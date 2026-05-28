@@ -63,19 +63,35 @@ function sidecarPath() {
   return path.join(__dirname, '..', 'server', 'bin', 'restos-server')
 }
 
-// Kill any leftover restos-server processes from previous crashed sessions.
-// Без этого порт 3001 остаётся занят и новый Go-бэк не может его взять.
+// Kill any leftover restos-server + embedded postgres processes from previous
+// crashed sessions. БЕЗ killaня postgres.exe порт 54329 (embedded-PG) остаётся
+// занят → новый запуск падает с "process already listening on port 54329".
+//
+// Также чистим postmaster.pid (lock-файл Postgres) — без этого даже после
+// kill PG может отказаться стартовать с тем же data_dir.
 function killStaleSidecars() {
-  try {
-    if (process.platform === 'win32') {
-      execSync('taskkill /F /IM restos-server.exe /T 2>nul', { stdio: 'ignore' })
-    } else {
-      execSync('pkill -9 -f restos-server || true', { stdio: 'ignore' })
-    }
-    console.log('[sidecar] killed stale processes (if any)')
-  } catch {
-    // taskkill возвращает non-zero если процессов нет — это OK.
+  const isWin = process.platform === 'win32'
+  const killers = isWin
+    ? [
+        'taskkill /F /IM restos-server.exe /T 2>nul',
+        'taskkill /F /IM postgres.exe /T 2>nul',
+      ]
+    : [
+        'pkill -9 -f restos-server || true',
+        'pkill -9 -f "postgres.*restos" || true',
+      ]
+  for (const cmd of killers) {
+    try { execSync(cmd, { stdio: 'ignore' }) } catch {}
   }
+  // Очистка lock-файла PG (если процесс убит kill -9, файл остался).
+  try {
+    const pgLock = path.join(app.getPath('userData'), 'pgdata', 'postmaster.pid')
+    if (fs.existsSync(pgLock)) {
+      fs.unlinkSync(pgLock)
+      console.log('[sidecar] removed stale postmaster.pid')
+    }
+  } catch {}
+  console.log('[sidecar] cleanup done')
 }
 
 // Проверка что порт 3001 свободен. Если занят — пробуем убить владельца.
@@ -171,7 +187,7 @@ function stopSidecar() {
 }
 
 // Wait for backend /healthz to respond OK before showing window.
-function waitForBackend(timeoutMs = 60000) {
+function waitForBackend(timeoutMs = 90000) {
   const start = Date.now()
   return new Promise((resolve, reject) => {
     function poll() {
@@ -211,13 +227,15 @@ if (!gotTheLock) {
 
   app.on('ready', async () => {
     setupFileLogger()
-    // 1) Убить zombie sidecar'ы от прошлого crash, освободить порт.
+    // 1) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
+    //    освободить порты 3001 (HTTP API) и 54329 (embedded PG).
     killStaleSidecars()
     await ensurePortFree(API_PORT)
+    await ensurePortFree(54329)
     // 2) Стартуем sidecar.
     startSidecar()
     try {
-      await waitForBackend()
+      await waitForBackend(90000)
     } catch (e) {
       console.error('[main] backend failed to start:', e.message)
       Sentry.captureMessage('Backend failed to start within timeout')
