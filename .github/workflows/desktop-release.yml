@@ -1,0 +1,69 @@
+name: desktop-release
+
+# Триггерится на git tag v* — собирает Windows installer и публикует в GitHub Releases.
+#
+# Использование:
+#   git tag v2.0.1 && git push origin v2.0.1
+#
+# CI делает:
+#   1. Cross-compile Go-binary под windows/amd64
+#   2. Build Vite frontend
+#   3. Packing с electron-builder → NSIS installer
+#   4. Upload в Release (создаёт release если ещё нет)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: server/go.sum
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Build Go sidecar (windows/amd64)
+        working-directory: server
+        run: |
+          mkdir -p ../desktop/resources
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+            go build -trimpath -ldflags "-s -w" \
+            -o ../desktop/resources/restos-server.exe ./cmd/restos-server
+          ls -lh ../desktop/resources/
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Copy frontend into desktop/
+        run: |
+          rm -rf desktop/frontend
+          cp -r dist desktop/frontend
+
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm install --no-save
+
+      - name: Pack Windows NSIS installer
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --x64 --publish=always
