@@ -1,0 +1,363 @@
+const Sentry = require('@sentry/node')
+Sentry.init({
+  dsn: 'https://0791a2aaef3fddc828f697fa2728033f@o4511224163270656.ingest.de.sentry.io/4511224183259216',
+  environment: 'desktop-main',
+  release: require('./package.json').version,
+  // Игнорируем известные auto-updater 404 на latest-mac.yml / latest.yml
+  // (когда релиз для платформы отсутствует — это не баг, а ожидаемое состояние).
+  beforeSend(event, hint) {
+    try {
+      const err = hint && hint.originalException
+      const msg = (err && (err.message || String(err))) || ''
+      if (/Cannot find (latest|latest-mac)\.yml/i.test(msg)) return null
+      if (/HttpError: 404/.test(msg) && /latest.*\.yml/.test(msg)) return null
+    } catch {}
+    return event
+  },
+})
+
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain } = require('electron')
+const path = require('path')
+const fs = require('fs')
+const { startAPIServer, setDesktopHandlers, setUpdateState } = require('./api-server')
+
+// File logger — writes both API and renderer logs to ~/Library/Logs/RestOS/main.log
+function setupFileLogger() {
+  try {
+    const logsDir = path.join(app.getPath('userData'), 'logs')
+    if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true })
+    const logFile = path.join(logsDir, 'main.log')
+    // Rotate if > 5 MB
+    try { if (fs.statSync(logFile).size > 5 * 1024 * 1024) fs.renameSync(logFile, logFile + '.old') } catch {}
+    const stream = fs.createWriteStream(logFile, { flags: 'a' })
+    stream.write(`\n=== ${new Date().toISOString()} app start v${require('./package.json').version} ===\n`)
+    const origLog = console.log.bind(console)
+    const origErr = console.error.bind(console)
+    console.log = (...a) => { try { stream.write(a.map(String).join(' ') + '\n') } catch {} ; origLog(...a) }
+    console.error = (...a) => { try { stream.write('[ERR] ' + a.map(String).join(' ') + '\n') } catch {} ; origErr(...a) }
+    console.log('[logger] writing to', logFile)
+  } catch (e) {
+    console.error('[logger] init failed:', e.message)
+  }
+}
+
+let mainWindow = null
+let tray = null
+let apiServerRef = null
+const API_PORT = 3001
+
+// Force-quit helper used by autoUpdater. Closes the HTTP server (otherwise
+// open sockets keep the Node process alive after app.quit) and the tray icon.
+function performShutdown() {
+  app.isQuitting = true
+  try { tray?.destroy() } catch {}
+  try { apiServerRef?.close() } catch {}
+}
+
+// Single instance lock
+const gotTheLock = app.requestSingleInstanceLock()
+if (!gotTheLock) { app.quit(); return }
+
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.focus()
+  }
+})
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    minWidth: 800,
+    minHeight: 600,
+    title: 'RestOS',
+    icon: path.join(__dirname, 'assets', 'icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      webSecurity: false,
+      // Don't throttle background tabs — POS app must keep running when minimized/idle
+      backgroundThrottling: false,
+    },
+    autoHideMenuBar: true,
+    show: false,
+  })
+
+  // Load frontend via Express server (handles absolute paths correctly)
+  mainWindow.loadURL(`http://localhost:${API_PORT}`)
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show()
+    mainWindow.maximize()
+  })
+
+  // Debug: capture renderer console errors and warnings
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    if (level >= 2) {
+      console.log(`[renderer ${level >= 3 ? 'ERR' : 'WARN'}] ${message} (${sourceId}:${line})`)
+    }
+  })
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
+    console.log(`[renderer] did-fail-load: ${code} ${desc} ${url}`)
+    // Auto-recover after a brief delay
+    setTimeout(() => {
+      try { mainWindow?.loadURL(`http://localhost:${API_PORT}`) } catch {}
+    }, 1500)
+  })
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    console.log(`[renderer] crashed:`, details)
+    // Auto-recover from a renderer crash so the cashier doesn't see a white screen
+    setTimeout(() => {
+      try { mainWindow?.reload() } catch {}
+    }, 500)
+  })
+  mainWindow.webContents.on('unresponsive', () => {
+    console.log('[renderer] unresponsive — reloading')
+    try { mainWindow?.reload() } catch {}
+  })
+
+  // White screen detector — periodically check if the renderer DOM is empty.
+  // If React crashed and ErrorBoundary didn't catch it, auto-reload.
+  let whiteScreenChecks = 0
+  setInterval(async () => {
+    if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return
+    try {
+      const childCount = await mainWindow.webContents.executeJavaScript(
+        'document.getElementById("root")?.children?.length ?? -1'
+      )
+      if (childCount === 0) {
+        whiteScreenChecks++
+        if (whiteScreenChecks >= 2) {
+          console.log('[white-screen-detector] root empty — reloading')
+          mainWindow.reload()
+          whiteScreenChecks = 0
+        }
+      } else {
+        whiteScreenChecks = 0
+      }
+    } catch {}
+  }, 2000)
+
+  // When window comes back from being hidden/minimized, force a refresh of the
+  // current page so any stalled timers/SSE reconnect cleanly.
+  let lastShownAt = Date.now()
+  mainWindow.on('hide', () => { lastShownAt = Date.now() })
+  mainWindow.on('show', () => {
+    const idleMs = Date.now() - lastShownAt
+    // Only reload if it was hidden for more than 5 minutes — short hides don't need it
+    if (idleMs > 5 * 60 * 1000) {
+      console.log(`[window] shown after ${Math.round(idleMs / 1000)}s — reloading`)
+      try { mainWindow?.webContents.reload() } catch {}
+    }
+    lastShownAt = Date.now()
+  })
+
+  mainWindow.on('close', (e) => {
+    if (!app.isQuitting) {
+      e.preventDefault()
+      mainWindow.hide()
+    }
+  })
+
+  mainWindow.on('closed', () => {
+    mainWindow = null
+  })
+}
+
+function createTray() {
+  const icon = nativeImage.createFromPath(path.join(__dirname, 'assets', 'icon.png'))
+  tray = new Tray(icon.resize({ width: 16, height: 16 }))
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Открыть RestOS', click: () => { mainWindow?.show(); mainWindow?.focus() } },
+    { type: 'separator' },
+    { label: `API: http://localhost:${API_PORT}`, enabled: false },
+    { label: 'Подключить официантов (QR)', click: () => shell.openExternal(`http://localhost:${API_PORT}/connect`) },
+    { type: 'separator' },
+    { label: 'Выход', click: () => { app.isQuitting = true; app.quit() } },
+  ])
+
+  tray.setToolTip('RestOS — Система управления рестораном')
+  tray.setContextMenu(contextMenu)
+  tray.on('double-click', () => { mainWindow?.show(); mainWindow?.focus() })
+}
+
+// Auto-updater with IPC events
+let autoUpdaterRef = null
+function setupAutoUpdater() {
+  // GitHub Releases публикует только Windows-артефакты (workflow сборки собирает
+  // только --win). На Mac electron-updater стучится за latest-mac.yml и получает
+  // 404 — это захламляет Sentry ("Cannot find latest-mac.yml ..."). Пока Mac-DMG
+  // не публикуется через релизы, auto-updater на darwin просто не запускаем.
+  if (process.platform === 'darwin') {
+    console.log('[updater] disabled on macOS (no published Mac artifacts)')
+    return
+  }
+  try {
+    const { autoUpdater } = require('electron-updater')
+    autoUpdaterRef = autoUpdater
+    autoUpdater.autoDownload = true
+    autoUpdater.autoInstallOnAppQuit = true
+
+    autoUpdater.on('checking-for-update', () => {
+      setUpdateState({ status: 'checking', version: null, percent: 0, error: null })
+    })
+    autoUpdater.on('update-not-available', () => {
+      setUpdateState({ status: 'not-available' })
+    })
+    autoUpdater.on('update-available', (info) => {
+      console.log('[updater] Update available:', info.version)
+      setUpdateState({ status: 'available', version: info.version })
+      mainWindow?.webContents.send('update-status', { status: 'downloading', version: info.version })
+    })
+    autoUpdater.on('download-progress', (progress) => {
+      setUpdateState({ status: 'downloading', percent: Math.round(progress.percent) })
+      mainWindow?.webContents.send('update-status', { status: 'progress', percent: Math.round(progress.percent) })
+    })
+    autoUpdater.on('update-downloaded', (info) => {
+      console.log('[updater] Update downloaded:', info.version)
+      setUpdateState({ status: 'ready', version: info.version, percent: 100 })
+      mainWindow?.webContents.send('update-status', { status: 'ready', version: info.version })
+
+      // Check if this is a critical update (release notes contain [CRITICAL])
+      const isCritical = (info.releaseNotes || '').toString().includes('[CRITICAL]')
+
+      if (isCritical) {
+        // Force update — block the app until restart
+        console.log('[updater] CRITICAL update — forcing restart')
+        mainWindow?.webContents.executeJavaScript(`
+          document.body.innerHTML = '<div style="position:fixed;inset:0;background:#0a0a0a;color:#fff;display:flex;align-items:center;justify-content:center;font-family:system-ui;z-index:999999"><div style="text-align:center"><h1 style="font-size:24px;margin-bottom:12px">Критическое обновление v${info.version}</h1><p style="color:#a1a1aa;margin-bottom:24px">Требуется перезагрузка для продолжения работы</p><button onclick="window.restosDesktop.installUpdate()" style="background:#3b82f6;color:#fff;border:none;padding:12px 32px;border-radius:8px;font-size:16px;font-weight:600;cursor:pointer">Перезагрузить сейчас</button></div></div>';
+        `).catch(() => {})
+        // Auto-restart after 30 seconds if user doesn't click
+        setTimeout(() => {
+          performShutdown()
+          setTimeout(() => {
+            try { autoUpdater.quitAndInstall(false, true) }
+            catch (e) { console.error('[updater] quitAndInstall failed:', e.message) }
+          }, 250)
+        }, 30000)
+      } else {
+        // Normal update — show banner
+        mainWindow?.webContents.executeJavaScript(`
+          if (!document.getElementById('restos-update-bar')) {
+            const bar = document.createElement('div');
+            bar.id = 'restos-update-bar';
+            bar.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;background:#1d4ed8;color:#fff;padding:8px 16px;font-family:system-ui;font-size:13px;display:flex;align-items:center;justify-content:center;gap:12px;';
+            bar.innerHTML = 'Обновление v${info.version} готово <button onclick="window.restosDesktop.installUpdate()" style="background:#fff;color:#1d4ed8;border:none;padding:4px 12px;border-radius:4px;font-weight:600;cursor:pointer;font-size:13px;">Перезагрузить</button>';
+            document.body.prepend(bar);
+          }
+        `).catch(() => {})
+      }
+    })
+    autoUpdater.on('error', (err) => {
+      console.log('[updater] Error:', err.message)
+      setUpdateState({ status: 'error', error: err.message })
+      // Report auto-updater errors to Sentry
+      try { Sentry.captureException(err, { tags: { component: 'auto-updater' } }) } catch {}
+    })
+
+    // IPC: install update now (called from renderer via window.restosDesktop.installUpdate)
+    ipcMain.on('install-update', () => {
+      console.log('[updater] install requested via IPC — shutting down')
+      performShutdown()
+      setTimeout(() => {
+        try { autoUpdater.quitAndInstall(false, true) }
+        catch (e) { console.error('[updater] quitAndInstall failed:', e.message) }
+      }, 250)
+    })
+
+    // Screenshot for bug reports
+    ipcMain.handle('capture-screenshot', async () => {
+      try {
+        if (!mainWindow) return null
+        const image = await mainWindow.webContents.capturePage()
+        const jpeg = image.toJPEG(50)
+        return 'data:image/jpeg;base64,' + jpeg.toString('base64')
+      } catch (e) {
+        console.error('[screenshot] capture failed:', e.message)
+        return null
+      }
+    })
+
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {})
+  } catch (e) {
+    console.log('[updater] Not available:', e.message)
+  }
+}
+
+// App lifecycle
+app.whenReady().then(async () => {
+  setupFileLogger()
+  // Start API server (PGlite + Express)
+  const server = await startAPIServer(API_PORT)
+  apiServerRef = server.server
+  console.log(`[RestOS] API server running on port ${API_PORT}`)
+
+  // Auto-open firewall ports on Windows for waiter connections (HTTP API + HTTPS for PWA)
+  if (process.platform === 'win32') {
+    const { exec } = require('child_process')
+    const HTTPS_PORT = API_PORT + 442 // 3001 → 3443, mirrors api-server.js
+    exec(`netsh advfirewall firewall show rule name="RestOS Waiter Connect" >nul 2>&1 || netsh advfirewall firewall add rule name="RestOS Waiter Connect" dir=in action=allow protocol=TCP localport=${API_PORT},${HTTPS_PORT}`, (err) => {
+      if (err) console.log('[firewall] Could not add rule (may need admin):', err.message)
+      else console.log(`[firewall] Ports ${API_PORT},${HTTPS_PORT} opened for waiter connections`)
+    })
+  }
+
+  // Handle license blocked/unblocked from sync engine
+  server.onBlocked((reason) => {
+    console.log('[RestOS] License blocked:', reason)
+    mainWindow?.webContents.send('license-blocked', { reason })
+    // Reload to show blocked page
+    mainWindow?.loadURL(`http://localhost:${API_PORT}`)
+  })
+  server.onUnblocked(() => {
+    console.log('[RestOS] License unblocked')
+    // Reload to show main app
+    mainWindow?.loadURL(`http://localhost:${API_PORT}`)
+  })
+
+  createWindow()
+  createTray()
+  setupAutoUpdater()
+
+  // Register desktop control handlers (called by api-server /desktop/* routes)
+  setDesktopHandlers({
+    checkUpdate: async () => {
+      if (!autoUpdaterRef) throw new Error('Updater unavailable')
+      return await autoUpdaterRef.checkForUpdates()
+    },
+    installUpdate: () => {
+      if (!autoUpdaterRef) throw new Error('Updater unavailable')
+      console.log('[updater] install requested — shutting down')
+      performShutdown()
+      // (isSilent=false → show progress, isForceRunAfter=true → relaunch the new app on macOS)
+      // Defer slightly so the HTTP response can flush before quit.
+      setTimeout(() => {
+        try { autoUpdaterRef.quitAndInstall(false, true) }
+        catch (e) { console.error('[updater] quitAndInstall failed:', e.message) }
+      }, 250)
+    },
+    openConnect: () => {
+      shell.openExternal(`http://localhost:${API_PORT}/connect`)
+    },
+  })
+})
+
+app.on('window-all-closed', () => {
+  // Don't quit — keep running in tray
+})
+
+app.on('before-quit', () => {
+  app.isQuitting = true
+  // Close HTTP server gracefully so the Node process can exit cleanly
+  try { apiServerRef?.close() } catch {}
+  try { tray?.destroy() } catch {}
+})
+
+app.on('activate', () => {
+  if (mainWindow === null) createWindow()
+  else mainWindow.show()
+})

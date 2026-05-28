@@ -1,16 +1,17 @@
 {
   "name": "restos-desktop",
-  "version": "1.5.275",
-  "description": "RestOS Desktop — POS система для ресторанов",
+  "version": "2.0.0",
+  "description": "RestOS v4 Desktop — POS система для ресторанов (Go-бэк + embedded Postgres)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build-frontend": "cd .. && npx vite build && rm -rf desktop/frontend && cp -r dist desktop/frontend",
+    "build-sidecar-win": "cd ../server && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/restos-server-windows-amd64.exe ./cmd/restos-server && cp bin/restos-server-windows-amd64.exe ../desktop/resources/restos-server.exe",
+    "build-sidecar-mac": "cd ../server && go build -trimpath -o bin/restos-server ./cmd/restos-server && cp bin/restos-server ../desktop/resources/restos-server",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
-    "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac",
-    "release": "cd .. && npx vite build && cd desktop && rm -rf frontend && cp -r ../dist frontend && git add -A && git commit -m \"update: new release\" && git push"
+    "dist:win": "npm run build-frontend && npm run build-sidecar-win && electron-builder --win",
+    "dist:mac": "npm run build-frontend && npm run build-sidecar-mac && electron-builder --mac"
   },
   "build": {
     "appId": "tj.restos.pos",
@@ -21,58 +22,55 @@
     "files": [
       "main.js",
       "preload.js",
-      "api-server.js",
-      "db.js",
-      "sync.js",
       "activate.html",
       "blocked.html",
       "frontend/**/*",
-      "node_modules/**/*"
+      "assets/**/*",
+      "node_modules/**/*",
+      "!main.js.v1"
     ],
-    "mac": {
+    "win": {
       "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        }
+        { "target": "nsis", "arch": ["x64"] }
       ],
       "icon": "assets/icon.png",
-      "category": "public.app-category.business"
+      "extraResources": [
+        {
+          "from": "resources/restos-server.exe",
+          "to": "restos-server.exe"
+        }
+      ]
     },
-    "win": {
-      "target": "nsis",
-      "icon": "assets/icon.png"
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "icon": "assets/icon.png",
+      "category": "public.app-category.business",
+      "extraResources": [
+        {
+          "from": "resources/restos-server",
+          "to": "restos-server"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "RestOS"
+      "shortcutName": "RestOS",
+      "perMachine": false
     },
     "publish": {
       "provider": "github",
       "owner": "beckortikov",
-      "repo": "restos-desktop"
+      "repo": "restos-v2"
     }
   },
   "dependencies": {
-    "@electric-sql/pglite": "^0.2.15",
     "@sentry/node": "^10.48.0",
-    "cors": "^2.8.5",
-    "electron-updater": "^6.3.9",
-    "express": "^4.21.0",
-    "qrcode": "^1.5.4"
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^33.0.0",
