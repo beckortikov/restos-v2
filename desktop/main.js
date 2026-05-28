@@ -224,6 +224,19 @@ function createWindow() {
     mainWindow.maximize()
   })
 
+  // Ctrl+Shift+I / Cmd+Opt+I — DevTools для дебага в проде.
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.type === 'keyDown' && input.key === 'I' && (input.control || input.meta) && input.shift) {
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
+    }
+    if (input.type === 'keyDown' && input.key === 'F12') {
+      mainWindow.webContents.openDevTools({ mode: 'detach' })
+    }
+    if (input.type === 'keyDown' && input.key === 'F5') {
+      mainWindow.reload()
+    }
+  })
+
   mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
     if (level >= 2) {
       console.log(`[renderer ${level >= 3 ? 'ERR' : 'WARN'}] ${message} (${sourceId}:${line})`)

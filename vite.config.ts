@@ -4,6 +4,10 @@ import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
 
 export default defineConfig({
+  // Electron грузит index.html через file:// — относительные пути обязательны,
+  // иначе `/assets/...` уйдёт в корень файловой системы.
+  // Для web-сборки (если когда-то понадобится) можно переопределить через env.
+  base: process.env.VITE_BASE_PATH || './',
   plugins: [
     react(),
     VitePWA({

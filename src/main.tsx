@@ -1,6 +1,14 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter } from 'react-router-dom'
+import { BrowserRouter, HashRouter } from 'react-router-dom'
+
+// В Electron index.html грузится через file:// — BrowserRouter не работает
+// (нет server-side fallback). Используем HashRouter (#/dashboard) в desktop.
+// Detect: window.restosDesktop exposed by preload.js means we're in Electron.
+const Router: typeof BrowserRouter =
+  (typeof window !== 'undefined' && (window as { restosDesktop?: unknown }).restosDesktop)
+    ? (HashRouter as unknown as typeof BrowserRouter)
+    : BrowserRouter
 import * as Sentry from '@sentry/react'
 import { AppRouter } from './router'
 import { ErrorBoundary } from '@/components/error-boundary'
@@ -99,11 +107,11 @@ if ((window as any).restosDesktop?.isDesktop) {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
-      <BrowserRouter>
+      <Router>
         <NativeConnectScreen>
           <AppRouter />
         </NativeConnectScreen>
-      </BrowserRouter>
+      </Router>
     </ErrorBoundary>
   </StrictMode>
 )
