@@ -63,34 +63,65 @@ function sidecarPath() {
   return path.join(__dirname, '..', 'server', 'bin', 'restos-server')
 }
 
-// Kill any leftover restos-server + embedded postgres processes from previous
-// crashed sessions. БЕЗ killaня postgres.exe порт 54329 (embedded-PG) остаётся
-// занят → новый запуск падает с "process already listening on port 54329".
+// Kill leftover processes from previous crashed sessions.
 //
-// Также чистим postmaster.pid (lock-файл Postgres) — без этого даже после
-// kill PG может отказаться стартовать с тем же data_dir.
+// СТРАТЕГИЯ: точечный kill только НАШИХ процессов, не трогать чужой Postgres
+// (юзер может иметь свой PG на 5432 для других проектов).
+//
+//   1. taskkill restos-server.exe — наш бинарь, всегда безопасно.
+//   2. Читаем pgdata/postmaster.pid → берём PID нашего embedded-postgres
+//      → kill только этот PID. Не трогаем чужие postgres.exe.
+//   3. Fallback: если postmaster.pid не существует, но порт 54329 занят —
+//      kill процесса именно на этом порту (а не всех postgres.exe).
 function killStaleSidecars() {
   const isWin = process.platform === 'win32'
-  const killers = isWin
-    ? [
-        'taskkill /F /IM restos-server.exe /T 2>nul',
-        'taskkill /F /IM postgres.exe /T 2>nul',
-      ]
-    : [
-        'pkill -9 -f restos-server || true',
-        'pkill -9 -f "postgres.*restos" || true',
-      ]
-  for (const cmd of killers) {
-    try { execSync(cmd, { stdio: 'ignore' }) } catch {}
-  }
-  // Очистка lock-файла PG (если процесс убит kill -9, файл остался).
+
+  // 1) Наш бинарь — всегда таскилл по имени, безопасно.
   try {
-    const pgLock = path.join(app.getPath('userData'), 'pgdata', 'postmaster.pid')
+    if (isWin) execSync('taskkill /F /IM restos-server.exe /T 2>nul', { stdio: 'ignore' })
+    else execSync('pkill -9 -f restos-server || true', { stdio: 'ignore' })
+  } catch {}
+
+  // 2) Embedded-postgres по pid из postmaster.pid (только НАША инстанция).
+  const pgLock = path.join(app.getPath('userData'), 'pgdata', 'postmaster.pid')
+  let killedByLock = false
+  try {
     if (fs.existsSync(pgLock)) {
-      fs.unlinkSync(pgLock)
-      console.log('[sidecar] removed stale postmaster.pid')
+      const content = fs.readFileSync(pgLock, 'utf8')
+      const pgPid = parseInt(content.split('\n')[0], 10)
+      if (pgPid > 0) {
+        try {
+          if (isWin) execSync(`taskkill /F /PID ${pgPid} /T 2>nul`, { stdio: 'ignore' })
+          else process.kill(pgPid, 'SIGKILL')
+          console.log('[sidecar] killed embedded-pg pid', pgPid)
+          killedByLock = true
+        } catch {}
+      }
+      try { fs.unlinkSync(pgLock) } catch {}
     }
   } catch {}
+
+  // 3) Fallback: kill процесса на порту 54329 если lock-файл отсутствует
+  //    или kill по pid не сработал.
+  if (!killedByLock) {
+    try {
+      if (isWin) {
+        const out = execSync('netstat -ano | findstr :54329', { encoding: 'utf8' })
+        const pids = new Set()
+        for (const line of out.split('\n')) {
+          const m = line.trim().match(/\s+(\d+)\s*$/)
+          if (m) pids.add(m[1])
+        }
+        for (const pid of pids) {
+          try { execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: 'ignore' }) } catch {}
+        }
+        if (pids.size > 0) console.log('[sidecar] killed port:54329 holders', [...pids].join(','))
+      } else {
+        execSync('lsof -ti:54329 | xargs -r kill -9 2>/dev/null || true', { stdio: 'ignore' })
+      }
+    } catch {}
+  }
+
   console.log('[sidecar] cleanup done')
 }
 
