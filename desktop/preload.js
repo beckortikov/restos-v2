@@ -25,6 +25,9 @@ contextBridge.exposeInMainWorld('restosDesktop', {
   checkForUpdate: () => ipcRenderer.invoke('check-update'),
   getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
 
+  // LAN IP — для QR-кода официанту, чтобы подключиться к этой кассе по локалке.
+  getLanIp: () => ipcRenderer.invoke('get-lan-ip'),
+
   // License blocked
   onBlocked: (callback) => ipcRenderer.on('license-blocked', (_, data) => callback(data)),
 

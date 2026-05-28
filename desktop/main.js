@@ -456,6 +456,26 @@ ipcMain.handle('check-update', async () => {
 
 ipcMain.handle('get-update-status', () => updateState)
 
+// ─── LAN IP detection ──────────────────────────────────────────────────────
+// Возвращает первый non-internal IPv4 адрес — это адрес который видят
+// другие устройства в той же WiFi-сети (телефон официанта).
+ipcMain.handle('get-lan-ip', () => {
+  try {
+    const os = require('os')
+    const ifs = os.networkInterfaces()
+    for (const name of Object.keys(ifs)) {
+      for (const addr of ifs[name] || []) {
+        if (addr.family === 'IPv4' && !addr.internal) {
+          return addr.address
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[get-lan-ip] error:', e)
+  }
+  return '127.0.0.1'
+})
+
 ipcMain.handle('capture-screenshot', async () => {
   try {
     const img = await mainWindow.webContents.capturePage()

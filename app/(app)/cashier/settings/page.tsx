@@ -69,10 +69,10 @@ export default function CashierSettingsPage() {
   const pinEnabled = restaurant?.pinLockEnabled ?? false
 
   function handleConnectWaiters() {
-    // /connect — это полноценная страница SPA, открываем в том же окне
-    // через router (HashRouter в Electron). connectUrl из preload — legacy v1.
+    // Кассир показывает QR официантам — отдельная страница /show-qr,
+    // которая генерирует QR с LAN-адресом этой кассы.
     void connectUrl
-    window.location.hash = '#/connect'
+    window.location.hash = '#/show-qr'
   }
 
   async function handleUpdate() {

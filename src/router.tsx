@@ -31,6 +31,7 @@ const WaiterOrderDetail = () => L(() => import('@/app/(app)/waiter/order/[id]/pa
 
 // Cashier
 const CashierSettings = () => L(() => import('@/app/(app)/cashier/settings/page'))
+const ShowQR = () => L(() => import('@/app/(app)/show-qr/page'))
 
 // Operations
 const POS = () => L(() => import('@/app/(app)/operations/pos/page'))
@@ -113,6 +114,7 @@ export function AppRouter() {
         {/* Cashier */}
         <Route path="/cashier" element={<Navigate to="/cashier/settings" replace />} />
         <Route path="/cashier/settings" element={<CashierSettings />} />
+        <Route path="/show-qr" element={<ShowQR />} />
 
         {/* Operations */}
         <Route path="/operations/pos" element={<POS />} />
