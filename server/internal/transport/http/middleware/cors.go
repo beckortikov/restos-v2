@@ -35,7 +35,11 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 			if origin != "" {
-				if allowAll {
+				// Electron-фронт (file://) шлёт Origin: null или file:// —
+				// разрешаем безусловно: это локальная same-machine коммуникация
+				// между Electron renderer и sidecar Go-бэком на 127.0.0.1.
+				isElectronLocal := origin == "null" || strings.HasPrefix(origin, "file://")
+				if allowAll || isElectronLocal {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
 				} else if _, ok := origins[origin]; ok {
 					w.Header().Set("Access-Control-Allow-Origin", origin)
