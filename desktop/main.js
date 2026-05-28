@@ -385,15 +385,52 @@ function setupTray() {
 }
 
 // ─── Auto-updater ──────────────────────────────────────────────────────────
+//
+// State machine, exposed to renderer через IPC:
+//   idle           — нет проверок
+//   checking       — checkForUpdates() в полёте
+//   available      — есть новая версия, скачивается
+//   downloading    — есть % прогресса
+//   ready          — скачано, можно installUpdate()
+//   not-available  — уже последняя
+//   error          — что-то пошло не так
+let updateState = { status: 'idle', version: null, percent: 0, error: null }
+
+function setUpdateState(patch) {
+  updateState = { ...updateState, ...patch }
+  try {
+    mainWindow?.webContents.send('update-status', updateState)
+  } catch {}
+}
+
 function setupAutoUpdater() {
-  if (!app.isPackaged) return
+  if (!app.isPackaged) {
+    // В dev — auto-updater отключён, но IPC всё равно работает (вернёт not-available).
+    setUpdateState({ status: 'not-available' })
+    return
+  }
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
-  autoUpdater.on('error', (err) => console.log('[updater] error:', err?.message ?? err))
-  autoUpdater.on('update-available', (info) => console.log('[updater] update-available:', info?.version))
+  autoUpdater.on('error', (err) => {
+    console.log('[updater] error:', err?.message ?? err)
+    setUpdateState({ status: 'error', error: String(err?.message ?? err) })
+  })
+  autoUpdater.on('checking-for-update', () => {
+    setUpdateState({ status: 'checking', error: null })
+  })
+  autoUpdater.on('update-available', (info) => {
+    console.log('[updater] update-available:', info?.version)
+    setUpdateState({ status: 'available', version: info?.version, percent: 0 })
+  })
+  autoUpdater.on('update-not-available', () => {
+    setUpdateState({ status: 'not-available' })
+  })
+  autoUpdater.on('download-progress', (p) => {
+    setUpdateState({ status: 'downloading', percent: Math.round(p?.percent || 0) })
+  })
   autoUpdater.on('update-downloaded', (info) => {
     console.log('[updater] update-downloaded:', info?.version)
-    mainWindow?.webContents.send('update-status', { type: 'downloaded', version: info?.version })
+    setUpdateState({ status: 'ready', version: info?.version, percent: 100 })
   })
   autoUpdater.checkForUpdatesAndNotify().catch(() => {})
 }
@@ -401,6 +438,23 @@ function setupAutoUpdater() {
 ipcMain.on('install-update', () => {
   try { autoUpdater.quitAndInstall() } catch (e) { console.error('install-update:', e) }
 })
+
+ipcMain.handle('check-update', async () => {
+  if (!app.isPackaged) {
+    setUpdateState({ status: 'not-available' })
+    return updateState
+  }
+  try {
+    setUpdateState({ status: 'checking', error: null })
+    await autoUpdater.checkForUpdates()
+    return updateState
+  } catch (e) {
+    setUpdateState({ status: 'error', error: String(e?.message ?? e) })
+    return updateState
+  }
+})
+
+ipcMain.handle('get-update-status', () => updateState)
 
 ipcMain.handle('capture-screenshot', async () => {
   try {

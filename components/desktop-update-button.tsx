@@ -20,28 +20,26 @@ export function DesktopUpdateButton() {
 
   useEffect(() => {
     if (!isDesktop) return
+    const d = (window as any).restosDesktop
     let cancelled = false
-    async function poll() {
-      try {
-        const r = await fetch('/desktop/update-status')
-        if (!r.ok) return
-        const s = (await r.json()) as UpdateStatus
-        if (cancelled) return
-        setState(s)
-      } catch {}
+    // 1) Pull текущее состояние при mount.
+    if (typeof d?.getUpdateStatus === 'function') {
+      d.getUpdateStatus().then((s: UpdateStatus) => { if (!cancelled) setState(s) }).catch(() => {})
     }
-    poll()
-    const id = setInterval(poll, 3000)
-    return () => { cancelled = true; clearInterval(id) }
+    // 2) Подписка на push-уведомления от main process (event 'update-status').
+    if (typeof d?.onUpdateStatus === 'function') {
+      d.onUpdateStatus((s: UpdateStatus) => { if (!cancelled) setState(s) })
+    }
+    return () => { cancelled = true }
   }, [isDesktop])
 
   if (!isDesktop) return null
 
   async function handleClick() {
+    const d = (window as any).restosDesktop
     if (state.status === 'ready') {
-      // Install
       try {
-        await fetch('/desktop/install-update', { method: 'POST' })
+        d?.installUpdate?.()
         setToast('Перезагрузка...')
       } catch (e: any) {
         setToast('Ошибка: ' + e.message)
@@ -52,13 +50,10 @@ export function DesktopUpdateButton() {
     setBusy(true)
     setToast(null)
     try {
-      const r = await fetch('/desktop/check-update', { method: 'POST' })
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({}))
-        setToast('Ошибка: ' + (j.error || r.statusText))
-      }
+      const next = await d?.checkForUpdate?.()
+      if (next) setState(next)
     } catch (e: any) {
-      setToast('Сеть недоступна')
+      setToast('Ошибка: ' + (e?.message || 'unknown'))
     } finally {
       setBusy(false)
       setTimeout(() => setToast(null), 4000)

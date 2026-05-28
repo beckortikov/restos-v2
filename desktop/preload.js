@@ -19,9 +19,11 @@ contextBridge.exposeInMainWorld('restosDesktop', {
   waiterUrl: 'http://localhost:3001',
   version: pkgVersion,
 
-  // Auto-updater
+  // Auto-updater — IPC instead of HTTP (v1 had Express endpoints; v4 has Go-only API).
   onUpdateStatus: (callback) => ipcRenderer.on('update-status', (_, data) => callback(data)),
   installUpdate: () => ipcRenderer.send('install-update'),
+  checkForUpdate: () => ipcRenderer.invoke('check-update'),
+  getUpdateStatus: () => ipcRenderer.invoke('get-update-status'),
 
   // License blocked
   onBlocked: (callback) => ipcRenderer.on('license-blocked', (_, data) => callback(data)),

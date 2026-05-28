@@ -23,18 +23,15 @@ function useDesktopUpdate() {
 
   useEffect(() => {
     if (!isDesktop) return
+    const d = (window as any).restosDesktop
     let cancelled = false
-    async function poll() {
-      try {
-        const r = await fetch('/desktop/update-status')
-        if (!r.ok) return
-        const s = await r.json()
-        if (!cancelled) setState(s)
-      } catch {}
+    if (typeof d?.getUpdateStatus === 'function') {
+      d.getUpdateStatus().then((s: DesktopUpdateState) => { if (!cancelled) setState(s) }).catch(() => {})
     }
-    poll()
-    const id = setInterval(poll, 5000)
-    return () => { cancelled = true; clearInterval(id) }
+    if (typeof d?.onUpdateStatus === 'function') {
+      d.onUpdateStatus((s: DesktopUpdateState) => { if (!cancelled) setState(s) })
+    }
+    return () => { cancelled = true }
   }, [isDesktop])
 
   return { isDesktop, ...state }
@@ -72,19 +69,20 @@ export default function CashierSettingsPage() {
   const pinEnabled = restaurant?.pinLockEnabled ?? false
 
   function handleConnectWaiters() {
-    if (!connectUrl) return
-    fetch('/desktop/open-connect', { method: 'POST' }).catch(() => {
-      window.open(connectUrl, '_blank')
-    })
+    // /connect — это полноценная страница SPA, открываем в том же окне
+    // через router (HashRouter в Electron). connectUrl из preload — legacy v1.
+    void connectUrl
+    window.location.hash = '#/connect'
   }
 
   async function handleUpdate() {
     if (!update.isDesktop) return
+    const d = (window as any).restosDesktop
     if (update.status === 'ready') {
-      try { await fetch('/desktop/install-update', { method: 'POST' }) } catch {}
+      try { d?.installUpdate?.() } catch {}
       return
     }
-    try { await fetch('/desktop/check-update', { method: 'POST' }) } catch {}
+    try { await d?.checkForUpdate?.() } catch {}
   }
 
   function handleLockSwitch() {
