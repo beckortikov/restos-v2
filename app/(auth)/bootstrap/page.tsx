@@ -47,8 +47,11 @@ export default function BootstrapPage() {
     try {
       const r: any = await unwrap(api.POST('/api/v1/bootstrap', {
         body: {
-          restaurant: { name: restName.trim(), currency, timezone },
-          owner: { name: ownerName.trim() || 'Владелец', pin: ownerPin, role: 'owner' },
+          restaurant_name: restName.trim(),
+          owner_name: ownerName.trim() || 'Владелец',
+          owner_pin: ownerPin,
+          currency,
+          timezone,
         } as any,
       }))
       const rid = r.restaurant?.id
