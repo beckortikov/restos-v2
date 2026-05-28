@@ -77,9 +77,11 @@ export async function createReceipt(receipt: Omit<StockReceipt, 'id'>) {
 }
 
 export async function confirmReceipt(id: string, confirmedBy: string) {
+  // confirmed_by резолвится бэком из session token — не отправляем.
+  void confirmedBy
   await unwrap(api.POST('/api/v1/stock/receipts/{id}/confirm', {
     params: { path: { id } },
-    body: { confirmed_by: confirmedBy } as any,
+    body: {} as any,
   }))
   logAction('receipt.confirm', 'receipt', id)
 }

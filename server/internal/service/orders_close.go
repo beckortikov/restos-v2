@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -23,6 +25,25 @@ type CloseOrderInput struct {
 	AccountID     string `json:"account_id"`     // financial_account, на который идёт revenue
 	ShiftID       string `json:"shift_id"`       // обязателен, привязка к смене
 	TipAmount     string `json:"tip_amount,omitempty"`
+
+	// Кассир, фиксируется в order.cashier_id.
+	CashierID *string `json:"cashier_id,omitempty"`
+
+	// Скидка — применяется к total ДО формирования financial_operation.
+	DiscountType   *string `json:"discount_type,omitempty"`  // "percent" | "fixed"
+	DiscountValue  *string `json:"discount_value,omitempty"` // decimal string
+	DiscountReason *string `json:"discount_reason,omitempty"`
+
+	// Multi-payment. Если задан — payment_method/account_id игнорируются
+	// (используются только если list пустой).
+	Payments []PaymentSplit `json:"payments,omitempty"`
+}
+
+// PaymentSplit — одна часть split-payment.
+type PaymentSplit struct {
+	Method    string `json:"method"`     // cash|card|transfer
+	Amount    string `json:"amount"`     // decimal string
+	AccountID string `json:"account_id"` // financial_account UUID
 }
 
 // Close — критичный многошаговый flow закрытия заказа.
@@ -46,14 +67,59 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 	if err != nil {
 		return nil, nil, err
 	}
-	if in.PaymentMethod == "" || in.ShiftID == "" {
-		return nil, nil, apperrors.Wrap("VALIDATION", "payment_method and shift_id are required", nil)
+	if in.ShiftID == "" {
+		return nil, nil, apperrors.Wrap("VALIDATION", "shift_id is required", nil)
+	}
+	// При single-payment payment_method обязателен. При multi-payment проверим позже.
+	if len(in.Payments) == 0 && in.PaymentMethod == "" {
+		return nil, nil, apperrors.Wrap("VALIDATION", "payment_method is required when payments[] is empty", nil)
 	}
 	tip := decimal.Zero
 	if in.TipAmount != "" {
 		tip, err = decimal.FromString(in.TipAmount)
 		if err != nil {
 			return nil, nil, apperrors.Wrap("VALIDATION", "bad tip_amount", err)
+		}
+	}
+
+	// Pre-validate discount fields (значение/тип проверим против order.Total внутри tx).
+	var discountValue decimal.Decimal
+	if in.DiscountType != nil {
+		if *in.DiscountType != "percent" && *in.DiscountType != "fixed" {
+			return nil, nil, apperrors.Wrap("VALIDATION", "discount_type must be 'percent' or 'fixed'", nil)
+		}
+		if in.DiscountValue == nil || *in.DiscountValue == "" {
+			return nil, nil, apperrors.Wrap("VALIDATION", "discount_value is required when discount_type set", nil)
+		}
+		discountValue, err = decimal.FromString(*in.DiscountValue)
+		if err != nil {
+			return nil, nil, apperrors.Wrap("VALIDATION", "bad discount_value", err)
+		}
+		if decimal.IsNegative(discountValue) {
+			return nil, nil, apperrors.Wrap("VALIDATION", "discount_value must be >= 0", nil)
+		}
+		if *in.DiscountType == "percent" && discountValue.GreaterThan(decimal.FromInt(100)) {
+			return nil, nil, apperrors.Wrap("VALIDATION", "discount_value (percent) must be <= 100", nil)
+		}
+	}
+
+	// Pre-validate payments[] shape.
+	if len(in.Payments) > 0 {
+		for i, p := range in.Payments {
+			if p.Method != "cash" && p.Method != "card" && p.Method != "transfer" {
+				return nil, nil, apperrors.Wrap("VALIDATION", "payments[].method must be cash|card|transfer", nil)
+			}
+			if p.AccountID == "" {
+				return nil, nil, apperrors.Wrap("VALIDATION", "payments[].account_id is required", nil)
+			}
+			amt, perr := decimal.FromString(p.Amount)
+			if perr != nil {
+				return nil, nil, apperrors.Wrap("VALIDATION", "payments[].amount invalid", perr)
+			}
+			if decimal.IsNegative(amt) {
+				return nil, nil, apperrors.Wrap("VALIDATION", "payments[].amount must be >= 0", nil)
+			}
+			_ = i
 		}
 	}
 
@@ -98,43 +164,140 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		order.UpdatedAt = now
 		shiftID := in.ShiftID
 		order.ShiftID = &shiftID
-		pm := in.PaymentMethod
-		order.PaymentMethod = &pm
 		order.TipAmount = tip
-		// Если нужно service-percent — добавить позже из restaurants.service_percent.
-		// Пока total_with_service = total + tip.
-		order.TotalWithService = decimal.Normalize(decimal.Add(order.Total, tip))
+		if in.CashierID != nil && *in.CashierID != "" {
+			cid := *in.CashierID
+			order.CashierID = &cid
+		}
+
+		// Рассчитываем discount от order.Total (без сервиса/чаевых).
+		discountAmount := decimal.Zero
+		if in.DiscountType != nil {
+			switch *in.DiscountType {
+			case "percent":
+				discountAmount = decimal.Percent(order.Total, discountValue)
+			case "fixed":
+				discountAmount = decimal.Normalize(discountValue)
+			}
+			if discountAmount.GreaterThan(order.Total) {
+				return apperrors.Wrap("VALIDATION", "discount exceeds order.total", nil)
+			}
+			dt := *in.DiscountType
+			order.DiscountType = &dt
+			order.DiscountValue = decimal.Normalize(discountValue)
+			order.DiscountAmount = decimal.Normalize(discountAmount)
+			if in.DiscountReason != nil {
+				dr := *in.DiscountReason
+				order.DiscountReason = &dr
+			}
+		}
+		discountedTotal := decimal.Normalize(decimal.Sub(order.Total, discountAmount))
+		if decimal.IsNegative(discountedTotal) {
+			discountedTotal = decimal.Zero
+		}
+		// total_with_service = (total - discount) + tip. service_amount not used yet.
+		order.TotalWithService = decimal.Normalize(decimal.Add(discountedTotal, tip))
+
+		// Snapshot payment_method и payments (jsonb).
+		expectedPayTotal := order.TotalWithService
+		isMulti := len(in.Payments) > 0
+		if isMulti {
+			// Сумма split-ов должна совпадать с total_with_service (tolerance 0.01).
+			sum := decimal.Zero
+			for _, p := range in.Payments {
+				amt, _ := decimal.FromString(p.Amount)
+				sum = decimal.Add(sum, amt)
+			}
+			sumN := decimal.Normalize(sum)
+			diff := decimal.Sub(sumN, expectedPayTotal).Abs()
+			if diff.GreaterThan(decimal.MustFromString("0.01")) {
+				return apperrors.Wrap("VALIDATION", "sum(payments[].amount) must equal total_with_service", nil)
+			}
+			split := "split"
+			if len(in.Payments) == 1 {
+				m := in.Payments[0].Method
+				order.PaymentMethod = &m
+			} else {
+				order.PaymentMethod = &split
+			}
+			isSplit := len(in.Payments) > 1
+			order.IsSplit = &isSplit
+			sc := len(in.Payments)
+			order.SplitCount = &sc
+			if jsonBytes, jerr := json.Marshal(in.Payments); jerr == nil {
+				order.Payments = datatypes.JSON(jsonBytes)
+			}
+		} else {
+			pm := in.PaymentMethod
+			order.PaymentMethod = &pm
+		}
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
 
-		// 5. Revenue financial_operation.
+		// 5. Revenue financial_operations (один или несколько split-ов).
 		opType := "in"
 		opCat := "revenue"
 		opActivity := "operational"
-		opAccount := in.AccountID
 		opDate := now.Format("2006-01-02")
 		opDesc := "order:" + order.ID
 		opAuto := true
 		opSourceRef := "order:" + order.ID
-		finOp := &models.FinancialOperation{
-			ID:           uuid.NewString(),
-			Type:         &opType,
-			Amount:       order.TotalWithService,
-			Category:     &opCat,
-			Activity:     &opActivity,
-			AccountID:    &opAccount,
-			Date:         &opDate,
-			Description:  &opDesc,
-			IsAuto:       &opAuto,
-			SourceRef:    &opSourceRef,
-			RestaurantID: &rid,
-			ShiftID:      &shiftID,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+
+		type payApplied struct {
+			Method string
+			Amount decimal.Decimal
 		}
-		if err := tx.Create(finOp).Error; err != nil {
-			return err
+		var applied []payApplied
+
+		if isMulti {
+			for _, p := range in.Payments {
+				amt, _ := decimal.FromString(p.Amount)
+				amtN := decimal.Normalize(amt)
+				acc := p.AccountID
+				finOp := &models.FinancialOperation{
+					ID:           uuid.NewString(),
+					Type:         &opType,
+					Amount:       amtN,
+					Category:     &opCat,
+					Activity:     &opActivity,
+					AccountID:    &acc,
+					Date:         &opDate,
+					Description:  &opDesc,
+					IsAuto:       &opAuto,
+					SourceRef:    &opSourceRef,
+					RestaurantID: &rid,
+					ShiftID:      &shiftID,
+					CreatedAt:    now,
+					UpdatedAt:    now,
+				}
+				if err := tx.Create(finOp).Error; err != nil {
+					return err
+				}
+				applied = append(applied, payApplied{Method: p.Method, Amount: amtN})
+			}
+		} else {
+			opAccount := in.AccountID
+			finOp := &models.FinancialOperation{
+				ID:           uuid.NewString(),
+				Type:         &opType,
+				Amount:       order.TotalWithService,
+				Category:     &opCat,
+				Activity:     &opActivity,
+				AccountID:    &opAccount,
+				Date:         &opDate,
+				Description:  &opDesc,
+				IsAuto:       &opAuto,
+				SourceRef:    &opSourceRef,
+				RestaurantID: &rid,
+				ShiftID:      &shiftID,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+			if err := tx.Create(finOp).Error; err != nil {
+				return err
+			}
+			applied = append(applied, payApplied{Method: in.PaymentMethod, Amount: order.TotalWithService})
 		}
 
 		// 6. Stock deduct через tech_card_lines.
@@ -153,12 +316,14 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			}
 		}
 
-		// 7. Update shift aggregates.
-		switch in.PaymentMethod {
-		case "cash":
-			shift.CashRevenue = decimal.Add(shift.CashRevenue, order.TotalWithService)
-		case "card":
-			shift.CardRevenue = decimal.Add(shift.CardRevenue, order.TotalWithService)
+		// 7. Update shift aggregates (по каждому payment split-у отдельно).
+		for _, p := range applied {
+			switch p.Method {
+			case "cash":
+				shift.CashRevenue = decimal.Add(shift.CashRevenue, p.Amount)
+			case "card":
+				shift.CardRevenue = decimal.Add(shift.CardRevenue, p.Amount)
+			}
 		}
 		ordersCount := 1
 		if shift.OrdersCount != nil {
@@ -174,7 +339,11 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		}
 
 		// 8. Enqueue receipt print job (fire-and-forget: worker отправит после commit).
-		if err := s.enqueueReceipt(tx, rid, &order, in.PaymentMethod, now); err != nil {
+		receiptPM := ""
+		if order.PaymentMethod != nil {
+			receiptPM = *order.PaymentMethod
+		}
+		if err := s.enqueueReceipt(tx, rid, &order, receiptPM, now); err != nil {
 			// Не валим транзакцию из-за печати — клиент может перепечатать вручную.
 			// Но логируем как warning.
 			// log в worker'е увидим всё равно — здесь оставим без явного логирования.
@@ -185,7 +354,7 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		buf.Add(EventOrderClosed, map[string]any{
 			"id":                 order.ID,
 			"total_with_service": order.TotalWithService.String(),
-			"payment_method":     in.PaymentMethod,
+			"payment_method":     receiptPM,
 			"shift_id":           in.ShiftID,
 		})
 		return nil

@@ -634,12 +634,35 @@ paths:
           application/json:
             schema:
               type: object
-              required: [payment_method, account_id, shift_id]
+              required: [shift_id]
               properties:
-                payment_method: { type: string, enum: [cash, card, transfer] }
-                account_id: { type: string, format: uuid }
+                payment_method:
+                  type: string
+                  enum: [cash, card, transfer]
+                  description: Обязателен, если payments[] пустой (single-payment режим).
+                account_id:
+                  type: string
+                  format: uuid
+                  description: Обязателен в single-payment режиме (игнорируется при payments[]).
                 shift_id: { type: string, format: uuid }
-                tip_amount: { type: string }
+                tip_amount: { type: string, description: "Decimal как строка." }
+                cashier_id:
+                  type: string
+                  format: uuid
+                  description: Кассир, закрывший заказ. Пишется в order.cashier_id.
+                discount_type:
+                  type: string
+                  enum: [percent, fixed]
+                  description: Тип скидки. Применяется к order.total ДО формирования financial_operation.
+                discount_value:
+                  type: string
+                  description: Размер скидки (decimal как строка). Для percent 0..100, для fixed <= order.total.
+                discount_reason:
+                  type: string
+                payments:
+                  type: array
+                  description: Split-payment. Если задан — payment_method/account_id из top-level игнорируются. Сумма должна равняться (total - discount) + tip с tolerance 0.01.
+                  items: { $ref: "#/components/schemas/PaymentSplit" }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
 
   /api/v1/orders/{id}/cancel:
@@ -2563,6 +2586,13 @@ components:
         closed_at: { type: string, format: date-time }
         is_split: { type: boolean }
         split_count: { type: integer }
+    PaymentSplit:
+      type: object
+      required: [method, amount, account_id]
+      properties:
+        method: { type: string, enum: [cash, card, transfer] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
     OrderItem:
       type: object
       properties:

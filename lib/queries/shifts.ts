@@ -38,26 +38,27 @@ export async function closeShift(shiftId: string, closedBy: string, closingBalan
 }
 
 export async function addShiftOperation(shiftId: string, type: 'cash_in' | 'cash_out', amount: number, description: string, createdBy?: string) {
+  // created_by резолвится бэком из session token — не отправляем явно.
+  void createdBy
   await unwrap(api.POST('/api/v1/shifts/{id}/operations', {
     params: { path: { id: shiftId } },
     body: {
       type,
       amount: String(amount),
       description: description || null,
-      created_by: createdBy ?? null,
     } as any,
   }))
   logAction(type === 'cash_in' ? 'shift.cash_in' : 'shift.cash_out', 'shift', shiftId, type === 'cash_in' ? 'Внесение наличных' : 'Изъятие наличных', { amount, description })
 }
 
 export async function createShiftExpense(shiftId: string, amount: number, category: string, description: string, createdBy?: string) {
+  void createdBy
   await unwrap(api.POST('/api/v1/shifts/{id}/expenses', {
     params: { path: { id: shiftId } },
     body: {
       type: 'expense',
       amount: String(amount),
       description: `${category}: ${description}`,
-      created_by: createdBy ?? null,
     } as any,
   }))
   logAction('shift.expense', 'shift', shiftId, `Расход из смены: ${category}`, { amount, category, description })

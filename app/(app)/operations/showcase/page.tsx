@@ -87,7 +87,7 @@ export default function ShowcasePage() {
           // v4: consume the semi-finished portion through the canonical endpoint.
           // Server clamps to 0 and writes the stock movement.
           await unwrap(api.POST('/api/v1/semi/consume', {
-            body: { semi_type_id: semi.id, qty: String(writeoffQty) } as any,
+            body: { semi_type_id: semi.semiTypeId, qty: String(writeoffQty) } as any,
           }))
           // Create writeoff record for history
           await createWriteoff({

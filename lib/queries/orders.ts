@@ -423,9 +423,12 @@ export async function fetchOrderSplits(orderId: string): Promise<OrderSplit[]> {
 }
 
 export async function splitOrderEqual(orderId: string, numSplits: number, servicePercent: number) {
+  // service_percent игнорируется бэком (берётся из order). Параметр оставлен
+  // для backward-compat сигнатуры.
+  void servicePercent
   await unwrap(api.POST('/api/v1/orders/{id}/splits/equal', {
     params: { path: { id: orderId } },
-    body: { count: numSplits, service_percent: String(servicePercent) } as any,
+    body: { count: numSplits } as any,
   }))
 }
 
