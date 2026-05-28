@@ -123,7 +123,7 @@ func TestPhase17_ReceiptsIncludeLines(t *testing.T) {
 	}
 	var env struct {
 		Data []struct {
-			ID    string                     `json:"id"`
+			ID    string                    `json:"id"`
 			Lines []models.StockReceiptLine `json:"lines"`
 		} `json:"data"`
 	}
@@ -131,7 +131,7 @@ func TestPhase17_ReceiptsIncludeLines(t *testing.T) {
 		t.Fatalf("decode: %v\n%s", err, b)
 	}
 	var found *struct {
-		ID    string                     `json:"id"`
+		ID    string                    `json:"id"`
 		Lines []models.StockReceiptLine `json:"lines"`
 	}
 	for i := range env.Data {
@@ -177,13 +177,13 @@ func TestPhase17_WriteoffsIncludeLines(t *testing.T) {
 	}
 	var env struct {
 		Data []struct {
-			ID    string                      `json:"id"`
+			ID    string                     `json:"id"`
 			Lines []models.StockWriteoffLine `json:"lines"`
 		} `json:"data"`
 	}
 	_ = json.Unmarshal(b, &env)
 	var found *struct {
-		ID    string                      `json:"id"`
+		ID    string                     `json:"id"`
 		Lines []models.StockWriteoffLine `json:"lines"`
 	}
 	for i := range env.Data {

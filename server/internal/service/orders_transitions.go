@@ -1,7 +1,7 @@
 // orders_transitions — Phase 18 F16/F19:
-//   • PatchOrder (partial PATCH /orders/{id}) для не-терминальных полей
+//   - PatchOrder (partial PATCH /orders/{id}) для не-терминальных полей
 //     (guests_count, comment, customer_id).
-//   • StartCooking / MarkReady / MarkServed — специализированные эндпоинты
+//   - StartCooking / MarkReady / MarkServed — специализированные эндпоинты
 //     для переходов статуса. Заменяют no-op'ы на frontend.
 package service
 

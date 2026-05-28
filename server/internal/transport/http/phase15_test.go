@@ -75,7 +75,7 @@ func TestPhase15_MenuItemsWithIncludes(t *testing.T) {
 	}
 	var env struct {
 		Data []struct {
-			ID            string                 `json:"id"`
+			ID            string                `json:"id"`
 			TechCardLines []models.TechCardLine `json:"tech_card_lines"`
 		} `json:"data"`
 		IngredientPrices map[string]struct {
@@ -89,7 +89,7 @@ func TestPhase15_MenuItemsWithIncludes(t *testing.T) {
 	}
 	// Найдём целевой пункт меню.
 	var found *struct {
-		ID            string                 `json:"id"`
+		ID            string                `json:"id"`
 		TechCardLines []models.TechCardLine `json:"tech_card_lines"`
 	}
 	for i := range env.Data {

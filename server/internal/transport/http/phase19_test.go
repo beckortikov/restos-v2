@@ -25,7 +25,7 @@ func setRestaurantFlags(t *testing.T, gdb *gorm.DB, rid string, techCards, enfor
 	if err := gdb.Model(&models.Restaurant{}).
 		Where("id = ?", rid).
 		Updates(map[string]any{
-			"tech_cards_enabled":   techCards,
+			"tech_cards_enabled":  techCards,
 			"enforce_stock_check": enforce,
 		}).Error; err != nil {
 		t.Fatal(err)

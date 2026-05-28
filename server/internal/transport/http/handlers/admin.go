@@ -151,6 +151,7 @@ func (h *CustomersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, c)
 }
+
 // IncrementStats — POST /api/v1/customers/{id}/stats.
 func (h *CustomersHandler) IncrementStats(w http.ResponseWriter, r *http.Request) {
 	var in service.CustomerStatsInput
@@ -284,6 +285,7 @@ func (h *ReservationsHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, res)
 }
+
 // PatchStatus — POST /api/v1/reservations/{id}/status.
 func (h *ReservationsHandler) PatchStatus(w http.ResponseWriter, r *http.Request) {
 	var in service.ReservationStatusInput

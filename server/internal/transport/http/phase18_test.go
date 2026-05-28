@@ -117,15 +117,15 @@ func TestPhase18_MonthlyRevenueExpenses(t *testing.T) {
 	activity := "operational"
 	cat := "rent"
 	if err := gdb.Create(&models.FinancialOperation{
-		ID:    uuid.NewString(),
-		Type:  &outType,
-		Amount: decimal.MustFromString("50"),
-		Category: &cat,
-		AccountID: &accountID,
-		Activity: &activity,
-		Date: &date,
+		ID:           uuid.NewString(),
+		Type:         &outType,
+		Amount:       decimal.MustFromString("50"),
+		Category:     &cat,
+		AccountID:    &accountID,
+		Activity:     &activity,
+		Date:         &date,
 		RestaurantID: &f.rid,
-		CreatedAt: now, UpdatedAt: now,
+		CreatedAt:    now, UpdatedAt: now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -37,15 +37,15 @@ type CreateOrderInput struct {
 //   - name/price/unit/unit_size/cogs/modifiers: опциональные override-поля.
 //     Если переданы — заменяют snapshot из меню (нужно для comp/discount/custom price).
 type CreateOrderItem struct {
-	MenuItemID  string             `json:"menu_item_id"`
-	Qty         string             `json:"qty"`
-	ModifierIDs []string           `json:"modifier_ids"`
-	Name        *string            `json:"name,omitempty"`
-	Price       *string            `json:"price,omitempty"`
-	Unit        *string            `json:"unit,omitempty"`
-	UnitSize    *string            `json:"unit_size,omitempty"`
-	COGS        *string            `json:"cogs,omitempty"`
-	Modifiers   *[]OrderItemModifierInput   `json:"modifiers,omitempty"`
+	MenuItemID  string                    `json:"menu_item_id"`
+	Qty         string                    `json:"qty"`
+	ModifierIDs []string                  `json:"modifier_ids"`
+	Name        *string                   `json:"name,omitempty"`
+	Price       *string                   `json:"price,omitempty"`
+	Unit        *string                   `json:"unit,omitempty"`
+	UnitSize    *string                   `json:"unit_size,omitempty"`
+	COGS        *string                   `json:"cogs,omitempty"`
+	Modifiers   *[]OrderItemModifierInput `json:"modifiers,omitempty"`
 }
 
 // OrderItemModifierInput — opcional shape для модификатора с overrides.

@@ -1123,10 +1123,10 @@ type SemiFinishedService struct{ r *repo.Repo }
 func NewSemiFinishedService(r *repo.Repo) *SemiFinishedService { return &SemiFinishedService{r: r} }
 
 type SemiTypeInput struct {
-	Name         *string             `json:"name,omitempty"`
-	OutputUnit   *string             `json:"output_unit,omitempty"`
-	YieldPercent *string             `json:"yield_percent,omitempty"`
-	Recipe       *[]SemiRecipeInput  `json:"recipe,omitempty"`
+	Name         *string            `json:"name,omitempty"`
+	OutputUnit   *string            `json:"output_unit,omitempty"`
+	YieldPercent *string            `json:"yield_percent,omitempty"`
+	Recipe       *[]SemiRecipeInput `json:"recipe,omitempty"`
 }
 
 // SemiRecipeInput — строка рецепта полуфабриката.

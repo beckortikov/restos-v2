@@ -127,7 +127,6 @@ func stockAfterCreate(tx *gorm.DB) {
 	}
 }
 
-
 // extractMovements достаёт []StockMovement из tx.Statement.Dest, который
 // может быть *StockMovement, []StockMovement, *[]StockMovement.
 func extractMovements(dest any) []*models.StockMovement {

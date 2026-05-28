@@ -13,18 +13,18 @@ import "time"
 //	FROM shadow_drifts WHERE created_at > now() - interval '24h'
 //	GROUP BY operation;
 type ShadowDrift struct {
-	ID            string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	RestaurantID  string `gorm:"column:restaurant_id;not null;index" json:"restaurant_id"`
-	Operation     string `gorm:"not null" json:"operation"`
-	Matched       bool `gorm:"not null" json:"matched"`
-	V1Status      *int `gorm:"column:v1_status" json:"v1_status"`
-	V4Status      *int `gorm:"column:v4_status" json:"v4_status"`
-	V1LatencyMs   *int `gorm:"column:v1_latency_ms" json:"v1_latency_ms"`
-	V4LatencyMs   *int `gorm:"column:v4_latency_ms" json:"v4_latency_ms"`
-	DiffSizeBytes *int `gorm:"column:diff_size_bytes" json:"diff_size_bytes"`
-	DiffSample    *string `gorm:"column:diff_sample" json:"diff_sample"`
-	UserID        *string `gorm:"column:user_id" json:"user_id"`
-	AppVersion    *string `gorm:"column:app_version" json:"app_version"`
+	ID            string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID  string    `gorm:"column:restaurant_id;not null;index" json:"restaurant_id"`
+	Operation     string    `gorm:"not null" json:"operation"`
+	Matched       bool      `gorm:"not null" json:"matched"`
+	V1Status      *int      `gorm:"column:v1_status" json:"v1_status"`
+	V4Status      *int      `gorm:"column:v4_status" json:"v4_status"`
+	V1LatencyMs   *int      `gorm:"column:v1_latency_ms" json:"v1_latency_ms"`
+	V4LatencyMs   *int      `gorm:"column:v4_latency_ms" json:"v4_latency_ms"`
+	DiffSizeBytes *int      `gorm:"column:diff_size_bytes" json:"diff_size_bytes"`
+	DiffSample    *string   `gorm:"column:diff_sample" json:"diff_sample"`
+	UserID        *string   `gorm:"column:user_id" json:"user_id"`
+	AppVersion    *string   `gorm:"column:app_version" json:"app_version"`
 	CreatedAt     time.Time `gorm:"not null" json:"created_at"`
 }
 
