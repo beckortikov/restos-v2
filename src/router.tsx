@@ -15,11 +15,6 @@ function L(factory: () => Promise<{ default: React.ComponentType }>) {
   )
 }
 
-// Public pages
-const Landing = () => L(() => import('@/app/landing/page'))
-const Pricing = () => L(() => import('@/app/pricing/page'))
-const Oferta = () => L(() => import('@/app/oferta/page'))
-
 // Auth & Connect
 const Login = () => L(() => import('@/app/(auth)/login/page'))
 const Bootstrap = () => L(() => import('@/app/(auth)/bootstrap/page'))
@@ -91,17 +86,11 @@ const AdminRestaurants = () => L(() => import('@/app/(admin)/admin/restaurants/p
 const AdminRestaurantDetail = () => L(() => import('@/app/(admin)/admin/restaurants/[id]/page'))
 const AdminUsers = () => L(() => import('@/app/(admin)/admin/users/page'))
 
-// В Electron'е (file://) landing-страница не нужна — это POS-приложение,
-// не маркетинг. Сразу редиректим на /login. В web — оставляем landing.
-const IS_ELECTRON = typeof window !== 'undefined' && !!(window as { restosDesktop?: unknown }).restosDesktop
-
 export function AppRouter() {
   return (
     <Routes>
-      {/* Public pages */}
-      <Route path="/" element={IS_ELECTRON ? <Navigate to="/login" replace /> : <Landing />} />
-      <Route path="/pricing" element={<Pricing />} />
-      <Route path="/oferta" element={<Oferta />} />
+      {/* Корень — сразу на login (landing/pricing/oferta удалены из POS-сборки). */}
+      <Route path="/" element={<Navigate to="/login" replace />} />
       <Route path="/connect" element={<Connect />} />
 
       {/* Auth */}
