@@ -56,7 +56,7 @@ export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
     unit: item.unit || 'piece',
     unit_size: String(item.unitSize ?? 1),
     sale_step: String(item.saleStep ?? 0),
-    low_stock_threshold: item.lowStockThreshold != null ? String(item.lowStockThreshold) : '5',
+    low_stock_threshold: item.lowStockThreshold != null ? Number(item.lowStockThreshold) : 5,
   }
   const data: any = await unwrap(api.POST('/api/v1/menu/items', { body: body as any }))
   const newId: string | undefined = data?.id
@@ -202,7 +202,7 @@ export async function updateMenuItem(id: string, data: Partial<{
   if (data.cookTimeMin !== undefined) updates.cook_time_min = data.cookTimeMin
   if (data.station !== undefined) updates.station = data.station
   if (data.isBatchCooking !== undefined) updates.is_batch_cooking = data.isBatchCooking
-  if (data.lowStockThreshold !== undefined) updates.low_stock_threshold = String(data.lowStockThreshold)
+  if (data.lowStockThreshold !== undefined) updates.low_stock_threshold = Number(data.lowStockThreshold)
   if (data.unit !== undefined) updates.unit = data.unit
   if (data.unitSize !== undefined) updates.unit_size = String(data.unitSize)
   if (data.saleStep !== undefined) updates.sale_step = String(data.saleStep)
