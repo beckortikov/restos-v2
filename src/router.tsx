@@ -91,11 +91,15 @@ const AdminRestaurants = () => L(() => import('@/app/(admin)/admin/restaurants/p
 const AdminRestaurantDetail = () => L(() => import('@/app/(admin)/admin/restaurants/[id]/page'))
 const AdminUsers = () => L(() => import('@/app/(admin)/admin/users/page'))
 
+// В Electron'е (file://) landing-страница не нужна — это POS-приложение,
+// не маркетинг. Сразу редиректим на /login. В web — оставляем landing.
+const IS_ELECTRON = typeof window !== 'undefined' && !!(window as { restosDesktop?: unknown }).restosDesktop
+
 export function AppRouter() {
   return (
     <Routes>
       {/* Public pages */}
-      <Route path="/" element={<Landing />} />
+      <Route path="/" element={IS_ELECTRON ? <Navigate to="/login" replace /> : <Landing />} />
       <Route path="/pricing" element={<Pricing />} />
       <Route path="/oferta" element={<Oferta />} />
       <Route path="/connect" element={<Connect />} />
