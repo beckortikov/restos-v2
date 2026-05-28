@@ -12,6 +12,7 @@ import { fetchFinancialOperations, fetchFinancialAccounts, createFinancialOperat
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
+import { useDataSync } from '@/hooks/use-data-sync'
 import {
   PieChart, Pie, Cell,
   BarChart, Bar,
@@ -45,11 +46,20 @@ export default function CashflowPage() {
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [loading, setLoading] = useState(true)
 
+  const reloadAll = () => {
+    Promise.all([fetchFinancialOperations(), fetchFinancialAccounts()])
+      .then(([ops, accs]) => { setOperations(ops); setAccounts(accs) })
+      .catch(() => {})
+  }
+
   useEffect(() => {
     Promise.all([fetchFinancialOperations(), fetchFinancialAccounts()])
       .then(([ops, accs]) => { setOperations(ops); setAccounts(accs) })
       .finally(() => setLoading(false))
   }, [])
+
+  // SSE-driven auto-refresh: другой кассир провёл операцию, закрылась смена и т.п.
+  useDataSync(['financial_operations', 'cash_shifts'], reloadAll)
 
   async function handleCreateOperation(data: { type: 'in' | 'out' | 'transfer'; amount: number; category: string; accountId: string; activity: FinancialActivity; description: string; date: string }) {
     try {

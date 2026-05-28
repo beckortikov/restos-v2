@@ -459,7 +459,7 @@ export default function OrdersPage() {
   }, [refetchAll])
 
   // Список — всегда «сегодня», поэтому realtime/sync и polling работают безусловно.
-  useDataSync(['orders', 'tables', 'users'], () => { refetchAll().catch(console.error) })
+  useDataSync(['orders', 'order_items', 'order_splits', 'order_voids', 'tables', 'users'], () => { refetchAll().catch(console.error) })
 
   // Polling каждые 8с только в local-mode. Пауза при скрытой вкладке.
   // Возврат во вкладку → один немедленный refetch.

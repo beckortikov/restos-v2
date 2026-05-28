@@ -320,7 +320,7 @@ export default function TableMapPage() {
     })
   }, [refetchAll])
 
-  useDataSync(['tables', 'zones', 'orders', 'users', 'menu_items'], () => { refetchAll().catch(console.error) })
+  useDataSync(['tables', 'zones', 'orders', 'order_items', 'users', 'menu_items', 'reservations'], () => { refetchAll().catch(console.error) })
 
   // Fetch on mount, and poll every 10s ONLY in local mode (Desktop app / Local DB)
   useEffect(() => {

@@ -12,6 +12,7 @@ import { CreateMenuItemDialog } from '@/components/dialogs/create-menu-item-dial
 import { EditMenuItemDialog } from '@/components/dialogs/edit-menu-item-dialog'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
+import { useDataSync } from '@/hooks/use-data-sync'
 
 export default function MenuPage() {
   const { canDo } = useAuth()
@@ -44,6 +45,10 @@ export default function MenuPage() {
   useEffect(() => {
     reloadAll().finally(() => setLoading(false))
   }, [])
+
+  // SSE-driven auto-refresh при изменении меню (другой кассир добавил позицию,
+  // менеджер обновил техкарту, и т.п.).
+  useDataSync(['menu_items', 'menu_categories', 'tech_card_lines'], () => { reloadAll().catch(console.error) })
 
   async function handleCreateMenuItem(data: { name: string; category: string; price: number; emoji: string; cogs: number; isAvailable: boolean; isPurchased?: boolean; purchasePrice?: number; purchaseUnit?: string; purchaseMinQty?: number; isBatchCooking?: boolean; lowStockThreshold?: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; saleStep?: number; techCard: { name: string; qty: number; unit: string; ingredientId?: string; semiId?: string }[] }) {
     try {

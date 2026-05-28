@@ -10,6 +10,7 @@ import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, Chevron
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { useDataSync } from '@/hooks/use-data-sync'
 
 const EXPENSE_CATEGORIES = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
 
@@ -137,16 +138,18 @@ export default function ShiftsPage() {
     return dSub(dAdd(dAdd(activeShift.openingBalance, liveRevenue.cashRevenue), cashIn), cashOut)
   }, [activeShift, shiftOps, liveRevenue.cashRevenue])
 
-  // Poll every 10 seconds for live revenue updates
-  useEffect(() => {
-    if (!activeShift) return
-    const interval = setInterval(() => {
-      fetchShiftRevenue(activeShift.id).then(setLiveRevenue).catch(() => {})
-      fetchShiftOperations(activeShift.id).then(setShiftOps).catch(() => {})
-      loadServiceRows(activeShift).catch(() => {})
-    }, 2000)
-    return () => clearInterval(interval)
-  }, [activeShift, loadServiceRows])
+  // SSE-driven auto-refresh — заменяет polling каждые 2с активной смены.
+  // Live revenue зависит от заказов (closeOrder) и операций смены.
+  const liveRefresh = useCallback(() => {
+    if (!activeShift) { reload().catch(console.error); return }
+    fetchShiftRevenue(activeShift.id).then(setLiveRevenue).catch(() => {})
+    fetchShiftOperations(activeShift.id).then(setShiftOps).catch(() => {})
+    loadServiceRows(activeShift).catch(() => {})
+  }, [activeShift, reload, loadServiceRows])
+  useDataSync(
+    ['cash_shifts', 'cash_shift_operations', 'orders', 'financial_operations'],
+    liveRefresh,
+  )
 
   const handlePayService = async (row: { waiterId: string; waiterName: string; toPay: number }) => {
     if (!activeShift || row.toPay <= 0) return

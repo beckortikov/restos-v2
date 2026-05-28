@@ -10,6 +10,7 @@ import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIn
 import { Search, AlertTriangle, TrendingDown, Package, Plus } from 'lucide-react'
 import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
 import { toast } from 'sonner'
+import { useDataSync } from '@/hooks/use-data-sync'
 
 function StockLevel({ qty, minQty }: { qty: number; minQty: number }) {
   const pct = Math.min(100, (qty / (minQty * 3)) * 100)
@@ -106,16 +107,9 @@ export default function InventoryPage() {
     fetchIngredientCategories().then(setIngredientCategories)
   }, [reload])
 
-  // Poll every 15s ONLY in local mode (Desktop app / Local DB)
-  useEffect(() => {
-    let isLocal = false
-    try { isLocal = localStorage.getItem('restos-sync-mode') === 'local' } catch {}
-    
-    if (isLocal) {
-      const interval = setInterval(reload, 2000)
-      return () => clearInterval(interval)
-    }
-  }, [reload])
+  // SSE-driven auto-refresh — заменяет polling каждые 2с.
+  // Ingredients qty меняется через stock_movements (см. CLAUDE.md правило #5).
+  useDataSync(['ingredients', 'stock_movements'], reload)
 
   async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; isFood?: boolean }) {
     try {

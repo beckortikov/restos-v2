@@ -23,6 +23,7 @@ import {
 } from '@/lib/queries'
 import { ChevronRight, CheckCircle2, Circle, Flame, FlaskConical } from 'lucide-react'
 import { toast } from 'sonner'
+import { useDataSync } from '@/hooks/use-data-sync'
 
 const COLUMNS: { status: OrderStatus; label: string; color: string; headerBg: string }[] = [
   { status: 'new', label: 'Новые', color: 'bg-blue-500', headerBg: 'bg-blue-50 border-blue-200' },
@@ -228,20 +229,15 @@ export default function KitchenPage() {
     refetchAll().finally(() => setLoading(false))
   }, [refetchAll])
 
-  // Poll every 10s ONLY in local mode (Desktop app / Local DB)
+  // SSE-driven auto-refresh — заменяет старый polling каждые 8с.
+  useDataSync(['orders', 'order_items'], () => { refetchAll().catch(console.error) })
+
+  // Refetch при возврате во вкладку (на случай если SSE прозевал event,
+  // например, мобильный WebView заморозил EventSource).
   useEffect(() => {
-    let isLocal = false
-    try { isLocal = localStorage.getItem('restos-sync-mode') === 'local' } catch {}
-    
-    if (!isLocal) return
-    const tick = () => { if (!document.hidden) refetchAll().catch(console.error) }
-    const interval = setInterval(tick, 8000)
     const onVisible = () => { if (!document.hidden) refetchAll().catch(console.error) }
     document.addEventListener('visibilitychange', onVisible)
-    return () => {
-      clearInterval(interval)
-      document.removeEventListener('visibilitychange', onVisible)
-    }
+    return () => document.removeEventListener('visibilitychange', onVisible)
   }, [refetchAll])
 
   // Filter orders by station — only show orders that have items for this station
