@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build artifacts
+dist/
+build/
+.next/
+*.tsbuildinfo
+out/
+
+# Electron release artifacts
+desktop/release/
+desktop/data/
+desktop/dist/
+desktop/frontend/
+
+# Android build artifacts
+android/.gradle/
+android/build/
+android/app/build/
+android/.idea/
+android/local.properties
+android/capacitor-cordova-android-plugins/
+*.apk
+*.aab
+
+# Go server
+server/bin/
+server/postgres-data/
+server/postgres-bin/
+server/logs/
+server/data/
+
+# Local config / secrets
+.env
+.env.local
+.env.*.local
+*.secret
+desktop/.pg-secret
+
+# Test artifacts
+test-results/
+playwright-report/
+coverage/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Editors
+.vscode/
+.idea/
+
+# Lock files of tools we don't use
+package-lock.json
+
+# Spreadsheets и временные документы (project-specific)
+*.xlsx
+.~lock*
+correction.txt
+ins.md
+test_write.txt

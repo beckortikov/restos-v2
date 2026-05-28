@@ -1,0 +1,3286 @@
+openapi: 3.1.0
+info:
+  title: RestOS v4 — restos-server API
+  version: 1.0.0
+  description: |
+    Полный REST API restos-server (Go) для Electron-фронта, Capacitor APK
+    официанта, и будущего Owner Dashboard на Next.js.
+
+    Все эндпоинты под `/api/v1` требуют Bearer-токен (выдаётся через
+    POST /api/v1/auth/login). Все мутирующие операции требуют
+    `Idempotency-Key` (UUID). Большие коллекции пагинируются через `cursor`.
+
+    Real-time события — через SSE `/api/v1/events`.
+
+servers:
+  - url: http://127.0.0.1:3001
+    description: Локальный кассирский ПК (Electron)
+  - url: http://{lan_host}:3001
+    description: LAN-доступ для официантов (Waiter APK)
+    variables:
+      lan_host:
+        default: 192.168.1.10
+
+security:
+  - bearerAuth: []
+
+# ─── tags для группировки в Swagger UI ────────────────────────────────────
+tags:
+  - { name: health,       description: Liveness/readiness probes }
+  - { name: auth,         description: PIN-логин и сессии }
+  - { name: menu,         description: Меню и категории }
+  - { name: floor,        description: Зоны и столы }
+  - { name: stock,        description: Склад, движения, инвентаризации }
+  - { name: shifts,       description: Кассовые смены }
+  - { name: orders,       description: Заказы, позиции, оплата, отмены }
+  - { name: printers,     description: Настройка принтеров }
+  - { name: print_jobs,   description: Очередь печати }
+  - { name: reports,      description: XLSX-отчёты }
+  - { name: license,      description: Лицензирование (7+7+lock) }
+  - { name: shadow,       description: Параллельный прогон v1↔v4 (Phase 8) }
+  - { name: admin,        description: Users / Customers / Suppliers / Reservations / Restaurant }
+  - { name: bootstrap,    description: Первичная инициализация (создание первого ресторана и Owner) }
+  - { name: finance,      description: Assets / Liabilities / Equity / Budget }
+  - { name: payroll,      description: TimeEntries (clock-in/out) }
+  - { name: semi,         description: Полуфабрикаты (types + stock) }
+  - { name: events,       description: Server-Sent Events }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PATHS
+# ═══════════════════════════════════════════════════════════════════════════
+paths:
+  # ─── Health ─────────────────────────────────────────────────────────────
+  /healthz:
+    get:
+      tags: [health]
+      summary: Liveness
+      security: []
+      responses: { "200": { $ref: "#/components/responses/OK" } }
+
+  /readyz:
+    get:
+      tags: [health]
+      summary: Readiness (БД доступна)
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/OK" }
+        "503": { $ref: "#/components/responses/Error" }
+
+  # ─── Auth ───────────────────────────────────────────────────────────────
+  /api/v1/auth/login:
+    post:
+      tags: [auth]
+      summary: PIN-login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [restaurant_id, pin]
+              properties:
+                restaurant_id: { type: string, format: uuid }
+                pin: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  session: { $ref: "#/components/schemas/SessionInfo" }
+        "401": { $ref: "#/components/responses/Error" }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      summary: Logout текущего токена
+      responses:
+        "204": { description: No content }
+
+  # ─── License ────────────────────────────────────────────────────────────
+  /api/v1/license/status:
+    get:
+      tags: [license]
+      summary: Текущее состояние лицензии
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/LicenseStatus" } } }
+
+  /api/v1/license/activate:
+    post:
+      tags: [license]
+      summary: Активация лицензии Ed25519-токеном
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties: { token: { type: string } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/LicenseStatus" } } }
+        "400": { $ref: "#/components/responses/Error" }
+
+  # ─── Menu ───────────────────────────────────────────────────────────────
+  /api/v1/menu/items:
+    get:
+      tags: [menu]
+      summary: Список блюд
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: q, schema: { type: string }, description: ILIKE по name (pg_trgm GIN) }
+        - { in: query, name: available, schema: { type: boolean } }
+        - in: query
+          name: include
+          schema: { type: string }
+          description: |
+            CSV: `tech_cards` подгружает tech_card_lines для каждого блюда
+            (batch, не N+1); `ingredient_prices` дополнительно отдаёт
+            top-level карту `ingredient_prices`.
+            Пример: `?include=tech_cards,ingredient_prices`.
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/MenuItemsList" } } }
+    post:
+      tags: [menu]
+      summary: Создать блюдо (Manager)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MenuItemInput" } } }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/MenuItem" } } }
+
+  /api/v1/menu/items/{id}:
+    patch:
+      tags: [menu]
+      summary: Обновить блюдо
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/MenuItemInput" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/MenuItem" } } }
+    delete:
+      tags: [menu]
+      summary: Soft delete (is_deleted=true)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": { description: No content }
+
+  /api/v1/menu/items/import:
+    post:
+      tags: [menu]
+      summary: Импорт меню XLSX (upsert by name)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties: { file: { type: string, format: binary } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } }
+
+  /api/v1/menu/categories:
+    get:
+      tags: [menu]
+      summary: Категории меню
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/MenuCategoriesList" } } }
+    post:
+      tags: [menu]
+      summary: Создать категорию
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string }, sort_order: { type: integer } }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/MenuCategory" } } }
+
+  /api/v1/menu/categories/{id}:
+    patch:
+      tags: [menu]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { name: { type: string }, sort_order: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/MenuCategory" } } }
+    delete:
+      tags: [menu]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "204": { description: No content } }
+
+  # ─── Floor ──────────────────────────────────────────────────────────────
+  /api/v1/zones:
+    get: { tags: [floor], summary: Зоны зала, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ZonesList" } } } } } }
+    post:
+      tags: [floor]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ZoneInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Zone" } } } } }
+
+  /api/v1/tables:
+    get:
+      tags: [floor]
+      summary: Столы
+      parameters:
+        - { in: query, name: zone_id, schema: { type: string, format: uuid } }
+        - { in: query, name: status, schema: { type: string, enum: [free, occupied, reserved, dirty] } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/TablesList" } } }
+    post:
+      tags: [floor]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TableInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
+
+  # ─── Stock ──────────────────────────────────────────────────────────────
+  /api/v1/stock/ingredients:
+    get:
+      tags: [stock]
+      summary: Ингредиенты склада
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: q, schema: { type: string } }
+        - { in: query, name: low, schema: { type: boolean }, description: qty<=min_qty }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/IngredientsList" } } }
+    post:
+      tags: [stock]
+      summary: Создать ингредиент. Если qty>0 — пишет также StockMovement type=receipt.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/IngredientInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Ingredient" } } } } }
+
+  /api/v1/stock/ingredients/{id}:
+    patch:
+      tags: [stock]
+      summary: Обновить ингредиент (qty НЕ принимается — только через stock movements).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/IngredientInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Ingredient" } } } } }
+    delete:
+      tags: [stock]
+      summary: Удалить ингредиент. 409 если используется в tech_card_lines.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "204": { description: No Content } }
+
+  /api/v1/stock/ingredient-categories:
+    get:
+      tags: [stock]
+      summary: Уникальные категории ингредиентов (отсортированные).
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StringList" } } } } }
+
+  /api/v1/stock/movements:
+    get:
+      tags: [stock]
+      summary: Лента движений склада.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: ingredient_id, schema: { type: string, format: uuid } }
+        - { in: query, name: type, schema: { type: string } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockMovementsList" } } } } }
+
+  /api/v1/stock/ingredients/import:
+    post:
+      tags: [stock]
+      summary: Импорт ингредиентов XLSX
+      requestBody:
+        required: true
+        content: { multipart/form-data: { schema: { type: object, properties: { file: { type: string, format: binary } } } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } }
+
+  /api/v1/stock/receipts:
+    get:
+      tags: [stock]
+      summary: Список приёмок.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: supplier_id, schema: { type: string, format: uuid } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: include, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceiptsList" } } } } }
+    post:
+      tags: [stock]
+      summary: Приёмка от поставщика (создаёт stock_movements +qty)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
+
+  /api/v1/stock/receipts/{id}/confirm:
+    post:
+      tags: [stock]
+      summary: Подтвердить приёмку. Для credit — создаст Liability, при account_id — FinancialOperation.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmReceiptInput" } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
+
+  /api/v1/stock/writeoffs:
+    get:
+      tags: [stock]
+      summary: Список списаний.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: include, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockWriteoffsList" } } } } }
+    post:
+      tags: [stock]
+      summary: Списание (создаёт stock_movements -qty)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/WriteoffInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockWriteoff" } } } } }
+
+  /api/v1/stock/inventory:
+    get:
+      tags: [stock]
+      summary: Список инвентаризаций.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: status, schema: { type: string, enum: [draft, applied] } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/InventoryChecksList" } } } } }
+    post:
+      tags: [stock]
+      summary: Создать draft инвентаризации
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/InventoryCheckInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/InventoryCheck" } } } } }
+
+  /api/v1/stock/inventory/{id}:
+    get:
+      tags: [stock]
+      summary: Одна инвентаризация (header).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/InventoryCheck" } } } } }
+
+  /api/v1/stock/inventory/{id}/lines:
+    get:
+      tags: [stock]
+      summary: Линии инвентаризации.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/InventoryCheckLinesList" } } } } }
+
+  /api/v1/supply-expenses:
+    get:
+      tags: [stock]
+      summary: Хоз. расходы (выдачи со склада не-food).
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: ingredient_id, schema: { type: string, format: uuid } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SupplyExpensesList" } } } } }
+    post:
+      tags: [stock]
+      summary: Создать хоз. расход (создаёт StockMovement -qty).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplyExpenseInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SupplyExpense" } } } } }
+
+  /api/v1/stock/inventory/{id}/apply:
+    post:
+      tags: [stock]
+      summary: Применить инвентаризацию (корректирующие stock_movements)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/InventoryCheck" } } } } }
+
+  # ─── Shifts ─────────────────────────────────────────────────────────────
+  /api/v1/shifts:
+    get:
+      tags: [shifts]
+      summary: Кассовые смены
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: status, schema: { type: string, enum: [open, closed] } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ShiftsList" } } } } }
+    post:
+      tags: [shifts]
+      summary: Открыть смену
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [opening_balance]
+              properties:
+                opening_balance: { type: string }
+                account_id: { type: string, format: uuid }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShift" } } } } }
+
+  /api/v1/shifts/{id}:
+    get:
+      tags: [shifts]
+      summary: Смена + операции
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shift: { $ref: "#/components/schemas/CashShift" }
+                  operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
+
+  /api/v1/shifts/{id}/close:
+    post:
+      tags: [shifts]
+      summary: Закрыть смену (фиксирует expected_cash, closing_balance)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [closing_balance], properties: { closing_balance: { type: string } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CashShift" } } } } }
+
+  /api/v1/shifts/{id}/operations:
+    get:
+      tags: [shifts]
+      summary: Список cash-операций смены
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+    post:
+      tags: [shifts]
+      summary: Cash in/out внутри смены
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, amount]
+              properties:
+                type: { type: string, enum: [cash_in, cash_out] }
+                amount: { type: string }
+                description: { type: string }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
+
+  # ─── Orders ─────────────────────────────────────────────────────────────
+  /api/v1/orders:
+    get:
+      tags: [orders]
+      summary: Список заказов (slim)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: status, schema: { type: string } }
+        - { in: query, name: table_id, schema: { type: string, format: uuid } }
+        - { in: query, name: shift_id, schema: { type: string, format: uuid } }
+        - { in: query, name: waiter_id, schema: { type: string, format: uuid } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrdersSlimList" } } } } }
+    post:
+      tags: [orders]
+      summary: Создать заказ + позиции
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateOrderInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+
+  /api/v1/orders/{id}:
+    get:
+      tags: [orders]
+      summary: Заказ + items + modifiers + voids
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderDetail" } } } } }
+    patch:
+      tags: [orders]
+      summary: "Patch open order header fields (guests_count, comment, customer_id)"
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                guests_count: { type: integer }
+                comment: { type: string }
+                customer_id: { type: string, format: uuid }
+      responses: { "200": { description: OK } }
+
+  /api/v1/order-items/{id}:
+    get:
+      tags: [orders]
+      summary: Точечный lookup позиции заказа (без items/modifiers заказа)
+      description: |
+        Используется фронтом, чтобы resolve order_id по item_id без линейного
+        скана /orders. Tenant-изоляция через JOIN на orders.restaurant_id.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderItem" } } } }
+        "404": { description: Not found }
+
+  /api/v1/orders/{id}/items:
+    post:
+      tags: [orders]
+      summary: Добавить позиции в открытый заказ
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items: { type: array, items: { $ref: "#/components/schemas/OrderItemInput" } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+
+  /api/v1/orders/{id}/close:
+    post:
+      tags: [orders]
+      summary: Закрыть заказ — revenue, deduct stock, attach shift, print receipt
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_method, account_id, shift_id]
+              properties:
+                payment_method: { type: string, enum: [cash, card, transfer] }
+                account_id: { type: string, format: uuid }
+                shift_id: { type: string, format: uuid }
+                tip_amount: { type: string }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+
+  /api/v1/orders/{id}/cancel:
+    post:
+      tags: [orders]
+      summary: Отменить заказ + cancel-runner на станции
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [reason], properties: { reason: { type: string } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+
+  /api/v1/orders/{id}/items/{itemId}/void:
+    post:
+      tags: [orders]
+      summary: Отменить одну позицию + cancel-runner на станции
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+                approved_by: { type: string, format: uuid }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrderItem" } } } } }
+
+  /api/v1/orders/{id}/split:
+    post:
+      tags: [orders]
+      summary: Разделить счёт (equal | by_items)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode: { type: string, enum: [equal, by_items] }
+                count: { type: integer, minimum: 2 }
+                splits:
+                  type: array
+                  items: { type: object, properties: { item_ids: { type: array, items: { type: string, format: uuid } } } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: { $ref: "#/components/schemas/Order" }
+                  splits: { type: array, items: { $ref: "#/components/schemas/OrderSplit" } }
+
+  /api/v1/orders/{id}/splits:
+    get:
+      tags: [orders]
+      summary: Список splits заказа
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/OrderSplit" } }
+
+  /api/v1/orders/{id}/splits/equal:
+    post:
+      tags: [orders]
+      summary: Разделить счёт на N равных частей (заменяет существующие unpaid splits)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [count]
+              properties:
+                count: { type: integer, minimum: 2 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: { $ref: "#/components/schemas/Order" }
+                  splits: { type: array, items: { $ref: "#/components/schemas/OrderSplit" } }
+
+  /api/v1/orders/{id}/splits/by-items:
+    post:
+      tags: [orders]
+      summary: Разделить счёт по группам позиций
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [groups]
+              properties:
+                groups:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      item_ids: { type: array, items: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/orders/{id}/splits/cancel:
+    post:
+      tags: [orders]
+      summary: Отменить все unpaid splits заказа
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: { $ref: "#/components/schemas/Order" }
+                  removed: { type: integer }
+
+  /api/v1/splits/{split_id}/pay:
+    post:
+      tags: [orders]
+      summary: Оплатить split (при оплате последнего — auto-close заказа)
+      parameters:
+        - { in: path, name: split_id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payment_method, account_id]
+              properties:
+                payment_method: { type: string }
+                account_id: { type: string, format: uuid }
+                account_name: { type: string }
+                cashier_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/orders/{id}/check-and-close:
+    post:
+      tags: [orders]
+      summary: Проверить оплату всех splits и закрыть заказ если оплачены
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_id: { type: string, format: uuid }
+                  paid_count: { type: integer }
+                  unpaid_count: { type: integer }
+                  closed: { type: boolean }
+                  order: { $ref: "#/components/schemas/Order" }
+
+  /api/v1/orders/{id}/voids:
+    get:
+      tags: [orders]
+      summary: Voids заказа
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+
+  /api/v1/voids:
+    get:
+      tags: [orders]
+      summary: Voids нескольких заказов
+      parameters:
+        - { in: query, name: order_ids, required: false, schema: { type: string }, description: "comma-separated UUIDs" }
+      responses: { "200": { description: OK } }
+    post:
+      tags: [orders]
+      summary: Standalone void (retroactive)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [order_id, reason]
+              properties:
+                order_id: { type: string, format: uuid }
+                item_name: { type: string }
+                item_qty: { type: integer }
+                item_price: { type: string }
+                reason: { type: string }
+                approved_by: { type: string }
+                approved_by_name: { type: string }
+                created_by: { type: string }
+                created_by_name: { type: string }
+      responses: { "201": { description: Created } }
+
+  /api/v1/orders/{id}/items/{itemId}/cancel:
+    post:
+      tags: [orders]
+      summary: Отменить позицию (pre-payment, мягкая)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+                qty: { type: string }
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/items/{itemId}/served:
+    post:
+      tags: [orders]
+      summary: Отметить позицию как поданную
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+    delete:
+      tags: [orders]
+      summary: Снять отметку «подано»
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/items/{itemId}/claim-print:
+    post:
+      tags: [orders]
+      summary: Атомарно занять позицию на печать (KDS worker lock)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [claimed_by]
+              properties:
+                station: { type: string }
+                claimed_by: { type: string }
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/items/{itemId}/release-print:
+    post:
+      tags: [orders]
+      summary: Снять lock на печать
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/items/{itemId}/claim-cancel-print:
+    post:
+      tags: [orders]
+      summary: Атомарно занять позицию на cancel-runner печать
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [claimed_by]
+              properties:
+                station: { type: string }
+                claimed_by: { type: string }
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/items/{itemId}/release-cancel-print:
+    post:
+      tags: [orders]
+      summary: Снять cancel-runner lock
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/reopen:
+    post:
+      tags: [orders]
+      summary: Переоткрыть закрытый заказ
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+      responses: { "200": { description: OK } }
+  /api/v1/orders/{id}/start-cooking:
+    post:
+      tags: [orders]
+      summary: "Перевести заказ в cooking"
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { cashier_id: { type: string, format: uuid } }
+      responses: { "200": { description: OK } }
+  /api/v1/orders/{id}/mark-ready:
+    post:
+      tags: [orders]
+      summary: "Перевести заказ в ready"
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+  /api/v1/orders/{id}/mark-served:
+    post:
+      tags: [orders]
+      summary: "Перевести заказ в served"
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/table:
+    post:
+      tags: [orders]
+      summary: Перенести заказ на другой стол
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [new_table_id]
+              properties:
+                new_table_id: { type: string, format: uuid }
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/auto-ready/check:
+    post:
+      tags: [orders]
+      summary: Перевод cooking-заказов с истёкшим expected_ready_at в ready
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "200": { description: OK } }
+
+  /api/v1/admin/cleanup/orphan-orders:
+    post:
+      tags: [admin]
+      summary: Отменить старые незакрытые заказы (>24ч)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "200": { description: OK } }
+
+  /api/v1/orders/{id}/transfer:
+    post:
+      tags: [orders]
+      summary: Перенести заказ на другой стол/официанта
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                table_id: { type: string, format: uuid }
+                waiter_id: { type: string, format: uuid }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+
+  # ─── Printers ───────────────────────────────────────────────────────────
+  /api/v1/printers:
+    get:
+      tags: [printers]
+      summary: Список принтеров
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PrintersList" } } } } }
+    post:
+      tags: [printers]
+      summary: Создать принтер
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PrinterInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Printer" } } } } }
+
+  /api/v1/printers/{id}:
+    get:
+      tags: [printers]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Printer" } } } } }
+    patch:
+      tags: [printers]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PrinterInput" } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Printer" } } } } }
+    delete:
+      tags: [printers]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "204": { description: No content } }
+
+  /api/v1/printers/{id}/test:
+    post:
+      tags: [printers]
+      summary: Печать пробной страницы (создаёт print_job type=test)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/PrintJob" } } } } }
+
+  # ─── Print jobs ─────────────────────────────────────────────────────────
+  /api/v1/print/jobs:
+    get:
+      tags: [print_jobs]
+      summary: Очередь печати
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: status, schema: { type: string, enum: [pending, running, done, failed] } }
+        - { in: query, name: type, schema: { type: string, enum: [receipt, runner, cancel_runner, test] } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PrintJobsList" } } } } }
+
+  /api/v1/print/jobs/{id}/retry:
+    post:
+      tags: [print_jobs]
+      summary: Перезапустить failed/done job
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PrintJob" } } } } }
+
+  # ─── Reports ────────────────────────────────────────────────────────────
+  /api/v1/reports/orders.xlsx:
+    get: { tags: [reports], summary: Заказы за период, parameters: [{ $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" }], responses: { "200": { $ref: "#/components/responses/XLSX" } } }
+  /api/v1/reports/shifts/{id}.xlsx:
+    get:
+      tags: [reports]
+      summary: Z-отчёт смены (3 листа)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { $ref: "#/components/responses/XLSX" } }
+  /api/v1/reports/stock-movements.xlsx:
+    get:
+      tags: [reports]
+      summary: Движения склада
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - { in: query, name: ingredient_id, schema: { type: string, format: uuid } }
+      responses: { "200": { $ref: "#/components/responses/XLSX" } }
+  /api/v1/reports/audit.xlsx:
+    get: { tags: [reports], summary: Лог мутаций, parameters: [{ $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" }], responses: { "200": { $ref: "#/components/responses/XLSX" } } }
+  /api/v1/reports/pl.xlsx:
+    get: { tags: [reports], summary: P&L (revenue - COGS - writeoffs - supply expenses), parameters: [{ $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" }], responses: { "200": { $ref: "#/components/responses/XLSX" } } }
+
+  # ─── Shadow (Phase 8) ───────────────────────────────────────────────────
+  /api/v1/admin/shadow/reports:
+    post:
+      tags: [shadow]
+      summary: Batch-приём drift-отчётов от фронта
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                app_version: { type: string }
+                items: { type: array, items: { $ref: "#/components/schemas/ShadowReportItem" } }
+      responses: { "202": { description: Accepted, content: { application/json: { schema: { type: object, properties: { accepted: { type: integer } } } } } } }
+
+  /api/v1/admin/shadow/stats:
+    get:
+      tags: [shadow]
+      summary: Агрегаты по operations (match rate, latency)
+      parameters: [{ $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" }]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ShadowStats" } } } } }
+
+  /api/v1/admin/shadow/drifts:
+    get:
+      tags: [shadow]
+      summary: Последние drift'ы с расхождением (для debug)
+      parameters: [ { in: query, name: limit, schema: { type: integer, default: 50, maximum: 200 } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/ShadowDrift" } } } } } } } }
+
+  # ─── Admin ──────────────────────────────────────────────────────────────
+  /api/v1/users:
+    get:
+      tags: [admin]
+      summary: Список персонала
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - { in: query, name: restaurant_id, schema: { type: string, format: uuid } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/UsersList" } } } } }
+    post:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UserInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } } }
+
+  /api/v1/users/{id}:
+    get:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } } }
+    patch:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/UserInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } } }
+    delete:
+      tags: [admin]
+      summary: Soft delete (role=deleted)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+  /api/v1/users/generate-pin:
+    post:
+      tags: [admin]
+      summary: Сгенерировать уникальный 4-значный PIN для пользователя
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                restaurant_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  pin: { type: string }
+  /api/v1/users/validate-pin:
+    post:
+      tags: [admin]
+      summary: Проверить PIN, вернуть пользователя если совпал
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pin: { type: string }
+                restaurant_id: { type: string, format: uuid }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/User" } } } }
+        "404": { description: Not Found }
+
+  /api/v1/customers:
+    get:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Cursor" }, { in: query, name: q, schema: { type: string } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CustomersList" } } } } }
+    post:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CustomerInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Customer" } } } } }
+  /api/v1/customers/{id}:
+    patch:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CustomerInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Customer" } } } } }
+    delete:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+  /api/v1/customers/{id}/stats:
+    post:
+      tags: [admin]
+      summary: "Best-effort recompute customer CRM stats after order close"
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                order_total: { type: string }
+      responses: { "200": { description: OK } }
+
+  /api/v1/suppliers:
+    get:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/Limit" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SuppliersList" } } } } }
+    post:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Supplier" } } } } }
+  /api/v1/suppliers/{id}:
+    patch:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Supplier" } } } } }
+    delete:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  /api/v1/reservations:
+    get:
+      tags: [admin]
+      parameters:
+        - { in: query, name: status, schema: { type: string } }
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ReservationsList" } } } } }
+    post:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReservationInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Reservation" } } } } }
+  /api/v1/reservations/{id}:
+    patch:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ReservationInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Reservation" } } } } }
+    delete:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  /api/v1/restaurant:
+    get: { tags: [admin], summary: Текущий ресторан, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Restaurant" } } } } } }
+    patch:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RestaurantInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Restaurant" } } } } }
+
+  # ─── Restaurants (global, Phase 10) ─────────────────────────────────────
+  /api/v1/restaurants:
+    get:
+      tags: [admin]
+      summary: Список всех ресторанов
+      responses: { "200": { description: OK } }
+    post:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RestaurantInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Restaurant" } } } } }
+  /api/v1/restaurants/{id}:
+    get:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Restaurant" } } } } }
+    patch:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RestaurantInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Restaurant" } } } } }
+    delete:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+  /api/v1/restaurants/{id}/stats:
+    get:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+  /api/v1/restaurants/{id}/clear-operations:
+    post:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "200": { description: OK } }
+  /api/v1/restaurants/{id}/clear-menu:
+    post:
+      tags: [admin]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "200": { description: OK } }
+  /api/v1/restaurants/{id}/seed:
+    post:
+      tags: [admin]
+      summary: "Заполнить ресторан demo-данными"
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: dataset, schema: { type: string, enum: [demo] } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+
+  # ─── Zones write (Phase 10) — POST на /api/v1/zones объявлен в Zones-блоке выше.
+  /api/v1/zones/{id}:
+    patch:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ZoneInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Zone" } } } } }
+    delete:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Tables write (Phase 10) ────────────────────────────────────────────
+  /api/v1/tables/{id}:
+    patch:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TableInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
+    delete:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+  /api/v1/tables/{id}/status:
+    patch:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TableInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
+  /api/v1/tables/{id}/assign-waiter:
+    post:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { waiter_id: { type: string, format: uuid, nullable: true } } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
+  /api/v1/tables/{id}/open-for-order:
+    post:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [order_id], properties: { order_id: { type: string, format: uuid }, waiter_id: { type: string, format: uuid } } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
+  /api/v1/tables/merge:
+    post:
+      tags: [floor]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { type: object, required: [primary_id, secondary_id], properties: { primary_id: { type: string, format: uuid }, secondary_id: { type: string, format: uuid } } } } } }
+      responses: { "200": { description: OK } }
+  /api/v1/tables/{id}/unmerge:
+    post:
+      tags: [floor]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
+  /api/v1/admin/cleanup/stuck-tables:
+    post:
+      tags: [admin]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { cleaned: { type: integer } } } } } } }
+
+  # ─── Bootstrap (no auth) ────────────────────────────────────────────────
+  /api/v1/bootstrap/status:
+    get:
+      tags: [bootstrap]
+      summary: Проверка инициализации (есть ли хоть один ресторан)
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  initialized: { type: boolean }
+
+  /api/v1/bootstrap:
+    post:
+      tags: [bootstrap]
+      summary: Создать первый ресторан + Owner-юзера (только если БД пустая)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BootstrapInput" }
+      responses:
+        "201":
+          description: Created
+          content: { application/json: { schema: { $ref: "#/components/schemas/BootstrapResult" } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "400": { $ref: "#/components/responses/Error" }
+
+  # ─── Finance: Assets ────────────────────────────────────────────────────
+  /api/v1/assets:
+    get:
+      tags: [finance]
+      summary: Список основных средств
+      parameters: [ { $ref: "#/components/parameters/Limit" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AssetsList" } } } } }
+    post:
+      tags: [finance]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AssetInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Asset" } } } } }
+  /api/v1/assets/{id}:
+    patch:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AssetInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Asset" } } } } }
+    delete:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Finance: Liabilities ───────────────────────────────────────────────
+  /api/v1/liabilities:
+    get:
+      tags: [finance]
+      summary: Список обязательств (кредиты, долги)
+      parameters: [ { $ref: "#/components/parameters/Limit" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/LiabilitiesList" } } } } }
+    post:
+      tags: [finance]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LiabilityInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Liability" } } } } }
+  /api/v1/liabilities/{id}:
+    patch:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/LiabilityInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Liability" } } } } }
+    delete:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Finance: Equity ────────────────────────────────────────────────────
+  /api/v1/equity:
+    get:
+      tags: [finance]
+      summary: Список записей собственного капитала
+      parameters: [ { $ref: "#/components/parameters/Limit" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EquityEntriesList" } } } } }
+    post:
+      tags: [finance]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/EquityInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/EquityEntry" } } } } }
+  /api/v1/equity/{id}:
+    patch:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/EquityInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/EquityEntry" } } } } }
+    delete:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Finance: Budget ────────────────────────────────────────────────────
+  /api/v1/budget:
+    get:
+      tags: [finance]
+      summary: Бюджет — план/факт по статьям
+      parameters:
+        - { in: query, name: period, schema: { type: string }, description: "Период вида YYYY-MM" }
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BudgetLinesList" } } } } }
+    post:
+      tags: [finance]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BudgetInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BudgetLine" } } } } }
+  /api/v1/budget/{id}:
+    patch:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BudgetInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BudgetLine" } } } } }
+    delete:
+      tags: [finance]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Payroll: TimeEntries ───────────────────────────────────────────────
+  /api/v1/time-entries:
+    get:
+      tags: [payroll]
+      summary: Список time-entries (учёт рабочего времени)
+      parameters:
+        - { in: query, name: user_id, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TimeEntriesList" } } } } }
+    post:
+      tags: [payroll]
+      summary: Clock-in (открыть смену сотрудника)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TimeEntryInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/TimeEntry" } } } } }
+  /api/v1/time-entries/{id}/clock-out:
+    patch:
+      tags: [payroll]
+      summary: Clock-out (закрыть смену, посчитать total_hours)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TimeEntryInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TimeEntry" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+  # ─── Menu: ModifierGroups ───────────────────────────────────────────────
+  /api/v1/menu/modifier-groups:
+    get:
+      tags: [menu]
+      summary: Группы модификаторов
+      parameters:
+        - { in: query, name: menu_item_id, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModifierGroupsList" } } } } }
+    post:
+      tags: [menu]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ModifierGroupInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/ModifierGroup" } } } } }
+  /api/v1/menu/modifier-groups/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ModifierGroupInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModifierGroup" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Menu: Modifiers ────────────────────────────────────────────────────
+  /api/v1/menu/modifiers:
+    get:
+      tags: [menu]
+      summary: Модификаторы внутри группы
+      parameters:
+        - { in: query, name: group_id, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ModifiersList" } } } } }
+    post:
+      tags: [menu]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ModifierInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Modifier" } } } } }
+  /api/v1/menu/modifiers/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ModifierInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Modifier" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Menu: TechCards ────────────────────────────────────────────────────
+  /api/v1/menu/tech-cards:
+    get:
+      tags: [menu]
+      summary: Строки тех. карт (блюдо → ингредиент / полуфабрикат)
+      parameters: [ { in: query, name: menu_item_id, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TechCardLinesList" } } } } }
+    post:
+      tags: [menu]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TechCardLineInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/TechCardLine" } } } } }
+  /api/v1/menu/tech-cards/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/TechCardLineInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TechCardLine" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  # ─── Semi-finished ──────────────────────────────────────────────────────
+  /api/v1/semi/types:
+    get:
+      tags: [semi]
+      summary: Типы полуфабрикатов
+      parameters: [ { in: query, name: include, schema: { type: string } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SemiTypesList" } } } } }
+    post:
+      tags: [semi]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SemiTypeInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SemiFinishedType" } } } } }
+  /api/v1/semi/types/{id}:
+    patch:
+      tags: [semi]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SemiTypeInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SemiFinishedType" } } } } }
+    delete:
+      tags: [semi]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  /api/v1/semi/stock:
+    get:
+      tags: [semi]
+      summary: Текущие остатки полуфабрикатов (read-only)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SemiStockList" } } } } }
+
+  # ─── Finance: Accounts ──────────────────────────────────────────────────
+  /api/v1/finance/accounts:
+    get:
+      tags: [finance]
+      summary: Список финансовых счетов
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialAccountsList" } } } } }
+    post:
+      tags: [finance]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialAccountInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialAccount" } } } } }
+  /api/v1/finance/accounts/{id}:
+    patch:
+      tags: [finance]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialAccountInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialAccount" } } } } }
+    delete:
+      tags: [finance]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": { description: No content }
+        "409": { $ref: "#/components/responses/Error" }
+  /api/v1/finance/accounts/transfer:
+    post:
+      tags: [finance]
+      summary: Атомарный перевод между двумя счетами с парой FinancialOperation
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/AccountTransferInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountTransferResult" } } } } }
+
+  # ─── Finance: Operations ────────────────────────────────────────────────
+  /api/v1/finance/operations:
+    get:
+      tags: [finance]
+      summary: Список финансовых операций (paged)
+      parameters:
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: type, schema: { type: string, enum: [in, out] } }
+        - { in: query, name: account_id, schema: { type: string, format: uuid } }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: activity, schema: { type: string } }
+        - { in: query, name: shift_id, schema: { type: string, format: uuid } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperationsList" } } } } }
+    post:
+      tags: [finance]
+      summary: Ручное создание финансовой операции (обновляет баланс счёта в той же tx)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperationInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+
+  # ─── Finance: Custom Categories ─────────────────────────────────────────
+  /api/v1/finance/custom-categories:
+    get:
+      tags: [finance]
+      summary: Кастомные финансовые категории
+      parameters: [ { in: query, name: type, schema: { type: string, enum: [in, out] } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CustomCategoriesList" } } } } }
+    post:
+      tags: [finance]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/CustomCategoryInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CustomCategory" } } } } }
+  /api/v1/finance/custom-categories/{id}:
+    delete:
+      tags: [finance]
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "204": { description: No content } }
+
+  # ─── Finance: JSON reports ──────────────────────────────────────────────
+  /api/v1/finance/pnl:
+    get:
+      tags: [finance]
+      summary: P&L отчёт (JSON) за период
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PnLReport" } } } } }
+  /api/v1/finance/cashflow:
+    get:
+      tags: [finance]
+      summary: Cash-flow отчёт (JSON) за период
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CashflowReport" } } } } }
+  /api/v1/finance/balance:
+    get:
+      tags: [finance]
+      summary: Баланс (активы / обязательства / собственный капитал)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BalanceReport" } } } } }
+  /api/v1/finance/monthly-revenue:
+    get:
+      tags: [finance]
+      summary: Выручка по месяцам (последние N)
+      parameters:
+        - { in: query, name: months, schema: { type: integer, default: 12, minimum: 1, maximum: 60 } }
+        - { in: query, name: year, schema: { type: integer } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MonthlyRevenueList" } } } } }
+
+  # ─── Finance: Payroll & service charge ──────────────────────────────────
+  /api/v1/finance/salary/pay:
+    post:
+      tags: [finance, payroll]
+      summary: Выплата ЗП (FinancialOperation type=out + декремент счёта в tx)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryPayInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+  /api/v1/finance/service-charge/pay:
+    post:
+      tags: [finance, payroll]
+      summary: Выплата сервис-чарджа официанту
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/ServiceChargePayInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+  /api/v1/finance/service-accrual/by-waiter:
+    get:
+      tags: [finance, payroll]
+      summary: Начисление сервис-чарджа по официантам за период
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ServiceAccrualList" } } } } }
+  /api/v1/finance/service-accrual/by-shift/{shift_id}:
+    get:
+      tags: [finance, payroll]
+      summary: Начисление сервис-чарджа по официантам в смене
+      parameters: [ { in: path, name: shift_id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ServiceAccrualList" } } } } }
+  /api/v1/finance/service-payout/by-waiter:
+    get:
+      tags: [finance, payroll]
+      summary: Выплаты сервис-чарджа по официантам за период
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ServicePayoutList" } } } } }
+  /api/v1/finance/service-payout/by-shift/{shift_id}:
+    get:
+      tags: [finance, payroll]
+      summary: Выплаты сервис-чарджа по официантам в смене
+      parameters: [ { in: path, name: shift_id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ServicePayoutList" } } } } }
+
+  # ─── Phase 14: cutover extras ───────────────────────────────────────────
+  /api/v1/shifts/active:
+    get:
+      tags: [shifts]
+      summary: Текущая open-смена (404 если нет)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CashShift" } } } }
+        "404": { description: Not Found }
+
+  /api/v1/shifts/{id}/zreport:
+    get:
+      tags: [shifts]
+      summary: Z-отчёт смены (JSON, агрегаты + ops + revenue_by_method)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shift: { type: object }
+                  revenue_by_method: { type: array, items: { type: object } }
+                  operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
+                  discrepancy: { type: string }
+
+  /api/v1/shifts/{id}/revenue:
+    get:
+      tags: [shifts]
+      summary: Денормализованная статистика смены (cash, card, count, avg)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+
+  /api/v1/shifts/{id}/operations-list:
+    get:
+      tags: [shifts]
+      summary: Список операций смены (без header'а) — реальный путь /shifts/{id}/operations (GET)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+
+  /api/v1/shifts/{id}/expenses:
+    post:
+      tags: [shifts]
+      summary: Внести cash_in/cash_out/expense (alias к cash_out)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, amount]
+              properties:
+                type: { type: string, enum: [cash_in, cash_out, expense] }
+                amount: { type: string }
+                description: { type: string }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
+
+  /api/v1/shifts/{id}/expenses/{op_id}:
+    delete:
+      tags: [shifts]
+      summary: Удалить cash-операцию (только если смена открыта)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: op_id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": { description: No Content }
+        "404": { description: Not Found }
+        "409": { description: Shift not open }
+  /api/v1/cash-shift-operations/{op_id}:
+    delete:
+      tags: [shifts]
+      summary: "Удалить cash-операцию по ID (сервер сам резолвит shift_id, проверяет статус смены)"
+      parameters:
+        - { in: path, name: op_id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "204": { description: No Content }
+        "404": { description: Not Found }
+        "409": { description: Shift not open }
+
+  /api/v1/stop-list:
+    get:
+      tags: [menu]
+      summary: Стоп-лист (auto + manual), compute-on-read
+      responses: { "200": { description: OK } }
+
+  /api/v1/stop-list/{menu_item_id}/override:
+    post:
+      tags: [menu]
+      summary: Поставить/снять manual stop_list_override
+      parameters:
+        - { in: path, name: menu_item_id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [override]
+              properties: { override: { type: boolean } }
+      responses: { "200": { description: OK } }
+
+  /api/v1/stop-list/recompute:
+    post:
+      tags: [menu]
+      summary: No-op (FE-совместимость; v4 считает on-read)
+      parameters: [ $ref: "#/components/parameters/IdempotencyKey" ]
+      responses: { "200": { description: OK } }
+
+  /api/v1/semi/prepare:
+    post:
+      tags: [semi]
+      summary: Произвести N единиц полуфабриката из рецепта
+      parameters: [ $ref: "#/components/parameters/IdempotencyKey" ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [semi_type_id, qty]
+              properties:
+                semi_type_id: { type: string, format: uuid }
+                qty: { type: string }
+                prepared_by: { type: string }
+      responses: { "200": { description: OK } }
+
+  /api/v1/semi/consume:
+    post:
+      tags: [semi]
+      summary: Списать N единиц полуфабриката
+      parameters: [ $ref: "#/components/parameters/IdempotencyKey" ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [semi_type_id, qty]
+              properties:
+                semi_type_id: { type: string, format: uuid }
+                qty: { type: string }
+                order_id: { type: string, format: uuid }
+      responses: { "200": { description: OK } }
+
+  /api/v1/menu/items/{id}/max-portions:
+    get:
+      tags: [menu]
+      summary: Сколько порций можно приготовить прямо сейчас
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+
+  /api/v1/menu/items/{id}/batch/produce:
+    post:
+      tags: [menu]
+      summary: Партионная готовка — произвести N порций (списать ингредиенты)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [qty]
+              properties:
+                qty: { type: integer, minimum: 1 }
+                prepared_by: { type: string }
+      responses: { "200": { description: OK } }
+
+  /api/v1/menu/items/{id}/batch/decrement:
+    post:
+      tags: [menu]
+      summary: Декремент prepared_qty (без списания ингредиентов)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                qty: { type: integer, minimum: 1, default: 1 }
+                order_id: { type: string, format: uuid }
+      responses: { "200": { description: OK } }
+
+  /api/v1/menu/items/{id}/batch/writeoff:
+    post:
+      tags: [menu]
+      summary: Списать партию (целиком или N порций)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                qty: { type: integer, minimum: 1 }
+                reason: { type: string }
+      responses: { "200": { description: OK } }
+
+  /api/v1/menu/items/{id}/batch/logs:
+    get:
+      tags: [menu]
+      summary: История партионной готовки
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses: { "200": { description: OK } }
+  /api/v1/menu/batch/logs:
+    get:
+      tags: [menu]
+      summary: История партионной готовки (по всем items)
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses: { "200": { description: OK } }
+
+  /api/v1/audit-log:
+    get:
+      tags: [admin]
+      summary: Audit log с фильтрами + offset-пагинация
+      parameters:
+        - { in: query, name: entity_type, schema: { type: string } }
+        - { in: query, name: action, schema: { type: string } }
+        - { in: query, name: user_id, schema: { type: string, format: uuid } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 500 } }
+        - { in: query, name: offset, schema: { type: integer, default: 0 } }
+      responses: { "200": { description: OK } }
+
+  /api/v1/print/jobs/{id}/reprint:
+    post:
+      tags: [print_jobs]
+      summary: Перепечатка — клонирует job с новым id, status='pending'
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "201": { description: Created } }
+
+  /api/v1/print/jobs/active-by-station:
+    get:
+      tags: [print_jobs]
+      summary: Pending jobs для станции (для KDS)
+      parameters:
+        - { in: query, name: station, required: true, schema: { type: string } }
+      responses: { "200": { description: OK } }
+
+  /api/v1/reservations/for-table/{table_id}:
+    get:
+      tags: [admin]
+      summary: Брони на конкретный стол в диапазоне (default = next 12h)
+      parameters:
+        - { in: path, name: table_id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses: { "200": { description: OK } }
+
+  /api/v1/time-entries/active:
+    get:
+      tags: [payroll]
+      summary: Текущая открытая запись для пользователя (404 если нет)
+      parameters:
+        - { in: query, name: user_id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TimeEntry" } } } }
+        "404": { description: Not Found }
+
+  /api/v1/time-entries/{id}:
+    patch:
+      tags: [payroll]
+      summary: Manual edit time entry (manager)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clock_in:  { type: string, format: date-time }
+                clock_out: { type: string, format: date-time }
+                role:      { type: string }
+                note:      { type: string }
+      responses: { "200": { description: OK } }
+    delete:
+      tags: [payroll]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  /api/v1/waiters/{id}/today-stats:
+    get:
+      tags: [payroll]
+      summary: Стата официанта за сегодня (orders/served/revenue/hours)
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK } }
+
+  # ─── SSE ────────────────────────────────────────────────────────────────
+  /api/v1/events:
+    get:
+      tags: [events]
+      summary: SSE-поток (order.*, shift.*, stock.movement, license.updated, hello, ping)
+      responses:
+        "200":
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema: { type: string }
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPONENTS
+# ═══════════════════════════════════════════════════════════════════════════
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+
+  parameters:
+    Limit:
+      in: query
+      name: limit
+      schema: { type: integer, default: 50, maximum: 200 }
+    Cursor:
+      in: query
+      name: cursor
+      schema: { type: string }
+      description: base64url-token из next_cursor предыдущего ответа
+    IdempotencyKey:
+      in: header
+      name: Idempotency-Key
+      required: false
+      schema: { type: string, format: uuid }
+      description: UUID, обязателен для всех write-операций (auto-added by client middleware)
+    From: { in: query, name: from, schema: { type: string, format: date-time } }
+    To:   { in: query, name: to,   schema: { type: string, format: date-time } }
+
+  responses:
+    OK:
+      description: OK
+      content: { application/json: { schema: { type: object } } }
+    Error:
+      description: Error envelope
+      content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+    XLSX:
+      description: XLSX file
+      content:
+        application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+          schema: { type: string, format: binary }
+      headers:
+        Content-Disposition:
+          schema: { type: string }
+          description: attachment; filename="..."
+
+  # ───── schemas ─────
+  schemas:
+    ErrorEnvelope:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, description: "Стабильный машинно-читаемый код" }
+        message: { type: string }
+        details: { type: object, additionalProperties: true }
+
+    SessionInfo:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        restaurant_id: { type: string, format: uuid }
+        user_name: { type: string }
+        role: { type: string }
+        expires_at: { type: string, format: date-time }
+
+    LicenseStatus:
+      type: object
+      properties:
+        state: { type: string, enum: [none, active, grace, warning, locked] }
+        expires_at: { type: string, format: date-time }
+        days_left: { type: integer }
+        days_until_lock: { type: integer }
+        is_blocked: { type: boolean }
+        block_reason: { type: string }
+        edition: { type: string, enum: [start, business, pro] }
+
+    Decimal: { type: string, description: "NUMERIC(14,4) как строка ('123.45')" }
+
+    # ─── Menu ──
+    MenuItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        price: { $ref: "#/components/schemas/Decimal" }
+        emoji: { type: string }
+        is_available: { type: boolean }
+        station: { type: string }
+        cogs: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        unit_size: { $ref: "#/components/schemas/Decimal" }
+        sale_step: { $ref: "#/components/schemas/Decimal" }
+        low_stock_threshold: { type: integer }
+    MenuItemInput:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        price: { $ref: "#/components/schemas/Decimal" }
+        emoji: { type: string }
+        is_available: { type: boolean }
+        station: { type: string }
+        cogs: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        unit_size: { $ref: "#/components/schemas/Decimal" }
+    MenuItemWithExtras:
+      allOf:
+        - $ref: "#/components/schemas/MenuItem"
+        - type: object
+          properties:
+            tech_card_lines:
+              type: array
+              description: |
+                Всегда присутствует (пустой массив, если не запрошен через
+                `?include=tech_cards`). Это уменьшает type-ветвление на фронте.
+              items: { $ref: "#/components/schemas/TechCardLine" }
+    IngredientPrice:
+      type: object
+      properties:
+        price: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        waste_percent: { $ref: "#/components/schemas/Decimal" }
+    MenuItemsList:
+      type: object
+      description: |
+        Универсальный envelope для /menu/items. Поля `tech_card_lines`
+        (per-item) и `ingredient_prices` (top-level) всегда присутствуют:
+        пустые, если соответствующий `include` не задан.
+
+        `?include=tech_cards` — заполняет `tech_card_lines` для каждого блюда
+        (одним batch-SELECT'ом, не N+1).
+
+        `?include=tech_cards,ingredient_prices` — дополнительно подгружает цены
+        ингредиентов из tech card lines в top-level `ingredient_prices`.
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/MenuItemWithExtras" }
+        ingredient_prices:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/IngredientPrice" }
+        next_cursor: { type: string }
+
+    MenuCategory:
+      type: object
+      properties: { id: { type: string, format: uuid }, name: { type: string }, sort_order: { type: integer } }
+    MenuCategoriesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/MenuCategory" } } } }
+
+    # ─── Floor ──
+    Zone: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, sort_order: { type: integer } } }
+    ZoneInput:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        sort_order: { type: integer }
+    ZonesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Zone" } } } }
+    Table:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        number: { type: integer }
+        capacity: { type: integer }
+        zone_id: { type: string, format: uuid }
+        status: { type: string, enum: [free, occupied, reserved, dirty] }
+    TablesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Table" } } } }
+    TableInput:
+      type: object
+      properties:
+        name: { type: string }
+        number: { type: integer }
+        capacity: { type: integer }
+        zone_id: { type: string, format: uuid }
+        status: { type: string, enum: [free, occupied, reserved, dirty, merged] }
+        current_order_id: { type: string }
+        waiter_id: { type: string }
+        opened_at: { type: string, format: date-time }
+
+    # ─── Stock ──
+    Ingredient:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        min_qty: { $ref: "#/components/schemas/Decimal" }
+        price_per_unit: { $ref: "#/components/schemas/Decimal" }
+    IngredientsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Ingredient" } }, next_cursor: { type: string } } }
+    IngredientInput:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        min_qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        price_per_unit: { $ref: "#/components/schemas/Decimal" }
+        waste_percent: { $ref: "#/components/schemas/Decimal" }
+        is_food: { type: boolean }
+    StringList: { type: object, properties: { data: { type: array, items: { type: string } } } }
+    StockMovement:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        ingredient_id: { type: string, format: uuid }
+        ingredient_name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        description: { type: string }
+        created_at: { type: string, format: date-time }
+    StockMovementsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockMovement" } }, next_cursor: { type: string } } }
+    StockReceiptsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReceipt" } }, next_cursor: { type: string } } }
+    StockWriteoffsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockWriteoff" } }, next_cursor: { type: string } } }
+    ConfirmReceiptInput:
+      type: object
+      properties:
+        account_id: { type: string, format: uuid }
+        payment_type: { type: string, enum: [paid, credit] }
+    InventoryChecksList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/InventoryCheck" } }, next_cursor: { type: string } } }
+    InventoryCheckLine:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        check_id: { type: string, format: uuid }
+        ingredient_id: { type: string, format: uuid }
+        ingredient_name: { type: string }
+        unit: { type: string }
+        system_qty: { $ref: "#/components/schemas/Decimal" }
+        actual_qty: { $ref: "#/components/schemas/Decimal" }
+        diff: { $ref: "#/components/schemas/Decimal" }
+    InventoryCheckLinesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/InventoryCheckLine" } } } }
+    SupplyExpense:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        ingredient_id: { type: string, format: uuid }
+        ingredient_name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        reason: { type: string }
+        issued_to: { type: string }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+    SupplyExpensesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SupplyExpense" } }, next_cursor: { type: string } } }
+    SupplyExpenseInput:
+      type: object
+      required: [ingredient_id, qty]
+      properties:
+        ingredient_id: { type: string, format: uuid }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        reason: { type: string }
+        issued_to: { type: string }
+        note: { type: string }
+
+    ReceiptInput:
+      type: object
+      required: [payment_type, lines]
+      properties:
+        supplier_id: { type: string, format: uuid }
+        supplier_name: { type: string }
+        date: { type: string }
+        note: { type: string }
+        payment_type: { type: string, enum: [paid, credit] }
+        paid_amount: { $ref: "#/components/schemas/Decimal" }
+        due_date: { type: string }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [ingredient_id, name, qty, price_per_unit]
+            properties:
+              ingredient_id: { type: string, format: uuid }
+              name: { type: string }
+              qty: { $ref: "#/components/schemas/Decimal" }
+              unit: { type: string }
+              price_per_unit: { $ref: "#/components/schemas/Decimal" }
+    StockReceipt:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        total_amount: { $ref: "#/components/schemas/Decimal" }
+        paid_amount: { $ref: "#/components/schemas/Decimal" }
+        debt_amount: { $ref: "#/components/schemas/Decimal" }
+
+    WriteoffInput:
+      type: object
+      required: [reason, lines]
+      properties:
+        reason: { type: string }
+        description: { type: string }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [ingredient_id, name, qty, cost]
+            properties:
+              ingredient_id: { type: string, format: uuid }
+              name: { type: string }
+              qty: { $ref: "#/components/schemas/Decimal" }
+              cost: { $ref: "#/components/schemas/Decimal" }
+    StockWriteoff:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        total_cost: { $ref: "#/components/schemas/Decimal" }
+
+    InventoryCheckInput:
+      type: object
+      required: [lines]
+      properties:
+        note: { type: string }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [ingredient_id, actual_qty]
+            properties:
+              ingredient_id: { type: string, format: uuid }
+              actual_qty: { $ref: "#/components/schemas/Decimal" }
+    InventoryCheck:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [draft, applied] }
+        total_items: { type: integer }
+        items_with_diff: { type: integer }
+        applied_at: { type: string, format: date-time }
+
+    ImportResult:
+      type: object
+      properties:
+        created: { type: integer }
+        updated: { type: integer }
+        skipped: { type: integer }
+        errors:
+          type: array
+          items: { type: object, properties: { row: { type: integer }, message: { type: string } } }
+
+    # ─── Shifts ──
+    CashShift:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [open, closed] }
+        opening_balance: { $ref: "#/components/schemas/Decimal" }
+        closing_balance: { $ref: "#/components/schemas/Decimal" }
+        expected_cash: { $ref: "#/components/schemas/Decimal" }
+        cash_revenue: { $ref: "#/components/schemas/Decimal" }
+        card_revenue: { $ref: "#/components/schemas/Decimal" }
+        orders_count: { type: integer }
+        avg_check: { $ref: "#/components/schemas/Decimal" }
+        opened_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time }
+    CashShiftOperation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [cash_in, cash_out] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        description: { type: string }
+    ShiftsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/CashShift" } }, next_cursor: { type: string } } }
+
+    # ─── Orders ──
+    Order:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        order_number: { type: integer }
+        status: { type: string }
+        type: { type: string }
+        table_id: { type: string, format: uuid }
+        waiter_id: { type: string, format: uuid }
+        total: { $ref: "#/components/schemas/Decimal" }
+        total_with_service: { $ref: "#/components/schemas/Decimal" }
+        payment_method: { type: string }
+        shift_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        closed_at: { type: string, format: date-time }
+        is_split: { type: boolean }
+        split_count: { type: integer }
+    OrderItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        price: { $ref: "#/components/schemas/Decimal" }
+        cogs: { $ref: "#/components/schemas/Decimal" }
+        cancelled_at: { type: string, format: date-time }
+    OrderItemInput:
+      type: object
+      required: [menu_item_id, qty]
+      properties:
+        menu_item_id: { type: string, format: uuid }
+        qty: { type: string, description: Decimal как строка }
+        modifier_ids: { type: array, items: { type: string, format: uuid } }
+    CreateOrderInput:
+      type: object
+      required: [items]
+      properties:
+        table_id: { type: string, format: uuid }
+        type: { type: string }
+        guests_count: { type: integer }
+        comment: { type: string }
+        shift_id: { type: string, format: uuid }
+        items: { type: array, items: { $ref: "#/components/schemas/OrderItemInput" } }
+    OrderDetail:
+      type: object
+      properties:
+        order: { $ref: "#/components/schemas/Order" }
+        items:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/OrderItem"
+              - type: object
+                properties:
+                  modifiers:
+                    type: array
+                    items: { type: object, properties: { id: { type: string }, name: { type: string }, price: { $ref: "#/components/schemas/Decimal" } } }
+        voids:
+          type: array
+          items: { $ref: "#/components/schemas/OrderVoid" }
+    OrderVoid: { type: object, properties: { id: { type: string, format: uuid }, item_name: { type: string }, item_qty: { type: integer }, reason: { type: string } } }
+    OrderSplit: { type: object, properties: { id: { type: string, format: uuid }, split_number: { type: integer }, split_type: { type: string }, total: { $ref: "#/components/schemas/Decimal" }, status: { type: string } } }
+    OrderSlim:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        order_number: { type: integer }
+        status: { type: string }
+        total: { $ref: "#/components/schemas/Decimal" }
+        total_with_service: { $ref: "#/components/schemas/Decimal" }
+        created_at: { type: string, format: date-time }
+    OrdersSlimList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/OrderSlim" } }, next_cursor: { type: string } } }
+
+    # ─── Printers ──
+    Printer:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { type: string, enum: [receipt, station] }
+        station: { type: string }
+        driver: { type: string, enum: [tcp, usb, virtual, mock] }
+        target: { type: string }
+        cols: { type: integer }
+        is_default: { type: boolean }
+        enabled: { type: boolean }
+    PrinterInput:
+      type: object
+      properties:
+        name: { type: string }
+        kind: { type: string, enum: [receipt, station] }
+        station: { type: string }
+        driver: { type: string, enum: [tcp, usb, virtual, mock] }
+        target: { type: string }
+        cols: { type: integer }
+        is_default: { type: boolean }
+        enabled: { type: boolean }
+    PrintersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Printer" } } } }
+    PrintJob:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [receipt, runner, cancel_runner, test] }
+        status: { type: string, enum: [pending, running, done, failed] }
+        printer_id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        attempts: { type: integer }
+        last_error: { type: string }
+        created_at: { type: string, format: date-time }
+        printed_at: { type: string, format: date-time }
+    PrintJobsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/PrintJob" } }, next_cursor: { type: string } } }
+
+    # ─── Shadow ──
+    ShadowReportItem:
+      type: object
+      required: [operation, matched]
+      properties:
+        operation: { type: string }
+        matched: { type: boolean }
+        v1_status: { type: integer }
+        v4_status: { type: integer }
+        v1_latency_ms: { type: integer }
+        v4_latency_ms: { type: integer }
+        diff_size_bytes: { type: integer }
+        diff_sample: { type: string }
+    ShadowStats:
+      type: object
+      properties:
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        total: { type: integer }
+        matched: { type: integer }
+        match_rate: { type: number }
+        by_operation:
+          type: array
+          items:
+            type: object
+            properties:
+              operation: { type: string }
+              total: { type: integer }
+              matched: { type: integer }
+              match_rate: { type: number }
+              avg_v1_latency_ms: { type: number }
+              avg_v4_latency_ms: { type: number }
+    ShadowDrift:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        operation: { type: string }
+        matched: { type: boolean }
+        diff_sample: { type: string }
+        created_at: { type: string, format: date-time }
+
+    # ─── Admin (Users / Customers / Suppliers / Reservations / Restaurant) ──
+    User:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        username: { type: string }
+        role: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        station: { type: string }
+        salary: { $ref: "#/components/schemas/Decimal" }
+        hourly_rate: { $ref: "#/components/schemas/Decimal" }
+    UserInput:
+      type: object
+      properties:
+        name: { type: string }
+        username: { type: string }
+        role: { type: string, enum: [cashier, cook, waiter, manager, owner] }
+        pin: { type: string }
+        password: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        station: { type: string }
+        salary: { $ref: "#/components/schemas/Decimal" }
+        hourly_rate: { $ref: "#/components/schemas/Decimal" }
+    UsersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/User" } } } }
+
+    Customer:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        phone: { type: string }
+        email: { type: string }
+        notes: { type: string }
+        total_spent: { $ref: "#/components/schemas/Decimal" }
+        visits_count: { type: integer }
+    CustomerInput:
+      type: object
+      properties: { name: { type: string }, phone: { type: string }, email: { type: string }, birth_date: { type: string }, notes: { type: string } }
+    CustomersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Customer" } }, next_cursor: { type: string } } }
+
+    Supplier:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        contact_person: { type: string }
+        phone: { type: string }
+        categories: { type: array, items: { type: string } }
+        payment_terms_days: { type: integer }
+        credit_limit: { $ref: "#/components/schemas/Decimal" }
+        current_debt: { $ref: "#/components/schemas/Decimal" }
+    SupplierInput:
+      type: object
+      properties:
+        name: { type: string }
+        contact_person: { type: string }
+        phone: { type: string }
+        categories: { type: array, items: { type: string } }
+        payment_terms_days: { type: integer }
+        credit_limit: { $ref: "#/components/schemas/Decimal" }
+    SuppliersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Supplier" } } } }
+
+    Reservation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        table_id: { type: string, format: uuid }
+        guest_name: { type: string }
+        guest_phone: { type: string }
+        guests_count: { type: integer }
+        reserved_at: { type: string, format: date-time }
+        duration_min: { type: integer }
+        status: { type: string }
+        note: { type: string }
+    ReservationInput:
+      type: object
+      properties:
+        table_id: { type: string, format: uuid }
+        guest_name: { type: string }
+        guest_phone: { type: string }
+        guests_count: { type: integer }
+        reserved_at: { type: string, format: date-time }
+        duration_min: { type: integer }
+        status: { type: string }
+        note: { type: string }
+    ReservationsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Reservation" } } } }
+
+    Restaurant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        slug: { type: string }
+        address: { type: string }
+        phone: { type: string }
+        currency: { type: string }
+        service_percent: { $ref: "#/components/schemas/Decimal" }
+        timezone: { type: string }
+        enforce_stock_check: { type: boolean }
+        tech_cards_enabled: { type: boolean }
+        auto_ready_mode: { type: boolean }
+        auto_ready_buffer_min: { type: integer }
+        pin_lock_enabled: { type: boolean }
+        pin_lock_timeout_min: { type: integer }
+        supply_allow_negative: { type: boolean }
+        license_expires_at: { type: string, format: date-time }
+        is_blocked: { type: boolean }
+    RestaurantInput:
+      type: object
+      properties:
+        name: { type: string }
+        slug: { type: string }
+        address: { type: string }
+        phone: { type: string }
+        currency: { type: string }
+        service_percent: { $ref: "#/components/schemas/Decimal" }
+        timezone: { type: string }
+        enforce_stock_check: { type: boolean }
+        tech_cards_enabled: { type: boolean }
+        auto_ready_mode: { type: boolean }
+        auto_ready_buffer_min: { type: integer }
+        pin_lock_enabled: { type: boolean }
+        pin_lock_timeout_min: { type: integer }
+        supply_allow_negative: { type: boolean }
+
+    # ─── Bootstrap ──
+    BootstrapInput:
+      type: object
+      required: [restaurant_name, owner_name, owner_pin]
+      properties:
+        restaurant_name: { type: string }
+        owner_name: { type: string }
+        owner_pin: { type: string }
+        currency: { type: string, description: "default TJS" }
+        timezone: { type: string, description: "default Asia/Dushanbe" }
+    BootstrapResult:
+      type: object
+      properties:
+        restaurant: { $ref: "#/components/schemas/Restaurant" }
+        owner: { $ref: "#/components/schemas/User" }
+
+    # ─── Finance: Assets ──
+    Asset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        purchase_date: { type: string, description: "ISO-date YYYY-MM-DD" }
+        useful_life_months: { type: integer }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    AssetInput:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        purchase_date: { type: string }
+        useful_life_months: { type: integer }
+        note: { type: string }
+    AssetsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Asset" } }, next_cursor: { type: string } } }
+
+    # ─── Finance: Liabilities ──
+    Liability:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        total_amount: { $ref: "#/components/schemas/Decimal" }
+        paid_amount: { $ref: "#/components/schemas/Decimal" }
+        remaining_amount: { $ref: "#/components/schemas/Decimal" }
+        creditor: { type: string }
+        due_date: { type: string }
+        monthly_payment: { $ref: "#/components/schemas/Decimal" }
+        interest_rate: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    LiabilityInput:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        total_amount: { $ref: "#/components/schemas/Decimal" }
+        paid_amount: { $ref: "#/components/schemas/Decimal" }
+        creditor: { type: string }
+        due_date: { type: string }
+        monthly_payment: { $ref: "#/components/schemas/Decimal" }
+        interest_rate: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+    LiabilitiesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Liability" } }, next_cursor: { type: string } } }
+
+    # ─── Finance: Equity ──
+    EquityEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    EquityInput:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+    EquityEntriesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/EquityEntry" } }, next_cursor: { type: string } } }
+
+    # ─── Finance: Budget ──
+    BudgetLine:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        category: { type: string }
+        type: { type: string, description: "income | expense" }
+        plan_amount: { $ref: "#/components/schemas/Decimal" }
+        fact_amount: { $ref: "#/components/schemas/Decimal" }
+        period: { type: string, description: "Например YYYY-MM" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    BudgetInput:
+      type: object
+      properties:
+        category: { type: string }
+        type: { type: string }
+        plan_amount: { $ref: "#/components/schemas/Decimal" }
+        fact_amount: { $ref: "#/components/schemas/Decimal" }
+        period: { type: string }
+    BudgetLinesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/BudgetLine" } }, next_cursor: { type: string } } }
+
+    # ─── Payroll: TimeEntry ──
+    TimeEntry:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        clock_in: { type: string, format: date-time }
+        clock_out: { type: string, format: date-time }
+        break_minutes: { type: integer }
+        total_hours: { $ref: "#/components/schemas/Decimal" }
+        status: { type: string, enum: [active, closed] }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+    TimeEntryInput:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid, description: "Обязателен на clock-in" }
+        clock_in: { type: string, format: date-time, description: "RFC3339, опц. (по умолчанию now)" }
+        clock_out: { type: string, format: date-time, description: "RFC3339, для clock-out" }
+        break_minutes: { type: integer }
+        status: { type: string }
+        note: { type: string }
+    TimeEntriesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/TimeEntry" } }, next_cursor: { type: string } } }
+
+    # ─── Menu: ModifierGroups / Modifiers / TechCards ──
+    ModifierGroup:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        menu_item_id: { type: string, format: uuid }
+        is_required: { type: boolean }
+        max_select: { type: integer }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+    ModifierGroupInput:
+      type: object
+      properties:
+        name: { type: string }
+        menu_item_id: { type: string, format: uuid }
+        is_required: { type: boolean }
+        max_select: { type: integer }
+        sort_order: { type: integer }
+    ModifierGroupsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/ModifierGroup" } }, next_cursor: { type: string } } }
+
+    Modifier:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        group_id: { type: string, format: uuid }
+        name: { type: string }
+        price: { $ref: "#/components/schemas/Decimal" }
+        is_default: { type: boolean }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+    ModifierInput:
+      type: object
+      properties:
+        group_id: { type: string, format: uuid }
+        name: { type: string }
+        price: { $ref: "#/components/schemas/Decimal" }
+        is_default: { type: boolean }
+        sort_order: { type: integer }
+    ModifiersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Modifier" } }, next_cursor: { type: string } } }
+
+    TechCardLine:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        menu_item_id: { type: string, format: uuid }
+        ingredient_id: { type: string, format: uuid }
+        semi_type_id: { type: string, format: uuid }
+        name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        created_at: { type: string, format: date-time }
+    TechCardLineInput:
+      type: object
+      properties:
+        menu_item_id: { type: string, format: uuid }
+        ingredient_id: { type: string, format: uuid }
+        semi_type_id: { type: string, format: uuid }
+        name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+    TechCardLinesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/TechCardLine" } }, next_cursor: { type: string } } }
+
+    # ─── Semi-finished ──
+    SemiFinishedType:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        output_unit: { type: string }
+        yield_percent: { $ref: "#/components/schemas/Decimal" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SemiTypeInput:
+      type: object
+      properties:
+        name: { type: string }
+        output_unit: { type: string }
+        yield_percent: { $ref: "#/components/schemas/Decimal" }
+    SemiTypesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SemiFinishedType" } }, next_cursor: { type: string } } }
+
+    SemiFinishedStock:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        semi_type_id: { type: string, format: uuid }
+        name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        price_per_unit: { $ref: "#/components/schemas/Decimal" }
+        last_produced_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SemiStockList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SemiFinishedStock" } }, next_cursor: { type: string } } }
+
+    # ─── Finance (Phase 12) ──
+    FinancialAccount:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [cash, bank, card, other] }
+        balance: { $ref: "#/components/schemas/Decimal" }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    FinancialAccountInput:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string }
+        balance: { $ref: "#/components/schemas/Decimal" }
+    FinancialAccountsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/FinancialAccount" } }, next_cursor: { type: string } } }
+
+    FinancialOperation:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string, enum: [in, out] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        category: { type: string }
+        account_id: { type: string, format: uuid }
+        account_name: { type: string }
+        activity: { type: string, enum: [operational, investment, financial] }
+        date: { type: string }
+        description: { type: string }
+        counterparty: { type: string }
+        is_auto: { type: boolean }
+        source_ref: { type: string }
+        shift_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    FinancialOperationInput:
+      type: object
+      required: [type, amount, category, account_id]
+      properties:
+        type: { type: string, enum: [in, out] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        category: { type: string }
+        account_id: { type: string, format: uuid }
+        activity: { type: string }
+        date: { type: string }
+        description: { type: string }
+        counterparty: { type: string }
+        shift_id: { type: string, format: uuid }
+    FinancialOperationsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/FinancialOperation" } }, next_cursor: { type: string } } }
+
+    AccountTransferInput:
+      type: object
+      required: [from_id, to_id, amount]
+      properties:
+        from_id: { type: string, format: uuid }
+        to_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        description: { type: string }
+    AccountTransferResult:
+      type: object
+      properties:
+        from: { $ref: "#/components/schemas/FinancialOperation" }
+        to: { $ref: "#/components/schemas/FinancialOperation" }
+
+    CustomCategory:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [in, out] }
+        created_at: { type: string, format: date-time }
+    CustomCategoryInput:
+      type: object
+      required: [name, type]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [in, out] }
+    CustomCategoriesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/CustomCategory" } }, next_cursor: { type: string } } }
+
+    PnLReport:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        revenue:
+          type: object
+          properties:
+            total: { $ref: "#/components/schemas/Decimal" }
+            by_method:
+              type: array
+              items:
+                type: object
+                properties:
+                  method: { type: string }
+                  amount: { $ref: "#/components/schemas/Decimal" }
+        cogs:
+          type: object
+          properties:
+            total: { $ref: "#/components/schemas/Decimal" }
+        opex:
+          type: object
+          properties:
+            total: { $ref: "#/components/schemas/Decimal" }
+            by_category:
+              type: array
+              items:
+                type: object
+                properties:
+                  category: { type: string }
+                  amount: { $ref: "#/components/schemas/Decimal" }
+        gross_profit: { $ref: "#/components/schemas/Decimal" }
+        net_profit: { $ref: "#/components/schemas/Decimal" }
+        margin_percent: { $ref: "#/components/schemas/Decimal" }
+
+    CashflowReport:
+      type: object
+      properties:
+        period:
+          type: object
+          properties:
+            from: { type: string, format: date-time }
+            to: { type: string, format: date-time }
+        by_activity:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              in: { $ref: "#/components/schemas/Decimal" }
+              out: { $ref: "#/components/schemas/Decimal" }
+              net: { $ref: "#/components/schemas/Decimal" }
+        net_total: { $ref: "#/components/schemas/Decimal" }
+        by_day:
+          type: array
+          items:
+            type: object
+            properties:
+              date: { type: string }
+              in: { $ref: "#/components/schemas/Decimal" }
+              out: { $ref: "#/components/schemas/Decimal" }
+
+    BalanceReport:
+      type: object
+      properties:
+        assets:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              amount: { $ref: "#/components/schemas/Decimal" }
+        total_assets: { $ref: "#/components/schemas/Decimal" }
+        liabilities:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              total: { $ref: "#/components/schemas/Decimal" }
+              paid: { $ref: "#/components/schemas/Decimal" }
+              remaining: { $ref: "#/components/schemas/Decimal" }
+        total_liabilities: { $ref: "#/components/schemas/Decimal" }
+        equity:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              amount: { $ref: "#/components/schemas/Decimal" }
+        total_equity: { $ref: "#/components/schemas/Decimal" }
+        computed_equity: { $ref: "#/components/schemas/Decimal" }
+
+    MonthlyRevenue:
+      type: object
+      properties:
+        month: { type: string, example: "2026-01" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+        orders_count: { type: integer }
+        avg_check: { $ref: "#/components/schemas/Decimal" }
+    MonthlyRevenueList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/MonthlyRevenue" } } } }
+
+    SalaryPayInput:
+      type: object
+      required: [user_id, amount, account_id]
+      properties:
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        employee_name: { type: string }
+        period: { type: string }
+        description: { type: string }
+    ServiceChargePayInput:
+      type: object
+      required: [waiter_id, amount, account_id]
+      properties:
+        waiter_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        period_from: { type: string }
+        period_to: { type: string }
+        description: { type: string }
+
+    ServiceAccrual:
+      type: object
+      properties:
+        waiter_id: { type: string, format: uuid }
+        waiter_name: { type: string }
+        total_orders: { type: integer }
+        total_revenue: { $ref: "#/components/schemas/Decimal" }
+        accrued_amount: { $ref: "#/components/schemas/Decimal" }
+    ServiceAccrualList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/ServiceAccrual" } } } }
+
+    ServicePayout:
+      type: object
+      properties:
+        waiter_id: { type: string, format: uuid }
+        waiter_name: { type: string }
+        paid_amount: { $ref: "#/components/schemas/Decimal" }
+    ServicePayoutList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/ServicePayout" } } } }

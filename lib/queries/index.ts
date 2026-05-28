@@ -1,0 +1,18 @@
+// Public barrel — components import functions from here via @/lib/queries.
+// Domain implementations live in sibling files; this file only re-exports.
+export * from './audit'
+export * from './restaurants'
+export * from './users'
+export * from './tables'
+export * from './menu'
+export * from './modifiers'
+export * from './orders'
+export * from './shifts'
+export * from './stock'
+export * from './semi'
+export * from './batch_cooking'
+export * from './suppliers'
+export * from './finance'
+export * from './reservations'
+export * from './customers'
+export * from './payroll'
