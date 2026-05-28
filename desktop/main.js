@@ -14,11 +14,12 @@ Sentry.init({
   release: require('./package.json').version,
 })
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain } = require('electron')
+const { app, BrowserWindow, Tray, Menu, nativeImage, shell, ipcMain, dialog } = require('electron')
 const path = require('path')
 const fs = require('fs')
+const net = require('net')
 const http = require('http')
-const { spawn } = require('child_process')
+const { spawn, execSync } = require('child_process')
 const { autoUpdater } = require('electron-updater')
 
 const API_PORT = 3001
@@ -62,10 +63,50 @@ function sidecarPath() {
   return path.join(__dirname, '..', 'server', 'bin', 'restos-server')
 }
 
+// Kill any leftover restos-server processes from previous crashed sessions.
+// Без этого порт 3001 остаётся занят и новый Go-бэк не может его взять.
+function killStaleSidecars() {
+  try {
+    if (process.platform === 'win32') {
+      execSync('taskkill /F /IM restos-server.exe /T 2>nul', { stdio: 'ignore' })
+    } else {
+      execSync('pkill -9 -f restos-server || true', { stdio: 'ignore' })
+    }
+    console.log('[sidecar] killed stale processes (if any)')
+  } catch {
+    // taskkill возвращает non-zero если процессов нет — это OK.
+  }
+}
+
+// Проверка что порт 3001 свободен. Если занят — пробуем убить владельца.
+function ensurePortFree(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer()
+    tester.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`[sidecar] port ${port} is busy — attempting to free`)
+        killStaleSidecars()
+        // Дать ОС время освободить порт.
+        setTimeout(() => resolve(false), 1500)
+      } else {
+        resolve(true)
+      }
+    })
+    tester.once('listening', () => {
+      tester.close(() => resolve(true))
+    })
+    tester.listen(port, '127.0.0.1')
+  })
+}
+
 function startSidecar() {
   const exe = sidecarPath()
   if (!fs.existsSync(exe)) {
     console.error('[sidecar] binary not found:', exe)
+    dialog.showErrorBox(
+      'RestOS — Ошибка запуска',
+      `Файл сервера не найден:\n${exe}\n\nВозможные причины:\n• Антивирус удалил restos-server.exe из карантина\n• Установка повреждена — переустановите RestOS\n\nЛог: ${path.join(app.getPath('userData'), 'logs', 'main.log')}`,
+    )
     return
   }
   console.log('[sidecar] starting:', exe)
@@ -105,6 +146,10 @@ function startSidecar() {
   goProc.on('error', (err) => {
     console.error('[sidecar] spawn error:', err)
     Sentry.captureException(err)
+    dialog.showErrorBox(
+      'RestOS — Невозможно запустить сервер',
+      `Ошибка запуска бинаря:\n${err.message}\n\nОбычно это значит что антивирус заблокировал restos-server.exe.\n\nДобавьте в исключения Windows Defender:\n${exe}`,
+    )
   })
 }
 
@@ -166,13 +211,20 @@ if (!gotTheLock) {
 
   app.on('ready', async () => {
     setupFileLogger()
+    // 1) Убить zombie sidecar'ы от прошлого crash, освободить порт.
+    killStaleSidecars()
+    await ensurePortFree(API_PORT)
+    // 2) Стартуем sidecar.
     startSidecar()
     try {
       await waitForBackend()
     } catch (e) {
       console.error('[main] backend failed to start:', e.message)
       Sentry.captureMessage('Backend failed to start within timeout')
-      // Open window anyway — user will see error from frontend.
+      dialog.showErrorBox(
+        'RestOS — Сервер не отвечает',
+        `Бэкенд не запустился за 60 секунд.\n\nВозможные причины:\n• Не хватает интернета для скачивания PostgreSQL (~80 МБ) при первом запуске\n• Антивирус блокирует embedded-postgres\n• Порт ${API_PORT} занят другой программой\n\nЛог: ${path.join(app.getPath('userData'), 'logs', 'main.log')}`,
+      )
     }
     createWindow()
     setupTray()
