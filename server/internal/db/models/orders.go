@@ -14,7 +14,7 @@ import (
 // добавим CHECK-constraints в отдельной миграции после Phase 1.
 type Order struct {
 	ID                 string           `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	OrderNumber        int              `gorm:"column:order_number" json:"order_number"` // SERIAL — генерируется БД
+	OrderNumber        int              `gorm:"column:order_number" json:"order_number"` // per-restaurant per-day, сервис проставляет атомарно в Create через order_counters
 	Status             *string          `gorm:"default:'new';index" json:"status"`
 	Type               *string          `gorm:"default:'hall'" json:"type"`
 	TableID            *string          `gorm:"column:table_id" json:"table_id"`

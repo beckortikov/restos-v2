@@ -137,8 +137,31 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 		}
 		status := "open"
 		now := time.Now().UTC()
+
+		// Per-restaurant per-day order_number. Atomic UPSERT в order_counters
+		// возвращает следующий номер. Дата берётся в timezone ресторана,
+		// fallback Asia/Dushanbe (см. restaurant.timezone, default из core.go).
+		var rTz string
+		if err := tx.Model(&models.Restaurant{}).
+			Select("COALESCE(timezone, 'Asia/Dushanbe')").
+			Where("id = ?", rid).
+			Scan(&rTz).Error; err != nil || rTz == "" {
+			rTz = "Asia/Dushanbe"
+		}
+		var nextNum int
+		if err := tx.Raw(`
+			INSERT INTO order_counters (restaurant_id, date, last_number, updated_at)
+			VALUES (?, (now() AT TIME ZONE ?)::date, 1, now())
+			ON CONFLICT (restaurant_id, date)
+			DO UPDATE SET last_number = order_counters.last_number + 1, updated_at = now()
+			RETURNING last_number
+		`, rid, rTz).Scan(&nextNum).Error; err != nil {
+			return err
+		}
+
 		order := &models.Order{
 			ID:           uuid.NewString(),
+			OrderNumber:  nextNum,
 			RestaurantID: &rid,
 			TableID:      in.TableID,
 			ShiftID:      in.ShiftID,
