@@ -1308,6 +1308,11 @@ export function OrderComposer(props: OrderComposerProps) {
                       // его — приходилось обходным путём через карту зала.
                       const isSelectable = isFree || isOccupied || isReserved || isBillRequested
                       const isSelected = selectedTableId === t.id
+                      // Количество открытых групп на столе. На /table-map это
+                      // показывается бейджем «⊕»/числом — добавляем тот же
+                      // индикатор сюда, чтобы кассир видел, что на столе уже
+                      // несколько счетов, ДО того как кликнет.
+                      const tabsCount = t.currentOrderIds?.length ?? 0
                       return (
                         <button key={t.id}
                           onClick={() => { if (isSelectable) { setSelectedTableId(t.id); setShowTablePicker(false) } }}
@@ -1321,6 +1326,14 @@ export function OrderComposer(props: OrderComposerProps) {
                             'border-yellow-200 bg-yellow-50 text-yellow-500 cursor-not-allowed opacity-60'
                           }`}>
                           {t.name}
+                          {tabsCount >= 2 && (
+                            <span
+                              title={`Открыто групп: ${tabsCount}`}
+                              className="absolute -top-1.5 -right-1.5 size-5 rounded-full bg-amber-500 text-white text-[10px] font-bold flex items-center justify-center shadow-sm ring-2 ring-card"
+                            >
+                              {tabsCount}
+                            </span>
+                          )}
                         </button>
                       )
                     })}

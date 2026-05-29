@@ -53,6 +53,39 @@ function dispatchChange(raw: string) {
   } catch {}
 }
 
+// Backend (server/internal/service/events.go) шлёт типизированные SSE-события
+// `event: order.created`, `event: shift.opened` и т.п. EventSource'у нужны
+// addEventListener'ы по каждому типу. Здесь мапим backend-имена на «таблицы»,
+// которые слушает useDataSync, и фанаутим listeners.
+//
+// Дополнительный fanout `orders → tables` сделан осознанно: open/close заказа
+// меняет `tables.status`, но backend openTableForOrder сейчас не публикует
+// table.updated. Этим fanout'ом мы заставляем все экраны, watch'ящие 'tables'
+// (включая POS table picker через useOrderData), refetch'ить столы.
+const EVENT_FANOUT: Record<string, string[]> = {
+  'order.created':     ['orders', 'tables'],
+  'order.updated':     ['orders', 'tables'],
+  'order.closed':      ['orders', 'tables'],
+  'order.cancelled':   ['orders', 'tables'],
+  'order.item.added':  ['order_items', 'orders'],
+  'order.item.voided': ['order_voids', 'order_items', 'orders'],
+  'shift.opened':      ['cash_shifts'],
+  'shift.closed':      ['cash_shifts'],
+  'stock.movement':    ['ingredients', 'stock_movements'],
+  'license.updated':   ['license'],
+}
+
+function fanout(eventType: string) {
+  const tables = EVENT_FANOUT[eventType]
+  if (!tables) return
+  const action = eventType.split('.').slice(1).join('.') || 'change'
+  for (const t of tables) {
+    for (const handler of listeners) {
+      try { handler(t, action) } catch {}
+    }
+  }
+}
+
 export function initRealtime() {
   if (typeof window === 'undefined') return
   if (bailedUnauthorized) return
@@ -88,6 +121,16 @@ export function initRealtime() {
 
   eventSource.addEventListener('hello', () => { lastEventAt = Date.now() })
   eventSource.addEventListener('ping', () => { lastEventAt = Date.now() })
+
+  // Типизированные backend-события — фанаутим в listeners через `EVENT_FANOUT`.
+  // Без этого ни одно бизнес-событие не превращается в `restos-data-updated`
+  // DOM-event, и useDataSync(...) молча не срабатывает.
+  for (const eventType of Object.keys(EVENT_FANOUT)) {
+    eventSource.addEventListener(eventType, () => {
+      lastEventAt = Date.now()
+      fanout(eventType)
+    })
+  }
 
   eventSource.onerror = () => {
     // EventSource doesn't expose status codes. If readyState becomes CLOSED

@@ -66,7 +66,11 @@ export function useOrderData(enabled: boolean = true): OrderData {
     if (enabled) reload()
   }, [enabled, reload])
 
-  useDataSync(['menu_items', 'meta', 'tables', 'zones', 'users'], reload)
+  // Включаем 'orders' в watch list, чтобы POS-плитки столов перекрашивались
+  // (free → occupied → free) в тот же момент, что и /table-map. Backend
+  // эмитит order.created/closed, lib/realtime.ts фанаутит на 'tables' и
+  // 'orders' — оба триггерят reload здесь.
+  useDataSync(['menu_items', 'meta', 'tables', 'zones', 'users', 'orders'], reload)
 
   return { menuItems, categories, tables, zones, users, loading, reload }
 }
