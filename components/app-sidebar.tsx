@@ -39,6 +39,8 @@ import {
   HandCoins,
   PanelLeftClose,
   PanelLeftOpen,
+  Plus,
+  Minus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -66,6 +68,101 @@ interface SidebarContextValue {
 }
 
 const COLLAPSED_KEY = 'restos.sidebar.collapsed'
+
+// ─── App zoom (per-device UI scale) ───────────────────────────────────────────
+// Ported из v1 (../restos/components/app-sidebar.tsx:113). Кассир может
+// увеличить/уменьшить весь интерфейс под свой экран/зрение. Стейт хранится
+// в localStorage на устройство — другие кассиры за тем же ПК увидят свою
+// настройку при логине, потому что ключ общий per-device. Применяется
+// scaling root font-size (rem-based Tailwind классы масштабируются, но
+// vh/vw/media queries остаются якорными к реальному viewport).
+
+const ZOOM_KEY = 'restos.zoom'
+const ZOOM_MIN = 50
+const ZOOM_MAX = 200
+const ZOOM_STEP = 10
+
+function clampZoom(n: number) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(n / ZOOM_STEP) * ZOOM_STEP))
+}
+
+function readZoom(): number {
+  if (typeof window === 'undefined') return 100
+  const saved = window.localStorage.getItem(ZOOM_KEY)
+  const n = saved ? parseInt(saved, 10) : 100
+  return Number.isFinite(n) ? clampZoom(n) : 100
+}
+
+function applyZoom(n: number) {
+  if (typeof document === 'undefined') return
+  document.documentElement.style.fontSize = `${n}%`
+}
+
+export function useAppZoom() {
+  const [zoom, setZoomState] = useState<number>(() => readZoom())
+
+  useEffect(() => {
+    applyZoom(zoom)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(ZOOM_KEY, String(zoom))
+    }
+  }, [zoom])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === ZOOM_KEY && e.newValue) {
+        const n = parseInt(e.newValue, 10)
+        if (Number.isFinite(n)) setZoomState(clampZoom(n))
+      }
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  return {
+    zoom,
+    increase: () => setZoomState((z) => clampZoom(z + ZOOM_STEP)),
+    decrease: () => setZoomState((z) => clampZoom(z - ZOOM_STEP)),
+    reset: () => setZoomState(100),
+  }
+}
+
+export function ZoomControls() {
+  const { zoom, increase, decrease, reset } = useAppZoom()
+  return (
+    <div className="mt-2 px-2 pt-2 border-t border-sidebar-border">
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          onClick={decrease}
+          disabled={zoom <= ZOOM_MIN}
+          title="Уменьшить"
+          className="size-8 rounded-md flex items-center justify-center text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <Minus className="size-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={reset}
+          title="Сбросить (100%)"
+          className="flex-1 h-8 rounded-md text-xs font-medium tabular-nums text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+        >
+          {zoom}%
+        </button>
+        <button
+          type="button"
+          onClick={increase}
+          disabled={zoom >= ZOOM_MAX}
+          title="Увеличить"
+          className="size-8 rounded-md flex items-center justify-center text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+        >
+          <Plus className="size-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
 
 const SidebarContext = createContext<SidebarContextValue>({
   open: false,
@@ -345,6 +442,7 @@ function SidebarContent({
             onExpandSidebar={() => onToggleCollapsed?.()}
           />
         ))}
+        {!collapsed && <ZoomControls />}
       </nav>
 
       {!collapsed && (

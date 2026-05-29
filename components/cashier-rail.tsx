@@ -15,6 +15,8 @@ import { useState } from 'react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
 import { type User } from '@/lib/types'
+import { useAppZoom } from '@/components/app-sidebar'
+import { Plus, Minus } from 'lucide-react'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -67,6 +69,42 @@ export function CashierRail({ effectiveUser }: CashierRailProps) {
     window.location.href = '/login'
   }
 
+  function RailZoomControls() {
+    const { zoom, increase, decrease, reset } = useAppZoom()
+    return (
+      <div className="w-full px-1 py-1.5 mb-1 border-t border-sidebar-border">
+        <div className="flex flex-col items-stretch gap-0.5">
+          <button
+            type="button"
+            onClick={increase}
+            disabled={zoom >= 200}
+            title="Увеличить"
+            className="h-7 rounded-md flex items-center justify-center text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <Plus className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={reset}
+            title="Сбросить (100%)"
+            className="h-6 rounded-md text-[10px] font-semibold tabular-nums text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+          >
+            {zoom}%
+          </button>
+          <button
+            type="button"
+            onClick={decrease}
+            disabled={zoom <= 50}
+            title="Уменьшить"
+            className="h-7 rounded-md flex items-center justify-center text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors disabled:opacity-30 disabled:hover:bg-transparent"
+          >
+            <Minus className="size-3.5" />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   function railItem(item: RailItem) {
     const Icon = item.icon
     const active = isActive(pathname, item.href)
@@ -112,6 +150,11 @@ export function CashierRail({ effectiveUser }: CashierRailProps) {
         )}
 
         <div className="flex-1" />
+
+        {/* Zoom controls — компактная вертикальная версия для узкого rail'а (88px).
+            Логика та же что в общем AppSidebar: localStorage 'restos.zoom',
+            50-200% шаг 10, применяется через document.documentElement.style.fontSize. */}
+        <RailZoomControls />
 
         {/* Refresh page — над профилем */}
         <button
