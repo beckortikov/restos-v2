@@ -63,3 +63,6 @@ package-lock.json
 correction.txt
 ins.md
 test_write.txt
+
+# Claude Code harness state (do not commit)
+.claude/
