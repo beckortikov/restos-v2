@@ -37,6 +37,12 @@ type CloseOrderInput struct {
 	// Multi-payment. Если задан — payment_method/account_id игнорируются
 	// (используются только если list пустой).
 	Payments []PaymentSplit `json:"payments,omitempty"`
+
+	// ServicePercent — % обслуживания, выбранный кассиром в момент close.
+	// Если nil — берём order.ServicePercent (default ресторана). Если "0"
+	// — сервис отключён для этого заказа. Хранится в order.service_percent
+	// и используется при вычислении total_with_service.
+	ServicePercent *string `json:"service_percent,omitempty"`
 }
 
 // PaymentSplit — одна часть split-payment.
@@ -195,8 +201,28 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		if decimal.IsNegative(discountedTotal) {
 			discountedTotal = decimal.Zero
 		}
-		// total_with_service = (total - discount) + tip. service_amount not used yet.
-		order.TotalWithService = decimal.Normalize(decimal.Add(discountedTotal, tip))
+		// Service: либо переопределён в input (cashier выключил/включил toggle
+		// в момент close), либо берём текущий order.service_percent (default
+		// ресторана). Сохраняем как persistable snapshot.
+		servicePercent := order.ServicePercent
+		if in.ServicePercent != nil {
+			sp, perr := decimal.FromString(*in.ServicePercent)
+			if perr != nil {
+				return apperrors.Wrap("VALIDATION", "bad service_percent", perr)
+			}
+			if decimal.IsNegative(sp) {
+				return apperrors.Wrap("VALIDATION", "service_percent must be >= 0", nil)
+			}
+			servicePercent = decimal.Normalize(sp)
+		}
+		serviceAmount := decimal.Zero
+		if !servicePercent.IsZero() {
+			serviceAmount = decimal.Normalize(decimal.Percent(discountedTotal, servicePercent))
+		}
+		order.ServicePercent = servicePercent
+		order.ServiceAmount = serviceAmount
+		// total_with_service = (total - discount) + service + tip.
+		order.TotalWithService = decimal.Normalize(decimal.Add(decimal.Add(discountedTotal, serviceAmount), tip))
 
 		// Snapshot payment_method и payments (jsonb).
 		expectedPayTotal := order.TotalWithService

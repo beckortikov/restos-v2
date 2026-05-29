@@ -343,8 +343,8 @@ export async function closeOrderWithPayment(
   discountReason?: string,
   payments?: import('../types').OrderPayment[],
 ) {
-  void tableId; void total; void cogs; void accountName; void servicePercent
-  void serviceAmount; void discountAmount; void payments
+  void tableId; void total; void cogs; void accountName
+  void serviceAmount; void discountAmount
   let shiftId: string | undefined
   try {
     const s: any = await unwrap(api.GET('/api/v1/shifts/active'))
@@ -369,6 +369,11 @@ export async function closeOrderWithPayment(
     shift_id: shiftId ?? '',
   }
   if (tipAmount && tipAmount > 0) body.tip_amount = String(tipAmount)
+  // Передаём service_percent ВСЕГДА (включая 0), чтобы бэкенд знал, выключил
+  // ли кассир toggle «Обслуживание». Без этого backend брал бы default ресторана
+  // и рассчитывал service сам, а FE отправлял payments[].amount уже с сервисом
+  // → sum(payments) != backend.total_with_service → VALIDATION error.
+  if (servicePercent != null) body.service_percent = String(servicePercent)
   if (cashierId) body.cashier_id = cashierId
   if (discountType) body.discount_type = discountType
   if (discountValue != null) body.discount_value = String(discountValue)
