@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   build-windows:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -40,6 +40,7 @@ jobs:
 
       - name: Build Go sidecar (windows/amd64)
         working-directory: server
+        shell: bash
         run: |
           mkdir -p ../desktop/resources
           GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
@@ -54,6 +55,7 @@ jobs:
         run: pnpm build
 
       - name: Copy frontend into desktop/
+        shell: bash
         run: |
           rm -rf desktop/frontend
           cp -r dist desktop/frontend
@@ -62,7 +64,7 @@ jobs:
         working-directory: desktop
         run: npm install --no-save
 
-      - name: Pack Windows NSIS installer
+      - name: Pack Windows NSIS installer + publish to release
         working-directory: desktop
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
