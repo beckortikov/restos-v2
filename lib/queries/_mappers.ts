@@ -26,8 +26,10 @@ export const ROLE_DISPLAY_FULL: Record<string, string> = {
   other: 'Прочий',
 }
 
-// Active order statuses the DB enum accepts.
-export const ACTIVE_ORDER_STATUSES = ['new', 'cooking', 'ready', 'served', 'bill_requested']
+// Active order statuses — raw backend values. Backend Create() emits 'open'
+// (we map it to FE-side 'new' in _mapBackendOrderStatus, but fetchTables
+// filters RAW status before mapping, so 'open' must be listed here too).
+export const ACTIVE_ORDER_STATUSES = ['open', 'new', 'cooking', 'ready', 'served', 'bill_requested']
 
 // Backend stores Go-side statuses 'open'/'closed' for newly-created and
 // fully-paid orders. The FE OrderStatus enum doesn't know those — without
