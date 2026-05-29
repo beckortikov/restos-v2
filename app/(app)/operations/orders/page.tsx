@@ -548,9 +548,18 @@ export default function OrdersPage() {
   }, [statusFilter, visibleStatusFilter, setStatusFilter])
 
   // useCallback — стабильная ссылка для memo() OrderRow/OrderCard.
-  const handleOpenOrder = useCallback((order: Order) => {
+  // Список грузится в slim-режиме (без items) ради скорости — но в диалоге
+  // нужны полные позиции для расчёта чека/подытога/COGS. Открываем диалог
+  // сразу со slim-версией для отзывчивости, в фоне догружаем full.
+  const handleOpenOrder = useCallback(async (order: Order) => {
     setSelectedOrder(order)
     setActionsDialogOpen(true)
+    try {
+      const full = await fetchOrders({ ids: [order.id], slim: false })
+      if (full[0]) setSelectedOrder(full[0])
+    } catch (e) {
+      console.error('[orders] load full order failed:', e)
+    }
   }, [])
 
   function handleOrderAction(action: string, data?: OrderActionData) {
