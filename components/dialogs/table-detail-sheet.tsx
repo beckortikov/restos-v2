@@ -340,7 +340,7 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
     )
   }
 
-  const style = STATUS_STYLE[table.status]
+  const style = STATUS_STYLE[table.status] ?? STATUS_STYLE.free
   const zone = zones.find((z) => z.id === table.zone)
   const order = openOrders.find(o => o.id === selectedOrderId) ?? openOrders[0] ?? null
   const waiter = table.waiterId ? users.find((u) => u.id === table.waiterId) : null

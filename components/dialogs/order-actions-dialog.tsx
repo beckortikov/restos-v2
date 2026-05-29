@@ -370,7 +370,7 @@ export function OrderActionsDialog({
 
   const table = order.tableId ? tables.find((t) => t.id === order.tableId) : null
   const waiter = order.waiterId ? users.find((u) => u.id === order.waiterId) : null
-  const style = STATUS_STYLE[order.status]
+  const style = STATUS_STYLE[order.status] ?? STATUS_STYLE.new
 
   // Calculation: subtotal — это сумма по живым позициям чека (отменённые
   // фильтруются visibleReceiptItems, voids тоже учитываются там же). Это

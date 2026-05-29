@@ -65,7 +65,7 @@ interface TableCardProps {
 }
 
 function TableCardInner({ table, tableOrders, fallbackOrder, waiter, servicePercent, onClick, isSelected, isMerged, hideReadyHighlight }: TableCardProps) {
-  const style = STATUS_STYLE[table.status]
+  const style = STATUS_STYLE[table.status] ?? STATUS_STYLE.free
   const openOrders = tableOrders
   // Primary order shown on the card. With multiple tabs we show the first by createdAt
   // but expose the count separately so users know there's more.

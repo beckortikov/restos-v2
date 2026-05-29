@@ -29,6 +29,21 @@ export const ROLE_DISPLAY_FULL: Record<string, string> = {
 // Active order statuses the DB enum accepts.
 export const ACTIVE_ORDER_STATUSES = ['new', 'cooking', 'ready', 'served', 'bill_requested']
 
+// Backend stores Go-side statuses 'open'/'closed' for newly-created and
+// fully-paid orders. The FE OrderStatus enum doesn't know those — without
+// the mapping `STATUS_STYLE[order.status]` would be undefined and crash on
+// `.bg` access (e.g. in OrderActionsDialog). Map them to the closest FE
+// equivalent so the UI is consistent.
+export function _mapBackendOrderStatus(s: unknown): OrderStatus {
+  if (s === 'open') return 'new'
+  if (s === 'closed') return 'done'
+  if (s === 'new' || s === 'cooking' || s === 'ready' || s === 'served'
+    || s === 'bill_requested' || s === 'done' || s === 'cancelled') {
+    return s
+  }
+  return 'new'
+}
+
 // Slim-выборка для страниц списка orders.
 export const ORDERS_SLIM_SELECT =
   'id,order_number,status,type,' +
@@ -196,7 +211,7 @@ export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[
   return {
     id: r.id,
     orderNumber: r.order_number != null ? Number(r.order_number) : undefined,
-    status: r.status as OrderStatus,
+    status: _mapBackendOrderStatus(r.status),
     type: r.type as OrderType,
     tableId: r.table_id ?? undefined,
     waiterId: r.waiter_id ?? undefined,
