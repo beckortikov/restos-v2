@@ -276,6 +276,20 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		}
 		var applied []payApplied
 
+		// creditAccount инкрементит balance счёта на amount. Раньше Close
+		// создавал financial_operation, но balance счёта не двигал —
+		// ДДС показывал операции, а «Касса» в UI стояла на opening_balance.
+		// Идемпотентность по source_ref уже обеспечена check'ом stock-deduct'а
+		// выше (один финoperation на order — нет double-credit'а на ретрае).
+		creditAccount := func(accountID string, amount decimal.Decimal) error {
+			return tx.Model(&models.FinancialAccount{}).
+				Where("restaurant_id = ? AND id = ?", rid, accountID).
+				Updates(map[string]any{
+					"balance":    gorm.Expr("balance + ?", amount),
+					"updated_at": now,
+				}).Error
+		}
+
 		if isMulti {
 			for _, p := range in.Payments {
 				amt, _ := decimal.FromString(p.Amount)
@@ -300,6 +314,9 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				if err := tx.Create(finOp).Error; err != nil {
 					return err
 				}
+				if err := creditAccount(acc, amtN); err != nil {
+					return err
+				}
 				applied = append(applied, payApplied{Method: p.Method, Amount: amtN})
 			}
 		} else {
@@ -321,6 +338,9 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				UpdatedAt:    now,
 			}
 			if err := tx.Create(finOp).Error; err != nil {
+				return err
+			}
+			if err := creditAccount(opAccount, order.TotalWithService); err != nil {
 				return err
 			}
 			applied = append(applied, payApplied{Method: in.PaymentMethod, Amount: order.TotalWithService})
