@@ -2,10 +2,10 @@ package handlers
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
@@ -152,14 +152,14 @@ func (h *ReportsHandler) PnL(w http.ResponseWriter, r *http.Request) {
 func parsePeriod(r *http.Request) (service.PeriodFilter, error) {
 	var f service.PeriodFilter
 	if v := queryString(r, "from"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			return f, errBadMultipart("bad ?from (RFC3339 required)")
 		}
 		f.From = &t
 	}
 	if v := queryString(r, "to"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			return f, errBadMultipart("bad ?to (RFC3339 required)")
 		}

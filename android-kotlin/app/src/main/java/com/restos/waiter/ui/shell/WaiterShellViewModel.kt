@@ -123,5 +123,5 @@ class WaiterShellViewModel @Inject constructor(
         java.time.LocalDate.now(java.time.ZoneId.systemDefault())
             .atStartOfDay(java.time.ZoneId.systemDefault())
             .toOffsetDateTime()
-            .toString()
+            .format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"))
 }

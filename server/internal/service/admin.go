@@ -20,6 +20,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -707,7 +708,7 @@ func (s *ReservationsService) Create(ctx context.Context, in ReservationInput) (
 		RestaurantID: &rid, CreatedAt: now,
 	}
 	if in.ReservedAt != nil {
-		t, err := time.Parse(time.RFC3339, *in.ReservedAt)
+		t, err := timeutil.ParseLooseRFC3339(*in.ReservedAt)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad reserved_at (RFC3339)", err)
 		}
@@ -757,7 +758,7 @@ func (s *ReservationsService) Patch(ctx context.Context, id string, in Reservati
 			updates["note"] = *in.Note
 		}
 		if in.ReservedAt != nil {
-			t, err := time.Parse(time.RFC3339, *in.ReservedAt)
+			t, err := timeutil.ParseLooseRFC3339(*in.ReservedAt)
 			if err != nil {
 				return apperrors.Wrap("VALIDATION", "bad reserved_at", err)
 			}

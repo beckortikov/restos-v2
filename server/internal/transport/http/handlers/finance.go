@@ -3,11 +3,11 @@ package handlers
 import (
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/service"
 	httpmw "github.com/restos/restos-v4/server/internal/transport/http/middleware"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
@@ -100,7 +100,7 @@ func (h *FinancialOperationsHandler) List(w http.ResponseWriter, r *http.Request
 	f.Activity = queryString(r, "activity")
 	f.ShiftID = queryString(r, "shift_id")
 	if v := queryString(r, "from"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			respond.BadRequest(w, "bad ?from")
 			return
@@ -108,7 +108,7 @@ func (h *FinancialOperationsHandler) List(w http.ResponseWriter, r *http.Request
 		f.From = &t
 	}
 	if v := queryString(r, "to"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			respond.BadRequest(w, "bad ?to")
 			return

@@ -19,6 +19,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -602,7 +603,7 @@ func (s *TimeEntriesService) ClockIn(ctx context.Context, in TimeEntryInput) (*m
 	now := time.Now().UTC()
 	in0 := now
 	if in.ClockIn != nil {
-		t, err := time.Parse(time.RFC3339, *in.ClockIn)
+		t, err := timeutil.ParseLooseRFC3339(*in.ClockIn)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad clock_in", err)
 		}
@@ -643,7 +644,7 @@ func (s *TimeEntriesService) ClockOut(ctx context.Context, id string, in TimeEnt
 	}
 	out := time.Now().UTC()
 	if in.ClockOut != nil {
-		t, err := time.Parse(time.RFC3339, *in.ClockOut)
+		t, err := timeutil.ParseLooseRFC3339(*in.ClockOut)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad clock_out", err)
 		}

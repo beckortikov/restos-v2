@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
@@ -15,14 +16,14 @@ import (
 // parseTimeRange — небольшой хэлпер для ?from=&to= (RFC3339).
 func parseTimeRange(r *http.Request) (from, to *time.Time, err error) {
 	if v := queryString(r, "from"); v != "" {
-		t, e := time.Parse(time.RFC3339, v)
+		t, e := timeutil.ParseLooseRFC3339(v)
 		if e != nil {
 			return nil, nil, e
 		}
 		from = &t
 	}
 	if v := queryString(r, "to"); v != "" {
-		t, e := time.Parse(time.RFC3339, v)
+		t, e := timeutil.ParseLooseRFC3339(v)
 		if e != nil {
 			return nil, nil, e
 		}

@@ -13,12 +13,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/cursor"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
@@ -303,7 +303,7 @@ func (h *AuditReadsHandler) List(w http.ResponseWriter, r *http.Request) {
 	f.Limit, _ = strconv.Atoi(queryString(r, "limit"))
 	f.Offset, _ = strconv.Atoi(queryString(r, "offset"))
 	if v := queryString(r, "from"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			respond.BadRequest(w, "bad ?from")
 			return
@@ -311,7 +311,7 @@ func (h *AuditReadsHandler) List(w http.ResponseWriter, r *http.Request) {
 		f.From = &t
 	}
 	if v := queryString(r, "to"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			respond.BadRequest(w, "bad ?to")
 			return
@@ -358,7 +358,7 @@ func (h *PrintJobsHandler) ActiveByStation(w http.ResponseWriter, r *http.Reques
 func (h *ReservationsHandler) ForTable(w http.ResponseWriter, r *http.Request) {
 	var f service.ForTableFilter
 	if v := queryString(r, "from"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			respond.BadRequest(w, "bad ?from")
 			return
@@ -366,7 +366,7 @@ func (h *ReservationsHandler) ForTable(w http.ResponseWriter, r *http.Request) {
 		f.From = t
 	}
 	if v := queryString(r, "to"); v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			respond.BadRequest(w, "bad ?to")
 			return

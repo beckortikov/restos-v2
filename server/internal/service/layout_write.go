@@ -18,6 +18,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/db/models"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -266,7 +267,7 @@ func (s *TablesWriteService) SetStatus(ctx context.Context, id string, in TableI
 		updates["waiter_id"] = *in.WaiterID
 	}
 	if in.OpenedAt != nil {
-		t, err := time.Parse(time.RFC3339, *in.OpenedAt)
+		t, err := timeutil.ParseLooseRFC3339(*in.OpenedAt)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad opened_at", err)
 		}

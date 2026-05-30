@@ -3,10 +3,10 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/service"
 	httpmw "github.com/restos/restos-v4/server/internal/transport/http/middleware"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
@@ -37,7 +37,7 @@ func (h *OrdersHandler) List(w http.ResponseWriter, r *http.Request) {
 		fromStr = queryString(r, "created_at_from")
 	}
 	if fromStr != "" {
-		t, err := parseLooseRFC3339(fromStr)
+		t, err := timeutil.ParseLooseRFC3339(fromStr)
 		if err != nil {
 			respond.BadRequest(w, "bad ?from: "+err.Error())
 			return
@@ -45,7 +45,7 @@ func (h *OrdersHandler) List(w http.ResponseWriter, r *http.Request) {
 		f.From = &t
 	}
 	if toStr := queryString(r, "to"); toStr != "" {
-		t, err := parseLooseRFC3339(toStr)
+		t, err := timeutil.ParseLooseRFC3339(toStr)
 		if err != nil {
 			respond.BadRequest(w, "bad ?to: "+err.Error())
 			return
@@ -248,23 +248,3 @@ func (h *OrdersHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, o)
 }
 
-// parseLooseRFC3339 принимает RFC3339 с опциональными секундами/милли.
-// Java's OffsetDateTime.toString() при нулевых секундах возвращает
-// `2026-05-30T00:00+05:00` — формально не-RFC3339, но семантически валидно.
-// Принимаем оба варианта плюс RFC3339Nano.
-func parseLooseRFC3339(s string) (time.Time, error) {
-	formats := []string{
-		time.RFC3339Nano,
-		time.RFC3339,
-		"2006-01-02T15:04Z07:00",  // без секунд
-		"2006-01-02T15:04:05",     // без timezone
-		"2006-01-02T15:04",        // без секунд и tz
-		"2006-01-02",              // только дата
-	}
-	for _, layout := range formats {
-		if t, err := time.Parse(layout, s); err == nil {
-			return t, nil
-		}
-	}
-	return time.Time{}, &time.ParseError{Layout: time.RFC3339, Value: s, Message: "unrecognized timestamp format"}
-}
