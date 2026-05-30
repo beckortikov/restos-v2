@@ -34,5 +34,5 @@ func (h *TablesHandler) ListTables(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, err)
 		return
 	}
-	respond.JSON(w, http.StatusOK, makeList[models.Table](rows, ""))
+	respond.JSON(w, http.StatusOK, makeList[service.TableWithEnriched](rows, ""))
 }
