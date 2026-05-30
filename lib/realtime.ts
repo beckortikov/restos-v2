@@ -62,7 +62,7 @@ function dispatchChange(raw: string) {
 // меняет `tables.status`, но backend openTableForOrder сейчас не публикует
 // table.updated. Этим fanout'ом мы заставляем все экраны, watch'ящие 'tables'
 // (включая POS table picker через useOrderData), refetch'ить столы.
-const EVENT_FANOUT: Record<string, string[]> = {
+export const EVENT_FANOUT: Record<string, string[]> = {
   'order.created':     ['orders', 'tables'],
   'order.updated':     ['orders', 'tables'],
   'order.closed':      ['orders', 'tables'],
