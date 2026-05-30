@@ -111,6 +111,27 @@ paths:
           description: OK
           content: { application/json: { schema: { $ref: "#/components/schemas/LicenseStatus" } } }
 
+  /api/v1/license/machine-id:
+    get:
+      tags: [license]
+      summary: Fingerprint машины + restaurant_id для активации
+      description: |
+        Возвращает stable hardware fingerprint (hash MAC+disk+CPU+machine-uuid) и
+        restaurant_id текущего инстанса. Клиент копирует эту пару и отправляет
+        админу, который выписывает токен с такими же значениями.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [machine_id, restaurant_id]
+                properties:
+                  machine_id: { type: string, example: "A1B2-7K3M-9XQA" }
+                  restaurant_id: { type: string, format: uuid }
+                  restaurant_name: { type: string }
+
   /api/v1/license/activate:
     post:
       tags: [license]

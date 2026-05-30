@@ -243,8 +243,9 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/reports/audit.xlsx", reportsH.Audit)
 			g.Get("/reports/pl.xlsx", reportsH.PnL)
 
-			// License — status + activate доступны даже в locked-режиме.
+			// License — status + activate + machine-id доступны даже в locked.
 			g.Get("/license/status", licenseH.Status)
+			g.Get("/license/machine-id", licenseH.MachineInfo)
 			g.Post("/license/activate", licenseH.Activate)
 
 			// Shadow (Phase 8): batch-приём drift-репортов + агрегаты для Owner Dashboard.

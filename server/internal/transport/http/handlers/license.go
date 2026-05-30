@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/restos/restos-v4/server/internal/pkg/license"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
@@ -23,6 +24,23 @@ func (h *LicenseHandler) Status(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, st)
 }
+
+// MachineInfo — GET /api/v1/license/machine-id.
+// Возвращает fingerprint текущей машины + restaurant_id чтобы клиент
+// мог скопировать и отправить админу для выписки токена.
+//
+// Не требует уже активной лицензии (наоборот, нужно для первой активации).
+func (h *LicenseHandler) MachineInfo(w http.ResponseWriter, r *http.Request) {
+	info, err := h.svc.MachineInfo(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, info)
+}
+
+// silence unused-import linter if license pkg used only in service for now.
+var _ = license.MachineID
 
 // Activate — POST /api/v1/license/activate.
 func (h *LicenseHandler) Activate(w http.ResponseWriter, r *http.Request) {

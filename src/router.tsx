@@ -80,6 +80,7 @@ const PrintersQueue = () => L(() => import('@/app/(app)/settings/printers/queue/
 const Import = () => L(() => import('@/app/(app)/settings/import/page'))
 const Customers = () => L(() => import('@/app/(app)/settings/customers/page'))
 const Audit = () => L(() => import('@/app/(app)/settings/audit/page'))
+const License = () => L(() => import('@/app/(app)/settings/license/page'))
 
 // Admin
 const AdminDashboard = () => L(() => import('@/app/(admin)/admin/page'))
@@ -163,6 +164,7 @@ export function AppRouter() {
         <Route path="/settings/import" element={<Import />} />
         <Route path="/settings/customers" element={<Customers />} />
         <Route path="/settings/audit" element={<Audit />} />
+        <Route path="/settings/license" element={<License />} />
       </Route>
 
       {/* Admin — superadmin only */}

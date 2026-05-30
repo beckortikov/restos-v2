@@ -58,6 +58,33 @@ const GraceDays = 7
 // WarningDays — ещё 7 дней до lock.
 const WarningDays = 7
 
+// MachineInfo — fingerprint текущей машины + restaurant_id/name для
+// активации. Клиент копирует MachineID и Restaurant.ID, отправляет админу,
+// тот выписывает токен с такими же значениями.
+type MachineInfo struct {
+	MachineID      string `json:"machine_id"`
+	RestaurantID   string `json:"restaurant_id"`
+	RestaurantName string `json:"restaurant_name,omitempty"`
+}
+
+// MachineInfo возвращает fingerprint этой машины + сведения о ресторане.
+// Используется на экране активации (GET /api/v1/license/machine-id).
+func (s *LicenseService) MachineInfo(ctx context.Context) (*MachineInfo, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var r models.Restaurant
+	if err := s.db.WithContext(ctx).Where("id = ?", rid).First(&r).Error; err != nil {
+		return nil, err
+	}
+	return &MachineInfo{
+		MachineID:      license.MachineID(),
+		RestaurantID:   r.ID,
+		RestaurantName: r.Name,
+	}, nil
+}
+
 // LicenseStatus — публичный ответ /license/status.
 type LicenseStatus struct {
 	State         State      `json:"state"`
@@ -175,6 +202,16 @@ func (s *LicenseService) Activate(ctx context.Context, in ActivateInput) (*Licen
 	}
 	if p.RestaurantID != rid {
 		return nil, apperrors.Wrap("VALIDATION", "token issued for a different restaurant", nil)
+	}
+	// Machine binding (v2.0.26+): если токен выписан с machine_id, сверяем
+	// с текущим железом. Empty mid → legacy machine-agnostic токен
+	// (продолжаем принимать для backward compat со старыми токенами).
+	if p.MachineID != "" {
+		current := license.MachineID()
+		if p.MachineID != current {
+			return nil, apperrors.Wrap("VALIDATION",
+				"token issued for different machine (got "+current+", token "+p.MachineID+")", nil)
+		}
 	}
 
 	// Update restaurant.

@@ -42,12 +42,18 @@ const (
 )
 
 // Payload — содержимое токена.
+//
+// MachineID — fingerprint железа (hash MAC+disk+CPU, см. MachineID()).
+// Если задан в токене, при activate бэкенд сверяет с текущим железом —
+// один токен можно установить только на машину для которой он выписан.
+// Empty → токен machine-agnostic (legacy / тестирование).
 type Payload struct {
 	Version      int       `json:"v"`
 	RestaurantID string    `json:"rid"`
 	IssuedAt     time.Time `json:"iat"`
 	ExpiresAt    time.Time `json:"exp"`
 	Edition      Edition   `json:"ed,omitempty"`
+	MachineID    string    `json:"mid,omitempty"`
 }
 
 // CurrentVersion — версия формата. Изменение → отдельный verifier.

@@ -41,6 +41,7 @@ import {
   PanelLeftOpen,
   Plus,
   Minus,
+  ShieldCheck,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -280,6 +281,7 @@ const NAV: NavItem[] = [
       { label: 'Импорт', href: '/settings/import', icon: Upload },
       { label: 'Принтеры', href: '/settings/printers', icon: Monitor },
       { label: 'История изменений', href: '/settings/audit', icon: History },
+      { label: 'Лицензия', href: '/settings/license', icon: ShieldCheck },
     ],
   },
 ]
