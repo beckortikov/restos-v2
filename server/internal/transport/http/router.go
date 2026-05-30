@@ -191,6 +191,10 @@ func NewRouter(deps Deps) http.Handler {
 			// форму bootstrap или login).
 			g.Get("/bootstrap/status", bootstrapH.Status)
 			g.Post("/bootstrap", bootstrapH.Run)
+			// Public probe для onboarding Kotlin APK / Electron — позволяет
+			// клиенту убедиться, что http://<host>:3001 — это RestOS v4, до
+			// логина. Возвращает {machine_id, restaurant_id, restaurant_name}.
+			g.Get("/public/machine-info", licenseH.PublicMachineInfo)
 		})
 
 		// Защищённые endpoints с обычным таймаутом.

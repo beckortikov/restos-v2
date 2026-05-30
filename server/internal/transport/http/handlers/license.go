@@ -39,6 +39,18 @@ func (h *LicenseHandler) MachineInfo(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, info)
 }
 
+// PublicMachineInfo — GET /api/v1/public/machine-info.
+// Без auth — используется onboarding-экраном Kotlin APK / Electron, чтобы
+// проверить что адрес действительно RestOS-бэк, до логина.
+func (h *LicenseHandler) PublicMachineInfo(w http.ResponseWriter, r *http.Request) {
+	info, err := h.svc.PublicMachineInfo(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, info)
+}
+
 // silence unused-import linter if license pkg used only in service for now.
 var _ = license.MachineID
 

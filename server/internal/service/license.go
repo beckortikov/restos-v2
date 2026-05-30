@@ -93,6 +93,26 @@ func (s *LicenseService) MachineInfo(ctx context.Context) (*MachineInfo, error) 
 	return info, nil
 }
 
+// PublicMachineInfo — то же что MachineInfo, но без tenant из ctx. Берёт
+// первый ресторан из БД (на v4 локально всегда один на машину). Нужен для
+// onboarding APK официанта и любого pre-auth probe экрана — например,
+// чтобы клиент мог проверить «это RestOS-бэк?» до логина.
+func (s *LicenseService) PublicMachineInfo(ctx context.Context) (*MachineInfo, error) {
+	var r models.Restaurant
+	if err := s.db.WithContext(ctx).Order("created_at ASC").First(&r).Error; err != nil {
+		return nil, err
+	}
+	info := &MachineInfo{
+		MachineID:      license.MachineID(),
+		RestaurantID:   r.ID,
+		RestaurantName: r.Name,
+	}
+	if r.AccountID != nil {
+		info.AccountID = *r.AccountID
+	}
+	return info, nil
+}
+
 // LicenseStatus — публичный ответ /license/status.
 type LicenseStatus struct {
 	State         State      `json:"state"`

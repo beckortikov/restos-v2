@@ -107,7 +107,7 @@ class OnboardingViewModel @Inject constructor(
      */
     private suspend fun probe(baseUrl: String): ProbeResult = withContext(Dispatchers.IO) {
         val request = Request.Builder()
-            .url("${baseUrl}api/v1/license/machine-id")
+            .url("${baseUrl}api/v1/public/machine-info")
             .get()
             .build()
         try {
