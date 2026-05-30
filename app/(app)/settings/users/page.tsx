@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, memo, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import {
@@ -29,13 +29,10 @@ export default function UserPermissionsPage() {
   const [tab, setTab] = useState<Tab>('staff')
   const [search, setSearch] = useState('')
 
-  // Add user form
+  // Add user form: показ inline, но state — внутри AddUserForm (мемо-компонент).
+  // Раньше state жил здесь → каждое нажатие клавиши в input ре-рендерило ВЕСЬ
+  // page.tsx (включая список 20-50 сотрудников × матрицу прав) → UI «фризился».
   const [showAddUser, setShowAddUser] = useState(false)
-  const [newName, setNewName] = useState('')
-  const [newUsername, setNewUsername] = useState('')
-  const [newRole, setNewRole] = useState<UserRoleType>('waiter')
-  const [newSalary, setNewSalary] = useState(0)
-  const [newPassword, setNewPassword] = useState('1234')
   const [addingUser, setAddingUser] = useState(false)
 
   // Edit user
@@ -131,22 +128,47 @@ export default function UserPermissionsPage() {
   }
 
   // ─── Staff CRUD ─────────────────────────────────────────────────────────
-  const handleAddUser = async () => {
-    if (!newName.trim() || !newUsername.trim() || !user?.restaurantId) return
+  // Принимает form values из AddUserForm (локальный state там, не здесь).
+  // Стабильная ссылка через useCallback — чтобы memo-обёртка реально работала.
+  const handleAddUser = useCallback(async (form: AddUserFormValues) => {
+    if (!form.name.trim() || !form.username.trim() || !user?.restaurantId) return
     setAddingUser(true)
     try {
-      await createUserForRestaurant({ name: newName.trim(), username: newUsername.trim().toLowerCase(), role: newRole, restaurantId: user.restaurantId, salary: newSalary, password: newPassword || '1234' })
-      toast.success(`${newName.trim()} добавлен`)
-      setShowAddUser(false); setNewName(''); setNewUsername(''); setNewRole('waiter'); setNewSalary(0); setNewPassword('1234')
-      // forceRefresh: cachedQuery иначе вернул бы Dexie-кэш (stale-while-revalidate)
-      // и новый сотрудник появился бы только после фонового рефрэша.
+      await createUserForRestaurant({
+        name: form.name.trim(),
+        username: form.username.trim().toLowerCase(),
+        role: form.role,
+        restaurantId: user.restaurantId,
+        salary: form.salary,
+        password: form.password || '1234',
+      })
+      toast.success(`${form.name.trim()} добавлен`)
+      setShowAddUser(false)
       await loadEmployees()
-    } catch (e) { toast.error(e instanceof Error ? e.message : 'Ошибка') } finally { setAddingUser(false) }
-  }
+    } catch (e) {
+      console.error('[createUser]', e)
+      toast.error(e instanceof Error ? e.message : 'Ошибка')
+    } finally {
+      setAddingUser(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.restaurantId])
+
+  const handleCancelAdd = useCallback(() => setShowAddUser(false), [])
 
   const handleDeleteUser = async (emp: User) => {
     if (!confirm(`Удалить "${emp.name}"?`)) return
-    try { await deleteUser(emp.id); toast.success('Удалён'); await loadEmployees() } catch { toast.error('Ошибка') }
+    try {
+      await deleteUser(emp.id)
+      toast.success('Удалён')
+      await loadEmployees()
+    } catch (e) {
+      // Полная диагностика в консоли + понятное сообщение пользователю.
+      // Без этого юзер видит только «Ошибка», а в DevTools — ничего.
+      console.error('[deleteUser]', emp.id, emp.name, e)
+      const msg = e instanceof Error ? e.message : 'Ошибка удаления'
+      toast.error(`Не удалось удалить: ${msg}`)
+    }
   }
 
   const openEditUser = (emp: User) => {
@@ -226,41 +248,14 @@ export default function UserPermissionsPage() {
         </div>
       </div>
 
-      {/* Add employee form */}
+      {/* Add employee form — мемо-компонент с локальным state, чтобы ввод
+          в input не ре-рендерил весь список сотрудников. */}
       {showAddUser && (
-        <div className="bg-card rounded-xl border border-border p-5 space-y-3">
-          <h3 className="text-sm font-semibold text-foreground">Новый сотрудник</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Имя <span className="text-destructive">*</span></label>
-              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Иванов Иван" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Логин <span className="text-destructive">*</span></label>
-              <input value={newUsername} onChange={e => setNewUsername(e.target.value)} placeholder="ivanov" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Пароль</label>
-              <input value={newPassword} onChange={e => setNewPassword(e.target.value)} placeholder="1234" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Роль</label>
-              <select value={newRole} onChange={e => setNewRole(e.target.value as UserRoleType)} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm">
-                {STAFF_ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-1">Зарплата</label>
-              <input type="number" min={0} value={newSalary || ''} onChange={e => setNewSalary(Number(e.target.value))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-            </div>
-          </div>
-          <div className="flex gap-2">
-            <button onClick={handleAddUser} disabled={addingUser || !newName.trim() || !newUsername.trim()} className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium disabled:opacity-50">
-              {addingUser ? 'Добавление...' : 'Добавить'}
-            </button>
-            <button onClick={() => setShowAddUser(false)} className="px-3 py-2 text-sm text-muted-foreground">Отмена</button>
-          </div>
-        </div>
+        <AddUserForm
+          submitting={addingUser}
+          onSubmit={handleAddUser}
+          onCancel={handleCancelAdd}
+        />
       )}
 
       {/* Tabs */}
@@ -680,3 +675,71 @@ export default function UserPermissionsPage() {
     </div>
   )
 }
+
+// ─── AddUserForm ──────────────────────────────────────────────────────────────
+// Локальный state — внутри. memo + стабильные props (см. useCallback в родителе)
+// не дают форме ре-рендериться при изменениях в родителе (employees, permMatrix
+// и т.п.), а изменения в form'е не ре-рендерят родителя.
+
+type AddUserFormValues = {
+  name: string
+  username: string
+  password: string
+  role: UserRoleType
+  salary: number
+}
+
+type AddUserFormProps = {
+  submitting: boolean
+  onSubmit: (values: AddUserFormValues) => void
+  onCancel: () => void
+}
+
+const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'other']
+
+const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel }: AddUserFormProps) {
+  const [name, setName] = useState('')
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('1234')
+  const [role, setRole] = useState<UserRoleType>('waiter')
+  const [salary, setSalary] = useState(0)
+
+  return (
+    <div className="bg-card rounded-xl border border-border p-5 space-y-3">
+      <h3 className="text-sm font-semibold text-foreground">Новый сотрудник</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Имя <span className="text-destructive">*</span></label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Иванов Иван" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Логин <span className="text-destructive">*</span></label>
+          <input value={username} onChange={e => setUsername(e.target.value)} placeholder="ivanov" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Пароль</label>
+          <input value={password} onChange={e => setPassword(e.target.value)} placeholder="1234" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Роль</label>
+          <select value={role} onChange={e => setRole(e.target.value as UserRoleType)} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm">
+            {STAFF_ROLES_LIST.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="text-xs text-muted-foreground block mb-1">Зарплата</label>
+          <input type="number" min={0} value={salary || ''} onChange={e => setSalary(Number(e.target.value))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <button
+          onClick={() => onSubmit({ name, username, password, role, salary })}
+          disabled={submitting || !name.trim() || !username.trim()}
+          className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium disabled:opacity-50">
+          {submitting ? 'Добавление...' : 'Добавить'}
+        </button>
+        <button onClick={onCancel} className="px-3 py-2 text-sm text-muted-foreground">Отмена</button>
+      </div>
+    </div>
+  )
+})
