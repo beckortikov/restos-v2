@@ -405,6 +405,7 @@ CREATE TABLE IF NOT EXISTS order_items (
   cancel_reason TEXT,
   printed_at TIMESTAMPTZ,
   cancel_printed_at TIMESTAMPTZ,
+  note TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );

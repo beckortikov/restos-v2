@@ -214,8 +214,7 @@ class OrderDetailViewModel @Inject constructor(
     }
 
     fun printPreBill() {
-        // TODO(v4-port): печать не подключена — no-op.
-        runAction(busyToast = "Печать пре-чека пока не реализована") {
+        runAction(busyToast = "Пре-чек отправлен на печать") {
             val updated = repo.printPreBill(orderId)
             _state.update { it.copy(order = updated) }
         }

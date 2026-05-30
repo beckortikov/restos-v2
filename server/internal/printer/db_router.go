@@ -82,6 +82,11 @@ func (r *DBRouter) resolveFromDB(job *models.PrintJob) Printer {
 				*job.RestaurantID, "receipt").First(&p).Error; err != nil {
 				return nil
 			}
+		case "pre_bill":
+			if err := q.Where("restaurant_id = ? AND kind = ? AND is_default = true",
+				*job.RestaurantID, "receipt").First(&p).Error; err != nil {
+				return nil
+			}
 		case "runner", "cancel_runner":
 			// Phase 4.5 базово: первый station-принтер. Phase 5: учёт job.Station.
 			if err := q.Where("restaurant_id = ? AND kind = ?",

@@ -200,6 +200,7 @@ export function _mapV4OrderItem(i: Record<string, any>): OrderItem {
     cancelPrintedAt: (i.cancel_printed_at as string | null) ?? null,
     servedAt: i.served_at ?? undefined,
     servedBy: i.served_by ?? undefined,
+    note: (i.note as string | null | undefined) ?? null,
   }
 }
 

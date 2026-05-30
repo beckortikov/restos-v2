@@ -232,6 +232,18 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
   }, [open, table?.id, table?.status])
 
   const handlePrint = useCallback(async () => {
+    // Pre-check — через backend job, не client ESC/POS.
+    if (receiptData?.isPreCheck && selectedOrderId) {
+      try {
+        const { printPreBill } = await import('@/lib/queries')
+        const { jobId } = await printPreBill(selectedOrderId)
+        toast.success(jobId ? `Пре-чек отправлен (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
+        return
+      } catch (e) {
+        toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
+        return
+      }
+    }
     // Try ESC/POS direct first (sharper output via print-server → thermal printer)
     if (receiptData) {
       const { printReceiptDirect } = await import('@/lib/print-service')

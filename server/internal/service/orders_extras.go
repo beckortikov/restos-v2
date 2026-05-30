@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -989,6 +990,79 @@ func (s *OrdersService) AutoReadyCheck(ctx context.Context) (*AutoReadyResult, e
 type CleanupOrphansResult struct {
 	Cancelled int      `json:"cancelled"`
 	OrderIDs  []string `json:"order_ids"`
+}
+
+// SetItemNoteInput — body PATCH /orders/{id}/items/{itemId}/note.
+// note=nil или пустая строка после trim → очищает комментарий.
+type SetItemNoteInput struct {
+	Note *string `json:"note"`
+}
+
+// SetItemNote — обновляет комментарий к позиции заказа. Используется
+// официантом для передачи кухне особых пожеланий («без лука», «medium-rare»).
+// Печатается в runner и пре-чеке.
+func (s *OrdersService) SetItemNote(ctx context.Context, orderID, itemID string, in SetItemNoteInput) (*models.OrderItem, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Normalize: trim, empty → nil.
+	var v *string
+	if in.Note != nil {
+		t := strings.TrimSpace(*in.Note)
+		if t != "" {
+			v = &t
+		}
+	}
+
+	var out *models.OrderItem
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		// Verify order belongs to tenant.
+		var cnt int64
+		if err := tx.Model(&models.Order{}).
+			Where("restaurant_id = ? AND id = ?", rid, orderID).
+			Count(&cnt).Error; err != nil {
+			return err
+		}
+		if cnt == 0 {
+			return apperrors.ErrNotFound
+		}
+		var item models.OrderItem
+		if err := tx.Where("id = ? AND order_id = ?", itemID, orderID).
+			First(&item).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		now := time.Now().UTC()
+		item.Note = v
+		item.UpdatedAt = now
+		if err := tx.Model(&models.OrderItem{}).
+			Where("id = ?", item.ID).
+			Updates(map[string]any{
+				"note":       v,
+				"updated_at": now,
+			}).Error; err != nil {
+			return err
+		}
+		out = &item
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventOrderUpdated, map[string]any{
+			"order_id": orderID,
+			"item_id":  itemID,
+			"action":   "item.note_updated",
+		})
+		s.pub.Flush(ctx, rid, buf)
+	}
+	return out, nil
 }
 
 // CleanupOrphanOrders — отменяет заказы со status in ('new','cooking','ready')

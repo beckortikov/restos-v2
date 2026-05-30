@@ -246,6 +246,10 @@ export interface OrderItem {
   // independently of the order-level status. Auto-created PGlite column.
   servedAt?: string
   servedBy?: string
+  /** Optional free-text note (e.g. "без лука", "хорошо прожарить").
+   *  Печатается в кухонном ранере и в пре-чеке. Меняется через
+   *  PATCH /orders/{id}/items/{itemId}/note. */
+  note?: string | null
 }
 
 export interface Order {

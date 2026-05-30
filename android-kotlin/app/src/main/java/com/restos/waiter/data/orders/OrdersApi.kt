@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
 import retrofit2.http.Query
@@ -61,22 +62,43 @@ interface OrdersApi {
         @Body body: TransferRequest,
     ): OrderDto
 
+    /**
+     * v4: PATCH /orders/{id}/items/{itemId}/note — комментарий к позиции.
+     * `note=null` или пустая строка → очищает.
+     */
+    @PATCH("api/v1/orders/{orderId}/items/{itemId}/note")
+    suspend fun setItemNote(
+        @Path("orderId") orderId: String,
+        @Path("itemId") itemId: String,
+        @Body body: SetItemNoteRequest,
+    ): OrderItemDto
+
+    /**
+     * v4: POST /orders/{id}/print-pre-bill — печать предварительного чека.
+     * Заказ не закрывается; возвращает ссылку на PrintJob.
+     */
+    @POST("api/v1/orders/{orderId}/print-pre-bill")
+    suspend fun printPreBill(@Path("orderId") orderId: String): PrintJobRefDto
+
     // -------- stubs: эндпоинтов на v4 пока нет (см. CLAUDE.md в android-kotlin/) --------
 
     // TODO(v4-port): /orders/{id}/request_bill не реализован — пока нет
     //   статусной PATCH-операции; UI получит no-op (просто не меняет статус
     //   на стороне сервера). Возможно вернётся как `POST /orders/{id}/status`.
 
-    // TODO(v4-port): /orders/{id}/print_pre_bill — print-сервис на v4 пока не
-    //   подключён; client-side concern. Stub.
-
     // TODO(v4-port): waiter reassignment — v4 переезжает на
     //   `POST /api/v1/tables/{tableId}/assign-waiter` (см. TablesApi).
     //   В OrderDetailRepository вызов проксируется в TablesApi.
-
-    // TODO(v4-port): set_item_note отсутствует. UI пишет в локальный state и
-    //   ничего не отправляет. Поле note в любом случае проходит при addItems().
 }
+
+@Serializable
+data class SetItemNoteRequest(val note: String?)
+
+@Serializable
+data class PrintJobRefDto(
+    @SerialName("job_id") val jobId: String,
+    val status: String,
+)
 
 // v4 не поддерживает stats по официанту — оставлен как «нулевой» по контракту,
 // чтобы UI WaiterShellViewModel компилировался. См. ShellRepository.statsToday().

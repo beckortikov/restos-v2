@@ -59,6 +59,7 @@ type OrderItem struct {
 	OrderID              *string         `gorm:"column:order_id;type:uuid;index" json:"order_id"`
 	MenuItemID           *string         `gorm:"column:menu_item_id;type:uuid" json:"menu_item_id"`
 	Name                 *string         `json:"name"`
+	Note                 *string         `gorm:"column:note" json:"note"`
 	Qty                  decimal.Decimal `gorm:"type:numeric(14,4);default:1" json:"qty"`
 	Price                decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"price"`
 	COGS                 decimal.Decimal `gorm:"column:cogs;type:numeric(14,4);default:0" json:"cogs"`

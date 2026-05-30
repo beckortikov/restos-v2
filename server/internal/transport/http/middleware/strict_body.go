@@ -27,7 +27,7 @@ import (
 // Feature-flag: env RESTOS_STRICT_MONEY_BODIES.
 //   - "" (unset) или "1"/"true"/"on" → strict (default в v2.0.25).
 //   - "0"/"false"/"off" → legacy permissive (без DisallowUnknownFields).
-//   Позволяет выключить strict без redeploy если что-то сломалось.
+//     Позволяет выключить strict без redeploy если что-то сломалось.
 func DecodeStrict(r *http.Request, dst any) error {
 	if r.Body == nil {
 		return io.EOF

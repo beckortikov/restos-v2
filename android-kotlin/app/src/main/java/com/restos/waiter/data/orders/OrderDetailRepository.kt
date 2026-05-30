@@ -86,10 +86,16 @@ class OrderDetailRepository @Inject constructor(
             .also { cache.putOrder(it) }
     }
 
-    // TODO(v4-port): печать пре-чека — client-side concern; пока no-op.
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun printPreBill(orderId: String): OrderDto =
-        cache.getOrder(orderId) ?: ordersApi.retrieve(orderId)
+    /**
+     * v4: POST /orders/{id}/print-pre-bill — кладёт PrintJob в очередь.
+     * Возвращает свежее состояние заказа (заказ не меняется, но UI
+     * полезно обновить — например, можно показать timestamp последней
+     * печати из print_jobs позже).
+     */
+    suspend fun printPreBill(orderId: String): OrderDto {
+        ordersApi.printPreBill(orderId)
+        return ordersApi.retrieve(orderId).also { cache.putOrder(it) }
+    }
 
     /** v4: hardcoded reasons (см. CancelReasons), бэк не имеет CRUD. */
     fun loadCancelReasons(kind: String): List<CancelReasons.Reason> =
@@ -118,12 +124,15 @@ class OrderDetailRepository @Inject constructor(
         return ordersApi.retrieve(orderId).also { cache.putOrder(it) }
     }
 
-    // TODO(v4-port): set_item_note отсутствует в v4. Возвращаем заказ
-    // как есть; UI обновит note локально через CartLine. На реальной БД
-    // не сохраняется до next-addItems.
-    @Suppress("UNUSED_PARAMETER")
-    suspend fun setItemNote(orderId: String, itemId: String, note: String): OrderDto =
-        ordersApi.retrieve(orderId).also { cache.putOrder(it) }
+    /**
+     * v4: PATCH /orders/{id}/items/{itemId}/note — комментарий к позиции.
+     * Пустая строка → очищает.
+     */
+    suspend fun setItemNote(orderId: String, itemId: String, note: String): OrderDto {
+        val payload = note.trim().ifEmpty { null }
+        ordersApi.setItemNote(orderId, itemId, SetItemNoteRequest(payload))
+        return ordersApi.retrieve(orderId).also { cache.putOrder(it) }
+    }
 }
 
 data class OrderDetailBundle(

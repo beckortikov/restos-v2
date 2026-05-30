@@ -352,6 +352,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/orders/{id}/items/{itemId}/cancel", ordersH.CancelItem)
 			g.Post("/orders/{id}/items/{itemId}/served", ordersH.MarkServed)
 			g.Delete("/orders/{id}/items/{itemId}/served", ordersH.UnmarkServed)
+			g.Patch("/orders/{id}/items/{itemId}/note", ordersH.SetItemNote)
+			g.Post("/orders/{id}/print-pre-bill", ordersH.PrintPreBill)
 			g.Post("/orders/{id}/items/{itemId}/claim-print", ordersH.ClaimPrint)
 			g.Post("/orders/{id}/items/{itemId}/release-print", ordersH.ReleasePrint)
 			g.Post("/orders/{id}/items/{itemId}/claim-cancel-print", ordersH.ClaimCancelPrint)

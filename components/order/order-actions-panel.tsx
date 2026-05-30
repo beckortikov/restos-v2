@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CreditCard, X, Tag, Trash2, Settings2, Receipt, AlertTriangle, FileText, Printer, ChevronDown, ChevronLeft, User as UserIcon, Clock, CheckCircle2 } from 'lucide-react'
+import { CreditCard, X, Tag, Trash2, Settings2, Receipt, AlertTriangle, FileText, Printer, ChevronDown, ChevronLeft, User as UserIcon, Clock, CheckCircle2, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAuth } from '@/lib/auth-store'
@@ -18,6 +18,7 @@ import { calcLineCogs, calcLineTotal, formatCurrency, getTimeSince, visibleRecei
 import { dDiv, dMul, dRound, dSub, dSum } from '@/lib/decimal'
 import {
   assignWaiter, cancelOrder, cancelOrderItem, closeOrderWithPayment, fetchActiveShift, fetchFinancialAccounts,
+  setOrderItemNote, printPreBill,
 } from '@/lib/queries'
 // fetchVoidsForOrder через @/lib/queries обёрнут в cachedQuery (Dexie SWR) —
 // после createVoid synchronously возвращает старый список, и наш
@@ -169,6 +170,10 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   const [pendingCancelIds, setPendingCancelIds] = useState<Set<string>>(new Set())
   const [voidingItem, setVoidingItem] = useState<{ id: string; name: string; qty: number; price: number } | null>(null)
   const [voidReason, setVoidReason] = useState<VoidReason>('guest_changed_mind')
+
+  // Note-edit state: { id, name, draftNote } или null.
+  const [editingNote, setEditingNote] = useState<{ id: string; name: string; draftNote: string } | null>(null)
+  const [savingNote, setSavingNote] = useState(false)
   const [voiding, setVoiding] = useState(false)
 
   // Pre-check preview ------------------------------------------------------
@@ -448,6 +453,37 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     setVoiding(false)
   }
 
+  const handleSaveNote = async () => {
+    if (!editingNote || savingNote) return
+    const target = editingNote
+    const trimmed = target.draftNote.trim()
+    setSavingNote(true)
+    try {
+      await setOrderItemNote(order.id, target.id, trimmed.length === 0 ? null : trimmed)
+      toast.success('Комментарий сохранён')
+      setEditingNote(null)
+      onItemsChanged?.()
+    } catch (e) {
+      toast.error(e instanceof Error ? `Ошибка: ${e.message}` : 'Ошибка сохранения')
+    }
+    setSavingNote(false)
+  }
+
+  const handleClearNote = async () => {
+    if (!editingNote || savingNote) return
+    const target = editingNote
+    setSavingNote(true)
+    try {
+      await setOrderItemNote(order.id, target.id, null)
+      toast.success('Комментарий очищен')
+      setEditingNote(null)
+      onItemsChanged?.()
+    } catch (e) {
+      toast.error(e instanceof Error ? `Ошибка: ${e.message}` : 'Ошибка очистки')
+    }
+    setSavingNote(false)
+  }
+
   const handlePreCheck = () => {
     try {
       const data = buildReceiptData(
@@ -468,13 +504,28 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     }
   }
 
-  // Печать пре-чека из drawer'а превью. Использует shared helper —
-  // см. printDataToPrinter выше.
+  // Печать пре-чека из drawer'а превью.
+  // Пре-чек теперь идёт через backend (POST /orders/{id}/print-pre-bill →
+  // job в БД → AutoPrintRunner → physical / virtual printer). Раньше
+  // печатался client-side через ESC/POS прямо из браузера — это обходило
+  // backend и virtual-принтер не получал джоба.
+  // Финальный чек (post-payment) по-прежнему печатается client-side через
+  // printDataToPrinter — это пока не переведено на backend job-queue.
   const handlePrintReceipt = async () => {
     if (!receiptPreview) return
+    if (receiptPreview.isPreCheck) {
+      try {
+        const { jobId } = await printPreBill(order.id)
+        toast.success(jobId ? `Пре-чек отправлен на печать (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
+        setReceiptOpen(false)
+      } catch (e) {
+        toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
+      }
+      return
+    }
     const ok = await printDataToPrinter(receiptPreview, receiptRef)
     if (ok) {
-      toast.success('Пре-чек отправлен на печать')
+      toast.success('Чек отправлен на печать')
       setReceiptOpen(false)
     }
   }
@@ -653,12 +704,30 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
                 <p className={`text-[10px] ${voided ? 'text-muted-foreground/70 line-through' : 'text-muted-foreground'}`}>
                   ×{item.qty} · {formatCurrency(item.price)}
                 </p>
+                {item.note ? (
+                  <p className="text-[10px] italic text-amber-700/90 dark:text-amber-300/90 truncate">
+                    ! {item.note}
+                  </p>
+                ) : null}
               </div>
               <span className={`text-xs font-bold min-w-[5rem] text-right tabular-nums whitespace-nowrap ${
                 voided ? 'text-muted-foreground line-through' : 'text-foreground'
               }`}>
                 {formatCurrency(calcLineTotal(item.price, item.qty, item.unit, item.unitSize))}
               </span>
+              {!voided && item.id ? (
+                <button
+                  onClick={() => setEditingNote({ id: item.id!, name: item.name, draftNote: item.note ?? '' })}
+                  title={item.note ? 'Редактировать комментарий' : 'Добавить комментарий'}
+                  className={`size-6 rounded-md flex items-center justify-center transition-colors shrink-0 ${
+                    item.note
+                      ? 'text-amber-700 dark:text-amber-300 hover:bg-amber-500/10'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                  }`}
+                >
+                  <Pencil className="size-3.5" />
+                </button>
+              ) : null}
               {!voided && item.id ? (
                 <button
                   onClick={() => setVoidingItem({ id: item.id!, name: item.name, qty: item.qty, price: item.price })}
@@ -1073,6 +1142,46 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               className="bg-destructive text-white hover:bg-destructive/90"
             >
               {voiding ? '...' : 'Отменить позицию'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Edit note dialog — комментарий к позиции (без лука / без перца / на вынос). */}
+      <AlertDialog open={!!editingNote} onOpenChange={(o) => { if (!o) setEditingNote(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Комментарий к «{editingNote?.name ?? ''}»</AlertDialogTitle>
+            <AlertDialogDescription>
+              Пожелания клиента или особенности приготовления. Печатается в кухонном ранере вместе с позицией.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <textarea
+            value={editingNote?.draftNote ?? ''}
+            onChange={e => setEditingNote(prev => prev ? { ...prev, draftNote: e.target.value } : prev)}
+            placeholder="например: без лука, хорошо прожарить"
+            rows={3}
+            className="w-full px-2.5 py-1.5 text-sm border border-border rounded-md bg-background resize-none"
+            autoFocus
+          />
+          <div className="flex flex-wrap gap-1.5">
+            {['Без лука', 'Без соли', 'Хорошо прожарить', 'На вынос', 'Острое', 'Без перца'].map(preset => (
+              <button
+                key={preset}
+                onClick={() => setEditingNote(prev => prev ? { ...prev, draftNote: preset } : prev)}
+                className="px-2 py-1 text-[11px] rounded-full border border-border text-muted-foreground hover:bg-muted"
+              >{preset}</button>
+            ))}
+          </div>
+          <AlertDialogFooter className="gap-2">
+            <AlertDialogCancel disabled={savingNote}>Отмена</AlertDialogCancel>
+            <button
+              onClick={handleClearNote}
+              disabled={savingNote}
+              className="px-3 py-1.5 text-sm rounded-md border border-border text-muted-foreground hover:bg-muted disabled:opacity-50"
+            >Очистить</button>
+            <AlertDialogAction onClick={handleSaveNote} disabled={savingNote}>
+              {savingNote ? '...' : 'Сохранить'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

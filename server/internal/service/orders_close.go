@@ -538,6 +538,9 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 		if it.Name != nil {
 			ri.Name = *it.Name
 		}
+		if it.Note != nil {
+			ri.Note = *it.Note
+		}
 		in.Items = append(in.Items, ri)
 	}
 

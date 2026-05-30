@@ -808,6 +808,16 @@ private fun OrderLineCard(
                     "served" -> "подано"
                     else -> null
                 }
+                if (item.note.isNotBlank()) {
+                    Text(
+                        "! ${item.note}",
+                        fontSize = 11.sp,
+                        fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                        color = Color(0xFFB45309),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
                         "${item.qty} × ${formatCurrency(item.priceAtOrder.toBigDecimalSafe())}",

@@ -2632,6 +2632,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/orders/{id}/items/{itemId}/note": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Установить/очистить комментарий к позиции заказа
+         * @description Используется официантом для передачи кухне особых пожеланий
+         *     («без лука», «medium-rare»). Печатается на runner и пре-чеке.
+         *     `note=null` или пустая строка после trim — очищает комментарий.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                    itemId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        note?: string | null;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["OrderItem"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/v1/orders/{id}/print-pre-bill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Печать предварительного чека (пре-чек для гостя)
+         * @description Создаёт PrintJob type='pre_bill' для отправки на receipt-принтер.
+         *     Заказ НЕ закрывается, financial_operations и stock_movements не
+         *     создаются. Можно вызывать многократно — каждый раз новый job.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            job_id: string;
+                            status: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orders/{id}/items/{itemId}/claim-print": {
         parameters: {
             query?: never;
@@ -8690,6 +8793,7 @@ export interface components {
             qty?: components["schemas"]["Decimal"];
             price?: components["schemas"]["Decimal"];
             cogs?: components["schemas"]["Decimal"];
+            note?: string | null;
             /** Format: date-time */
             cancelled_at?: string;
         };

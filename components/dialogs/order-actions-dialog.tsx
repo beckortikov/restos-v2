@@ -308,6 +308,20 @@ export function OrderActionsDialog({
   }, [open])
 
   const handlePrint = useCallback(async () => {
+    // Pre-check теперь печатается через backend job (POST /orders/{id}/print-pre-bill)
+    // → AutoPrintRunner → physical / virtual printer. Финальный чек по-прежнему
+    // идёт через client-side ESC/POS.
+    if (receiptData?.isPreCheck && order?.id) {
+      try {
+        const { printPreBill } = await import('@/lib/queries')
+        const { jobId } = await printPreBill(order.id)
+        toast.success(jobId ? `Пре-чек отправлен (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
+        return
+      } catch (e) {
+        toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
+        return
+      }
+    }
     // Try ESC/POS direct print first — gives crisp dark output (like iiko)
     if (receiptData) {
       const ok = await printReceiptDirect(receiptData)

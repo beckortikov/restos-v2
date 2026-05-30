@@ -972,6 +972,56 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses: { "200": { description: OK } }
 
+  /api/v1/orders/{id}/items/{itemId}/note:
+    patch:
+      tags: [orders]
+      summary: Установить/очистить комментарий к позиции заказа
+      description: |
+        Используется официантом для передачи кухне особых пожеланий
+        («без лука», «medium-rare»). Печатается на runner и пре-чеке.
+        `note=null` или пустая строка после trim — очищает комментарий.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { in: path, name: itemId, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string, nullable: true }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OrderItem" }
+
+  /api/v1/orders/{id}/print-pre-bill:
+    post:
+      tags: [orders]
+      summary: Печать предварительного чека (пре-чек для гостя)
+      description: |
+        Создаёт PrintJob type='pre_bill' для отправки на receipt-принтер.
+        Заказ НЕ закрывается, financial_operations и stock_movements не
+        создаются. Можно вызывать многократно — каждый раз новый job.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, status]
+                properties:
+                  job_id: { type: string, format: uuid }
+                  status: { type: string }
+
   /api/v1/orders/{id}/items/{itemId}/claim-print:
     post:
       tags: [orders]
@@ -2655,6 +2705,7 @@ components:
         qty: { $ref: "#/components/schemas/Decimal" }
         price: { $ref: "#/components/schemas/Decimal" }
         cogs: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string, nullable: true }
         cancelled_at: { type: string, format: date-time }
     OrderItemInput:
       type: object

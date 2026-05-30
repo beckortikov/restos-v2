@@ -22,7 +22,7 @@ export function HardwareBackHandler() {
 
     ;(async () => {
       try {
-        const { App } = await import('@capacitor/app' as any) /* dead branch */
+        const { App } = await import(/* @vite-ignore */ '@capacitor/app' as any) /* dead branch */
         if (cancelled) return
         const handle = await App.addListener('backButton', ({ canGoBack }: { canGoBack: boolean }) => {
           // At /waiter/tables (root) the only sensible action is to background

@@ -94,6 +94,9 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			if it.Name != nil {
 				ri.Name = *it.Name
 			}
+			if it.Note != nil {
+				ri.Comment = *it.Note
+			}
 			f, _ := it.Qty.Float64()
 			ri.Qty = int(f)
 			if ri.Qty < 1 {
@@ -187,6 +190,9 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 			ri := escpos.RunnerItem{}
 			if it.Name != nil {
 				ri.Name = *it.Name
+			}
+			if it.Note != nil {
+				ri.Comment = *it.Note
 			}
 			f, _ := it.Qty.Float64()
 			ri.Qty = int(f)

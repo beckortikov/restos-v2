@@ -491,6 +491,22 @@ export async function cancelSplits(orderId: string) {
   }))
 }
 
+export async function setOrderItemNote(orderId: string, itemId: string, note: string | null): Promise<void> {
+  await unwrap(api.PATCH('/api/v1/orders/{id}/items/{itemId}/note', {
+    params: { path: { id: orderId, itemId } },
+    body: { note } as any,
+  }))
+  logAction('order.item.note', 'order_item', itemId, undefined, { orderId, note })
+}
+
+export async function printPreBill(orderId: string): Promise<{ jobId: string; status: string }> {
+  const res: any = await unwrap(api.POST('/api/v1/orders/{id}/print-pre-bill', {
+    params: { path: { id: orderId } },
+  }))
+  logAction('order.pre_bill.print', 'order', orderId)
+  return { jobId: res?.job_id ?? '', status: res?.status ?? 'pending' }
+}
+
 export async function reopenOrder(orderId: string): Promise<void> {
   await unwrap(api.POST('/api/v1/orders/{id}/reopen', {
     params: { path: { id: orderId } },

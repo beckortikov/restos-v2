@@ -28,16 +28,16 @@ type Restaurant struct {
 	LicenseExpiresAt   *time.Time      `gorm:"column:license_expires_at" json:"license_expires_at"`
 	// AccountID — владелец сети (Phase 1 multi-branch). Заполняется при
 	// activate из payload.aid. Empty/NULL → одиночный ресторан.
-	AccountID          *string         `gorm:"column:account_id" json:"account_id,omitempty"`
-	IsBlocked          *bool           `gorm:"column:is_blocked;default:false" json:"is_blocked"`
-	BlockReason        *string         `gorm:"column:block_reason" json:"block_reason"`
-	LastSeenAt         *time.Time      `gorm:"column:last_seen_at" json:"last_seen_at"`
-	AppVersion         *string         `gorm:"column:app_version" json:"app_version"`
-	SupplyAllowNeg     bool            `gorm:"column:supply_allow_negative;not null;default:true" json:"supply_allow_negative"`
-	PinLockEnabled     *bool           `gorm:"column:pin_lock_enabled;default:false" json:"pin_lock_enabled"`
-	PinLockTimeoutMin  *int            `gorm:"column:pin_lock_timeout_min;default:5" json:"pin_lock_timeout_min"`
-	CreatedAt          time.Time       `json:"created_at"`
-	UpdatedAt          time.Time       `json:"updated_at"`
+	AccountID         *string    `gorm:"column:account_id" json:"account_id,omitempty"`
+	IsBlocked         *bool      `gorm:"column:is_blocked;default:false" json:"is_blocked"`
+	BlockReason       *string    `gorm:"column:block_reason" json:"block_reason"`
+	LastSeenAt        *time.Time `gorm:"column:last_seen_at" json:"last_seen_at"`
+	AppVersion        *string    `gorm:"column:app_version" json:"app_version"`
+	SupplyAllowNeg    bool       `gorm:"column:supply_allow_negative;not null;default:true" json:"supply_allow_negative"`
+	PinLockEnabled    *bool      `gorm:"column:pin_lock_enabled;default:false" json:"pin_lock_enabled"`
+	PinLockTimeoutMin *int       `gorm:"column:pin_lock_timeout_min;default:5" json:"pin_lock_timeout_min"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 func (Restaurant) TableName() string { return "restaurants" }

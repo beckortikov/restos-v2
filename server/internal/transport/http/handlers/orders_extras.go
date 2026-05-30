@@ -170,6 +170,33 @@ func (h *OrdersHandler) MarkServed(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, item)
 }
 
+// SetItemNote — PATCH /api/v1/orders/{id}/items/{itemId}/note.
+func (h *OrdersHandler) SetItemNote(w http.ResponseWriter, r *http.Request) {
+	var in service.SetItemNoteInput
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			respond.BadRequest(w, "invalid JSON body")
+			return
+		}
+	}
+	item, err := h.svc.SetItemNote(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "itemId"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, item)
+}
+
+// PrintPreBill — POST /api/v1/orders/{id}/print-pre-bill.
+func (h *OrdersHandler) PrintPreBill(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.PrintPreBill(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}
+
 // UnmarkServed — DELETE /api/v1/orders/{id}/items/{itemId}/served.
 func (h *OrdersHandler) UnmarkServed(w http.ResponseWriter, r *http.Request) {
 	item, err := h.svc.UnmarkItemServed(r.Context(), chi.URLParam(r, "id"), chi.URLParam(r, "itemId"))

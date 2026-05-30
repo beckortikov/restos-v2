@@ -55,6 +55,7 @@ type ReceiptItem struct {
 	Qty       decimal.Decimal
 	Price     decimal.Decimal
 	LineTotal decimal.Decimal
+	Note      string // комментарий официанта; печатается строкой "  ! <note>"
 }
 
 // ReceiptLayout строит байты чека клиенту.
@@ -96,6 +97,9 @@ func ReceiptLayout(in ReceiptInput) []byte {
 		left := strconv.Itoa(qtyAsInt(it.Qty)) + " x " + decToShort(it.Price)
 		right := decToShort(it.LineTotal)
 		b.TextLn(PadRow("  "+left, right, cols))
+		if it.Note != "" {
+			b.TextLnf("  ! %s", it.Note)
+		}
 	}
 	b.Text(dashes(cols)).LF()
 
@@ -121,6 +125,80 @@ func ReceiptLayout(in ReceiptInput) []byte {
 	b.LF().AlignCenter().TextLn("Спасибо за визит!").LF()
 
 	// Cut с подмоткой 3 строки.
+	b.Feed(3).CutFull()
+	return b.Bytes()
+}
+
+// PreBillLayout — предварительный чек (для гостя перед оплатой).
+//
+// Отличия от ReceiptLayout:
+//   - заголовок «ПРЕДВАРИТЕЛЬНЫЙ ЧЕК» вместо «Чек № N»;
+//   - нет «Оплата:» (метод оплаты ещё не выбран);
+//   - нет «Спасибо за визит!»;
+//   - в конце дисклеймер «не является фискальным чеком».
+//
+// Используется при PrintPreBill — заказ остаётся open, ничего не списывается.
+func PreBillLayout(in ReceiptInput) []byte {
+	cols := in.Cols
+	if cols == 0 {
+		cols = Cols80
+	}
+	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
+
+	// Header.
+	b.AlignCenter().FontDouble().TextLn(in.RestaurantName).FontNormal()
+	if in.RestaurantAddr != "" {
+		b.TextLn(in.RestaurantAddr)
+	}
+	b.LF()
+
+	// Title.
+	b.AlignCenter().Bold(true).TextLn("ПРЕДВАРИТЕЛЬНЫЙ ЧЕК").Bold(false)
+	b.LF()
+
+	// Meta.
+	b.AlignLeft()
+	b.TextLnf("Заказ № %d", in.OrderNumber)
+	b.TextLnf("Открыт:    %s", in.OpenedAt.Format("02.01.2006 15:04"))
+	b.TextLnf("Напечатан: %s", in.ClosedAt.Format("02.01.2006 15:04"))
+	if in.TableLabel != "" {
+		b.TextLn(in.TableLabel)
+	}
+	if in.WaiterName != "" {
+		b.TextLnf("Официант:  %s", in.WaiterName)
+	}
+
+	b.Text(dashes(cols)).LF()
+
+	// Items.
+	for _, it := range in.Items {
+		b.TextLn(it.Name)
+		left := strconv.Itoa(qtyAsInt(it.Qty)) + " x " + decToShort(it.Price)
+		right := decToShort(it.LineTotal)
+		b.TextLn(PadRow("  "+left, right, cols))
+		if it.Note != "" {
+			b.TextLnf("  ! %s", it.Note)
+		}
+	}
+	b.Text(dashes(cols)).LF()
+
+	// Totals (без поля «Оплата»).
+	b.TextLn(PadRow("Сумма:", decToShort(in.Subtotal), cols))
+	if !in.DiscountAmount.IsZero() {
+		b.TextLn(PadRow("Скидка:", "-"+decToShort(in.DiscountAmount), cols))
+	}
+	if !in.ServiceAmount.IsZero() {
+		b.TextLn(PadRow("Сервис:", decToShort(in.ServiceAmount), cols))
+	}
+	if !in.TipAmount.IsZero() {
+		b.TextLn(PadRow("Чаевые:", decToShort(in.TipAmount), cols))
+	}
+	b.Bold(true).FontDouble()
+	b.TextLn(PadRow("К ОПЛАТЕ:", decToShort(in.Total), cols/2))
+	b.FontNormal().Bold(false)
+
+	b.LF().AlignCenter().TextLn("ПРЕДВАРИТЕЛЬНЫЙ — не является").TextLn("фискальным чеком").LF()
+
 	b.Feed(3).CutFull()
 	return b.Bytes()
 }

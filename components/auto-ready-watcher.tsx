@@ -42,7 +42,7 @@ async function fireNativeNotification(orderInfo?: string) {
   // API silently no-ops when the app is backgrounded inside Capacitor's
   // WebView, so it's not a substitute on phone shells.
   try {
-    const { LocalNotifications } = await import('@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
+    const { LocalNotifications } = await import(/* @vite-ignore */ '@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
     await LocalNotifications.schedule({
       notifications: [
         {
@@ -178,7 +178,7 @@ export function AutoReadyWatcher() {
     if (Capacitor.isNativePlatform()) {
       void (async () => {
         try {
-          const { LocalNotifications } = await import('@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
+          const { LocalNotifications } = await import(/* @vite-ignore */ '@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
           const status = await LocalNotifications.checkPermissions()
           if (status.display !== 'granted') {
             await LocalNotifications.requestPermissions()
