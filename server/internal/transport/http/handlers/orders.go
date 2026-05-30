@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/restos/restos-v4/server/internal/service"
+	httpmw "github.com/restos/restos-v4/server/internal/transport/http/middleware"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
 
@@ -109,8 +110,10 @@ func (h *OrdersHandler) AddItems(w http.ResponseWriter, r *http.Request) {
 func (h *OrdersHandler) Close(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var in service.CloseOrderInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		respond.BadRequest(w, "invalid JSON body")
+	// Strict-decode: деньги. Любое лишнее поле (FE мог отправить через
+	// `as any` cast) → 400 вместо silent-drop.
+	if err := httpmw.DecodeStrict(r, &in); err != nil {
+		respond.BadRequest(w, "invalid JSON body: "+err.Error())
 		return
 	}
 	order, _, err := h.svc.Close(r.Context(), id, in)
@@ -125,8 +128,9 @@ func (h *OrdersHandler) Close(w http.ResponseWriter, r *http.Request) {
 func (h *OrdersHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var in service.CancelOrderInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		respond.BadRequest(w, "invalid JSON body")
+	// Strict-decode: отмена заказа → отмена revenue (деньги).
+	if err := httpmw.DecodeStrict(r, &in); err != nil {
+		respond.BadRequest(w, "invalid JSON body: "+err.Error())
 		return
 	}
 	order, err := h.svc.Cancel(r.Context(), id, in)

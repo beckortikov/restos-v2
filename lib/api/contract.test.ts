@@ -31,7 +31,8 @@ describe('CloseOrderInput contract', () => {
 
   it('payments[]: method enum cash|card|transfer', () => {
     type Split = components['schemas']['PaymentSplit']
-    expectTypeOf<Split['method']>().toEqualTypeOf<'cash' | 'card' | 'transfer' | undefined>()
+    type Method = NonNullable<Split['method']>
+    expectTypeOf<Method>().toEqualTypeOf<'cash' | 'card' | 'transfer'>()
   })
 })
 

@@ -2580,17 +2580,36 @@ components:
       type: object
       properties:
         id: { type: string, format: uuid }
-        order_number: { type: integer }
+        order_number:
+          type: integer
+          description: |
+            Per-restaurant per-day sequence (см. v2.0.21 + миграция 008).
+            Старые заказы (до v2.0.21) могут иметь 0 — FE падает на UUID-hash fallback.
         status: { type: string }
         type: { type: string }
         table_id: { type: string, format: uuid }
         waiter_id: { type: string, format: uuid }
+        cashier_id: { type: string, format: uuid }
         total: { $ref: "#/components/schemas/Decimal" }
+        # Service/tip/discount snapshots — фиксируются при close, нужны UI для чека.
+        service_percent: { $ref: "#/components/schemas/Decimal" }
+        service_amount: { $ref: "#/components/schemas/Decimal" }
+        tip_amount: { $ref: "#/components/schemas/Decimal" }
+        discount_type: { type: string, enum: [percent, fixed] }
+        discount_value: { $ref: "#/components/schemas/Decimal" }
+        discount_amount: { $ref: "#/components/schemas/Decimal" }
+        discount_reason: { type: string }
         total_with_service: { $ref: "#/components/schemas/Decimal" }
         payment_method: { type: string }
         shift_id: { type: string, format: uuid }
+        guests_count: { type: integer }
+        comment: { type: string }
         created_at: { type: string, format: date-time }
+        ready_at: { type: string, format: date-time }
+        expected_ready_at: { type: string, format: date-time }
         closed_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time }
+        kitchen_started_at: { type: string, format: date-time }
         is_split: { type: boolean }
         split_count: { type: integer }
     PaymentSplit:

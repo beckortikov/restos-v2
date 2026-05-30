@@ -8579,6 +8579,10 @@ export interface components {
         Order: {
             /** Format: uuid */
             id?: string;
+            /**
+             * @description Per-restaurant per-day sequence (см. v2.0.21 + миграция 008).
+             *     Старые заказы (до v2.0.21) могут иметь 0 — FE падает на UUID-hash fallback.
+             */
             order_number?: number;
             status?: string;
             type?: string;
@@ -8586,15 +8590,35 @@ export interface components {
             table_id?: string;
             /** Format: uuid */
             waiter_id?: string;
+            /** Format: uuid */
+            cashier_id?: string;
             total?: components["schemas"]["Decimal"];
+            service_percent?: components["schemas"]["Decimal"];
+            service_amount?: components["schemas"]["Decimal"];
+            tip_amount?: components["schemas"]["Decimal"];
+            /** @enum {string} */
+            discount_type?: "percent" | "fixed";
+            discount_value?: components["schemas"]["Decimal"];
+            discount_amount?: components["schemas"]["Decimal"];
+            discount_reason?: string;
             total_with_service?: components["schemas"]["Decimal"];
             payment_method?: string;
             /** Format: uuid */
             shift_id?: string;
+            guests_count?: number;
+            comment?: string;
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
+            ready_at?: string;
+            /** Format: date-time */
+            expected_ready_at?: string;
+            /** Format: date-time */
             closed_at?: string;
+            /** Format: date-time */
+            cancelled_at?: string;
+            /** Format: date-time */
+            kitchen_started_at?: string;
             is_split?: boolean;
             split_count?: number;
         };

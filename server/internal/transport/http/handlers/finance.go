@@ -9,6 +9,7 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/service"
+	httpmw "github.com/restos/restos-v4/server/internal/transport/http/middleware"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
 
@@ -125,8 +126,10 @@ func (h *FinancialOperationsHandler) List(w http.ResponseWriter, r *http.Request
 
 func (h *FinancialOperationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var in service.FinancialOperationInput
-	if !decodeBody(r, &in) {
-		respond.BadRequest(w, "invalid JSON body")
+	// Strict-decode: ручная финансовая операция → деньги. Любое лишнее
+	// поле (FE через `body as any`) сразу 400 вместо silent-drop.
+	if err := httpmw.DecodeStrict(r, &in); err != nil {
+		respond.BadRequest(w, "invalid JSON body: "+err.Error())
 		return
 	}
 	out, err := h.svc.Create(r.Context(), in)

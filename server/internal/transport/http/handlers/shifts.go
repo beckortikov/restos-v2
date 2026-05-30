@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/restos/restos-v4/server/internal/service"
+	httpmw "github.com/restos/restos-v4/server/internal/transport/http/middleware"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
 
@@ -59,8 +60,9 @@ func (h *ShiftsHandler) Open(w http.ResponseWriter, r *http.Request) {
 func (h *ShiftsHandler) Close(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var in service.CloseShiftInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		respond.BadRequest(w, "invalid JSON body")
+	// Strict-decode: Z-отчёт смены — деньги, нельзя дропнуть поле.
+	if err := httpmw.DecodeStrict(r, &in); err != nil {
+		respond.BadRequest(w, "invalid JSON body: "+err.Error())
 		return
 	}
 	shift, err := h.svc.Close(r.Context(), id, in)
