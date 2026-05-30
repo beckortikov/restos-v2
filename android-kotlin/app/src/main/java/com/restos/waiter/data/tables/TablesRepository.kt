@@ -12,6 +12,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -58,11 +59,18 @@ class TablesRepository @Inject constructor(
         draftStore.pruneByFreeTables(freeTableIds)
     }
 
+    /**
+     * Старт сегодняшнего дня в локальной TZ, отформатированный как строгий
+     * RFC3339 с обязательными `:ss` секундами (`2026-05-30T00:00:00+05:00`).
+     * Go-бэк (`time.Parse(time.RFC3339, ...)`) отвергает форму без секунд,
+     * которую возвращает OffsetDateTime.toString() при нулевых секундах,
+     * и вернёт 400 → весь tables-snapshot падает в пустой список.
+     */
     private fun startOfTodayIso(): String =
         LocalDate.now(ZoneId.systemDefault())
             .atStartOfDay(ZoneId.systemDefault())
             .toOffsetDateTime()
-            .toString()
+            .format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX"))
 }
 
 data class TablesSnapshot(

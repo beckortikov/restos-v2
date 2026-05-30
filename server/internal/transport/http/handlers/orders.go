@@ -29,23 +29,25 @@ func (h *OrdersHandler) List(w http.ResponseWriter, r *http.Request) {
 		Page:     parsePage(r),
 	}
 	// Accept both `from` (Electron POS) and `created_at_from` (Kotlin APK)
-	// — same semantics, RFC3339.
+	// — same semantics. Tolerant к двум формам ISO: с секундами и без
+	// (Java's OffsetDateTime.toString() при нулевых секундах опускает их,
+	// что нарушает strict-RFC3339).
 	fromStr := queryString(r, "from")
 	if fromStr == "" {
 		fromStr = queryString(r, "created_at_from")
 	}
 	if fromStr != "" {
-		t, err := time.Parse(time.RFC3339, fromStr)
+		t, err := parseLooseRFC3339(fromStr)
 		if err != nil {
-			respond.BadRequest(w, "bad ?from (RFC3339 required)")
+			respond.BadRequest(w, "bad ?from: "+err.Error())
 			return
 		}
 		f.From = &t
 	}
 	if toStr := queryString(r, "to"); toStr != "" {
-		t, err := time.Parse(time.RFC3339, toStr)
+		t, err := parseLooseRFC3339(toStr)
 		if err != nil {
-			respond.BadRequest(w, "bad ?to (RFC3339 required)")
+			respond.BadRequest(w, "bad ?to: "+err.Error())
 			return
 		}
 		f.To = &t
@@ -244,4 +246,25 @@ func (h *OrdersHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, o)
+}
+
+// parseLooseRFC3339 принимает RFC3339 с опциональными секундами/милли.
+// Java's OffsetDateTime.toString() при нулевых секундах возвращает
+// `2026-05-30T00:00+05:00` — формально не-RFC3339, но семантически валидно.
+// Принимаем оба варианта плюс RFC3339Nano.
+func parseLooseRFC3339(s string) (time.Time, error) {
+	formats := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02T15:04Z07:00",  // без секунд
+		"2006-01-02T15:04:05",     // без timezone
+		"2006-01-02T15:04",        // без секунд и tz
+		"2006-01-02",              // только дата
+	}
+	for _, layout := range formats {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, &time.ParseError{Layout: time.RFC3339, Value: s, Message: "unrecognized timestamp format"}
 }

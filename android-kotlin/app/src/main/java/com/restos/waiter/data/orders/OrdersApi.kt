@@ -211,18 +211,25 @@ data class RawOrderVoid(
  * Маппинг сырой item -> UI-DTO. UI-имена (`nameAtOrder`/`priceAtOrder`)
  * — наследие v3; сервер v4 отдаёт `name`/`price` напрямую.
  */
-internal fun RawOrderItem.toDto(): OrderItemDto = OrderItemDto(
-    id = id,
-    menuItem = menuItemId,
-    nameAtOrder = name.orEmpty(),
-    priceAtOrder = price,
-    qty = qty.toIntSafe(),
-    note = note.orEmpty(),
-    cancelledAt = cancelledAt,
-    sentToKitchenAt = printedAt, // server возвращает только printed_at; на печать = «ушло на кухню»
-    servedAt = servedAt,
-    kitchenStatus = null, // не приходит с сервера; UI вычисляет из servedAt/printedAt
-)
+internal fun RawOrderItem.toDto(): OrderItemDto {
+    // Сервер v4 не отдаёт per-item subtotal — считаем сами: qty * price.
+    val sub = runCatching {
+        java.math.BigDecimal(qty).multiply(java.math.BigDecimal(price)).toPlainString()
+    }.getOrDefault("0")
+    return OrderItemDto(
+        id = id,
+        menuItem = menuItemId,
+        nameAtOrder = name.orEmpty(),
+        priceAtOrder = price,
+        qty = qty.toIntSafe(),
+        note = note.orEmpty(),
+        cancelledAt = cancelledAt,
+        sentToKitchenAt = printedAt,
+        servedAt = servedAt,
+        kitchenStatus = null,
+        subtotal = sub,
+    )
+}
 
 internal fun RawOrderVoid.toDto(): CancelledItemDto = CancelledItemDto(
     id = id,
