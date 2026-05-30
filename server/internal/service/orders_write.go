@@ -207,6 +207,29 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 			return err
 		}
 
+		// Sync table.status → occupied.
+		// Идемпотентно: если стол уже occupied (вторая группа за тем же столом),
+		// current_order_id первой группы НЕ перетираем — только bump updated_at.
+		// Это критично для feature "2 группы за одним столом" в POS.
+		if order.TableID != nil && *order.TableID != "" {
+			var t models.Table
+			if err := tx.Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+				First(&t).Error; err == nil {
+				updates := map[string]any{"updated_at": now}
+				if t.Status == nil || *t.Status != "occupied" {
+					updates["status"] = "occupied"
+					updates["current_order_id"] = order.ID
+					updates["opened_at"] = now
+				}
+				if err := tx.Model(&models.Table{}).
+					Where("id = ?", t.ID).
+					Updates(updates).Error; err != nil {
+					return err
+				}
+				buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+			}
+		}
+
 		created = order
 		buf.Add(EventOrderCreated, map[string]any{
 			"id":     order.ID,

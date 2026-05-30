@@ -40,6 +40,7 @@ const (
 	EventOrderCancelled  = "order.cancelled"
 	EventOrderItemAdded  = "order.item.added"
 	EventOrderItemVoided = "order.item.voided"
+	EventTableUpdated    = "table.updated"
 	EventStockMovement   = "stock.movement"
 	EventShiftOpened     = "shift.opened"
 	EventShiftClosed     = "shift.closed"

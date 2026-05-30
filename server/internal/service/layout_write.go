@@ -122,9 +122,18 @@ func (s *ZonesWriteService) Delete(ctx context.Context, id string) error {
 // Tables write
 // ═══════════════════════════════════════════════════════════════════════════
 
-type TablesWriteService struct{ r *repo.Repo }
+type TablesWriteService struct {
+	r   *repo.Repo
+	pub *EventPublisher
+}
 
 func NewTablesWriteService(r *repo.Repo) *TablesWriteService { return &TablesWriteService{r: r} }
+
+// WithPublisher оборачивает сервис с EventPublisher для SSE-эмиссии.
+func (s *TablesWriteService) WithPublisher(pub *EventPublisher) *TablesWriteService {
+	s.pub = pub
+	return s
+}
 
 type TableInput struct {
 	Name           *string `json:"name,omitempty"`
@@ -403,6 +412,14 @@ func (s *TablesWriteService) OpenForOrder(ctx context.Context, id string, in Ope
 	var out models.Table
 	if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {
 		return nil, err
+	}
+	// Эмим SSE table.updated, чтобы Kotlin/Web POS подхватили новое состояние.
+	if s.pub != nil {
+		if rid, terr := tenant.MustRestaurantID(ctx); terr == nil {
+			buf := NewBuffer()
+			buf.Add(EventTableUpdated, map[string]any{"id": id})
+			s.pub.Flush(ctx, rid, buf)
+		}
 	}
 	return &out, nil
 }

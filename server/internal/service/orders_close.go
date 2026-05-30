@@ -401,6 +401,33 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			_ = err
 		}
 
+		// Если на этом столе больше нет активных заказов — освобождаем его.
+		// Активные статусы — те же, что считает резерв в computeReservations
+		// (open/new/cooking/ready) + bill_requested/served (заказ ещё не закрыт).
+		if order.TableID != nil && *order.TableID != "" {
+			var activeCount int64
+			if err := tx.Model(&models.Order{}).
+				Where("restaurant_id = ? AND table_id = ?", rid, *order.TableID).
+				Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+				Where("id <> ?", order.ID).
+				Count(&activeCount).Error; err != nil {
+				return err
+			}
+			if activeCount == 0 {
+				if err := tx.Model(&models.Table{}).
+					Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+					Updates(map[string]any{
+						"status":           "free",
+						"current_order_id": nil,
+						"opened_at":        nil,
+						"updated_at":       now,
+					}).Error; err != nil {
+					return err
+				}
+				buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+			}
+		}
+
 		closed = &order
 		buf.Add(EventOrderClosed, map[string]any{
 			"id":                 order.ID,

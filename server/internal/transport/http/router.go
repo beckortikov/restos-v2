@@ -120,7 +120,7 @@ func NewRouter(deps Deps) http.Handler {
 	techCardsSvc := service.NewTechCardsService(rep)
 	semiSvc := service.NewSemiFinishedService(rep)
 	zonesWriteSvc := service.NewZonesWriteService(rep)
-	tablesWriteSvc := service.NewTablesWriteService(rep)
+	tablesWriteSvc := service.NewTablesWriteService(rep).WithPublisher(pub)
 	restaurantsSvc := service.NewRestaurantsService(rep)
 	ingredientsWriteSvc := service.NewIngredientsWriteService(rep)
 	stockReadsSvc := service.NewStockReadsService(rep)

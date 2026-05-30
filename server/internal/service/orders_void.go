@@ -48,6 +48,7 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 	actor, _ := audit.ActorFromContext(ctx)
 
 	var cancelled *models.Order
+	buf := NewBuffer()
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 		var order models.Order
@@ -91,6 +92,31 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 			return err
 		}
 
+		// Если на столе больше нет активных заказов — освобождаем.
+		if order.TableID != nil && *order.TableID != "" {
+			var activeCount int64
+			if err := tx.Model(&models.Order{}).
+				Where("restaurant_id = ? AND table_id = ?", rid, *order.TableID).
+				Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+				Where("id <> ?", order.ID).
+				Count(&activeCount).Error; err != nil {
+				return err
+			}
+			if activeCount == 0 {
+				if err := tx.Model(&models.Table{}).
+					Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+					Updates(map[string]any{
+						"status":           "free",
+						"current_order_id": nil,
+						"opened_at":        nil,
+						"updated_at":       now,
+					}).Error; err != nil {
+					return err
+				}
+				buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+			}
+		}
+
 		cancelled = &order
 		return nil
 	})
@@ -98,7 +124,6 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 		return nil, err
 	}
 	if s.pub != nil {
-		buf := NewBuffer()
 		buf.Add(EventOrderCancelled, map[string]any{"id": cancelled.ID, "reason": in.Reason})
 		s.pub.Flush(ctx, rid, buf)
 	}
