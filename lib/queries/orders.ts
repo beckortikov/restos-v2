@@ -304,7 +304,7 @@ export async function cancelOrder(orderId: string, reason: string, cancelledBy?:
   if (!reason || !reason.trim()) throw new Error('Укажите причину отмены')
   await unwrap(api.POST('/api/v1/orders/{id}/cancel', {
     params: { path: { id: orderId } },
-    body: { reason: reason.trim(), cancelled_by: cancelledBy ?? null } as any,
+    body: { reason: reason.trim() } as any,
   }))
   let cancelledItemIds: string[] = []
   let newTotal = 0

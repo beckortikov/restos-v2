@@ -135,7 +135,7 @@ func NewRouter(deps Deps) http.Handler {
 	batchSvc := service.NewBatchCookingService(rep)
 	auditReadsSvc := service.NewAuditReadsService(rep)
 
-	authH := handlers.NewAuth(authSvc)
+	authH := handlers.NewAuth(authSvc, deps.DB)
 	menuH := handlers.NewMenu(menuSvc)
 	tablesH := handlers.NewTables(tablesSvc)
 	stockH := handlers.NewStock(stockSvc)

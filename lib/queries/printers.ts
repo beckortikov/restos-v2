@@ -66,7 +66,7 @@ export async function ensureBackendVirtualPrinters(): Promise<void> {
       name: `${VIRTUAL_NAME_PREFIX} receipt`,
       kind: 'receipt',
       driver: 'virtual',
-      target: '',
+      target: 'auto',
       is_default: true,
       enabled: true,
     })
@@ -78,9 +78,10 @@ export async function ensureBackendVirtualPrinters(): Promise<void> {
       name: `${VIRTUAL_NAME_PREFIX} station`,
       kind: 'station',
       driver: 'virtual',
-      target: '',
+      target: 'auto',
       is_default: false,
       enabled: true,
+      station: 'kitchen',
     })
   }
 }
