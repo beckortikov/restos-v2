@@ -65,7 +65,6 @@ class NewOrderViewModel @Inject constructor(
 
     /** UUID-строка либо null, если пришёл sentinel "" / отсутствует. */
     val tableId: String? = savedStateHandle.get<String>("tableId")?.takeIf { it.isNotBlank() }
-        .also { android.util.Log.i("RestOSDebug", "NewOrderViewModel init: tableId='$it' (raw='${savedStateHandle.get<String>("tableId")}')") }
 
     /** Если задан — режим «добавить позиции к существующему заказу». */
     val appendToOrderId: String? = savedStateHandle.get<String>("orderId")?.takeIf { it.isNotBlank() }
@@ -219,7 +218,6 @@ class NewOrderViewModel @Inject constructor(
                     resp.id
                 } else {
                     val orderType = if (tableId != null) "hall" else "takeaway"
-                    android.util.Log.i("RestOSDebug", "submit(): type=$orderType, tableId=$tableId, items=${items.size}")
                     val resp = createOrderApi.create(
                         idemKey = idemKey,
                         body = CreateOrderRequest(

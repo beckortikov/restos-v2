@@ -89,7 +89,7 @@ fun SelectTableForNewOrderScreen(
             }
             if (groups.noZone.isNotEmpty()) {
                 item {
-                    Section(title = "С собой") {
+                    Section(title = "Без зоны") {
                         TablesGrid(groups.noZone, onPick = onPick)
                     }
                 }
