@@ -54,7 +54,8 @@ export default function UserPermissionsPage() {
     const matrix: PermMap = {}
     for (const emp of emps) {
       const saved = emp.permissions?.actions && Object.keys(emp.permissions.actions).length > 0 ? emp.permissions.actions : null
-      const defaults = ROLE_DEFAULT_PERMISSIONS[emp.role].actions
+      // Defensive: role может оказаться не в карте (legacy/migrated 'deleted').
+    const defaults = ROLE_DEFAULT_PERMISSIONS[emp.role]?.actions ?? {}
       const full: Record<string, boolean> = {}
       for (const key of ALL_PERMISSIONS) {
         full[key] = saved ? (saved[key] === true) : (defaults[key] === true)
@@ -98,7 +99,8 @@ export default function UserPermissionsPage() {
   }
 
   const resetUser = (emp: User) => {
-    const defaults = ROLE_DEFAULT_PERMISSIONS[emp.role].actions
+    // Defensive: role может оказаться не в карте (legacy/migrated 'deleted').
+    const defaults = ROLE_DEFAULT_PERMISSIONS[emp.role]?.actions ?? {}
     const full: Record<string, boolean> = {}
     for (const key of ALL_PERMISSIONS) { full[key] = defaults[key] === true }
     setPermMatrix(prev => ({ ...prev, [emp.id]: full }))
@@ -345,7 +347,7 @@ export default function UserPermissionsPage() {
             // и тем когда Dexie/UI допрочитают свежие данные.
             const matrix = permMatrix[emp.id]
             const isCustomized = !!matrix && ALL_PERMISSIONS.some(
-              p => (matrix[p] ?? false) !== (ROLE_DEFAULT_PERMISSIONS[emp.role].actions[p] ?? false)
+              p => (matrix[p] ?? false) !== ((ROLE_DEFAULT_PERMISSIONS[emp.role]?.actions ?? {})[p] ?? false)
             )
 
             return (
@@ -397,7 +399,7 @@ export default function UserPermissionsPage() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
                           {group.keys.map(key => {
                             const isOn = permMatrix[emp.id]?.[key] ?? false
-                            const defaultVal = ROLE_DEFAULT_PERMISSIONS[emp.role].actions[key] ?? false
+                            const defaultVal = (ROLE_DEFAULT_PERMISSIONS[emp.role]?.actions ?? {})[key] ?? false
                             const isChanged = isOn !== defaultVal
                             return (
                               <button key={key} onClick={() => togglePerm(emp.id, key)}
@@ -473,7 +475,7 @@ export default function UserPermissionsPage() {
         // Get current state for role+perm (from actual employee permissions, not defaults)
         const getRolePermState = (role: UserRoleType, key: PermissionKey): 'all' | 'some' | 'none' => {
           const roleEmps = employees.filter(e => e.role === role)
-          if (roleEmps.length === 0) return ROLE_DEFAULT_PERMISSIONS[role].actions[key] ? 'all' : 'none'
+          if (roleEmps.length === 0) return (ROLE_DEFAULT_PERMISSIONS[role]?.actions ?? {})[key] ? 'all' : 'none'
           const onCount = roleEmps.filter(e => permMatrix[e.id]?.[key] === true).length
           if (onCount === roleEmps.length) return 'all'
           if (onCount > 0) return 'some'
@@ -518,7 +520,7 @@ export default function UserPermissionsPage() {
                         <td className="px-4 py-2.5 text-sm text-foreground sticky left-0 bg-card z-10">{PERMISSION_LABELS[key]}</td>
                         {MATRIX_ROLES.map(role => {
                           const state = getRolePermState(role, key)
-                          const defaultVal = ROLE_DEFAULT_PERMISSIONS[role].actions[key] === true
+                          const defaultVal = (ROLE_DEFAULT_PERMISSIONS[role]?.actions ?? {})[key] === true
                           const isChanged = (state === 'all') !== defaultVal
                           return (
                             <td key={role} className="px-2 py-2.5 text-center">

@@ -103,7 +103,14 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 	}
 	q := scoped.Table("orders").Select(slimSelect)
 	if f.Status != "" {
-		q = q.Where("status = ?", f.Status)
+		// «new» и «open» — синонимы (legacy v1 vs v4 backend convention).
+		// Клиент может прислать любое; фильтр принимает оба.
+		switch f.Status {
+		case "new", "open":
+			q = q.Where("status IN ?", []string{"new", "open"})
+		default:
+			q = q.Where("status = ?", f.Status)
+		}
 	}
 	if f.TableID != "" {
 		q = q.Where("table_id = ?", f.TableID)

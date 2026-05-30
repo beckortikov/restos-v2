@@ -65,6 +65,9 @@ func (s *UsersService) List(ctx context.Context, f UsersFilter) ([]models.User, 
 	if f.RestaurantID != "" {
 		q = q.Where("restaurant_id = ?", f.RestaurantID)
 	}
+	// Soft-deleted (role='deleted') скрываем из list — фронт не знает
+	// этот псевдо-роль и крашится на ROLE_DEFAULT_PERMISSIONS['deleted'].
+	q = q.Where("role IS NULL OR role <> ?", "deleted")
 	var rows []models.User
 	// PIN/password защищены json:"-" на модели — сериализация их скроет.
 	if err := q.Order("role ASC, name ASC").Find(&rows).Error; err != nil {
@@ -319,6 +322,10 @@ func (s *UsersService) ValidatePIN(ctx context.Context, restaurantID, pin string
 	return found, nil
 }
 
+// listWithoutDeleted — общий фильтр: исключаем soft-deleted пользователей
+// из всех list-запросов. Frontend ROLE_DEFAULT_PERMISSIONS не знает role
+// 'deleted' и крашится при попытке отрендерить.
+//
 // Delete — мягкое удаление через установку role='deleted'.
 // Hard delete опасен: order.waiter_id ссылается через FK без cascade
 // в legacy схеме. Эта семантика согласована с frontend.

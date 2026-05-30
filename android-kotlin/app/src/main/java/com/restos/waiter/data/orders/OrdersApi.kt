@@ -355,12 +355,20 @@ data class OrderItemDto(
 
 /** Статусы заказа — формально совпадают с v3 (бэк-портировал). */
 object OrderStatus {
+    // v4 бэк создаёт заказы со status='open'. Старое v3 API использовало 'new'.
+    // Поддерживаем оба для совместимости с историческими записями.
+    const val OPEN = "open"
     const val NEW = "new"
+    const val COOKING = "cooking"
+    const val READY = "ready"
+    const val SERVED = "served"
     const val BILL_REQUESTED = "bill_requested"
     const val DONE = "done"
     const val CANCELLED = "cancelled"
 
-    fun isActive(status: String): Boolean = status == NEW || status == BILL_REQUESTED
+    fun isActive(status: String): Boolean =
+        status == OPEN || status == NEW || status == COOKING ||
+            status == READY || status == SERVED || status == BILL_REQUESTED
 }
 
 /**
