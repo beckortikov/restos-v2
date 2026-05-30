@@ -7,8 +7,6 @@ import { startOfToday } from '@/lib/helpers'
 import { api, unwrap } from '@/lib/api'
 import { onDataChange, initRealtime } from '@/lib/realtime'
 import { toast } from 'sonner'
-// Capacitor дропнут — нативный Android в android-kotlin/. React только в Electron.
-const Capacitor = { isNativePlatform: () => false }
 import type { Table } from '@/lib/types'
 
 // Plays a soft notification sound (data URI — no external file)
@@ -35,32 +33,6 @@ function playReadyChime() {
   } catch { /* audio not supported */ }
 }
 
-async function fireNativeNotification(orderInfo?: string) {
-  // On Capacitor (Android/iOS) use the LocalNotifications plugin — it shows
-  // in the system tray, lights up the screen, plays the system notification
-  // sound, and survives the WebView being briefly paused. The Web Notification
-  // API silently no-ops when the app is backgrounded inside Capacitor's
-  // WebView, so it's not a substitute on phone shells.
-  try {
-    const { LocalNotifications } = await import(/* @vite-ignore */ '@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
-    await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: Math.floor(Math.random() * 2_000_000_000),
-          title: 'Заказ готов!',
-          body: orderInfo || 'Заберите блюда с кухни',
-          schedule: { at: new Date(Date.now() + 100) },
-          sound: undefined, // system default — guaranteed present on every device
-          smallIcon: 'ic_stat_icon_config_sample',
-          autoCancel: true,
-        },
-      ],
-    })
-  } catch (e) {
-    console.warn('[ready-watcher] LocalNotifications failed, falling back to Web Notification', e)
-  }
-}
-
 function fireWebNotification(orderInfo?: string) {
   if (typeof window === 'undefined' || !('Notification' in window)) return
   if (Notification.permission !== 'granted') return
@@ -75,14 +47,10 @@ function notifyReady(orderInfo?: string) {
     description: orderInfo || 'Заберите блюда с кухни',
     duration: 8000,
   })
-  // Vibration on mobile (web API; Capacitor LocalNotifications also vibrates by default)
+  // Vibration on mobile (web API)
   try { navigator.vibrate?.([200, 100, 200]) } catch { /* ignore */ }
-  // System tray notification — native on Capacitor, Web Notification on browser
-  if (Capacitor.isNativePlatform()) {
-    void fireNativeNotification(orderInfo)
-  } else {
-    fireWebNotification(orderInfo)
-  }
+  // System tray notification via Web Notification API (Electron supports it)
+  fireWebNotification(orderInfo)
 }
 
 // Background watcher:
@@ -172,20 +140,8 @@ export function AutoReadyWatcher() {
       } catch { /* ignore */ }
     }
 
-    // Request notification permission. On Android 13+ (POST_NOTIFICATIONS),
-    // Capacitor's LocalNotifications.requestPermissions() shows the system
-    // dialog. On web the legacy Notification.requestPermission is used.
-    if (Capacitor.isNativePlatform()) {
-      void (async () => {
-        try {
-          const { LocalNotifications } = await import(/* @vite-ignore */ '@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
-          const status = await LocalNotifications.checkPermissions()
-          if (status.display !== 'granted') {
-            await LocalNotifications.requestPermissions()
-          }
-        } catch { /* plugin not registered yet */ }
-      })()
-    } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+    // Request notification permission via the Web Notification API.
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {})
     }
 

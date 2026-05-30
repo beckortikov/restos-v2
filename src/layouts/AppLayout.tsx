@@ -9,7 +9,6 @@ import { AutoPrintRunner } from '@/components/auto-print-runner'
 import { PrintQueueRunner } from '@/components/print-queue-runner'
 import { AutoReadyWatcher } from '@/components/auto-ready-watcher'
 import { RealtimeCacheBridge } from '@/components/realtime-cache-bridge'
-import { HardwareBackHandler } from '@/components/hardware-back-handler'
 import { LicenseGate } from '@/components/license-gate'
 
 function AppContent() {
@@ -30,7 +29,6 @@ function AppContent() {
         </WaiterShell>
         <Toaster richColors position="top-center" />
         <RealtimeCacheBridge />
-        <HardwareBackHandler />
         <AutoPrintRunner /><PrintQueueRunner />
         <AutoReadyWatcher />
       </>

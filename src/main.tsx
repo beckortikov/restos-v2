@@ -12,7 +12,6 @@ const Router: typeof BrowserRouter =
 import * as Sentry from '@sentry/react'
 import { AppRouter } from './router'
 import { ErrorBoundary } from '@/components/error-boundary'
-import { NativeConnectScreen } from '@/components/native-connect-screen'
 import './index.css'
 // Bundle Inter font locally — works offline, more readable
 import '@fontsource/inter/400.css'
@@ -108,9 +107,7 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
       <Router>
-        <NativeConnectScreen>
-          <AppRouter />
-        </NativeConnectScreen>
+        <AppRouter />
       </Router>
     </ErrorBoundary>
   </StrictMode>
