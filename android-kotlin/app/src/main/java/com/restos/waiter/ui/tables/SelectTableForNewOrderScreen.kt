@@ -87,13 +87,6 @@ fun SelectTableForNewOrderScreen(
                     }
                 }
             }
-            if (groups.noZone.isNotEmpty()) {
-                item {
-                    Section(title = "Без зоны") {
-                        TablesGrid(groups.noZone, onPick = onPick)
-                    }
-                }
-            }
             if (state.tables.isEmpty() && !state.loading) {
                 item {
                     Text(
