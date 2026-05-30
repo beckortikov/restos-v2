@@ -22,12 +22,19 @@ func NewOrders(svc *service.OrdersService) *OrdersHandler { return &OrdersHandle
 // Query: limit, cursor, status, table_id, shift_id, from, to (RFC3339).
 func (h *OrdersHandler) List(w http.ResponseWriter, r *http.Request) {
 	f := service.OrdersFilter{
-		Status:  queryString(r, "status"),
-		TableID: queryString(r, "table_id"),
-		ShiftID: queryString(r, "shift_id"),
-		Page:    parsePage(r),
+		Status:   queryString(r, "status"),
+		TableID:  queryString(r, "table_id"),
+		ShiftID:  queryString(r, "shift_id"),
+		WaiterID: queryString(r, "waiter_id"),
+		Page:     parsePage(r),
 	}
-	if fromStr := queryString(r, "from"); fromStr != "" {
+	// Accept both `from` (Electron POS) and `created_at_from` (Kotlin APK)
+	// — same semantics, RFC3339.
+	fromStr := queryString(r, "from")
+	if fromStr == "" {
+		fromStr = queryString(r, "created_at_from")
+	}
+	if fromStr != "" {
 		t, err := time.Parse(time.RFC3339, fromStr)
 		if err != nil {
 			respond.BadRequest(w, "bad ?from (RFC3339 required)")
