@@ -269,6 +269,9 @@ data class OrderDto(
     @SerialName("waiter_id") val waiter: String? = null,
     @SerialName("cashier_id") val cashier: String? = null,
     @SerialName("guests_count") val guestsCount: Int = 0,
+    /** Сервер в OrderSlim возвращает заранее посчитанное число активных
+     *  (не-cancelled) позиций. Для OrderDetail парсинг через items.size. */
+    @SerialName("items_count") val itemsCount: Int = 0,
     val total: String = "0",
     @SerialName("service_percent") val servicePercent: String = "0",
     @SerialName("service_amount") val serviceChargeAmount: String = "0",

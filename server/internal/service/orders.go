@@ -73,6 +73,9 @@ type OrderSlim struct {
 	TableName  string `json:"table_name,omitempty"`
 	WaiterName string `json:"waiter_name,omitempty"`
 	ZoneName   string `json:"zone_name,omitempty"`
+	// Counts: число активных (не-cancelled) позиций в заказе. Считается одним
+	// GROUP BY в enrichSlim — без N+1.
+	ItemsCount int `json:"items_count"`
 }
 
 // orderSlimRow — внутреннее: GORM-биндинг (имена колонок).
@@ -444,6 +447,31 @@ func (s *OrdersService) enrichSlim(ctx context.Context, rows []OrderSlim) error 
 		}
 	}
 
+	// Batch-count активных позиций — один GROUP BY вместо N+1.
+	orderIDs := make([]string, 0, len(rows))
+	for _, r := range rows {
+		orderIDs = append(orderIDs, r.ID)
+	}
+	itemsCountByOrder := make(map[string]int, len(orderIDs))
+	if len(orderIDs) > 0 {
+		type cntRow struct {
+			OrderID string `gorm:"column:order_id"`
+			N       int    `gorm:"column:n"`
+		}
+		var counts []cntRow
+		// order_items не tenant-scoped, фильтруем через order_id IN (...) — заказы уже tenant-scoped.
+		if err := s.r.DB().Table("order_items").
+			Select("order_id, COUNT(*) AS n").
+			Where("order_id IN ? AND cancelled_at IS NULL", orderIDs).
+			Group("order_id").
+			Scan(&counts).Error; err != nil {
+			return err
+		}
+		for _, c := range counts {
+			itemsCountByOrder[c.OrderID] = c.N
+		}
+	}
+
 	for i := range rows {
 		if rows[i].TableID != nil {
 			if n, ok := tableNameByID[*rows[i].TableID]; ok {
@@ -459,6 +487,9 @@ func (s *OrdersService) enrichSlim(ctx context.Context, rows []OrderSlim) error 
 			if n, ok := waiterNameByID[*rows[i].WaiterID]; ok {
 				rows[i].WaiterName = n
 			}
+		}
+		if n, ok := itemsCountByOrder[rows[i].ID]; ok {
+			rows[i].ItemsCount = n
 		}
 	}
 	return nil

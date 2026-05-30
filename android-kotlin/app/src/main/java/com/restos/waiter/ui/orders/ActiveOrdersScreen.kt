@@ -154,7 +154,10 @@ private fun OrdersGrid(orders: List<OrderDto>, onOpen: (String) -> Unit) {
 private fun OrderRowCard(order: OrderDto, compact: Boolean = false, onClick: () -> Unit) {
     val isBill = order.status == OrderStatus.BILL_REQUESTED
     val borderColor = if (isBill) Color(0xFFDDD6FE) else MaterialTheme.colorScheme.surfaceVariant
-    val itemCount = order.items.count { it.cancelledAt == null }
+    // OrderSlim из списка не содержит items (slim-endpoint), используем
+    // server-computed itemsCount. Для OrderDetail (envelope) — fallback на items.size.
+    val itemCount = if (order.items.isNotEmpty()) order.items.count { it.cancelledAt == null }
+        else order.itemsCount
     val timeLabel = runCatching {
         formatTimeSince(java.time.Instant.parse(order.createdAt).toEpochMilli())
     }.getOrDefault("")
@@ -175,7 +178,7 @@ private fun OrderRowCard(order: OrderDto, compact: Boolean = false, onClick: () 
     ) {
         if (compact) {
             OrderCompactBody(
-                title = order.tableName ?: "Заказ №${order.id}",
+                title = order.tableName ?: order.orderNumber?.let { "Заказ №$it" } ?: "Заказ",
                 zone = order.tableZoneName,
                 waiterName = order.waiterName,
                 isBill = isBill,
@@ -187,7 +190,7 @@ private fun OrderRowCard(order: OrderDto, compact: Boolean = false, onClick: () 
         } else {
             Box(modifier = Modifier.padding(12.dp).fillMaxSize()) {
                 OrderListBody(
-                    title = order.tableName ?: "Заказ №${order.id}",
+                    title = order.tableName ?: order.orderNumber?.let { "Заказ №$it" } ?: "Заказ",
                     zone = order.tableZoneName,
                     waiterName = order.waiterName,
                     totalLabel = totalLabel,
