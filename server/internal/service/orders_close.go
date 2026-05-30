@@ -81,6 +81,16 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 	if len(in.Payments) == 0 && in.PaymentMethod == "" {
 		return nil, nil, apperrors.Wrap("VALIDATION", "payment_method is required when payments[] is empty", nil)
 	}
+	// Enum-валидация payment_method для single-payment. Multi-payment проверяет
+	// каждую entry отдельно ниже. Whitelist синхронен с payments[].method.
+	if len(in.Payments) == 0 {
+		switch in.PaymentMethod {
+		case "cash", "card", "transfer":
+			// ok
+		default:
+			return nil, nil, apperrors.Wrap("VALIDATION", "payment_method must be cash|card|transfer", nil)
+		}
+	}
 	tip := decimal.Zero
 	if in.TipAmount != "" {
 		tip, err = decimal.FromString(in.TipAmount)

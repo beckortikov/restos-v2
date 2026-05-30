@@ -363,12 +363,17 @@ object OrderStatus {
     const val READY = "ready"
     const val SERVED = "served"
     const val BILL_REQUESTED = "bill_requested"
-    const val DONE = "done"
+
+    // v4 backend uses "closed"; legacy v3 was "done". Kept constant name for callsite stability.
+    const val DONE = "closed"
     const val CANCELLED = "cancelled"
 
     fun isActive(status: String): Boolean =
         status == OPEN || status == NEW || status == COOKING ||
             status == READY || status == SERVED || status == BILL_REQUESTED
+
+    /** Заказ только что создан (либо v4 "open", либо legacy v3 "new"). */
+    fun isFresh(status: String): Boolean = status == OPEN || status == NEW
 }
 
 /**

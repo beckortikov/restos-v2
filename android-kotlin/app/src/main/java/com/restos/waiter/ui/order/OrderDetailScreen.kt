@@ -122,7 +122,7 @@ fun OrderDetailScreen(
                 },
                 title = { OrderTitle(state.order) },
                 actions = {
-                    if (state.order?.status == OrderStatus.NEW &&
+                    if (state.order?.let { OrderStatus.isFresh(it.status) } == true &&
                         state.order?.table != null
                     ) {
                         IconButton(onClick = viewModel::openTransferTable) {
@@ -139,7 +139,7 @@ fun OrderDetailScreen(
             val o = state.order
             when {
                 o == null -> Unit
-                o.status == OrderStatus.NEW -> BottomActions(
+                OrderStatus.isFresh(o.status) -> BottomActions(
                     order = o,
                     busy = state.busy,
                     onPrintPreBill = viewModel::printPreBill,
@@ -413,7 +413,7 @@ private fun OrderBody(
         // OrderHeaderCard убран — те же поля (имя стола / зона / статус /
         // время / гости / официант) есть в TopAppBar и в chips групп.
         item { Spacer(Modifier.height(4.dp)) }
-        if (order.status == OrderStatus.NEW) {
+        if (OrderStatus.isFresh(order.status)) {
             item {
                 AddItemSearch(
                     query = state.search,
@@ -435,7 +435,7 @@ private fun OrderBody(
             }
         } else {
             items(items, key = { it.id }) { it ->
-                if (order.status == OrderStatus.NEW) {
+                if (OrderStatus.isFresh(order.status)) {
                     SwipeableOrderLine(
                         item = it,
                         onCancel = { onCancelItem(it) },
@@ -805,10 +805,12 @@ private fun OrderLineCard(
                     else null,
                 )
                 val kitchenLabel = when (item.kitchenStatus) {
+                    "pending" -> "в очереди"
                     "new" -> "ожидает"
                     "cooking" -> "готовится"
                     "ready" -> "готово"
                     "served" -> "подано"
+                    "cancelled" -> "отменена"
                     else -> null
                 }
                 if (item.note.isNotBlank()) {
@@ -838,6 +840,7 @@ private fun OrderLineCard(
                             color = when (item.kitchenStatus) {
                                 "ready" -> Color(0xFFB45309)
                                 "served" -> Color(0xFF059669)
+                                "cancelled" -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
                                 else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
                             },
                             fontWeight = FontWeight.Medium,
@@ -971,7 +974,7 @@ private fun BottomActions(
             // 1) Печать пре-чека — голубая outlined-кнопка во всю ширину
             OutlinedButton(
                 onClick = onPrintPreBill,
-                enabled = !busy && order.status == OrderStatus.NEW,
+                enabled = !busy && OrderStatus.isFresh(order.status),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = Color(0xFF1D4ED8),
@@ -987,7 +990,7 @@ private fun BottomActions(
             // 2) «+ Добавить» (filled) во всю ширину
             Button(
                 onClick = onAddItems,
-                enabled = !busy && order.status == OrderStatus.NEW,
+                enabled = !busy && OrderStatus.isFresh(order.status),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
             ) {
                 Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -998,7 +1001,7 @@ private fun BottomActions(
             //    диалог сам скажет «нет других официантов».
             Button(
                 onClick = onAssignWaiter,
-                enabled = !busy && order.status == OrderStatus.NEW,
+                enabled = !busy && OrderStatus.isFresh(order.status),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFFFEF3C7),
@@ -1012,7 +1015,7 @@ private fun BottomActions(
             // 4) Отменить заказ — красная outlined (вертикально внизу)
             OutlinedButton(
                 onClick = onCancelOrder,
-                enabled = !busy && order.status == OrderStatus.NEW,
+                enabled = !busy && OrderStatus.isFresh(order.status),
                 modifier = Modifier.fillMaxWidth().height(48.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     contentColor = MaterialTheme.colorScheme.error,

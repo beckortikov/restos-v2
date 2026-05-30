@@ -80,8 +80,11 @@ class ActiveOrdersViewModel @Inject constructor(
         viewModelScope.launch {
             if (initial) _state.update { it.copy(loading = true, error = null) }
             try {
-                val list = ordersApi.listOrders(status = OrderStatus.NEW).data +
-                    ordersApi.listOrders(status = OrderStatus.BILL_REQUESTED).data
+                // v4 backend has 7 active statuses (open/new/cooking/ready/served/bill_requested).
+                // Запрашиваем всё и фильтруем клиентом через OrderStatus.isActive — проще,
+                // чем делать 6 параллельных запросов на каждый статус.
+                val list = ordersApi.listOrders(status = null, limit = 200).data
+                    .filter { OrderStatus.isActive(it.status) }
                 _state.update {
                     it.copy(
                         loading = false,
