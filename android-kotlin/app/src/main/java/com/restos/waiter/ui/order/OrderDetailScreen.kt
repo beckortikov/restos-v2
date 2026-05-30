@@ -804,15 +804,6 @@ private fun OrderLineCard(
                         androidx.compose.ui.text.style.TextDecoration.LineThrough
                     else null,
                 )
-                val kitchenLabel = when (item.kitchenStatus) {
-                    "pending" -> "в очереди"
-                    "new" -> "ожидает"
-                    "cooking" -> "готовится"
-                    "ready" -> "готово"
-                    "served" -> "подано"
-                    "cancelled" -> "отменена"
-                    else -> null
-                }
                 if (item.note.isNotBlank()) {
                     Text(
                         "! ${item.note}",
@@ -823,30 +814,17 @@ private fun OrderLineCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "${item.qty} × ${formatCurrency(item.priceAtOrder.toBigDecimalSafe())}",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (served) 0.45f else 0.6f),
-                        textDecoration = if (served)
-                            androidx.compose.ui.text.style.TextDecoration.LineThrough
-                        else null,
-                    )
-                    if (kitchenLabel != null) {
-                        Spacer(Modifier.width(4.dp))
-                        Text(
-                            "· $kitchenLabel",
-                            fontSize = 11.sp,
-                            color = when (item.kitchenStatus) {
-                                "ready" -> Color(0xFFB45309)
-                                "served" -> Color(0xFF059669)
-                                "cancelled" -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
-                                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                            },
-                            fontWeight = FontWeight.Medium,
-                        )
-                    }
-                }
+                // Kitchen-status бейджи убраны по запросу — официанту лишний
+                // визуальный шум. Зачёркивание+ослабленный цвет на «served»
+                // через `served` уже даёт нужный сигнал.
+                Text(
+                    "${item.qty} × ${formatCurrency(item.priceAtOrder.toBigDecimalSafe())}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (served) 0.45f else 0.6f),
+                    textDecoration = if (served)
+                        androidx.compose.ui.text.style.TextDecoration.LineThrough
+                    else null,
+                )
             }
             // Комментарий (если есть) — справа, маленьким курсивом-серым.
             if (item.note.isNotBlank()) {
