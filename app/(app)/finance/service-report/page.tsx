@@ -17,7 +17,15 @@ type Preset = 'today' | 'week' | 'month' | 'custom'
 // «02.05» — пресет «Сегодня» начинал захватывать вчера.
 function localISO(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+  // RFC3339 требует timezone suffix (Z или ±HH:MM). Без него Go-бэк
+  // отвергает «bad ?from (RFC3339 required)». Раньше слали голое
+  // "YYYY-MM-DDTHH:MM:SS" — годилось для PG TIMESTAMP, но v4-бэк строгий.
+  const tzMin = -d.getTimezoneOffset() // getTimezoneOffset is inverted
+  const sign = tzMin >= 0 ? '+' : '-'
+  const tzAbs = Math.abs(tzMin)
+  const tzH = pad(Math.floor(tzAbs / 60))
+  const tzM = pad(tzAbs % 60)
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${tzH}:${tzM}`
 }
 
 function rangeFor(preset: Preset): { from: string; to: string } {

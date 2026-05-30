@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -266,8 +267,12 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		opCat := "revenue"
 		opActivity := "operational"
 		opDate := now.Format("2006-01-02")
-		opDesc := "order:" + order.ID
+		// description видит пользователь в /finance/accounts и /finance/cashflow.
+		// Раньше писали "order:<UUID>" — UI показывал длинный хэш. Используем
+		// порядковый номер per restaurant per day (v2.0.21).
+		opDesc := fmt.Sprintf("Заказ #%d", order.OrderNumber)
 		opAuto := true
+		// source_ref остаётся machine-readable для идемпотентности и audit-связи.
 		opSourceRef := "order:" + order.ID
 
 		type payApplied struct {
