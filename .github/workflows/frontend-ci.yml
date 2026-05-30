@@ -1,0 +1,73 @@
+name: frontend-ci
+
+# Защитник №1 (TypeScript strict) и №2 (ts-prune мёртвые экспорты).
+# Контракт-тест (защитник №3) живёт в server-ci.yml как часть go test.
+#
+# История: эти проверки добавлены после серии багов v2.0.14-38, когда
+# фронт слал лишние поля в body ({ "cancelled_by": ... }, и т.п.),
+# которые TS-компилятор не ловил из-за `body: {...} as any`.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "hooks/**"
+      - "styles/**"
+      - "tests/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "tsconfig.json"
+      - ".github/workflows/frontend-ci.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "app/**"
+      - "components/**"
+      - "lib/**"
+      - "hooks/**"
+      - "styles/**"
+      - "tests/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "tsconfig.json"
+      - ".github/workflows/frontend-ci.yml"
+
+jobs:
+  typecheck:
+    name: tsc --noEmit (strict)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: tsc --noEmit
+        run: pnpm typecheck
+
+  dead-exports:
+    name: ts-prune (мёртвые экспорты)
+    runs-on: ubuntu-latest
+    # Пока continue-on-error: репорт большой (legacy v1 экспорты).
+    # Чистим инкрементально, не блокируем CI.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: ts-prune
+        run: pnpm ts-prune
