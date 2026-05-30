@@ -201,6 +201,14 @@ export function _mapV4OrderItem(i: Record<string, any>): OrderItem {
     servedAt: i.served_at ?? undefined,
     servedBy: i.served_by ?? undefined,
     note: (i.note as string | null | undefined) ?? null,
+    kitchenStatus: i.kitchen_status ?? null,
+    modifiers: Array.isArray(i.modifiers)
+      ? i.modifiers.map((m: any) => ({
+          modifierId: m.modifier_id ?? m.id ?? undefined,
+          name: m.name ?? '',
+          price: Number(m.price ?? 0) || 0,
+        }))
+      : undefined,
   }
 }
 

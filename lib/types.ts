@@ -250,6 +250,9 @@ export interface OrderItem {
    *  Печатается в кухонном ранере и в пре-чеке. Меняется через
    *  PATCH /orders/{id}/items/{itemId}/note. */
   note?: string | null
+  /** Computed бэком per-item: pending/cooking/ready/served/cancelled.
+   *  Колонки в БД нет — выводится в service/orders.go::computeItemKitchenStatus. */
+  kitchenStatus?: string | null
 }
 
 export interface Order {

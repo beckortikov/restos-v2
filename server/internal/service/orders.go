@@ -66,7 +66,12 @@ type OrderSlim struct {
 	GuestsCount  *int            `json:"guests_count,omitempty"`
 	Total        decimal.Decimal `json:"total"`
 	TotalWithSvc decimal.Decimal `json:"total_with_service"`
-	ShiftID      *string         `json:"shift_id,omitempty"`
+	// Money breakdown — нужны waiter-dashboard'у для суммирования сегодняшних
+	// service/tip/discount без второго запроса детальки.
+	ServiceAmount  decimal.Decimal `json:"service_amount"`
+	DiscountAmount decimal.Decimal `json:"discount_amount"`
+	TipAmount      decimal.Decimal `json:"tip_amount"`
+	ShiftID        *string         `json:"shift_id,omitempty"`
 	CreatedAt    time.Time       `json:"created_at"`
 	ClosedAt     *time.Time      `json:"closed_at,omitempty"`
 	// Enriched display-only fields (батч-загрузка в List, чтобы избежать N+1 на клиенте).
@@ -89,13 +94,17 @@ type orderSlimRow struct {
 	GuestsCount      *int            `gorm:"column:guests_count"`
 	Total            decimal.Decimal `gorm:"column:total"`
 	TotalWithService decimal.Decimal `gorm:"column:total_with_service"`
+	ServiceAmount    decimal.Decimal `gorm:"column:service_amount"`
+	DiscountAmount   decimal.Decimal `gorm:"column:discount_amount"`
+	TipAmount        decimal.Decimal `gorm:"column:tip_amount"`
 	ShiftID          *string         `gorm:"column:shift_id"`
 	CreatedAt        time.Time       `gorm:"column:created_at"`
 	ClosedAt         *time.Time      `gorm:"column:closed_at"`
 }
 
 const slimSelect = `id, order_number, status, "type", table_id, waiter_id, guests_count,
-total, total_with_service, shift_id, created_at, closed_at`
+total, total_with_service, service_amount, discount_amount, tip_amount,
+shift_id, created_at, closed_at`
 
 // List — постраничный slim-список. Использует индекс
 // idx_orders_restaurant_created (PRD 05) → keyset быстрый.
@@ -146,9 +155,12 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 			TableID:      r.TableID,
 			WaiterID:     r.WaiterID,
 			GuestsCount:  r.GuestsCount,
-			Total:        r.Total,
-			TotalWithSvc: r.TotalWithService,
-			ShiftID:      r.ShiftID,
+			Total:          r.Total,
+			TotalWithSvc:   r.TotalWithService,
+			ServiceAmount:  r.ServiceAmount,
+			DiscountAmount: r.DiscountAmount,
+			TipAmount:      r.TipAmount,
+			ShiftID:        r.ShiftID,
 			CreatedAt:    r.CreatedAt,
 			ClosedAt:     r.ClosedAt,
 		})

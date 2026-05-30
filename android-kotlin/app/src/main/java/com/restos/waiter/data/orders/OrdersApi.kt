@@ -191,6 +191,22 @@ data class RawOrderItem(
     @SerialName("printed_at") val printedAt: String? = null,
     @SerialName("served_at") val servedAt: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("kitchen_status") val kitchenStatus: String? = null,
+    val modifiers: List<RawOrderItemModifier> = emptyList(),
+)
+
+/**
+ * Сырой модификатор позиции (server `models.OrderItemModifier`). Сериализован
+ * в RawOrderItem.modifiers; UI-DTO `OrderItemDto` пока не имеет поля modifiers,
+ * поэтому маппинг в toDto() не пробрасывает их.
+ * TODO(ui-port): добавить modifiers в OrderItemDto и пробросить в toDto().
+ */
+@Serializable
+data class RawOrderItemModifier(
+    val id: String,
+    @SerialName("modifier_id") val modifierId: String? = null,
+    val name: String? = null,
+    val price: String = "0",
 )
 
 /** Сырое void-событие как отдаёт бэк (`models.OrderVoid`). */
@@ -226,7 +242,7 @@ internal fun RawOrderItem.toDto(): OrderItemDto {
         cancelledAt = cancelledAt,
         sentToKitchenAt = printedAt,
         servedAt = servedAt,
-        kitchenStatus = null,
+        kitchenStatus = kitchenStatus,
         subtotal = sub,
     )
 }
