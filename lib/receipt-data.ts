@@ -11,7 +11,39 @@
 import { dAdd, dDiv, dMul, dRound, dSub, dSum } from './decimal'
 import { calcLineTotal, visibleReceiptItems } from './helpers'
 import type { Order, OrderVoid, PaymentMethod, Restaurant, Table, User, Zone } from './types'
-import type { ReceiptPrintData } from './print-service'
+
+// Структура данных чека. Используется только для HTML-превью в UI-drawer'ах
+// (см. components/print-receipt.tsx). Реальная ESC/POS-печать собирается на
+// бэке — фронт лишь зовёт POST /orders/{id}/close (создаёт чек-job) или
+// POST /orders/{id}/print-pre-bill (создаёт пре-чек-job), worker печатает.
+//
+// Раньше этот же тип был payload'ом для client-side ESC/POS-сборщика
+// (lib/print-service.ts) — после удаления Path A type живёт здесь.
+export interface ReceiptPrintData {
+  orderId: string
+  orderNumber?: number | string
+  orderType: 'hall' | 'delivery' | 'takeaway'
+  restaurantName?: string
+  restaurantAddress?: string
+  tableName?: string
+  zoneName?: string
+  waiterName?: string
+  cashierName?: string
+  items: { name: string; qty: number; price: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; modifiers?: { name: string; price: number }[] }[]
+  subtotal: number
+  discountAmount?: number
+  discountReason?: string
+  servicePercent: number
+  serviceAmount: number
+  tipAmount?: number
+  guestsCount?: number
+  total: number
+  paymentMethod?: PaymentMethod
+  accountName?: string
+  createdAt: string
+  closedAt: string
+  isPreCheck?: boolean
+}
 
 const isHallType = (t?: string | null) => t !== 'delivery' && t !== 'takeaway'
 

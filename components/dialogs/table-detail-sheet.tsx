@@ -232,38 +232,22 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
   }, [open, table?.id, table?.status])
 
   const handlePrint = useCallback(async () => {
-    // Pre-check — через backend job, не client ESC/POS.
+    // Пре-чек — backend job (POST /orders/{id}/print-pre-bill).
+    // Финальный чек — создаётся бэкендом автоматически при закрытии
+    // заказа. Тут только пре-чек, потому что финал уходит через
+    // OrderActionsDialog / order-actions-panel.
     if (receiptData?.isPreCheck && selectedOrderId) {
       try {
         const { printPreBill } = await import('@/lib/queries')
         const { jobId } = await printPreBill(selectedOrderId)
         toast.success(jobId ? `Пре-чек отправлен (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
-        return
       } catch (e) {
         toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
-        return
       }
+      return
     }
-    // Try ESC/POS direct first (sharper output via print-server → thermal printer)
-    if (receiptData) {
-      const { printReceiptDirect } = await import('@/lib/print-service')
-      const ok = await printReceiptDirect(receiptData)
-      if (ok) return
-      // На десктопе термопринтер — единственный канал. HTML-fallback
-      // отправил бы на дефолтный системный принтер (обычно офисный A4).
-      const isDesktop = !!(window as unknown as { restosDesktop?: { isDesktop?: boolean } }).restosDesktop?.isDesktop
-      if (isDesktop) {
-        toast.error('Принтер недоступен. Проверьте подключение и настройки.')
-        return
-      }
-    }
-    // Fallback: HTML print
-    if (!receiptRef.current) return
-    const printWindow = window.open('', '_blank', 'width=320,height=600')
-    if (!printWindow) return
-    printWindow.document.write(`<html><head><title>Чек</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:monospace}@media print{@page{margin:5mm;size:80mm auto}}</style></head><body>${receiptRef.current.outerHTML}<script>window.onload=function(){window.print();window.close()}<\/script></body></html>`)
-    printWindow.document.close()
-  }, [receiptData])
+    toast.info('Чек отправлен на печать бэкендом при закрытии заказа')
+  }, [receiptData, selectedOrderId])
 
   const handlePreCheck = useCallback(() => {
     if (!table) return

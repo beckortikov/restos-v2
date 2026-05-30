@@ -5,7 +5,6 @@ import { AuthProvider, AuthGuard, useAuth } from '@/lib/auth-store'
 import { AppSidebar, MobileHeader, MobileSidebar, SidebarProvider } from '@/components/app-sidebar'
 import { CashierShell } from '@/components/cashier-shell'
 import { Toaster } from '@/components/ui/sonner'
-import { AutoPrintRunner } from '@/components/auto-print-runner'
 import { PwaUpdater } from '@/components/pwa-updater'
 import { InstallPwaPrompt } from '@/components/install-pwa-prompt'
 import { LocalServerGuard } from '@/components/local-server-guard'
@@ -56,7 +55,6 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <LocalServerHealth />
           <PwaUpdater />
           <InstallPwaPrompt />
-          <AutoPrintRunner />
         </SidebarProvider>
       </AuthGuard>
     </AuthProvider>

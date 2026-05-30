@@ -3,38 +3,37 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  ArrowLeft, RefreshCw, X, Trash2, Eye, Clock, CheckCircle2, XCircle, AlertCircle,
+  ArrowLeft, Trash2, Clock, CheckCircle2, XCircle, AlertCircle,
   ChevronDown, ChevronRight, Printer, FlaskConical, Copy,
 } from 'lucide-react'
 import { fetchPrintJobs, type PrintJournalEntry } from '@/lib/queries'
-import { ensureBackendVirtualPrinters, disableBackendVirtualPrinters } from '@/lib/queries/printers'
+import {
+  ensureBackendVirtualPrinters,
+  disableBackendVirtualPrinters,
+  isVirtualPrinterOn,
+  setVirtualPrinterOn,
+  subscribeVirtualMode,
+  getHistoryHiddenBefore,
+  clearHistoryView,
+} from '@/lib/queries/printers'
 import { useDataSync } from '@/hooks/use-data-sync'
-import { decodeCP866Hex } from '@/lib/print-service'
-import {
-  listPendingJobs, cancelJob, cancelAllPending, retryNow,
-  subscribeQueue, isVirtualPrinterOn, setVirtualPrinterOn, subscribeVirtualMode,
-  getHistoryHiddenBefore, clearHistoryView,
-  type PrintJob,
-} from '@/lib/print-queue'
+import { decodeCP866Hex } from '@/lib/cp866'
 import { toast } from 'sonner'
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel,
-  AlertDialogContent, AlertDialogDescription, AlertDialogFooter,
-  AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+
+// Path B queue page. Журнал заданий читается из audit_log через
+// fetchPrintJobs. Pending-очередь (с retry/cancel) теперь живёт на бэке:
+// внутренний worker сам ретраит print_jobs с backoff и при превышении
+// MAX_ATTEMPTS переводит job в status=failed (тут отобразится как
+// «Ошибка»). Управление виртуальным режимом — через backend
+// ensureBackendVirtualPrinters / disableBackendVirtualPrinters.
 
 type FilterStatus = 'all' | 'success' | 'failed' | 'mock'
 type FilterKind = 'all' | 'receipt' | 'runner' | 'cancel'
 
-// Тип job'а в БЕЙДЖЕ. «Заказ» (а не «Кухня») чтобы не путать с
-// названием станции «Бар»/«Кухня» в самом тексте задания.
 const KIND_LABEL: Record<string, string> = {
   'print.receipt': 'Чек',
   'print.runner': 'Заказ',
   'print.cancel': 'Отмена',
-  'receipt': 'Чек',
-  'runner': 'Заказ',
-  'cancel-runner': 'Отмена',
 }
 
 function StatusBadge({ status, virtual }: { status: string; virtual?: boolean }) {
@@ -65,37 +64,27 @@ function formatDate(iso: string): string {
 }
 
 export default function PrintQueuePage() {
-  const [pending, setPending] = useState<PrintJob[]>([])
   const [history, setHistory] = useState<PrintJournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [filterStatus, setFilterStatus] = useState<FilterStatus>('all')
   const [filterKind, setFilterKind] = useState<FilterKind>('all')
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [virtual, setVirtual] = useState(isVirtualPrinterOn())
-  const [confirmCancelAll, setConfirmCancelAll] = useState(false)
 
   const reload = useCallback(async () => {
-    const [p, h] = await Promise.all([
-      listPendingJobs(),
-      fetchPrintJobs({ limit: 200, sinceMs: 7 * 24 * 60 * 60 * 1000 }).catch(() => []),
-    ])
-    setPending(p)
+    const h = await fetchPrintJobs({ limit: 200, sinceMs: 7 * 24 * 60 * 60 * 1000 }).catch(() => [])
     setHistory(h)
     setLoading(false)
   }, [])
 
   useEffect(() => {
     reload()
-    const unsubQueue = subscribeQueue(reload)
     const unsubVirtual = subscribeVirtualMode(() => setVirtual(isVirtualPrinterOn()))
-    // Safety-net poll (60s) — основная live-доставка идёт через
-    // useDataSync(['audit_log']) ниже, перехватывающий SSE-инвалидацию кэша.
-    const interval = setInterval(reload, 2_000)
-    return () => { unsubQueue(); unsubVirtual(); clearInterval(interval) }
+    return () => { unsubVirtual() }
   }, [reload])
 
   // Live: пере-загружаем журнал каждый раз когда audit_log меняется
-  // (logPrint пишет именно туда → SSE → invalidateCache → этот хук).
+  // (печать пишет в audit_log → SSE → invalidateCache → этот хук).
   useDataSync(['audit_log'], reload)
 
   const hiddenBefore = getHistoryHiddenBefore()
@@ -125,32 +114,14 @@ export default function PrintQueuePage() {
     } catch (e) {
       console.error('[virtual-toggle] backend sync failed:', e)
       toast.error('Виртуальные принтеры на сервере не обновились', {
-        description: 'Возможно, нет связи с сидекаром. Локальный режим всё равно включён.',
+        description: 'Возможно, нет связи с сидекаром.',
       })
     }
   }
 
-  async function handleCancelOne(id?: number) {
-    if (!id) return
-    await cancelJob(id)
-    toast.success('Задание отменено')
-  }
-
-  async function handleCancelAll() {
-    const n = await cancelAllPending()
-    setConfirmCancelAll(false)
-    toast.success(`Очередь очищена (${n})`)
-  }
-
-  async function handleRetryNow(id?: number) {
-    if (!id) return
-    await retryNow(id)
-    toast.info('Повтор запланирован')
-  }
-
   function handleClearHistory() {
     clearHistoryView()
-    setHistory([...history]) // trigger re-filter
+    setHistory([...history])
     toast.success('История скрыта')
   }
 
@@ -178,7 +149,7 @@ export default function PrintQueuePage() {
         </Link>
         <div className="flex-1 min-w-0">
           <h1 className="text-xl font-bold text-foreground">Очередь печати</h1>
-          <p className="text-sm text-muted-foreground">Журнал заданий и повтор неудачных печатей</p>
+          <p className="text-sm text-muted-foreground">Журнал заданий печати за последние 7 дней</p>
         </div>
       </div>
 
@@ -201,55 +172,16 @@ export default function PrintQueuePage() {
         </button>
       </div>
 
-      {/* Pending */}
-      {pending.length > 0 && (
-        <section className="rounded-xl border border-amber-200 bg-amber-50/40 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2.5 bg-amber-100/60 border-b border-amber-200">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-amber-900 flex items-center gap-2">
-              <Clock className="size-3.5" />В ожидании повтора ({pending.length})
-            </h2>
-            <button
-              onClick={() => setConfirmCancelAll(true)}
-              className="text-xs text-destructive font-medium hover:underline"
-            >
-              Отменить все
-            </button>
-          </div>
-          <div className="divide-y divide-amber-200/50">
-            {pending.map(job => (
-              <div key={job.id} className="px-4 py-2.5 flex items-center gap-3">
-                <Clock className={`size-4 shrink-0 ${job.status === 'dead' ? 'text-destructive' : 'text-amber-600'}`} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-foreground truncate">
-                    {KIND_LABEL[job.kind] ?? job.kind} · {job.summary}
-                  </div>
-                  <div className="text-[11px] text-muted-foreground flex items-center gap-2 flex-wrap mt-0.5">
-                    <span>{formatTime(job.createdAt)}</span>
-                    {job.printerName && <span>· {job.printerName}{job.printerIP ? ` (${job.printerIP})` : ''}</span>}
-                    <span>· попыток: {job.attemptCount}</span>
-                    {job.lastError && <span className="text-destructive">· {job.lastError}</span>}
-                    {job.status === 'dead' && <span className="text-destructive font-medium">· остановлено</span>}
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleRetryNow(job.id)}
-                  className="size-8 flex items-center justify-center rounded-lg text-primary hover:bg-primary/10 transition-colors"
-                  title="Повторить сейчас"
-                >
-                  <RefreshCw className="size-4" />
-                </button>
-                <button
-                  onClick={() => handleCancelOne(job.id)}
-                  className="size-8 flex items-center justify-center rounded-lg text-destructive hover:bg-destructive/10 transition-colors"
-                  title="Отменить"
-                >
-                  <X className="size-4" />
-                </button>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* Info banner about pending */}
+      <div className="rounded-xl border border-border bg-muted/30 px-4 py-3 flex items-start gap-3">
+        <Clock className="size-4 text-muted-foreground shrink-0 mt-0.5" />
+        <p className="text-xs text-muted-foreground">
+          Pending-задания и retry-логика обрабатываются worker'ом на бэке. После
+          5 неудачных попыток job переходит в статус «Ошибка» и появляется ниже.
+          Поднимите принтер в сети и нажмите Retry на конкретной строке — или
+          используйте /api/v1/print/jobs/&#123;id&#125;/retry.
+        </p>
+      </div>
 
       {/* Filters */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -323,7 +255,7 @@ export default function PrintQueuePage() {
                         </div>
                       ) : (
                         <div className="text-[11px] text-muted-foreground italic">
-                          Текст недоступен (status=success — сохраняется только для не-успешных, чтобы не раздувать журнал)
+                          Текст недоступен (status=success — payload сохраняется только для не-успешных, чтобы не раздувать журнал)
                         </div>
                       )}
                     </div>
@@ -334,23 +266,6 @@ export default function PrintQueuePage() {
           </div>
         )}
       </section>
-
-      <AlertDialog open={confirmCancelAll} onOpenChange={setConfirmCancelAll}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Отменить всю очередь?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Все {pending.length} pending-заданий будут удалены. Эти чеки не будут напечатаны.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Назад</AlertDialogCancel>
-            <AlertDialogAction onClick={handleCancelAll} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Отменить все
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </div>
   )
 }

@@ -3,7 +3,7 @@
 import { forwardRef } from 'react'
 import { formatCurrency, calcLineTotal, formatQty } from '@/lib/helpers'
 import type { PaymentMethod } from '@/lib/types'
-import type { ReceiptPrintData } from '@/lib/print-service'
+import type { ReceiptPrintData } from '@/lib/receipt-data'
 
 const PAYMENT_LABELS: Record<PaymentMethod, string> = {
   cash: 'Наличные',

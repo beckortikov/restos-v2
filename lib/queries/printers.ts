@@ -96,3 +96,45 @@ export async function disableBackendVirtualPrinters(): Promise<void> {
     }
   }
 }
+
+// ─── UI флаги для /settings/printers/queue ────────────────────────────────
+// «Виртуальный режим» — пользовательская установка, видимая локально на
+// устройстве. Реальный backend-эффект делают ensureBackendVirtualPrinters /
+// disableBackendVirtualPrinters; флаг ниже нужен только для подсветки toggle
+// в UI. Раньше жил в lib/print-queue.ts (Path A).
+
+const VIRTUAL_KEY = 'restos.virtualPrinter'
+const VIRTUAL_EVENT = 'virtual-printer-changed'
+
+export function isVirtualPrinterOn(): boolean {
+  if (typeof window === 'undefined') return false
+  return localStorage.getItem(VIRTUAL_KEY) === 'on'
+}
+
+export function setVirtualPrinterOn(on: boolean): void {
+  if (typeof window === 'undefined') return
+  if (on) localStorage.setItem(VIRTUAL_KEY, 'on')
+  else localStorage.removeItem(VIRTUAL_KEY)
+  window.dispatchEvent(new Event(VIRTUAL_EVENT))
+}
+
+export function subscribeVirtualMode(cb: () => void): () => void {
+  if (typeof window === 'undefined') return () => {}
+  window.addEventListener(VIRTUAL_EVENT, cb)
+  return () => window.removeEventListener(VIRTUAL_EVENT, cb)
+}
+
+// «Очистить историю» в журнале печати: audit_log иммутабельный, поэтому
+// мы локально запоминаем timestamp, до которого скрываем. Только UI-фильтр.
+const HIDDEN_BEFORE_KEY = 'restos.printQueue.hiddenBefore'
+
+export function getHistoryHiddenBefore(): number {
+  if (typeof window === 'undefined') return 0
+  const v = localStorage.getItem(HIDDEN_BEFORE_KEY)
+  return v ? Number(v) : 0
+}
+
+export function clearHistoryView(): void {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(HIDDEN_BEFORE_KEY, String(Date.now()))
+}

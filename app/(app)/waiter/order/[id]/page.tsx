@@ -378,24 +378,13 @@ export default function WaiterOrderDetailPage() {
   // error reasons we used to surface eagerly — but only AFTER the waiter
   // requested a real print, not on every pre-check tap.
   async function handlePrintPreCheck() {
-    if (!receiptPreview) return
+    if (!receiptPreview || !order) return
     setPrinting(true)
     try {
-      const { printReceiptDirect, getLastReceiptError } = await import('@/lib/print-service')
-      const ok = await printReceiptDirect(receiptPreview)
-      if (ok) {
-        toast.success('Пре-чек отправлен на печать')
-        setReceiptOpen(false)
-      } else {
-        const err = getLastReceiptError()
-        if (err?.reason === 'no_printer_configured') {
-          toast.warning('Принтер не настроен. Покажите чек гостю с экрана.')
-        } else if (err?.reason === 'no_transport_available') {
-          toast.warning(`Не удалось напечатать на ${err.printerIP ?? 'принтер'}: десктоп не отвечает или принтер недоступен.`)
-        } else {
-          toast.warning('Принтер недоступен. Покажите чек гостю с экрана.')
-        }
-      }
+      const { printPreBill } = await import('@/lib/queries')
+      const { jobId } = await printPreBill(order.id)
+      toast.success(jobId ? `Пре-чек отправлен на печать (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
+      setReceiptOpen(false)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка печати')
     } finally {

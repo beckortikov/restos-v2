@@ -5,7 +5,7 @@ import { Link } from 'react-router-dom'
 import { Printer, RefreshCw, ExternalLink, Clock, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { fetchPrintJobs, type PrintJournalEntry } from '@/lib/queries'
-import { decodeCP866Hex } from '@/lib/print-service'
+import { decodeCP866Hex } from '@/lib/cp866'
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'

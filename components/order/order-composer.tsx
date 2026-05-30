@@ -40,7 +40,6 @@ import {
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
-import { printReceiptDirect } from '@/lib/print-service'
 import { useOrderData } from './use-order-data'
 import type { CartLine, OrderComposerProps, TabInfo } from './types'
 
@@ -738,51 +737,14 @@ export function OrderComposer(props: OrderComposerProps) {
             serviceAmount,
             totalWithService,
           )
-          // Гостевой чек печатается ПО ВЫБОРУ — кассир жмёт кнопку в тосте.
-          // Кухонные/станционные runner-чеки печатаются автоматически через
-          // отдельный механизм (auto-print-runner.tsx) и здесь не дёргаются.
-          // Receipt-данные собираем в замыкании action — без повторного
-          // обращения к БД, всё уже в памяти.
-          const receiptData = {
-            orderId: order.id,
-            orderNumber: order.orderNumber,
-            orderType: 'takeaway' as const,
-            restaurantName: restaurant?.name,
-            cashierName: effectiveUser?.name,
-            items: items.map(i => ({
-              name: i.name,
-              qty: i.qty,
-              price: i.price,
-              unit: i.unit,
-              unitSize: i.unitSize,
-            })),
-            subtotal: total,
-            servicePercent,
-            serviceAmount,
-            guestsCount: 1,
-            total: totalWithService,
-            paymentMethod,
-            accountName: accName,
-            createdAt: order.createdAt ?? new Date().toISOString(),
-            closedAt: new Date().toISOString(),
-            isPreCheck: false,
-          }
+          // Чек-job создаётся бэкендом внутри closeOrderWithPayment
+          // (server enqueueReceipt). Worker печатает асинхронно — фронт
+          // показывает только подтверждение оплаты. Раньше чек собирался
+          // и слался client-side через legacy print-server (Path A) —
+          // теперь весь pipeline server-side (Path B).
           toast.success(`Оплачено · ${formatCurrency(totalWithService)} · ${paymentMethod === 'cash' ? 'Наличные' : 'Карта'}`, {
-            duration: 6000,
-            action: {
-              label: '🖨 Чек гостю',
-              onClick: () => {
-                printReceiptDirect(receiptData)
-                  .then(ok => {
-                    if (ok) toast.success('Чек отправлен на печать')
-                    else toast.warning('Чек не напечатан — проверьте принтер')
-                  })
-                  .catch(e => {
-                    console.error('[OrderComposer] inline print failed:', e)
-                    toast.warning('Чек не напечатан — проверьте принтер')
-                  })
-              },
-            },
+            duration: 4000,
+            description: 'Чек отправлен на печать',
           })
         } catch (e) {
           // Заказ создан, но закрытие/оплата упала — пусть кассир закроет

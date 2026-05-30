@@ -27,7 +27,6 @@ import {
 // строк, кэш тут не выигрывает.
 import { fetchVoidsForOrder } from '@/lib/queries'
 import { buildReceiptData } from '@/lib/receipt-data'
-import { printReceiptDirect } from '@/lib/print-service'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -317,41 +316,12 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     setCloseReceiptOpen(true)
   }
 
-  // Helper: ESC/POS direct → desktop fallback toast → browser print.
-  // Mirrors handlePrintReceipt (pre-check), but reusable and parametrized.
-  const printDataToPrinter = async (data: ReceiptData, ref: React.RefObject<HTMLDivElement | null>): Promise<boolean> => {
-    try {
-      const ok = await printReceiptDirect(data)
-      if (ok) return true
-      const isDesktop = !!(window as unknown as { restosDesktop?: { isDesktop?: boolean } }).restosDesktop?.isDesktop
-      if (isDesktop) {
-        toast.error('Принтер недоступен. Проверьте подключение и настройки.')
-        return false
-      }
-      if (!ref.current) return false
-      const w = window.open('', '_blank', 'width=320,height=600')
-      if (!w) return false
-      w.document.write(`<html><head><title>Чек</title><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:monospace}@media print{@page{margin:5mm;size:80mm auto}}</style></head><body>${ref.current.outerHTML}<script>window.onload=function(){window.print();window.close();}<\/script></body></html>`)
-      w.document.close()
-      return true
-    } catch (e) {
-      toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
-      return false
-    }
-  }
-
-  // «Только печать» в close-drawer — печатаем чек, заказ НЕ закрываем,
-  // drawer остаётся открытым (кассир может ещё раз посмотреть и нажать
-  // финальную кнопку).
-  const handlePrintCloseReceipt = async () => {
-    if (!closeReceiptData) return
-    const ok = await printDataToPrinter(closeReceiptData, closeReceiptRef)
-    if (ok) toast.success('Чек отправлен на печать')
-  }
-
-  // «Закрыть и распечатать» — финализируем заказ + печать + закрываем
-  // drawer. Если печать упадёт после успешного close — заказ уже закрыт,
-  // кассир увидит ошибку печати и может перепечатать с очереди.
+  // «Закрыть и распечатать» / «Закрыть» — финализируем заказ. Чек-job
+  // создаётся бэкендом внутри POST /orders/{id}/close (см.
+  // server/internal/service/orders_close.go enqueueReceipt) — фронт ничего
+  // дополнительно не печатает. Раньше тут был client-side printReceiptDirect
+  // через legacy print-server (Path A) — теперь весь pipeline server-side
+  // (Path B): backend → print_jobs → worker → driver.
   const handleFinalizeAndPrint = async ({ alsoPrint }: { alsoPrint: boolean }) => {
     if (submitting || !closeReceiptData) return
     setSubmitting(true)
@@ -380,10 +350,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         discountReason || undefined,
         undefined,
       )
-      if (alsoPrint) {
-        await printDataToPrinter(closeReceiptData, closeReceiptRef)
-      }
-      toast.success('Заказ оплачен')
+      toast.success(alsoPrint ? 'Заказ оплачен · чек отправлен на печать' : 'Заказ оплачен')
       setCloseReceiptOpen(false)
       setCloseReceiptData(null)
       onClosed?.()
@@ -505,28 +472,18 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   }
 
   // Печать пре-чека из drawer'а превью.
-  // Пре-чек теперь идёт через backend (POST /orders/{id}/print-pre-bill →
-  // job в БД → AutoPrintRunner → physical / virtual printer). Раньше
-  // печатался client-side через ESC/POS прямо из браузера — это обходило
-  // backend и virtual-принтер не получал джоба.
-  // Финальный чек (post-payment) по-прежнему печатается client-side через
-  // printDataToPrinter — это пока не переведено на backend job-queue.
+  // Пре-чек идёт через backend (POST /orders/{id}/print-pre-bill → job в БД
+  // → worker → physical / virtual printer). Финальный чек после оплаты
+  // создаётся бэкендом автоматически при closeOrderWithPayment — отдельная
+  // кнопка печати финала больше не нужна.
   const handlePrintReceipt = async () => {
     if (!receiptPreview) return
-    if (receiptPreview.isPreCheck) {
-      try {
-        const { jobId } = await printPreBill(order.id)
-        toast.success(jobId ? `Пре-чек отправлен на печать (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
-        setReceiptOpen(false)
-      } catch (e) {
-        toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
-      }
-      return
-    }
-    const ok = await printDataToPrinter(receiptPreview, receiptRef)
-    if (ok) {
-      toast.success('Чек отправлен на печать')
+    try {
+      const { jobId } = await printPreBill(order.id)
+      toast.success(jobId ? `Пре-чек отправлен на печать (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
       setReceiptOpen(false)
+    } catch (e) {
+      toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
     }
   }
 
@@ -1091,25 +1048,15 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               <CheckCircle2 className="size-4" />
               {submitting ? 'Обработка...' : `Закрыть и распечатать · ${formatCurrency(total)}`}
             </button>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                onClick={handlePrintCloseReceipt}
-                disabled={submitting}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
-              >
-                <Printer className="size-4" />
-                Только печать
-              </button>
-              <button
-                onClick={() => handleFinalizeAndPrint({ alsoPrint: false })}
-                disabled={submitting}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border-2 border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
-                title="Закрыть заказ без печати чека"
-              >
-                <CheckCircle2 className="size-4" />
-                Закрыть
-              </button>
-            </div>
+            <button
+              onClick={() => handleFinalizeAndPrint({ alsoPrint: false })}
+              disabled={submitting}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
+              title="Закрыть заказ без печати чека"
+            >
+              <CheckCircle2 className="size-4" />
+              Закрыть без печати
+            </button>
           </SheetFooter>
         </SheetContent>
       </Sheet>

@@ -31,7 +31,6 @@ import { useAuth } from '@/lib/auth-store'
 import { PrintReceipt, type ReceiptData } from '@/components/print-receipt'
 import { SplitBillDialog } from '@/components/dialogs/split-bill-dialog'
 import { fetchOrderSplits, paySplit, cancelSplits, fetchVoidsForOrder } from '@/lib/queries'
-import { printReceiptDirect } from '@/lib/print-service'
 import { type OrderSplit, type OrderVoid } from '@/lib/types'
 import {
   Clock,
@@ -308,59 +307,26 @@ export function OrderActionsDialog({
   }, [open])
 
   const handlePrint = useCallback(async () => {
-    // Pre-check теперь печатается через backend job (POST /orders/{id}/print-pre-bill)
-    // → AutoPrintRunner → physical / virtual printer. Финальный чек по-прежнему
-    // идёт через client-side ESC/POS.
-    if (receiptData?.isPreCheck && order?.id) {
+    // Пре-чек: backend создаёт job через POST /orders/{id}/print-pre-bill.
+    // Финальный чек (post-payment): backend создаёт job автоматически
+    // внутри POST /orders/{id}/close — тут отдельно ничего печатать не
+    // нужно, drawer показывает превью гостю + закрывается. Раньше тут
+    // был client-side ESC/POS через legacy print-server (Path A).
+    if (!order?.id) return
+    if (receiptData?.isPreCheck) {
       try {
         const { printPreBill } = await import('@/lib/queries')
         const { jobId } = await printPreBill(order.id)
         toast.success(jobId ? `Пре-чек отправлен (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
-        return
       } catch (e) {
         toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
-        return
       }
+      return
     }
-    // Try ESC/POS direct print first — gives crisp dark output (like iiko)
-    if (receiptData) {
-      const ok = await printReceiptDirect(receiptData)
-      if (ok) {
-        toast.success('Чек отправлен на печать')
-        return
-      }
-      // На десктопе термопринтер — единственный канал. HTML-fallback
-      // ушёл бы на дефолтный системный (обычно офисный A4) — это не чек
-      // для гостя, лучше явно показать ошибку.
-      const isDesktop = !!(window as unknown as { restosDesktop?: { isDesktop?: boolean } }).restosDesktop?.isDesktop
-      if (isDesktop) {
-        toast.error('Принтер недоступен. Проверьте подключение и настройки.')
-        return
-      }
-    }
-    // Fallback: HTML window.print() — works in browser without print server
-    if (!receiptRef.current) return
-    const printWindow = window.open('', '_blank', 'width=320,height=600')
-    if (!printWindow) return
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Чек</title>
-          <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: monospace; }
-            @media print {
-              @page { margin: 5mm; size: 80mm auto; }
-            }
-          </style>
-        </head>
-        <body>
-          ${receiptRef.current.outerHTML}
-          <script>window.onload = function() { window.print(); window.close(); }<\/script>
-        </body>
-      </html>
-    `)
-    printWindow.document.close()
+    // Финальный чек уже отправлен бэкендом при закрытии заказа — кнопка
+    // тут просто информирует кассира. Если нужен повтор печати — через
+    // /settings/printers/queue.
+    toast.info('Чек уже отправлен на печать бэкендом при закрытии заказа')
   }, [receiptData, order])
 
   const handlePreCheck = useCallback(() => {

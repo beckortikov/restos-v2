@@ -5,8 +5,6 @@ import { WaiterShell } from '@/components/waiter/waiter-shell'
 import { CashierShell } from '@/components/cashier-shell'
 import { MobileNewOrderFab } from '@/components/mobile-new-order-fab'
 import { Toaster } from '@/components/ui/sonner'
-import { AutoPrintRunner } from '@/components/auto-print-runner'
-import { PrintQueueRunner } from '@/components/print-queue-runner'
 import { AutoReadyWatcher } from '@/components/auto-ready-watcher'
 import { RealtimeCacheBridge } from '@/components/realtime-cache-bridge'
 import { LicenseGate } from '@/components/license-gate'
@@ -29,7 +27,6 @@ function AppContent() {
         </WaiterShell>
         <Toaster richColors position="top-center" />
         <RealtimeCacheBridge />
-        <AutoPrintRunner /><PrintQueueRunner />
         <AutoReadyWatcher />
       </>
     )
@@ -43,7 +40,6 @@ function AppContent() {
         </CashierShell>
         <Toaster richColors position="top-center" />
         <RealtimeCacheBridge />
-        <AutoPrintRunner /><PrintQueueRunner />
         <AutoReadyWatcher />
       </>
     )
@@ -64,7 +60,6 @@ function AppContent() {
       <MobileNewOrderFab />
       <Toaster richColors position="top-center" />
       <RealtimeCacheBridge />
-      <AutoPrintRunner /><PrintQueueRunner />
       <AutoReadyWatcher />
     </SidebarProvider>
   )
