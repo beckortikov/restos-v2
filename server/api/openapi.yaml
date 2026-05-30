@@ -659,9 +659,16 @@ paths:
                   description: Размер скидки (decimal как строка). Для percent 0..100, для fixed <= order.total.
                 discount_reason:
                   type: string
+                service_percent:
+                  type: string
+                  description: |
+                    Override service-charge % для этого закрытия (decimal).
+                    Если nil — берётся order.service_percent (default ресторана).
+                    "0" — сервис отключён (кассир снял toggle «Обслуживание»).
+                    Включается в total_with_service = (total - discount) + service + tip.
                 payments:
                   type: array
-                  description: Split-payment. Если задан — payment_method/account_id из top-level игнорируются. Сумма должна равняться (total - discount) + tip с tolerance 0.01.
+                  description: Split-payment. Если задан — payment_method/account_id из top-level игнорируются. Сумма должна равняться total_with_service = (total - discount) + service + tip с tolerance 0.01.
                   items: { $ref: "#/components/schemas/PaymentSplit" }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
 

@@ -4,19 +4,20 @@ on:
   push:
     paths:
       - "server/**"
+      - "lib/api/generated.ts"
       - ".github/workflows/server-ci.yml"
   pull_request:
     paths:
       - "server/**"
+      - "lib/api/generated.ts"
       - ".github/workflows/server-ci.yml"
-
-defaults:
-  run:
-    working-directory: server
 
 jobs:
   build-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
     steps:
       - uses: actions/checkout@v4
 
@@ -45,3 +46,25 @@ jobs:
 
       - name: test
         run: go test -race -count=1 ./...
+
+  # Гарантирует, что lib/api/generated.ts соответствует server/api/openapi.yaml.
+  # Если разработчик изменил openapi.yaml и не пересобрал TS-types,
+  # шаг падает с diff'ом — критично, потому что иначе FE начинает писать
+  # `as any` и баги уходят в production (см. v2.0.14-22 серия фиксов).
+  openapi-ts-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: regen TS types
+        working-directory: server
+        run: make ts-client
+      - name: assert no drift
+        run: |
+          if ! git diff --exit-code lib/api/generated.ts; then
+            echo "::error::lib/api/generated.ts out of date with server/api/openapi.yaml"
+            echo "Run 'cd server && make ts-client' and commit the result."
+            exit 1
+          fi

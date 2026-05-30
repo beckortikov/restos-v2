@@ -363,32 +363,33 @@ export async function closeOrderWithPayment(
       if (match?.id) accountId = match.id
     } catch {}
   }
-  const body: Record<string, unknown> = {
-    payment_method: paymentMethod,
+  // Typed body — компилятор ловит missing/extra fields per openapi.yaml
+  // (см. generated.ts components.requestBodies for /orders/{id}/close).
+  // Передаём service_percent ВСЕГДА (включая 0), чтобы бэкенд знал, выключил
+  // ли кассир toggle «Обслуживание». Без этого backend брал бы default ресторана
+  // → sum(payments) != backend.total_with_service.
+  type CloseBody = NonNullable<NonNullable<NonNullable<import('../api/generated').paths['/api/v1/orders/{id}/close']['post']['requestBody']>['content']['application/json']>>
+  const body: CloseBody = {
+    payment_method: paymentMethod as 'cash' | 'card' | 'transfer',
     account_id: accountId ?? '',
     shift_id: shiftId ?? '',
   }
   if (tipAmount && tipAmount > 0) body.tip_amount = String(tipAmount)
-  // Передаём service_percent ВСЕГДА (включая 0), чтобы бэкенд знал, выключил
-  // ли кассир toggle «Обслуживание». Без этого backend брал бы default ресторана
-  // и рассчитывал service сам, а FE отправлял payments[].amount уже с сервисом
-  // → sum(payments) != backend.total_with_service → VALIDATION error.
   if (servicePercent != null) body.service_percent = String(servicePercent)
   if (cashierId) body.cashier_id = cashierId
-  if (discountType) body.discount_type = discountType
+  if (discountType) body.discount_type = discountType as 'percent' | 'fixed'
   if (discountValue != null) body.discount_value = String(discountValue)
   if (discountReason) body.discount_reason = discountReason
   if (Array.isArray(payments) && payments.length > 0) {
     body.payments = payments.map(p => ({
-      method: p.method,
+      method: p.method as 'cash' | 'card' | 'transfer',
       amount: String(p.amount),
-      account_id: p.accountId,
-      account_name: p.accountName ?? null,
+      account_id: p.accountId ?? '',
     }))
   }
-  const closed: any = await unwrap(api.POST('/api/v1/orders/{id}/close', {
+  const closed = await unwrap(api.POST('/api/v1/orders/{id}/close', {
     params: { path: { id: orderId } },
-    body: body as any,
+    body,
   }))
   const finalTotal = totalWithService ?? Number(closed?.total_with_service ?? total)
   logAction('order.close', 'order', orderId, `Оплата ${paymentMethod}`, { total: finalTotal, paymentMethod })

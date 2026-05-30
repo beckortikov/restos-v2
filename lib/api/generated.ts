@@ -1870,13 +1870,42 @@ export interface paths {
             requestBody: {
                 content: {
                     "application/json": {
-                        /** @enum {string} */
-                        payment_method: "cash" | "card" | "transfer";
-                        /** Format: uuid */
-                        account_id: string;
+                        /**
+                         * @description Обязателен, если payments[] пустой (single-payment режим).
+                         * @enum {string}
+                         */
+                        payment_method?: "cash" | "card" | "transfer";
+                        /**
+                         * Format: uuid
+                         * @description Обязателен в single-payment режиме (игнорируется при payments[]).
+                         */
+                        account_id?: string;
                         /** Format: uuid */
                         shift_id: string;
+                        /** @description Decimal как строка. */
                         tip_amount?: string;
+                        /**
+                         * Format: uuid
+                         * @description Кассир, закрывший заказ. Пишется в order.cashier_id.
+                         */
+                        cashier_id?: string;
+                        /**
+                         * @description Тип скидки. Применяется к order.total ДО формирования financial_operation.
+                         * @enum {string}
+                         */
+                        discount_type?: "percent" | "fixed";
+                        /** @description Размер скидки (decimal как строка). Для percent 0..100, для fixed <= order.total. */
+                        discount_value?: string;
+                        discount_reason?: string;
+                        /**
+                         * @description Override service-charge % для этого закрытия (decimal).
+                         *     Если nil — берётся order.service_percent (default ресторана).
+                         *     "0" — сервис отключён (кассир снял toggle «Обслуживание»).
+                         *     Включается в total_with_service = (total - discount) + service + tip.
+                         */
+                        service_percent?: string;
+                        /** @description Split-payment. Если задан — payment_method/account_id из top-level игнорируются. Сумма должна равняться total_with_service = (total - discount) + service + tip с tolerance 0.01. */
+                        payments?: components["schemas"]["PaymentSplit"][];
                     };
                 };
             };
@@ -8568,6 +8597,13 @@ export interface components {
             closed_at?: string;
             is_split?: boolean;
             split_count?: number;
+        };
+        PaymentSplit: {
+            /** @enum {string} */
+            method: "cash" | "card" | "transfer";
+            amount: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id: string;
         };
         OrderItem: {
             /** Format: uuid */
