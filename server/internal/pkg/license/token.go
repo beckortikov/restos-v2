@@ -54,6 +54,11 @@ type Payload struct {
 	ExpiresAt    time.Time `json:"exp"`
 	Edition      Edition   `json:"ed,omitempty"`
 	MachineID    string    `json:"mid,omitempty"`
+	// AccountID — владелец сети ресторанов (Phase 1 multi-branch).
+	// Empty → одиночный ресторан (текущая модель). Заполнен →
+	// этот ресторан принадлежит сети с консолидированной отчётностью
+	// (будущий Owner Dashboard читает по account_id).
+	AccountID string `json:"aid,omitempty"`
 }
 
 // CurrentVersion — версия формата. Изменение → отдельный verifier.

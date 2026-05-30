@@ -65,6 +65,10 @@ type MachineInfo struct {
 	MachineID      string `json:"machine_id"`
 	RestaurantID   string `json:"restaurant_id"`
 	RestaurantName string `json:"restaurant_name,omitempty"`
+	// AccountID — если ресторан принадлежит сети. Заполняется только
+	// если уже была активация с account-токеном. Иначе пусто (новый
+	// install или одиночный).
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // MachineInfo возвращает fingerprint этой машины + сведения о ресторане.
@@ -78,11 +82,15 @@ func (s *LicenseService) MachineInfo(ctx context.Context) (*MachineInfo, error) 
 	if err := s.db.WithContext(ctx).Where("id = ?", rid).First(&r).Error; err != nil {
 		return nil, err
 	}
-	return &MachineInfo{
+	info := &MachineInfo{
 		MachineID:      license.MachineID(),
 		RestaurantID:   r.ID,
 		RestaurantName: r.Name,
-	}, nil
+	}
+	if r.AccountID != nil {
+		info.AccountID = *r.AccountID
+	}
+	return info, nil
 }
 
 // LicenseStatus — публичный ответ /license/status.
@@ -227,6 +235,11 @@ func (s *LicenseService) Activate(ctx context.Context, in ActivateInput) (*Licen
 		"is_blocked":         &noBlock,
 		"block_reason":       nil,
 		"updated_at":         now,
+	}
+	// Phase 1 multi-branch: если токен выписан с account_id (сеть),
+	// сохраняем в restaurants.account_id. Empty → NULL (одиночный).
+	if p.AccountID != "" {
+		updates["account_id"] = p.AccountID
 	}
 	if err := s.db.WithContext(ctx).Model(&models.Restaurant{}).
 		Where("id = ?", rid).Updates(updates).Error; err != nil {

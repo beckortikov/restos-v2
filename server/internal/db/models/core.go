@@ -26,6 +26,9 @@ type Restaurant struct {
 	LocalServerIP      *string         `gorm:"column:local_server_ip" json:"local_server_ip"`
 	LicenseKey         *string         `gorm:"column:license_key" json:"license_key"`
 	LicenseExpiresAt   *time.Time      `gorm:"column:license_expires_at" json:"license_expires_at"`
+	// AccountID — владелец сети (Phase 1 multi-branch). Заполняется при
+	// activate из payload.aid. Empty/NULL → одиночный ресторан.
+	AccountID          *string         `gorm:"column:account_id" json:"account_id,omitempty"`
 	IsBlocked          *bool           `gorm:"column:is_blocked;default:false" json:"is_blocked"`
 	BlockReason        *string         `gorm:"column:block_reason" json:"block_reason"`
 	LastSeenAt         *time.Time      `gorm:"column:last_seen_at" json:"last_seen_at"`

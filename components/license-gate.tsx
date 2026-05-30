@@ -155,12 +155,25 @@ function ActivationScreen({
                 plain
               />
             )}
+            {info?.accountId && (
+              <FieldRow
+                label="ID сети (account)"
+                value={info.accountId}
+                onCopy={() => copy(info.accountId!, 'aid')}
+                copied={copiedField === 'aid'}
+              />
+            )}
           </div>
 
           {info && (
             <button
               onClick={() => copy(
-                `Код машины: ${info.machineId}\nID ресторана: ${info.restaurantId}${info.restaurantName ? `\nРесторан: ${info.restaurantName}` : ''}`,
+                [
+                  `Код машины: ${info.machineId}`,
+                  `ID ресторана: ${info.restaurantId}`,
+                  info.restaurantName ? `Ресторан: ${info.restaurantName}` : '',
+                  info.accountId ? `ID сети: ${info.accountId}` : '',
+                ].filter(Boolean).join('\n'),
                 'all',
               )}
               className="w-full inline-flex items-center justify-center gap-2 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-semibold hover:bg-primary/90 transition-colors"

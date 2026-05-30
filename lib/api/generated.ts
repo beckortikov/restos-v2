@@ -213,6 +213,13 @@ export interface paths {
                             /** Format: uuid */
                             restaurant_id: string;
                             restaurant_name?: string;
+                            /**
+                             * Format: uuid
+                             * @description Если ресторан принадлежит сети (Phase 1 multi-branch),
+                             *     Owner Dashboard в будущем читает агрегаты по этому
+                             *     account_id по всем restaurants владельца.
+                             */
+                            account_id?: string;
                         };
                     };
                 };

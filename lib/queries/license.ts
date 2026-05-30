@@ -13,6 +13,9 @@ export interface MachineInfo {
   machineId: string
   restaurantId: string
   restaurantName?: string
+  // Phase 1 multi-branch: если ресторан принадлежит сети, заполняется
+  // после activate'а account-токеном. Empty → одиночный.
+  accountId?: string
 }
 
 export interface LicenseStatus {
@@ -31,6 +34,7 @@ export async function fetchMachineInfo(): Promise<MachineInfo> {
     machineId: String(r?.machine_id ?? ''),
     restaurantId: String(r?.restaurant_id ?? ''),
     restaurantName: r?.restaurant_name ? String(r.restaurant_name) : undefined,
+    accountId: r?.account_id ? String(r.account_id) : undefined,
   }
 }
 

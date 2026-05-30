@@ -131,6 +131,13 @@ paths:
                   machine_id: { type: string, example: "A1B2-7K3M-9XQA" }
                   restaurant_id: { type: string, format: uuid }
                   restaurant_name: { type: string }
+                  account_id:
+                    type: string
+                    format: uuid
+                    description: |
+                      Если ресторан принадлежит сети (Phase 1 multi-branch),
+                      Owner Dashboard в будущем читает агрегаты по этому
+                      account_id по всем restaurants владельца.
 
   /api/v1/license/activate:
     post:
