@@ -48,7 +48,10 @@ type Config struct {
 func LoadFromFlags() (*Config, error) {
 	c := &Config{}
 
-	flag.StringVar(&c.HTTPAddr, "http-addr", envOr("RESTOS_HTTP_ADDR", "127.0.0.1:3001"),
+	// Default to 0.0.0.0 so the Kotlin APK officianta can reach the sidecar
+	// over LAN (cashier exposes http://<lan-ip>:3001 in the QR). Electron
+	// still fetches via 127.0.0.1:3001 — both interfaces are bound.
+	flag.StringVar(&c.HTTPAddr, "http-addr", envOr("RESTOS_HTTP_ADDR", "0.0.0.0:3001"),
 		"HTTP listen address")
 	flag.StringVar(&c.ExternalPGDSN, "external-pg-dsn", envOr("RESTOS_EXTERNAL_PG_DSN", ""),
 		"External Postgres DSN (dev only). If set, embedded-postgres is not started.")

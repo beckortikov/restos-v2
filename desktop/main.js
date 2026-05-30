@@ -161,7 +161,10 @@ function startSidecar() {
   const env = {
     ...process.env,
     RESTOS_DATA_DIR: app.getPath('userData'),
-    RESTOS_HTTP_ADDR: `127.0.0.1:${API_PORT}`,
+    // Bind on 0.0.0.0 so the waiter's Kotlin APK can reach the sidecar over
+    // LAN (e.g. http://192.168.x.y:3001). Electron itself fetches via
+    // http://127.0.0.1:3001 which works identically.
+    RESTOS_HTTP_ADDR: `0.0.0.0:${API_PORT}`,
     // Cache PG binary so embedded-postgres reuses it across runs.
     RESTOS_PG_CACHE: path.join(app.getPath('userData'), 'pg-cache'),
     // Ed25519 public key для verify license-токенов. Вшит в installer.
