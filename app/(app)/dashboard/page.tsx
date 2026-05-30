@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { lazy, Suspense } from 'react'
+import { Link } from 'react-router-dom'
 import { formatCurrency, getTimeSince, calcLineCogs, calcLineTotal } from '@/lib/helpers'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
@@ -71,21 +72,23 @@ function KpiCard({
   label: string; value: string; sub?: string
   icon: React.ElementType; color?: string; href?: string
 }) {
-  const Wrapper = href ? 'a' : 'div'
-  return (
-    <Wrapper {...(href ? { href } : {})} className={`bg-card rounded-xl border border-border p-4 md:p-5 ${href ? 'hover:border-primary/40 transition-colors cursor-pointer' : ''}`}>
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-wide truncate">{label}</p>
-          <p className="text-xl md:text-2xl font-bold text-foreground mt-1 leading-none">{value}</p>
-          {sub && <p className="text-muted-foreground text-[11px] mt-1.5 truncate">{sub}</p>}
-        </div>
-        <div className={`size-9 md:size-10 rounded-lg flex items-center justify-center shrink-0 ${color}`}>
-          <Icon className="size-4 md:size-5" />
-        </div>
+  // ВАЖНО: используем react-router-dom <Link>, а не <a href>. В Electron
+  // file:// нативный <a> уходит в browser navigation (file:///finance/...)
+  // и показывает белый экран. Link делает SPA-навигацию через HashRouter.
+  const cls = `bg-card rounded-xl border border-border p-4 md:p-5 ${href ? 'hover:border-primary/40 transition-colors cursor-pointer block' : ''}`
+  const inner = (
+    <div className="flex items-start justify-between gap-2">
+      <div className="min-w-0">
+        <p className="text-muted-foreground text-[11px] font-medium uppercase tracking-wide truncate">{label}</p>
+        <p className="text-xl md:text-2xl font-bold text-foreground mt-1 leading-none">{value}</p>
+        {sub && <p className="text-muted-foreground text-[11px] mt-1.5 truncate">{sub}</p>}
       </div>
-    </Wrapper>
+      <div className={`size-9 md:size-10 rounded-lg flex items-center justify-center shrink-0 ${color}`}>
+        <Icon className="size-4 md:size-5" />
+      </div>
+    </div>
   )
+  return href ? <Link to={href} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>
 }
 
 // ─── Alert Item ──────────────────────────────────────────────────────────────
@@ -95,13 +98,12 @@ function AlertItem({ icon: Icon, text, severity = 'warn', href }: { icon: React.
     error: 'text-red-600 bg-red-50 border-red-200',
     info: 'text-blue-600 bg-blue-50 border-blue-200',
   }
-  const Wrapper = href ? 'a' : 'div'
-  return (
-    <Wrapper {...(href ? { href } : {})} className={`flex items-center gap-2.5 px-3 py-2.5 rounded-lg border text-sm ${colors[severity]} ${href ? 'hover:opacity-80 transition-opacity' : ''}`}>
-      <Icon className="size-4 shrink-0" />
-      <span className="truncate">{text}</span>
-    </Wrapper>
-  )
+  const cls = `flex items-center gap-2.5 px-3 py-2.5 rounded-lg border text-sm ${colors[severity]} ${href ? 'hover:opacity-80 transition-opacity' : ''}`
+  const inner = (<>
+    <Icon className="size-4 shrink-0" />
+    <span className="truncate">{text}</span>
+  </>)
+  return href ? <Link to={href} className={cls}>{inner}</Link> : <div className={cls}>{inner}</div>
 }
 
 // ─── Mini Table Map ──────────────────────────────────────────────────────────
@@ -435,9 +437,9 @@ export default function DashboardPage() {
                   <MapPin className="size-4 text-muted-foreground" />
                   Карта зала
                 </h2>
-                <a href="/operations/table-map" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+                <Link to="/operations/table-map" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                   Открыть <ArrowRight className="size-3" />
-                </a>
+                </Link>
               </div>
               <MiniTableMap tables={tables} zones={zones} />
             </div>
@@ -449,9 +451,9 @@ export default function DashboardPage() {
                   <ChefHat className="size-4 text-muted-foreground" />
                   Конвейер заказов
                 </h2>
-                <a href="/operations/kitchen" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+                <Link to="/operations/kitchen" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                   Кухня <ArrowRight className="size-3" />
-                </a>
+                </Link>
               </div>
               <OrderPipeline orders={orders} />
 
@@ -497,9 +499,9 @@ export default function DashboardPage() {
                 </h2>
                 <p className="text-muted-foreground text-[11px] mt-0.5">За последние месяцы</p>
               </div>
-              <a href="/finance/pnl" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+              <Link to="/finance/pnl" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                 ОПиУ <ArrowRight className="size-3" />
-              </a>
+              </Link>
             </div>
             <RevenueChart />
           </div>
@@ -585,9 +587,9 @@ export default function DashboardPage() {
                 <Wallet className="size-4 text-muted-foreground" />
                 Счета
               </h2>
-              <a href="/finance/accounts" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+              <Link to="/finance/accounts" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                 Все <ArrowRight className="size-3" />
-              </a>
+              </Link>
             </div>
             <div className="space-y-2.5">
               {accounts.map(acc => (
@@ -612,9 +614,9 @@ export default function DashboardPage() {
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-foreground">🔥 Топ блюда сегодня</h2>
-              <a href="/analytics/abc-menu" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+              <Link to="/analytics/abc-menu" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                 ABC <ArrowRight className="size-3" />
-              </a>
+              </Link>
             </div>
             {topDishes.length === 0 ? (
               <p className="text-muted-foreground text-xs text-center py-4">Нет продаж сегодня</p>
@@ -673,9 +675,9 @@ export default function DashboardPage() {
                 <Package className="size-4 text-muted-foreground" />
                 Склад: низкий остаток
               </h2>
-              <a href="/warehouse/inventory" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+              <Link to="/warehouse/inventory" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                 Склад <ArrowRight className="size-3" />
-              </a>
+              </Link>
             </div>
             {lowStock.length === 0 ? (
               <div className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
@@ -709,9 +711,9 @@ export default function DashboardPage() {
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-foreground">Последние операции</h2>
-              <a href="/finance/cashflow" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+              <Link to="/finance/cashflow" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                 ДДС <ArrowRight className="size-3" />
-              </a>
+              </Link>
             </div>
             <div className="space-y-2">
               {recentOps.map(op => (
