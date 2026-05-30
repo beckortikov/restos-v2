@@ -1,1 +1,0 @@
-import{_ as e,d as t,l as n,r,u as i}from"./print-service-MZZivY53.js";export{r as getLastReceiptError,n as printOrderCancellation,i as printOrderRunners,t as printReceiptDirect,e as syncPrinterConfigToDesktop};
