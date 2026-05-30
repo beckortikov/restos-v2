@@ -9,8 +9,8 @@
     "dev:next": "next dev",
     "build:next": "next build",
     "build-desktop": "vite build && cd desktop && node -e \"const p=require('./package.json');const v=p.version.split('.');v[2]=+v[2]+1;p.version=v.join('.');require('fs').writeFileSync('package.json',JSON.stringify(p,null,2)+'\\n')\" && rm -rf frontend && cp -r ../dist frontend",
-    "waiter:apk": "pnpm build && npx cap sync android && cd android && JAVA_HOME=\"${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}\" ./gradlew assembleRelease && echo '\\n✓ APK ready: android/app/build/outputs/apk/release/app-release.apk'",
-    "waiter:apk-debug": "pnpm build && npx cap sync android && cd android && JAVA_HOME=\"${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}\" ./gradlew assembleDebug && echo '\\n✓ APK ready: android/app/build/outputs/apk/debug/app-debug.apk'",
+    "waiter:apk": "cd android-kotlin && JAVA_HOME=\"${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}\" ./gradlew assembleRelease && echo '\\n✓ APK ready: android-kotlin/app/build/outputs/apk/release/app-release.apk'",
+    "waiter:apk-debug": "cd android-kotlin && JAVA_HOME=\"${JAVA_HOME:-/Applications/Android Studio.app/Contents/jbr/Contents/Home}\" ./gradlew assembleDebug && echo '\\n✓ APK ready: android-kotlin/app/build/outputs/apk/debug/app-debug.apk'",
     "desktop:standalone": "node desktop/standalone.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -18,12 +18,6 @@
     "test:perf": "playwright test --project=perf"
   },
   "dependencies": {
-    "@capacitor-mlkit/barcode-scanning": "^8.0.1",
-    "@capacitor/app": "^8.1.0",
-    "@capacitor/core": "^8.3.1",
-    "@capacitor/local-notifications": "^8.0.2",
-    "@capacitor/preferences": "^8.0.1",
-    "@capacitor/status-bar": "^8.0.2",
     "@fontsource/inter": "^5.2.8",
     "@hookform/resolvers": "^3.9.1",
     "@radix-ui/react-accordion": "1.2.12",
@@ -87,8 +81,6 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@capacitor/android": "^8.3.1",
-    "@capacitor/cli": "^8.3.1",
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.2.0",
     "@testing-library/jest-dom": "^6.9.1",

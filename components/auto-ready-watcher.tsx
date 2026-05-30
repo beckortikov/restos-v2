@@ -7,7 +7,8 @@ import { startOfToday } from '@/lib/helpers'
 import { api, unwrap } from '@/lib/api'
 import { onDataChange, initRealtime } from '@/lib/realtime'
 import { toast } from 'sonner'
-import { Capacitor } from '@capacitor/core'
+// Capacitor дропнут — нативный Android в android-kotlin/. React только в Electron.
+const Capacitor = { isNativePlatform: () => false }
 import type { Table } from '@/lib/types'
 
 // Plays a soft notification sound (data URI — no external file)
@@ -41,7 +42,7 @@ async function fireNativeNotification(orderInfo?: string) {
   // API silently no-ops when the app is backgrounded inside Capacitor's
   // WebView, so it's not a substitute on phone shells.
   try {
-    const { LocalNotifications } = await import('@capacitor/local-notifications')
+    const { LocalNotifications } = await import('@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
     await LocalNotifications.schedule({
       notifications: [
         {
@@ -177,7 +178,7 @@ export function AutoReadyWatcher() {
     if (Capacitor.isNativePlatform()) {
       void (async () => {
         try {
-          const { LocalNotifications } = await import('@capacitor/local-notifications')
+          const { LocalNotifications } = await import('@capacitor/local-notifications' as any) /* dead branch, Capacitor dropped */
           const status = await LocalNotifications.checkPermissions()
           if (status.display !== 'granted') {
             await LocalNotifications.requestPermissions()

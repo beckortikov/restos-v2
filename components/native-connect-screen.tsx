@@ -11,7 +11,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Capacitor } from '@capacitor/core'
+// Capacitor дропнут — нативный Android в android-kotlin/. React только в Electron.
+const Capacitor = { isNativePlatform: () => false }
 import * as q from '@/lib/queries'
 import { Camera, Loader2, AlertTriangle, X, Keyboard } from 'lucide-react'
 import QrScanner from 'qr-scanner'
@@ -66,13 +67,13 @@ export function NativeConnectScreen({ children }: { children: React.ReactNode })
       // Push WebView content BELOW the system status bar (instead of under it)
       // and match its background to our app surface so the seam disappears.
       try {
-        const { StatusBar, Style } = await import('@capacitor/status-bar')
+        const { StatusBar, Style } = await import('@capacitor/status-bar' as any) /* dead branch */
         await StatusBar.setOverlaysWebView({ overlay: false })
         await StatusBar.setStyle({ style: Style.Light })
         await StatusBar.setBackgroundColor({ color: '#ffffff' })
       } catch { /* plugin not registered or not on supported platform */ }
       try {
-        const { Preferences } = await import('@capacitor/preferences')
+        const { Preferences } = await import('@capacitor/preferences' as any) /* dead branch */
         const { value } = await Preferences.get({ key: PREF_KEY })
         if (cancelled) return
         if (value && LAN_RE.test(value)) {
@@ -113,7 +114,7 @@ export function NativeConnectScreen({ children }: { children: React.ReactNode })
     }
     const cleanUrl = stripTrailingSlash(url).replace(/\/login\/?$/, '').replace(/\/connect.*$/, '')
     try {
-      const { Preferences } = await import('@capacitor/preferences')
+      const { Preferences } = await import('@capacitor/preferences' as any) /* dead branch */
       await Preferences.set({ key: PREF_KEY, value: cleanUrl })
     } catch { /* web context — не критично */ }
     persistLocalServer(cleanUrl)
@@ -191,7 +192,7 @@ export function NativeConnectScreen({ children }: { children: React.ReactNode })
 
   async function reset() {
     try {
-      const { Preferences } = await import('@capacitor/preferences')
+      const { Preferences } = await import('@capacitor/preferences' as any) /* dead branch */
       await Preferences.remove({ key: PREF_KEY })
     } catch {}
     try {

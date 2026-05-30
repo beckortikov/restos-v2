@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">RestOS Waiter</string>
-    <string name="title_activity_main">RestOS Waiter</string>
-    <string name="package_name">com.restos.waiter</string>
-    <string name="custom_url_scheme">com.restos.waiter</string>
-</resources>

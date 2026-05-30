@@ -2,7 +2,11 @@
 
 import { useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { Capacitor } from '@capacitor/core'
+
+// Capacitor дропнут — нативный Kotlin Android-клиент теперь в android-kotlin/.
+// React-фронт живёт только в Electron, где isNativePlatform=false и весь
+// этот хук — no-op. Оставляем stub чтобы не править ApLayout.
+const Capacitor = { isNativePlatform: () => false }
 
 // Android hardware back button: navigate within the app instead of exiting it.
 // Only at the root waiter screen (/waiter/tables) the back button can exit;
@@ -18,9 +22,9 @@ export function HardwareBackHandler() {
 
     ;(async () => {
       try {
-        const { App } = await import('@capacitor/app')
+        const { App } = await import('@capacitor/app' as any) /* dead branch */
         if (cancelled) return
-        const handle = await App.addListener('backButton', ({ canGoBack }) => {
+        const handle = await App.addListener('backButton', ({ canGoBack }: { canGoBack: boolean }) => {
           // At /waiter/tables (root) the only sensible action is to background
           // the app — let the platform handle it.
           if (pathname === '/waiter/tables' || pathname === '/waiter') {

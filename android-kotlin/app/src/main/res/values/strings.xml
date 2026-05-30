@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RestOS Waiter</string>
+    <string name="pin_login_title">Введите PIN</string>
+    <string name="pin_login_subtitle">RestOS · Официант</string>
+    <string name="pin_backspace">Стереть</string>
+    <string name="pin_error_invalid">Неверный PIN</string>
+    <string name="pin_error_network">Нет соединения с сервером</string>
+    <string name="logout">Выйти</string>
+</resources>
