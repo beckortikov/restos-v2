@@ -164,6 +164,10 @@ function startSidecar() {
     RESTOS_HTTP_ADDR: `127.0.0.1:${API_PORT}`,
     // Cache PG binary so embedded-postgres reuses it across runs.
     RESTOS_PG_CACHE: path.join(app.getPath('userData'), 'pg-cache'),
+    // Ed25519 public key для verify license-токенов. Вшит в installer.
+    // Меняется ТОЛЬКО при ротации keypair (см. restos-admin/README).
+    // Соответствующий PRIVATE_KEY хранится в Vercel env вашей админки.
+    RESTOS_LICENSE_PUBLIC_KEY: 'NNsxnnh+jyMTw6GvrhfkbWTwMueYzG6zQ7RCN4x7qjM=',
   }
 
   goProc = spawn(exe, [], {
