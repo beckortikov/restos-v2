@@ -6,8 +6,9 @@ import {
   Users, Printer, Link2, RefreshCw, Lock, ChevronRight, Trash2, CookingPot,
   ChefHat, BookOpen, FlaskConical, Package, ScrollText, ClipboardCheck, History,
   Truck, TrendingDown, TrendingUp, Scale, Wallet, Target, HandCoins,
-  BarChart3, Upload, FileClock,
+  BarChart3, Upload, FileClock, Copy,
 } from 'lucide-react'
+import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import type { PermissionKey } from '@/lib/types'
 
@@ -220,11 +221,33 @@ export default function CashierSettingsPage() {
     .map(id => ({ id, label: SECTION_LABELS[id], items: items.filter(it => it.section === id) }))
     .filter(g => g.items.length > 0)
 
+  async function copyRid() {
+    if (!restaurant?.id) return
+    try {
+      await navigator.clipboard.writeText(restaurant.id)
+      toast.success('ID ресторана скопирован')
+    } catch {
+      toast.error('Не удалось скопировать')
+    }
+  }
+
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 bg-muted/30">
       <div className="max-w-3xl mx-auto">
         <h1 className="text-xl md:text-2xl font-bold text-foreground mb-1">Настройки</h1>
-        <p className="text-sm text-muted-foreground mb-5">Доступные разделы зависят от выданных вам прав</p>
+        <p className="text-sm text-muted-foreground mb-3">Доступные разделы зависят от выданных вам прав</p>
+        {restaurant?.id && (
+          <button
+            onClick={copyRid}
+            title="Нажмите чтобы скопировать"
+            className="mb-5 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-card border border-border text-xs font-mono text-muted-foreground hover:border-primary/40 hover:text-foreground transition-colors"
+          >
+            <span className="font-sans font-medium text-foreground">{restaurant.name}</span>
+            <span className="text-muted-foreground/60">·</span>
+            <span>{restaurant.id}</span>
+            <Copy className="size-3 ml-1" />
+          </button>
+        )}
 
         <div className="space-y-6">
           {grouped.map(group => (

@@ -9,7 +9,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import * as Sentry from '@sentry/react'
-import { Building2, Save, RefreshCw } from 'lucide-react'
+import { Building2, Save, RefreshCw, Copy } from 'lucide-react'
 import type { Restaurant } from '@/lib/types'
 
 export default function SettingsPage() {
@@ -119,9 +119,22 @@ export default function SettingsPage() {
           <div className="size-12 rounded-xl bg-primary/10 flex items-center justify-center">
             <Building2 className="size-6 text-primary" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <p className="font-semibold text-foreground">{rest.name}</p>
-            <p className="text-xs text-muted-foreground">ID: {rest.slug}</p>
+            <p className="text-xs text-muted-foreground">slug: {rest.slug}</p>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(rest.id).then(
+                  () => toast.success('ID скопирован'),
+                  () => toast.error('Не удалось скопировать'),
+                )
+              }}
+              title="Нажмите чтобы скопировать"
+              className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-1 rounded bg-muted hover:bg-border transition-colors text-[11px] font-mono text-muted-foreground hover:text-foreground"
+            >
+              <span>ID: {rest.id}</span>
+              <Copy className="size-3" />
+            </button>
           </div>
         </div>
 
