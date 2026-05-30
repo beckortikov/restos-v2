@@ -159,8 +159,12 @@ func (s *LicenseService) IsLocked(ctx context.Context, restaurantID string) bool
 		return true
 	}
 	if r.LicenseExpiresAt == nil {
-		// Лицензия не активирована — не блокируем (dev/первый запуск).
-		return false
+		// Лицензия НЕ активирована → блокируем (требуется activate).
+		// v2.0.29+: строгая модель «без активации не работаем».
+		// Read-эндпоинты остаются доступны (middleware применяется только к
+		// write-роутам), плюс /license/* всегда работают — клиент может
+		// видеть machine_id и активировать.
+		return true
 	}
 	lockAt := r.LicenseExpiresAt.AddDate(0, 0, GraceDays+WarningDays)
 	return time.Now().UTC().After(lockAt)
