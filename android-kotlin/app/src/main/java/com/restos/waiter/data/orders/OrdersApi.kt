@@ -82,7 +82,7 @@ interface OrdersApi {
         @Path("orderId") orderId: String,
         @Path("itemId") itemId: String,
         @Body body: SetItemNoteRequest,
-    ): OrderItemDto
+    ): RawOrderItem
 
     /**
      * v4: POST /orders/{id}/print-pre-bill — печать предварительного чека.
@@ -165,35 +165,52 @@ data class OrderDetailEnvelope(
     val voids: List<RawOrderVoid> = emptyList(),
 )
 
-/** Сырая позиция как её отдаёт Go-бэк (`models.OrderItem`). */
+/**
+ * Сырая позиция как её отдаёт Go-бэк (`models.OrderItem`). Имена полей —
+ * 1:1 с json-тегами в `server/internal/db/models/orders.go::OrderItem`.
+ * `qty`/`price` — decimal-string (см. `decimal.Decimal MarshalJSON`).
+ *
+ * Сервер НЕ возвращает `sent_to_kitchen_at` и `kitchen_status` на уровне
+ * item — есть только `served_at` и `printed_at`. Производное «состояние
+ * кухни» (cooking/ready/served) UI выводит из таймстампов сам.
+ */
 @Serializable
 data class RawOrderItem(
     val id: String,
+    @SerialName("order_id") val orderId: String? = null,
     @SerialName("menu_item_id") val menuItemId: String? = null,
     val name: String? = null,
     val note: String? = null,
     val qty: String = "0",
     val price: String = "0",
+    val cogs: String = "0",
+    val unit: String? = null,
+    @SerialName("unit_size") val unitSize: String = "1",
     @SerialName("cancelled_at") val cancelledAt: String? = null,
-    @SerialName("sent_to_kitchen_at") val sentToKitchenAt: String? = null,
-    @SerialName("served_at") val servedAt: String? = null,
-    @SerialName("kitchen_status") val kitchenStatus: String? = null,
+    @SerialName("cancel_reason") val cancelReason: String? = null,
     @SerialName("printed_at") val printedAt: String? = null,
+    @SerialName("served_at") val servedAt: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
 )
 
 /** Сырое void-событие как отдаёт бэк (`models.OrderVoid`). */
 @Serializable
 data class RawOrderVoid(
     val id: String,
+    @SerialName("order_id") val orderId: String? = null,
     @SerialName("item_name") val itemName: String? = null,
     @SerialName("item_qty") val itemQty: Int? = 1,
     @SerialName("item_price") val itemPrice: String = "0",
     val reason: String? = null,
-    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("approved_by_name") val approvedByName: String? = null,
     @SerialName("created_by_name") val createdByName: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
 )
 
-/** Маппинг сырой item -> UI-DTO (price_at_order / name_at_order). */
+/**
+ * Маппинг сырой item -> UI-DTO. UI-имена (`nameAtOrder`/`priceAtOrder`)
+ * — наследие v3; сервер v4 отдаёт `name`/`price` напрямую.
+ */
 internal fun RawOrderItem.toDto(): OrderItemDto = OrderItemDto(
     id = id,
     menuItem = menuItemId,
@@ -202,10 +219,9 @@ internal fun RawOrderItem.toDto(): OrderItemDto = OrderItemDto(
     qty = qty.toIntSafe(),
     note = note.orEmpty(),
     cancelledAt = cancelledAt,
-    sentToKitchenAt = sentToKitchenAt,
+    sentToKitchenAt = printedAt, // server возвращает только printed_at; на печать = «ушло на кухню»
     servedAt = servedAt,
-    kitchenStatus = kitchenStatus,
-    subtotal = "0",
+    kitchenStatus = null, // не приходит с сервера; UI вычисляет из servedAt/printedAt
 )
 
 internal fun RawOrderVoid.toDto(): CancelledItemDto = CancelledItemDto(
@@ -222,58 +238,118 @@ internal fun RawOrderVoid.toDto(): CancelledItemDto = CancelledItemDto(
 private fun String.toIntSafe(): Int =
     runCatching { java.math.BigDecimal(this).toInt() }.getOrDefault(0)
 
+/**
+ * Контракт v4 (см. `server/internal/db/models/orders.go::Order` и
+ * `server/internal/service/orders.go::OrderSlim`).
+ *
+ * Сервер отдаёт:
+ *   - flat-поля Order по json-тегам: `type`/`table_id`/`waiter_id`/
+ *     `service_amount`/`total_with_service`/... — не `order_type`/`table`/
+ *     `waiter`/`service_charge_amount`, как было в v3.
+ *   - `items`/`voids` НЕ возвращаются в OrderDto напрямую. Они приходят
+ *     отдельным envelope `{order, items, voids}` в `GET /orders/{id}`
+ *     (см. `OrderDetailEnvelope`) и потом сшиваются в `OrderDetailRepository`.
+ *   - `OrderSlim` (list) — компактная карточка без discount/service_amount.
+ *
+ * Производные поля (`tableName`/`tableZoneName`/`waiterName`/`statusDisplay`/
+ * `subtotal`/`billRequestedAt`) сервер v4 НЕ возвращает — это наследие v3.
+ * Они оставлены как nullable для совместимости с UI; реально вычисляются
+ * клиентом по lookup'у в Tables/Users (см. репозитории в `data/tables/`).
+ *
+ * Имена Kotlin-полей сохранены v3-style (`orderType`, `table`, `waiter`),
+ * чтобы не ломать 20+ UI-консьюмеров. JSON-теги переведены на v4.
+ */
 @Serializable
 data class OrderDto(
     val id: String,
     @SerialName("order_number") val orderNumber: Int? = null,
     val status: String = "new",
-    @SerialName("status_display") val statusDisplay: String? = null,
-    @SerialName("order_type") val orderType: String = "hall",
-    val table: String? = null,
-    @SerialName("table_name") val tableName: String? = null,
-    @SerialName("table_zone_name") val tableZoneName: String? = null,
-    val waiter: String? = null,
-    @SerialName("waiter_name") val waiterName: String? = null,
+    @SerialName("type") val orderType: String = "hall",
+    @SerialName("table_id") val table: String? = null,
+    @SerialName("waiter_id") val waiter: String? = null,
+    @SerialName("cashier_id") val cashier: String? = null,
     @SerialName("guests_count") val guestsCount: Int = 0,
-    val subtotal: String = "0",
     val total: String = "0",
-    @SerialName("service_charge_amount") val serviceChargeAmount: String = "0",
+    @SerialName("service_percent") val servicePercent: String = "0",
+    @SerialName("service_amount") val serviceChargeAmount: String = "0",
+    @SerialName("total_with_service") val totalWithService: String = "0",
+    @SerialName("discount_type") val discountType: String? = null,
+    @SerialName("discount_value") val discountValue: String = "0",
     @SerialName("discount_amount") val discountAmount: String = "0",
     @SerialName("tip_amount") val tipAmount: String = "0",
-    val items: List<OrderItemDto> = emptyList(),
-    @SerialName("cancelled_items") val cancelledItems: List<CancelledItemDto> = emptyList(),
-    @SerialName("created_at") val createdAt: String,
-    @SerialName("bill_requested_at") val billRequestedAt: String? = null,
+    @SerialName("payment_method") val paymentMethod: String? = null,
+    @SerialName("shift_id") val shiftId: String? = null,
+    @SerialName("restaurant_id") val restaurantId: String? = null,
+    @SerialName("kitchen_started_at") val kitchenStartedAt: String? = null,
+    @SerialName("ready_at") val readyAt: String? = null,
+    @SerialName("expected_ready_at") val expectedReadyAt: String? = null,
     @SerialName("closed_at") val closedAt: String? = null,
     @SerialName("cancelled_at") val cancelledAt: String? = null,
+    @SerialName("cancel_reason") val cancelReason: String? = null,
+    @SerialName("created_at") val createdAt: String,
     @SerialName("updated_at") val updatedAt: String = createdAt,
     val comment: String = "",
+
+    // ── Поля, заполняемые клиентом (envelope-merge или enrichment),
+    //    сервер их НЕ присылает. Сериализация транзитная: при retrofit'е
+    //    они придут с дефолтами; затем `OrderDetailRepository` копирует
+    //    в `items`/`cancelledItems` из envelope.
+    val items: List<OrderItemDto> = emptyList(),
+    val cancelledItems: List<CancelledItemDto> = emptyList(),
+
+    // ── client-computed display fields (нет на сервере; UI делает lookup
+    //    по tables/users/zones). Объявлены здесь, потому что UI читает
+    //    `order.tableName` напрямую. Если решим почистить — нужен enrich-слой.
+    val tableName: String? = null,
+    val tableZoneName: String? = null,
+    val waiterName: String? = null,
+    val statusDisplay: String? = null,
+    val billRequestedAt: String? = null,
+    val subtotal: String = "0",
 )
 
+/**
+ * UI-DTO отменённой позиции. Маппится из `RawOrderVoid` (см. `toDto`).
+ * Сервер v4 хранит `OrderVoid` с полями `item_name`/`item_qty`/`item_price`/
+ * `reason`/`created_at`/`created_by_name` — не `name_at_order`/`price_at_order`.
+ */
 @Serializable
 data class CancelledItemDto(
     val id: String,
-    @SerialName("menu_item") val menuItem: String? = null,
-    @SerialName("name_at_order") val nameAtOrder: String,
-    @SerialName("price_at_order") val priceAtOrder: String,
+    val menuItem: String? = null,
+    val nameAtOrder: String,
+    val priceAtOrder: String,
     val qty: Int,
-    @SerialName("cancel_reason") val cancelReason: String = "",
-    @SerialName("cancelled_at") val cancelledAt: String? = null,
-    @SerialName("cancelled_by_name") val cancelledByName: String? = null,
+    val cancelReason: String = "",
+    val cancelledAt: String? = null,
+    val cancelledByName: String? = null,
 )
 
+/**
+ * UI-DTO позиции заказа. На сетевой уровень напрямую НЕ десериализуется —
+ * сервер v4 отдаёт `RawOrderItem` (поля `name`/`price`/`qty` decimal-string),
+ * а маппинг в этот DTO выполняет `RawOrderItem.toDto()`.
+ *
+ * Имена `nameAtOrder`/`priceAtOrder` — наследие v3, сохранены ради UI.
+ * `kitchenStatus`/`sentToKitchenAt` сервер v4 НЕ возвращает на уровне item;
+ * UI выводит производное состояние из `servedAt`/`printedAt`.
+ * `subtotal` сервер не считает per-item — оставлено для совместимости.
+ *
+ * TODO(api-strict): `qty: Int` срезает дробные количества (весовые блюда).
+ * Для перехода на `qty: String` нужно адаптировать ~10 UI-консьюмеров.
+ */
 @Serializable
 data class OrderItemDto(
     val id: String,
-    @SerialName("menu_item") val menuItem: String? = null,
-    @SerialName("name_at_order") val nameAtOrder: String,
-    @SerialName("price_at_order") val priceAtOrder: String,
+    val menuItem: String? = null,
+    val nameAtOrder: String,
+    val priceAtOrder: String,
     val qty: Int,
     val note: String = "",
-    @SerialName("cancelled_at") val cancelledAt: String? = null,
-    @SerialName("sent_to_kitchen_at") val sentToKitchenAt: String? = null,
-    @SerialName("served_at") val servedAt: String? = null,
-    @SerialName("kitchen_status") val kitchenStatus: String? = null,
+    val cancelledAt: String? = null,
+    val sentToKitchenAt: String? = null,
+    val servedAt: String? = null,
+    val kitchenStatus: String? = null,
     val subtotal: String = "0",
 )
 

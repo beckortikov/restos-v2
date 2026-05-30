@@ -19,9 +19,17 @@ interface CreateOrderApi {
     ): OrderDto
 }
 
+/**
+ * Body для `POST /api/v1/orders`. См.
+ * `server/internal/service/orders_write.go::CreateOrderInput`:
+ *   - `type` (НЕ `order_type`) — hall|takeaway|delivery
+ *   - `table_id`, `guests_count`, `comment`, `items`
+ *   - `waiter_id` сервер берёт из Actor (токена), поле в body игнорируется,
+ *     но оставлено для diagnostics-friendly traceback.
+ */
 @Serializable
 data class CreateOrderRequest(
-    @SerialName("order_type") val orderType: String = "hall",
+    @SerialName("type") val orderType: String = "hall",
     @SerialName("table_id") val tableId: String? = null,
     @SerialName("waiter_id") val waiterId: String? = null,
     @SerialName("guests_count") val guestsCount: Int = 1,

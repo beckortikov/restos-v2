@@ -18,18 +18,31 @@ interface MenuApi {
     suspend fun listCategories(): PagedEnvelope<CategoryDto>
 }
 
+/**
+ * Контракт v4 — см. `server/internal/db/models/menu.go::MenuItem`.
+ * Сервер НЕ возвращает `sort_order`, `stop_reason`, `kind` — это поля v3.
+ * Они удалены, чтобы не маскировать «всё блюдо дефолтное».
+ */
 @Serializable
 data class MenuItemDto(
     val id: String,
     val category: String? = null,
-    val name: String,
-    val price: String,
+    val name: String = "",
+    val price: String = "0",
     val emoji: String = "",
     @SerialName("image_url") val imageUrl: String? = null,
-    @SerialName("sort_order") val sortOrder: Int = 0,
     @SerialName("is_available") val isAvailable: Boolean = true,
-    @SerialName("stop_reason") val stopReason: String? = null,
-    val kind: String = "dish",
+    @SerialName("stop_list_override") val stopListOverride: Boolean = false,
+    val cogs: String = "0",
+    val station: String = "hot_kitchen",
+    val unit: String = "piece",
+    @SerialName("unit_size") val unitSize: String = "1",
+    @SerialName("sale_step") val saleStep: String = "0",
+    @SerialName("cook_time_min") val cookTimeMin: Int? = null,
+    @SerialName("is_batch_cooking") val isBatchCooking: Boolean = false,
+    @SerialName("prepared_qty") val preparedQty: Int = 0,
+    @SerialName("is_deleted") val isDeleted: Boolean = false,
+    @SerialName("low_stock_threshold") val lowStockThreshold: Int = 5,
 )
 
 @Serializable
