@@ -7,6 +7,7 @@ import {
   ChevronDown, ChevronRight, Printer, FlaskConical, Copy,
 } from 'lucide-react'
 import { fetchPrintJobs, type PrintJournalEntry } from '@/lib/queries'
+import { ensureBackendVirtualPrinters, disableBackendVirtualPrinters } from '@/lib/queries/printers'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { decodeCP866Hex } from '@/lib/print-service'
 import {
@@ -111,10 +112,21 @@ export default function PrintQueuePage() {
   async function handleToggleVirtual(on: boolean) {
     setVirtualPrinterOn(on)
     setVirtual(on)
-    if (on) {
-      toast.info('Тестовый режим включён', { description: 'Реальная печать отключена. Все попытки попадают в журнал как «виртуальные».' })
-    } else {
-      toast.success('Тестовый режим выключен', { description: 'Печать снова идёт на реальные принтеры.' })
+    try {
+      if (on) {
+        await ensureBackendVirtualPrinters()
+        toast.info('Тестовый режим включён', {
+          description: 'Все чеки (включая авто-runner и close-order) пишутся как файлы в backups/print/. Реальные принтеры не используются.',
+        })
+      } else {
+        await disableBackendVirtualPrinters()
+        toast.success('Тестовый режим выключен', { description: 'Печать снова идёт на настроенные принтеры.' })
+      }
+    } catch (e) {
+      console.error('[virtual-toggle] backend sync failed:', e)
+      toast.error('Виртуальные принтеры на сервере не обновились', {
+        description: 'Возможно, нет связи с сидекаром. Локальный режим всё равно включён.',
+      })
     }
   }
 
