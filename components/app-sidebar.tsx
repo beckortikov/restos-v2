@@ -455,10 +455,11 @@ function SidebarContent({
             <div className="px-3 pb-1">
               <button
                 onClick={() => {
-                  // Prefer opening in system browser via desktop endpoint, fallback to window.open
-                  fetch('/desktop/open-connect', { method: 'POST' }).catch(() => {
-                    window.open((window as any).restosDesktop.connectUrl, '_blank')
-                  })
+                  // Открываем /show-qr внутри HashRouter'а — там QRCode.toDataURL
+                  // с LAN-адресом этой кассы. Раньше тут было window.open() на
+                  // http://localhost:3001/connect — v1 Express endpoint, которого
+                  // в v4 Go-бэке нет → 404 в новом окне.
+                  window.location.hash = '#/show-qr'
                 }}
                 className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-sidebar-primary/10 hover:bg-sidebar-primary/20 transition-colors text-sm text-sidebar-primary font-medium"
               >
