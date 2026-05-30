@@ -353,8 +353,11 @@ private fun OrderTitle(order: OrderDto?) {
         return
     }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        val title = order.tableName
+            ?: order.orderNumber?.let { "Заказ №$it" }
+            ?: "Заказ"
         Text(
-            order.tableName ?: "Заказ №${order.id}",
+            title,
             fontWeight = FontWeight.SemiBold,
             fontSize = 16.sp,
         )

@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.Header
 import retrofit2.http.PATCH
 import retrofit2.http.POST
 import retrofit2.http.Path
@@ -30,12 +31,22 @@ interface OrdersApi {
         @Query("limit") limit: Int? = 200,
     ): PagedEnvelope<OrderDto>
 
+    /**
+     * v4 detail endpoint возвращает envelope `{order, items, voids}` (см.
+     * server/internal/service/orders.go::OrderDetail). UI работает с плоским
+     * OrderDto — слияние делает OrderDetailRepository.retrieveFlat().
+     */
     @GET("api/v1/orders/{id}")
-    suspend fun retrieve(@Path("id") id: String): OrderDto
+    suspend fun retrieve(@Path("id") id: String): OrderDetailEnvelope
 
+    /**
+     * `idemKey` — стабильный UUID; при retry должен быть тем же, иначе
+     * добавление позиций задублируется.
+     */
     @POST("api/v1/orders/{id}/items")
     suspend fun addItems(
         @Path("id") id: String,
+        @Header("Idempotency-Key") idemKey: String,
         @Body body: AddItemsRequest,
     ): OrderDto
 
@@ -137,10 +148,85 @@ data class CancelOrderRequest(val reason: String)
 @Serializable
 data class TransferRequest(@SerialName("table_id") val tableId: String)
 
+/**
+ * Envelope для `GET /api/v1/orders/{id}` — сервер возвращает Order вместе
+ * с relation'ами отдельными списками (см. server/internal/service/orders.go
+ * `OrderDetail`). Мы парсим envelope как есть и потом плющим его в OrderDto
+ * в OrderDetailRepository.
+ *
+ * Серверные OrderItem/OrderVoid имеют другие имена полей (`name`/`price`
+ * вместо `name_at_order`/`price_at_order` и `qty` как decimal-string),
+ * поэтому здесь объявляем "сырые" DTO и маппим в Kotlin-DTO на границе.
+ */
+@Serializable
+data class OrderDetailEnvelope(
+    val order: OrderDto,
+    val items: List<RawOrderItem> = emptyList(),
+    val voids: List<RawOrderVoid> = emptyList(),
+)
+
+/** Сырая позиция как её отдаёт Go-бэк (`models.OrderItem`). */
+@Serializable
+data class RawOrderItem(
+    val id: String,
+    @SerialName("menu_item_id") val menuItemId: String? = null,
+    val name: String? = null,
+    val note: String? = null,
+    val qty: String = "0",
+    val price: String = "0",
+    @SerialName("cancelled_at") val cancelledAt: String? = null,
+    @SerialName("sent_to_kitchen_at") val sentToKitchenAt: String? = null,
+    @SerialName("served_at") val servedAt: String? = null,
+    @SerialName("kitchen_status") val kitchenStatus: String? = null,
+    @SerialName("printed_at") val printedAt: String? = null,
+)
+
+/** Сырое void-событие как отдаёт бэк (`models.OrderVoid`). */
+@Serializable
+data class RawOrderVoid(
+    val id: String,
+    @SerialName("item_name") val itemName: String? = null,
+    @SerialName("item_qty") val itemQty: Int? = 1,
+    @SerialName("item_price") val itemPrice: String = "0",
+    val reason: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+    @SerialName("created_by_name") val createdByName: String? = null,
+)
+
+/** Маппинг сырой item -> UI-DTO (price_at_order / name_at_order). */
+internal fun RawOrderItem.toDto(): OrderItemDto = OrderItemDto(
+    id = id,
+    menuItem = menuItemId,
+    nameAtOrder = name.orEmpty(),
+    priceAtOrder = price,
+    qty = qty.toIntSafe(),
+    note = note.orEmpty(),
+    cancelledAt = cancelledAt,
+    sentToKitchenAt = sentToKitchenAt,
+    servedAt = servedAt,
+    kitchenStatus = kitchenStatus,
+    subtotal = "0",
+)
+
+internal fun RawOrderVoid.toDto(): CancelledItemDto = CancelledItemDto(
+    id = id,
+    menuItem = null,
+    nameAtOrder = itemName.orEmpty(),
+    priceAtOrder = itemPrice,
+    qty = itemQty ?: 1,
+    cancelReason = reason.orEmpty(),
+    cancelledAt = createdAt,
+    cancelledByName = createdByName,
+)
+
+private fun String.toIntSafe(): Int =
+    runCatching { java.math.BigDecimal(this).toInt() }.getOrDefault(0)
+
 @Serializable
 data class OrderDto(
     val id: String,
-    val status: String,
+    @SerialName("order_number") val orderNumber: Int? = null,
+    val status: String = "new",
     @SerialName("status_display") val statusDisplay: String? = null,
     @SerialName("order_type") val orderType: String = "hall",
     val table: String? = null,

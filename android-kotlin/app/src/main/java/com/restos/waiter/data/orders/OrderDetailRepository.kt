@@ -27,8 +27,20 @@ class OrderDetailRepository @Inject constructor(
     val cachedTables: List<TableDto> get() = cache.tables.value
     val cachedWaiters: List<UserDto> get() = cache.users.value.filter { it.role == "waiter" }
 
+    /**
+     * Распаковывает envelope `{order, items, voids}` в плоский OrderDto —
+     * UI ожидает relation'ы непосредственно внутри order.
+     */
+    private suspend fun retrieveFlat(orderId: String): OrderDto {
+        val env = ordersApi.retrieve(orderId)
+        return env.order.copy(
+            items = env.items.map { it.toDto() },
+            cancelledItems = env.voids.map { it.toDto() },
+        )
+    }
+
     suspend fun loadInitial(orderId: String): OrderDetailBundle = coroutineScope {
-        val orderDef = async { ordersApi.retrieve(orderId) }
+        val orderDef = async { retrieveFlat(orderId) }
         val menuDef = async { runCatching { menuApi.listItems().data }.getOrNull() }
         val tablesDef = async { runCatching { tablesApi.listTables().data }.getOrNull() }
         val waitersDef = async {
@@ -61,12 +73,16 @@ class OrderDetailRepository @Inject constructor(
     }
 
     suspend fun refreshOrder(orderId: String): OrderDto =
-        ordersApi.retrieve(orderId).also { cache.putOrder(it) }
+        retrieveFlat(orderId).also { cache.putOrder(it) }
 
     fun cachedOrder(orderId: String): OrderDto? = cache.getOrder(orderId)
 
     suspend fun addItem(orderId: String, item: NewOrderItem): OrderDto =
-        ordersApi.addItems(orderId, AddItemsRequest(listOf(item)))
+        ordersApi.addItems(
+            id = orderId,
+            idemKey = java.util.UUID.randomUUID().toString(),
+            body = AddItemsRequest(listOf(item)),
+        )
 
     suspend fun cancelItem(orderId: String, itemId: String, reason: String): OrderDto =
         ordersApi.cancelItem(orderId, itemId, CancelItemRequest(reason))
@@ -81,7 +97,7 @@ class OrderDetailRepository @Inject constructor(
     // локально (показываем баннер «Кассир принимает оплату»), но без
     // серверной отметки. Когда бэк добавит status PATCH — заменить.
     suspend fun requestBill(orderId: String): OrderDto {
-        val current = cache.getOrder(orderId) ?: ordersApi.retrieve(orderId)
+        val current = cache.getOrder(orderId) ?: retrieveFlat(orderId)
         return current.copy(status = OrderStatus.BILL_REQUESTED)
             .also { cache.putOrder(it) }
     }
@@ -94,7 +110,7 @@ class OrderDetailRepository @Inject constructor(
      */
     suspend fun printPreBill(orderId: String): OrderDto {
         ordersApi.printPreBill(orderId)
-        return ordersApi.retrieve(orderId).also { cache.putOrder(it) }
+        return retrieveFlat(orderId).also { cache.putOrder(it) }
     }
 
     /** v4: hardcoded reasons (см. CancelReasons), бэк не имеет CRUD. */
@@ -115,13 +131,13 @@ class OrderDetailRepository @Inject constructor(
      * tableId из текущего заказа (для takeaway вернёт исходный заказ).
      */
     suspend fun assignWaiter(orderId: String, waiterId: String): OrderDto {
-        val order = cache.getOrder(orderId) ?: ordersApi.retrieve(orderId)
+        val order = cache.getOrder(orderId) ?: retrieveFlat(orderId)
         val tableId = order.table
         if (tableId != null) {
             tablesApi.assignWaiter(tableId, AssignWaiterRequest(waiterId = waiterId))
         }
         // Перетягиваем актуальный заказ — бэк проставит waiter автоматически.
-        return ordersApi.retrieve(orderId).also { cache.putOrder(it) }
+        return retrieveFlat(orderId).also { cache.putOrder(it) }
     }
 
     /**
@@ -131,7 +147,7 @@ class OrderDetailRepository @Inject constructor(
     suspend fun setItemNote(orderId: String, itemId: String, note: String): OrderDto {
         val payload = note.trim().ifEmpty { null }
         ordersApi.setItemNote(orderId, itemId, SetItemNoteRequest(payload))
-        return ordersApi.retrieve(orderId).also { cache.putOrder(it) }
+        return retrieveFlat(orderId).also { cache.putOrder(it) }
     }
 }
 

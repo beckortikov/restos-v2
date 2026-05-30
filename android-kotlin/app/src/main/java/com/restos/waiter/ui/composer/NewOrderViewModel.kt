@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
+import java.util.UUID
 import javax.inject.Inject
 
 data class CartLine(
@@ -73,6 +74,15 @@ class NewOrderViewModel @Inject constructor(
     val state: StateFlow<NewOrderUiState> = _state.asStateFlow()
 
     private var myUserId: String? = null
+
+    /**
+     * Sticky idempotency key для текущего submit-цикла. Генерится один раз
+     * на одну логическую операцию (создать заказ ИЛИ добавить позиции).
+     * Сбрасывается ТОЛЬКО после успешного ответа сервера; на network-сбое
+     * пользователь жмёт «Создать заказ» повторно — летит тот же ключ, бэк
+     * возвращает закэшированный ответ из idempotency_keys.
+     */
+    private var pendingIdemKey: String? = null
 
     init {
         if (tableId == null || isAppendMode) {
@@ -193,17 +203,24 @@ class NewOrderViewModel @Inject constructor(
         if (s.busy || s.cart.isEmpty()) return
         _state.update { it.copy(busy = true, error = null) }
         viewModelScope.launch {
+            val idemKey = pendingIdemKey
+                ?: UUID.randomUUID().toString().also { pendingIdemKey = it }
             try {
                 val items = s.cart.map {
                     NewOrderItem(menuItemId = it.menuItemId, qty = it.qty)
                 }
                 val resultOrderId: String = if (isAppendMode) {
-                    val resp = ordersApi.addItems(appendToOrderId!!, AddItemsRequest(items))
+                    val resp = ordersApi.addItems(
+                        id = appendToOrderId!!,
+                        idemKey = idemKey,
+                        body = AddItemsRequest(items),
+                    )
                     resp.id
                 } else {
                     val orderType = if (tableId != null) "hall" else "takeaway"
                     val resp = createOrderApi.create(
-                        CreateOrderRequest(
+                        idemKey = idemKey,
+                        body = CreateOrderRequest(
                             orderType = orderType,
                             tableId = tableId,
                             waiterId = myUserId,
@@ -213,6 +230,8 @@ class NewOrderViewModel @Inject constructor(
                     )
                     resp.id
                 }
+                // Успех — следующий submit это новая операция.
+                pendingIdemKey = null
                 tableId?.let { tid ->
                     myUserId?.let { uid -> draftStore.delete(tid, uid) }
                 }
@@ -220,6 +239,8 @@ class NewOrderViewModel @Inject constructor(
                     it.copy(busy = false, cart = emptyList(), createdOrderId = resultOrderId)
                 }
             } catch (e: Throwable) {
+                // НЕ сбрасываем pendingIdemKey — если пользователь нажмёт
+                // «Создать» ещё раз, нужно слать ТОТ ЖЕ ключ.
                 val msg = if (isAppendMode) "Не удалось добавить позиции"
                 else "Не удалось создать заказ"
                 _state.update { it.copy(busy = false, error = errorMessage(e, msg)) }

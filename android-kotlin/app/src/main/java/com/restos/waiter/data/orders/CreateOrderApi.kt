@@ -3,12 +3,20 @@ package com.restos.waiter.data.orders
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import retrofit2.http.Body
+import retrofit2.http.Header
 import retrofit2.http.POST
 
 /** v4: создание заказа. `restaurant_id` сервер берёт из токена. */
 interface CreateOrderApi {
+    /**
+     * `idemKey` — стабильный UUID на одно логическое создание. При retry
+     * после network-сбоя нужно слать ТОТ ЖЕ ключ, иначе бэк создаст дубль.
+     */
     @POST("api/v1/orders")
-    suspend fun create(@Body body: CreateOrderRequest): OrderDto
+    suspend fun create(
+        @Header("Idempotency-Key") idemKey: String,
+        @Body body: CreateOrderRequest,
+    ): OrderDto
 }
 
 @Serializable

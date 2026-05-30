@@ -298,7 +298,7 @@ private fun MenuListRow(
 ) {
     val disabled = !item.isAvailable
     val inCart = qtyInCart > 0
-    val bg = if (inCart) Color(0xFFFFF7ED)
+    val bg = if (inCart) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
     else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
 
     Surface(
