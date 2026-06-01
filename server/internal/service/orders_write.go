@@ -327,8 +327,11 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 
 		now := time.Now().UTC()
 		extra := decimal.Zero
-		// Запомним свежесозданные items для последующего runner-эмита.
-		var newItems []models.OrderItem
+		// Items, которые нужно прогнать через runner-эмит:
+		//   - свежесозданные (qty_printed = 0, delta = qty)
+		//   - merged-в-printed (qty_printed > 0, delta = qty - qty_printed)
+		// enqueueRunners сам пропускает строки с delta <= 0.
+		var runnerItems []models.OrderItem
 
 		// iiko-style merge: подгребаем существующие mergeable rows этого заказа.
 		// Mergeable = same menu_item_id, same note, same sorted modifier set,
@@ -345,6 +348,8 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 			}
 			if existing := pickMergeable(existingRows, existingMods, it, key); existing != nil {
 				// Merge: bump qty, не INSERT'им новой строки.
+				// printed_at и qty_printed НЕ трогаем — runner-эмиттер сам посчитает
+				// delta = newQty - existing.QtyPrinted и допечатает остаток.
 				newQty := decimal.Add(existing.Qty, qty)
 				if err := tx.Model(&models.OrderItem{}).
 					Where("id = ?", existing.ID).
@@ -363,13 +368,15 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 				// Обновим in-memory представление, чтобы повторный input с тем же
 				// ключом тоже слился в эту же строку.
 				existing.Qty = newQty
+				// Передаём в runner — он напечатает только delta поверх qty_printed.
+				runnerItems = append(runnerItems, *existing)
 				continue
 			}
 			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx)
 			if err != nil {
 				return err
 			}
-			newItems = append(newItems, *oi)
+			runnerItems = append(runnerItems, *oi)
 			extra = decimal.Add(extra, lineTotal)
 			// Добавим в pool, чтобы следующий input с тем же ключом смержился.
 			existingRows = append(existingRows, oi)
@@ -384,8 +391,9 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
-		// Runner-jobs только на свежедобавленные items (старые уже напечатаны).
-		if err := s.enqueueRunners(tx, rid, &order, newItems, now); err != nil {
+		// Runner-jobs: и свежесозданные, и merged-в-printed (с delta).
+		// enqueueRunners сам считает qty - qty_printed на каждой строке.
+		if err := s.enqueueRunners(tx, rid, &order, runnerItems, now); err != nil {
 			return err
 		}
 		updated = &order
@@ -477,11 +485,15 @@ func preMergeInputs(items []CreateOrderItem) ([]CreateOrderItem, error) {
 }
 
 // loadMergeableItems вытягивает все order_items этого заказа, по которым
-// допустим merge (cancelled_at=NULL, served_at=NULL, printed_at=NULL),
-// + map их модификаторов для быстрого compare.
+// допустим merge (cancelled_at=NULL, served_at=NULL), + map их модификаторов
+// для быстрого compare.
+//
+// Фильтр printed_at IS NULL УБРАН (Phase 4+): мы мержим даже в уже напечатанные
+// строки. Runner-эмиттер при следующем enqueue посмотрит на delta qty-qty_printed
+// и допечатает только новую часть. См. enqueueRunners.
 func loadMergeableItems(tx *gorm.DB, orderID string) ([]*models.OrderItem, map[string][]models.OrderItemModifier, error) {
 	var rows []models.OrderItem
-	if err := tx.Where("order_id = ? AND cancelled_at IS NULL AND served_at IS NULL AND printed_at IS NULL", orderID).
+	if err := tx.Where("order_id = ? AND cancelled_at IS NULL AND served_at IS NULL", orderID).
 		Find(&rows).Error; err != nil {
 		return nil, nil, err
 	}

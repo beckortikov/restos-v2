@@ -8,6 +8,7 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/escpos"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
 // StationResolver — лёгкий interface, подменяемый для тестов.
@@ -55,8 +56,13 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		miByID[m.ID] = m
 	}
 
-	// Группируем items по station.
+	// Группируем items по station. На каждой строке считаем delta = qty - qty_printed:
+	//   - delta <= 0 → skip (повар уже видит всё; merge не добавил единиц).
+	//   - delta  > 0 → печатаем эту delta и помечаем qty_printed = qty.
+	// printedItemIDs — id строк, у которых надо проставить printed_at/qty_printed
+	// после успешной постановки job'а.
 	byStation := make(map[string][]models.OrderItem)
+	printedItemIDs := make([]string, 0, len(items))
 	for _, it := range items {
 		if it.MenuItemID == nil {
 			continue
@@ -65,11 +71,23 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		if !ok {
 			continue
 		}
+		delta := decimal.Sub(it.Qty, it.QtyPrinted)
+		if !decimal.IsPositive(delta) {
+			continue
+		}
 		station := "hot_kitchen"
 		if mi.Station != nil && *mi.Station != "" {
 			station = *mi.Station
 		}
-		byStation[station] = append(byStation[station], it)
+		// На печать передаём копию item с qty=delta, чтобы повар увидел
+		// именно дозаказ, а не суммарное количество.
+		printable := it
+		printable.Qty = delta
+		byStation[station] = append(byStation[station], printable)
+		printedItemIDs = append(printedItemIDs, it.ID)
+	}
+	if len(byStation) == 0 {
+		return nil
 	}
 
 	// Имя ресторана для шапки (опц.).
@@ -124,6 +142,20 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			UpdatedAt:    now,
 		}
 		if err := tx.Session(&gorm.Session{SkipHooks: true}).Create(job).Error; err != nil {
+			return err
+		}
+	}
+	// Помечаем строки как «полностью отданные повару» (qty_printed = qty).
+	// printed_at ставим, если ещё не стоял — он остаётся timestamp'ом ПЕРВОЙ
+	// печати на runner (его читают legacy-консьюмеры).
+	if len(printedItemIDs) > 0 {
+		if err := tx.Exec(`
+			UPDATE order_items
+			   SET qty_printed = qty,
+			       printed_at = COALESCE(printed_at, ?),
+			       updated_at = ?
+			 WHERE id IN ?
+		`, now, now, printedItemIDs).Error; err != nil {
 			return err
 		}
 	}

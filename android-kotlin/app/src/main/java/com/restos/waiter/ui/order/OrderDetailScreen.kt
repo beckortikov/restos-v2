@@ -30,6 +30,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Receipt
+import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
@@ -858,7 +859,7 @@ private fun OrderLineCard(
                     modifier = Modifier.size(32.dp),
                 ) {
                     Icon(
-                        Icons.Outlined.Close, // нет Minus в дефолтном core — close сойдёт визуально
+                        Icons.Outlined.Remove,
                         contentDescription = "−1",
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),

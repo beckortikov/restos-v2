@@ -8914,6 +8914,7 @@ export interface components {
             id?: string;
             name?: string;
             qty?: components["schemas"]["Decimal"];
+            qty_printed?: components["schemas"]["Decimal"];
             price?: components["schemas"]["Decimal"];
             cogs?: components["schemas"]["Decimal"];
             note?: string | null;

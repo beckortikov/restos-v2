@@ -61,6 +61,7 @@ type OrderItem struct {
 	Name                 *string         `json:"name"`
 	Note                 *string         `gorm:"column:note" json:"note"`
 	Qty                  decimal.Decimal `gorm:"type:numeric(14,4);default:1" json:"qty"`
+	QtyPrinted           decimal.Decimal `gorm:"column:qty_printed;type:numeric(14,4);default:0" json:"qty_printed"`
 	Price                decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"price"`
 	COGS                 decimal.Decimal `gorm:"column:cogs;type:numeric(14,4);default:0" json:"cogs"`
 	Unit                 *string         `gorm:"default:'piece'" json:"unit"`

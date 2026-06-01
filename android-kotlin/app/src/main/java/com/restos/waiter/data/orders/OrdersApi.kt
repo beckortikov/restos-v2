@@ -187,6 +187,7 @@ data class RawOrderItem(
     val name: String? = null,
     val note: String? = null,
     val qty: String = "0",
+    @SerialName("qty_printed") val qtyPrinted: String = "0",
     val price: String = "0",
     val cogs: String = "0",
     val unit: String? = null,
