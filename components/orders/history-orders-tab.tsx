@@ -26,7 +26,7 @@ import { OrderCard, OrderRow, VirtualOrderCards, VirtualOrderRows } from './orde
 
 const STATUS_FILTER: { value: 'all' | 'done' | 'cancelled'; label: string }[] = [
   { value: 'all', label: 'Все' },
-  { value: 'done', label: 'Закрытые' },
+  { value: 'done', label: 'Оплаченные' },
   { value: 'cancelled', label: 'Отменённые' },
 ]
 

@@ -650,9 +650,35 @@ export function OrderActionsDialog({
                   </div>
                 )
               })}
-              <div className="flex items-center justify-between px-4 py-3 bg-muted/30">
-                <span className="text-sm font-semibold">Подытог</span>
-                <span className="text-base font-bold">{formatCurrency(subtotal)}</span>
+              <div className="bg-muted/30">
+                <div className="flex items-center justify-between px-4 py-3">
+                  <span className="text-sm font-semibold">Подытог</span>
+                  <span className="text-base font-bold">{formatCurrency(subtotal)}</span>
+                </div>
+                {discountAmount > 0 && (
+                  <div className="flex items-center justify-between px-4 py-1 text-xs text-muted-foreground">
+                    <span>Скидка</span>
+                    <span>−{formatCurrency(discountAmount)}</span>
+                  </div>
+                )}
+                {includeService && servicePercent > 0 && serviceAmount > 0 && (
+                  <div className="flex items-center justify-between px-4 py-1 text-xs text-muted-foreground">
+                    <span>Обслуживание ({servicePercent}%)</span>
+                    <span>+{formatCurrency(serviceAmount)}</span>
+                  </div>
+                )}
+                {tipAmount > 0 && (
+                  <div className="flex items-center justify-between px-4 py-1 text-xs text-muted-foreground">
+                    <span>Чаевые</span>
+                    <span>+{formatCurrency(tipAmount)}</span>
+                  </div>
+                )}
+                {(discountAmount > 0 || (includeService && serviceAmount > 0) || tipAmount > 0) && (
+                  <div className="flex items-center justify-between px-4 py-2 border-t border-border/60">
+                    <span className="text-sm font-bold">Итого</span>
+                    <span className="text-sm font-bold">{formatCurrency(totalWithService)}</span>
+                  </div>
+                )}
               </div>
             </div>
           </div>
