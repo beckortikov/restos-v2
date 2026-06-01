@@ -19,6 +19,20 @@ CP866_MAP['¤'] = 0xFD
 const CP866_REVERSE: Record<number, string> = {}
 for (const [ch, code] of Object.entries(CP866_MAP)) CP866_REVERSE[code] = ch
 
+// base64ToHex — конвертирует base64-строку (как Go [] byte приходит в JSON)
+// в hex для прокидывания в decodeCP866Hex. Используется для PrintJob.payload
+// в очереди печати.
+export function base64ToHex(b64: string): string {
+  if (!b64) return ''
+  let raw = ''
+  try { raw = atob(b64) } catch { return '' }
+  let hex = ''
+  for (let i = 0; i < raw.length; i++) {
+    hex += raw.charCodeAt(i).toString(16).padStart(2, '0')
+  }
+  return hex
+}
+
 export function decodeCP866Hex(hex: string): string {
   if (!hex) return ''
   let out = ''

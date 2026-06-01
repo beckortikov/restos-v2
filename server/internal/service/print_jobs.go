@@ -28,8 +28,16 @@ type PrintJobsFilter struct {
 	Page   cursor.Page
 }
 
+// PrintJobWithEnrich — PrintJob + denormalized join-поля для UI журнала
+// очереди печати. Сохраняем все JSON-поля PrintJob (включая `payload` в
+// base64) и добавляем `order_number` через batch-loadup из orders.
+type PrintJobWithEnrich struct {
+	models.PrintJob
+	OrderNumber *int `json:"order_number,omitempty"`
+}
+
 // List — пагинированный список jobs ресторана.
-func (s *PrintJobsService) List(ctx context.Context, f PrintJobsFilter) ([]models.PrintJob, string, error) {
+func (s *PrintJobsService) List(ctx context.Context, f PrintJobsFilter) ([]PrintJobWithEnrich, string, error) {
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return nil, "", err
@@ -50,7 +58,53 @@ func (s *PrintJobsService) List(ctx context.Context, f PrintJobsFilter) ([]model
 	trimmed, next := cursor.Next(rows, limit, func(m models.PrintJob) cursor.Token {
 		return cursor.Token{Time: m.CreatedAt, ID: m.ID}
 	})
-	return trimmed, next, nil
+
+	// Batch-loadup order_number for unique order_ids.
+	byID := map[string]int{}
+	ids := make([]string, 0, len(trimmed))
+	seen := map[string]struct{}{}
+	for _, r := range trimmed {
+		if r.OrderID == nil || *r.OrderID == "" {
+			continue
+		}
+		if _, ok := seen[*r.OrderID]; ok {
+			continue
+		}
+		seen[*r.OrderID] = struct{}{}
+		ids = append(ids, *r.OrderID)
+	}
+	if len(ids) > 0 {
+		type tinyOrder struct {
+			ID          string `gorm:"column:id"`
+			OrderNumber int    `gorm:"column:order_number"`
+		}
+		var os []tinyOrder
+		ordScoped, err := s.r.ForTenant(ctx)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := ordScoped.Table("orders").
+			Select("id, order_number").
+			Where("id IN ?", ids).
+			Scan(&os).Error; err != nil {
+			return nil, "", err
+		}
+		for _, o := range os {
+			byID[o.ID] = o.OrderNumber
+		}
+	}
+
+	enriched := make([]PrintJobWithEnrich, len(trimmed))
+	for i, r := range trimmed {
+		enriched[i] = PrintJobWithEnrich{PrintJob: r}
+		if r.OrderID != nil {
+			if n, ok := byID[*r.OrderID]; ok {
+				nv := n
+				enriched[i].OrderNumber = &nv
+			}
+		}
+	}
+	return enriched, next, nil
 }
 
 // Retry — failed/done → pending, attempts=0. Воркер подберёт.

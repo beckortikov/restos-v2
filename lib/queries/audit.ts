@@ -1,4 +1,5 @@
 import { api, unwrap } from './_client'
+import { base64ToHex } from '@/lib/cp866'
 
 export async function logAction(action: string, entityType: string, entityId?: string, entityName?: string, details?: Record<string, unknown>): Promise<void> {
   // No-op in v4: server-side GORM hooks (internal/audit/hooks.go) write
@@ -40,6 +41,8 @@ export interface PrintJournalEntry {
   maxAttempts?: number
   /** Cashier dismissed from POS drawer — hide from active failure list. */
   dismissed?: boolean
+  /** Sequential order number (orders.order_number) for human-readable summary. */
+  orderNumber?: number
 }
 
 export async function fetchPrintJobs(opts?: { limit?: number; sinceMs?: number }): Promise<PrintJournalEntry[]> {
@@ -91,9 +94,13 @@ function mapPrintJobEntry(r: any): PrintJournalEntry {
 
   const orderId: string | undefined = r?.order_id ?? undefined
   const lastError: string | undefined = r?.last_error ?? undefined
+  const orderNumber: number | undefined = typeof r?.order_number === 'number' ? r.order_number : undefined
+  const orderLabel = orderNumber != null
+    ? `Заказ №${orderNumber}`
+    : `Заказ ${orderId ? String(orderId).slice(0, 8) : '—'}`
   const summary = uiStatus === 'failed' && lastError
     ? lastError
-    : `Order ${orderId ? String(orderId).slice(0, 8) : '—'} / type=${type || 'unknown'}`
+    : `${orderLabel} / type=${type || 'unknown'}`
 
   return {
     id: String(r?.id ?? ''),
@@ -103,7 +110,7 @@ function mapPrintJobEntry(r: any): PrintJournalEntry {
     orderId,
     printerName: undefined,
     printerIP: undefined,
-    contentHex: undefined,
+    contentHex: r?.payload ? base64ToHex(String(r.payload)) : undefined,
     station: undefined,
     reason: lastError,
     virtual: false,
@@ -114,6 +121,7 @@ function mapPrintJobEntry(r: any): PrintJournalEntry {
     attempts: typeof r?.attempts === 'number' ? r.attempts : undefined,
     maxAttempts: undefined,
     dismissed: false,
+    orderNumber,
   }
 }
 

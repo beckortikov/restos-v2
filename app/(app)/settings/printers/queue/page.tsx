@@ -245,7 +245,7 @@ export default function PrintQueuePage() {
                       </div>
                       {text ? (
                         <div className="relative">
-                          <pre className="font-mono text-[11px] bg-white text-foreground p-3 rounded border border-border overflow-x-auto whitespace-pre">{text}</pre>
+                          <pre className="font-mono text-[11px] bg-white text-foreground p-3 rounded border border-border overflow-auto whitespace-pre max-h-96">{text}</pre>
                           <button
                             onClick={() => handleCopyText(entry.contentHex)}
                             className="absolute top-2 right-2 px-2 py-1 text-[10px] bg-muted/80 hover:bg-muted rounded text-muted-foreground hover:text-foreground flex items-center gap-1 backdrop-blur-sm"

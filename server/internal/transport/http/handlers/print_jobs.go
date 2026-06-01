@@ -5,7 +5,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
@@ -29,7 +28,7 @@ func (h *PrintJobsHandler) List(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, err)
 		return
 	}
-	respond.JSON(w, http.StatusOK, makeList[models.PrintJob](rows, next))
+	respond.JSON(w, http.StatusOK, makeList[service.PrintJobWithEnrich](rows, next))
 }
 
 // Retry — POST /api/v1/print/jobs/{id}/retry.
