@@ -87,6 +87,21 @@ class OrderDetailRepository @Inject constructor(
     suspend fun cancelItem(orderId: String, itemId: String, reason: String): OrderDto =
         ordersApi.cancelItem(orderId, itemId, CancelItemRequest(reason))
 
+    /**
+     * iiko-style −1 на позиции. Бэк сплитит row, если текущий qty>1.
+     * Если qty=1 — обычная полная отмена (с этой же причиной).
+     */
+    suspend fun decrementItem(orderId: String, itemId: String, reason: String = "guest_changed_mind"): OrderDto =
+        ordersApi.cancelItem(orderId, itemId, CancelItemRequest(reason = reason, qty = "1"))
+
+    /** iiko-style +1. Бэк сам merge'нёт по menu_item_id+modifiers+note. */
+    suspend fun incrementItem(orderId: String, menuItemId: String): OrderDto =
+        ordersApi.addItems(
+            id = orderId,
+            idemKey = java.util.UUID.randomUUID().toString(),
+            body = AddItemsRequest(listOf(NewOrderItem(menuItemId = menuItemId, qty = 1))),
+        )
+
     suspend fun cancelOrder(orderId: String, reason: String): OrderDto =
         ordersApi.cancelOrder(orderId, CancelOrderRequest(reason))
 

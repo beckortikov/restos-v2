@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,6 +86,13 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 	if len(in.Items) == 0 {
 		return nil, nil, apperrors.Wrap("VALIDATION", "order must have at least one item", nil)
 	}
+	// iiko-style pre-merge: схлопываем входящие позиции с одинаковым ключом
+	// (menu_item_id + note + sorted modifier_ids), чтобы не плодить row'ы.
+	mergedItems, err := preMergeInputs(in.Items)
+	if err != nil {
+		return nil, nil, err
+	}
+	in.Items = mergedItems
 
 	actor, _ := audit.ActorFromContext(ctx)
 	buf := NewBuffer()
@@ -257,6 +266,14 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 	if len(in.Items) == 0 {
 		return nil, nil, apperrors.Wrap("VALIDATION", "items required", nil)
 	}
+	// iiko-style pre-merge на входе: повторные позиции с одинаковым ключом
+	// сливаются в одну до операции. (Merge с уже существующими DB-rows —
+	// внутри транзакции ниже.)
+	mergedItems, err := preMergeInputs(in.Items)
+	if err != nil {
+		return nil, nil, err
+	}
+	in.Items = mergedItems
 	buf := NewBuffer()
 	var updated *models.Order
 
@@ -312,13 +329,53 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		extra := decimal.Zero
 		// Запомним свежесозданные items для последующего runner-эмита.
 		var newItems []models.OrderItem
+
+		// iiko-style merge: подгребаем существующие mergeable rows этого заказа.
+		// Mergeable = same menu_item_id, same note, same sorted modifier set,
+		// not cancelled, not served, not printed (после печати на кухню — не
+		// сливаем, повар должен видеть дозаказ отдельной строкой).
+		existingRows, existingMods, err := loadMergeableItems(tx, order.ID)
+		if err != nil {
+			return err
+		}
 		for _, it := range in.Items {
+			key, qty, err := mergeKeyForInput(it)
+			if err != nil {
+				return err
+			}
+			if existing := pickMergeable(existingRows, existingMods, it, key); existing != nil {
+				// Merge: bump qty, не INSERT'им новой строки.
+				newQty := decimal.Add(existing.Qty, qty)
+				if err := tx.Model(&models.OrderItem{}).
+					Where("id = ?", existing.ID).
+					Updates(map[string]any{
+						"qty":        newQty,
+						"updated_at": now,
+					}).Error; err != nil {
+					return err
+				}
+				// Пересчёт line-total: price * deltaQty + сумма модификаторов * deltaQty.
+				lineTotal := decimal.Mul(existing.Price, qty)
+				for _, m := range existingMods[existing.ID] {
+					lineTotal = decimal.Add(lineTotal, decimal.Mul(m.Price, qty))
+				}
+				extra = decimal.Add(extra, decimal.Normalize(lineTotal))
+				// Обновим in-memory представление, чтобы повторный input с тем же
+				// ключом тоже слился в эту же строку.
+				existing.Qty = newQty
+				continue
+			}
 			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx)
 			if err != nil {
 				return err
 			}
 			newItems = append(newItems, *oi)
 			extra = decimal.Add(extra, lineTotal)
+			// Добавим в pool, чтобы следующий input с тем же ключом смержился.
+			existingRows = append(existingRows, oi)
+			if mods := snapshotModifiersForItem(tx, oi.ID); len(mods) > 0 {
+				existingMods[oi.ID] = mods
+			}
 		}
 
 		order.Total = decimal.Normalize(decimal.Add(order.Total, extra))
@@ -337,6 +394,11 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 			"added":    len(in.Items),
 			"total":    order.Total.String(),
 		})
+		// Триггерим reload UI — после merge старые items могли изменить qty.
+		buf.Add(EventOrderUpdated, map[string]any{
+			"id":     order.ID,
+			"action": "items.added",
+		})
 		return nil
 	})
 	if err != nil {
@@ -344,6 +406,180 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 	}
 	s.publish(ctx, rid, buf)
 	return updated, buf, nil
+}
+
+// ─── iiko-style merge helpers ───────────────────────────────────────────────
+
+// mergeKeyForInput возвращает каноничный ключ для input-позиции:
+// "<menu_item_id>|<note>|<sorted modifier_ids joined ',' >".
+// Также возвращает Qty (parsed) для удобства caller'а.
+// Если у input есть override-поля price/name/cogs/unit или Modifiers[] с
+// custom name/price — merge невозможен (ключ помечается уникальным uuid),
+// потому что snapshot не будет идентичен существующей строке.
+func mergeKeyForInput(it CreateOrderItem) (string, decimal.Decimal, error) {
+	qty, err := decimal.FromString(it.Qty)
+	if err != nil {
+		return "", decimal.Zero, apperrors.Wrap("VALIDATION", "bad qty: "+it.Qty, err)
+	}
+	// Override-поля делают позицию «уникальной» — не сливаем.
+	if it.Price != nil || it.Name != nil || it.COGS != nil || it.Unit != nil || it.UnitSize != nil {
+		return "uniq:" + uuid.NewString(), qty, nil
+	}
+	if it.Modifiers != nil && len(*it.Modifiers) > 0 {
+		for _, m := range *it.Modifiers {
+			if m.Name != nil || m.Price != nil {
+				return "uniq:" + uuid.NewString(), qty, nil
+			}
+		}
+	}
+	mids := make([]string, 0, len(it.ModifierIDs))
+	mids = append(mids, it.ModifierIDs...)
+	if it.Modifiers != nil {
+		for _, m := range *it.Modifiers {
+			if m.ModifierID != nil && *m.ModifierID != "" {
+				mids = append(mids, *m.ModifierID)
+			}
+		}
+	}
+	sort.Strings(mids)
+	return it.MenuItemID + "|" + strings.Join(mids, ","), qty, nil
+}
+
+// preMergeInputs схлопывает повторные input-позиции с одинаковым merge-ключом.
+// Note=v4 на input-уровне передаётся в `it.Note`? — Нет, шапка CreateOrderItem
+// note нет. Note вешается отдельным эндпоинтом setItemNote после INSERT, поэтому
+// для merge-ключа на входе note всегда пустая. Это согласуется с фронтом
+// (note прописывается строго после создания).
+func preMergeInputs(items []CreateOrderItem) ([]CreateOrderItem, error) {
+	if len(items) <= 1 {
+		return items, nil
+	}
+	byKey := make(map[string]int, len(items)) // key -> index in out
+	out := make([]CreateOrderItem, 0, len(items))
+	for _, it := range items {
+		key, qty, err := mergeKeyForInput(it)
+		if err != nil {
+			return nil, err
+		}
+		if idx, ok := byKey[key]; ok && !strings.HasPrefix(key, "uniq:") {
+			// Складываем qty в существующую строку.
+			prevQty, err := decimal.FromString(out[idx].Qty)
+			if err != nil {
+				return nil, err
+			}
+			out[idx].Qty = decimal.Add(prevQty, qty).String()
+			continue
+		}
+		byKey[key] = len(out)
+		out = append(out, it)
+	}
+	return out, nil
+}
+
+// loadMergeableItems вытягивает все order_items этого заказа, по которым
+// допустим merge (cancelled_at=NULL, served_at=NULL, printed_at=NULL),
+// + map их модификаторов для быстрого compare.
+func loadMergeableItems(tx *gorm.DB, orderID string) ([]*models.OrderItem, map[string][]models.OrderItemModifier, error) {
+	var rows []models.OrderItem
+	if err := tx.Where("order_id = ? AND cancelled_at IS NULL AND served_at IS NULL AND printed_at IS NULL", orderID).
+		Find(&rows).Error; err != nil {
+		return nil, nil, err
+	}
+	out := make([]*models.OrderItem, len(rows))
+	ids := make([]string, len(rows))
+	for i := range rows {
+		out[i] = &rows[i]
+		ids[i] = rows[i].ID
+	}
+	modsByItem := make(map[string][]models.OrderItemModifier)
+	if len(ids) > 0 {
+		var mods []models.OrderItemModifier
+		if err := tx.Where("order_item_id IN ?", ids).Find(&mods).Error; err != nil {
+			return nil, nil, err
+		}
+		for _, m := range mods {
+			if m.OrderItemID != nil {
+				modsByItem[*m.OrderItemID] = append(modsByItem[*m.OrderItemID], m)
+			}
+		}
+	}
+	return out, modsByItem, nil
+}
+
+func snapshotModifiersForItem(tx *gorm.DB, itemID string) []models.OrderItemModifier {
+	var mods []models.OrderItemModifier
+	_ = tx.Where("order_item_id = ?", itemID).Find(&mods).Error
+	return mods
+}
+
+// pickMergeable ищет в pool существующую строку, в которую можно влить input.
+// Сравнение:
+//   - menu_item_id равен
+//   - note input ("") должен совпасть с note существующей (NULL или "")
+//   - sorted modifier_ids set совпадает (по modifier_id)
+//   - override-полей на input нет (это уже отфильтровано в mergeKeyForInput
+//     через "uniq:"-ключ — такие сюда не приходят).
+func pickMergeable(
+	pool []*models.OrderItem,
+	mods map[string][]models.OrderItemModifier,
+	input CreateOrderItem,
+	key string,
+) *models.OrderItem {
+	if strings.HasPrefix(key, "uniq:") {
+		return nil
+	}
+	// inputMids — то, что входит в ключ.
+	inputMids := make([]string, 0, len(input.ModifierIDs))
+	inputMids = append(inputMids, input.ModifierIDs...)
+	if input.Modifiers != nil {
+		for _, m := range *input.Modifiers {
+			if m.ModifierID != nil && *m.ModifierID != "" {
+				inputMids = append(inputMids, *m.ModifierID)
+			}
+		}
+	}
+	sort.Strings(inputMids)
+	for _, row := range pool {
+		if row.MenuItemID == nil || *row.MenuItemID != input.MenuItemID {
+			continue
+		}
+		// note на input уровне у позиций нет (см. preMergeInputs); считаем
+		// merge возможным только если у существующей строки note тоже пуст.
+		if row.Note != nil && strings.TrimSpace(*row.Note) != "" {
+			continue
+		}
+		existingMids := make([]string, 0)
+		for _, m := range mods[row.ID] {
+			if m.ModifierID != nil && *m.ModifierID != "" {
+				existingMids = append(existingMids, *m.ModifierID)
+			} else {
+				// custom-модификатор без modifier_id → не сливаем.
+				existingMids = nil
+				break
+			}
+		}
+		if existingMids == nil {
+			continue
+		}
+		sort.Strings(existingMids)
+		if !stringSliceEqual(existingMids, inputMids) {
+			continue
+		}
+		return row
+	}
+	return nil
+}
+
+func stringSliceEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // collectModifierIDs — собирает все modifier_id из ModifierIDs и Modifiers[]

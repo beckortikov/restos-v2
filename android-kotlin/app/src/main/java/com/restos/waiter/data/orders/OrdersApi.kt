@@ -139,8 +139,13 @@ data class NewOrderItem(
         this(menuItemId = menuItemId, qty = qty.toString(), note = note)
 }
 
+/**
+ * Partial-cancel поддерживается бэком: если `qty` задан и `qty < item.qty`,
+ * сервер сплитит строку (исходную уменьшает, отменённую часть выносит в
+ * новый row). Если qty=null или qty>=item.qty — старое поведение, full cancel.
+ */
 @Serializable
-data class CancelItemRequest(val reason: String)
+data class CancelItemRequest(val reason: String, val qty: String? = null)
 
 @Serializable
 data class CancelOrderRequest(val reason: String)

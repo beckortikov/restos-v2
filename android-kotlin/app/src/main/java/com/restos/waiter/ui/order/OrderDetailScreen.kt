@@ -176,6 +176,8 @@ fun OrderDetailScreen(
                     onAddItem = viewModel::addItem,
                     onSearch = viewModel::setSearch,
                     onCancelItem = viewModel::openCancelItem,
+                    onIncrementItem = viewModel::incrementItem,
+                    onDecrementItem = viewModel::decrementItem,
                     onToggleServed = viewModel::toggleServed,
                     onEditNote = viewModel::openEditNote,
                     onSwitchGroup = onSwitchGroup,
@@ -381,6 +383,8 @@ private fun OrderBody(
     onCancelItem: (OrderItemDto) -> Unit,
     onToggleServed: (OrderItemDto) -> Unit,
     onEditNote: (OrderItemDto) -> Unit,
+    onIncrementItem: (OrderItemDto) -> Unit,
+    onDecrementItem: (OrderItemDto) -> Unit,
     onSwitchGroup: (String) -> Unit,
     onNewGroup: () -> Unit,
 ) {
@@ -441,6 +445,8 @@ private fun OrderBody(
                         onCancel = { onCancelItem(it) },
                         onEditNote = { onEditNote(it) },
                         onToggleServed = { onToggleServed(it) },
+                        onIncrement = { onIncrementItem(it) },
+                        onDecrement = { onDecrementItem(it) },
                     )
                 } else {
                     OrderLineCard(
@@ -449,6 +455,9 @@ private fun OrderBody(
                         canToggleServed = order.status == OrderStatus.BILL_REQUESTED,
                         onCancel = {},
                         onToggleServed = { onToggleServed(it) },
+                        onIncrement = {},
+                        onDecrement = {},
+                        showInlineQtyControls = false,
                     )
                 }
             }
@@ -678,6 +687,8 @@ private fun SwipeableOrderLine(
     onCancel: () -> Unit,
     onEditNote: () -> Unit,
     onToggleServed: () -> Unit,
+    onIncrement: () -> Unit,
+    onDecrement: () -> Unit,
 ) {
     val dismissState = androidx.compose.material3.rememberSwipeToDismissBoxState(
         positionalThreshold = { distance -> distance * 0.35f },
@@ -759,6 +770,9 @@ private fun SwipeableOrderLine(
                 canToggleServed = true,
                 onCancel = {},
                 onToggleServed = onToggleServed,
+                onIncrement = onIncrement,
+                onDecrement = onDecrement,
+                showInlineQtyControls = true,
             )
         },
     )
@@ -771,6 +785,9 @@ private fun OrderLineCard(
     canToggleServed: Boolean,
     onCancel: () -> Unit,
     onToggleServed: () -> Unit,
+    onIncrement: () -> Unit = {},
+    onDecrement: () -> Unit = {},
+    showInlineQtyControls: Boolean = false,
 ) {
     val served = item.servedAt != null || item.kitchenStatus == "served"
     // Тап по карточке = переключить «подано» (без отдельного чекбокса).
@@ -833,6 +850,31 @@ private fun OrderLineCard(
                     fontSize = 13.sp,
                     modifier = Modifier.padding(end = 4.dp),
                 )
+            }
+            // iiko-style +/− inline controls (только в fresh-статусах).
+            if (showInlineQtyControls) {
+                androidx.compose.material3.IconButton(
+                    onClick = onDecrement,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Close, // нет Minus в дефолтном core — close сойдёт визуально
+                        contentDescription = "−1",
+                        modifier = Modifier.size(16.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                }
+                androidx.compose.material3.IconButton(
+                    onClick = onIncrement,
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Outlined.Add,
+                        contentDescription = "+1",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                    )
+                }
             }
             Text(
                 formatCurrency(item.subtotal.toBigDecimalSafe()),

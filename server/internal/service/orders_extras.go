@@ -607,22 +607,103 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 			reason = *in.Reason
 		}
 		canceller := actor.UserID
-		item.CancelledAt = &now
-		item.CancelledBy = &canceller
-		item.CancelReason = &reason
-		item.UpdatedAt = now
-		if err := tx.Save(&item).Error; err != nil {
+
+		// Partial-cancel: если qty задан и qty < item.qty → split строку.
+		// Создаём отдельный cancelled row на qtyToCancel, исходную уменьшаем
+		// на эту же дельту. Если qty не задан или >= item.qty — обычная
+		// полная отмена (старое поведение).
+		var qtyToCancel decimal.Decimal
+		fullCancel := true
+		if in.Qty != nil && strings.TrimSpace(*in.Qty) != "" {
+			q, err := decimal.FromString(*in.Qty)
+			if err != nil {
+				return apperrors.Wrap("VALIDATION", "bad qty: "+*in.Qty, err)
+			}
+			if !decimal.IsPositive(q) {
+				return apperrors.Wrap("VALIDATION", "qty must be > 0", nil)
+			}
+			// Если qty < item.qty — partial. Иначе full.
+			if q.Cmp(item.Qty) < 0 {
+				qtyToCancel = q
+				fullCancel = false
+			} else {
+				qtyToCancel = item.Qty
+			}
+		} else {
+			qtyToCancel = item.Qty
+		}
+
+		// Загрузим модификаторы (нужны для line-total и для split-копирования).
+		var itemMods []models.OrderItemModifier
+		if err := tx.Where("order_item_id = ?", item.ID).Find(&itemMods).Error; err != nil {
 			return err
 		}
+		modSum := decimal.Zero
+		for _, m := range itemMods {
+			modSum = decimal.Add(modSum, m.Price)
+		}
+		// Per-unit стоимость строки = price + сумма модификаторов.
+		perUnit := decimal.Add(item.Price, modSum)
+		lineDelta := decimal.Normalize(decimal.Mul(perUnit, qtyToCancel))
+
+		if fullCancel {
+			item.CancelledAt = &now
+			item.CancelledBy = &canceller
+			item.CancelReason = &reason
+			item.UpdatedAt = now
+			if err := tx.Save(&item).Error; err != nil {
+				return err
+			}
+		} else {
+			// 1) Создаём новый cancelled-row копию.
+			split := models.OrderItem{
+				ID:           uuid.NewString(),
+				OrderID:      item.OrderID,
+				MenuItemID:   item.MenuItemID,
+				Name:         item.Name,
+				Note:         item.Note,
+				Qty:          qtyToCancel,
+				Price:        item.Price,
+				COGS:         item.COGS,
+				Unit:         item.Unit,
+				UnitSize:     item.UnitSize,
+				CancelledAt:  &now,
+				CancelledBy:  &canceller,
+				CancelReason: &reason,
+				// printed_at / served_at не копируем — отменяемая часть была
+				// «непропечатанной» (иначе фронт обычно не даёт partial).
+				CreatedAt: item.CreatedAt,
+				UpdatedAt: now,
+			}
+			if err := tx.Create(&split).Error; err != nil {
+				return err
+			}
+			// 2) Уменьшаем оригинальный row.
+			item.Qty = decimal.Sub(item.Qty, qtyToCancel)
+			item.UpdatedAt = now
+			if err := tx.Model(&models.OrderItem{}).
+				Where("id = ?", item.ID).
+				Updates(map[string]any{
+					"qty":        item.Qty,
+					"updated_at": now,
+				}).Error; err != nil {
+				return err
+			}
+			// Модификаторы на split НЕ копируем — line-total split'а считается по
+			// per-unit оригинала (включающему модификаторы), runner'у тоже
+			// достаточно факта отмены X штук.
+			item = split
+		}
+
 		// Recompute order total.
-		lineTotal := decimal.Normalize(decimal.Mul(item.Price, item.Qty))
-		order.Total = decimal.Normalize(decimal.Sub(order.Total, lineTotal))
+		order.Total = decimal.Normalize(decimal.Sub(order.Total, lineDelta))
 		order.TotalWithService = order.Total
 		order.UpdatedAt = now
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
-		// Cancel runner — для повара.
+		// Cancel runner — для повара. Передаём отменённый row (split при partial,
+		// оригинал при full).
 		if err := s.enqueueCancelRunners(tx, rid, &order, []models.OrderItem{item}, reason, now); err != nil {
 			return err
 		}
@@ -638,6 +719,12 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 			"order_id": orderID,
 			"item_id":  itemID,
 			"action":   "cancel",
+		})
+		// Дублируем как order.updated — UI слушает этот канал, чтобы
+		// перечитать заказ после partial-cancel/merge.
+		buf.Add(EventOrderUpdated, map[string]any{
+			"id":     orderID,
+			"action": "item.cancel",
 		})
 		s.pub.Flush(ctx, rid, buf)
 	}

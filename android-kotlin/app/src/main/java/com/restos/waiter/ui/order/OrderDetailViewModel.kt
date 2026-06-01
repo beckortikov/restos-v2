@@ -172,6 +172,35 @@ class OrderDetailViewModel @Inject constructor(
         }
     }
 
+    /**
+     * iiko-style +1 на позиции. Если у строки есть menuItem — отправляем
+     * addItems с тем же menu_item_id; бэк сам merge'нёт в существующую строку.
+     */
+    fun incrementItem(item: OrderItemDto) {
+        val menuItemId = item.menuItem ?: return
+        if (_state.value.busy) return
+        runAction(busyToast = "+1 ${item.nameAtOrder}") {
+            val updated = repo.incrementItem(orderId, menuItemId)
+            _state.update { it.copy(order = updated) }
+        }
+    }
+
+    /**
+     * iiko-style −1. Если qty>1 — partial-cancel (бэк сплитит строку).
+     * Если qty=1 — открываем обычный диалог с причиной.
+     */
+    fun decrementItem(item: OrderItemDto) {
+        if (item.qty <= 1) {
+            openCancelItem(item)
+            return
+        }
+        if (_state.value.busy) return
+        runAction(busyToast = "−1 ${item.nameAtOrder}") {
+            val updated = repo.decrementItem(orderId, item.id)
+            _state.update { it.copy(order = updated) }
+        }
+    }
+
     fun cancelItem(item: OrderItemDto, reason: String) {
         runAction(busyToast = "Позиция отменена") {
             val updated = repo.cancelItem(orderId, item.id, reason)

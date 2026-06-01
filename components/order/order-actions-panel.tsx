@@ -10,14 +10,14 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { CreditCard, X, Tag, Trash2, Settings2, Receipt, AlertTriangle, FileText, Printer, ChevronDown, ChevronLeft, User as UserIcon, Clock, CheckCircle2, Pencil } from 'lucide-react'
+import { CreditCard, X, Tag, Trash2, Settings2, Receipt, AlertTriangle, FileText, Printer, ChevronDown, ChevronLeft, User as UserIcon, Clock, CheckCircle2, Pencil, Plus, Minus } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAuth } from '@/lib/auth-store'
 import { calcLineCogs, calcLineTotal, formatCurrency, getTimeSince, visibleReceiptItems, voidedItemFlags } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub, dSum } from '@/lib/decimal'
 import {
-  assignWaiter, cancelOrder, cancelOrderItem, closeOrderWithPayment, fetchActiveShift, fetchFinancialAccounts,
+  assignWaiter, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, closeOrderWithPayment, fetchActiveShift, fetchFinancialAccounts,
   setOrderItemNote, printPreBill,
 } from '@/lib/queries'
 // fetchVoidsForOrder через @/lib/queries обёрнут в cachedQuery (Dexie SWR) —
@@ -436,6 +436,47 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     setSavingNote(false)
   }
 
+  // iiko-style +/− на строке позиции. Бэк делает merge сам, поэтому
+  // фронт просто шлёт "+1" / "−1" того же menu_item_id.
+  const [adjustingItemId, setAdjustingItemId] = useState<string | null>(null)
+  const handleIncrementItem = async (item: any) => {
+    if (!item.menuItemId || adjustingItemId) return
+    setAdjustingItemId(item.id)
+    try {
+      await addItemsToOrder(order.id, [{
+        id: '',
+        menuItemId: item.menuItemId,
+        name: item.name,
+        price: item.price,
+        cogs: item.cogs ?? 0,
+        qty: 1,
+        unit: item.unit ?? 'piece',
+        unitSize: item.unitSize ?? 1,
+        modifiers: [],
+      } as any])
+      onItemsChanged?.()
+    } catch (e) {
+      toast.error(e instanceof Error ? `Ошибка: ${e.message}` : '+1 не удалось')
+    }
+    setAdjustingItemId(null)
+  }
+  const handleDecrementItem = async (item: any) => {
+    if (adjustingItemId) return
+    // qty=1 → откатываемся на старый dialog с причиной.
+    if (item.qty <= 1) {
+      setVoidingItem({ id: item.id!, name: item.name, qty: item.qty, price: item.price })
+      return
+    }
+    setAdjustingItemId(item.id)
+    try {
+      await cancelOrderItemPartial(item.id, 1, VOID_REASON_LABELS['guest_changed_mind'], user?.id)
+      onItemsChanged?.()
+    } catch (e) {
+      toast.error(e instanceof Error ? `Ошибка: ${e.message}` : '−1 не удалось')
+    }
+    setAdjustingItemId(null)
+  }
+
   const handleClearNote = async () => {
     if (!editingNote || savingNote) return
     const target = editingNote
@@ -672,6 +713,26 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               }`}>
                 {formatCurrency(calcLineTotal(item.price, item.qty, item.unit, item.unitSize))}
               </span>
+              {!voided && item.id ? (
+                <>
+                  <button
+                    onClick={() => handleDecrementItem(item)}
+                    disabled={adjustingItemId === item.id}
+                    title={item.qty > 1 ? 'Уменьшить (-1)' : 'Отменить позицию'}
+                    className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
+                  >
+                    <Minus className="size-3.5" />
+                  </button>
+                  <button
+                    onClick={() => handleIncrementItem(item)}
+                    disabled={adjustingItemId === item.id}
+                    title="Увеличить (+1)"
+                    className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                </>
+              ) : null}
               {!voided && item.id ? (
                 <button
                   onClick={() => setEditingNote({ id: item.id!, name: item.name, draftNote: item.note ?? '' })}
