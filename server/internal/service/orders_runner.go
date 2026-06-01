@@ -8,7 +8,6 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/escpos"
-	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
 // StationResolver — лёгкий interface, подменяемый для тестов.
@@ -56,11 +55,11 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		miByID[m.ID] = m
 	}
 
-	// Группируем items по station. На каждой строке считаем delta = qty - qty_printed:
-	//   - delta <= 0 → skip (повар уже видит всё; merge не добавил единиц).
-	//   - delta  > 0 → печатаем эту delta и помечаем qty_printed = qty.
-	// printedItemIDs — id строк, у которых надо проставить printed_at/qty_printed
-	// после успешной постановки job'а.
+	// Группируем items по station. Печатаем полную qty каждой строки —
+	// merge не сливается с уже-напечатанными рядами (см. loadMergeableItems
+	// фильтр `printed_at IS NULL`), поэтому здесь не нужно учитывать
+	// qty_printed. printedItemIDs — id строк, чтобы проставить
+	// printed_at/qty_printed после успешной постановки job'а.
 	byStation := make(map[string][]models.OrderItem)
 	printedItemIDs := make([]string, 0, len(items))
 	for _, it := range items {
@@ -71,19 +70,11 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		if !ok {
 			continue
 		}
-		delta := decimal.Sub(it.Qty, it.QtyPrinted)
-		if !decimal.IsPositive(delta) {
-			continue
-		}
 		station := "hot_kitchen"
 		if mi.Station != nil && *mi.Station != "" {
 			station = *mi.Station
 		}
-		// На печать передаём копию item с qty=delta, чтобы повар увидел
-		// именно дозаказ, а не суммарное количество.
-		printable := it
-		printable.Qty = delta
-		byStation[station] = append(byStation[station], printable)
+		byStation[station] = append(byStation[station], it)
 		printedItemIDs = append(printedItemIDs, it.ID)
 	}
 	if len(byStation) == 0 {

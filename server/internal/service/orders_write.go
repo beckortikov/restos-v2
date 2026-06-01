@@ -485,15 +485,15 @@ func preMergeInputs(items []CreateOrderItem) ([]CreateOrderItem, error) {
 }
 
 // loadMergeableItems вытягивает все order_items этого заказа, по которым
-// допустим merge (cancelled_at=NULL, served_at=NULL), + map их модификаторов
-// для быстрого compare.
+// допустим merge (cancelled_at=NULL, served_at=NULL, printed_at=NULL).
 //
-// Фильтр printed_at IS NULL УБРАН (Phase 4+): мы мержим даже в уже напечатанные
-// строки. Runner-эмиттер при следующем enqueue посмотрит на delta qty-qty_printed
-// и допечатает только новую часть. См. enqueueRunners.
+// `printed_at IS NULL` намеренно: после печати на кухню дозаказ создаётся
+// отдельной строкой, чтобы повар увидел его как новую runner-строку. Iiko-
+// style. См. v2.0.66 revert (раньше пробовали мержить с delta-runner, но
+// кассирский UX оказался запутаннее, чем кухонный профит).
 func loadMergeableItems(tx *gorm.DB, orderID string) ([]*models.OrderItem, map[string][]models.OrderItemModifier, error) {
 	var rows []models.OrderItem
-	if err := tx.Where("order_id = ? AND cancelled_at IS NULL AND served_at IS NULL", orderID).
+	if err := tx.Where("order_id = ? AND cancelled_at IS NULL AND served_at IS NULL AND printed_at IS NULL", orderID).
 		Find(&rows).Error; err != nil {
 		return nil, nil, err
 	}
