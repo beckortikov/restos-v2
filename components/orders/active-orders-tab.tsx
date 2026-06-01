@@ -226,8 +226,9 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
         data?.discountValue,
         data?.discountReason,
         data?.payments,
+        data?.skipReceipt,
       )
-        .then(() => toast.success('Заказ оплачен и закрыт'))
+        .then(() => toast.success(data?.skipReceipt ? 'Заказ закрыт без печати' : 'Заказ оплачен · чек на печать'))
         .catch((e) => toast.error(`Ошибка закрытия заказа: ${e?.message ?? ''}`))
       const closedAt = new Date().toISOString()
       setOrders((prev) => prev.map((o) => o.id === orderId ? { ...o, status: 'done' as OrderStatus, paymentMethod: data?.paymentMethod, closedAt } : o))

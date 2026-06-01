@@ -498,8 +498,9 @@ export default function TableMapPage() {
         data?.discountValue,
         data?.discountReason,
         data?.payments,
+        data?.skipReceipt,
       )
-        .then(() => { toast.success('Заказ оплачен'); setSheetOpen(false); setSelectedTable(null); refetchAll() })
+        .then(() => { toast.success(data?.skipReceipt ? 'Заказ закрыт без печати' : 'Заказ оплачен · чек на печать'); setSheetOpen(false); setSelectedTable(null); refetchAll() })
         .catch((e: any) => toast.error(`Ошибка оплаты: ${e?.message ?? ''}`))
     } else if (action === 'start_cooking') {
       const orderId = resolveOrderId()
@@ -959,8 +960,9 @@ export default function TableMapPage() {
                 data?.discountValue,
                 data?.discountReason,
                 data?.payments,
+                data?.skipReceipt,
               )
-              toast.success('Заказ оплачен')
+              toast.success(data?.skipReceipt ? 'Заказ закрыт без печати' : 'Заказ оплачен · чек на печать')
             } catch (e: any) { toast.error(`Ошибка оплаты: ${e?.message ?? ''}`) }
             setOrderActionsOpen(false)
             setSelectedOrder(null)

@@ -44,6 +44,11 @@ type CloseOrderInput struct {
 	// — сервис отключён для этого заказа. Хранится в order.service_percent
 	// и используется при вычислении total_with_service.
 	ServicePercent *string `json:"service_percent,omitempty"`
+
+	// SkipReceipt — если true, чек не enqueue'ится в print_jobs. Кассир выбрал
+	// «Закрыть без печати» в sidebar'е. Заказ всё равно закрывается + revenue
+	// fix'ится. Полезно когда принтер недоступен или клиенту не нужен чек.
+	SkipReceipt bool `json:"skip_receipt,omitempty"`
 }
 
 // PaymentSplit — одна часть split-payment.
@@ -400,15 +405,19 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		}
 
 		// 8. Enqueue receipt print job (fire-and-forget: worker отправит после commit).
+		//    SkipReceipt — кассир явно выбрал «Закрыть без печати» в sidebar'е;
+		//    job не создаём, перепечатка из истории остаётся доступной.
 		receiptPM := ""
 		if order.PaymentMethod != nil {
 			receiptPM = *order.PaymentMethod
 		}
-		if err := s.enqueueReceipt(tx, rid, &order, receiptPM, now); err != nil {
-			// Не валим транзакцию из-за печати — клиент может перепечатать вручную.
-			// Но логируем как warning.
-			// log в worker'е увидим всё равно — здесь оставим без явного логирования.
-			_ = err
+		if !in.SkipReceipt {
+			if err := s.enqueueReceipt(tx, rid, &order, receiptPM, now); err != nil {
+				// Не валим транзакцию из-за печати — клиент может перепечатать вручную.
+				// Но логируем как warning.
+				// log в worker'е увидим всё равно — здесь оставим без явного логирования.
+				_ = err
+			}
 		}
 
 		// Если на этом столе больше нет активных заказов — освобождаем его.

@@ -364,6 +364,7 @@ export async function closeOrderWithPayment(
   discountValue?: number,
   discountReason?: string,
   payments?: import('../types').OrderPayment[],
+  skipReceipt?: boolean,
 ) {
   void tableId; void total; void cogs; void accountName
   void serviceAmount; void discountAmount
@@ -402,6 +403,7 @@ export async function closeOrderWithPayment(
   if (discountType) body.discount_type = discountType as 'percent' | 'fixed'
   if (discountValue != null) body.discount_value = String(discountValue)
   if (discountReason) body.discount_reason = discountReason
+  if (skipReceipt) (body as any).skip_receipt = true
   if (Array.isArray(payments) && payments.length > 0) {
     body.payments = payments.map(p => ({
       method: p.method as 'cash' | 'card' | 'transfer',

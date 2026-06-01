@@ -78,6 +78,8 @@ export interface OrderActionData {
   discountType?: string
   discountValue?: number
   discountReason?: string
+  /** «Закрыть без печати» в close-preview — бэк пропустит enqueueReceipt. */
+  skipReceipt?: boolean
 }
 
 export interface OrderActionsBodyProps {
@@ -355,14 +357,14 @@ export function OrderActionsBody({
     })
   }
 
-  /** Подтверждение из close-preview overlay'а — реально закрывает заказ. */
-  const confirmClose = useCallback(() => {
+  /** Подтверждение из close-preview overlay'а — реально закрывает заказ.
+   *  withPrint=true → бэкенд enqueue'ит чек (по умолчанию).
+   *  withPrint=false → SkipReceipt=true, бэк закроет заказ без печати. */
+  const confirmClose = useCallback((withPrint: boolean) => {
     if (!pendingCloseData) return
-    onAction('close_and_pay', pendingCloseData)
+    onAction('close_and_pay', { ...pendingCloseData, skipReceipt: !withPrint })
     setShowClosePreview(false)
     setPendingCloseData(null)
-    // showReceipt остаётся true — после закрытия overlay переключится
-    // в режим «Заказ оплачен» (handled by заголовок в receipt view).
   }, [pendingCloseData, onAction])
 
   /** Отмена preview — возвращаемся к sidebar'у без закрытия. */
@@ -411,18 +413,28 @@ export function OrderActionsBody({
         </div>
         {isPending ? (
           <div className="px-3 py-2 border-t flex flex-col gap-1.5">
+            {/* Закрыть + напечатать чек (default) и Закрыть без печати —
+                симметрично POS-терминалу order-actions-panel.tsx. Назад как
+                ghost-link под кнопками. SkipReceipt flag см. CloseOrderInput. */}
             <button
-              onClick={confirmClose}
+              onClick={() => confirmClose(true)}
               className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
             >
+              <Printer className="size-4" />
+              Закрыть и распечатать · {formatCurrency(pendingCloseData?.totalWithService ?? totalWithService)}
+            </button>
+            <button
+              onClick={() => confirmClose(false)}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors"
+            >
               <CheckCircle2 className="size-4" />
-              Подтвердить · {formatCurrency(pendingCloseData?.totalWithService ?? totalWithService)}
+              Закрыть без печати
             </button>
             <button
               onClick={cancelClosePreview}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+              className="w-full text-xs text-muted-foreground hover:text-foreground py-1"
             >
-              Назад
+              ← Назад
             </button>
           </div>
         ) : (

@@ -2139,8 +2139,9 @@ export function OrderComposer(props: OrderComposerProps) {
                 data?.discountValue,
                 data?.discountReason,
                 data?.payments,
+                data?.skipReceipt,
               )
-              toast.success('Заказ оплачен')
+              toast.success(data?.skipReceipt ? 'Заказ закрыт без печати' : 'Заказ оплачен · чек на печать')
               setOrderActionsOpen(false)
               setSelectedFullOrder(null)
               // После закрытия заказа: сбросить выбор группы, обновить tabs.
