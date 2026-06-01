@@ -535,46 +535,9 @@ export function OrderActionsBody({
           </div>
         </div>
 
-        {/* Payment section — gating: orders.close, любой активный статус */}
-        {showPaymentSection && (
-          <OrderPaymentPanel
-            isHall={isHallOrder(order.type)}
-            subtotal={subtotal}
-            totalWithService={totalWithService}
-            serviceAmount={serviceAmount}
-            remainingAmount={remainingAmount}
-            discountType={discountType}
-            setDiscountType={setDiscountType}
-            discountValue={discountValue}
-            setDiscountValue={setDiscountValue}
-            discountAmount={discountAmount}
-            setDiscountAmount={setDiscountAmount}
-            discountReason={discountReason}
-            setDiscountReason={setDiscountReason}
-            showDiscountForm={showDiscountForm}
-            setShowDiscountForm={setShowDiscountForm}
-            includeService={includeService}
-            setIncludeService={setIncludeService}
-            servicePercent={servicePercent}
-            setServicePercent={setServicePercent}
-            accounts={accounts}
-            paymentType={paymentType}
-            setPaymentType={setPaymentType}
-            selectedAccountId={selectedAccountId}
-            setSelectedAccountId={setSelectedAccountId}
-            payments={payments}
-            setPayments={setPayments}
-            showAddPayment={showAddPayment}
-            setShowAddPayment={setShowAddPayment}
-            addPaymentMethod={addPaymentMethod}
-            setAddPaymentMethod={setAddPaymentMethod}
-            addPaymentAccountId={addPaymentAccountId}
-            setAddPaymentAccountId={setAddPaymentAccountId}
-            addPaymentAmount={addPaymentAmount}
-            setAddPaymentAmount={setAddPaymentAmount}
-            onPreCheck={handlePreCheck}
-          />
-        )}
+        {/* Payment section ПЕРЕЕХАЛА в footer (см. внизу) — кассир просил
+            «пре-чек/скидка/оплата вниз». Тело sidebar'а — только позиции +
+            итоги; действия (включая выбор счёта) живут в зоне большого пальца. */}
 
         {order.status === 'done' && order.closedAt && (
           <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 text-sm text-emerald-700 text-center flex items-center justify-center gap-2">
@@ -611,10 +574,55 @@ export function OrderActionsBody({
         )}
       </div>
 
-      {/* Footer — компактные кнопки, без скролла (выпилены «Отменить» / «В готовку»
-          для status='new': cancel доступен через форму ниже; cooking стартует
-          из кухни автоматически). */}
-      <div className="px-3 py-2 border-t space-y-1.5">
+      {/* Footer — все действия в зоне большого пальца. Внутри собственный
+          overflow-y-auto (max-h-[55vh]) на случай длинного списка mixed-payments
+          или раскрытой discount-формы. CTA «Закрыть и оплатить» + Отменить
+          живут в sticky-блоке ниже. */}
+      <div className="border-t flex flex-col flex-shrink-0 max-h-[60vh]">
+        {/* Pre-check / Discount / Payment-method picker — раньше были в body. */}
+        {showPaymentSection && (
+          <div className="px-3 py-2 overflow-y-auto">
+            <OrderPaymentPanel
+              isHall={isHallOrder(order.type)}
+              subtotal={subtotal}
+              totalWithService={totalWithService}
+              serviceAmount={serviceAmount}
+              remainingAmount={remainingAmount}
+              discountType={discountType}
+              setDiscountType={setDiscountType}
+              discountValue={discountValue}
+              setDiscountValue={setDiscountValue}
+              discountAmount={discountAmount}
+              setDiscountAmount={setDiscountAmount}
+              discountReason={discountReason}
+              setDiscountReason={setDiscountReason}
+              showDiscountForm={showDiscountForm}
+              setShowDiscountForm={setShowDiscountForm}
+              includeService={includeService}
+              setIncludeService={setIncludeService}
+              servicePercent={servicePercent}
+              setServicePercent={setServicePercent}
+              accounts={accounts}
+              paymentType={paymentType}
+              setPaymentType={setPaymentType}
+              selectedAccountId={selectedAccountId}
+              setSelectedAccountId={setSelectedAccountId}
+              payments={payments}
+              setPayments={setPayments}
+              showAddPayment={showAddPayment}
+              setShowAddPayment={setShowAddPayment}
+              addPaymentMethod={addPaymentMethod}
+              setAddPaymentMethod={setAddPaymentMethod}
+              addPaymentAccountId={addPaymentAccountId}
+              setAddPaymentAccountId={setAddPaymentAccountId}
+              addPaymentAmount={addPaymentAmount}
+              setAddPaymentAmount={setAddPaymentAmount}
+              onPreCheck={handlePreCheck}
+            />
+          </div>
+        )}
+
+        <div className="px-3 pt-2 pb-3 space-y-1.5 border-t flex-shrink-0">
         {/* Готово! для cooking — единственная не-в-grid'е кнопка-статус. */}
         {order.status === 'cooking' && canDo('kitchen.cooking') && (
           <button
@@ -743,6 +751,7 @@ export function OrderActionsBody({
             Вы можете только просматривать заказ
           </div>
         )}
+        </div>
       </div>
 
       {order && (
