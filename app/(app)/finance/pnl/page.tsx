@@ -29,9 +29,20 @@ export default function PnlPage() {
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
-  const [period, setPeriod] = useState<PeriodKey>('month')
+  const [period, setPeriod] = useState<PeriodKey>(() => {
+    try {
+      const v = localStorage.getItem('pnl:period') as PeriodKey | null
+      if (v) return v
+    } catch {}
+    return 'month'
+  })
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  useEffect(() => {
+    if (period !== 'custom') {
+      try { localStorage.setItem('pnl:period', period) } catch {}
+    }
+  }, [period])
 
   useEffect(() => {
     Promise.all([fetchOrders(), fetchFinancialOperations(), fetchMenuItems(), fetchUsers()])

@@ -13,16 +13,18 @@ import {
 import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
+import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
+
+function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string } {
+  const [fy, fm, fd] = fromYmd.split('-').map(Number)
+  const [ty, tm, td] = toYmd.split('-').map(Number)
+  const start = new Date(fy, (fm || 1) - 1, fd || 1, 0, 0, 0, 0)
+  const end = new Date(ty, (tm || 1) - 1, td || 1, 23, 59, 59, 999)
+  return { from: start.toISOString(), to: end.toISOString() }
+}
 
 type PayAction = 'salary' | 'advance' | 'deduction' | 'edit_salary' | 'service'
 type TabKey = 'salary' | 'timesheet'
-
-function monthRange(): { from: string; to: string } {
-  const now = new Date()
-  const from = new Date(now.getFullYear(), now.getMonth(), 1).toISOString()
-  const to = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString()
-  return { from, to }
-}
 
 // ─── Elapsed timer hook ──────────────────────────────────────────────────────
 
@@ -70,9 +72,13 @@ export default function PayrollPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'with_salary' | 'no_salary' | 'has_advance' | 'has_deduction'>('all')
 
   // ─── Service-charge state (period-scoped) ─────────────────────────────────
-  const initialRange = monthRange()
-  const [serviceFrom, setServiceFrom] = useState<string>(initialRange.from)
-  const [serviceTo, setServiceTo] = useState<string>(initialRange.to)
+  const [servicePreset, setServicePreset] = useState<RangePreset>(() => readStoredPreset('payroll:service-preset', 'month'))
+  const _initR = servicePreset === 'custom' ? getPresetRange('month') : getPresetRange(servicePreset)
+  const _initIso = isoFromYmd(_initR.from, _initR.to)
+  const [serviceFrom, setServiceFrom] = useState<string>(_initIso.from)
+  const [serviceTo, setServiceTo] = useState<string>(_initIso.to)
+  const [serviceCustomFrom, setServiceCustomFrom] = useState<string>(getPresetRange('month').from)
+  const [serviceCustomTo, setServiceCustomTo] = useState<string>(getPresetRange('month').to)
   const [serviceAccrual, setServiceAccrual] = useState<Record<string, { accrued: number; ordersCount: number }>>({})
   const [servicePayout, setServicePayout] = useState<Record<string, number>>({})
 
@@ -433,31 +439,25 @@ export default function PayrollPage() {
       {tab === 'salary' && (
         <>
           {/* Service period filter */}
-          <div className="flex flex-wrap items-end gap-3 bg-blue-50/40 border border-blue-100 rounded-xl p-3">
-            <div>
-              <label className="block text-[10px] font-semibold text-blue-700 uppercase mb-1">Период обслуживания</label>
-              <div className="flex items-center gap-2">
-                <input type="date" value={serviceFrom.slice(0, 10)}
-                  onChange={e => setServiceFrom(new Date(e.target.value + 'T00:00:00').toISOString())}
-                  className="px-2 py-1 text-xs bg-card border border-border rounded-md" />
-                <span className="text-xs text-muted-foreground">—</span>
-                <input type="date" value={serviceTo.slice(0, 10)}
-                  onChange={e => setServiceTo(new Date(e.target.value + 'T23:59:59').toISOString())}
-                  className="px-2 py-1 text-xs bg-card border border-border rounded-md" />
-                <button onClick={() => { const r = monthRange(); setServiceFrom(r.from); setServiceTo(r.to) }}
-                  className="px-2 py-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100">
-                  Этот месяц
-                </button>
-                <button onClick={() => {
-                  const now = new Date()
-                  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0).toISOString()
-                  const to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999).toISOString()
-                  setServiceFrom(from); setServiceTo(to)
-                }} className="px-2 py-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100">
-                  Сегодня
-                </button>
-              </div>
-            </div>
+          <div className="flex flex-wrap items-center gap-3 bg-blue-50/40 border border-blue-100 rounded-xl p-3">
+            <label className="text-[10px] font-semibold text-blue-700 uppercase">Период обслуживания</label>
+            <DateRangePresets
+              value={servicePreset}
+              onChange={(p, r) => {
+                setServicePreset(p)
+                if (p === 'custom') {
+                  setServiceCustomFrom(r.from); setServiceCustomTo(r.to)
+                  if (r.from && r.to) { const iso = isoFromYmd(r.from, r.to); setServiceFrom(iso.from); setServiceTo(iso.to) }
+                } else {
+                  const iso = isoFromYmd(r.from, r.to); setServiceFrom(iso.from); setServiceTo(iso.to)
+                }
+              }}
+              customFrom={serviceCustomFrom}
+              customTo={serviceCustomTo}
+              onCustomFromChange={(v) => { setServicePreset('custom'); setServiceCustomFrom(v); if (v && serviceCustomTo) { const iso = isoFromYmd(v, serviceCustomTo); setServiceFrom(iso.from); setServiceTo(iso.to) } }}
+              onCustomToChange={(v) => { setServicePreset('custom'); setServiceCustomTo(v); if (serviceCustomFrom && v) { const iso = isoFromYmd(serviceCustomFrom, v); setServiceFrom(iso.from); setServiceTo(iso.to) } }}
+              storageKey="payroll:service-preset"
+            />
           </div>
 
           {/* KPI */}

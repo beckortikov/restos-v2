@@ -12,6 +12,7 @@ import { fetchFinancialOperations, fetchFinancialAccounts, createFinancialOperat
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
+import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
 import { useDataSync } from '@/hooks/use-data-sync'
 import {
   PieChart, Pie, Cell,
@@ -39,8 +40,10 @@ export default function CashflowPage() {
   const { canDo } = useAuth()
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [activityFilter, setActivityFilter] = useState<FinancialActivity | 'all'>('all')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  const [preset, setPreset] = useState<RangePreset>(() => readStoredPreset('cashflow:preset', 'month'))
+  const initialRange = preset === 'custom' ? { from: '', to: '' } : getPresetRange(preset)
+  const [dateFrom, setDateFrom] = useState(initialRange.from)
+  const [dateTo, setDateTo] = useState(initialRange.to)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [operations, setOperations] = useState<FinancialOperation[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
@@ -170,35 +173,16 @@ export default function CashflowPage() {
       <CashflowCharts operations={filtered} />
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3 items-end">
-        <div className="flex items-center gap-2">
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">С</label>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="px-3 py-1.5 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-          <div className="space-y-1">
-            <label className="text-xs text-muted-foreground">По</label>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="px-3 py-1.5 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-          {(dateFrom || dateTo) && (
-            <button
-              onClick={() => { setDateFrom(''); setDateTo('') }}
-              className="px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground mt-4"
-            >
-              Сбросить
-            </button>
-          )}
-        </div>
+      <div className="flex flex-wrap gap-3 items-center">
+        <DateRangePresets
+          value={preset}
+          onChange={(p, r) => { setPreset(p); setDateFrom(r.from); setDateTo(r.to) }}
+          customFrom={dateFrom}
+          customTo={dateTo}
+          onCustomFromChange={(v) => { setPreset('custom'); setDateFrom(v) }}
+          onCustomToChange={(v) => { setPreset('custom'); setDateTo(v) }}
+          storageKey="cashflow:preset"
+        />
         <div className="flex gap-1.5">
           {(['all', 'in', 'out'] as const).map((t) => (
             <button

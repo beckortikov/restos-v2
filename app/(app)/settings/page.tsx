@@ -9,8 +9,58 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import * as Sentry from '@sentry/react'
-import { Building2, Save, RefreshCw, Copy } from 'lucide-react'
+import { Building2, Save, RefreshCw, Copy, ChevronDown, ChevronRight, X } from 'lucide-react'
 import type { Restaurant } from '@/lib/types'
+
+// ─── Reusable bits ───────────────────────────────────────────────────────────
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-card rounded-xl border border-border p-4 space-y-3">
+      <h2 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h2>
+      <div className="space-y-3">{children}</div>
+    </div>
+  )
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-xs font-medium text-foreground block mb-1">{label}</label>
+      {children}
+      {hint && <p className="text-[11px] text-muted-foreground mt-1">{hint}</p>}
+    </div>
+  )
+}
+
+function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: () => void; disabled?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onChange}
+      disabled={disabled}
+      className={`relative w-10 h-5.5 h-[22px] rounded-full transition-colors shrink-0 ${checked ? 'bg-primary' : 'bg-muted-foreground/30'} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+    >
+      <span className={`absolute top-0.5 left-0.5 size-[18px] rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-[18px]' : ''}`} />
+    </button>
+  )
+}
+
+function ToggleRow({ title, hint, checked, onChange, disabled }: { title: string; hint?: string; checked: boolean; onChange: () => void; disabled?: boolean }) {
+  return (
+    <div className={`flex items-start justify-between gap-3 ${disabled ? 'opacity-50' : ''}`}>
+      <div className="flex-1 min-w-0">
+        <p className="text-xs font-medium text-foreground">{title}</p>
+        {hint && <p className="text-[11px] text-muted-foreground mt-0.5 leading-snug">{hint}</p>}
+      </div>
+      <Toggle checked={checked} onChange={onChange} disabled={disabled} />
+    </div>
+  )
+}
+
+const inputCls = 'w-full px-2.5 py-1.5 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/30'
+
+// ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
   const { user, restaurant: ctxRestaurant, canAccessRoles, updateRestaurant: updateAuthRestaurant } = useAuth()
@@ -28,6 +78,7 @@ export default function SettingsPage() {
   const [supplyAllowNegative, setSupplyAllowNegative] = useState(true)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   // Always load fresh from DB to get latest settings
   useEffect(() => {
@@ -107,21 +158,31 @@ export default function SettingsPage() {
     }
   }
 
-  return (
-    <div className="p-4 md:p-6 space-y-5 max-w-2xl">
-      <div>
-        <h1 className="text-xl font-bold text-foreground">Настройки ресторана</h1>
-        <p className="text-muted-foreground text-sm mt-0.5">Основные данные вашего заведения</p>
-      </div>
+  const handleReset = () => {
+    if (!rest) return
+    setName(rest.name)
+    setAddress(rest.address || '')
+    setPhone(rest.phone || '')
+    setServicePercent(rest.servicePercent)
+    setEnforceStockCheck(rest.enforceStockCheck ?? false)
+    setTechCardsEnabled(rest.techCardsEnabled ?? true)
+    setAutoReadyMode(rest.autoReadyMode ?? false)
+    setAutoReadyBufferMin(rest.autoReadyBufferMin ?? 5)
+    setPinLockEnabled(rest.pinLockEnabled ?? false)
+    setPinLockTimeoutMin(rest.pinLockTimeoutMin ?? 5)
+    setSupplyAllowNegative(rest.supplyAllowNegative ?? true)
+  }
 
-      <div className="bg-card rounded-xl border border-border p-6 space-y-5">
-        <div className="flex items-center gap-3 pb-4 border-b border-border">
-          <div className="size-12 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Building2 className="size-6 text-primary" />
+  return (
+    <div className="flex flex-col h-full">
+      {/* Sticky header */}
+      <div className="sticky top-0 z-10 bg-background/95 backdrop-blur border-b border-border px-4 md:px-6 py-3 flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="size-9 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+            <Building2 className="size-5 text-primary" />
           </div>
-          <div className="flex-1 min-w-0">
-            <p className="font-semibold text-foreground">{rest.name}</p>
-            <p className="text-xs text-muted-foreground">slug: {rest.slug}</p>
+          <div className="min-w-0">
+            <h1 className="text-base font-bold text-foreground truncate">Настройки ресторана</h1>
             <button
               onClick={() => {
                 navigator.clipboard.writeText(rest.id).then(
@@ -129,129 +190,120 @@ export default function SettingsPage() {
                   () => toast.error('Не удалось скопировать'),
                 )
               }}
-              title="Нажмите чтобы скопировать"
-              className="mt-1.5 inline-flex items-center gap-1.5 px-2 py-1 rounded bg-muted hover:bg-border transition-colors text-[11px] font-mono text-muted-foreground hover:text-foreground"
+              title="ID ресторана — скопировать"
+              className="inline-flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-foreground"
             >
-              <span>ID: {rest.id}</span>
-              <Copy className="size-3" />
+              slug: {rest.slug} · <span>ID</span> <Copy className="size-2.5" />
             </button>
           </div>
         </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleReset}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            <X className="size-3.5" />
+            Сбросить
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            <Save className="size-3.5" />
+            {saving ? 'Сохранение…' : 'Сохранить'}
+          </button>
+        </div>
+      </div>
 
-        <div className="space-y-4">
-          <div>
-            <label className="text-sm font-medium text-foreground block mb-1.5">Название</label>
-            <input
-              value={name}
-              onChange={e => setName(e.target.value)}
-              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-foreground block mb-1.5">Адрес</label>
-            <input
-              value={address}
-              onChange={e => setAddress(e.target.value)}
-              placeholder="г. Душанбе, ул. ..."
-              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-foreground block mb-1.5">Телефон</label>
-            <input
-              value={phone}
-              onChange={e => setPhone(e.target.value.replace(/[^\d+\-\s()]/g, ''))}
-              placeholder="+992 ..."
-              inputMode="tel"
-              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-          </div>
-
-          <div>
-            <label className="text-sm font-medium text-foreground block mb-1.5">Процент обслуживания (%)</label>
-            <input
-              type="number"
-              min={0}
-              max={30}
-              value={servicePercent}
-              onChange={e => setServicePercent(Number(e.target.value))}
-              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-            />
-            <p className="text-xs text-muted-foreground mt-1">Добавляется к счёту при оплате (0 = без обслуживания)</p>
-          </div>
-
-          {/* Tech cards toggle */}
-          <div className="flex items-center justify-between pt-4 border-t border-border">
-            <div className="flex-1 pr-3">
-              <p className="text-sm font-medium text-foreground">📋 Учёт по техкартам</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Списание ингредиентов со склада, авто-стоп-лист и проверка остатков по рецептам. Отключите чтобы работать без техкарт (COGS берётся из карточки блюда).</p>
+      <div className="p-4 md:p-6 space-y-4 max-w-6xl w-full">
+        {/* Two-column grid of cards */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Основное */}
+          <Card title="Основное">
+            <Field label="Название">
+              <input value={name} onChange={e => setName(e.target.value)} className={inputCls} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Валюта">
+                <input value={rest.currency} disabled className={`${inputCls} opacity-60`} />
+              </Field>
+              <Field label="Часовой пояс">
+                <input value={rest.timezone} disabled className={`${inputCls} opacity-60`} />
+              </Field>
             </div>
-            <button
-              type="button"
-              onClick={() => setTechCardsEnabled(!techCardsEnabled)}
-              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${techCardsEnabled ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow transition-transform ${techCardsEnabled ? 'translate-x-5' : ''}`} />
-            </button>
-          </div>
+          </Card>
 
-          {/* Stock check toggle */}
-          <div className={`flex items-center justify-between pt-4 border-t border-border ${!techCardsEnabled ? 'opacity-50 pointer-events-none' : ''}`}>
-            <div>
-              <p className="text-sm font-medium text-foreground">Строгая проверка склада</p>
-              <p className="text-xs text-muted-foreground mt-0.5">Блокировать заказ если ингредиентов нет на складе</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setEnforceStockCheck(!enforceStockCheck)}
-              disabled={!techCardsEnabled}
-              className={`relative w-11 h-6 rounded-full transition-colors ${enforceStockCheck ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow transition-transform ${enforceStockCheck ? 'translate-x-5' : ''}`} />
-            </button>
-          </div>
+          {/* Адрес и контакты */}
+          <Card title="Адрес и контакты">
+            <Field label="Адрес">
+              <input value={address} onChange={e => setAddress(e.target.value)} placeholder="г. Душанбе, ул. ..." className={inputCls} />
+            </Field>
+            <Field label="Телефон">
+              <input
+                value={phone}
+                onChange={e => setPhone(e.target.value.replace(/[^\d+\-\s()]/g, ''))}
+                placeholder="+992 ..."
+                inputMode="tel"
+                className={inputCls}
+              />
+            </Field>
+          </Card>
 
-          {/* Supplies allow negative stock */}
-          <div className="flex items-center justify-between pt-4 border-t border-border">
-            <div className="flex-1 pr-3">
-              <p className="text-sm font-medium text-foreground">📦 Хозтовары: разрешить минус</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Если включено — при выдаче больше, чем на складе, остаток уходит в минус (долг гасится следующей приёмкой).
-                Если выключено — выдача блокируется, пока не оформите приёмку.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setSupplyAllowNegative(!supplyAllowNegative)}
-              className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${supplyAllowNegative ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-            >
-              <span className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow transition-transform ${supplyAllowNegative ? 'translate-x-5' : ''}`} />
-            </button>
-          </div>
+          {/* Цены и сервис */}
+          <Card title="Цены и сервис">
+            <Field label="Процент обслуживания (%)" hint="Добавляется к счёту при оплате (0 = без обслуживания)">
+              <input
+                type="number"
+                min={0}
+                max={30}
+                value={servicePercent}
+                onChange={e => setServicePercent(Number(e.target.value))}
+                className={inputCls}
+              />
+            </Field>
+          </Card>
 
-          {/* Auto-ready mode (no kitchen display) */}
-          <div className="pt-4 border-t border-border space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex-1 pr-3">
-                <p className="text-sm font-medium text-foreground">🍳 Авто-готовность (без экрана повара)</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Повар работает по чекам с принтера. Заказ автоматически становится &laquo;готов&raquo; через время указанное в техкарте.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAutoReadyMode(!autoReadyMode)}
-                className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${autoReadyMode ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-              >
-                <span className={`absolute top-0.5 left-0.5 size-5 rounded-full bg-white shadow transition-transform ${autoReadyMode ? 'translate-x-5' : ''}`} />
-              </button>
+          {/* Склад и техкарты */}
+          <Card title="Склад и техкарты">
+            <ToggleRow
+              title="📋 Учёт по техкартам"
+              hint="Списание ингредиентов, авто-стоп-лист, проверка остатков по рецептам."
+              checked={techCardsEnabled}
+              onChange={() => setTechCardsEnabled(!techCardsEnabled)}
+            />
+            <div className="border-t border-border pt-3">
+              <ToggleRow
+                title="Строгая проверка склада"
+                hint="Блокировать заказ если ингредиентов нет на складе"
+                checked={enforceStockCheck}
+                onChange={() => setEnforceStockCheck(!enforceStockCheck)}
+                disabled={!techCardsEnabled}
+              />
             </div>
+            <div className="border-t border-border pt-3">
+              <ToggleRow
+                title="📦 Хозтовары: разрешить минус"
+                hint="Выдача больше, чем на складе → остаток в минус (долг гасится приёмкой)."
+                checked={supplyAllowNegative}
+                onChange={() => setSupplyAllowNegative(!supplyAllowNegative)}
+              />
+            </div>
+          </Card>
+
+          {/* Workflow */}
+          <Card title="Workflow кухни">
+            <ToggleRow
+              title="🍳 Авто-готовность (без экрана повара)"
+              hint="Повар работает по чекам с принтера. Заказ авто-готов через время из техкарты."
+              checked={autoReadyMode}
+              onChange={() => setAutoReadyMode(!autoReadyMode)}
+            />
             {autoReadyMode && (
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
-                <label className="text-xs font-medium text-blue-900 block">
-                  Запасной буфер времени (мин)
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-2.5">
+                <label className="text-[11px] font-medium text-blue-900 block mb-1.5">
+                  Запасной буфер (мин)
                 </label>
                 <div className="flex items-center gap-2">
                   <input
@@ -260,75 +312,66 @@ export default function SettingsPage() {
                     max={30}
                     value={autoReadyBufferMin}
                     onChange={e => setAutoReadyBufferMin(Math.max(0, Math.min(30, Number(e.target.value) || 0)))}
-                    className="w-20 px-3 py-2 bg-white border border-blue-300 rounded-lg text-sm text-center"
+                    className="w-16 px-2 py-1 bg-white border border-blue-300 rounded text-sm text-center"
                   />
-                  <p className="text-xs text-blue-800 flex-1">
-                    Добавляется к максимальному времени готовки из техкарты блюд
+                  <p className="text-[11px] text-blue-800 flex-1">
+                    Добавляется к макс. времени готовки из техкарты
                   </p>
                 </div>
-                <p className="text-[11px] text-blue-700">
-                  💡 Например: лагман 30 мин + буфер 5 мин = заказ станет &laquo;готов&raquo; через 35 мин
-                </p>
               </div>
             )}
-          </div>
-        </div>
+          </Card>
 
-        {/* PIN Lock */}
-        <div className="bg-card rounded-xl border border-border p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-foreground">🔒 PIN-код блокировка POS</p>
-              <p className="text-xs text-muted-foreground mt-0.5">POS блокируется после бездействия. Разблокировка по PIN-коду сотрудника.</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setPinLockEnabled(!pinLockEnabled)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${pinLockEnabled ? 'bg-primary' : 'bg-muted'}`}
-            >
-              <span className={`inline-block size-4 transform rounded-full bg-white transition-transform ${pinLockEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-            </button>
-          </div>
-          {pinLockEnabled && (
-            <div className="bg-blue-50 rounded-lg p-4 space-y-3">
-              <div className="flex items-center gap-3">
-                <label className="text-xs text-blue-800 font-medium">Блокировать через:</label>
+          {/* Безопасность */}
+          <Card title="Безопасность">
+            <ToggleRow
+              title="🔒 PIN-блокировка POS"
+              hint="POS блокируется после бездействия. Разблокировка по PIN сотрудника."
+              checked={pinLockEnabled}
+              onChange={() => setPinLockEnabled(!pinLockEnabled)}
+            />
+            {pinLockEnabled && (
+              <div className="bg-blue-50 border border-blue-200 rounded-md p-2.5 flex items-center gap-2">
+                <label className="text-[11px] text-blue-900 font-medium">Через:</label>
                 <select
                   value={pinLockTimeoutMin}
                   onChange={e => setPinLockTimeoutMin(Number(e.target.value))}
-                  className="px-3 py-2 bg-white border border-blue-300 rounded-lg text-sm"
+                  className="px-2 py-1 bg-white border border-blue-300 rounded text-xs"
                 >
                   <option value={1}>1 мин</option>
                   <option value={3}>3 мин</option>
                   <option value={5}>5 мин</option>
                   <option value={10}>10 мин</option>
                 </select>
-                <p className="text-xs text-blue-800 flex-1">бездействия на POS-терминале</p>
+                <p className="text-[11px] text-blue-800 flex-1">бездействия на терминале</p>
               </div>
-              <p className="text-[11px] text-blue-700">
-                💡 Назначьте PIN каждому сотруднику в разделе «Права доступа». При блокировке POS показывает цифровую клавиатуру — сотрудник вводит свой PIN и работает от своего имени.
-              </p>
-            </div>
-          )}
+            )}
+          </Card>
         </div>
 
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          <Save className="size-4" />
-          {saving ? 'Сохранение...' : 'Сохранить'}
-        </button>
+        {/* Дополнительно — collapsible (owner-only danger zone) */}
+        {user?.role === 'owner' && (
+          <div className="bg-card rounded-xl border border-border overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setAdvancedOpen(v => !v)}
+              className="w-full px-4 py-3 flex items-center justify-between text-left hover:bg-muted/40 transition-colors"
+            >
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Дополнительно</p>
+                <p className="text-xs text-muted-foreground/80 mt-0.5">Опасная зона — сброс данных ресторана</p>
+              </div>
+              {advancedOpen ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+            </button>
+            {advancedOpen && (
+              <div className="border-t border-border p-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
+                <ClearOpsCard restaurantId={rest.id} restaurantName={rest.name} />
+                <ClearMenuCard restaurantId={rest.id} restaurantName={rest.name} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
-
-      {/* Owner-only: clear operations / menu for this restaurant */}
-      {user?.role === 'owner' && (
-        <>
-          <ClearOpsCard restaurantId={rest.id} restaurantName={rest.name} />
-          <ClearMenuCard restaurantId={rest.id} restaurantName={rest.name} />
-        </>
-      )}
     </div>
   )
 }
@@ -340,17 +383,16 @@ function ClearOpsCard({ restaurantId, restaurantName }: { restaurantId: string; 
 
   return (
     <>
-      <div className="bg-amber-50 rounded-xl border-2 border-amber-200 p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-amber-800">Сброс операций ресторана</h2>
-        <p className="text-xs text-amber-700">
-          Удалит все заказы, смены, финансовые операции, движения склада, бронирования, журнал действий, инвентаризации, накладные, списания, заготовки. Сбросит балансы счетов, статистику клиентов и поставщиков, статус столов в «Свободен».
-          <br /><strong>Сохранится:</strong> меню, ингредиенты (включая остатки), тех.карты, столы, зоны, сотрудники, поставщики, клиенты (без статистики), счета, активы/пассивы.
+      <div className="bg-amber-50 rounded-lg border border-amber-200 p-3 space-y-2">
+        <h3 className="text-xs font-semibold text-amber-800">Сброс операций ресторана</h3>
+        <p className="text-[11px] text-amber-700 leading-snug">
+          Удалит все заказы, смены, фин. операции, движения склада, бронирования, журнал, инвентаризации, накладные, списания, заготовки. Сохранит меню, ингредиенты, тех.карты, столы, сотрудников.
         </p>
         <button
           onClick={() => { setConfirmName(''); setOpen(true) }}
-          className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-amber-700"
+          className="inline-flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700"
         >
-          <RefreshCw className="size-4" />
+          <RefreshCw className="size-3.5" />
           Сбросить операции
         </button>
       </div>
@@ -412,19 +454,16 @@ function ClearMenuCard({ restaurantId, restaurantName }: { restaurantId: string;
 
   return (
     <>
-      <div className="bg-rose-50 rounded-xl border-2 border-rose-200 p-5 space-y-3">
-        <h2 className="text-sm font-semibold text-rose-800">Очистка меню</h2>
-        <p className="text-xs text-rose-700">
-          Удалит все блюда, категории, тех.карты, модификаторы и заготовки. Старые
-          заказы сохранятся (с замороженными названиями), их связь с меню будет
-          снята. <strong>Не трогает</strong> ингредиенты, остатки склада, столы,
-          сотрудников, поставщиков, клиентов, счета.
+      <div className="bg-rose-50 rounded-lg border border-rose-200 p-3 space-y-2">
+        <h3 className="text-xs font-semibold text-rose-800">Очистка меню</h3>
+        <p className="text-[11px] text-rose-700 leading-snug">
+          Удалит все блюда, категории, тех.карты, модификаторы и заготовки. Старые заказы сохранятся (с замороженными названиями). Не трогает ингредиенты, склад, столы, сотрудников.
         </p>
         <button
           onClick={() => { setConfirmName(''); setOpen(true) }}
-          className="inline-flex items-center gap-2 rounded-lg bg-rose-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-rose-700"
+          className="inline-flex items-center gap-1.5 rounded-md bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-700"
         >
-          <RefreshCw className="size-4" />
+          <RefreshCw className="size-3.5" />
           Очистить меню
         </button>
       </div>

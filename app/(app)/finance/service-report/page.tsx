@@ -8,8 +8,7 @@ import type { User } from '@/lib/types'
 import { exportToExcel } from '@/lib/export-excel'
 import { HandCoins, Download } from 'lucide-react'
 import { toast } from 'sonner'
-
-type Preset = 'today' | 'week' | 'month' | 'custom'
+import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
 
 // Локальная ISO-строка без TZ-конверсии. toISOString() сдвигает в UTC и в
 // таймзонах с положительным смещением (UTC+5 для TJ) локальное 02.05 00:00
@@ -28,22 +27,17 @@ function localISO(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}${sign}${tzH}:${tzM}`
 }
 
-function rangeFor(preset: Preset): { from: string; to: string } {
-  const now = new Date()
-  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
-  if (preset === 'today') {
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0)
-    return { from: localISO(start), to: localISO(endOfDay) }
-  }
-  if (preset === 'week') {
-    const start = new Date(now)
-    start.setDate(start.getDate() - 6)
-    start.setHours(0, 0, 0, 0)
-    return { from: localISO(start), to: localISO(endOfDay) }
-  }
-  // month default
-  const start = new Date(now.getFullYear(), now.getMonth(), 1)
-  return { from: localISO(start), to: localISO(endOfDay) }
+function isoRangeFromYmd(fromYmd: string, toYmd: string): { from: string; to: string } {
+  const [fy, fm, fd] = fromYmd.split('-').map(Number)
+  const [ty, tm, td] = toYmd.split('-').map(Number)
+  const start = new Date(fy, (fm || 1) - 1, fd || 1, 0, 0, 0, 0)
+  const end = new Date(ty, (tm || 1) - 1, td || 1, 23, 59, 59, 999)
+  return { from: localISO(start), to: localISO(end) }
+}
+
+function rangeForPreset(preset: RangePreset): { from: string; to: string } {
+  const r = preset === 'custom' ? getPresetRange('month') : getPresetRange(preset)
+  return isoRangeFromYmd(r.from, r.to)
 }
 
 interface Row {
@@ -57,10 +51,12 @@ interface Row {
 
 export default function ServiceReportPage() {
   const { canDo } = useAuth()
-  const [preset, setPreset] = useState<Preset>('month')
-  const initial = rangeFor('month')
+  const [preset, setPreset] = useState<RangePreset>(() => readStoredPreset('service-report:preset', 'month'))
+  const initial = rangeForPreset(preset === 'custom' ? 'month' : preset)
   const [from, setFrom] = useState(initial.from)
   const [to, setTo] = useState(initial.to)
+  const [customFrom, setCustomFrom] = useState(getPresetRange('month').from)
+  const [customTo, setCustomTo] = useState(getPresetRange('month').to)
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -116,12 +112,18 @@ export default function ServiceReportPage() {
     remaining: rows.reduce((s, r) => s + r.remaining, 0),
   }), [rows])
 
-  const applyPreset = (p: Preset) => {
+  const applyPreset = (p: RangePreset, r: { from: string; to: string }) => {
     setPreset(p)
-    if (p !== 'custom') {
-      const r = rangeFor(p)
-      setFrom(r.from)
-      setTo(r.to)
+    if (p === 'custom') {
+      setCustomFrom(r.from)
+      setCustomTo(r.to)
+      if (r.from && r.to) {
+        const iso = isoRangeFromYmd(r.from, r.to)
+        setFrom(iso.from); setTo(iso.to)
+      }
+    } else {
+      const iso = isoRangeFromYmd(r.from, r.to)
+      setFrom(iso.from); setTo(iso.to)
     }
   }
 
@@ -164,24 +166,16 @@ export default function ServiceReportPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap items-end gap-3 bg-card border border-border rounded-xl p-3">
-        <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
-          {(['today', 'week', 'month', 'custom'] as Preset[]).map(p => (
-            <button key={p} onClick={() => applyPreset(p)}
-              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${preset === p ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
-              {p === 'today' ? 'Сегодня' : p === 'week' ? '7 дней' : p === 'month' ? 'Месяц' : 'Свой'}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-2">
-          <input type="date" value={from.slice(0, 10)}
-            onChange={e => { setPreset('custom'); setFrom(new Date(e.target.value + 'T00:00:00').toISOString()) }}
-            className="px-2 py-1 text-xs bg-card border border-border rounded-md" />
-          <span className="text-xs text-muted-foreground">—</span>
-          <input type="date" value={to.slice(0, 10)}
-            onChange={e => { setPreset('custom'); setTo(new Date(e.target.value + 'T23:59:59').toISOString()) }}
-            className="px-2 py-1 text-xs bg-card border border-border rounded-md" />
-        </div>
+      <div className="flex flex-wrap items-center gap-3 bg-card border border-border rounded-xl p-3">
+        <DateRangePresets
+          value={preset}
+          onChange={(p, r) => applyPreset(p, r)}
+          customFrom={customFrom}
+          customTo={customTo}
+          onCustomFromChange={(v) => { setPreset('custom'); setCustomFrom(v); if (v && customTo) { const iso = isoRangeFromYmd(v, customTo); setFrom(iso.from); setTo(iso.to) } }}
+          onCustomToChange={(v) => { setPreset('custom'); setCustomTo(v); if (customFrom && v) { const iso = isoRangeFromYmd(customFrom, v); setFrom(iso.from); setTo(iso.to) } }}
+          storageKey="service-report:preset"
+        />
       </div>
 
       {/* KPI */}

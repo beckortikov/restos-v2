@@ -77,7 +77,7 @@ export function DatePeriodFilter({
             onClick={() => onPeriodChange(opt.value)}
             className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
               period === opt.value
-                ? 'bg-card shadow-sm text-foreground'
+                ? 'bg-primary text-primary-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
             }`}
           >
