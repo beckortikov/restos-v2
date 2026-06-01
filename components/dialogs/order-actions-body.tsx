@@ -156,6 +156,12 @@ export function OrderActionsBody({
   const [dataLoaded, setDataLoaded] = useState(false)
   const [showReceipt, setShowReceipt] = useState(false)
   const [receiptData, setReceiptData] = useState<ReceiptData | null>(null)
+  // «Закрыть и оплатить» теперь двухшаговый: 1-й клик готовит pendingCloseData
+  // и показывает receipt-preview (showReceipt + showClosePreview), 2-й клик
+  // в превью отправляет onAction('close_and_pay'). До v2.0.82 заказ закрывался
+  // сразу — кассир жаловался что нет шанса проверить состав/сумму.
+  const [showClosePreview, setShowClosePreview] = useState(false)
+  const [pendingCloseData, setPendingCloseData] = useState<any>(null)
   const receiptRef = useRef<HTMLDivElement>(null)
 
   // Split bill
@@ -242,6 +248,8 @@ export function OrderActionsBody({
   useEffect(() => {
     setShowReceipt(false)
     setReceiptData(null)
+    setShowClosePreview(false)
+    setPendingCloseData(null)
     setTipAmount(0)
     setDiscountType(null)
     setDiscountValue(0)
@@ -329,8 +337,8 @@ export function OrderActionsBody({
 
     setReceiptData(receipt)
     setShowReceipt(true)
-
-    onAction('close_and_pay', {
+    setShowClosePreview(true)
+    setPendingCloseData({
       paymentMethod: primaryPm,
       cogs,
       accountId: finalPayments[0]?.accountId ?? selectedAccountId,
@@ -347,11 +355,30 @@ export function OrderActionsBody({
     })
   }
 
+  /** Подтверждение из close-preview overlay'а — реально закрывает заказ. */
+  const confirmClose = useCallback(() => {
+    if (!pendingCloseData) return
+    onAction('close_and_pay', pendingCloseData)
+    setShowClosePreview(false)
+    setPendingCloseData(null)
+    // showReceipt остаётся true — после закрытия overlay переключится
+    // в режим «Заказ оплачен» (handled by заголовок в receipt view).
+  }, [pendingCloseData, onAction])
+
+  /** Отмена preview — возвращаемся к sidebar'у без закрытия. */
+  const cancelClosePreview = useCallback(() => {
+    setShowClosePreview(false)
+    setShowReceipt(false)
+    setReceiptData(null)
+    setPendingCloseData(null)
+  }, [])
+
   const isOwnAsWaiter = role === 'waiter' && order.waiterId === user?.id
   const canDoVoid = canDo('orders.void')
 
-  // ─── Receipt view after payment ──────────────────────────────────────────
+  // ─── Receipt / pre-close confirmation view ───────────────────────────────
   if (showReceipt && receiptData) {
+    const isPending = showClosePreview && !receiptData.isPreCheck
     return (
       <div className="flex flex-col flex-1 min-h-0">
         <div className="px-4 py-3 border-b flex items-center gap-2 text-sm font-semibold">
@@ -359,6 +386,11 @@ export function OrderActionsBody({
             <>
               <FileText className="size-5 text-blue-500" />
               Предварительный счёт
+            </>
+          ) : isPending ? (
+            <>
+              <CreditCard className="size-5 text-primary" />
+              Подтвердите оплату
             </>
           ) : (
             <>
@@ -377,21 +409,39 @@ export function OrderActionsBody({
             <PrintReceipt ref={receiptRef} data={receiptData} />
           </div>
         </div>
-        <div className="px-4 py-3 border-t flex gap-2">
-          <button
-            onClick={handlePrint}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-4 text-base font-medium md:py-3 md:text-sm text-primary-foreground hover:bg-primary/90 transition-colors"
-          >
-            <Printer className="size-4" />
-            Печать чека
-          </button>
-          <button
-            onClick={onClose}
-            className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border-2 border-border px-5 py-4 text-base font-medium md:py-3 md:text-sm hover:bg-muted transition-colors"
-          >
-            Закрыть
-          </button>
-        </div>
+        {isPending ? (
+          <div className="px-3 py-2 border-t flex flex-col gap-1.5">
+            <button
+              onClick={confirmClose}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <CheckCircle2 className="size-4" />
+              Подтвердить · {formatCurrency(pendingCloseData?.totalWithService ?? totalWithService)}
+            </button>
+            <button
+              onClick={cancelClosePreview}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2 text-sm font-medium hover:bg-muted transition-colors"
+            >
+              Назад
+            </button>
+          </div>
+        ) : (
+          <div className="px-3 py-2 border-t flex gap-2">
+            <button
+              onClick={handlePrint}
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+            >
+              <Printer className="size-4" />
+              Печать чека
+            </button>
+            <button
+              onClick={onClose}
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg border border-border px-4 py-2.5 text-sm font-medium hover:bg-muted transition-colors"
+            >
+              Закрыть
+            </button>
+          </div>
+        )}
       </div>
     )
   }
@@ -588,29 +638,33 @@ export function OrderActionsBody({
 
         {showPaymentSection && !order.isSplit && (
           <div className="space-y-1.5">
+            {/* «Дозаказ» + «Разделить счёт» на одной строке — симметрично
+                «Пре-чек / Скидка» в payment-panel, экономит вертикаль. */}
+            <div className="grid grid-cols-2 gap-1.5">
+              {(order.status === 'ready' || order.status === 'served' || order.status === 'bill_requested') ? (
+                <button
+                  onClick={() => goToAddItems(order)}
+                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+                >
+                  <Plus className="size-3.5" />
+                  Дозаказ
+                </button>
+              ) : <div />}
+              <button
+                onClick={() => setShowSplitDialog(true)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors"
+              >
+                <Scissors className="size-3.5" />
+                Разделить счёт
+              </button>
+            </div>
             <button
               onClick={handleCloseAndPay}
               disabled={payments.length > 0 ? paymentsTotal < totalWithService : !selectedAccountId}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <CreditCard className="size-4" />
               Закрыть и оплатить · {formatCurrency(totalWithService)}
-            </button>
-            {(order.status === 'ready' || order.status === 'served' || order.status === 'bill_requested') && (
-              <button
-                onClick={() => goToAddItems(order)}
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
-              >
-                <Plus className="size-3.5" />
-                Дозаказ
-              </button>
-            )}
-            <button
-              onClick={() => setShowSplitDialog(true)}
-              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-4 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors"
-            >
-              <Scissors className="size-3.5" />
-              Разделить счёт
             </button>
           </div>
         )}

@@ -22,7 +22,7 @@ import {
   BottomSheetTitle as SheetTitle,
   BottomSheetDescription as SheetDescription,
 } from '@/components/ui/bottom-sheet'
-import { formatCurrency, getTimeSince, startOfToday } from '@/lib/helpers'
+import { getTimeSince, startOfToday } from '@/lib/helpers'
 import {
   STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -281,6 +281,32 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
                 </button>
               )}
             </span>
+            {/* Гости — поднят сюда из отдельной полоски, чтобы стоял рядом
+                с назначением официанта и был сразу заметен. Применяется к
+                выбранному в табах заказу. */}
+            {order && order.status !== 'done' && order.status !== 'cancelled' && canEditGuests && (
+              <span className="inline-flex items-center gap-1 min-w-0 rounded-md bg-primary/10 px-1.5 py-0.5 text-primary font-medium">
+                <Users className="size-3 shrink-0" />
+                <span>Гости</span>
+                <button
+                  onClick={() => adjustGuests(order.id, -1)}
+                  disabled={guestsBusy || (order.guestsCount ?? 1) <= 1}
+                  className="size-4 rounded border border-primary/30 flex items-center justify-center hover:bg-primary/20 disabled:opacity-30"
+                  aria-label="Меньше гостей"
+                >
+                  <Minus className="size-2.5" />
+                </button>
+                <span className="w-4 text-center font-bold tabular-nums">{order.guestsCount ?? 1}</span>
+                <button
+                  onClick={() => adjustGuests(order.id, +1)}
+                  disabled={guestsBusy || (order.guestsCount ?? 1) >= 99}
+                  className="size-4 rounded border border-primary/30 flex items-center justify-center hover:bg-primary/20 disabled:opacity-30"
+                  aria-label="Больше гостей"
+                >
+                  <Plus className="size-2.5" />
+                </button>
+              </span>
+            )}
           </div>
 
           {showWaiterPicker && canEditTables && (
@@ -333,7 +359,7 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
                 <button
                   key={o.id}
                   onClick={() => setSelectedOrderId(o.id)}
-                  className={`shrink-0 inline-flex flex-col items-start gap-0.5 rounded-xl border-2 px-3 py-2 text-left transition-all ${
+                  className={`shrink-0 inline-flex flex-col items-start gap-0 rounded-lg border px-2.5 py-1 text-left transition-all ${
                     active
                       ? 'border-primary bg-primary/5'
                       : ready
@@ -345,7 +371,9 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
                 >
                   <span className={`text-xs font-semibold ${active ? 'text-primary' : 'text-foreground'}`}>{tabLabel(o, i)}</span>
                   <span className="text-[11px] text-muted-foreground">{ORDER_STATUS_LABELS[o.status]}</span>
-                  <span className="text-xs font-bold">{formatCurrency(o.total)}</span>
+                  {/* Сумму убрали — единая компактная высота карточки, чтобы
+                      ряд групп выглядел однородно (фидбек кассира). Total
+                      виден в sidebar'е выбранной группы. */}
                 </button>
               )
             })}
@@ -362,31 +390,8 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
           </div>
         )}
 
-        {/* Guests stepper для выбранного заказа — закрытый/отменённый недоступен. */}
-        {order && order.status !== 'done' && order.status !== 'cancelled' && canEditGuests && (
-          <div className="px-4 py-2 border-b flex items-center gap-2 text-xs">
-            <span className="text-muted-foreground">Гости:</span>
-            <div className="inline-flex items-center gap-1">
-              <button
-                onClick={() => adjustGuests(order.id, -1)}
-                disabled={guestsBusy || (order.guestsCount ?? 1) <= 1}
-                className="size-6 rounded border border-border flex items-center justify-center hover:bg-muted disabled:opacity-30"
-                aria-label="Меньше гостей"
-              >
-                <Minus className="size-3" />
-              </button>
-              <span className="w-6 text-center font-semibold tabular-nums">{order.guestsCount ?? 1}</span>
-              <button
-                onClick={() => adjustGuests(order.id, +1)}
-                disabled={guestsBusy || (order.guestsCount ?? 1) >= 99}
-                className="size-6 rounded border border-border flex items-center justify-center hover:bg-muted disabled:opacity-30"
-                aria-label="Больше гостей"
-              >
-                <Plus className="size-3" />
-              </button>
-            </div>
-          </div>
-        )}
+        {/* Standalone Guests stepper удалён — переехал в top header рядом
+            с «Официант», см. поднятый span с классом bg-primary/10. */}
 
         {/* Body */}
         {order ? (

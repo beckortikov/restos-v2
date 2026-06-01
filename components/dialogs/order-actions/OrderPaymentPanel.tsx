@@ -16,9 +16,6 @@ import {
   Wallet,
   Building2,
   CheckCircle2,
-  Percent,
-  Minus,
-  Plus,
   FileText,
   Tag,
   Trash2,
@@ -269,72 +266,11 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
         ) : null}
       </div>
 
-      {/* Service */}
-      {isHall && (
-        <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold flex items-center gap-1.5">
-              <Percent className="size-3.5" />
-              Обслуживание
-            </h4>
-            <button
-              onClick={() => setIncludeService(!includeService)}
-              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
-                includeService ? 'bg-primary' : 'bg-muted'
-              }`}
-            >
-              <span className={`inline-block size-3.5 transform rounded-full bg-white transition-transform ${
-                includeService ? 'translate-x-[18px]' : 'translate-x-[3px]'
-              }`} />
-            </button>
-          </div>
-
-          {includeService && (
-            <div className="flex items-center justify-between rounded-xl border border-border p-3">
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setServicePercent(Math.max(0, servicePercent - 5))}
-                  disabled={servicePercent <= 0}
-                  className="size-9 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:bg-muted/80 transition-colors disabled:opacity-30"
-                >
-                  <Minus className="size-4" />
-                </button>
-                <span className="text-lg font-bold w-12 text-center">{servicePercent}%</span>
-                <button
-                  onClick={() => setServicePercent(Math.min(30, servicePercent + 5))}
-                  disabled={servicePercent >= 30}
-                  className="size-9 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:bg-muted/80 transition-colors disabled:opacity-30"
-                >
-                  <Plus className="size-4" />
-                </button>
-              </div>
-              <span className="text-sm font-medium text-muted-foreground">
-                +{formatCurrency(serviceAmount)}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Total */}
-      <div className="rounded-xl bg-primary/5 border-2 border-primary/20 px-4 py-3 space-y-1">
-        {discountAmount > 0 && (
-          <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">Подытог</span>
-            <span className="font-medium">{formatCurrency(subtotal)}</span>
-          </div>
-        )}
-        {discountAmount > 0 && (
-          <div className="flex items-center justify-between text-sm text-red-600">
-            <span>Скидка</span>
-            <span className="font-medium">-{formatCurrency(discountAmount)}</span>
-          </div>
-        )}
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-bold">К оплате</span>
-          <span className="text-xl font-bold text-primary">{formatCurrency(totalWithService)}</span>
-        </div>
-      </div>
+      {/* Service-charge UI исключён из sidebar'а — % обслуживания берётся из
+          настроек ресторана и применяется автоматически. Итоговая сумма
+          (включая обслуживание) показана в OrderTotalsBlock выше; «К оплате»
+          дублировал её, поэтому удалён. CTA «Закрыть и оплатить · сумма»
+          в footer'е тоже показывает total. */}
 
       {/* Mixed payment section */}
       <div className="space-y-3">
