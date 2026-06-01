@@ -197,7 +197,7 @@ func PreBillLayout(in ReceiptInput) []byte {
 	b.TextLn(PadRow("К ОПЛАТЕ:", decToShort(in.Total), cols/2))
 	b.FontNormal().Bold(false)
 
-	b.LF().AlignCenter().TextLn("ПРЕДВАРИТЕЛЬНЫЙ — не является").TextLn("фискальным чеком").LF()
+	b.LF().AlignCenter().TextLn("ПРЕДВАРИТЕЛЬНЫЙ - не является").TextLn("фискальным чеком").LF()
 
 	b.Feed(3).CutFull()
 	return b.Bytes()
@@ -245,7 +245,7 @@ func RunnerLayout(in RunnerInput) []byte {
 	b.Text(dashes(cols)).LF()
 
 	for _, it := range in.Items {
-		b.FontDouble().TextLnf("%d × %s", it.Qty, it.Name).FontNormal()
+		b.FontDouble().TextLnf("%d x %s", it.Qty, it.Name).FontNormal()
 		for _, m := range it.Modifiers {
 			b.TextLnf("  + %s", m)
 		}
@@ -294,7 +294,7 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	b.Text(dashes(cols)).LF()
 
 	for _, it := range in.Items {
-		b.FontDouble().TextLnf("× %d  %s", it.Qty, it.Name).FontNormal()
+		b.FontDouble().TextLnf("x %d  %s", it.Qty, it.Name).FontNormal()
 	}
 	if in.Reason != "" {
 		b.LF().Bold(true).TextLn("Причина:").Bold(false).TextLn(in.Reason)

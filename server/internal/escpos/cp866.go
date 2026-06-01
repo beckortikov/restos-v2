@@ -12,15 +12,27 @@ package escpos
 
 import "unicode/utf8"
 
+// dropRune — sentinel значение возвращаемое runeToCP866 для символов, которые
+// должны быть полностью отброшены (не выводить даже '?'): zero-width chars,
+// эмодзи и пр. Используем impossible byte 0xFF как маркер — реально 0xFF в
+// CP866 это «space» (NBSP-like) и в чеках нам не нужен.
+const dropRune = byte(0xFF)
+
 // EncodeCP866 переводит строку UTF-8 → байты CP866.
-// Символы, отсутствующие в таблице, заменяются на '?' (0x3F).
+// Символы, отсутствующие в таблице, заменяются на '?' (0x3F) либо отбрасываются
+// (эмодзи, zero-width). Для типографских символов («» — … × → и т.д.)
+// делается ASCII-транслитерация (см. runeToCP866).
 //
 // Покрывает: ASCII (0x00..0x7F), русские заглавные/строчные, ё/Ё, №, ½/¼,
 // псевдографику (для разделителей). Этого достаточно для чеков.
 func EncodeCP866(s string) []byte {
 	out := make([]byte, 0, len(s))
 	for _, r := range s {
-		out = append(out, runeToCP866(r))
+		b := runeToCP866(r)
+		if b == dropRune {
+			continue
+		}
+		out = append(out, b)
 	}
 	return out
 }
@@ -31,13 +43,18 @@ func EncodeCP866Bytes(b []byte) []byte {
 	out := make([]byte, 0, len(b))
 	for len(b) > 0 {
 		r, size := utf8.DecodeRune(b)
-		out = append(out, runeToCP866(r))
+		c := runeToCP866(r)
+		if c != dropRune {
+			out = append(out, c)
+		}
 		b = b[size:]
 	}
 	return out
 }
 
 // runeToCP866 — единичный rune → byte. Hot path, без аллокаций.
+// Возвращает dropRune (0xFF) для рун, которые следует полностью отбросить
+// (эмодзи, zero-width). Возвращает '?' для неизвестных символов.
 func runeToCP866(r rune) byte {
 	switch {
 	case r < 0x80:
@@ -107,12 +124,59 @@ func runeToCP866(r rune) byte {
 		return 0xFA
 	case r == '°':
 		return 0xF8
-	case r == '±':
-		return 0xF1 // приблизительно; в CP866 ±=0xF1 совпадает с ё, но в чеках обычно используется только в reports — приоритет ё
+	// ─── ASCII-fallback'и для типографских символов ───────────────────────
+	// Принтер их не умеет, отдаём максимально близкий ASCII. Соответствует
+	// CP866_MAP в ../restos/lib/print-service.ts.
+	case r == '—' || r == '–' || r == '−':
+		// em-dash, en-dash, minus sign → '-'
+		return '-'
+	case r == '«' || r == '»' || r == '“' || r == '”' || r == '„':
+		// guillemets и curly double quotes → '"'
+		return '"'
+	case r == '‘' || r == '’' || r == '‚' || r == '`':
+		// curly single quotes, backtick → '
+		return '\''
+	case r == '…':
+		// ellipsis — отдаём один '.'; если важно «...», в layout заменить заранее.
+		return '.'
+	case r == '×':
+		return 'x'
+	case r == '→' || r == '⇒' || r == '➔' || r == '➜':
+		return '>'
+	case r == '←' || r == '⇐':
+		return '<'
+	case r == '↑' || r == '⇑':
+		return '^'
+	case r == '↓' || r == '⇓':
+		return 'v'
+	case r == '✓' || r == '✔':
+		return '+'
+	case r == '✗' || r == '✘':
+		return 'x'
+	case r == '★' || r == '☆':
+		return '*'
 	case r == '€':
-		return '?' // в CP866 нет € — отдадим '?'
+		// в CP866 нет € — отдадим 'E'. В layout'ах принято писать «EUR».
+		return 'E'
 	case r == '₽':
-		return '?' // в CP866 нет ₽ — для рубля используем «р.» в layout
+		// в CP866 нет ₽ — отдаём 'R'. В layout'ах принято писать «р.»
+		return 'R'
+	case r == ' ' || r == ' ' || r == ' ' || r == ' ' || r == ' ':
+		// non-breaking space / narrow / thin / figure / hair space → regular space
+		return ' '
+	case r == '​' || r == '‌' || r == '‍' || r == '\ufeff':
+		// zero-width: ZWSP, ZWNJ, ZWJ, BOM — полностью отбрасываем
+		return dropRune
+	// Эмодзи и прочая внеплоскостная пиктография — отбрасываем (BMP supplementary
+	// planes начиная с U+10000). Это покрывает 🍕🥗🔥 и т.д.
+	case r > 0xFFFF:
+		return dropRune
+	// Геометрические/символьные знаки внутри BMP, которые часто прилетают в
+	// названиях блюд из старых меню (U+2600..U+27BF — Misc Symbols + Dingbats).
+	// Если уже не сматчили выше — отбрасываем.
+	case r >= 0x2600 && r <= 0x27BF:
+		return dropRune
+	// Misc Symbols and Pictographs (U+1F300..) уже отрезаны проверкой r > 0xFFFF.
 	}
 	return '?'
 }
