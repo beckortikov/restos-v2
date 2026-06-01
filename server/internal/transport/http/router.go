@@ -380,6 +380,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/shifts/{id}/expenses", shiftsH.AddExpense)
 			g.Delete("/shifts/{id}/expenses/{op_id}", shiftsH.DeleteExpense)
 			g.Delete("/cash-shift-operations/{id}", shiftsH.DeleteOperationByID)
+			g.Post("/shifts/{id}/print-z", shiftsH.PrintZ)
+			g.Post("/shifts/{id}/print-x", shiftsH.PrintX)
 
 			g.Post("/stock/receipts", stockH.CreateReceipt)
 			g.Post("/stock/receipts/{id}/confirm", stockH.ConfirmReceipt)

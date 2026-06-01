@@ -255,6 +255,9 @@ type ZReport struct {
 	GuestsCount      int                         `json:"guests_count"`
 	Operations       []models.CashShiftOperation `json:"operations"`
 	Discrepancy      decimal.Decimal             `json:"discrepancy"`
+	// Previous — выжимка предыдущей закрытой смены (для delta-chip на UI).
+	// nil, если это первая смена ресторана.
+	Previous *PreviousSummary `json:"previous,omitempty"`
 }
 
 // ZReport — GET /api/v1/shifts/{id}/zreport.
@@ -460,6 +463,12 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		Where("restaurant_id = ? AND shift_id = ? AND status = ?", rid, shiftID, "closed").
 		Scan(&guests).Error; err == nil {
 		out.GuestsCount = guests.N
+	}
+
+	// ─── Previous shift summary (delta-chip) ───────────────────────────
+	// Best-effort: ошибка/отсутствие предыдущей смены не валит ответ.
+	if prev, err := s.loadPreviousSummary(ctx, &shift); err == nil {
+		out.Previous = prev
 	}
 
 	return out, nil

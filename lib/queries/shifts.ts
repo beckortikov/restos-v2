@@ -80,6 +80,14 @@ export async function fetchShiftRevenue(shiftId: string): Promise<{ cashRevenue:
   }
 }
 
+export interface ShiftZReportPrevious {
+  revenue: number
+  ordersCount: number
+  avgCheck: number
+  guestsCount: number
+  closedAt?: string | null
+}
+
 export interface ShiftZReport {
   cashRevenue: number
   cardRevenue: number
@@ -91,6 +99,7 @@ export interface ShiftZReport {
   salesByWaiter: { waiterId: string; name: string; ordersCount: number; total: number; avgCheck: number }[]
   salesByCategory: { name: string; qty: number; total: number }[]
   salesByOrderType: { type: string; ordersCount: number; total: number }[]
+  previous?: ShiftZReportPrevious | null
 }
 
 export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> {
@@ -125,7 +134,32 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
       ordersCount: Number(t.orders_count ?? 0),
       total: Number(t.total ?? 0),
     })),
+    previous: r?.previous
+      ? {
+          revenue: Number(r.previous.revenue ?? 0),
+          ordersCount: Number(r.previous.orders_count ?? 0),
+          avgCheck: Number(r.previous.avg_check ?? 0),
+          guestsCount: Number(r.previous.guests_count ?? 0),
+          closedAt: r.previous.closed_at ?? null,
+        }
+      : null,
   }
+}
+
+// ─── Print Z/X-report (sends ESC/POS to default receipt printer) ──────────
+
+export async function printShiftZ(shiftId: string): Promise<{ jobId: string; status: string }> {
+  const res: any = await unwrap(
+    api.POST('/api/v1/shifts/{id}/print-z', { params: { path: { id: shiftId } } }),
+  )
+  return { jobId: String(res?.job_id ?? ''), status: String(res?.status ?? 'pending') }
+}
+
+export async function printShiftX(shiftId: string): Promise<{ jobId: string; status: string }> {
+  const res: any = await unwrap(
+    api.POST('/api/v1/shifts/{id}/print-x', { params: { path: { id: shiftId } } }),
+  )
+  return { jobId: String(res?.job_id ?? ''), status: String(res?.status ?? 'pending') }
 }
 
 export async function fetchShiftOperations(shiftId: string): Promise<CashShiftOperation[]> {

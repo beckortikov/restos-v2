@@ -2013,6 +2013,59 @@ paths:
                   guests_count: { type: integer }
                   operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
                   discrepancy: { type: string }
+                  previous:
+                    type: object
+                    nullable: true
+                    properties:
+                      revenue: { type: string }
+                      orders_count: { type: integer }
+                      avg_check: { type: string }
+                      guests_count: { type: integer }
+                      closed_at: { type: string, format: date-time, nullable: true }
+
+  /api/v1/shifts/{id}/print-z:
+    post:
+      tags: [shifts]
+      summary: Печать Z-отчёта смены на receipt-принтер
+      description: |
+        Создаёт PrintJob type='z_report' с готовым ESC/POS payload.
+        Реальная отправка — асинхронным воркером очереди.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, status]
+                properties:
+                  job_id: { type: string, format: uuid }
+                  status: { type: string }
+
+  /api/v1/shifts/{id}/print-x:
+    post:
+      tags: [shifts]
+      summary: Печать промежуточного X-отчёта (без обнуления)
+      description: |
+        Аналог print-z, но layout — X-отчёт (без секции «Расхождение»).
+        Может вызываться при открытой смене.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, status]
+                properties:
+                  job_id: { type: string, format: uuid }
+                  status: { type: string }
 
   /api/v1/shifts/{id}/revenue:
     get:

@@ -5,14 +5,36 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
 import { type CashShift, type CashShiftOperation, type FinancialAccount } from '@/lib/types'
-import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, type ShiftZReport } from '@/lib/queries'
-import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard } from 'lucide-react'
+import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, printShiftZ, printShiftX, type ShiftZReport } from '@/lib/queries'
+import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useDataSync } from '@/hooks/use-data-sync'
 
 const EXPENSE_CATEGORIES = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
+
+// DeltaChip — маленький бейдж «↑ +5% к прошлой смене» под KPI-числом.
+// Серый «—» если предыдущее значение 0 (деление на ноль) или previous отсутствует.
+function DeltaChip({ current, previous, hasPrevious }: { current: number; previous: number; hasPrevious: boolean }) {
+  if (!hasPrevious) return null
+  if (!Number.isFinite(previous) || previous === 0) {
+    return <p className="text-[11px] text-muted-foreground mt-0.5">— к прошлой смене</p>
+  }
+  const delta = ((current - previous) / Math.abs(previous)) * 100
+  const isUp = delta >= 0
+  const cls = isUp ? 'text-emerald-600' : 'text-rose-600'
+  const Icon = isUp ? ArrowUp : ArrowDown
+  const sign = isUp ? '+' : '−'
+  const abs = Math.abs(delta)
+  return (
+    <p className={`text-[11px] mt-0.5 flex items-center gap-0.5 ${cls}`}>
+      <Icon className="size-3" />
+      <span className="font-medium">{sign}{abs < 10 ? abs.toFixed(1) : Math.round(abs)}%</span>
+      <span className="text-muted-foreground"> к прошлой смене</span>
+    </p>
+  )
+}
 
 export default function ShiftsPage() {
   const { user, canDo } = useAuth()
@@ -271,6 +293,24 @@ export default function ShiftsPage() {
     }
   }
 
+  const handlePrintZ = async (shiftId: string) => {
+    try {
+      await printShiftZ(shiftId)
+      toast.success('Z-отчёт отправлен на принтер')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка печати Z-отчёта')
+    }
+  }
+
+  const handlePrintX = async (shiftId: string) => {
+    try {
+      await printShiftX(shiftId)
+      toast.success('X-отчёт отправлен на принтер')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка печати X-отчёта')
+    }
+  }
+
   const handleOp = async () => {
     if (!activeShift || !showOp || opAmount <= 0) return
     try {
@@ -339,6 +379,20 @@ export default function ShiftsPage() {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
+                onClick={() => handlePrintX(activeShift.id)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-card border border-border text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap"
+                title="Печать промежуточного X-отчёта (без обнуления)"
+              >
+                <Printer className="size-3.5" />X-отчёт
+              </button>
+              <button
+                onClick={() => handlePrintZ(activeShift.id)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-card border border-border text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap"
+                title="Печать Z-отчёта на принтер"
+              >
+                <Printer className="size-3.5" />Печать Z
+              </button>
+              <button
                 onClick={() => { exportShiftToXlsx(activeShift).catch(e => toast.error(e instanceof Error ? e.message : 'Ошибка экспорта')) }}
                 className="inline-flex items-center gap-1.5 px-3 py-2 bg-card border border-border text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap"
                 title="Экспорт текущей смены в Excel"
@@ -362,14 +416,29 @@ export default function ShiftsPage() {
               <p className="text-[11px] text-muted-foreground mt-0.5">
                 Нал {formatCurrency(liveRevenue.cashRevenue)} · Безнал {formatCurrency(liveRevenue.cardRevenue)}
               </p>
+              <DeltaChip
+                current={liveRevenue.cashRevenue + liveRevenue.cardRevenue}
+                previous={zReport?.previous?.revenue ?? 0}
+                hasPrevious={!!zReport?.previous}
+              />
             </div>
             <div className="bg-muted/50 rounded-lg p-3">
               <p className="text-xs text-muted-foreground">Средний чек</p>
               <p className="text-lg font-bold text-foreground">{formatCurrency(liveRevenue.avgCheck)}</p>
+              <DeltaChip
+                current={liveRevenue.avgCheck}
+                previous={zReport?.previous?.avgCheck ?? 0}
+                hasPrevious={!!zReport?.previous}
+              />
             </div>
             <div className="bg-muted/50 rounded-lg p-3">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><ShoppingBag className="size-3" />Заказов</p>
               <p className="text-lg font-bold text-foreground">{liveRevenue.ordersCount}</p>
+              <DeltaChip
+                current={liveRevenue.ordersCount}
+                previous={zReport?.previous?.ordersCount ?? 0}
+                hasPrevious={!!zReport?.previous}
+              />
             </div>
             <div className="bg-muted/50 rounded-lg p-3">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><Users className="size-3" />Гостей</p>
@@ -379,6 +448,11 @@ export default function ShiftsPage() {
                   Ср. на гостя {formatCurrency((liveRevenue.cashRevenue + liveRevenue.cardRevenue) / Math.max(1, zReport?.guestsCount ?? 0))}
                 </p>
               )}
+              <DeltaChip
+                current={zReport?.guestsCount ?? 0}
+                previous={zReport?.previous?.guestsCount ?? 0}
+                hasPrevious={!!zReport?.previous}
+              />
             </div>
           </div>
 

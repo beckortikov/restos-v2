@@ -92,6 +92,26 @@ func (h *ShiftsHandler) DeleteExpense(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// PrintZ — POST /api/v1/shifts/{id}/print-z. Кладёт PrintJob type='z_report'.
+func (h *ShiftsHandler) PrintZ(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.PrintZ(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}
+
+// PrintX — POST /api/v1/shifts/{id}/print-x. Кладёт PrintJob type='x_report'.
+func (h *ShiftsHandler) PrintX(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.PrintX(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}
+
 // DeleteOperationByID — DELETE /api/v1/cash-shift-operations/{id}.
 // Удаляет операцию без shift_id в пути — сервер сам резолвит её родителя
 // и применяет tenant-чек.

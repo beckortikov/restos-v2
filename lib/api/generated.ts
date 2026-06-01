@@ -97,6 +97,19 @@ export interface paths {
                         "application/json": {
                             token?: string;
                             session?: components["schemas"]["SessionInfo"];
+                            user?: {
+                                /** Format: uuid */
+                                id?: string;
+                                username?: string;
+                                full_name?: string;
+                                role?: string;
+                                permissions?: string[];
+                            };
+                            restaurant?: {
+                                /** Format: uuid */
+                                id?: string;
+                                name?: string;
+                            };
                         };
                     };
                 };
@@ -7338,8 +7351,20 @@ export interface paths {
                         "application/json": {
                             shift?: Record<string, never>;
                             revenue_by_method?: Record<string, never>[];
+                            sales_by_waiter?: Record<string, never>[];
+                            sales_by_category?: Record<string, never>[];
+                            sales_by_order_type?: Record<string, never>[];
+                            guests_count?: number;
                             operations?: components["schemas"]["CashShiftOperation"][];
                             discrepancy?: string;
+                            previous?: {
+                                revenue?: string;
+                                orders_count?: number;
+                                avg_check?: string;
+                                guests_count?: number;
+                                /** Format: date-time */
+                                closed_at?: string | null;
+                            } | null;
                         };
                     };
                 };
@@ -7347,6 +7372,104 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shifts/{id}/print-z": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Печать Z-отчёта смены на receipt-принтер
+         * @description Создаёт PrintJob type='z_report' с готовым ESC/POS payload.
+         *     Реальная отправка — асинхронным воркером очереди.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            job_id: string;
+                            status: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shifts/{id}/print-x": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Печать промежуточного X-отчёта (без обнуления)
+         * @description Аналог print-z, но layout — X-отчёт (без секции «Расхождение»).
+         *     Может вызываться при открытой смене.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            job_id: string;
+                            status: string;
+                        };
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
