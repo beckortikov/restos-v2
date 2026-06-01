@@ -550,7 +550,7 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
                 className="w-full py-2 rounded-xl border-2 border-dashed border-border text-xs font-medium text-muted-foreground hover:border-muted-foreground/30 hover:text-foreground transition-colors flex items-center justify-center gap-1.5"
               >
                 <ArrowRightLeft className="size-3.5" />
-                Разделить оплату (нал + безнал)
+                Смешанная оплата (нал + безнал)
               </button>
             </>
           ) : (

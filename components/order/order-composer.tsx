@@ -253,6 +253,7 @@ export function OrderComposer(props: OrderComposerProps) {
   const lockDestination = newProps?.lockDestination ?? false
   const onCartChange = newProps?.onCartChange
   const forceNewOrder = newProps?.forceNewOrder ?? false
+  const initialExistingOrderId = newProps?.initialExistingOrderId
 
   // Cart + UI state ---------------------------------------------------------
   const [cart, setCart] = useState<CartLine[]>(newProps?.initialCart ?? [])
@@ -284,7 +285,7 @@ export function OrderComposer(props: OrderComposerProps) {
 
   // Multi-tab state ---------------------------------------------------------
   const [openTabs, setOpenTabs] = useState<TabInfo[]>([])
-  const [selectedExistingOrderId, setSelectedExistingOrderId] = useState<string | null>(null)
+  const [selectedExistingOrderId, setSelectedExistingOrderId] = useState<string | null>(initialExistingOrderId ?? null)
 
   // Inline order actions: открываем существующий OrderActionsDialog поверх
   // POS, чтобы кассир мог закрыть/оплатить заказ не уходя со страницы.
@@ -362,6 +363,8 @@ export function OrderComposer(props: OrderComposerProps) {
         setOpenTabs(tabs)
         if (forceNewOrder) {
           setSelectedExistingOrderId(null)
+        } else if (initialExistingOrderId && tabs.some(t => t.id === initialExistingOrderId)) {
+          setSelectedExistingOrderId(initialExistingOrderId)
         } else if (tabs.length === 1) {
           setSelectedExistingOrderId(tabs[0].id)
         } else if (tabs.length === 0) {
@@ -371,6 +374,7 @@ export function OrderComposer(props: OrderComposerProps) {
         const tabs: TabInfo[] = ids.map(id => ({ id, total: 0, status: 'cooking' }))
         setOpenTabs(tabs)
         if (forceNewOrder) setSelectedExistingOrderId(null)
+        else if (initialExistingOrderId && tabs.some(t => t.id === initialExistingOrderId)) setSelectedExistingOrderId(initialExistingOrderId)
         else if (tabs.length === 1) setSelectedExistingOrderId(tabs[0].id)
       })
       return () => { cancelled = true }
@@ -399,7 +403,7 @@ export function OrderComposer(props: OrderComposerProps) {
     setOpenTabs([])
     setSelectedExistingOrderId(null)
     return () => { cancelled = true }
-  }, [orderType, selectedTableId, tables, isAddMode, forceNewOrder])
+  }, [orderType, selectedTableId, tables, isAddMode, forceNewOrder, initialExistingOrderId])
 
   const existingOrderId = isAddMode
     ? (props as Extract<OrderComposerProps, { mode: 'add' }>).orderId

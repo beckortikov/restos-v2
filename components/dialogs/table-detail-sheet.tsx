@@ -352,10 +352,11 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
             {canAccessRoles(['manager', 'waiter', 'cashier']) && (
               <button
                 onClick={handleNewGroup}
-                className="shrink-0 inline-flex flex-col items-center justify-center gap-0.5 rounded-xl border-2 border-dashed border-primary/40 px-4 py-2 text-primary hover:bg-primary/5 transition-colors min-h-[68px]"
+                className="shrink-0 inline-flex items-center justify-center gap-1 rounded-lg border border-dashed border-primary/40 px-2.5 py-1 text-primary hover:bg-primary/5 transition-colors"
+                title="Новая группа"
               >
-                <Plus className="size-4" />
-                <span className="text-[11px] font-medium">Новая группа</span>
+                <Plus className="size-3.5" />
+                <span className="text-[11px] font-medium">Группа</span>
               </button>
             )}
           </div>

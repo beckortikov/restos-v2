@@ -58,6 +58,10 @@ interface NewOrderProps extends CommonProps {
   /** When true, never auto-pick an existing tab on the chosen table — always
    * create a brand-new order ("Новая группа" UX from the waiter app). */
   forceNewOrder?: boolean
+  /** Pre-select an existing open order by id (when coming from
+   *  OrderActionsBody «Дозаказ» — кассир уже выбрал конкретную группу).
+   *  Без этого composer auto-pick'нет первую в openTabs. */
+  initialExistingOrderId?: string
 }
 
 interface AddItemsProps extends CommonProps {

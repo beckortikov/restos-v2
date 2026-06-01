@@ -18,6 +18,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { formatCurrency, getTimeSince, calcLineCogs, visibleReceiptItems, voidedItemFlags, calcLineTotal } from '@/lib/helpers'
 import { dAdd, dSub, dMul, dDiv, dRound, dSum } from '@/lib/decimal'
@@ -47,8 +48,6 @@ import {
   Clock,
   MapPin,
   UserCircle,
-  Flame,
-  XCircle,
   Scissors,
   CheckCircle2,
   CreditCard,
@@ -131,6 +130,18 @@ export function OrderActionsBody({
   hideMeta,
 }: OrderActionsBodyProps) {
   const { user, restaurant, canDo } = useAuth()
+  const navigate = useNavigate()
+
+  /** «Дозаказ» — навигация в полноценный POS (как «Новая группа»), а не убогий
+   *  AddItemsDialog. Передаём tableId (если есть) + orderId, чтобы композер
+   *  пред-выбрал нужный заказ. takeaway/delivery — только orderId. */
+  const goToAddItems = useCallback((order: Order) => {
+    onClose()
+    const params = new URLSearchParams()
+    if (order.tableId) params.set('tableId', order.tableId)
+    params.set('orderId', order.id)
+    navigate(`/operations/pos?${params.toString()}`)
+  }, [navigate, onClose])
   const role = user?.role || ''
   const [paymentType, setPaymentType] = useState<PaymentType>('cash')
   const [selectedAccountId, setSelectedAccountId] = useState<string>('')
@@ -550,85 +561,55 @@ export function OrderActionsBody({
         )}
       </div>
 
-      {/* Footer */}
-      <div className="px-4 py-3 border-t space-y-2">
-        {order.status === 'new' && (
-          <div className="space-y-2 w-full">
-            <div className="flex gap-2 w-full">
-              {canDo('orders.cancel') && (
-                <button
-                  onClick={() => onAction('cancel')}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl border-2 border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700 hover:bg-red-100 transition-colors"
-                >
-                  <XCircle className="size-4" />
-                  Отменить
-                </button>
-              )}
-              {(canDo('kitchen.cooking') || canDo('orders.cancel')) && (
-                <button
-                  onClick={() => onAction('start_cooking')}
-                  className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-500 px-5 py-4 text-base font-medium md:py-3 md:text-sm text-white hover:bg-amber-600 transition-colors"
-                >
-                  <Flame className="size-4" />
-                  В готовку
-                </button>
-              )}
-            </div>
-            <button
-              onClick={() => { onAction('add_items'); onClose() }}
-              className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border-2 border-primary/30 bg-primary/5 px-5 py-3.5 text-base font-medium md:py-2.5 md:text-sm text-primary hover:bg-primary/10 transition-colors"
-            >
-              <Plus className="size-4" />
-              Дозаказ
-            </button>
-          </div>
-        )}
-
-        {order.status === 'cooking' && (
-          <div className="space-y-2 w-full">
-            {canDo('kitchen.cooking') && (
+      {/* Footer — компактные кнопки, без скролла (выпилены «Отменить» / «В готовку»
+          для status='new': cancel доступен через форму ниже; cooking стартует
+          из кухни автоматически). */}
+      <div className="px-3 py-2 border-t space-y-1.5">
+        {(order.status === 'new' || order.status === 'cooking') && (
+          <>
+            {order.status === 'cooking' && canDo('kitchen.cooking') && (
               <button
                 onClick={() => onAction('mark_ready')}
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 px-5 py-4 text-base font-medium md:py-3 md:text-sm text-white hover:bg-emerald-700 transition-colors"
+                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 transition-colors"
               >
                 <CheckCircle2 className="size-4" />
                 Готово!
               </button>
             )}
             <button
-              onClick={() => { onAction('add_items'); onClose() }}
-              className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border-2 border-primary/30 bg-primary/5 px-5 py-3.5 text-base font-medium md:py-2.5 md:text-sm text-primary hover:bg-primary/10 transition-colors"
+              onClick={() => goToAddItems(order)}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10 transition-colors"
             >
               <Plus className="size-4" />
               Дозаказ
             </button>
-          </div>
+          </>
         )}
 
         {showPaymentSection && !order.isSplit && (
-          <div className="space-y-2">
+          <div className="space-y-1.5">
             <button
               onClick={handleCloseAndPay}
               disabled={payments.length > 0 ? paymentsTotal < totalWithService : !selectedAccountId}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-4 text-base font-medium md:py-3 md:text-sm text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <CreditCard className="size-4" />
               Закрыть и оплатить · {formatCurrency(totalWithService)}
             </button>
             {(order.status === 'ready' || order.status === 'served' || order.status === 'bill_requested') && (
               <button
-                onClick={() => { onAction('add_items'); onClose() }}
-                className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-primary/30 bg-primary/5 px-5 py-3.5 text-base font-medium md:py-2.5 md:text-sm text-primary hover:bg-primary/10 transition-colors"
+                onClick={() => goToAddItems(order)}
+                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
               >
-                <Plus className="size-4" />
+                <Plus className="size-3.5" />
                 Дозаказ
               </button>
             )}
             <button
               onClick={() => setShowSplitDialog(true)}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-border px-5 py-3.5 text-base font-medium md:py-2.5 md:text-sm text-foreground hover:bg-muted transition-colors"
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-4 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors"
             >
-              <Scissors className="size-4" />
+              <Scissors className="size-3.5" />
               Разделить счёт
             </button>
           </div>
