@@ -5,8 +5,8 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
 import { type CashShift, type CashShiftOperation, type FinancialAccount } from '@/lib/types'
-import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge } from '@/lib/queries'
-import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2 } from 'lucide-react'
+import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, type ShiftZReport } from '@/lib/queries'
+import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
@@ -29,6 +29,13 @@ export default function ShiftsPage() {
 
   // Live revenue for active shift
   const [liveRevenue, setLiveRevenue] = useState<{ cashRevenue: number; cardRevenue: number; ordersCount: number; avgCheck: number }>({ cashRevenue: 0, cardRevenue: 0, ordersCount: 0, avgCheck: 0 })
+
+  // Z-report (полная разбивка: способы оплаты, категории, типы заказов, официанты, гостей).
+  // Подтягиваем для активной смены параллельно с liveRevenue, обновляем по SSE.
+  const [zReport, setZReport] = useState<ShiftZReport | null>(null)
+
+  // Tab внутри активной смены: «Сводка» / «Официанты» (frame «15» / «16»).
+  const [activeTab, setActiveTab] = useState<'summary' | 'waiters'>('summary')
 
   // Cash accounts for shift linkage
   const [cashAccounts, setCashAccounts] = useState<FinancialAccount[]>([])
@@ -93,13 +100,19 @@ export default function ShiftsPage() {
     setActiveShift(active)
     setHistory(hist.filter(s => s.status === 'closed'))
     if (active) {
-      const [ops, rev] = await Promise.all([fetchShiftOperations(active.id), fetchShiftRevenue(active.id)])
+      const [ops, rev, zr] = await Promise.all([
+        fetchShiftOperations(active.id),
+        fetchShiftRevenue(active.id),
+        fetchShiftZReport(active.id).catch(() => null),
+      ])
       setShiftOps(ops)
       setLiveRevenue(rev)
+      setZReport(zr)
       await loadServiceRows(active)
     } else {
       setShiftOps([])
       setLiveRevenue({ cashRevenue: 0, cardRevenue: 0, ordersCount: 0, avgCheck: 0 })
+      setZReport(null)
       setWaiterServiceRows([])
     }
   }, [loadServiceRows])
@@ -144,6 +157,7 @@ export default function ShiftsPage() {
     if (!activeShift) { reload().catch(console.error); return }
     fetchShiftRevenue(activeShift.id).then(setLiveRevenue).catch(() => {})
     fetchShiftOperations(activeShift.id).then(setShiftOps).catch(() => {})
+    fetchShiftZReport(activeShift.id).then(setZReport).catch(() => {})
     loadServiceRows(activeShift).catch(() => {})
   }, [activeShift, reload, loadServiceRows])
   useDataSync(
@@ -340,26 +354,168 @@ export default function ShiftsPage() {
             </div>
           </div>
 
-          {/* Quick stats — live revenue */}
+          {/* KPI cards — iiko-style: Выручка / Средний чек / Заказов / Гостей */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-muted/50 rounded-lg p-3">
-              <p className="text-xs text-muted-foreground">Выручка наличные</p>
-              <p className="text-lg font-bold text-emerald-600">{formatCurrency(liveRevenue.cashRevenue)}</p>
+              <p className="text-xs text-muted-foreground">Выручка</p>
+              <p className="text-lg font-bold text-primary">{formatCurrency(liveRevenue.cashRevenue + liveRevenue.cardRevenue)}</p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Нал {formatCurrency(liveRevenue.cashRevenue)} · Безнал {formatCurrency(liveRevenue.cardRevenue)}
+              </p>
             </div>
             <div className="bg-muted/50 rounded-lg p-3">
-              <p className="text-xs text-muted-foreground">Выручка безнал</p>
-              <p className="text-lg font-bold text-blue-600">{formatCurrency(liveRevenue.cardRevenue)}</p>
+              <p className="text-xs text-muted-foreground">Средний чек</p>
+              <p className="text-lg font-bold text-foreground">{formatCurrency(liveRevenue.avgCheck)}</p>
             </div>
             <div className="bg-muted/50 rounded-lg p-3">
               <p className="text-xs text-muted-foreground flex items-center gap-1"><ShoppingBag className="size-3" />Заказов</p>
               <p className="text-lg font-bold text-foreground">{liveRevenue.ordersCount}</p>
-              {liveRevenue.avgCheck > 0 && <p className="text-xs text-muted-foreground">Ср. чек: {formatCurrency(liveRevenue.avgCheck)}</p>}
             </div>
             <div className="bg-muted/50 rounded-lg p-3">
-              <p className="text-xs text-muted-foreground">Итого выручка</p>
-              <p className="text-lg font-bold text-primary">{formatCurrency(liveRevenue.cashRevenue + liveRevenue.cardRevenue)}</p>
+              <p className="text-xs text-muted-foreground flex items-center gap-1"><Users className="size-3" />Гостей</p>
+              <p className="text-lg font-bold text-foreground">{zReport?.guestsCount ?? 0}</p>
+              {(zReport?.guestsCount ?? 0) > 0 && (
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Ср. на гостя {formatCurrency((liveRevenue.cashRevenue + liveRevenue.cardRevenue) / Math.max(1, zReport?.guestsCount ?? 0))}
+                </p>
+              )}
             </div>
           </div>
+
+          {/* Tabs «Сводка» / «Официанты» */}
+          <div className="flex items-center gap-1 border-b border-border -mb-2">
+            <button
+              onClick={() => setActiveTab('summary')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'summary'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+            >
+              <BarChart3 className="inline-block size-3.5 mr-1.5 -mt-0.5" />Сводка
+            </button>
+            <button
+              onClick={() => setActiveTab('waiters')}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${activeTab === 'waiters'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+            >
+              <Users className="inline-block size-3.5 mr-1.5 -mt-0.5" />Официанты
+              {zReport && zReport.salesByWaiter.length > 0 && (
+                <span className="ml-1.5 text-[11px] text-muted-foreground">({zReport.salesByWaiter.length})</span>
+              )}
+            </button>
+          </div>
+
+          {activeTab === 'summary' ? (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Оплата по способам */}
+              <div className="bg-muted/40 rounded-xl p-4 border border-border">
+                <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5"><CreditCard className="size-3.5 text-muted-foreground" />Оплата по способам</h3>
+                {!zReport || zReport.revenueByMethod.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Закрытых заказов пока нет</p>
+                ) : (
+                  <div className="space-y-1.5 text-sm">
+                    {zReport.revenueByMethod.map(m => {
+                      const label = m.paymentMethod === 'cash' ? 'Наличные'
+                        : m.paymentMethod === 'card' ? 'Банк. карта'
+                        : m.paymentMethod === 'transfer' ? 'Перевод'
+                        : m.paymentMethod || '—'
+                      return (
+                        <div key={m.paymentMethod || 'unknown'} className="flex items-center justify-between">
+                          <span className="text-muted-foreground">{label} <span className="text-[11px]">({m.ordersCount})</span></span>
+                          <span className="font-medium text-foreground tabular-nums">{formatCurrency(m.total)}</span>
+                        </div>
+                      )
+                    })}
+                    <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
+                      <span>Итого</span>
+                      <span className="tabular-nums">{formatCurrency(zReport.revenueByMethod.reduce((s, m) => s + m.total, 0))}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Продажи по категориям */}
+              <div className="bg-muted/40 rounded-xl p-4 border border-border">
+                <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5"><Tag className="size-3.5 text-muted-foreground" />Продажи по категориям</h3>
+                {!zReport || zReport.salesByCategory.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Закрытых заказов пока нет</p>
+                ) : (
+                  <div className="space-y-1.5 text-sm">
+                    {zReport.salesByCategory.slice(0, 8).map(c => (
+                      <div key={c.name} className="flex items-center justify-between">
+                        <span className="text-muted-foreground truncate pr-2">{c.name} <span className="text-[11px]">({c.qty} шт)</span></span>
+                        <span className="font-medium text-foreground tabular-nums">{formatCurrency(c.total)}</span>
+                      </div>
+                    ))}
+                    {zReport.salesByCategory.length > 8 && (
+                      <p className="text-[11px] text-muted-foreground italic pt-1">…и ещё {zReport.salesByCategory.length - 8}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* По типу заказа */}
+              <div className="bg-muted/40 rounded-xl p-4 border border-border">
+                <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5"><MapPin className="size-3.5 text-muted-foreground" />По типу заказа</h3>
+                {!zReport || zReport.salesByOrderType.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Закрытых заказов пока нет</p>
+                ) : (
+                  <div className="space-y-1.5 text-sm">
+                    {zReport.salesByOrderType.map(t => {
+                      const label = t.type === 'hall' ? 'В зале'
+                        : t.type === 'takeaway' ? 'С собой'
+                        : t.type === 'delivery' ? 'Доставка'
+                        : t.type
+                      return (
+                        <div key={t.type} className="flex items-center justify-between">
+                          <span className="text-muted-foreground">{label} <span className="text-[11px]">({t.ordersCount})</span></span>
+                          <span className="font-medium text-foreground tabular-nums">{formatCurrency(t.total)}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            /* Tab «Официанты» — per-waiter breakdown по frame «16. Официанты» */
+            <div className="bg-muted/40 rounded-xl border border-border overflow-hidden">
+              {!zReport || zReport.salesByWaiter.length === 0 ? (
+                <div className="p-6 text-center text-sm text-muted-foreground">
+                  Пока нет закрытых заказов с привязкой к официанту
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-[11px] uppercase tracking-wide text-muted-foreground border-b border-border">
+                        <th className="text-left px-3 py-2.5 font-semibold">Официант</th>
+                        <th className="text-right px-3 py-2.5 font-semibold">Заказов</th>
+                        <th className="text-right px-3 py-2.5 font-semibold">Продажи</th>
+                        <th className="text-right px-3 py-2.5 font-semibold">Ср. чек</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {zReport.salesByWaiter.map(w => (
+                        <tr key={w.waiterId} className="border-b border-border/50 last:border-b-0">
+                          <td className="px-3 py-2.5 text-foreground font-medium">{w.name}</td>
+                          <td className="px-3 py-2.5 text-right text-muted-foreground tabular-nums">{w.ordersCount}</td>
+                          <td className="px-3 py-2.5 text-right text-foreground font-medium tabular-nums">{formatCurrency(w.total)}</td>
+                          <td className="px-3 py-2.5 text-right text-muted-foreground tabular-nums">{formatCurrency(w.avgCheck)}</td>
+                        </tr>
+                      ))}
+                      <tr className="bg-muted/60 font-semibold">
+                        <td className="px-3 py-2.5">Итого</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{zReport.salesByWaiter.reduce((s, w) => s + w.ordersCount, 0)}</td>
+                        <td className="px-3 py-2.5 text-right tabular-nums">{formatCurrency(zReport.salesByWaiter.reduce((s, w) => s + w.total, 0))}</td>
+                        <td className="px-3 py-2.5 text-right text-muted-foreground tabular-nums">—</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Cash operations summary */}
           {shiftOps.length > 0 && (

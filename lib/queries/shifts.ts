@@ -80,6 +80,54 @@ export async function fetchShiftRevenue(shiftId: string): Promise<{ cashRevenue:
   }
 }
 
+export interface ShiftZReport {
+  cashRevenue: number
+  cardRevenue: number
+  ordersCount: number
+  avgCheck: number
+  guestsCount: number
+  discrepancy: number
+  revenueByMethod: { paymentMethod: string; ordersCount: number; total: number }[]
+  salesByWaiter: { waiterId: string; name: string; ordersCount: number; total: number; avgCheck: number }[]
+  salesByCategory: { name: string; qty: number; total: number }[]
+  salesByOrderType: { type: string; ordersCount: number; total: number }[]
+}
+
+export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> {
+  const r: any = await unwrap(api.GET('/api/v1/shifts/{id}/zreport', { params: { path: { id: shiftId } } }))
+  const shift = r?.shift ?? {}
+  return {
+    cashRevenue: Number(shift.cash_revenue ?? 0),
+    cardRevenue: Number(shift.card_revenue ?? 0),
+    ordersCount: Number(shift.orders_count ?? 0),
+    avgCheck: Number(shift.avg_check ?? 0),
+    guestsCount: Number(r?.guests_count ?? 0),
+    discrepancy: Number(r?.discrepancy ?? 0),
+    revenueByMethod: (r?.revenue_by_method ?? []).map((m: any) => ({
+      paymentMethod: String(m.payment_method ?? ''),
+      ordersCount: Number(m.orders_count ?? 0),
+      total: Number(m.total ?? 0),
+    })),
+    salesByWaiter: (r?.sales_by_waiter ?? []).map((w: any) => ({
+      waiterId: String(w.waiter_id ?? ''),
+      name: String(w.name ?? '—'),
+      ordersCount: Number(w.orders_count ?? 0),
+      total: Number(w.total ?? 0),
+      avgCheck: Number(w.avg_check ?? 0),
+    })),
+    salesByCategory: (r?.sales_by_category ?? []).map((c: any) => ({
+      name: String(c.name ?? '—'),
+      qty: Number(c.qty ?? 0),
+      total: Number(c.total ?? 0),
+    })),
+    salesByOrderType: (r?.sales_by_order_type ?? []).map((t: any) => ({
+      type: String(t.type ?? 'hall'),
+      ordersCount: Number(t.orders_count ?? 0),
+      total: Number(t.total ?? 0),
+    })),
+  }
+}
+
 export async function fetchShiftOperations(shiftId: string): Promise<CashShiftOperation[]> {
   const env: any = await unwrap(api.GET('/api/v1/shifts/{id}/operations', { params: { path: { id: shiftId } } }))
   const arr: any[] = Array.isArray(env?.data) ? env.data : Array.isArray(env) ? env : []

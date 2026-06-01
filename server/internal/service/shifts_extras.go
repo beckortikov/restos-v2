@@ -222,12 +222,39 @@ type ZReportShift struct {
 	ClosedBy       *string          `json:"closed_by"`
 }
 
+// ZReportSalesByWaiter — per-waiter breakdown (frame «16. Официанты»).
+type ZReportSalesByWaiter struct {
+	WaiterID    string          `json:"waiter_id"`
+	Name        string          `json:"name"`
+	OrdersCount int             `json:"orders_count"`
+	Total       decimal.Decimal `json:"total"`
+	AvgCheck    decimal.Decimal `json:"avg_check"`
+}
+
+// ZReportSalesByCategory — sales по категории меню.
+type ZReportSalesByCategory struct {
+	Name  string          `json:"name"`
+	Qty   int             `json:"qty"`
+	Total decimal.Decimal `json:"total"`
+}
+
+// ZReportSalesByOrderType — sales по типу заказа (hall/takeaway/delivery).
+type ZReportSalesByOrderType struct {
+	Type        string          `json:"type"`
+	OrdersCount int             `json:"orders_count"`
+	Total       decimal.Decimal `json:"total"`
+}
+
 // ZReport — body GET /api/v1/shifts/{id}/zreport.
 type ZReport struct {
-	Shift           ZReportShift                `json:"shift"`
-	RevenueByMethod []ZReportRevenueByMethod    `json:"revenue_by_method"`
-	Operations      []models.CashShiftOperation `json:"operations"`
-	Discrepancy     decimal.Decimal             `json:"discrepancy"`
+	Shift            ZReportShift                `json:"shift"`
+	RevenueByMethod  []ZReportRevenueByMethod    `json:"revenue_by_method"`
+	SalesByWaiter    []ZReportSalesByWaiter      `json:"sales_by_waiter"`
+	SalesByCategory  []ZReportSalesByCategory    `json:"sales_by_category"`
+	SalesByOrderType []ZReportSalesByOrderType   `json:"sales_by_order_type"`
+	GuestsCount      int                         `json:"guests_count"`
+	Operations       []models.CashShiftOperation `json:"operations"`
+	Discrepancy      decimal.Decimal             `json:"discrepancy"`
 }
 
 // ZReport — GET /api/v1/shifts/{id}/zreport.
@@ -310,5 +337,130 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	if shift.ExpectedCash != nil {
 		out.Discrepancy = decimal.Normalize(decimal.Sub(shift.ClosingBalance, *shift.ExpectedCash))
 	}
+
+	// ─── Sales by waiter ──────────────────────────────────────────────
+	type waiterRow struct {
+		WaiterID    *string         `gorm:"column:waiter_id"`
+		OrdersCount int             `gorm:"column:orders_count"`
+		Total       decimal.Decimal `gorm:"column:total"`
+	}
+	var waiterRows []waiterRow
+	if err := s.r.Raw().WithContext(ctx).
+		Model(&models.Order{}).
+		Select("waiter_id, COUNT(*) AS orders_count, COALESCE(SUM(total_with_service), 0) AS total").
+		Where("restaurant_id = ? AND shift_id = ? AND status = ? AND waiter_id IS NOT NULL", rid, shiftID, "closed").
+		Group("waiter_id").
+		Order("total DESC").
+		Find(&waiterRows).Error; err == nil && len(waiterRows) > 0 {
+		// Подгрузим имена.
+		ids := make([]string, 0, len(waiterRows))
+		for _, r := range waiterRows {
+			if r.WaiterID != nil {
+				ids = append(ids, *r.WaiterID)
+			}
+		}
+		nameMap := map[string]string{}
+		if len(ids) > 0 {
+			var users []struct {
+				ID   string `gorm:"column:id"`
+				Name string `gorm:"column:name"`
+			}
+			s.r.Raw().WithContext(ctx).Table("users").Select("id, name").Where("id IN ?", ids).Find(&users)
+			for _, u := range users {
+				nameMap[u.ID] = u.Name
+			}
+		}
+		for _, r := range waiterRows {
+			if r.WaiterID == nil {
+				continue
+			}
+			avg := decimal.Zero
+			if r.OrdersCount > 0 {
+				avg = decimal.Normalize(decimal.DivRound(r.Total, decimal.FromInt(int64(r.OrdersCount))))
+			}
+			name := nameMap[*r.WaiterID]
+			if name == "" {
+				name = "—"
+			}
+			out.SalesByWaiter = append(out.SalesByWaiter, ZReportSalesByWaiter{
+				WaiterID:    *r.WaiterID,
+				Name:        name,
+				OrdersCount: r.OrdersCount,
+				Total:       decimal.Normalize(r.Total),
+				AvgCheck:    avg,
+			})
+		}
+	}
+
+	// ─── Sales by category ────────────────────────────────────────────
+	// Категория хранится прямо в order_items.menu_item_id → menu_items.category.
+	// Используем JOIN, чтобы категории читались как есть даже если меню изменилось.
+	type catRow struct {
+		Name  *string         `gorm:"column:name"`
+		Qty   int             `gorm:"column:qty"`
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	var catRows []catRow
+	if err := s.r.Raw().WithContext(ctx).
+		Table("order_items AS oi").
+		Select("COALESCE(NULLIF(mi.category, ''), 'Без категории') AS name, COUNT(oi.id) AS qty, COALESCE(SUM(oi.qty * oi.price), 0) AS total").
+		Joins("JOIN orders o ON o.id = oi.order_id").
+		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
+		Where("o.restaurant_id = ? AND o.shift_id = ? AND o.status = ? AND oi.cancelled_at IS NULL", rid, shiftID, "closed").
+		Group("COALESCE(NULLIF(mi.category, ''), 'Без категории')").
+		Order("total DESC").
+		Find(&catRows).Error; err == nil {
+		for _, r := range catRows {
+			name := "Без категории"
+			if r.Name != nil && *r.Name != "" {
+				name = *r.Name
+			}
+			out.SalesByCategory = append(out.SalesByCategory, ZReportSalesByCategory{
+				Name:  name,
+				Qty:   r.Qty,
+				Total: decimal.Normalize(r.Total),
+			})
+		}
+	}
+
+	// ─── Sales by order type ──────────────────────────────────────────
+	type typeRow struct {
+		Type        *string         `gorm:"column:type"`
+		OrdersCount int             `gorm:"column:orders_count"`
+		Total       decimal.Decimal `gorm:"column:total"`
+	}
+	var typeRows []typeRow
+	if err := s.r.Raw().WithContext(ctx).
+		Model(&models.Order{}).
+		Select("type, COUNT(*) AS orders_count, COALESCE(SUM(total_with_service), 0) AS total").
+		Where("restaurant_id = ? AND shift_id = ? AND status = ?", rid, shiftID, "closed").
+		Group("type").
+		Order("total DESC").
+		Find(&typeRows).Error; err == nil {
+		for _, r := range typeRows {
+			t := "hall"
+			if r.Type != nil && *r.Type != "" {
+				t = *r.Type
+			}
+			out.SalesByOrderType = append(out.SalesByOrderType, ZReportSalesByOrderType{
+				Type:        t,
+				OrdersCount: r.OrdersCount,
+				Total:       decimal.Normalize(r.Total),
+			})
+		}
+	}
+
+	// ─── Guests count ─────────────────────────────────────────────────
+	var guests struct {
+		N int `gorm:"column:n"`
+	}
+	if err := s.r.Raw().WithContext(ctx).
+		Model(&models.Order{}).
+		Select("COALESCE(SUM(GREATEST(guests_count, 1)), 0) AS n").
+		Where("restaurant_id = ? AND shift_id = ? AND status = ?", rid, shiftID, "closed").
+		Scan(&guests).Error; err == nil {
+		out.GuestsCount = guests.N
+	}
+
 	return out, nil
 }
