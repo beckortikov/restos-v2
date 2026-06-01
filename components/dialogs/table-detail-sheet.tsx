@@ -34,7 +34,7 @@ import {
   type User,
   type Zone,
 } from '@/lib/types'
-import { fetchOrders, fetchUsers, fetchZones, fetchReservationForTable, updateReservationStatus, quickUpdateCapacity } from '@/lib/queries'
+import { fetchOrders, fetchUsers, fetchZones, fetchReservationForTable, updateReservationStatus, quickUpdateCapacity, patchOrder } from '@/lib/queries'
 import { toast } from 'sonner'
 import type { Reservation } from '@/lib/types'
 import { ReservationDialog } from '@/components/dialogs/reservation-dialog'
@@ -93,6 +93,7 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
   const [localCapacity, setLocalCapacity] = useState(table?.capacity ?? 0)
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
+  const [guestsBusy, setGuestsBusy] = useState(false)
 
   const canEditTables = canDo('tables.edit') || canAccessRoles(['manager', 'owner'])
   const canReserve = canAccessRoles(['manager', 'waiter', 'cashier'])
@@ -165,6 +166,29 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
     onOpenChange(false)
     navigate(`/operations/pos?tableId=${table.id}`)
   }, [table, onOpenChange, navigate])
+
+  const canEditGuests = canAccessRoles(['manager', 'waiter', 'cashier', 'owner'])
+
+  /** Локально-оптимистичное обновление гостей текущего заказа + откат при ошибке. */
+  const adjustGuests = useCallback(async (orderId: string, delta: number) => {
+    if (guestsBusy) return
+    const current = orders.find(o => o.id === orderId)
+    if (!current) return
+    const prev = current.guestsCount ?? 1
+    const next = Math.max(1, Math.min(99, prev + delta))
+    if (next === prev) return
+    setOrders(list => list.map(o => o.id === orderId ? { ...o, guestsCount: next } : o))
+    setGuestsBusy(true)
+    try {
+      await patchOrder(orderId, { guestsCount: next })
+    } catch (e: any) {
+      // Rollback.
+      setOrders(list => list.map(o => o.id === orderId ? { ...o, guestsCount: prev } : o))
+      toast.error(e?.message ?? 'Не удалось обновить количество гостей')
+    } finally {
+      setGuestsBusy(false)
+    }
+  }, [orders, guestsBusy])
 
   /** Переадресует action заказ-level в onAction родителя с orderId стола. */
   const handleOrderAction = useCallback((action: string, data?: OrderActionData) => {
@@ -334,6 +358,32 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
                 <span className="text-[11px] font-medium">Новая группа</span>
               </button>
             )}
+          </div>
+        )}
+
+        {/* Guests stepper для выбранного заказа — закрытый/отменённый недоступен. */}
+        {order && order.status !== 'done' && order.status !== 'cancelled' && canEditGuests && (
+          <div className="px-4 py-2 border-b flex items-center gap-2 text-xs">
+            <span className="text-muted-foreground">Гости:</span>
+            <div className="inline-flex items-center gap-1">
+              <button
+                onClick={() => adjustGuests(order.id, -1)}
+                disabled={guestsBusy || (order.guestsCount ?? 1) <= 1}
+                className="size-6 rounded border border-border flex items-center justify-center hover:bg-muted disabled:opacity-30"
+                aria-label="Меньше гостей"
+              >
+                <Minus className="size-3" />
+              </button>
+              <span className="w-6 text-center font-semibold tabular-nums">{order.guestsCount ?? 1}</span>
+              <button
+                onClick={() => adjustGuests(order.id, +1)}
+                disabled={guestsBusy || (order.guestsCount ?? 1) >= 99}
+                className="size-6 rounded border border-border flex items-center justify-center hover:bg-muted disabled:opacity-30"
+                aria-label="Больше гостей"
+              >
+                <Plus className="size-3" />
+              </button>
+            </div>
           </div>
         )}
 
