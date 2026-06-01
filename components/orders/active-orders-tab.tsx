@@ -165,6 +165,22 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
     }
   }, [])
 
+  // ВАЖНО: renderCard объявлен ЗДЕСЬ (до всех early-return ниже), иначе
+  // при skeleton-state / empty-state count хуков отличается между рендерами
+  // → React error #310 «Rendered fewer hooks than expected».
+  const renderCard = useCallback((order: Order) => (
+    <ActiveOrderCard
+      order={order}
+      tablesData={tablesData}
+      usersData={usersData}
+      voids={voidsByOrderId.get(order.id)}
+      servicePercent={servicePercent}
+      onOpen={handleOpenOrder}
+      onPay={handleOpenOrder}
+      onCancel={handleOpenOrder}
+    />
+  ), [tablesData, usersData, voidsByOrderId, servicePercent, handleOpenOrder])
+
   function handleOrderAction(action: string, data?: OrderActionData) {
     if (!selectedOrder) return
     const orderId = selectedOrder.id
@@ -248,19 +264,6 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
       </div>
     )
   }
-
-  const renderCard = useCallback((order: Order) => (
-    <ActiveOrderCard
-      order={order}
-      tablesData={tablesData}
-      usersData={usersData}
-      voids={voidsByOrderId.get(order.id)}
-      servicePercent={servicePercent}
-      onOpen={handleOpenOrder}
-      onPay={handleOpenOrder}
-      onCancel={handleOpenOrder}
-    />
-  ), [tablesData, usersData, voidsByOrderId, servicePercent, handleOpenOrder])
 
   return (
     <>
