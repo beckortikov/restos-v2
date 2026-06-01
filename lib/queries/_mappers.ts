@@ -39,6 +39,7 @@ export const ACTIVE_ORDER_STATUSES = ['open', 'new', 'cooking', 'ready', 'served
 export function _mapBackendOrderStatus(s: unknown): OrderStatus {
   if (s === 'open') return 'new'
   if (s === 'closed') return 'done'
+  if (s === 'refunded') return 'done'
   if (s === 'new' || s === 'cooking' || s === 'ready' || s === 'served'
     || s === 'bill_requested' || s === 'done' || s === 'cancelled') {
     return s
@@ -251,6 +252,9 @@ export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[
     cancelledBy: r.cancelled_by ?? undefined,
     cancelReason: r.cancel_reason ?? undefined,
     cancelledTotal: r.cancelled_total != null ? Number(r.cancelled_total) : undefined,
+    refundedTotal: r.refunded_total != null ? Number(r.refunded_total) : undefined,
+    refundedAt: r.refunded_at ?? undefined,
+    refundReason: r.refund_reason ?? undefined,
     tabLabel: r.tab_label ?? undefined,
     items: mappedItems,
   }

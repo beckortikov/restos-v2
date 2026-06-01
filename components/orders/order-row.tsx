@@ -4,7 +4,7 @@
 // History-табе на странице «Заказы». Вынесены из старого монолитного page.tsx
 // чтобы убрать дублирование между двумя табами.
 
-import { useState, memo } from 'react'
+import { useState, memo, type ReactNode } from 'react'
 import { Clock, MapPin, ChevronDown, ChevronUp } from 'lucide-react'
 import {
   formatCurrency, getTimeSince, calcLineTotal, calcOrderDisplayTotal,
@@ -71,9 +71,11 @@ interface RowProps {
   voids?: OrderVoid[]
   servicePercent?: number
   onOpen?: (order: Order) => void
+  /** Optional inline actions slot — rendered to the right of the row content. */
+  renderActions?: (order: Order) => React.ReactNode
 }
 
-function OrderCardInner({ order, tablesData, usersData, voids, servicePercent, onOpen }: RowProps) {
+function OrderCardInner({ order, tablesData, usersData, voids, servicePercent, onOpen, renderActions }: RowProps) {
   const table = order.tableId ? tablesData.find((t) => t.id === order.tableId) : null
   const waiter = order.waiterId ? usersData.find((u) => u.id === order.waiterId) : null
   const [expanded, setExpanded] = useState(false)
@@ -130,6 +132,12 @@ function OrderCardInner({ order, tablesData, usersData, voids, servicePercent, o
         {expanded ? 'Скрыть состав' : 'Показать состав'}
       </button>
 
+      {renderActions && (
+        <div className="pt-2 border-t border-border flex items-center gap-2 flex-wrap" onClick={(e) => e.stopPropagation()}>
+          {renderActions(order)}
+        </div>
+      )}
+
       {expanded && (
         <div className="pt-2 border-t border-border space-y-1.5">
           {order.items.map((item, idx) => {
@@ -158,10 +166,11 @@ export const OrderCard = memo(OrderCardInner, (prev, next) => {
   if (prev.servicePercent !== next.servicePercent) return false
   if (prev.onOpen !== next.onOpen) return false
   if (prev.voids !== next.voids) return false
+  if (prev.renderActions !== next.renderActions) return false
   return ordersEqualShallow(prev.order, next.order)
 })
 
-function OrderRowInner({ order, tablesData, usersData, voids, servicePercent, onOpen }: RowProps) {
+function OrderRowInner({ order, tablesData, usersData, voids, servicePercent, onOpen, renderActions }: RowProps) {
   const table = order.tableId ? tablesData.find((t) => t.id === order.tableId) : null
   const waiter = order.waiterId ? usersData.find((u) => u.id === order.waiterId) : null
   const voidedFlags = voidedItemFlags(order.items, voids)
@@ -210,6 +219,11 @@ function OrderRowInner({ order, tablesData, usersData, voids, servicePercent, on
       <td className="px-4 py-3">
         <span className="text-xs text-muted-foreground">{order.paymentMethod ? PAYMENT_LABELS[order.paymentMethod] : '—'}</span>
       </td>
+      {renderActions && (
+        <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+          {renderActions(order)}
+        </td>
+      )}
     </tr>
   )
 }
@@ -220,6 +234,7 @@ export const OrderRow = memo(OrderRowInner, (prev, next) => {
   if (prev.servicePercent !== next.servicePercent) return false
   if (prev.onOpen !== next.onOpen) return false
   if (prev.voids !== next.voids) return false
+  if (prev.renderActions !== next.renderActions) return false
   return ordersEqualShallow(prev.order, next.order)
 })
 
@@ -235,9 +250,10 @@ interface VirtualProps {
   voidsByOrderId: Map<string, OrderVoid[]>
   servicePercent?: number
   onOpen: (order: Order) => void
+  renderActions?: (order: Order) => ReactNode
 }
 
-export function VirtualOrderCards({ orders, tablesData, usersData, voidsByOrderId, servicePercent, onOpen }: VirtualProps) {
+export function VirtualOrderCards({ orders, tablesData, usersData, voidsByOrderId, servicePercent, onOpen, renderActions }: VirtualProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
     count: orders.length,
@@ -255,7 +271,7 @@ export function VirtualOrderCards({ orders, tablesData, usersData, voidsByOrderI
               key={order.id}
               style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${v.start}px)`, paddingBottom: 12 }}
             >
-              <OrderCard order={order} tablesData={tablesData} usersData={usersData} voids={voidsByOrderId.get(order.id)} servicePercent={servicePercent} onOpen={onOpen} />
+              <OrderCard order={order} tablesData={tablesData} usersData={usersData} voids={voidsByOrderId.get(order.id)} servicePercent={servicePercent} onOpen={onOpen} renderActions={renderActions} />
             </div>
           )
         })}
@@ -264,7 +280,7 @@ export function VirtualOrderCards({ orders, tablesData, usersData, voidsByOrderI
   )
 }
 
-export function VirtualOrderRows({ orders, tablesData, usersData, voidsByOrderId, servicePercent, onOpen, headers, cols }: VirtualProps & { headers?: string[]; cols?: string }) {
+export function VirtualOrderRows({ orders, tablesData, usersData, voidsByOrderId, servicePercent, onOpen, renderActions, headers, cols }: VirtualProps & { headers?: string[]; cols?: string }) {
   const parentRef = useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
     count: orders.length,
@@ -272,8 +288,14 @@ export function VirtualOrderRows({ orders, tablesData, usersData, voidsByOrderId
     estimateSize: () => 52,
     overscan: 8,
   })
-  const colsClass = cols ?? 'grid-cols-[80px_140px_minmax(120px,1fr)_120px_120px_120px_120px_120px]'
-  const cells = headers ?? ['#', 'Статус', 'Стол/Тип', 'Позиций', 'Сумма', 'Официант', 'Время', 'Оплата']
+  const defaultCols = renderActions
+    ? 'grid-cols-[80px_140px_minmax(120px,1fr)_120px_120px_120px_120px_120px_180px]'
+    : 'grid-cols-[80px_140px_minmax(120px,1fr)_120px_120px_120px_120px_120px]'
+  const colsClass = cols ?? defaultCols
+  const defaultHeaders = renderActions
+    ? ['#', 'Статус', 'Стол/Тип', 'Позиций', 'Сумма', 'Официант', 'Время', 'Оплата', '']
+    : ['#', 'Статус', 'Стол/Тип', 'Позиций', 'Сумма', 'Официант', 'Время', 'Оплата']
+  const cells = headers ?? defaultHeaders
   return (
     <div className="bg-card rounded-xl border border-border overflow-hidden">
       <div className={`grid ${colsClass} bg-muted/40 border-b border-border`}>
@@ -323,6 +345,9 @@ export function VirtualOrderRows({ orders, tablesData, usersData, voidsByOrderId
                   </div>
                 </div>
                 <div className="px-4 py-3"><span className="text-xs text-muted-foreground">{order.paymentMethod ? PAYMENT_LABELS[order.paymentMethod] : '—'}</span></div>
+                {renderActions && (
+                  <div className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>{renderActions(order)}</div>
+                )}
               </div>
             )
           })}

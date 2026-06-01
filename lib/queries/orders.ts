@@ -589,3 +589,22 @@ export async function fetchVoidsForOrders(orderIds: string[]): Promise<Map<strin
   }
   return out
 }
+
+// ─── Refund / Reprint ──────────────────────────────────────────────────────
+
+export async function refundOrder(orderId: string, reason: string, amount?: number): Promise<void> {
+  const body: any = { reason }
+  if (amount != null) body.amount = String(amount)
+  await unwrap(api.POST('/api/v1/orders/{id}/refund' as any, {
+    params: { path: { id: orderId } as any },
+    body: body as any,
+  } as any))
+  logAction('order.refund', 'order', orderId, undefined, { reason, amount })
+}
+
+export async function reprintOrderReceipt(orderId: string): Promise<{ jobId: string; status: string }> {
+  const res: any = await unwrap(api.POST('/api/v1/orders/{id}/reprint-receipt' as any, {
+    params: { path: { id: orderId } as any },
+  } as any))
+  return { jobId: res?.job_id ?? '', status: res?.status ?? 'pending' }
+}

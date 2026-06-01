@@ -47,6 +47,9 @@ type Order struct {
 	CancelledBy        *string          `gorm:"column:cancelled_by" json:"cancelled_by"`
 	CancelReason       *string          `gorm:"column:cancel_reason" json:"cancel_reason"`
 	CancelledTotal     *decimal.Decimal `gorm:"column:cancelled_total;type:numeric(14,4)" json:"cancelled_total"`
+	RefundedTotal      decimal.Decimal  `gorm:"column:refunded_total;type:numeric(14,4);default:0" json:"refunded_total"`
+	RefundedAt         *time.Time       `gorm:"column:refunded_at" json:"refunded_at"`
+	RefundReason       *string          `gorm:"column:refund_reason" json:"refund_reason"`
 	CreatedAt          time.Time        `json:"created_at"`
 	UpdatedAt          time.Time        `json:"updated_at"`
 }

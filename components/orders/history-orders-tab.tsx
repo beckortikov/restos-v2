@@ -5,7 +5,7 @@
 // Cursor-based pagination через next_cursor.
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Search, FileDown, Loader2 } from 'lucide-react'
+import { Search, FileDown, Loader2, Printer, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { useAuth } from '@/lib/auth-store'
@@ -15,10 +15,12 @@ import {
 } from '@/lib/types'
 import {
   fetchOrdersWithCursor, fetchOrders, fetchTables, fetchUsers, fetchVoidsForOrders,
+  refundOrder, reprintOrderReceipt,
 } from '@/lib/queries'
 import { exportOrdersToXlsx } from '@/lib/orders-export'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
 import { OrderActionsDialog } from '@/components/dialogs/order-actions-dialog'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
 import { OrderCard, OrderRow, VirtualOrderCards, VirtualOrderRows } from './order-row'
 
@@ -45,9 +47,19 @@ function parseYmdToDate(s: string, end = false): Date {
   return end ? endOfDay(dt) : startOfDay(dt)
 }
 
+const REFUND_REASONS = [
+  'Жалоба клиента',
+  'Ошибка кассира',
+  'Ошибка кухни',
+  'Качество блюда',
+  'Отказ клиента',
+  'Прочее',
+]
+
 export function HistoryOrdersTab() {
-  const { restaurant } = useAuth()
+  const { restaurant, canDo } = useAuth()
   const servicePercent = restaurant?.servicePercent
+  const canRefund = canDo('orders.refund')
 
   const initialPreset: RangePreset = typeof window !== 'undefined' ? readStoredPreset(STORAGE_KEY, 'month') : 'month'
   const initialRange = useMemo(() => getPresetRange(initialPreset), [initialPreset])
@@ -74,6 +86,13 @@ export function HistoryOrdersTab() {
 
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [actionsDialogOpen, setActionsDialogOpen] = useState(false)
+
+  // Refund dialog state.
+  const [refundOrderObj, setRefundOrderObj] = useState<Order | null>(null)
+  const [refundReason, setRefundReason] = useState<string>(REFUND_REASONS[0])
+  const [refundAmount, setRefundAmount] = useState<string>('')
+  const [refundSubmitting, setRefundSubmitting] = useState(false)
+  const [reprintingId, setReprintingId] = useState<string | null>(null)
 
   // Initial static data
   useEffect(() => {
@@ -174,6 +193,78 @@ export function HistoryOrdersTab() {
       console.error('[history] load full order failed:', e)
     }
   }, [])
+
+  const orderRemainingRefund = useCallback((o: Order): number => {
+    const paid = Number(o.totalWithService ?? o.total ?? 0)
+    const refunded = Number(o.refundedTotal ?? 0)
+    return Math.max(0, paid - refunded)
+  }, [])
+
+  const openRefundDialog = useCallback((o: Order) => {
+    setRefundOrderObj(o)
+    setRefundReason(REFUND_REASONS[0])
+    setRefundAmount(String(orderRemainingRefund(o).toFixed(2)))
+  }, [orderRemainingRefund])
+
+  const submitRefund = async () => {
+    if (!refundOrderObj) return
+    const amt = Number(refundAmount)
+    if (!Number.isFinite(amt) || amt <= 0) { toast.error('Введите сумму возврата > 0'); return }
+    setRefundSubmitting(true)
+    try {
+      await refundOrder(refundOrderObj.id, refundReason, amt)
+      toast.success('Возврат проведён')
+      setRefundOrderObj(null)
+      await load()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка возврата')
+    } finally {
+      setRefundSubmitting(false)
+    }
+  }
+
+  const handleReprint = useCallback(async (o: Order) => {
+    setReprintingId(o.id)
+    try {
+      await reprintOrderReceipt(o.id)
+      toast.success('Чек отправлен на принтер')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка перепечатки')
+    } finally {
+      setReprintingId(null)
+    }
+  }, [])
+
+  const renderRowActions = useCallback((o: Order) => {
+    const isClosed = o.status === 'done'
+    const remaining = orderRemainingRefund(o)
+    const showRefund = canRefund && isClosed && remaining > 0
+    return (
+      <div className="inline-flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); handleReprint(o) }}
+          disabled={reprintingId === o.id}
+          title="Перепечатать чек"
+          className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-card border border-border hover:bg-muted disabled:opacity-50"
+        >
+          {reprintingId === o.id ? <Loader2 className="size-3.5 animate-spin" /> : <Printer className="size-3.5" />}
+          <span className="hidden sm:inline">Печать</span>
+        </button>
+        {showRefund && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); openRefundDialog(o) }}
+            title="Возврат"
+            className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded-md bg-rose-50 border border-rose-200 text-rose-700 hover:bg-rose-100"
+          >
+            <Undo2 className="size-3.5" />
+            <span className="hidden sm:inline">Возврат</span>
+          </button>
+        )}
+      </div>
+    )
+  }, [canRefund, handleReprint, openRefundDialog, orderRemainingRefund, reprintingId])
 
   const handleExport = async () => {
     if (filtered.length === 0) { toast.info('Нет заказов для экспорта'); return }
@@ -316,11 +407,11 @@ export function HistoryOrdersTab() {
         ) : filtered.length === 0 ? (
           <p className="text-muted-foreground text-sm text-center py-10">Заказов не найдено</p>
         ) : filtered.length > 50 ? (
-          <VirtualOrderCards orders={filtered} tablesData={tablesData} usersData={usersData} voidsByOrderId={voidsByOrderId} servicePercent={servicePercent} onOpen={handleOpenOrder} />
+          <VirtualOrderCards orders={filtered} tablesData={tablesData} usersData={usersData} voidsByOrderId={voidsByOrderId} servicePercent={servicePercent} onOpen={handleOpenOrder} renderActions={renderRowActions} />
         ) : (
           <div className="space-y-3">
             {filtered.map(o => (
-              <OrderCard key={o.id} order={o} tablesData={tablesData} usersData={usersData} voids={voidsByOrderId.get(o.id)} servicePercent={servicePercent} onOpen={handleOpenOrder} />
+              <OrderCard key={o.id} order={o} tablesData={tablesData} usersData={usersData} voids={voidsByOrderId.get(o.id)} servicePercent={servicePercent} onOpen={handleOpenOrder} renderActions={renderRowActions} />
             ))}
           </div>
         )}
@@ -329,7 +420,7 @@ export function HistoryOrdersTab() {
       {/* Desktop table */}
       {filtered.length > 50 ? (
         <div className="hidden md:block">
-          <VirtualOrderRows orders={filtered} tablesData={tablesData} usersData={usersData} voidsByOrderId={voidsByOrderId} servicePercent={servicePercent} onOpen={handleOpenOrder} />
+          <VirtualOrderRows orders={filtered} tablesData={tablesData} usersData={usersData} voidsByOrderId={voidsByOrderId} servicePercent={servicePercent} onOpen={handleOpenOrder} renderActions={renderRowActions} />
         </div>
       ) : (
         <div className="hidden md:block bg-card rounded-xl border border-border overflow-hidden">
@@ -337,17 +428,17 @@ export function HistoryOrdersTab() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
-                  {['#', 'Статус', 'Стол/Тип', 'Позиций', 'Сумма', 'Официант', 'Время', 'Оплата'].map(h => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">{h}</th>
+                  {['#', 'Статус', 'Стол/Тип', 'Позиций', 'Сумма', 'Официант', 'Время', 'Оплата', ''].map((h, i) => (
+                    <th key={i} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(o => (
-                  <OrderRow key={o.id} order={o} tablesData={tablesData} usersData={usersData} voids={voidsByOrderId.get(o.id)} servicePercent={servicePercent} onOpen={handleOpenOrder} />
+                  <OrderRow key={o.id} order={o} tablesData={tablesData} usersData={usersData} voids={voidsByOrderId.get(o.id)} servicePercent={servicePercent} onOpen={handleOpenOrder} renderActions={renderRowActions} />
                 ))}
                 {filtered.length === 0 && !loading && (
-                  <tr><td colSpan={8} className="px-4 py-10 text-center text-muted-foreground text-sm">Заказов не найдено</td></tr>
+                  <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground text-sm">Заказов не найдено</td></tr>
                 )}
               </tbody>
             </table>
@@ -376,6 +467,62 @@ export function HistoryOrdersTab() {
         onAction={() => { /* история — read-only; действия отключены */ }}
         onItemsChanged={() => { load().catch(console.error) }}
       />
+
+      {/* Refund dialog */}
+      <Dialog open={!!refundOrderObj} onOpenChange={(open) => { if (!open) setRefundOrderObj(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Возврат заказа{refundOrderObj?.orderNumber ? ` #${refundOrderObj.orderNumber}` : ''}</DialogTitle>
+          </DialogHeader>
+          {refundOrderObj && (
+            <div className="space-y-4">
+              <div className="text-sm text-muted-foreground">
+                Остаток к возврату:{' '}
+                <span className="font-semibold text-foreground">{formatCurrency(orderRemainingRefund(refundOrderObj))}</span>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Причина</label>
+                <select
+                  value={refundReason}
+                  onChange={(e) => setRefundReason(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  {REFUND_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">Сумма</label>
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  min="0"
+                  value={refundAmount}
+                  onChange={(e) => setRefundAmount(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setRefundOrderObj(null)}
+              disabled={refundSubmitting}
+              className="px-4 py-2 text-sm rounded-lg bg-card border border-border hover:bg-muted disabled:opacity-50"
+            >Отмена</button>
+            <button
+              type="button"
+              onClick={submitRefund}
+              disabled={refundSubmitting}
+              className="px-4 py-2 text-sm rounded-lg bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-50 inline-flex items-center gap-2"
+            >
+              {refundSubmitting && <Loader2 className="size-4 animate-spin" />}
+              Подтвердить
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

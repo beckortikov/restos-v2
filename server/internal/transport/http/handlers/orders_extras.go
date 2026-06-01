@@ -316,3 +316,28 @@ func (h *OrdersHandler) CleanupOrphans(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, res)
 }
+
+// Refund — POST /api/v1/orders/{id}/refund.
+func (h *OrdersHandler) Refund(w http.ResponseWriter, r *http.Request) {
+	var in service.RefundOrderInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	res, err := h.svc.Refund(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}
+
+// ReprintReceipt — POST /api/v1/orders/{id}/reprint-receipt.
+func (h *OrdersHandler) ReprintReceipt(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.ReprintReceipt(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}

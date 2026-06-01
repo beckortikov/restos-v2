@@ -731,6 +731,52 @@ paths:
             schema: { type: object, required: [reason], properties: { reason: { type: string } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
 
+  /api/v1/orders/{id}/refund:
+    post:
+      tags: [orders]
+      summary: Возврат денег по закрытому заказу (полный или частичный)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string }
+                amount: { type: string, description: "Сумма возврата (decimal). Если пусто — полный остаток." }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order_id: { type: string, format: uuid }
+                  refunded: { type: string }
+
+  /api/v1/orders/{id}/reprint-receipt:
+    post:
+      tags: [orders]
+      summary: Повторная печать чека (КОПИЯ)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string, format: uuid }
+                  status: { type: string }
+
   /api/v1/orders/{id}/items/{itemId}/void:
     post:
       tags: [orders]

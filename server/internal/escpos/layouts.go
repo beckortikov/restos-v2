@@ -46,7 +46,8 @@ type ReceiptInput struct {
 	TipAmount      decimal.Decimal
 	Total          decimal.Decimal
 	PaymentMethod  string
-	Cols           int // 48 или 32
+	Cols           int  // 48 или 32
+	IsReprint      bool // true → шапка «КОПИЯ ЧЕКА» вместо «Чек № N»
 }
 
 // ReceiptItem — одна позиция в чеке.
@@ -74,6 +75,10 @@ func ReceiptLayout(in ReceiptInput) []byte {
 	b.LF()
 
 	// Meta.
+	if in.IsReprint {
+		b.AlignCenter().Bold(true).TextLn("КОПИЯ ЧЕКА").Bold(false).AlignLeft()
+		b.LF()
+	}
 	b.AlignLeft().Bold(true).TextLnf("Чек № %d", in.OrderNumber).Bold(false)
 	b.TextLnf("Открыт:  %s", in.OpenedAt.Format("02.01.2006 15:04"))
 	b.TextLnf("Закрыт:  %s", in.ClosedAt.Format("02.01.2006 15:04"))

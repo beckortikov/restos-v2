@@ -386,6 +386,9 @@ CREATE TABLE IF NOT EXISTS orders (
   cancelled_by TEXT,
   cancel_reason TEXT,
   cancelled_total NUMERIC(14,4),
+  refunded_total NUMERIC(14,4) NOT NULL DEFAULT 0,
+  refunded_at TIMESTAMPTZ,
+  refund_reason TEXT,
   created_at TIMESTAMPTZ DEFAULT now(),
   updated_at TIMESTAMPTZ DEFAULT now()
 );

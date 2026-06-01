@@ -292,6 +292,9 @@ export interface Order {
   cancelledBy?: string
   cancelReason?: string
   cancelledTotal?: number
+  refundedTotal?: number
+  refundedAt?: string
+  refundReason?: string
 }
 
 export interface OrderPayment {
@@ -707,6 +710,7 @@ export const TEST_PASSWORD = '1234'
 
 export const ALL_PERMISSIONS = [
   'orders.create', 'orders.close', 'orders.cancel', 'orders.void',
+  'orders.refund',
   'orders.view_others',
   'orders.create_stopped',
   'kitchen.cooking',
@@ -734,6 +738,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'orders.close': 'Закрытие / оплата заказов',
   'orders.cancel': 'Отмена заказов',
   'orders.void': 'Отмена позиций (void)',
+  'orders.refund': 'Возврат заказа',
   'orders.view_others': 'Просмотр и дозаказ к чужим заказам',
   'orders.create_stopped': 'Пробивать стоп-блюда (отметка в чеке)',
   'kitchen.cooking': 'Управление кухней',
@@ -762,7 +767,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 export const PERMISSION_GROUPS: { label: string; keys: PermissionKey[] }[] = [
-  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.view_others', 'orders.create_stopped', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'pos.access', 'showcase.view'] },
+  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.view_others', 'orders.create_stopped', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'pos.access', 'showcase.view'] },
   { label: 'Склад', keys: ['inventory.view', 'inventory.manage', 'suppliers.manage', 'menu.view', 'menu.edit', 'menu.view_cost', 'writeoffs.create'] },
   { label: 'Финансы', keys: ['finance.view', 'finance.manage', 'payroll.manage'] },
   { label: 'Аналитика и клиенты', keys: ['analytics.view', 'customers.manage'] },
@@ -815,6 +820,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
     nav: [],
     actions: {
       'orders.create': true, 'orders.close': true, 'orders.void': true,
+      'orders.refund': true,
       'orders.view_others': true,
       'tables.reserve': true, 'shifts.manage': true, 'pos.access': true,
       'showcase.view': true,
