@@ -16,6 +16,11 @@ export default function POSPage() {
   // заказа автоматически становится 'hall'.
   const initialTableId = params.get('tableId') ?? undefined
   const initialOrderType = initialTableId ? ('hall' as const) : undefined
+  // ?newGroup=1 — пришёл из TableDetailSheet «+ Новая группа», нельзя реюзать
+  // существующий заказ стола (multi-tab сценарий: новая группа гостей пришла к
+  // тому же столу). Без forceNewOrder POS попытается auto-pick первый openTab,
+  // что блокирует создание новой группы.
+  const forceNewOrder = params.get('newGroup') === '1'
 
   const isCashier = user?.role === 'cashier'
 
@@ -55,7 +60,7 @@ export default function POSPage() {
   if (isCashier) {
     return (
       <div className="h-full min-h-0 flex flex-col">
-        <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} />
+        <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} forceNewOrder={forceNewOrder} />
       </div>
     )
   }
@@ -65,7 +70,7 @@ export default function POSPage() {
     <>
       {/* Mobile: fill the area between header and bottom nav */}
       <div className="md:hidden fixed inset-0 bottom-16 z-40 bg-background">
-        <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} />
+        <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} forceNewOrder={forceNewOrder} />
       </div>
 
       {/* Desktop: composer fills the main area next to the AppSidebar.
@@ -75,7 +80,7 @@ export default function POSPage() {
           still reachable from the sidebar / inactivity timer. */}
       <div className="hidden md:flex flex-col h-full min-h-0 bg-background">
         <div className="flex-1 min-h-0">
-          <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} />
+          <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} forceNewOrder={forceNewOrder} />
         </div>
       </div>
     </>

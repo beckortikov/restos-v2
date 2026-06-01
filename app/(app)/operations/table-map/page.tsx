@@ -41,6 +41,7 @@ import { useDataSync } from '@/hooks/use-data-sync'
 import { TableDetailSheet } from '@/components/dialogs/table-detail-sheet'
 import { CreateOrderDialog } from '@/components/dialogs/create-order-dialog'
 import { OrderActionsDialog, type OrderActionData } from '@/components/dialogs/order-actions-dialog'
+import { AddItemsDialog } from '@/components/dialogs/add-items-dialog'
 import { ManageZoneDialog } from '@/components/dialogs/manage-zone-dialog'
 import { ManageTableDialog } from '@/components/dialogs/manage-table-dialog'
 import { toast } from 'sonner'
@@ -236,6 +237,7 @@ export default function TableMapPage() {
   // Order actions dialog
   const [orderActionsOpen, setOrderActionsOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
+  const [addItemsOrderId, setAddItemsOrderId] = useState<string | null>(null)
 
   // Table merge mode
   const [mergeMode, setMergeMode] = useState(false)
@@ -412,7 +414,7 @@ export default function TableMapPage() {
     setSheetOpen(true)
   }
 
-  function handleSheetAction(action: string, tableId: string, data?: { orderId?: string; paymentMethod?: PaymentMethod; editTable?: boolean; assignWaiterId?: string; accountId?: string; accountName?: string; servicePercent?: number; serviceAmount?: number; totalWithService?: number }) {
+  function handleSheetAction(action: string, tableId: string, data?: OrderActionData & { orderId?: string; editTable?: boolean; assignWaiterId?: string }) {
     // Resolve which order this action targets. Prefer the explicit orderId from the
     // sheet (multi-tab aware); fall back to the legacy table.currentOrderId.
     const resolveOrderId = (): string | null => {
@@ -475,7 +477,9 @@ export default function TableMapPage() {
         toast.error('Заказ не найден')
         return
       }
-      const cogs = order.items.reduce((s, i) => s + calcLineCogs(i.cogs || 0, i.qty, i.unit, i.unitSize), 0)
+      // OrderActionsBody уже посчитал cogs от visible items (без cancelled+voids) —
+      // используем его если передан, иначе fallback на order.items.
+      const cogs = data?.cogs ?? order.items.reduce((s, i) => s + calcLineCogs(i.cogs || 0, i.qty, i.unit, i.unitSize), 0)
       closeOrderWithPayment(
         order.id,
         data?.paymentMethod || 'cash',
@@ -488,9 +492,50 @@ export default function TableMapPage() {
         data?.servicePercent,
         data?.serviceAmount,
         data?.totalWithService,
+        data?.tipAmount,
+        data?.discountAmount,
+        data?.discountType,
+        data?.discountValue,
+        data?.discountReason,
+        data?.payments,
       )
-        .then(() => { toast.success('Заказ оплачен'); refetchAll() })
+        .then(() => { toast.success('Заказ оплачен'); setSheetOpen(false); setSelectedTable(null); refetchAll() })
         .catch((e: any) => toast.error(`Ошибка оплаты: ${e?.message ?? ''}`))
+    } else if (action === 'start_cooking') {
+      const orderId = resolveOrderId()
+      if (!orderId) return
+      updateOrderStatus(orderId, 'cooking')
+        .then(() => { toast.success('Заказ отправлен на кухню'); refetchAll() })
+        .catch(() => toast.error('Ошибка'))
+    } else if (action === 'mark_ready') {
+      const orderId = resolveOrderId()
+      if (!orderId) return
+      updateOrderStatus(orderId, 'ready', { ready_at: new Date().toISOString() })
+        .then(() => { toast.success('Заказ готов к выдаче'); refetchAll() })
+        .catch(() => toast.error('Ошибка'))
+    } else if (action === 'cancel') {
+      const orderId = resolveOrderId()
+      if (!orderId) return
+      deleteOrder(orderId)
+        .then(async () => {
+          await updateTableStatus(tableId, 'free').catch(console.error)
+          toast.success('Заказ отменён')
+          setSheetOpen(false)
+          setSelectedTable(null)
+          refetchAll()
+        })
+        .catch(() => toast.error('Ошибка отмены'))
+    } else if (action === 'add_items') {
+      const orderId = resolveOrderId()
+      if (!orderId) return
+      setSheetOpen(false)
+      setAddItemsOrderId(orderId)
+    } else if (action === 'reopen') {
+      const orderId = resolveOrderId()
+      if (!orderId) return
+      import('@/lib/queries').then(({ reopenOrder }) => reopenOrder(orderId))
+        .then(() => { toast.success('Заказ открыт для редактирования'); setSheetOpen(false); setSelectedTable(null); refetchAll() })
+        .catch((e) => toast.error(e instanceof Error ? e.message : 'Ошибка reopen'))
     } else if (action === 'pay') {
       // Open full order-actions-dialog with discounts, tips, split, mixed payment
       const orderId = resolveOrderId()
@@ -821,6 +866,15 @@ export default function TableMapPage() {
         defaultTabLabel={pendingTabLabel ?? undefined}
         onSubmitted={() => { refetchAll() }}
       />
+
+      {addItemsOrderId && (
+        <AddItemsDialog
+          orderId={addItemsOrderId}
+          open={!!addItemsOrderId}
+          onClose={() => setAddItemsOrderId(null)}
+          onDone={() => { setAddItemsOrderId(null); refetchAll() }}
+        />
+      )}
 
       <ManageZoneDialog
         open={zoneDialogOpen}
