@@ -53,12 +53,26 @@ export default function LoginPage() {
     }
     setLoading(true)
     setError('')
-    const result = await login(value)
-    if (result.ok) {
-      navigate(homeRoute, { replace: true })
-    } else {
-      setError(result.error || 'Ошибка входа')
+    try {
+      const result = await login(value)
+      if (result.ok) {
+        // Navigation is handled by the `useEffect` watching `user`
+        // above. Doing it here too races on a stale-closure
+        // `homeRoute` (`/login` at the time submitPin was created,
+        // before user state updated). Skipping the local navigate
+        // also fixes the «spinner stuck on Вход…» bug: if our
+        // local navigate fired into the stale route, LoginPage
+        // never unmounted and loading stayed true.
+      } else {
+        setError(result.error || 'Ошибка входа')
+        setPin('')
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ошибка входа')
       setPin('')
+    } finally {
+      // Always release the spinner. If the user-effect already
+      // navigated away, this no-ops on an unmounted component.
       setLoading(false)
     }
   }
