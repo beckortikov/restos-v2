@@ -598,6 +598,8 @@ paths:
         - { in: query, name: table_id, schema: { type: string, format: uuid } }
         - { in: query, name: shift_id, schema: { type: string, format: uuid } }
         - { in: query, name: waiter_id, schema: { type: string, format: uuid } }
+        - { in: query, name: cashier_id, schema: { type: string, format: uuid } }
+        - { in: query, name: type, schema: { type: string } }
         - { in: query, name: from, schema: { type: string, format: date-time } }
         - { in: query, name: to, schema: { type: string, format: date-time } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrdersSlimList" } } } } }

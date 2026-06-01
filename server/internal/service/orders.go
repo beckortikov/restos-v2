@@ -43,13 +43,15 @@ func (s *OrdersService) publish(ctx context.Context, restaurantID string, buf *E
 
 // OrdersFilter — фильтры для GET /orders.
 type OrdersFilter struct {
-	Status   string
-	TableID  string
-	ShiftID  string
-	WaiterID string // filter by orders.waiter_id (для «Мои заказы» в Kotlin APK)
-	From     *time.Time // created_at >=
-	To       *time.Time // created_at <
-	Page     cursor.Page
+	Status    string
+	TableID   string
+	ShiftID   string
+	WaiterID  string // filter by orders.waiter_id (для «Мои заказы» в Kotlin APK)
+	CashierID string // filter by orders.cashier_id (для history-таба «по кассиру»)
+	Type      string // filter by orders.type (hall|takeaway|delivery)
+	From      *time.Time // created_at >=
+	To        *time.Time // created_at <
+	Page      cursor.Page
 }
 
 // OrderSlim — компактный DTO для списка. Без items/modifiers — это «карточка»
@@ -132,6 +134,12 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 	}
 	if f.WaiterID != "" {
 		q = q.Where("waiter_id = ?", f.WaiterID)
+	}
+	if f.CashierID != "" {
+		q = q.Where("cashier_id = ?", f.CashierID)
+	}
+	if f.Type != "" {
+		q = q.Where("\"type\" = ?", f.Type)
 	}
 	if f.From != nil {
 		q = q.Where("created_at >= ?", *f.From)

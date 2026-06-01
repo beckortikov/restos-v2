@@ -17,23 +17,45 @@ export interface FetchOrdersOptions {
   slim?: boolean
   /** Filter to orders on a specific table — server-side via ?table_id=. */
   tableId?: string
+  status?: string
+  type?: string
+  waiterId?: string
+  cashierId?: string
+  limit?: number
+  cursor?: string
+}
+
+export interface FetchOrdersResult {
+  orders: Order[]
+  nextCursor: string | null
 }
 
 export async function fetchOrders(opts?: FetchOrdersOptions): Promise<Order[]> {
-  const query: { limit: number; shift_id?: string; table_id?: string; from?: string; to?: string } = { limit: 1000 }
+  const r = await fetchOrdersWithCursor(opts)
+  return r.orders
+}
+
+export async function fetchOrdersWithCursor(opts?: FetchOrdersOptions): Promise<FetchOrdersResult> {
+  const query: { limit: number; shift_id?: string; table_id?: string; from?: string; to?: string; status?: string; type?: string; waiter_id?: string; cashier_id?: string; cursor?: string } = { limit: opts?.limit ?? 1000 }
   if (opts?.shiftId) query.shift_id = opts.shiftId
   if (opts?.tableId) query.table_id = opts.tableId
+  if (opts?.status) query.status = opts.status
+  if (opts?.type) query.type = opts.type
+  if (opts?.waiterId) query.waiter_id = opts.waiterId
+  if (opts?.cashierId) query.cashier_id = opts.cashierId
+  if (opts?.cursor) query.cursor = opts.cursor
   if (opts?.from) query.from = typeof opts.from === 'string' ? opts.from : opts.from.toISOString()
   if (opts?.to) query.to = typeof opts.to === 'string' ? opts.to : opts.to.toISOString()
-  const env: any = await unwrap(api.GET('/api/v1/orders', { params: { query } }))
+  const env: any = await unwrap(api.GET('/api/v1/orders', { params: { query: query as any } }))
   let rows: any[] = Array.isArray(env?.data) ? env.data : Array.isArray(env) ? env : []
+  const nextCursor: string | null = (env?.next_cursor as string) ?? (env?.nextCursor as string) ?? null
   if (opts?.ids && opts.ids.length > 0) {
     const set = new Set(opts.ids)
     rows = rows.filter(r => set.has(r.id))
   }
   const wantItems = !opts?.slim
   if (!wantItems) {
-    return rows.map(r => _mapV4Order(r, []))
+    return { orders: rows.map(r => _mapV4Order(r, [])), nextCursor }
   }
   const out: Order[] = []
   for (const r of rows) {
@@ -46,7 +68,7 @@ export async function fetchOrders(opts?: FetchOrdersOptions): Promise<Order[]> {
       out.push(_mapV4Order(r, []))
     }
   }
-  return out
+  return { orders: out, nextCursor }
 }
 
 export async function claimItemPrint(itemId: string): Promise<boolean> {

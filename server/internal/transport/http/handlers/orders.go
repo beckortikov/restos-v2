@@ -22,11 +22,13 @@ func NewOrders(svc *service.OrdersService) *OrdersHandler { return &OrdersHandle
 // Query: limit, cursor, status, table_id, shift_id, from, to (RFC3339).
 func (h *OrdersHandler) List(w http.ResponseWriter, r *http.Request) {
 	f := service.OrdersFilter{
-		Status:   queryString(r, "status"),
-		TableID:  queryString(r, "table_id"),
-		ShiftID:  queryString(r, "shift_id"),
-		WaiterID: queryString(r, "waiter_id"),
-		Page:     parsePage(r),
+		Status:    queryString(r, "status"),
+		TableID:   queryString(r, "table_id"),
+		ShiftID:   queryString(r, "shift_id"),
+		WaiterID:  queryString(r, "waiter_id"),
+		CashierID: queryString(r, "cashier_id"),
+		Type:      queryString(r, "type"),
+		Page:      parsePage(r),
 	}
 	// Accept both `from` (Electron POS) and `created_at_from` (Kotlin APK)
 	// — same semantics. Tolerant к двум формам ISO: с секундами и без
