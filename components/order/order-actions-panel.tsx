@@ -167,7 +167,9 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   // показываем зачёркивание. После подтверждения родитель перезаливает
   // order через onItemsChanged, и cancelled_at прилетает в order.items[*].
   const [pendingCancelIds, setPendingCancelIds] = useState<Set<string>>(new Set())
-  const [voidingItem, setVoidingItem] = useState<{ id: string; name: string; qty: number; price: number } | null>(null)
+  // deltaQty задан → partial cancel (минус N штук, остальные позиции остаются).
+  // Не задан → full cancel всей строки.
+  const [voidingItem, setVoidingItem] = useState<{ id: string; name: string; qty: number; price: number; deltaQty?: number } | null>(null)
   const [voidReason, setVoidReason] = useState<VoidReason>('guest_changed_mind')
 
   // Note-edit state: { id, name, draftNote } или null.
@@ -394,12 +396,21 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     // AutoPrintRunner подхватит и напечатает кухонную «ОТМЕНА» для уже
     // напечатанных позиций. Раньше тут был createVoid (биллинговый void в
     // отдельной таблице) — кухня не уведомлялась.
-    setPendingCancelIds(prev => new Set(prev).add(item.id))
+    const isPartial = item.deltaQty != null && item.deltaQty > 0 && item.deltaQty < item.qty
+    // Для partial не вешаем pendingCancelIds (строка остаётся, просто qty уменьшится).
+    if (!isPartial) {
+      setPendingCancelIds(prev => new Set(prev).add(item.id))
+    }
     setVoidingItem(null)
     setVoidReason('guest_changed_mind')
     try {
-      await cancelOrderItem(item.id, reasonLabel, user?.id)
-      toast.success(`Отменено: ${item.name}`)
+      if (isPartial) {
+        await cancelOrderItemPartial(item.id, item.deltaQty!, reasonLabel, user?.id)
+        toast.success(`−${item.deltaQty} «${item.name}»`)
+      } else {
+        await cancelOrderItem(item.id, reasonLabel, user?.id)
+        toast.success(`Отменено: ${item.name}`)
+      }
       // Parent перечитает order — cancelled_at прилетит в order.items[*],
       // и pending можно очистить (флаг уже закрепится через voidedItemFlags).
       onItemsChanged?.()
@@ -460,21 +471,18 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     }
     setAdjustingItemId(null)
   }
-  const handleDecrementItem = async (item: any) => {
+  const handleDecrementItem = (item: any) => {
     if (adjustingItemId) return
-    // qty=1 → откатываемся на старый dialog с причиной.
-    if (item.qty <= 1) {
-      setVoidingItem({ id: item.id!, name: item.name, qty: item.qty, price: item.price })
-      return
-    }
-    setAdjustingItemId(item.id)
-    try {
-      await cancelOrderItemPartial(item.id, 1, VOID_REASON_LABELS['guest_changed_mind'], user?.id)
-      onItemsChanged?.()
-    } catch (e) {
-      toast.error(e instanceof Error ? `Ошибка: ${e.message}` : '−1 не удалось')
-    }
-    setAdjustingItemId(null)
+    // Всегда показываем dialog с выбором причины — partial и full отличаются
+    // только deltaQty (1 vs ВСЯ строка). Дальше handleVoidConfirm разруливает.
+    const isPartial = item.qty > 1
+    setVoidingItem({
+      id: item.id!,
+      name: item.name,
+      qty: item.qty,
+      price: item.price,
+      deltaQty: isPartial ? 1 : undefined,
+    })
   }
 
   const handleClearNote = async () => {
@@ -1126,9 +1134,17 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
       <AlertDialog open={!!voidingItem} onOpenChange={(o) => { if (!o) setVoidingItem(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Отменить позицию?</AlertDialogTitle>
+            <AlertDialogTitle>
+              {voidingItem?.deltaQty != null && voidingItem.deltaQty < voidingItem.qty
+                ? `Отменить ${voidingItem.deltaQty} шт.?`
+                : 'Отменить позицию?'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {voidingItem ? `«${voidingItem.name}» (×${voidingItem.qty}) — ${formatCurrency(voidingItem.price * voidingItem.qty)}. Если позиция уже напечатана на кухню — туда уйдёт уведомление об отмене.` : ''}
+              {voidingItem
+                ? (voidingItem.deltaQty != null && voidingItem.deltaQty < voidingItem.qty
+                  ? `«${voidingItem.name}» — минус ${voidingItem.deltaQty} из ${voidingItem.qty}. Остаток ${voidingItem.qty - voidingItem.deltaQty} останется в заказе.`
+                  : `«${voidingItem.name}» (×${voidingItem.qty}) — ${formatCurrency(voidingItem.price * voidingItem.qty)}. Если позиция уже напечатана на кухню — туда уйдёт уведомление об отмене.`)
+                : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <div className="grid grid-cols-2 gap-1.5">

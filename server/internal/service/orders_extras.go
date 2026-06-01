@@ -695,9 +695,17 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 			item = split
 		}
 
-		// Recompute order total.
+		// Recompute order total + cancelled_total.
 		order.Total = decimal.Normalize(decimal.Sub(order.Total, lineDelta))
 		order.TotalWithService = order.Total
+		// cancelled_total — аккумулятор отменённой суммы (используется Z-отчётом,
+		// P&L и Owner Dashboard). Растёт и при full-cancel, и при partial.
+		prevCancelled := decimal.Zero
+		if order.CancelledTotal != nil {
+			prevCancelled = *order.CancelledTotal
+		}
+		newCancelled := decimal.Normalize(decimal.Add(prevCancelled, lineDelta))
+		order.CancelledTotal = &newCancelled
 		order.UpdatedAt = now
 		if err := tx.Save(&order).Error; err != nil {
 			return err
