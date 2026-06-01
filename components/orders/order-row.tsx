@@ -48,20 +48,30 @@ export const isTogo = (t?: string) => t === 'delivery' || t === 'takeaway'
 // отрисовку карточки/строки. Без этого React-React.memo ререндерит все заказы
 // при любом обновлении массива из SSE.
 export function ordersEqualShallow(prev: Order, next: Order): boolean {
-  return (
-    prev.id === next.id &&
-    prev.status === next.status &&
-    prev.total === next.total &&
-    prev.totalWithService === next.totalWithService &&
-    prev.servicePercent === next.servicePercent &&
-    prev.paymentMethod === next.paymentMethod &&
-    prev.closedAt === next.closedAt &&
-    prev.waiterId === next.waiterId &&
-    prev.tableId === next.tableId &&
-    prev.type === next.type &&
-    prev.items.length === next.items.length &&
-    prev.items.filter(i => i.cancelledAt).length === next.items.filter(i => i.cancelledAt).length
-  )
+  if (
+    prev.id !== next.id ||
+    prev.status !== next.status ||
+    prev.total !== next.total ||
+    prev.totalWithService !== next.totalWithService ||
+    prev.servicePercent !== next.servicePercent ||
+    prev.paymentMethod !== next.paymentMethod ||
+    prev.closedAt !== next.closedAt ||
+    prev.waiterId !== next.waiterId ||
+    prev.tableId !== next.tableId ||
+    prev.type !== next.type ||
+    prev.orderNumber !== next.orderNumber ||
+    prev.guestsCount !== next.guestsCount ||
+    prev.readyAt !== next.readyAt ||
+    prev.items.length !== next.items.length
+  ) return false
+  // Сравним items по cancelledAt — одно прохождение вместо двух filter'ов.
+  let prevCancelled = 0
+  let nextCancelled = 0
+  for (let i = 0; i < prev.items.length; i++) {
+    if (prev.items[i].cancelledAt) prevCancelled++
+    if (next.items[i].cancelledAt) nextCancelled++
+  }
+  return prevCancelled === nextCancelled
 }
 
 interface RowProps {

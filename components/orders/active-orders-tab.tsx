@@ -23,6 +23,15 @@ import { OrderActionsDialog, type OrderActionData } from '@/components/dialogs/o
 import { AddItemsDialog } from '@/components/dialogs/add-items-dialog'
 
 import { ActiveOrderCard } from './active-order-card'
+import { VirtualOrderCardGrid, useColumnCount } from './virtual-order-card-grid'
+import { ordersEqualShallow } from './order-row'
+
+/**
+ * Порог переключения на виртуализованный grid. До 30 карточек overhead
+ * виртуализации (chunking + absolute-positioning + scroll-container) не
+ * окупается — проще нарисовать всё в DOM. После — заметный выигрыш.
+ */
+const VIRTUALIZE_THRESHOLD = 30
 
 export type ActiveTypeFilter = 'all' | 'hall' | 'takeaway'
 
@@ -43,6 +52,8 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
   const [usersData, setUsersData] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
 
+  const columnsCount = useColumnCount()
+
   const [actionsDialogOpen, setActionsDialogOpen] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [addItemsOrderId, setAddItemsOrderId] = useState<string | null>(null)
@@ -61,7 +72,15 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
       fetchTables(),
       fetchUsers(),
     ])
-    setOrders(o)
+    // Skip setState если ничего значимого не изменилось — это сохраняет
+    // референс массива → React.memo карточек не пересчитывается.
+    setOrders((prev) => {
+      if (prev.length !== o.length) return o
+      for (let i = 0; i < prev.length; i++) {
+        if (prev[i].id !== o[i].id || !ordersEqualShallow(prev[i], o[i])) return o
+      }
+      return prev
+    })
     setTablesData(t)
     setUsersData(u)
     const ids = o.map(x => x.id)
@@ -230,23 +249,45 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
     )
   }
 
+  const renderCard = useCallback((order: Order) => (
+    <ActiveOrderCard
+      order={order}
+      tablesData={tablesData}
+      usersData={usersData}
+      voids={voidsByOrderId.get(order.id)}
+      servicePercent={servicePercent}
+      onOpen={handleOpenOrder}
+      onPay={handleOpenOrder}
+      onCancel={handleOpenOrder}
+    />
+  ), [tablesData, usersData, voidsByOrderId, servicePercent, handleOpenOrder])
+
   return (
     <>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-        {filtered.map((order) => (
-          <ActiveOrderCard
-            key={order.id}
-            order={order}
-            tablesData={tablesData}
-            usersData={usersData}
-            voids={voidsByOrderId.get(order.id)}
-            servicePercent={servicePercent}
-            onOpen={handleOpenOrder}
-            onPay={handleOpenOrder}
-            onCancel={handleOpenOrder}
-          />
-        ))}
-      </div>
+      {filtered.length > VIRTUALIZE_THRESHOLD ? (
+        <VirtualOrderCardGrid
+          items={filtered}
+          columnsCount={columnsCount}
+          renderItem={renderCard}
+          getKey={(o) => o.id}
+        />
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {filtered.map((order) => (
+            <ActiveOrderCard
+              key={order.id}
+              order={order}
+              tablesData={tablesData}
+              usersData={usersData}
+              voids={voidsByOrderId.get(order.id)}
+              servicePercent={servicePercent}
+              onOpen={handleOpenOrder}
+              onPay={handleOpenOrder}
+              onCancel={handleOpenOrder}
+            />
+          ))}
+        </div>
+      )}
 
       <OrderActionsDialog
         order={selectedOrder}
