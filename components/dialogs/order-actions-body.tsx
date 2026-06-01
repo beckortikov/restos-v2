@@ -615,41 +615,31 @@ export function OrderActionsBody({
           для status='new': cancel доступен через форму ниже; cooking стартует
           из кухни автоматически). */}
       <div className="px-3 py-2 border-t space-y-1.5">
-        {(order.status === 'new' || order.status === 'cooking') && (
-          <>
-            {order.status === 'cooking' && canDo('kitchen.cooking') && (
-              <button
-                onClick={() => onAction('mark_ready')}
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 transition-colors"
-              >
-                <CheckCircle2 className="size-4" />
-                Готово!
-              </button>
-            )}
-            <button
-              onClick={() => goToAddItems(order)}
-              className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm font-medium text-primary hover:bg-primary/10 transition-colors"
-            >
-              <Plus className="size-4" />
-              Дозаказ
-            </button>
-          </>
+        {/* Готово! для cooking — единственная не-в-grid'е кнопка-статус. */}
+        {order.status === 'cooking' && canDo('kitchen.cooking') && (
+          <button
+            onClick={() => onAction('mark_ready')}
+            className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 transition-colors"
+          >
+            <CheckCircle2 className="size-4" />
+            Готово!
+          </button>
         )}
 
         {showPaymentSection && !order.isSplit && (
           <div className="space-y-1.5">
-            {/* «Дозаказ» + «Разделить счёт» на одной строке — симметрично
-                «Пре-чек / Скидка» в payment-panel, экономит вертикаль. */}
+            {/* «Дозаказ» (слева) + «Разделить счёт» (справа) — 50/50 в одной
+                строке. Дозаказ показывается для всех активных статусов
+                (включая new/cooking), что было разделено раньше; теперь
+                единый ряд кнопок без скачков layout'а. */}
             <div className="grid grid-cols-2 gap-1.5">
-              {(order.status === 'ready' || order.status === 'served' || order.status === 'bill_requested') ? (
-                <button
-                  onClick={() => goToAddItems(order)}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
-                >
-                  <Plus className="size-3.5" />
-                  Дозаказ
-                </button>
-              ) : <div />}
+              <button
+                onClick={() => goToAddItems(order)}
+                className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+              >
+                <Plus className="size-3.5" />
+                Дозаказ
+              </button>
               <button
                 onClick={() => setShowSplitDialog(true)}
                 className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-medium text-foreground hover:bg-muted transition-colors"

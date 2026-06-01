@@ -33,8 +33,8 @@ interface FinancialAccount {
 type PaymentType = 'cash' | 'noncash'
 
 const PAYMENT_OPTIONS: { value: PaymentType; label: string; icon: React.ReactNode }[] = [
-  { value: 'cash', label: 'Наличные', icon: <Banknote className="size-5" /> },
-  { value: 'noncash', label: 'Безналичные', icon: <CreditCard className="size-5" /> },
+  { value: 'cash', label: 'Наличные', icon: <Banknote className="size-4" /> },
+  { value: 'noncash', label: 'Безналичные', icon: <CreditCard className="size-4" /> },
 ]
 
 interface OrderPaymentPanelProps {
@@ -409,12 +409,14 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
         ) : (
           payments.length === 0 ? (
             <>
+              {/* Высота как у «Пре-чек / Скидка» сверху (py-2.5 + border) —
+                  раньше было p-3.5 + border-2 (~50px), теперь ~36px. */}
               <div className="grid grid-cols-2 gap-2">
                 {PAYMENT_OPTIONS.map((opt) => (
                   <button
                     key={opt.value}
                     onClick={() => setPaymentType(opt.value)}
-                    className={`flex items-center justify-center gap-2 rounded-xl border-2 p-3.5 transition-all ${
+                    className={`flex items-center justify-center gap-2 rounded-xl border-2 px-3 py-2.5 transition-all ${
                       paymentType === opt.value
                         ? 'border-primary bg-primary/5 text-primary'
                         : 'border-border hover:border-muted-foreground/30'
