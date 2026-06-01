@@ -777,7 +777,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'tables.edit': ['/operations/table-map'],
   'tables.reserve': ['/operations/table-map'],
   'shifts.manage': ['/operations/shifts'],
-  'pos.access': ['/operations/pos', '/cashier'],
+  'pos.access': ['/operations/pos', '/cashier', '/show-qr'],
   'inventory.view': ['/warehouse/inventory'],
   'inventory.manage': ['/warehouse/inventory', '/warehouse/receipts', '/warehouse/inventory-check', '/warehouse/history', '/warehouse/supply-expenses'],
   'menu.view': ['/warehouse/menu', '/operations/pos'],
