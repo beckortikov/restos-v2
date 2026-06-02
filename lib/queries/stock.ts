@@ -54,6 +54,11 @@ export async function fetchReceipts(): Promise<StockReceipt[]> {
 }
 
 export async function createReceipt(receipt: Omit<StockReceipt, 'id'>) {
+  // v2.0.87: одна атомарная операция вместо двух запросов
+  // (createReceipt → createFinancialOperation). Передаём account_id + paid,
+  // бэк сам создаёт financial_operation (stock_purchase) и обновляет баланс
+  // счёта в той же транзакции. Идемпотентность — через UNIQUE индекс на
+  // (restaurant_id, source_ref="receipt:<id>").
   const data: any = await unwrap(api.POST('/api/v1/stock/receipts', {
     body: {
       supplier_id: receipt.supplierId || null,
@@ -63,6 +68,8 @@ export async function createReceipt(receipt: Omit<StockReceipt, 'id'>) {
       payment_type: receipt.paymentType,
       paid_amount: String(receipt.paidAmount ?? 0),
       due_date: receipt.dueDate || null,
+      account_id: receipt.accountId || null,
+      paid: receipt.paid ?? (receipt.paymentType === 'paid'),
       lines: (receipt.lines ?? []).map(l => ({
         ingredient_id: l.ingredientId,
         name: l.name,

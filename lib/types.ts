@@ -336,6 +336,11 @@ export interface StockReceipt {
   dueDate?: string
   confirmedAt?: string
   confirmedBy?: string
+  // v2.0.87: атомарная приёмка. Если accountId указан и paid=true (default),
+  // бэк сам создаст financial_operation type=out category=stock_purchase
+  // source_ref=receipt:<id> и спишет баланс счёта в той же транзакции.
+  accountId?: string
+  paid?: boolean
   lines: ReceiptLine[]
 }
 

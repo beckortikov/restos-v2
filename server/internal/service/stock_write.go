@@ -15,6 +15,12 @@ import (
 )
 
 // ReceiptInput — body POST /api/v1/stock/receipts.
+//
+// v2.0.87 (атомарная приёмка): если AccountID задан И Paid=true (default),
+// то в той же транзакции создаётся financial_operation
+// (type="out", category="stock_purchase", source_ref="receipt:<id>") и
+// списывается баланс счёта. Без AccountID или с Paid=false —
+// финоперация НЕ создаётся (кредиторская задолженность, оплатим позже).
 type ReceiptInput struct {
 	SupplierID   *string       `json:"supplier_id,omitempty"`
 	SupplierName *string       `json:"supplier_name,omitempty"`
@@ -23,6 +29,8 @@ type ReceiptInput struct {
 	PaymentType  string        `json:"payment_type"` // paid | credit
 	PaidAmount   string        `json:"paid_amount,omitempty"`
 	DueDate      *string       `json:"due_date,omitempty"`
+	AccountID    *string       `json:"account_id,omitempty"` // если указан + Paid → атомарный finop
+	Paid         *bool         `json:"paid,omitempty"`       // default true
 	Lines        []ReceiptLine `json:"lines"`
 }
 
@@ -187,6 +195,60 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				return err
 			}
 		}
+		// Атомарный финоп (v2.0.87): если AccountID указан И paid=true (default),
+		// создаём financial_operation type="out" category="stock_purchase" с
+		// source_ref="receipt:<id>". UNIQUE INDEX по (restaurant_id, source_ref)
+		// для префикса "receipt:" обеспечивает идемпотентность на DB-уровне.
+		paidFlag := true
+		if in.Paid != nil {
+			paidFlag = *in.Paid
+		}
+		if in.AccountID != nil && *in.AccountID != "" && paidFlag && decimal.IsPositive(totalAmount) {
+			var acc models.FinancialAccount
+			if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "account not found", err)
+			}
+			newBal := decimal.Normalize(decimal.Sub(acc.Balance, totalAmount))
+			if decimal.IsNegative(newBal) {
+				return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)
+			}
+			if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			opType := "out"
+			opCat := "stock_purchase"
+			opActivity := "operational"
+			opDate := date
+			opSrc := "receipt:" + receiptID
+			isAuto := true
+			desc := "Приёмка"
+			if in.SupplierName != nil && *in.SupplierName != "" {
+				desc = "Приёмка от " + *in.SupplierName
+			}
+			accID := *in.AccountID
+			ridStr := rid
+			finOp := &models.FinancialOperation{
+				ID:           uuid.NewString(),
+				Type:         &opType,
+				Amount:       totalAmount,
+				Category:     &opCat,
+				AccountID:    &accID,
+				AccountName:  acc.Name,
+				Activity:     &opActivity,
+				Date:         &opDate,
+				Description:  &desc,
+				Counterparty: in.SupplierName,
+				IsAuto:       &isAuto,
+				SourceRef:    &opSrc,
+				RestaurantID: &ridStr,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+			if err := tx.Create(finOp).Error; err != nil {
+				return err
+			}
+		}
+
 		created = receipt
 		return nil
 	})

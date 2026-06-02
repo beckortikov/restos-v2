@@ -524,7 +524,8 @@ type PnLJSON struct {
 	COGS struct {
 		Total decimal.Decimal `json:"total"`
 	} `json:"cogs"`
-	Opex struct {
+	Writeoffs decimal.Decimal `json:"writeoffs"`
+	Opex      struct {
 		Total      decimal.Decimal `json:"total"`
 		ByCategory []ByCategoryRow `json:"by_category"`
 	} `json:"opex"`
@@ -602,6 +603,29 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 		out.COGS.Total = decimal.Normalize(cogsRows[0].Total)
 	}
 
+	// Writeoffs: SUM(stock_writeoffs.total_cost) created_at IN period.
+	// Включаем в ОПиУ отдельной строкой между COGS и opex — на дашборде
+	// владелец должен видеть брак не растворённым в operational expenses.
+	scopedWo, _ := s.r.ForTenant(ctx)
+	type woRow struct {
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	qWo := scopedWo.Table("stock_writeoffs").
+		Select("COALESCE(SUM(total_cost), 0) AS total")
+	if f.From != nil {
+		qWo = qWo.Where("created_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		qWo = qWo.Where("created_at < ?", *f.To)
+	}
+	var woRows []woRow
+	if err := qWo.Scan(&woRows).Error; err != nil {
+		return nil, err
+	}
+	if len(woRows) > 0 {
+		out.Writeoffs = decimal.Normalize(woRows[0].Total)
+	}
+
 	// Opex from financial_operations type='out' grouped by category.
 	scoped3, _ := s.r.ForTenant(ctx)
 	type opexRow struct {
@@ -629,7 +653,10 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	}
 	out.Opex.Total = decimal.Normalize(out.Opex.Total)
 
-	out.GrossProfit = decimal.Normalize(decimal.Sub(out.Revenue.Total, out.COGS.Total))
+	// GrossProfit = Revenue - COGS - Writeoffs. Списания — это потеря
+	// валовой маржи (испорченный продукт, который не превратился в выручку),
+	// поэтому они вычитаются ДО операционных расходов.
+	out.GrossProfit = decimal.Normalize(decimal.Sub(decimal.Sub(out.Revenue.Total, out.COGS.Total), out.Writeoffs))
 	out.NetProfit = decimal.Normalize(decimal.Sub(out.GrossProfit, out.Opex.Total))
 	if decimal.IsPositive(out.Revenue.Total) {
 		out.MarginPercent = decimal.Normalize(decimal.Mul(decimal.DivRound(out.NetProfit, out.Revenue.Total), decimal.FromInt(100)))

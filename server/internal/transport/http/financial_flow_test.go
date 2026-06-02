@@ -120,11 +120,17 @@ func TestFinancialFlow_Full(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// ─── Flow 1: приёмка ─────────────────────────────────────────────────
+	// ─── Flow 1: приёмка (атомарная — v2.0.87) ───────────────────────────
 	t.Run("Flow1_Receipt", func(t *testing.T) {
+		// v2.0.87: account_id + paid=true → CreateReceipt сам создаёт
+		// financial_operation type="out" category="stock_purchase"
+		// source_ref="receipt:<id>" и списывает баланс счёта в той же tx.
+		// Никаких ручных POST /finance/operations больше не нужно.
 		body := map[string]any{
 			"payment_type":  "paid",
 			"supplier_name": "Поставщик-Мясо",
+			"account_id":    cashAccID,
+			"paid":          true,
 			"lines": []map[string]any{{
 				"ingredient_id":  meat.ID,
 				"name":           meatName,
@@ -161,33 +167,37 @@ func TestFinancialFlow_Full(t *testing.T) {
 			t.Errorf("MISMATCH receipt movement qty = %s, want 10", mv[0].Qty.String())
 		}
 
+		// Атомарный финоп.
+		var finOps []models.FinancialOperation
+		gdb.Where("restaurant_id = ? AND source_ref = ?", f.rid, "receipt:"+receipt.ID).Find(&finOps)
+		if len(finOps) != 1 {
+			t.Fatalf("expected 1 auto fin-op for receipt, got %d", len(finOps))
+		}
+		op := finOps[0]
+		if !op.Amount.Equal(decimal.MustFromString("250")) {
+			t.Errorf("MISMATCH receipt finop amount = %s, want 250", op.Amount.String())
+		}
+		if op.Type == nil || *op.Type != "out" {
+			t.Errorf("receipt finop type = %v, want out", op.Type)
+		}
+		if op.Category == nil || *op.Category != "stock_purchase" {
+			t.Errorf("receipt finop category = %v, want stock_purchase", op.Category)
+		}
+		if op.AccountID == nil || *op.AccountID != cashAccID {
+			t.Errorf("receipt finop account_id mismatch")
+		}
+
+		// Баланс кассы должен снизиться: 1000 - 250 = 750.
+		var cashAfter models.FinancialAccount
+		gdb.First(&cashAfter, "id = ?", cashAccID)
+		if !cashAfter.Balance.Equal(decimal.MustFromString("750")) {
+			t.Errorf("MISMATCH cash balance after receipt = %s, want 750", cashAfter.Balance.String())
+		}
+
 		// /stock/receipts list — приёмка видна.
 		lr, lb := f.get(t, "/api/v1/stock/receipts", tok)
 		if lr.StatusCode != 200 {
 			t.Fatalf("list receipts %d: %s", lr.StatusCode, lb)
-		}
-
-		// ВАЖНО: CreateReceipt НЕ создаёт financial_operation автоматически
-		// (см. service/stock_write.go) — нет account_id у приёмки в текущей
-		// схеме. ДДС/баланс касса для закупа надо отражать вручную через
-		// /finance/operations. Делаем это здесь, чтобы ДДС/ОПиУ сходились.
-		opBody := map[string]any{
-			"type":         "out",
-			"amount":       "250",
-			"category":     "stock_purchase",
-			"account_id":   cashAccID,
-			"activity":     "operational",
-			"description":  "Закуп: receipt " + receipt.ID,
-			"counterparty": "Поставщик-Мясо",
-		}
-		opr, opb := f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), opBody)
-		if opr.StatusCode != 201 {
-			t.Fatalf("finance op (stock_purchase) %d: %s", opr.StatusCode, opb)
-		}
-		var op models.FinancialOperation
-		_ = json.Unmarshal(opb, &op)
-		if !op.Amount.Equal(decimal.MustFromString("250")) {
-			t.Errorf("MISMATCH stock_purchase op amount = %s, want 250", op.Amount.String())
 		}
 	})
 
@@ -448,7 +458,8 @@ func TestFinancialFlow_Full(t *testing.T) {
 			COGS struct {
 				Total decimal.Decimal `json:"total"`
 			} `json:"cogs"`
-			Opex struct {
+			Writeoffs decimal.Decimal `json:"writeoffs"`
+			Opex      struct {
 				Total      decimal.Decimal `json:"total"`
 				ByCategory []struct {
 					Category string          `json:"category"`
@@ -470,17 +481,21 @@ func TestFinancialFlow_Full(t *testing.T) {
 		if !pnl.COGS.Total.Equal(decimal.MustFromString("20")) {
 			t.Errorf("MISMATCH PnL cogs = %s, want 20 (4×5)", pnl.COGS.Total.String())
 		}
-		// Gross = 275 - 20 = 255.
-		if !pnl.GrossProfit.Equal(decimal.MustFromString("255")) {
-			t.Errorf("MISMATCH PnL gross_profit = %s, want 255", pnl.GrossProfit.String())
+		// Writeoffs = 1 kg × 20 cost = 20 (Flow2). v2.0.87: отдельной строкой.
+		if !pnl.Writeoffs.Equal(decimal.MustFromString("20")) {
+			t.Errorf("MISMATCH PnL writeoffs = %s, want 20", pnl.Writeoffs.String())
+		}
+		// Gross = 275 - 20 (COGS) - 20 (writeoffs) = 235.
+		if !pnl.GrossProfit.Equal(decimal.MustFromString("235")) {
+			t.Errorf("MISMATCH PnL gross_profit = %s, want 235", pnl.GrossProfit.String())
 		}
 		// Opex = stock_purchase 250 + salary 200 + bonus 50 = 500.
 		if !pnl.Opex.Total.Equal(decimal.MustFromString("500")) {
 			t.Errorf("MISMATCH PnL opex.total = %s, want 500", pnl.Opex.Total.String())
 		}
-		// Net = 255 - 500 = -245.
-		if !pnl.NetProfit.Equal(decimal.MustFromString("-245")) {
-			t.Errorf("MISMATCH PnL net_profit = %s, want -245", pnl.NetProfit.String())
+		// Net = 235 - 500 = -265.
+		if !pnl.NetProfit.Equal(decimal.MustFromString("-265")) {
+			t.Errorf("MISMATCH PnL net_profit = %s, want -265", pnl.NetProfit.String())
 		}
 		// By category coverage.
 		cats := map[string]decimal.Decimal{}

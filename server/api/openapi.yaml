@@ -2676,6 +2676,22 @@ components:
         payment_type: { type: string, enum: [paid, credit] }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         due_date: { type: string }
+        account_id:
+          type: string
+          format: uuid
+          description: >
+            Если указан и `paid=true`, в той же транзакции списывается
+            баланс счёта и создаётся financial_operation
+            (type=out, category=stock_purchase, source_ref=receipt:<id>).
+            Идемпотентность гарантирована UNIQUE index на (restaurant_id, source_ref).
+            Если не указан — приёмка фиксируется без денежной операции
+            (поставщик в долг — кредиторка).
+        paid:
+          type: boolean
+          default: true
+          description: >
+            Если false и `account_id` указан — финоп НЕ создаётся (отметка
+            «приёмка сейчас, оплатим потом»).
         lines:
           type: array
           items:
@@ -3418,6 +3434,11 @@ components:
           type: object
           properties:
             total: { $ref: "#/components/schemas/Decimal" }
+        writeoffs:
+          $ref: "#/components/schemas/Decimal"
+          description: >
+            Стоимость списаний (брак/порча/потери) за период.
+            Вычитается из gross_profit отдельной строкой между COGS и opex.
         opex:
           type: object
           properties:

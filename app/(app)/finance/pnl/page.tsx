@@ -15,8 +15,9 @@ import {
   type FinancialOperation,
   type MenuItem,
   type User,
+  type StockWriteoff,
 } from '@/lib/types'
-import { fetchOrders, fetchFinancialOperations, fetchMenuItems, fetchUsers } from '@/lib/queries'
+import { fetchOrders, fetchFinancialOperations, fetchMenuItems, fetchUsers, fetchWriteoffs } from '@/lib/queries'
 
 const PnlMarginChart = lazy(() => import('@/components/charts/pnl-margin-chart'))
 
@@ -28,6 +29,7 @@ export default function PnlPage() {
   const [finOps, setFinOps] = useState<FinancialOperation[]>([])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [users, setUsers] = useState<User[]>([])
+  const [writeoffs, setWriteoffs] = useState<StockWriteoff[]>([])
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>(() => {
     try {
@@ -45,8 +47,8 @@ export default function PnlPage() {
   }, [period])
 
   useEffect(() => {
-    Promise.all([fetchOrders(), fetchFinancialOperations(), fetchMenuItems(), fetchUsers()])
-      .then(([o, fo, mi, u]) => { setOrders(o); setFinOps(fo); setMenuItems(mi); setUsers(u) })
+    Promise.all([fetchOrders(), fetchFinancialOperations(), fetchMenuItems(), fetchUsers(), fetchWriteoffs()])
+      .then(([o, fo, mi, u, wo]) => { setOrders(o); setFinOps(fo); setMenuItems(mi); setUsers(u); setWriteoffs(wo) })
       .finally(() => setLoading(false))
   }, [])
 
@@ -59,7 +61,18 @@ export default function PnlPage() {
   const serviceRevenue = useMemo(() => closedOrders.reduce((s, o) => s + (o.serviceAmount ?? 0), 0), [closedOrders])
   const salesRevenue = revenue - serviceRevenue
   const cogsTotal = useMemo(() => dSum(closedOrders.flatMap(o => o.items.map(i => calcLineCogs(i.cogs, i.qty, i.unit, i.unitSize)))), [closedOrders])
-  const grossProfit = revenue - cogsTotal
+  // v2.0.87: списания (брак/порча) — отдельной строкой ОПиУ между COGS и opex.
+  // Это потеря валовой маржи, которую владелец должен видеть отдельно от
+  // операционных расходов.
+  const filteredWriteoffs = useMemo(
+    () => filterByDateRange(writeoffs, w => w.createdAt, period, customFrom, customTo),
+    [writeoffs, period, customFrom, customTo],
+  )
+  const writeoffsTotal = useMemo(
+    () => filteredWriteoffs.reduce((s, w) => s + (w.totalCost ?? 0), 0),
+    [filteredWriteoffs],
+  )
+  const grossProfit = revenue - cogsTotal - writeoffsTotal
   const grossMargin = revenue > 0 ? (grossProfit / revenue) * 100 : 0
 
   // Operating expenses from financial operations — EXCLUDE:
@@ -93,6 +106,9 @@ export default function PnlPage() {
       rows.push({ label: '  в т.ч. обслуживание', value: serviceRevenue, bold: false, type: 'in' })
     }
     rows.push({ label: '— Себестоимость (COGS)', value: -cogsTotal, bold: false, type: 'out' })
+    if (writeoffsTotal > 0) {
+      rows.push({ label: '— Списания (брак/порча)', value: -writeoffsTotal, bold: false, type: 'out' })
+    }
     rows.push({ label: 'Валовая прибыль', value: grossProfit, bold: true, type: grossProfit >= 0 ? 'in' : 'out' })
 
     // Operating expenses (excluding stock purchases and COGS duplicate)
@@ -108,7 +124,7 @@ export default function PnlPage() {
       rows.push({ label: 'Закупки (пополнение склада)', value: -totalStockPurchases, bold: false, type: 'out' })
     }
     return rows
-  }, [revenue, salesRevenue, serviceRevenue, cogsTotal, grossProfit, opexCategories, ebitda, totalStockPurchases])
+  }, [revenue, salesRevenue, serviceRevenue, cogsTotal, writeoffsTotal, grossProfit, opexCategories, ebitda, totalStockPurchases])
 
   const chartData = useMemo(() => menuItems.map((m) => ({
     name: m.name,
