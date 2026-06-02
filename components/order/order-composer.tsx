@@ -29,6 +29,8 @@ import {
 // в @/lib/queries возвращает stale до того, как фоновое обновление
 // допишет новые строки в Dexie (см. cache.ts cachedQuery, stale-while-revalidate).
 import { fetchVoidsForOrder } from '@/lib/queries'
+import { fetchStopList } from '@/lib/queries'
+import { V4Error } from '@/lib/api'
 import { OrderActionsDialog } from '@/components/dialogs/order-actions-dialog'
 import { OrderActionsPanel } from '@/components/order/order-actions-panel'
 import { FailedPrintsButton } from '@/components/order/failed-prints-button'
@@ -41,6 +43,7 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
 import { useOrderData } from './use-order-data'
+import { useDataSync } from '@/hooks/use-data-sync'
 import type { CartLine, OrderComposerProps, TabInfo } from './types'
 
 const ORDER_TYPE_OPTIONS = [
@@ -234,6 +237,45 @@ export function OrderComposer(props: OrderComposerProps) {
   const canOrderStopped = canDo('orders.create_stopped')
 
   const { menuItems, categories, tables, zones, users, loading } = useOrderData(true)
+
+  // ─── Backend stop-list ────────────────────────────────────────────────────
+  // Динамический stop-list считается бэком (нехватка ингредиентов + manual
+  // override). Если позиция в stop-list — кассир видит «Стоп» badge и
+  // grayscale-обработку, как для статичного `!item.isAvailable`. Менеджер
+  // с разрешением `orders.create_stopped` может всё равно положить блюдо
+  // в корзину — тогда при POST /orders шлём `override_stop_list: true`.
+  // Refresh: invalidate на SSE-эвентах stock.movement / order.closed /
+  // license/orders (см. lib/realtime.ts EVENT_FANOUT). На события
+  // `ingredients` / `stock_movements` / `orders` (после close) — refetch.
+  const [stoppedIds, setStoppedIds] = useState<Set<string>>(new Set())
+  const [stopReasons, setStopReasons] = useState<Map<string, string>>(new Map())
+  const reloadStopList = useCallback(async () => {
+    try {
+      const list = await fetchStopList()
+      const ids = new Set<string>()
+      const reasons = new Map<string, string>()
+      for (const row of list) {
+        ids.add(row.menuItemId)
+        if (row.manual) {
+          reasons.set(row.menuItemId, 'В стоп-листе (вручную)')
+        } else if (row.ingredients?.length) {
+          const ingNames = row.ingredients.map(i => i.name).filter(Boolean).join(', ')
+          reasons.set(row.menuItemId, ingNames ? `Нет ингредиентов: ${ingNames}` : 'Нет ингредиентов')
+        } else {
+          reasons.set(row.menuItemId, 'В стоп-листе')
+        }
+      }
+      setStoppedIds(ids)
+      setStopReasons(reasons)
+    } catch {
+      // Бэк может быть недоступен — не падаем, остаёмся на legacy `isAvailable`.
+    }
+  }, [])
+  useEffect(() => { void reloadStopList() }, [reloadStopList])
+  // SSE-инвалидация: stock-движения (приёмка/списание/инвентаризация дают
+  // stock.movement) и закрытие заказа (deduct stock → возможно новая
+  // нехватка) → перерасчёт stop-list на бэке + refetch здесь.
+  useDataSync(['ingredients', 'stock_movements', 'orders', 'menu_items'], reloadStopList)
 
   // POS favorites (per-device, per-restaurant). Long-press / right-click на
   // карточке добавляет/удаляет — см. DishTile.onContextAction ниже. Список
@@ -540,13 +582,24 @@ export function OrderComposer(props: OrderComposerProps) {
 
   // Cart ops ----------------------------------------------------------------
   const addToCart = useCallback((item: MenuItem) => {
-    // Block stop-list items unless user has permission to order them.
-    if (!item.isAvailable) {
+    // Stop-list gating. Два источника блокировки:
+    //   1) legacy `!item.isAvailable` — owner вручную пометил в menu admin;
+    //   2) backend stop-list (`stoppedIds`) — computed-on-read из shortage
+    //      ингредиентов + manual override.
+    // Без permission — отказ; с permission — info-toast + флаг override.
+    const backendStopped = stoppedIds.has(item.id)
+    const isStopped = !item.isAvailable || backendStopped
+    let needsOverride = false
+    if (isStopped) {
       if (!canOrderStopped) {
-        toast.warning(`«${item.name}» в стопе`)
+        const reason = backendStopped ? (stopReasons.get(item.id) ?? 'в стопе') : 'в стопе'
+        toast.warning(`«${item.name}» — ${reason}`)
         return
       }
-      // With permission: warn but allow.
+      // With permission: warn but allow. Если позиция в backend stop-list —
+      // помечаем линию флагом overrideStopList, чтобы POST /orders ушёл с
+      // override_stop_list:true (иначе backend вернёт 409 ITEM_STOPPED).
+      needsOverride = backendStopped
       toast.info(`«${item.name}» в стопе — добавлено по разрешению`)
     }
     if (item.unit && item.unit !== 'piece') {
@@ -557,7 +610,9 @@ export function OrderComposer(props: OrderComposerProps) {
     setCart(prev => {
       const existing = prev.find(l => l.menuItemId === item.id && l.unit === 'piece')
       if (existing) {
-        return prev.map(l => l.menuItemId === item.id && l.unit === 'piece' ? { ...l, qty: l.qty + 1 } : l)
+        return prev.map(l => l.menuItemId === item.id && l.unit === 'piece'
+          ? { ...l, qty: l.qty + 1, overrideStopList: l.overrideStopList || needsOverride }
+          : l)
       }
       return [...prev, {
         menuItemId: item.id,
@@ -568,15 +623,17 @@ export function OrderComposer(props: OrderComposerProps) {
         cogs: item.cogs,
         unit: 'piece',
         unitSize: 1,
+        overrideStopList: needsOverride || undefined,
       }]
     })
     // Auto-clear search so the waiter can immediately type the next dish
     // without manually deleting the previous query.
     setSearch('')
-  }, [canOrderStopped])
+  }, [canOrderStopped, stoppedIds, stopReasons])
 
   const confirmWeight = useCallback(() => {
     if (!weightItem || weightValue <= 0) return
+    const needsOverride = stoppedIds.has(weightItem.id)
     setCart(prev => [...prev, {
       menuItemId: weightItem.id,
       name: weightItem.name,
@@ -586,11 +643,12 @@ export function OrderComposer(props: OrderComposerProps) {
       cogs: weightItem.cogs,
       unit: weightItem.unit ?? 'g',
       unitSize: weightItem.unitSize || 100,
+      overrideStopList: needsOverride || undefined,
     }])
     setWeightItem(null)
     setWeightValue(0)
     setSearch('')
-  }, [weightItem, weightValue])
+  }, [weightItem, weightValue, stoppedIds])
 
   const updateQty = useCallback((menuItemId: string, delta: number) => {
     setCart(prev => prev.map(l => {
@@ -633,6 +691,10 @@ export function OrderComposer(props: OrderComposerProps) {
       } catch { /* пускаем — server-side gate в closeOrderWithPayment ловит */ }
     }
     setSubmitting(true)
+    // Если кассир/менеджер положил в корзину stop-listed позиции с разрешением —
+    // флаг `overrideStopList` на cart-линии превращается в `override_stop_list: true`
+    // в body запроса. Без флага backend вернёт 409 ITEM_STOPPED.
+    const overrideStopList = cart.some(l => l.overrideStopList)
     try {
       const items: OrderItem[] = cart.map(l => ({
         menuItemId: l.menuItemId,
@@ -645,7 +707,7 @@ export function OrderComposer(props: OrderComposerProps) {
       }))
 
       if (existingOrderId) {
-        await addItemsToOrder(existingOrderId, items)
+        await addItemsToOrder(existingOrderId, items, { overrideStopList })
         toast.success(`Дозаказ: +${totalItems} поз. · ${formatCurrency(total)}`)
         setCart([])
         // Обновляем «Уже заказано» без переключения стола. AutoPrintRunner
@@ -695,6 +757,7 @@ export function OrderComposer(props: OrderComposerProps) {
         shiftId: shift?.id,
         guestsCount,
         tabLabel: autoLabel || undefined,
+        overrideStopList,
       })
 
       if (orderType === 'hall' && selectedTableId && order) {
@@ -768,6 +831,24 @@ export function OrderComposer(props: OrderComposerProps) {
       setPendingTabLabel('')
       if (order?.id) onSubmitted?.({ orderId: order.id, mode: 'new' })
     } catch (e) {
+      // 409 ITEM_STOPPED — бэк отклонил заказ из-за позиции в stop-list.
+      // Показываем дружелюбный тост; refetch stop-list, чтобы UI догнал.
+      if (e instanceof V4Error && e.status === 409) {
+        const env = e.envelope()
+        const code = (env && (env as { code?: string }).code) || ''
+        if (code === 'ITEM_STOPPED') {
+          const stoppedNames = cart
+            .filter(l => stoppedIds.has(l.menuItemId))
+            .map(l => l.name)
+          const which = stoppedNames.length ? `«${stoppedNames.join(', ')}»` : 'Одна из позиций'
+          toast.error(`${which} в стоп-листе`, {
+            description: 'Обратитесь к менеджеру для override.',
+            duration: 6000,
+          })
+          void reloadStopList()
+          return
+        }
+      }
       const msg = e instanceof Error ? e.message : 'Ошибка'
       if (msg.includes('Недостаточно ингредиентов')) {
         toast.error('Не хватает ингредиентов', {
@@ -925,7 +1006,7 @@ export function OrderComposer(props: OrderComposerProps) {
           <div className="grid grid-cols-2 gap-2.5">
             {availableMenu.map(item => {
               const inCart = cartByMenuId.get(item.id)
-              const isStopped = !item.isAvailable
+              const isStopped = !item.isAvailable || stoppedIds.has(item.id)
               return (
                 <div key={item.id} className="relative">
                   <button onClick={() => addToCart(item)}
@@ -949,8 +1030,11 @@ export function OrderComposer(props: OrderComposerProps) {
                     {inCart && (
                       <span className="absolute top-2 right-2 size-8 rounded-full bg-primary text-primary-foreground text-sm font-bold flex items-center justify-center shadow-lg">{inCart.qty}</span>
                     )}
-                    {!item.isAvailable && (
-                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-bold uppercase tracking-wide shadow-lg">Стоп</span>
+                    {isStopped && (
+                      <span
+                        className="absolute top-2 left-2 px-2 py-0.5 rounded-full bg-rose-500 text-white text-[10px] font-bold uppercase tracking-wide shadow-lg"
+                        title={stopReasons.get(item.id) ?? 'Стоп'}
+                      >Стоп</span>
                     )}
                   </button>
                   {inCart && (
@@ -967,7 +1051,7 @@ export function OrderComposer(props: OrderComposerProps) {
           <div className="divide-y divide-border bg-card border border-border rounded-xl overflow-hidden">
             {availableMenu.map(item => {
               const inCart = cartByMenuId.get(item.id)
-              const isStopped = !item.isAvailable
+              const isStopped = !item.isAvailable || stoppedIds.has(item.id)
               return (
                 <div key={item.id} className={`flex items-center gap-3 px-3 py-2.5 ${inCart ? 'bg-primary/5' : ''} ${isStopped ? 'opacity-60 grayscale-[0.5]' : ''}`}>
                   <button onClick={() => addToCart(item)} className="flex-1 flex items-center gap-3 text-left min-w-0">
@@ -980,7 +1064,10 @@ export function OrderComposer(props: OrderComposerProps) {
                       <div className="flex items-center gap-1.5 min-w-0">
                         <p className={`text-sm font-semibold truncate ${isStopped ? 'text-muted-foreground line-through' : 'text-foreground'}`}>{item.name}</p>
                         {isStopped && (
-                          <span className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold uppercase shrink-0">Стоп</span>
+                          <span
+                            className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold uppercase shrink-0"
+                            title={stopReasons.get(item.id) ?? 'Стоп'}
+                          >Стоп</span>
                         )}
                       </div>
                       <p className={`text-xs font-bold ${isStopped ? 'text-muted-foreground' : 'text-primary'}`}>{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>
@@ -1556,7 +1643,7 @@ export function OrderComposer(props: OrderComposerProps) {
                           price={item.price}
                           emoji={item.emoji}
                           qtyInCart={inCart?.qty}
-                          isStopped={!item.isAvailable}
+                          isStopped={!item.isAvailable || stoppedIds.has(item.id)}
                           onClick={() => addToCart(item)}
                         />
                       </div>
@@ -1698,11 +1785,12 @@ export function OrderComposer(props: OrderComposerProps) {
                   // permission gating happens inside addToCart (toast warning
                   // for users без orders.create_stopped, info-toast для
                   // тех у кого permission есть).
-                  const isStopped = !item.isAvailable
+                  const isStopped = !item.isAvailable || stoppedIds.has(item.id)
                   return (
                     <button
                       key={item.id}
                       onClick={() => addToCart(item)}
+                      title={isStopped ? (stopReasons.get(item.id) ?? 'В стоп-листе') : undefined}
                       className={`relative inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
                         isStopped
                           ? 'border-border bg-muted text-muted-foreground'

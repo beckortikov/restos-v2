@@ -241,6 +241,9 @@ export async function applyInventoryCheck(
     return ''
   }
   await unwrap(api.POST('/api/v1/stock/inventory/{id}/apply', { params: { path: { id: checkId } }, body: {} as any }))
+  // Stock изменился — попросим бэк пересчитать stop-list. Fire-and-forget,
+  // на ошибку не падаем. UI догонит через SSE stock.movement → useDataSync.
+  void checkAndUpdateStopList()
   const withDiff = lines.filter(l => dSub(l.actualQty, l.systemQty) !== 0).length
   logAction('inventory.check', 'inventory_checks', checkId, `Инвентаризация: ${withDiff} расхождений`, {
     totalItems: lines.length,

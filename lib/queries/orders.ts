@@ -144,13 +144,14 @@ export async function releaseItemCancelPrint(itemId: string): Promise<void> {
   } catch {}
 }
 
-export async function createOrder(order: { type: OrderType; tableId?: string; waiterId?: string; items: OrderItem[]; total: number; restaurantId?: string; shiftId?: string; guestsCount?: number; tabLabel?: string }) {
+export async function createOrder(order: { type: OrderType; tableId?: string; waiterId?: string; items: OrderItem[]; total: number; restaurantId?: string; shiftId?: string; guestsCount?: number; tabLabel?: string; overrideStopList?: boolean }) {
   const body: Record<string, unknown> = {
     type: order.type,
     table_id: order.tableId || null,
     shift_id: order.shiftId || null,
     guests_count: order.guestsCount && order.guestsCount > 0 ? order.guestsCount : null,
     comment: order.tabLabel && order.tabLabel.trim() ? order.tabLabel.trim() : null,
+    override_stop_list: order.overrideStopList ? true : undefined,
     items: order.items.map(i => ({
       menu_item_id: i.menuItemId,
       qty: String(i.qty),
@@ -183,9 +184,10 @@ export async function createOrder(order: { type: OrderType; tableId?: string; wa
   return created
 }
 
-export async function addItemsToOrder(orderId: string, newItems: import('../types').OrderItem[]): Promise<void> {
+export async function addItemsToOrder(orderId: string, newItems: import('../types').OrderItem[], opts?: { overrideStopList?: boolean }): Promise<void> {
   if (!newItems.length) return
-  const body = {
+  const body: Record<string, unknown> = {
+    override_stop_list: opts?.overrideStopList ? true : undefined,
     items: newItems.map(i => ({
       menu_item_id: i.menuItemId,
       qty: String(i.qty),
@@ -423,6 +425,9 @@ export async function closeOrderWithPayment(
   }))
   const finalTotal = totalWithService ?? Number(closed?.total_with_service ?? total)
   logAction('order.close', 'order', orderId, `Оплата ${paymentMethod}`, { total: finalTotal, paymentMethod })
+  // Stock мог уйти в shortage — попросим бэк пересчитать stop-list.
+  // Fire-and-forget; UI догонит через SSE order.closed → useDataSync.
+  void unwrap(api.POST('/api/v1/stop-list/recompute', { body: {} as any })).catch(() => {})
   return closed
 }
 

@@ -9,6 +9,11 @@ export interface CartLine {
   cogs: number
   unit: 'piece' | 'g' | 'kg'
   unitSize: number
+  /** Set to true when a manager/owner-permission user explicitly bypasses
+   *  the backend stop-list for this dish. Causes the order request to
+   *  carry `override_stop_list: true`, allowing the backend to accept the
+   *  item that would otherwise return 409 ITEM_STOPPED. */
+  overrideStopList?: boolean
 }
 
 export interface TabInfo {
