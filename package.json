@@ -15,8 +15,10 @@
     "typecheck": "tsc --noEmit",
     "ts-prune": "ts-prune --ignore \"(generated|router|page|layout|config|test|archive|node_modules)\"",
     "test": "vitest run",
+    "test:run": "vitest run",
     "test:watch": "vitest",
     "test:ui": "vitest --ui",
+    "test:e2e": "playwright test --project=chromium",
     "test:perf": "playwright test --project=perf"
   },
   "dependencies": {
