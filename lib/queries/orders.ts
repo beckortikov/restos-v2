@@ -365,6 +365,11 @@ export async function closeOrderWithPayment(
   discountReason?: string,
   payments?: import('../types').OrderPayment[],
   skipReceipt?: boolean,
+  // v2.0.90 — UUID менеджера/owner, одобрившего скидку ≥10%. Без него
+  // backend вернёт 403 DISCOUNT_REQUIRES_APPROVAL.
+  // TODO(UI): когда discount_value ≥ 10%, открыть PIN-prompt менеджера и
+  // передать сюда approvedBy. До этого скидки ≥10% не пройдут backend-gate.
+  approvedBy?: string,
 ) {
   void tableId; void total; void cogs; void accountName
   void serviceAmount; void discountAmount
@@ -403,6 +408,7 @@ export async function closeOrderWithPayment(
   if (discountType) body.discount_type = discountType as 'percent' | 'fixed'
   if (discountValue != null) body.discount_value = String(discountValue)
   if (discountReason) body.discount_reason = discountReason
+  if (approvedBy) (body as any).approved_by = approvedBy
   if (skipReceipt) (body as any).skip_receipt = true
   if (Array.isArray(payments) && payments.length > 0) {
     body.payments = payments.map(p => ({

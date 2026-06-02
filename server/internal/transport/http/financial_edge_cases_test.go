@@ -554,6 +554,13 @@ func bootstrapForOrder(t *testing.T, f *e2eFixture, _ interface{}, cashBalance s
 	if err := gdbReal.Where("restaurant_id = ?", f.rid).First(&mi).Error; err != nil {
 		t.Fatal(err)
 	}
+	// v2.0.90 — включаем tech_cards+strict, чтобы backend stock-gate работал.
+	// Большинство сценариев ниже создают tech_card_line + ingredient через
+	// эту хелперу, и ожидают, что заказ создаётся (ingredient.qty=10 хватит).
+	// Тесты, которые проверяют shortage, переопределяют qty=0 ниже.
+	on := true
+	gdbReal.Model(&models.Restaurant{}).Where("id = ?", f.rid).
+		Updates(map[string]any{"tech_cards_enabled": &on, "enforce_stock_check": &on})
 	ingName, ingUnit := "Rice-"+uuid.NewString()[:8], "kg"
 	ing := &models.Ingredient{
 		ID: uuid.NewString(), Name: &ingName, Unit: &ingUnit, RestaurantID: &f.rid,

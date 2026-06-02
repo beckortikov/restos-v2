@@ -39,6 +39,11 @@ type CloseOrderInput struct {
 	// (используются только если list пустой).
 	Payments []PaymentSplit `json:"payments,omitempty"`
 
+	// ApprovedBy — UUID менеджера/owner, одобрившего скидку ≥10%.
+	// Без него скидка >10% (или fixed-эквивалент >10% от subtotal) отклоняется
+	// с 403 DISCOUNT_REQUIRES_APPROVAL. Логируется в order.discount_approved_by.
+	ApprovedBy *string `json:"approved_by,omitempty"`
+
 	// ServicePercent — % обслуживания, выбранный кассиром в момент close.
 	// Если nil — берём order.ServicePercent (default ресторана). Если "0"
 	// — сервис отключён для этого заказа. Хранится в order.service_percent
@@ -204,6 +209,52 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			if discountAmount.GreaterThan(order.Total) {
 				return apperrors.Wrap("VALIDATION", "discount exceeds order.total", nil)
 			}
+
+			// БАГ #1 — backend approval-gate для скидок ≥10%.
+			// Вычисляем эффективный процент: для percent — discountValue,
+			// для fixed — (discountAmount / order.Total) * 100. Если subtotal=0
+			// — гейт пропускаем (вырожденный case).
+			effectivePct := decimal.Zero
+			if *in.DiscountType == "percent" {
+				effectivePct = discountValue
+			} else if !order.Total.IsZero() {
+				effectivePct = decimal.Mul(
+					decimal.DivRound(discountAmount, order.Total),
+					decimal.FromInt(100),
+				)
+			}
+			if effectivePct.GreaterThan(decimal.FromInt(10)) {
+				if in.ApprovedBy == nil || *in.ApprovedBy == "" {
+					return apperrors.Wrap(
+						"DISCOUNT_REQUIRES_APPROVAL",
+						"discount ≥10% requires approved_by (manager/owner)",
+						nil,
+					)
+				}
+				// Проверяем что approver — действующий manager/owner ресторана.
+				var approver models.User
+				if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.ApprovedBy).
+					First(&approver).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return apperrors.Wrap(
+							"DISCOUNT_REQUIRES_APPROVAL",
+							"approved_by user not found",
+							nil,
+						)
+					}
+					return err
+				}
+				if approver.Role == nil || (*approver.Role != "manager" && *approver.Role != "owner") {
+					return apperrors.Wrap(
+						"DISCOUNT_REQUIRES_APPROVAL",
+						"approved_by must be manager or owner",
+						nil,
+					)
+				}
+				ab := approver.ID
+				order.DiscountApprovedBy = &ab
+			}
+
 			dt := *in.DiscountType
 			order.DiscountType = &dt
 			order.DiscountValue = decimal.Normalize(discountValue)
@@ -503,34 +554,110 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 	}
 
 	// 3. Для каждой позиции × tech_card_line — создаём StockMovement (qty<0 = списание).
+	//    v2.0.90 — semi-finished каскадно разворачиваются до базовых ингредиентов
+	//    через semi_recipe_lines (см. MISSING #4).
 	for _, it := range items {
 		if it.MenuItemID == nil {
 			continue
 		}
 		tcl := linesByMenu[*it.MenuItemID]
 		for _, line := range tcl {
-			if line.IngredientID == nil {
-				// semi_finished — пропускаем в MVP (отдельная логика production-recipe).
-				continue
+			lineQty := decimal.Mul(line.Qty, it.Qty)
+			switch {
+			case line.IngredientID != nil:
+				if err := writeIngredientDeduct(tx, restaurantID, *line.IngredientID, line.Name, line.Unit, lineQty, sourceRef, now); err != nil {
+					return err
+				}
+			case line.SemiTypeID != nil:
+				// Каскад: для каждого ингредиента в semi_recipe_lines.
+				if err := s.cascadeSemiDeduct(tx, restaurantID, *line.SemiTypeID, lineQty, sourceRef, now, 0); err != nil {
+					return err
+				}
 			}
-			deduct := decimal.Normalize(decimal.Mul(line.Qty, it.Qty)).Neg()
-			desc := sourceRef
-			opType := "out"
-			unit := line.Unit
-			mv := &models.StockMovement{
-				ID:             uuid.NewString(),
-				Type:           &opType,
-				IngredientID:   line.IngredientID,
-				IngredientName: line.Name,
-				Description:    &desc,
-				Qty:            deduct,
-				Unit:           unit,
-				RestaurantID:   &restaurantID,
-				CreatedAt:      now,
-			}
-			if err := tx.Create(mv).Error; err != nil {
+		}
+	}
+	return nil
+}
+
+// writeIngredientDeduct — append-only stock_movement type=out на базовый ингредиент.
+func writeIngredientDeduct(
+	tx *gorm.DB,
+	restaurantID, ingredientID string,
+	name, unit *string,
+	qty decimal.Decimal,
+	sourceRef string,
+	now time.Time,
+) error {
+	deduct := decimal.Normalize(qty).Neg()
+	desc := sourceRef
+	opType := "out"
+	ingID := ingredientID
+	mv := &models.StockMovement{
+		ID:             uuid.NewString(),
+		Type:           &opType,
+		IngredientID:   &ingID,
+		IngredientName: name,
+		Description:    &desc,
+		Qty:            deduct,
+		Unit:           unit,
+		RestaurantID:   &restaurantID,
+		CreatedAt:      now,
+	}
+	return tx.Create(mv).Error
+}
+
+// cascadeSemiDeduct рекурсивно разворачивает полуфабрикат до базовых
+// ингредиентов через semi_recipe_lines.
+//
+// qty — сколько единиц полуфабриката нужно (после применения yield_percent
+// мы делим на yield/100, чтобы получить сырьё «до уварки»).
+//
+// depth — текущая глубина (защита от циклов: max 5).
+func (s *OrdersService) cascadeSemiDeduct(
+	tx *gorm.DB,
+	restaurantID, semiTypeID string,
+	qty decimal.Decimal,
+	sourceRef string,
+	now time.Time,
+	depth int,
+) error {
+	if depth >= 5 {
+		return apperrors.Wrap("INTERNAL", "tech-card cycle or too-deep semi-finished recipe (>5)", nil)
+	}
+	// Yield-percent: если semi_finished_types.yield_percent=80, нужно
+	// добавить 25% сырья (qty / 0.8). Default 100 → без изменений.
+	var sft models.SemiFinishedType
+	if err := tx.Where("restaurant_id = ? AND id = ?", restaurantID, semiTypeID).
+		First(&sft).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Полуфабрикат не настроен — пропускаем (без ошибки, чтобы не
+			// блокировать close при неполной настройке меню).
+			return nil
+		}
+		return err
+	}
+	rawQty := qty
+	if sft.YieldPercent.IsPositive() {
+		hundred := decimal.FromInt(100)
+		if !sft.YieldPercent.Equal(hundred) {
+			rawQty = decimal.Mul(qty, decimal.DivRound(hundred, sft.YieldPercent))
+		}
+	}
+
+	var lines []models.SemiRecipeLine
+	if err := tx.Where("semi_type_id = ?", semiTypeID).Find(&lines).Error; err != nil {
+		return err
+	}
+	for _, l := range lines {
+		needed := decimal.Mul(l.QtyPerUnit, rawQty)
+		switch {
+		case l.IngredientID != nil:
+			if err := writeIngredientDeduct(tx, restaurantID, *l.IngredientID, l.Name, l.Unit, needed, sourceRef, now); err != nil {
 				return err
 			}
+		default:
+			// Nested semi-finished не моделируется semi_recipe_lines.SemiTypeID,
+			// но мы предусмотрим — если расширим схему, дополним здесь.
 		}
 	}
 	return nil

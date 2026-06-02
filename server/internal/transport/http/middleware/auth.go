@@ -46,6 +46,7 @@ func Auth(svc *service.AuthService) func(http.Handler) http.Handler {
 			ctx = audit.WithActor(ctx, audit.Actor{
 				UserID:   info.UserID,
 				UserName: info.UserName,
+				Role:     info.Role,
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

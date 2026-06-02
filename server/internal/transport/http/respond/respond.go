@@ -75,6 +75,13 @@ func statusForCode(code string) int {
 		return http.StatusUnauthorized
 	case "CONFLICT":
 		return http.StatusConflict
+	case "INSUFFICIENT_STOCK", "ITEM_STOPPED":
+		// v2.0.90 — доменные конфликты, требующие explicit override
+		// (manager/owner role + флаг в payload, либо коррекция склада).
+		return http.StatusConflict
+	case "DISCOUNT_REQUIRES_APPROVAL":
+		// v2.0.90 — скидка ≥10% без approved_by → требуем одобрение.
+		return http.StatusForbidden
 	case "VALIDATION", "BAD_REQUEST":
 		return http.StatusBadRequest
 	default:

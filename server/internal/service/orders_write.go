@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -30,6 +31,11 @@ type CreateOrderInput struct {
 	Comment     *string           `json:"comment"`
 	ShiftID     *string           `json:"shift_id"`
 	Items       []CreateOrderItem `json:"items"`
+
+	// OverrideStopList — менеджер/owner может принудительно создать
+	// заказ с позицией в стоп-листе. Без этого флага позиции, помеченные
+	// в стоп-листе (manual override или low stock), вернут 409 ITEM_STOPPED.
+	OverrideStopList bool `json:"override_stop_list,omitempty"`
 }
 
 // CreateOrderItem — позиция при создании заказа.
@@ -63,6 +69,10 @@ type OrderItemModifierInput struct {
 // AddItemsInput — body POST /api/v1/orders/{id}/items.
 type AddItemsInput struct {
 	Items []CreateOrderItem `json:"items"`
+
+	// OverrideStopList — менеджер/owner может принудительно создать
+	// заказ с позицией в стоп-листе (для исправительных операций).
+	OverrideStopList bool `json:"override_stop_list,omitempty"`
 }
 
 // ─── Implementation ─────────────────────────────────────────────────────────
@@ -116,8 +126,15 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 			menuByID[m.ID] = m
 		}
 
+		// v2.0.90 — stop-list backend-gate (БАГ #3). Если позиция в стопе и
+		// клиент не передал override_stop_list (или роль не достаточная) — 409.
+		if err := validateStopListForItems(ctx, tx, rid, in.Items, menuByID, in.OverrideStopList); err != nil {
+			return err
+		}
+
 		// Phase 19: stock + tech-card валидация (порт v1 lib/stock-check.ts).
-		// Если есть нехватки — откатываемся с VALIDATION-ошибкой.
+		// Если есть нехватки — откатываемся с INSUFFICIENT_STOCK (409) или
+		// VALIDATION (400 — нет техкарты) ошибкой.
 		if err := validateStockForItems(ctx, tx, rid, in.Items, menuByID); err != nil {
 			return err
 		}
@@ -306,6 +323,11 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		menuByID := make(map[string]models.MenuItem, len(menuItems))
 		for _, m := range menuItems {
 			menuByID[m.ID] = m
+		}
+
+		// v2.0.90 — stop-list backend-gate (БАГ #3).
+		if err := validateStopListForItems(ctx, tx, rid, in.Items, menuByID, in.OverrideStopList); err != nil {
+			return err
 		}
 
 		// Phase 19: тех/stock-валидация для доп. позиций.
@@ -892,7 +914,121 @@ func validateStockForItems(
 	if len(shortages) == 0 {
 		return nil
 	}
-	return apperrors.Wrap("VALIDATION", formatShortages(shortages), nil)
+	// «не настроена техкарта» — VALIDATION (configuration). Реальные
+	// нехватки склада — INSUFFICIENT_STOCK (CONFLICT/409).
+	allTechCardMissing := true
+	for _, s := range shortages {
+		if !strings.Contains(s, "не настроена техкарта") {
+			allTechCardMissing = false
+			break
+		}
+	}
+	if allTechCardMissing {
+		return apperrors.Wrap("VALIDATION", formatShortages(shortages), nil)
+	}
+	return apperrors.Wrap("INSUFFICIENT_STOCK", formatShortages(shortages), nil)
+}
+
+// validateStopListForItems — БАГ #3 backend-gate стоп-листа.
+//
+// Позиция считается «в стопе» если:
+//   - menu_items.stop_list_override = true (manual), ИЛИ
+//   - её tech_card_line ссылается на ингредиент с qty <= min_qty (auto).
+//
+// Если override_stop_list=true И actor.Role ∈ {manager, owner} — разрешаем
+// (но логируем в audit_log через стандартный hook на mutation order). Иначе 409.
+func validateStopListForItems(
+	ctx context.Context,
+	tx *gorm.DB,
+	rid string,
+	items []CreateOrderItem,
+	menuByID map[string]models.MenuItem,
+	overrideStopList bool,
+) error {
+	// 1. Собираем manual-override menu_item_id.
+	manualBlocked := make(map[string]bool, len(items))
+	autoBlocked := make(map[string]bool, len(items))
+	itemNames := make(map[string]string, len(items))
+
+	menuIDs := make([]string, 0, len(items))
+	for _, it := range items {
+		menuIDs = append(menuIDs, it.MenuItemID)
+		if mi, ok := menuByID[it.MenuItemID]; ok {
+			if mi.StopListOverride != nil && *mi.StopListOverride {
+				manualBlocked[it.MenuItemID] = true
+			}
+			if mi.Name != nil {
+				itemNames[it.MenuItemID] = *mi.Name
+			}
+		}
+	}
+
+	// 2. Auto-stop через low-stock ingredient → tech_card_line.
+	var lowIngs []models.Ingredient
+	if err := tx.Where("restaurant_id = ? AND qty <= min_qty", rid).
+		Find(&lowIngs).Error; err != nil {
+		return err
+	}
+	if len(lowIngs) > 0 {
+		lowSet := make(map[string]bool, len(lowIngs))
+		for _, i := range lowIngs {
+			lowSet[i.ID] = true
+		}
+		var lines []models.TechCardLine
+		if err := tx.Where("restaurant_id = ? AND menu_item_id IN ?", rid, menuIDs).
+			Find(&lines).Error; err != nil {
+			return err
+		}
+		for _, l := range lines {
+			if l.MenuItemID == nil || l.IngredientID == nil {
+				continue
+			}
+			if lowSet[*l.IngredientID] {
+				autoBlocked[*l.MenuItemID] = true
+			}
+		}
+	}
+
+	// 3. Собираем «нарушители».
+	type blocked struct {
+		ID     string `json:"item_id"`
+		Name   string `json:"item_name"`
+		Reason string `json:"reason"` // "manual" | "auto"
+	}
+	var hits []blocked
+	for _, it := range items {
+		switch {
+		case manualBlocked[it.MenuItemID]:
+			hits = append(hits, blocked{ID: it.MenuItemID, Name: itemNames[it.MenuItemID], Reason: "manual"})
+		case autoBlocked[it.MenuItemID]:
+			hits = append(hits, blocked{ID: it.MenuItemID, Name: itemNames[it.MenuItemID], Reason: "auto"})
+		}
+	}
+	if len(hits) == 0 {
+		return nil
+	}
+
+	// 4. Override path.
+	if overrideStopList {
+		actor, _ := audit.ActorFromContext(ctx)
+		if actor.Role == "manager" || actor.Role == "owner" {
+			// audit идёт через стандартный GORM hook на Order.AfterCreate.
+			return nil
+		}
+		return apperrors.Wrap("FORBIDDEN", "override_stop_list requires manager or owner role", nil)
+	}
+
+	// 5. Reject.
+	names := make([]string, 0, len(hits))
+	for _, h := range hits {
+		nm := h.Name
+		if nm == "" {
+			nm = h.ID
+		}
+		names = append(names, nm)
+	}
+	msg := fmt.Sprintf("позиции в стоп-листе: %s", strings.Join(names, ", "))
+	return apperrors.Wrap("ITEM_STOPPED", msg, nil)
 }
 
 // computeReservations — собирает резервации от уже открытых не-deducted заказов.

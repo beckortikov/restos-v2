@@ -19,6 +19,7 @@ import "context"
 type Actor struct {
 	UserID   string
 	UserName string
+	Role     string // cashier|waiter|cook|manager|owner — для approval-gate'ов
 }
 
 type actorKey struct{}

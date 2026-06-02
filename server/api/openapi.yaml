@@ -610,7 +610,15 @@ paths:
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/CreateOrderInput" } } }
-      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "409":
+          description: |
+            v2.0.90 — доменные конфликты:
+            - INSUFFICIENT_STOCK: одного или нескольких ингредиентов не хватает (детали в message).
+            - ITEM_STOPPED: позиция в стоп-листе. Передать `override_stop_list: true`
+              в payload и залогиниться как manager/owner для override.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/orders/{id}:
     get:
@@ -664,7 +672,16 @@ paths:
               required: [items]
               properties:
                 items: { type: array, items: { $ref: "#/components/schemas/OrderItemInput" } }
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+                override_stop_list:
+                  type: boolean
+                  description: |
+                    v2.0.90 — manager/owner может явно обойти стоп-лист.
+                    Без флага позиции в стопе вернут 409 ITEM_STOPPED.
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "409":
+          description: ITEM_STOPPED / INSUFFICIENT_STOCK.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/orders/{id}/close:
     post:
@@ -704,6 +721,14 @@ paths:
                   description: Размер скидки (decimal как строка). Для percent 0..100, для fixed <= order.total.
                 discount_reason:
                   type: string
+                approved_by:
+                  type: string
+                  format: uuid
+                  description: |
+                    v2.0.90 — UUID менеджера/owner, одобрившего скидку.
+                    Обязателен если эффективная скидка ≥10% (percent>10 или
+                    fixed-эквивалент >10% от subtotal). Иначе 403
+                    DISCOUNT_REQUIRES_APPROVAL. Approver проверяется по role.
                 service_percent:
                   type: string
                   description: |
@@ -715,7 +740,13 @@ paths:
                   type: array
                   description: Split-payment. Если задан — payment_method/account_id из top-level игнорируются. Сумма должна равняться total_with_service = (total - discount) + service + tip с tolerance 0.01.
                   items: { $ref: "#/components/schemas/PaymentSplit" }
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Order" } } } }
+        "403":
+          description: |
+            DISCOUNT_REQUIRES_APPROVAL — скидка ≥10% без approved_by или approved_by
+            не является manager/owner ресторана.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/orders/{id}/cancel:
     post:
@@ -2861,6 +2892,12 @@ components:
         comment: { type: string }
         shift_id: { type: string, format: uuid }
         items: { type: array, items: { $ref: "#/components/schemas/OrderItemInput" } }
+        override_stop_list:
+          type: boolean
+          description: |
+            v2.0.90 — флаг manager/owner override стоп-листа. Без него позиции
+            с stop_list_override=true или low-stock ингредиентами вернут
+            409 ITEM_STOPPED.
     OrderDetail:
       type: object
       properties:
