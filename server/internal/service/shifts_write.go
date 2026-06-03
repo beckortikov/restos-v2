@@ -180,6 +180,72 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 	return closed, nil
 }
 
+// UpdateAccountInput — body PATCH /api/v1/shifts/{id}.
+type UpdateAccountInput struct {
+	AccountID string `json:"account_id"`
+}
+
+// UpdateAccount привязывает (или меняет) финансовый счёт к открытой смене.
+// Нужно для recovery legacy-смен, открытых без accountId — без него
+// createShiftExpense и payServiceCharge падают.
+// Изменение запрещено для закрытых смен (фиксированный отчёт).
+func (s *ShiftsService) UpdateAccount(ctx context.Context, shiftID string, in UpdateAccountInput) (*models.CashShift, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if in.AccountID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+
+	var updated *models.CashShift
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var shift models.CashShift
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, shiftID).
+			First(&shift).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		if shift.Status == nil || *shift.Status != "open" {
+			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
+		}
+		// Verify account exists in this tenant and is of type 'cash'.
+		var acc models.FinancialAccount
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, in.AccountID).
+			First(&acc).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("VALIDATION", "account not found", nil)
+			}
+			return err
+		}
+		if acc.Type == nil || *acc.Type != "cash" {
+			return apperrors.Wrap("VALIDATION", "account must be of type 'cash'", nil)
+		}
+
+		now := time.Now().UTC()
+		shift.AccountID = &in.AccountID
+		shift.UpdatedAt = now
+		if err := tx.Save(&shift).Error; err != nil {
+			return err
+		}
+		updated = &shift
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventShiftOpened, map[string]any{"id": updated.ID, "patched": true})
+		s.pub.Flush(ctx, rid, buf)
+	}
+	return updated, nil
+}
+
 // AddOperation вносит cash_in / cash_out в смену.
 func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in ShiftOperationInput) (*models.CashShiftOperation, error) {
 	rid, err := tenant.MustRestaurantID(ctx)

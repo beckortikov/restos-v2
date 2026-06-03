@@ -547,6 +547,25 @@ paths:
                   shift: { $ref: "#/components/schemas/CashShift" }
                   operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
 
+  /api/v1/shifts/{id}:
+    patch:
+      tags: [shifts]
+      summary: Привязать/изменить счёт у открытой смены (recovery legacy-смен без account_id)
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [account_id]
+              properties:
+                account_id: { type: string, format: uuid }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CashShift" } } } }
+        "409": { description: Shift not open }
+
   /api/v1/shifts/{id}/close:
     post:
       tags: [shifts]

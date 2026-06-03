@@ -73,6 +73,23 @@ func (h *ShiftsHandler) Close(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, shift)
 }
 
+// UpdateAccount — PATCH /api/v1/shifts/{id}. Привязка счёта к открытой смене.
+// Recovery для legacy-смен, открытых без accountId.
+func (h *ShiftsHandler) UpdateAccount(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var in service.UpdateAccountInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	shift, err := h.svc.UpdateAccount(r.Context(), id, in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, shift)
+}
+
 // AddOperation — POST /api/v1/shifts/{id}/operations.
 func (h *ShiftsHandler) AddOperation(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")

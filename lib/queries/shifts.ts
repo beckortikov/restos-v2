@@ -1,4 +1,5 @@
 import { api, unwrap, unwrapOr404 } from './_client'
+import { getBaseURL } from '../api/v4-typed'
 import type { CashShift, CashShiftOperation } from '../types'
 import { logAction } from './audit'
 import { _mapV4Shift } from './_mappers'
@@ -25,6 +26,36 @@ export async function openShift(openedBy: string, openingBalance: number, accoun
   void openedBy
   logAction('shift.open', 'shift', r?.id, 'Смена открыта', { openingBalance, accountId })
   return _mapV4Shift(r)
+}
+
+// patchShiftAccount — recovery для legacy-смен, открытых без accountId.
+// Без счёта createShiftExpense и payServiceCharge падают; этот endpoint
+// позволяет привязать cash-счёт к уже открытой смене без её закрытия.
+// OpenAPI-сгенерённый клиент пока не знает про PATCH /shifts/{id}, поэтому
+// идём через прямой fetch на тот же baseURL что используют остальные api-вызовы.
+export async function patchShiftAccount(shiftId: string, accountId: string): Promise<void> {
+  // Прямой fetch — openapi-fetch не имеет PATCH /shifts/{id} в типах до regen.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (typeof localStorage !== 'undefined') {
+    const tok = localStorage.getItem('restos-v4-token')
+    if (tok) headers['Authorization'] = `Bearer ${tok}`
+  }
+  // Idempotency-Key как и в остальных write-вызовах (middleware api-клиента ставит UUID).
+  try { headers['Idempotency-Key'] = crypto.randomUUID() } catch { /* noop */ }
+  const res = await fetch(`${getBaseURL()}/api/v1/shifts/${encodeURIComponent(shiftId)}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ account_id: accountId }),
+  })
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try {
+      const body = await res.json()
+      msg = body?.error?.message || body?.message || msg
+    } catch { /* ignore */ }
+    throw new Error(msg)
+  }
+  logAction('shift.account.attach', 'shift', shiftId, 'Привязка счёта к смене', { accountId })
 }
 
 export async function closeShift(shiftId: string, closedBy: string, closingBalance: number): Promise<CashShift> {

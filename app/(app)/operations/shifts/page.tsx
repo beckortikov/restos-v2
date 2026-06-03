@@ -5,7 +5,7 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
 import { type CashShift, type CashShiftOperation, type FinancialAccount } from '@/lib/types'
-import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, printShiftZ, printShiftX, type ShiftZReport } from '@/lib/queries'
+import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, patchShiftAccount, printShiftZ, printShiftX, type ShiftZReport } from '@/lib/queries'
 import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
@@ -75,6 +75,10 @@ export default function ShiftsPage() {
   const [showOp, setShowOp] = useState<'cash_in' | 'cash_out' | null>(null)
   const [opAmount, setOpAmount] = useState(0)
   const [opDesc, setOpDesc] = useState('')
+
+  // Recovery — привязка счёта к уже открытой legacy-смене (account_id = null)
+  const [attachAccountId, setAttachAccountId] = useState<string>('')
+  const [attaching, setAttaching] = useState(false)
 
   // Shift expense form
   const [showExpense, setShowExpense] = useState(false)
@@ -214,8 +218,34 @@ export default function ShiftsPage() {
     }
   }
 
+  const handleAttachAccount = async () => {
+    if (!activeShift || !attachAccountId) return
+    setAttaching(true)
+    try {
+      await patchShiftAccount(activeShift.id, attachAccountId)
+      toast.success('Счёт привязан к смене')
+      setAttachAccountId('')
+      await reload()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка привязки счёта')
+    } finally {
+      setAttaching(false)
+    }
+  }
+
+  // Дефолтный выбор счёта для recovery-блока — первый доступный.
+  useEffect(() => {
+    if (activeShift && !activeShift.accountId && !attachAccountId && cashAccounts.length > 0) {
+      setAttachAccountId(cashAccounts[0].id)
+    }
+  }, [activeShift, cashAccounts, attachAccountId])
+
   const handleOpen = async () => {
     if (!user) return
+    if (!openAccountId) {
+      toast.error('Выберите счёт смены — без него операции работать не будут')
+      return
+    }
     try {
       await openShift(user.id, openBalance, openAccountId || undefined)
       toast.success('Смена открыта')
@@ -656,13 +686,60 @@ export default function ShiftsPage() {
               </div>
               {!activeShift.accountId && (
                 <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-2">
-                  ⚠ У смены не указан счёт — выплата невозможна. Закройте и откройте смену со счётом.
+                  ⚠ У смены не указан счёт — выплата невозможна. Привяжите счёт в блоке выше.
                 </p>
               )}
             </div>
           )}
 
-          {/* Actions */}
+          {/* Recovery — у legacy-смен может не быть accountId; без него Расход
+              и выплата обслуживания недоступны. Показываем inline-блок с
+              селектом и кнопкой «Привязать». */}
+          {!activeShift.accountId && (
+            <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-300 dark:border-amber-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-start gap-2">
+                <span className="text-amber-700 dark:text-amber-300 mt-0.5">⚠</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-amber-900 dark:text-amber-200">У смены не указан счёт</p>
+                  <p className="text-xs text-amber-800 dark:text-amber-300/90 mt-0.5">
+                    Привяжите счёт чтобы разблокировать <b>Расход</b> и <b>выплату обслуживания</b> официантам.
+                  </p>
+                </div>
+              </div>
+              {cashAccounts.length === 0 ? (
+                <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-2.5">
+                  Нет cash-счетов. Создайте в <a href="/finance/accounts" className="underline">Финансы → Счета</a>.
+                </p>
+              ) : (
+                <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+                  <div className="flex-1">
+                    <label className="text-[11px] text-amber-800 dark:text-amber-300 block mb-1">Счёт</label>
+                    <select
+                      value={attachAccountId}
+                      onChange={e => setAttachAccountId(e.target.value)}
+                      className="w-full px-3 py-2 bg-background border border-amber-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-amber-400/40"
+                    >
+                      {cashAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  </div>
+                  <button
+                    onClick={handleAttachAccount}
+                    disabled={!attachAccountId || attaching}
+                    className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {attaching ? '…' : 'Привязать'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Actions. Выбран вариант «3 кнопки + раздельные inline-формы»:
+              Внесение/Изъятие — одинаковая форма (cash_in/cash_out отличаются только знаком),
+              Расход — отдельная с категорией. Унификация под единую модалку с табами
+              рассмотрена, но тут симметрия и так очевидна, а отдельная форма Расхода
+              сохраняет акцент на категории. Расход НЕ disable как только accountId привязан
+              (через auto-select при открытии или recovery-блок выше). */}
           <div className="grid grid-cols-3 gap-2">
             <button
               onClick={() => { setShowOp('cash_in'); setOpAmount(0); setOpDesc('') }}
@@ -844,19 +921,27 @@ export default function ShiftsPage() {
             </button>
           ) : (
             <div className="max-w-sm mx-auto space-y-3 text-left">
-              {cashAccounts.length > 1 && (
+              {cashAccounts.length === 0 ? (
+                /* Hard-block: без cash-счёта смена работать не может (выплаты + расходы). */
+                <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3 space-y-2">
+                  <p className="font-medium">❌ Нет счёта типа «Касса»</p>
+                  <p>Создайте счёт в разделе{' '}
+                    <a href="/finance/accounts" className="underline font-medium hover:text-rose-900">Финансы → Счета</a>
+                    {' '}— без него смена не сможет принимать выплаты и расходы.</p>
+                </div>
+              ) : (
+                /* Всегда показываем селект — даже если счёт один, кассир должен видеть какой именно. */
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1">Касса</label>
+                  <label className="text-xs text-muted-foreground block mb-1">Счёт смены</label>
                   <select value={openAccountId} onChange={e => setOpenAccountId(e.target.value)}
-                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
+                    disabled={cashAccounts.length === 1}
+                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-70">
                     {cashAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select>
+                  {cashAccounts.length === 1 && (
+                    <p className="text-[11px] text-muted-foreground mt-1">Единственный cash-счёт автоматически выбран.</p>
+                  )}
                 </div>
-              )}
-              {cashAccounts.length === 0 && (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-                  ⚠ В Финансах нет ни одного счёта типа «Касса». Смена откроется без привязки к счёту — операции по смене не попадут в баланс счетов.
-                </p>
               )}
               <div>
                 <label className="text-xs text-muted-foreground block mb-1">Начальный остаток в кассе</label>
@@ -865,7 +950,8 @@ export default function ShiftsPage() {
               </div>
               <div className="flex gap-2 justify-center">
                 <button onClick={handleOpen}
-                  className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90">
+                  disabled={cashAccounts.length === 0 || !openAccountId}
+                  className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">
                   Открыть
                 </button>
                 <button onClick={() => setShowOpen(false)} className="px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground">Отмена</button>

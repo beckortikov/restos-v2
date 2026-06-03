@@ -377,6 +377,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/admin/cleanup/orphan-orders", ordersH.CleanupOrphans)
 
 			g.Post("/shifts", shiftsH.Open)
+			g.Patch("/shifts/{id}", shiftsH.UpdateAccount)
 			g.Post("/shifts/{id}/close", shiftsH.Close)
 			g.Post("/shifts/{id}/operations", shiftsH.AddOperation)
 			g.Post("/shifts/{id}/expenses", shiftsH.AddExpense)
