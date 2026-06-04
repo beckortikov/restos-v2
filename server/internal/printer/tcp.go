@@ -35,11 +35,17 @@ type TCPPrinter struct {
 }
 
 // NewTCP создаёт принтер. Минимум — addr.
+//
+// v2.1.7: таймауты увеличены 3s/5s → 8s/15s. Реальные кассовые сети
+// (особенно с Wi-Fi роутерами / отдельным VLAN для кухни) часто дают
+// SYN handshake >3s. Также XPrinter может «зависнуть» на write если
+// внутренний буфер заполнен (печатает предыдущий чек). i/o timeout —
+// частая ошибка после v2.1.0 (большие payload'ы с meta-блоком).
 func NewTCP(addr string) *TCPPrinter {
 	return &TCPPrinter{
 		Addr:         normalizeTCPAddr(addr),
-		DialTimeout:  3 * time.Second,
-		WriteTimeout: 5 * time.Second,
+		DialTimeout:  8 * time.Second,
+		WriteTimeout: 15 * time.Second,
 	}
 }
 

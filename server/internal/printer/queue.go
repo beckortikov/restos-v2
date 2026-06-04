@@ -155,8 +155,10 @@ func (q *Queue) process(ctx context.Context, j *models.PrintJob) {
 	}
 
 	// Отправляем с разумным timeout — TCP-driver сам уважает свой DialTimeout,
-	// но добавим общий 10с потолок.
-	sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// но добавим общий потолок. v2.1.7: 10s → 30s, т.к. tcp.go теперь имеет
+	// dial 8s + write 15s = max 23s. Запас в 7s для медленных принтеров
+	// (XPrinter с большим payload'ом включая meta-блок + QR).
+	sendCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	if err := pr.Send(sendCtx, j.Payload); err != nil {
