@@ -185,18 +185,30 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 			return err
 		}
 
+		// v2.2.0: копируем service_percent из ресторана. Иначе order создаётся
+		// с 0 и pre-check не показывает «Обслуживание» (поле скрыто в layout
+		// при ServiceAmount==0). Раньше pre-bill пересчитывал percent на лету,
+		// но проверка `if !order.ServicePercent.IsZero()` отказывала когда
+		// percent действительно 0 → ничего не считалось.
+		var restServicePercent decimal.Decimal
+		_ = tx.Model(&models.Restaurant{}).
+			Select("COALESCE(service_percent, 0)").
+			Where("id = ?", rid).
+			Scan(&restServicePercent).Error
+
 		order := &models.Order{
-			ID:           uuid.NewString(),
-			OrderNumber:  nextNum,
-			RestaurantID: &rid,
-			TableID:      in.TableID,
-			ShiftID:      in.ShiftID,
-			Type:         &typ,
-			Status:       &status,
-			GuestsCount:  &guests,
-			Comment:      in.Comment,
-			CreatedAt:    now,
-			UpdatedAt:    now,
+			ID:             uuid.NewString(),
+			OrderNumber:    nextNum,
+			RestaurantID:   &rid,
+			TableID:        in.TableID,
+			ShiftID:        in.ShiftID,
+			Type:           &typ,
+			Status:         &status,
+			GuestsCount:    &guests,
+			Comment:        in.Comment,
+			ServicePercent: restServicePercent,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 		if actor.UserID != "" {
 			waiter := actor.UserID
