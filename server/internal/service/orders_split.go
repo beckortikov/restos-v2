@@ -302,6 +302,7 @@ func (s *OrdersService) Transfer(ctx context.Context, orderID string, in Transfe
 	}
 
 	var updated *models.Order
+	var oldTableID, newTableID string // v2.2.1: для emit'а table.updated SSE
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 		var order models.Order
@@ -332,6 +333,11 @@ func (s *OrdersService) Transfer(ctx context.Context, orderID string, in Transfe
 				return apperrors.Wrap("VALIDATION", "table not found in this restaurant", nil)
 			}
 			updates["table_id"] = *in.TableID
+			// v2.2.1: запоминаем оба ID для пост-update sync.
+			if order.TableID != nil {
+				oldTableID = *order.TableID
+			}
+			newTableID = *in.TableID
 		}
 		if in.WaiterID != nil {
 			var cnt int64
@@ -349,6 +355,48 @@ func (s *OrdersService) Transfer(ctx context.Context, orderID string, in Transfe
 		if err := tx.Model(&order).Updates(updates).Error; err != nil {
 			return err
 		}
+
+		// v2.2.1: синхронизация tables — без этого старый стол остаётся
+		// «Занят», новый «Свободен» в карте зала и в POS до полного refetch'а.
+		// Старый: освобождаем если на нём НЕ осталось других активных заказов.
+		// Новый: помечаем «Занят» + current_order_id = order.id.
+		if newTableID != "" && newTableID != oldTableID {
+			if oldTableID != "" {
+				var activeCount int64
+				if err := tx.Model(&models.Order{}).
+					Where("restaurant_id = ? AND table_id = ?", rid, oldTableID).
+					Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+					Where("id <> ?", order.ID).
+					Count(&activeCount).Error; err != nil {
+					return err
+				}
+				if activeCount == 0 {
+					if err := tx.Model(&models.Table{}).
+						Where("id = ? AND restaurant_id = ?", oldTableID, rid).
+						Updates(map[string]any{
+							"status":           "free",
+							"current_order_id": nil,
+							"opened_at":        nil,
+							"updated_at":       now,
+						}).Error; err != nil {
+						return err
+					}
+				}
+			}
+			// Новый стол: занят + current_order_id. opened_at — оставляем если
+			// уже был (был свободен → сейчас момент открытия).
+			if err := tx.Model(&models.Table{}).
+				Where("id = ? AND restaurant_id = ?", newTableID, rid).
+				Updates(map[string]any{
+					"status":           "occupied",
+					"current_order_id": order.ID,
+					"opened_at":        gorm.Expr("COALESCE(opened_at, ?)", now),
+					"updated_at":       now,
+				}).Error; err != nil {
+				return err
+			}
+		}
+
 		// Перечитываем для актуальных полей.
 		if err := tx.Where("id = ?", orderID).First(&order).Error; err != nil {
 			return err
@@ -365,6 +413,15 @@ func (s *OrdersService) Transfer(ctx context.Context, orderID string, in Transfe
 			"id":     updated.ID,
 			"action": "transfer",
 		})
+		// v2.2.1: emit table.updated для обоих столов — POS подписан на
+		// 'tables' channel в useDataSync, без события карта зала не обновится
+		// до полного refetch'а (через 30с poll).
+		if oldTableID != "" && oldTableID != newTableID {
+			buf.Add(EventTableUpdated, map[string]any{"id": oldTableID})
+		}
+		if newTableID != "" && newTableID != oldTableID {
+			buf.Add(EventTableUpdated, map[string]any{"id": newTableID})
+		}
 		s.pub.Flush(ctx, rid, buf)
 	}
 	return updated, nil
