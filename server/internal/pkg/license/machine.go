@@ -7,6 +7,7 @@ import (
 	"net"
 	"os/exec"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -57,14 +58,19 @@ func MachineID() string {
 
 func computeMachineID() string {
 	parts := []string{}
-	if mac := firstMACAddress(); mac != "" {
-		parts = append(parts, "mac:"+mac)
+	// v2.1.5 fix: hostUUID (firmware/BIOS) — самый стабильный источник,
+	// ставим ПЕРВЫМ. Меняется только при замене материнки. MAC адреса
+	// нестабильны (Wi-Fi ↔ Ethernet порядок, USB-донглы, VPN-интерфейсы)
+	// поэтому используем allMACs sorted (детерминированный набор всех
+	// физических MAC), не firstMAC.
+	if hostUUID := machineUUID(); hostUUID != "" {
+		parts = append(parts, "uuid:"+hostUUID)
+	}
+	if macs := allMACsSorted(); len(macs) > 0 {
+		parts = append(parts, "macs:"+strings.Join(macs, ","))
 	}
 	if diskSN := diskSerial(); diskSN != "" {
 		parts = append(parts, "disk:"+diskSN)
-	}
-	if hostUUID := machineUUID(); hostUUID != "" {
-		parts = append(parts, "uuid:"+hostUUID)
 	}
 	if len(parts) == 0 {
 		// Fallback — лучше что-то чем ничего.
@@ -78,31 +84,47 @@ func computeMachineID() string {
 	return fmt.Sprintf("%s-%s-%s", hex12[0:4], hex12[4:8], hex12[8:12])
 }
 
-// firstMACAddress — MAC первого «нормального» интерфейса.
-// Пропускаем loopback, down, virtual (docker/vmware/etc).
-func firstMACAddress() string {
+// allMACsSorted — все физические MAC адреса, отсортированные.
+//
+// v2.1.5: раньше брали MAC первого «up» интерфейса (`firstMACAddress`),
+// но порядок в net.Interfaces() меняется между перезагрузками (Wi-Fi vs
+// Ethernet enumerate'ятся по-разному), и MachineID нестабильно.
+//
+// Теперь: собираем ВСЕ MAC (включая «down»), фильтруем virtual + loopback,
+// сортируем лексикографически → детерминированный набор. Если ENT-кабель
+// отсоединён или Wi-Fi выключен — MAC всё равно в списке.
+//
+// Полное hashing-окно: SHA-256 от всех hex-MAC через `,`.
+func allMACsSorted() []string {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return ""
+		return nil
 	}
+	out := make([]string, 0, len(ifaces))
 	for _, ifa := range ifaces {
-		if ifa.Flags&net.FlagLoopback != 0 || ifa.Flags&net.FlagUp == 0 {
+		if ifa.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		// Skip virtual: docker0, vmnet*, vboxnet*, veth*, tap*, tun*, br-*.
+		// Skip virtual: docker0, vmnet*, vboxnet*, veth*, tap*, tun*, br-*,
+		// VPN/проксирующие интерфейсы.
 		n := strings.ToLower(ifa.Name)
 		if strings.HasPrefix(n, "docker") || strings.HasPrefix(n, "vmnet") ||
 			strings.HasPrefix(n, "vbox") || strings.HasPrefix(n, "veth") ||
 			strings.HasPrefix(n, "br-") || strings.HasPrefix(n, "tun") ||
-			strings.HasPrefix(n, "tap") || strings.HasPrefix(n, "utun") {
+			strings.HasPrefix(n, "tap") || strings.HasPrefix(n, "utun") ||
+			strings.HasPrefix(n, "zt") || strings.HasPrefix(n, "wg") ||
+			strings.HasPrefix(n, "ppp") || strings.Contains(n, "virtual") ||
+			strings.Contains(n, "hyper-v") || strings.Contains(n, "vethernet") {
 			continue
 		}
 		hw := ifa.HardwareAddr.String()
-		if hw != "" && hw != "00:00:00:00:00:00" {
-			return hw
+		if hw == "" || hw == "00:00:00:00:00:00" {
+			continue
 		}
+		out = append(out, strings.ToLower(hw))
 	}
-	return ""
+	sort.Strings(out)
+	return out
 }
 
 func machineUUID() string {
