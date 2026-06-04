@@ -25,6 +25,22 @@ export async function createFinancialAccount(data: { name: string; type: string 
   } as FinancialAccount
 }
 
+export async function updateFinancialAccount(id: string, patch: { name?: string; type?: string }): Promise<FinancialAccount> {
+  const body: Record<string, unknown> = {}
+  if (patch.name !== undefined) body.name = patch.name
+  if (patch.type !== undefined) body.type = patch.type
+  const row: any = await unwrap(api.PATCH('/api/v1/finance/accounts/{id}', {
+    params: { path: { id } },
+    body: body as any,
+  }))
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    balance: Number(row.balance ?? 0),
+  } as FinancialAccount
+}
+
 export async function deleteFinancialAccount(id: string): Promise<void> {
   try {
     await unwrap(api.DELETE('/api/v1/finance/accounts/{id}', { params: { path: { id } } }))

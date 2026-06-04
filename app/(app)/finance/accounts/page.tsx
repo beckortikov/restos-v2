@@ -5,8 +5,8 @@ import { useAuth } from '@/lib/auth-store'
 import { DatePeriodFilter, filterByDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { formatCurrency } from '@/lib/helpers'
 import { type FinancialAccount, type FinancialOperation } from '@/lib/types'
-import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation } from '@/lib/queries'
-import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard } from 'lucide-react'
+import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialAccount } from '@/lib/queries'
+import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
@@ -39,6 +39,15 @@ export default function AccountsPage() {
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
 
+  // Edit-account dialog state. Открывается по клику на pencil-иконку
+  // в карточке счёта. Позволяет поменять name и/или type (cash ↔ bank).
+  // Без этого юзер, случайно создавший «Касса» с type=bank, мог только
+  // удалить и пересоздать.
+  const [editingAccount, setEditingAccount] = useState<FinancialAccount | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editType, setEditType] = useState<'cash' | 'bank'>('cash')
+  const [editSaving, setEditSaving] = useState(false)
+
   useEffect(() => {
     Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
       .then(([accs, ops]) => { setAccounts(accs); setOperations(ops) })
@@ -61,6 +70,31 @@ export default function AccountsPage() {
       toast.error(e instanceof Error ? e.message : 'Ошибка создания счёта')
     } finally {
       setAddingSaving(false)
+    }
+  }
+
+  function openEditDialog(acc: FinancialAccount, e: React.MouseEvent) {
+    e.stopPropagation()
+    setEditingAccount(acc)
+    setEditName(acc.name)
+    setEditType((acc.type === 'cash' ? 'cash' : 'bank') as 'cash' | 'bank')
+  }
+
+  async function handleSaveEdit() {
+    if (!editingAccount || !editName) return
+    setEditSaving(true)
+    try {
+      const updated = await updateFinancialAccount(editingAccount.id, {
+        name: editName,
+        type: editType,
+      })
+      setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a))
+      setEditingAccount(null)
+      toast.success(`Счёт «${updated.name}» обновлён`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка обновления')
+    } finally {
+      setEditSaving(false)
     }
   }
 
@@ -160,7 +194,7 @@ export default function AccountsPage() {
             <button
               key={acc.id}
               onClick={() => setSelectedAccount(acc.id)}
-              className={`text-left rounded-xl border p-4 transition-colors ${selectedAccount === acc.id ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-muted/30'}`}
+              className={`relative text-left rounded-xl border p-4 transition-colors ${selectedAccount === acc.id ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-muted/30'}`}
             >
               <div className="flex items-center gap-2 mb-2">
                 {acc.type === 'cash' ? (
@@ -169,6 +203,18 @@ export default function AccountsPage() {
                   <CreditCard className="size-4 text-blue-600" />
                 )}
                 <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{acc.name}</span>
+                {canDo('finance.manage') && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(e) => openEditDialog(acc, e)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') openEditDialog(acc, e as unknown as React.MouseEvent) }}
+                    title="Изменить имя/тип"
+                    className="ml-auto p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                  >
+                    <Pencil className="size-3.5" />
+                  </span>
+                )}
               </div>
               <p className="text-2xl font-bold text-foreground">{formatCurrency(acc.balance)}</p>
               <div className="flex items-center gap-3 mt-1.5 text-xs">
@@ -245,6 +291,69 @@ export default function AccountsPage() {
       />
 
       {/* Add Account Dialog */}
+      {/* Edit-account dialog — изменение имени/типа существующего счёта.
+          Открывается по pencil-иконке в карточке. v2.0.99 fix. */}
+      <Dialog open={editingAccount !== null} onOpenChange={(o) => !o && setEditingAccount(null)}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Изменить счёт</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Название</label>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Название счёта"
+                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Тип</label>
+              <div className="flex gap-2">
+                {(['cash', 'bank'] as const).map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setEditType(t)}
+                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${
+                      editType === t
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-card border-border text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {t === 'cash' ? 'Наличные (касса)' : 'Банк (безнал)'}
+                  </button>
+                ))}
+              </div>
+              {editingAccount && editingAccount.type !== editType && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mt-1">
+                  ⚠ Меняем тип с «{editingAccount.type === 'cash' ? 'Наличные' : 'Банк'}» на «{editType === 'cash' ? 'Наличные' : 'Банк'}». Баланс и существующие операции сохраняются — меняется только классификация.
+                </p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setEditingAccount(null)}
+              className="px-4 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={handleSaveEdit}
+              disabled={!editName || editSaving}
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            >
+              {editSaving ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={addAccountDialogOpen} onOpenChange={setAddAccountDialogOpen}>
         <DialogContent className="sm:max-w-md rounded-xl">
           <DialogHeader>
