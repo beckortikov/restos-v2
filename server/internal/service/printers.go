@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,20 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
+
+// normalizePrinterTarget — для tcp-драйвера дополняет адрес дефолтным портом
+// :9100 если кассир ввёл только IP. Хранится уже нормализованным, чтобы
+// db_router и worker получали готовый host:port.
+func normalizePrinterTarget(driver, target string) string {
+	t := strings.TrimSpace(target)
+	if driver != "tcp" || t == "" {
+		return t
+	}
+	if _, _, err := net.SplitHostPort(t); err == nil {
+		return t
+	}
+	return net.JoinHostPort(t, "9100")
+}
 
 // PrintersService — CRUD по физическим принтерам.
 type PrintersService struct {
@@ -33,6 +49,12 @@ type PrinterInput struct {
 	Cols      *int    `json:"cols,omitempty"`
 	IsDefault *bool   `json:"is_default,omitempty"`
 	Enabled   *bool   `json:"enabled,omitempty"`
+	// Content flags (миграция 015).
+	PrintLogo       *bool `json:"print_logo,omitempty"`
+	PrintDiscount   *bool `json:"print_discount,omitempty"`
+	PrintService    *bool `json:"print_service,omitempty"`
+	PrintTip        *bool `json:"print_tip,omitempty"`
+	PrintQRFeedback *bool `json:"print_qr_feedback,omitempty"`
 }
 
 // List — все принтеры ресторана.
@@ -66,6 +88,11 @@ func (s *PrintersService) Get(ctx context.Context, id string) (*models.Printer, 
 
 // Create. Валидация: kind ∈ {receipt,station}, driver ∈ {tcp,usb,virtual,mock},
 // для kind=station требуется station.
+//
+// Swap-default: если is_default=true и kind=receipt — в той же транзакции
+// очищаем флаг is_default у предыдущего default-receipt-принтера. Никаких
+// 409 «duplicate default»: UX лучше, чем требовать от кассира сначала
+// «снять галочку».
 func (s *PrintersService) Create(ctx context.Context, in PrinterInput) (*models.Printer, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
@@ -86,19 +113,24 @@ func (s *PrintersService) Create(ctx context.Context, in PrinterInput) (*models.
 
 	now := time.Now().UTC()
 	p := &models.Printer{
-		ID:           uuid.NewString(),
-		RestaurantID: rid,
-		Name:         *in.Name,
-		Kind:         *in.Kind,
-		Station:      in.Station,
-		Driver:       *in.Driver,
-		Cols:         48,
-		Enabled:      true,
-		CreatedAt:    now,
-		UpdatedAt:    now,
+		ID:              uuid.NewString(),
+		RestaurantID:    rid,
+		Name:            *in.Name,
+		Kind:            *in.Kind,
+		Station:         in.Station,
+		Driver:          *in.Driver,
+		Cols:            48,
+		Enabled:         true,
+		PrintLogo:       true,
+		PrintDiscount:   true,
+		PrintService:    true,
+		PrintTip:        false,
+		PrintQRFeedback: false,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if in.Target != nil {
-		p.Target = *in.Target
+		p.Target = normalizePrinterTarget(p.Driver, *in.Target)
 	}
 	if in.Cols != nil {
 		p.Cols = *in.Cols
@@ -109,29 +141,63 @@ func (s *PrintersService) Create(ctx context.Context, in PrinterInput) (*models.
 	if in.Enabled != nil {
 		p.Enabled = *in.Enabled
 	}
+	if in.PrintLogo != nil {
+		p.PrintLogo = *in.PrintLogo
+	}
+	if in.PrintDiscount != nil {
+		p.PrintDiscount = *in.PrintDiscount
+	}
+	if in.PrintService != nil {
+		p.PrintService = *in.PrintService
+	}
+	if in.PrintTip != nil {
+		p.PrintTip = *in.PrintTip
+	}
+	if in.PrintQRFeedback != nil {
+		p.PrintQRFeedback = *in.PrintQRFeedback
+	}
 
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(p).Error; err != nil {
-		// unique-index `default+receipt` или `station per restaurant` поднимут 23505.
-		return nil, mapPGConflict(err)
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if p.IsDefault && p.Kind == "receipt" {
+			if err := tx.Model(&models.Printer{}).
+				Where("restaurant_id = ? AND kind = ? AND is_default = TRUE",
+					rid, "receipt").
+				Updates(map[string]any{"is_default": false, "updated_at": now}).
+				Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Create(p).Error; err != nil {
+			return mapPGConflict(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	return p, nil
 }
 
 // Patch — частичное обновление.
 func (s *PrintersService) Patch(ctx context.Context, id string, in PrinterInput) (*models.Printer, error) {
-	scoped, err := s.r.ForTenant(ctx)
+	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var existing models.Printer
-	if err := scoped.Where("id = ?", id).First(&existing).Error; err != nil {
+	scopedRead, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := scopedRead.Where("id = ?", id).First(&existing).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
 	}
-	updates := map[string]any{"updated_at": time.Now().UTC()}
+	now := time.Now().UTC()
+	updates := map[string]any{"updated_at": now}
 	if in.Name != nil {
 		updates["name"] = *in.Name
 	}
@@ -144,14 +210,16 @@ func (s *PrintersService) Patch(ctx context.Context, id string, in PrinterInput)
 	if in.Station != nil {
 		updates["station"] = *in.Station
 	}
+	driverForTarget := existing.Driver
 	if in.Driver != nil {
 		if !validDriver(*in.Driver) {
 			return nil, apperrors.Wrap("VALIDATION", "bad driver", nil)
 		}
 		updates["driver"] = *in.Driver
+		driverForTarget = *in.Driver
 	}
 	if in.Target != nil {
-		updates["target"] = *in.Target
+		updates["target"] = normalizePrinterTarget(driverForTarget, *in.Target)
 	}
 	if in.Cols != nil {
 		updates["cols"] = *in.Cols
@@ -162,10 +230,53 @@ func (s *PrintersService) Patch(ctx context.Context, id string, in PrinterInput)
 	if in.Enabled != nil {
 		updates["enabled"] = *in.Enabled
 	}
+	if in.PrintLogo != nil {
+		updates["print_logo"] = *in.PrintLogo
+	}
+	if in.PrintDiscount != nil {
+		updates["print_discount"] = *in.PrintDiscount
+	}
+	if in.PrintService != nil {
+		updates["print_service"] = *in.PrintService
+	}
+	if in.PrintTip != nil {
+		updates["print_tip"] = *in.PrintTip
+	}
+	if in.PrintQRFeedback != nil {
+		updates["print_qr_feedback"] = *in.PrintQRFeedback
+	}
 
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
-		return nil, mapPGConflict(err)
+	// Эффективные значения для swap-логики.
+	effectiveKind := existing.Kind
+	if in.Kind != nil {
+		effectiveKind = *in.Kind
+	}
+	effectiveDefault := existing.IsDefault
+	if in.IsDefault != nil {
+		effectiveDefault = *in.IsDefault
+	}
+
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		// Swap: если выставляем default=true для receipt — снимаем флаг с других.
+		if effectiveDefault && effectiveKind == "receipt" {
+			if err := tx.Model(&models.Printer{}).
+				Where("restaurant_id = ? AND kind = ? AND is_default = TRUE AND id <> ?",
+					rid, "receipt", id).
+				Updates(map[string]any{"is_default": false, "updated_at": now}).
+				Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&models.Printer{}).
+			Where("restaurant_id = ? AND id = ?", rid, id).
+			Updates(updates).Error; err != nil {
+			return mapPGConflict(err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 	scoped3, _ := s.r.ForTenant(ctx)
 	var updated models.Printer

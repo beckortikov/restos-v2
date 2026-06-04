@@ -687,6 +687,13 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 		return err
 	}
 
+	// 2a. Конфиг default receipt-принтера (cols + content flags из миграции 015).
+	// Если не настроен — заказ всё равно закрываем (close_order не должен падать),
+	// просто кладём job без printer_id и worker сам резолвит / помечает failed.
+	var receiptP models.Printer
+	hasReceiptP := tx.Where("restaurant_id = ? AND kind = 'receipt' AND is_default = TRUE AND enabled = TRUE",
+		restaurantID).First(&receiptP).Error == nil
+
 	// 3. Готовим input layout.
 	in := escpos.ReceiptInput{
 		RestaurantName: rest.Name,
@@ -698,6 +705,14 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 		ServiceAmount:  order.ServiceAmount,
 		TipAmount:      order.TipAmount,
 		Total:          order.TotalWithService,
+	}
+	if hasReceiptP {
+		in.Cols = receiptP.Cols
+		in.SuppressLogo = !receiptP.PrintLogo
+		in.SuppressDiscount = !receiptP.PrintDiscount
+		in.SuppressService = !receiptP.PrintService
+		in.ShowTip = receiptP.PrintTip
+		in.ShowQRFeedback = receiptP.PrintQRFeedback
 	}
 	if rest.Address != nil {
 		in.RestaurantAddr = *rest.Address
@@ -729,6 +744,10 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 		RestaurantID: &restaurantID,
 		CreatedAt:    now,
 		UpdatedAt:    now,
+	}
+	if hasReceiptP {
+		pid := receiptP.ID
+		pj.PrinterID = &pid
 	}
 	// SkipHooks: print_jobs не пишем в audit.
 	return tx.Session(&gorm.Session{SkipHooks: true}).Create(pj).Error

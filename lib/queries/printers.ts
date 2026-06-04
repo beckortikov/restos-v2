@@ -10,6 +10,13 @@ type DBPrinter = {
   enabled: boolean
   is_default: boolean
   target: string
+  station?: string | null
+  cols?: number
+  print_logo?: boolean
+  print_discount?: boolean
+  print_service?: boolean
+  print_tip?: boolean
+  print_qr_feedback?: boolean
 }
 
 export async function listPrinters(): Promise<DBPrinter[]> {
@@ -17,25 +24,42 @@ export async function listPrinters(): Promise<DBPrinter[]> {
   return res?.data ?? []
 }
 
-export async function createPrinter(input: {
-  name: string
-  kind: 'receipt' | 'station'
-  driver: 'virtual' | 'tcp' | 'usb' | 'mock'
-  target: string
+export type PrinterFormPayload = {
+  name?: string
+  kind?: 'receipt' | 'station'
+  driver?: 'virtual' | 'tcp' | 'usb' | 'mock'
+  target?: string
   is_default?: boolean
   enabled?: boolean
   station?: string
-}): Promise<DBPrinter> {
+  cols?: number
+  print_logo?: boolean
+  print_discount?: boolean
+  print_service?: boolean
+  print_tip?: boolean
+  print_qr_feedback?: boolean
+}
+
+export async function createPrinter(input: PrinterFormPayload): Promise<DBPrinter> {
   const res: any = await unwrap(api.POST('/api/v1/printers', { body: input as any }))
   return res
 }
 
 export async function updatePrinter(
   id: string,
-  input: Partial<{ enabled: boolean; is_default: boolean; target: string }>,
+  input: PrinterFormPayload,
 ): Promise<DBPrinter> {
   const res: any = await unwrap(
     api.PATCH('/api/v1/printers/{id}', { params: { path: { id } }, body: input as any }),
+  )
+  return res
+}
+
+// testPrinter — POST /printers/{id}/test. Backend создаёт print_job type=test
+// и worker отправляет пробную страницу. Возвращает job_id.
+export async function testPrinter(id: string): Promise<{ id: string; status: string }> {
+  const res: any = await unwrap(
+    api.POST('/api/v1/printers/{id}/test', { params: { path: { id } } } as any),
   )
   return res
 }

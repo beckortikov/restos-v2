@@ -1322,6 +1322,16 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/PrinterInput" } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Printer" } } } } }
+    put:
+      tags: [printers]
+      summary: PUT-алиас PATCH для совместимости
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/PrinterInput" } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Printer" } } } } }
     delete:
       tags: [printers]
       parameters:
@@ -2957,9 +2967,14 @@ components:
         station: { type: string }
         driver: { type: string, enum: [tcp, usb, virtual, mock] }
         target: { type: string }
-        cols: { type: integer }
+        cols: { type: integer, description: "32=58mm, 42-48=80mm" }
         is_default: { type: boolean }
         enabled: { type: boolean }
+        print_logo: { type: boolean }
+        print_discount: { type: boolean }
+        print_service: { type: boolean }
+        print_tip: { type: boolean }
+        print_qr_feedback: { type: boolean }
     PrinterInput:
       type: object
       properties:
@@ -2967,10 +2982,15 @@ components:
         kind: { type: string, enum: [receipt, station] }
         station: { type: string }
         driver: { type: string, enum: [tcp, usb, virtual, mock] }
-        target: { type: string }
+        target: { type: string, description: "host[:port] — для tcp; :9100 добавляется автоматически если не указан" }
         cols: { type: integer }
         is_default: { type: boolean }
         enabled: { type: boolean }
+        print_logo: { type: boolean }
+        print_discount: { type: boolean }
+        print_service: { type: boolean }
+        print_tip: { type: boolean }
+        print_qr_feedback: { type: boolean }
     PrintersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Printer" } } } }
     PrintJob:
       type: object

@@ -48,6 +48,16 @@ type ReceiptInput struct {
 	PaymentMethod  string
 	Cols           int  // 48 или 32
 	IsReprint      bool // true → шапка «КОПИЯ ЧЕКА» вместо «Чек № N»
+	// Content suppress-flags (миграция 015). Zero-value = старое поведение
+	// (всё печатается). True = принтер настроен «не печатать эту строку».
+	// Tip / QRFeedback по умолчанию выключены и включаются только если
+	// printer.print_tip = true / printer.print_qr_feedback = true.
+	SuppressLogo     bool   // выключить шапку «название ресторана»
+	SuppressDiscount bool   // не печатать строку «Скидка:»
+	SuppressService  bool   // не печатать строку «Сервис:»
+	ShowTip          bool   // печатать строку «Чаевые:» (если TipAmount > 0)
+	ShowQRFeedback   bool   // печатать QR-фидбэк в подвале
+	QRFeedbackURL    string // payload QR (опционально, если ShowQRFeedback)
 }
 
 // ReceiptItem — одна позиция в чеке.
@@ -68,11 +78,13 @@ func ReceiptLayout(in ReceiptInput) []byte {
 	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
 
 	// Header.
-	b.AlignCenter().FontDouble().TextLn(in.RestaurantName).FontNormal()
-	if in.RestaurantAddr != "" {
-		b.TextLn(in.RestaurantAddr)
+	if !in.SuppressLogo {
+		b.AlignCenter().FontDouble().TextLn(in.RestaurantName).FontNormal()
+		if in.RestaurantAddr != "" {
+			b.TextLn(in.RestaurantAddr)
+		}
+		b.LF()
 	}
-	b.LF()
 
 	// Meta.
 	if in.IsReprint {
@@ -110,13 +122,14 @@ func ReceiptLayout(in ReceiptInput) []byte {
 
 	// Totals.
 	b.TextLn(PadRow("Сумма:", decToShort(in.Subtotal), cols))
-	if !in.DiscountAmount.IsZero() {
+	if !in.DiscountAmount.IsZero() && !in.SuppressDiscount {
 		b.TextLn(PadRow("Скидка:", "-"+decToShort(in.DiscountAmount), cols))
 	}
-	if !in.ServiceAmount.IsZero() {
+	if !in.ServiceAmount.IsZero() && !in.SuppressService {
 		b.TextLn(PadRow("Сервис:", decToShort(in.ServiceAmount), cols))
 	}
-	if !in.TipAmount.IsZero() {
+	// Чаевые печатаются только если принтер настроен (ShowTip=true) и они есть.
+	if !in.TipAmount.IsZero() && in.ShowTip {
 		b.TextLn(PadRow("Чаевые:", decToShort(in.TipAmount), cols))
 	}
 	b.Bold(true).FontDouble()
@@ -128,6 +141,12 @@ func ReceiptLayout(in ReceiptInput) []byte {
 	}
 
 	b.LF().AlignCenter().TextLn("Спасибо за визит!").LF()
+
+	if in.ShowQRFeedback && in.QRFeedbackURL != "" {
+		b.LF().AlignCenter().TextLn("Оцените заведение:").LF()
+		b.QRCode(in.QRFeedbackURL, 5)
+		b.LF()
+	}
 
 	// Cut с подмоткой 3 строки.
 	b.Feed(3).CutFull()
@@ -151,11 +170,13 @@ func PreBillLayout(in ReceiptInput) []byte {
 	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
 
 	// Header.
-	b.AlignCenter().FontDouble().TextLn(in.RestaurantName).FontNormal()
-	if in.RestaurantAddr != "" {
-		b.TextLn(in.RestaurantAddr)
+	if !in.SuppressLogo {
+		b.AlignCenter().FontDouble().TextLn(in.RestaurantName).FontNormal()
+		if in.RestaurantAddr != "" {
+			b.TextLn(in.RestaurantAddr)
+		}
+		b.LF()
 	}
-	b.LF()
 
 	// Title.
 	b.AlignCenter().Bold(true).TextLn("ПРЕДВАРИТЕЛЬНЫЙ ЧЕК").Bold(false)
@@ -189,13 +210,13 @@ func PreBillLayout(in ReceiptInput) []byte {
 
 	// Totals (без поля «Оплата»).
 	b.TextLn(PadRow("Сумма:", decToShort(in.Subtotal), cols))
-	if !in.DiscountAmount.IsZero() {
+	if !in.DiscountAmount.IsZero() && !in.SuppressDiscount {
 		b.TextLn(PadRow("Скидка:", "-"+decToShort(in.DiscountAmount), cols))
 	}
-	if !in.ServiceAmount.IsZero() {
+	if !in.ServiceAmount.IsZero() && !in.SuppressService {
 		b.TextLn(PadRow("Сервис:", decToShort(in.ServiceAmount), cols))
 	}
-	if !in.TipAmount.IsZero() {
+	if !in.TipAmount.IsZero() && in.ShowTip {
 		b.TextLn(PadRow("Чаевые:", decToShort(in.TipAmount), cols))
 	}
 	b.Bold(true).FontDouble()

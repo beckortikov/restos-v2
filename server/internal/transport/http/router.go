@@ -406,6 +406,9 @@ func NewRouter(deps Deps) http.Handler {
 			// Admin: printers CRUD + print queue retry + test page.
 			g.Post("/printers", printersH.Create)
 			g.Patch("/printers/{id}", printersH.Patch)
+			// PUT — алиас PATCH для совместимости с клиентами, посылающими PUT
+			// (v2.0.93: некоторые формы slept до миграции на PATCH).
+			g.Put("/printers/{id}", printersH.Patch)
 			g.Delete("/printers/{id}", printersH.Delete)
 			g.Post("/printers/{id}/test", printersH.Test)
 			g.Post("/print/jobs/{id}/retry", printJobsH.Retry)

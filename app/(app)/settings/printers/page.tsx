@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Printer, Plus, Trash2, CheckCircle2, ListOrdered, Star, ServerCog, Loader2 } from 'lucide-react'
+import { Printer, Plus, Trash2, CheckCircle2, ListOrdered, Star, ServerCog, Loader2, Pencil, FileText } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
@@ -10,6 +10,8 @@ import {
   createPrinter,
   updatePrinter,
   deletePrinter,
+  testPrinter,
+  type PrinterFormPayload,
 } from '@/lib/queries/printers'
 import { ALL_STATIONS, STATION_LABELS, type MenuStation } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -34,11 +36,8 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Label } from '@/components/ui/label'
 
-// Path B printers page. Источник правды для принтеров — таблица `printers`
-// на бэке (GET /api/v1/printers). Раньше тут был localStorage-based config
-// с прямыми вызовами на legacy print-server по HTTP (Path A) — удалено
-// вместе с lib/print-service.ts. Теперь весь pipeline server-side:
-// backend создаёт print_jobs row, worker отправляет на driver.
+// v2.0.93: переписана под полный CRUD + тестовая печать + paper width + content flags.
+// Path B: источник правды для принтеров — таблица `printers` на бэке.
 
 type DBPrinter = {
   id: string
@@ -48,7 +47,13 @@ type DBPrinter = {
   enabled: boolean
   is_default: boolean
   target: string
-  station?: string
+  station?: string | null
+  cols?: number
+  print_logo?: boolean
+  print_discount?: boolean
+  print_service?: boolean
+  print_tip?: boolean
+  print_qr_feedback?: boolean
 }
 
 type DriverKind = 'tcp' | 'virtual'
@@ -58,29 +63,119 @@ interface FormState {
   name: string
   driver: DriverKind
   kind: PrinterKind
-  target: string
+  host: string
+  port: string
   station: MenuStation | ''
   enabled: boolean
   is_default: boolean
+  cols: number // 32 | 42 | 48
+  print_logo: boolean
+  print_discount: boolean
+  print_service: boolean
+  print_tip: boolean
+  print_qr_feedback: boolean
 }
 
 const DEFAULT_FORM: FormState = {
   name: '',
   driver: 'tcp',
   kind: 'receipt',
-  target: '',
+  host: '',
+  port: '',
   station: '',
   enabled: true,
   is_default: false,
+  cols: 48,
+  print_logo: true,
+  print_discount: true,
+  print_service: true,
+  print_tip: false,
+  print_qr_feedback: false,
+}
+
+// Разбирает target вида "host:port" / "host" / IPv6 "[::1]:9100".
+function splitTarget(target: string): { host: string; port: string } {
+  const t = (target || '').trim()
+  if (!t) return { host: '', port: '' }
+  // IPv6 [::1]:9100
+  if (t.startsWith('[')) {
+    const close = t.indexOf(']')
+    if (close > 0) {
+      const host = t.slice(1, close)
+      const rest = t.slice(close + 1)
+      const port = rest.startsWith(':') ? rest.slice(1) : ''
+      return { host, port }
+    }
+  }
+  const i = t.lastIndexOf(':')
+  if (i < 0) return { host: t, port: '' }
+  // если перед двоеточием цифр и точек > 0 — IPv4/host:port
+  return { host: t.slice(0, i), port: t.slice(i + 1) }
+}
+
+function joinTarget(host: string, port: string): string {
+  const h = host.trim()
+  const p = port.trim()
+  if (!h) return ''
+  if (!p) return h // backend сам подставит :9100
+  if (h.includes(':') && !h.startsWith('[')) return `[${h}]:${p}`
+  return `${h}:${p}`
+}
+
+function fromPrinter(p: DBPrinter): FormState {
+  const { host, port } = p.driver === 'tcp' ? splitTarget(p.target) : { host: '', port: '' }
+  return {
+    name: p.name,
+    driver: (p.driver === 'tcp' || p.driver === 'virtual' ? p.driver : 'tcp') as DriverKind,
+    kind: (p.kind === 'station' ? 'station' : 'receipt') as PrinterKind,
+    host,
+    port,
+    station: (p.station as MenuStation) ?? '',
+    enabled: p.enabled,
+    is_default: p.is_default,
+    cols: p.cols ?? 48,
+    print_logo: p.print_logo ?? true,
+    print_discount: p.print_discount ?? true,
+    print_service: p.print_service ?? true,
+    print_tip: p.print_tip ?? false,
+    print_qr_feedback: p.print_qr_feedback ?? false,
+  }
+}
+
+function toPayload(form: FormState, editing: boolean): PrinterFormPayload {
+  const payload: PrinterFormPayload = {
+    name: form.name.trim(),
+    driver: form.driver,
+    kind: form.kind,
+    target: form.driver === 'virtual' ? '' : joinTarget(form.host, form.port),
+    enabled: form.enabled,
+    is_default: form.kind === 'receipt' ? form.is_default : false,
+    cols: form.cols,
+    print_logo: form.print_logo,
+    print_discount: form.print_discount,
+    print_service: form.print_service,
+    print_tip: form.print_tip,
+    print_qr_feedback: form.print_qr_feedback,
+  }
+  if (form.kind === 'station' && form.station) {
+    payload.station = form.station as string
+  }
+  // На редактирование station-принтера обнулять station нельзя — поле остаётся.
+  if (editing && form.kind === 'receipt') {
+    // Бэк хранит station=null для receipt — ничего не передаём (PATCH не тронет).
+  }
+  return payload
 }
 
 export default function PrinterSettingsPage() {
   const { canDo } = useAuth()
   const [printers, setPrinters] = useState<DBPrinter[]>([])
   const [loading, setLoading] = useState(true)
-  const [addOpen, setAddOpen] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [editing, setEditing] = useState<DBPrinter | null>(null)
   const [form, setForm] = useState<FormState>(DEFAULT_FORM)
-  const [creating, setCreating] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [testing, setTesting] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DBPrinter | null>(null)
 
   const reload = useCallback(async () => {
@@ -96,38 +191,50 @@ export default function PrinterSettingsPage() {
 
   useEffect(() => { reload() }, [reload])
 
-  const handleCreate = async () => {
+  const openCreate = () => {
+    setEditing(null)
+    setForm(DEFAULT_FORM)
+    setDialogOpen(true)
+  }
+
+  const openEdit = (p: DBPrinter) => {
+    setEditing(p)
+    setForm(fromPrinter(p))
+    setDialogOpen(true)
+  }
+
+  const handleSave = async () => {
     if (!form.name.trim()) {
       toast.error('Укажите название принтера')
       return
     }
-    if (form.driver === 'tcp' && !form.target.trim()) {
-      toast.error('Укажите адрес принтера (IP:порт)')
+    if (form.driver === 'tcp' && !form.host.trim()) {
+      toast.error('Укажите IP или хост принтера')
       return
     }
     if (form.kind === 'station' && !form.station) {
       toast.error('Выберите станцию')
       return
     }
-    setCreating(true)
+    setSaving(true)
     try {
-      await createPrinter({
-        name: form.name.trim(),
-        driver: form.driver,
-        kind: form.kind,
-        target: form.driver === 'virtual' ? '' : form.target.trim(),
-        enabled: form.enabled,
-        is_default: form.is_default,
-        ...(form.kind === 'station' ? { station: form.station as string } : {}),
-      })
-      toast.success(`Принтер «${form.name.trim()}» создан`)
-      setAddOpen(false)
+      const payload = toPayload(form, !!editing)
+      if (editing) {
+        await updatePrinter(editing.id, payload)
+        toast.success(`«${form.name.trim()}» сохранён`)
+      } else {
+        await createPrinter(payload)
+        toast.success(`Принтер «${form.name.trim()}» создан`)
+      }
+      setDialogOpen(false)
+      setEditing(null)
       setForm(DEFAULT_FORM)
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? `Ошибка: ${e.message}` : 'Не удалось создать принтер')
+      const msg = e instanceof Error ? e.message : 'Ошибка'
+      toast.error(`Ошибка: ${msg}`)
     } finally {
-      setCreating(false)
+      setSaving(false)
     }
   }
 
@@ -150,6 +257,18 @@ export default function PrinterSettingsPage() {
     }
   }
 
+  const handleTest = async (p: DBPrinter) => {
+    setTesting(p.id)
+    try {
+      await testPrinter(p.id)
+      toast.success(`Тест отправлен на «${p.name}» — смотри очередь печати`)
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка тестовой печати')
+    } finally {
+      setTesting(null)
+    }
+  }
+
   const handleDelete = async () => {
     if (!deleteTarget) return
     try {
@@ -168,6 +287,13 @@ export default function PrinterSettingsPage() {
         <p className="text-muted-foreground">Нет доступа</p>
       </div>
     )
+  }
+
+  const colsLabel = (cols?: number): string => {
+    if (!cols) return ''
+    if (cols <= 32) return '58мм'
+    if (cols <= 42) return '80мм узкий'
+    return '80мм'
   }
 
   return (
@@ -227,6 +353,11 @@ export default function PrinterSettingsPage() {
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
                       {p.driver}
                     </span>
+                    {colsLabel(p.cols) && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                        {colsLabel(p.cols)}
+                      </span>
+                    )}
                     {p.station && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
                         {STATION_LABELS[p.station as MenuStation] ?? p.station}
@@ -243,6 +374,20 @@ export default function PrinterSettingsPage() {
                       <Star className="size-4" />
                     </Button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleTest(p)}
+                    disabled={testing === p.id || !p.enabled}
+                    title="Тестовая печать"
+                  >
+                    {testing === p.id
+                      ? <Loader2 className="size-4 animate-spin" />
+                      : <FileText className="size-4" />}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => openEdit(p)} title="Редактировать">
+                    <Pencil className="size-4" />
+                  </Button>
                   <button
                     onClick={() => handleToggleEnabled(p)}
                     className={`size-8 rounded-lg flex items-center justify-center border-2 transition-all ${
@@ -263,7 +408,7 @@ export default function PrinterSettingsPage() {
       </div>
 
       {/* Add button */}
-      <Button onClick={() => { setForm(DEFAULT_FORM); setAddOpen(true) }} className="w-full">
+      <Button onClick={openCreate} className="w-full">
         <Plus className="size-4" />
         Добавить принтер
       </Button>
@@ -274,22 +419,20 @@ export default function PrinterSettingsPage() {
           <Printer className="size-4" />Как работает печать в RestOS v4
         </p>
         <ol className="space-y-1 list-decimal list-inside">
-          <li>
-            Кассир закрывает заказ или печатает пре-чек → бэкенд создаёт job в очереди печати.
-          </li>
+          <li>Кассир закрывает заказ или печатает пре-чек → бэкенд создаёт job в очереди печати.</li>
           <li>Worker отправляет ESC/POS на драйвер (TCP) или пишет файл (virtual).</li>
           <li>На ошибки — повтор по backoff, после 5 попыток job переходит в «failed».</li>
-          <li>Виртуальные принтеры — для тестов: payload падает в <code>backups/print/</code>.</li>
+          <li>Порт не указан — backend сам подставит :9100 (стандартный ESC/POS).</li>
         </ol>
       </div>
 
-      {/* Add dialog */}
-      <Dialog open={addOpen} onOpenChange={setAddOpen}>
-        <DialogContent className="max-w-md">
+      {/* Create / Edit dialog */}
+      <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); if (!o) setEditing(null) }}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Добавить принтер</DialogTitle>
+            <DialogTitle>{editing ? 'Редактировать принтер' : 'Добавить принтер'}</DialogTitle>
             <DialogDescription>
-              TCP — сетевой термопринтер по IP. Virtual — пишет в файл вместо реальной печати.
+              TCP — сетевой термопринтер. Virtual — пишет в файл (для тестов без железа).
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
@@ -360,17 +503,76 @@ export default function PrinterSettingsPage() {
             )}
 
             {form.driver === 'tcp' && (
-              <div className="space-y-1.5">
-                <Label htmlFor="printer-target">Адрес (host:port)</Label>
-                <Input
-                  id="printer-target"
-                  value={form.target}
-                  onChange={e => setForm(f => ({ ...f, target: e.target.value }))}
-                  placeholder="192.168.1.100:9100"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  Стандартный порт ESC/POS термопринтеров — 9100.
+              <div className="grid grid-cols-3 gap-2">
+                <div className="col-span-2 space-y-1.5">
+                  <Label htmlFor="printer-host">IP или хост</Label>
+                  <Input
+                    id="printer-host"
+                    value={form.host}
+                    onChange={e => setForm(f => ({ ...f, host: e.target.value }))}
+                    placeholder="192.168.1.100"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="printer-port">Порт</Label>
+                  <Input
+                    id="printer-port"
+                    value={form.port}
+                    onChange={e => setForm(f => ({ ...f, port: e.target.value.replace(/[^0-9]/g, '') }))}
+                    placeholder="9100"
+                  />
+                </div>
+                <p className="col-span-3 text-[11px] text-muted-foreground -mt-1">
+                  Порт можно не указывать — backend сам подставит 9100.
                 </p>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label>Ширина бумаги</Label>
+              <div className="flex rounded-lg border border-border bg-card overflow-hidden">
+                {[
+                  { v: 32, label: '58мм (32)' },
+                  { v: 42, label: '80мм узкий (42)' },
+                  { v: 48, label: '80мм (48)' },
+                ].map(opt => (
+                  <button
+                    key={opt.v}
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, cols: opt.v }))}
+                    className={`flex-1 px-2 py-1.5 text-xs font-medium ${
+                      form.cols === opt.v ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {form.kind === 'receipt' && (
+              <div className="space-y-2 rounded-lg border border-border p-3 bg-card">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Содержимое чека
+                </Label>
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  {([
+                    ['print_logo', 'Логотип / адрес'],
+                    ['print_discount', 'Строка скидки'],
+                    ['print_service', 'Строка сервиса'],
+                    ['print_tip', 'Чаевые'],
+                    ['print_qr_feedback', 'QR-фидбэк'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={form[key]}
+                        onChange={e => setForm(f => ({ ...f, [key]: e.target.checked }))}
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -396,13 +598,27 @@ export default function PrinterSettingsPage() {
             </div>
           </div>
 
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setAddOpen(false)} disabled={creating}>
+          <DialogFooter className="flex-wrap gap-2">
+            {editing && (
+              <Button
+                variant="outline"
+                onClick={() => handleTest(editing)}
+                disabled={saving || testing === editing.id || !form.enabled}
+              >
+                {testing === editing.id
+                  ? <Loader2 className="size-4 animate-spin" />
+                  : <FileText className="size-4" />}
+                Тест
+              </Button>
+            )}
+            <Button variant="ghost" onClick={() => setDialogOpen(false)} disabled={saving}>
               Отмена
             </Button>
-            <Button onClick={handleCreate} disabled={creating}>
-              {creating ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}
-              Создать
+            <Button onClick={handleSave} disabled={saving}>
+              {saving
+                ? <Loader2 className="size-4 animate-spin" />
+                : (editing ? <CheckCircle2 className="size-4" /> : <Plus className="size-4" />)}
+              {editing ? 'Сохранить' : 'Создать'}
             </Button>
           </DialogFooter>
         </DialogContent>

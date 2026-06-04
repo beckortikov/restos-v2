@@ -23,6 +23,13 @@ type Printer struct {
 	Cols         int       `gorm:"not null;default:48" json:"cols"`
 	IsDefault    bool      `gorm:"column:is_default;not null;default:false" json:"is_default"`
 	Enabled      bool      `gorm:"not null;default:true" json:"enabled"`
+	// Content flags (миграция 015) — что печатать в receipt-чеке.
+	// Для kind=station игнорируется (ранер всегда содержит позиции).
+	PrintLogo       bool `gorm:"column:print_logo;not null;default:true" json:"print_logo"`
+	PrintDiscount   bool `gorm:"column:print_discount;not null;default:true" json:"print_discount"`
+	PrintService    bool `gorm:"column:print_service;not null;default:true" json:"print_service"`
+	PrintTip        bool `gorm:"column:print_tip;not null;default:false" json:"print_tip"`
+	PrintQRFeedback bool `gorm:"column:print_qr_feedback;not null;default:false" json:"print_qr_feedback"`
 	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
 	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
 }

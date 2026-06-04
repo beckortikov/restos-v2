@@ -71,6 +71,19 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 			return err
 		}
 
+		// 3a. Default receipt-принтер. Без него worker не знает, куда печатать,
+		// поэтому возвращаем 412 PRECONDITION с понятной ошибкой — UI покажет
+		// тост «Настройте принтер в Параметры → Принтеры».
+		var receiptP models.Printer
+		printerErr := tx.Where("restaurant_id = ? AND kind = 'receipt' AND is_default = TRUE AND enabled = TRUE",
+			rid).First(&receiptP).Error
+		if errors.Is(printerErr, gorm.ErrRecordNotFound) {
+			return apperrors.Wrap("PRECONDITION", "no default receipt printer configured", nil)
+		}
+		if printerErr != nil {
+			return printerErr
+		}
+
 		now := time.Now().UTC()
 
 		// 4. Build layout input — пересчитываем total на лету (заказ не закрыт,
@@ -84,14 +97,20 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 		total := decimal.Normalize(decimal.Add(subtotal, serviceAmount))
 
 		in := escpos.ReceiptInput{
-			RestaurantName: rest.Name,
-			OrderNumber:    order.OrderNumber,
-			OpenedAt:       order.CreatedAt,
-			ClosedAt:       now,
-			Subtotal:       subtotal,
-			DiscountAmount: order.DiscountAmount,
-			ServiceAmount:  serviceAmount,
-			Total:          total,
+			RestaurantName:   rest.Name,
+			OrderNumber:      order.OrderNumber,
+			OpenedAt:         order.CreatedAt,
+			ClosedAt:         now,
+			Subtotal:         subtotal,
+			DiscountAmount:   order.DiscountAmount,
+			ServiceAmount:    serviceAmount,
+			Total:            total,
+			Cols:             receiptP.Cols,
+			SuppressLogo:     !receiptP.PrintLogo,
+			SuppressDiscount: !receiptP.PrintDiscount,
+			SuppressService:  !receiptP.PrintService,
+			ShowTip:          receiptP.PrintTip,
+			ShowQRFeedback:   receiptP.PrintQRFeedback,
 		}
 		if rest.Address != nil {
 			in.RestaurantAddr = *rest.Address
@@ -113,12 +132,15 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 
 		payload := escpos.PreBillLayout(in)
 
-		// 5. Enqueue print_job.
+		// 5. Enqueue print_job. printer_id привязан явно — worker не зависит
+		// от Resolve fallback'а.
+		pid := receiptP.ID
 		pj := &models.PrintJob{
 			ID:           uuid.NewString(),
 			Type:         "pre_bill",
 			Payload:      payload,
 			OrderID:      &order.ID,
+			PrinterID:    &pid,
 			Status:       "pending",
 			RestaurantID: &rid,
 			CreatedAt:    now,

@@ -4,8 +4,26 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 )
+
+// normalizeTCPAddr — допускает запись адреса без порта ("192.168.1.50") и
+// автоматически добавляет ":9100" (стандартный порт ESC/POS термопринтеров).
+// IPv6-литералы в квадратных скобках обрабатываются корректно: "[::1]" → "[::1]:9100",
+// "[::1]:9100" — без изменений.
+func normalizeTCPAddr(addr string) string {
+	a := strings.TrimSpace(addr)
+	if a == "" {
+		return a
+	}
+	// Если уже валидный host:port — оставляем.
+	if _, _, err := net.SplitHostPort(a); err == nil {
+		return a
+	}
+	// Нет порта — добавляем дефолтный 9100.
+	return net.JoinHostPort(a, "9100")
+}
 
 // TCPPrinter — самый частый кейс: сетевой принтер на порту 9100 (или другом).
 // Подключение per-job (не keepalive): термопринтеры часто закрывают idle-сокеты,
@@ -19,7 +37,7 @@ type TCPPrinter struct {
 // NewTCP создаёт принтер. Минимум — addr.
 func NewTCP(addr string) *TCPPrinter {
 	return &TCPPrinter{
-		Addr:         addr,
+		Addr:         normalizeTCPAddr(addr),
 		DialTimeout:  3 * time.Second,
 		WriteTimeout: 5 * time.Second,
 	}

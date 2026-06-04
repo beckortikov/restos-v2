@@ -84,6 +84,9 @@ func statusForCode(code string) int {
 		return http.StatusForbidden
 	case "VALIDATION", "BAD_REQUEST":
 		return http.StatusBadRequest
+	case "PRECONDITION", "PRECONDITION_FAILED":
+		// v2.0.93 — например «нет default receipt-принтера» при пре-чеке.
+		return http.StatusPreconditionFailed
 	default:
 		return http.StatusInternalServerError
 	}

@@ -33,8 +33,9 @@ func TestPrinters_CRUD(t *testing.T) {
 	var p models.Printer
 	_ = json.Unmarshal(body, &p)
 
-	// Second default receipt → CONFLICT (unique index).
-	resp2, _ := f.post(t, "/api/v1/printers", tok, uuid.NewString(),
+	// Second default receipt → SWAP (v2.0.93): не 409, а тихий swap.
+	// Старый default снимается, новый становится дефолтом.
+	resp2, body2 := f.post(t, "/api/v1/printers", tok, uuid.NewString(),
 		map[string]any{
 			"name":       "Backup receipt",
 			"kind":       "receipt",
@@ -42,8 +43,25 @@ func TestPrinters_CRUD(t *testing.T) {
 			"target":     t.TempDir(),
 			"is_default": true,
 		})
-	if resp2.StatusCode != 409 {
-		t.Errorf("second default expected 409, got %d", resp2.StatusCode)
+	if resp2.StatusCode != 201 {
+		t.Errorf("second default expected 201 (swap), got %d: %s", resp2.StatusCode, body2)
+	}
+	var p2 models.Printer
+	_ = json.Unmarshal(body2, &p2)
+	if !p2.IsDefault {
+		t.Errorf("new printer must have is_default=true after swap")
+	}
+	// Старый должен потерять флаг.
+	{
+		getResp, getBody := f.get(t, "/api/v1/printers/"+p.ID, tok)
+		if getResp.StatusCode != 200 {
+			t.Fatalf("get old printer %d", getResp.StatusCode)
+		}
+		var old models.Printer
+		_ = json.Unmarshal(getBody, &old)
+		if old.IsDefault {
+			t.Errorf("old default must be cleared after swap")
+		}
 	}
 
 	// Create station printer.
@@ -81,8 +99,9 @@ func TestPrinters_CRUD(t *testing.T) {
 		Data []models.Printer `json:"data"`
 	}
 	_ = json.Unmarshal(listBody, &env)
-	if len(env.Data) != 2 {
-		t.Errorf("list want 2, got %d", len(env.Data))
+	// 2 receipt (swap не создаёт дубликат) + 1 station.
+	if len(env.Data) != 3 {
+		t.Errorf("list want 3, got %d", len(env.Data))
 	}
 
 	// Patch — enable=false.
