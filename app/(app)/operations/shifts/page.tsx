@@ -146,9 +146,15 @@ export default function ShiftsPage() {
   useEffect(() => {
     reload().finally(() => setLoading(false))
     fetchFinancialAccounts().then(accs => {
+      // Раньше показывали ТОЛЬКО type='cash'. Но юзер мог создать счёт с
+      // именем «Касса» но type='bank' (бывший default'ом в /finance/accounts
+      // до v2.0.98), и форма смены показывала «Нет счёта типа Касса» даже
+      // когда счёт фактически есть. Теперь: cash-приоритет, но если их нет,
+      // показываем все. В select подписи отмечают тип, чтобы юзер видел.
       const cashOnly = accs.filter(a => a.type === 'cash')
-      setCashAccounts(cashOnly)
-      if (cashOnly.length > 0) setOpenAccountId(cashOnly[0].id)
+      const list = cashOnly.length > 0 ? cashOnly : accs
+      setCashAccounts(list)
+      if (list.length > 0) setOpenAccountId(list[0].id)
     }).catch(() => {})
   }, [reload])
 
@@ -936,10 +942,19 @@ export default function ShiftsPage() {
                   <select value={openAccountId} onChange={e => setOpenAccountId(e.target.value)}
                     disabled={cashAccounts.length === 1}
                     className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-70">
-                    {cashAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    {cashAccounts.map(a => (
+                      <option key={a.id} value={a.id}>
+                        {a.name}{a.type !== 'cash' ? ` (${a.type === 'bank' ? 'банк' : a.type})` : ''}
+                      </option>
+                    ))}
                   </select>
                   {cashAccounts.length === 1 && (
-                    <p className="text-[11px] text-muted-foreground mt-1">Единственный cash-счёт автоматически выбран.</p>
+                    <p className="text-[11px] text-muted-foreground mt-1">Единственный счёт автоматически выбран.</p>
+                  )}
+                  {cashAccounts.every(a => a.type !== 'cash') && (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded mt-1.5 px-2 py-1">
+                      ⚠ В списке нет cash-счётов. Используется счёт другого типа — корректно работать будет, но в /finance/accounts желательно изменить тип на «Касса (наличные)».
+                    </p>
                   )}
                 </div>
               )}

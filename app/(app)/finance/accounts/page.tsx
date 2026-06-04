@@ -28,7 +28,10 @@ export default function AccountsPage() {
   const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [newAccountName, setNewAccountName] = useState('')
-  const [newAccountType, setNewAccountType] = useState<'cash' | 'bank'>('bank')
+  // Default = 'cash' (наличные/касса) — большинство ресторанов добавляют сначала
+  // основную кассу. Раньше default был 'bank' → юзеры создавали счёт «Касса» с
+  // type='bank' и потом /operations/shifts не находил cash-счёт. Fix v2.0.98.
+  const [newAccountType, setNewAccountType] = useState<'cash' | 'bank'>('cash')
   const [transferFrom, setTransferFrom] = useState('')
   const [transferTo, setTransferTo] = useState('')
   const [transferAmount, setTransferAmount] = useState(0)
