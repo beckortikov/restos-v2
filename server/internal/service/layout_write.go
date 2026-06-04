@@ -297,6 +297,7 @@ func (s *TablesWriteService) AssignWaiter(ctx context.Context, id string, in Ass
 		return nil, err
 	}
 	var out models.Table
+	var affectedOrderIDs []string // v2.2.2: для cascade update + SSE
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		scoped, err := tr.ForTenant(ctx)
 		if err != nil {
@@ -326,6 +327,34 @@ func (s *TablesWriteService) AssignWaiter(ctx context.Context, id string, in Ass
 		}
 		scoped2, _ := tr.ForTenant(ctx)
 		if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+
+		// v2.2.2: каскадно обновляем waiter_id у всех АКТИВНЫХ заказов на
+		// этом столе. Иначе waiter PWA «Мои заказы» нового официанта пуст,
+		// старый продолжает видеть переданный заказ → confusion.
+		// active = not closed and not cancelled.
+		scopedO, _ := tr.ForTenant(ctx)
+		var orderUpdates map[string]any
+		if in.WaiterID == nil {
+			orderUpdates = map[string]any{"waiter_id": nil, "updated_at": time.Now().UTC()}
+		} else {
+			orderUpdates = map[string]any{"waiter_id": *in.WaiterID, "updated_at": time.Now().UTC()}
+		}
+		// Сначала получим список ID для SSE emit'а.
+		var openOrders []models.Order
+		if err := scopedO.Where("table_id = ?", id).
+			Where("status NOT IN ?", []string{"done", "cancelled"}).
+			Select("id").Find(&openOrders).Error; err == nil {
+			for _, o := range openOrders {
+				affectedOrderIDs = append(affectedOrderIDs, o.ID)
+			}
+		}
+		scopedU, _ := tr.ForTenant(ctx)
+		if err := scopedU.Model(&models.Order{}).
+			Where("table_id = ?", id).
+			Where("status NOT IN ?", []string{"done", "cancelled"}).
+			Updates(orderUpdates).Error; err != nil {
 			return err
 		}
 
@@ -370,6 +399,18 @@ func (s *TablesWriteService) AssignWaiter(ctx context.Context, id string, in Ass
 	})
 	if err != nil {
 		return nil, err
+	}
+	// v2.2.2: SSE emit — table.updated + order.updated для каждого
+	// затронутого заказа. Без этого POS и waiter PWA не обновляются
+	// до 30с poll'а: новый официант не видит заказ в «Моих заказах»,
+	// старый продолжает видеть.
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventTableUpdated, map[string]any{"id": id})
+		for _, oid := range affectedOrderIDs {
+			buf.Add(EventOrderUpdated, map[string]any{"id": oid, "action": "assign_waiter"})
+		}
+		s.pub.Flush(ctx, rid, buf)
 	}
 	return &out, nil
 }
