@@ -715,6 +715,51 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 		if err := s.enqueueCancelRunners(tx, rid, &order, []models.OrderItem{item}, reason, now); err != nil {
 			return err
 		}
+
+		// Auto-cancel order when last live item gone (v2.1.1).
+		if fullCancel {
+			var liveCount int64
+			if err := tx.Model(&models.OrderItem{}).
+				Where("order_id = ? AND cancelled_at IS NULL", order.ID).
+				Count(&liveCount).Error; err != nil {
+				return err
+			}
+			if liveCount == 0 && (order.Status == nil || (*order.Status != "cancelled" && *order.Status != "closed")) {
+				cstatus := "cancelled"
+				autoReason := "Все позиции отменены"
+				cancellerID := actor.UserID
+				order.Status = &cstatus
+				order.CancelledAt = &now
+				order.CancelledBy = &cancellerID
+				order.CancelReason = &autoReason
+				order.UpdatedAt = now
+				if err := tx.Save(&order).Error; err != nil {
+					return err
+				}
+				if order.TableID != nil && *order.TableID != "" {
+					var activeCount int64
+					if err := tx.Model(&models.Order{}).
+						Where("restaurant_id = ? AND table_id = ?", rid, *order.TableID).
+						Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+						Where("id <> ?", order.ID).
+						Count(&activeCount).Error; err != nil {
+						return err
+					}
+					if activeCount == 0 {
+						if err := tx.Model(&models.Table{}).
+							Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+							Updates(map[string]any{
+								"status":           "free",
+								"current_order_id": nil,
+								"opened_at":        nil,
+								"updated_at":       now,
+							}).Error; err != nil {
+							return err
+						}
+					}
+				}
+			}
+		}
 		out = &item
 		return nil
 	})

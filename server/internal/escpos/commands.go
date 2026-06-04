@@ -129,6 +129,20 @@ func (b *Builder) DrawerKick(m, t1, t2 byte) *Builder {
 // DrawerKickDefault — стандартный kick для большинства ящиков.
 func (b *Builder) DrawerKickDefault() *Builder { return b.DrawerKick(0, 50, 50) }
 
+// ─── Buzzer ───────────────────────────────────────────────────────────────
+
+// Beep — ESC B n t. n = number of beeps (1..9), t = duration (1..9, ~100ms each).
+// Стандарт Epson ESC/POS; работает на большинстве thermal-принтеров (Xprinter,
+// TM-T20, Star-совместимые). На принтерах с DIP-switch SW2-8 может потребоваться
+// переключение для активации buzzer. Невалидные значения → no-op (безопасно для
+// любого принтера: либо не сработает, либо проигнорирует команду).
+func (b *Builder) Beep(times, duration byte) *Builder {
+	if times < 1 || times > 9 || duration < 1 || duration > 9 {
+		return b
+	}
+	return b.Raw(0x1B, 0x42, times, duration)
+}
+
 // ─── Barcodes & QR ────────────────────────────────────────────────────────
 
 // BarcodeCode128 печатает CODE128 штрих-код.

@@ -314,6 +314,8 @@ func RunnerLayout(in RunnerInput) []byte {
 	// ── Minimal feed + partial cut (v1: 0A then 1D 56 42 03) ─────────────
 	b.LF()
 	b.CutWithFeed(3)
+	// 1 короткий пик — повар слышит «прилетел заказ». v2.1.1.
+	b.Beep(1, 3)
 	return b.Bytes()
 }
 
@@ -381,6 +383,8 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 
 	b.LF()
 	b.CutWithFeed(3)
+	// 3 длинных пика — отмена, гарантированно ловит внимание повара. v2.1.1.
+	b.Beep(3, 4)
 	return b.Bytes()
 }
 

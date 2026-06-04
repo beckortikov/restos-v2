@@ -149,6 +149,8 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 	actor, _ := audit.ActorFromContext(ctx)
 
 	var voided *models.OrderItem
+	autoCancelled := false
+	buf := NewBuffer()
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 
@@ -234,6 +236,57 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 			return err
 		}
 
+		// 6. Auto-cancel order when last live item gone (v2.1.1).
+		// Симптом до фикса: заказ остаётся status=new с пустыми items,
+		// стол висит «Занят», takeaway-заказ виден в списке как «0 поз».
+		var liveCount int64
+		if err := tx.Model(&models.OrderItem{}).
+			Where("order_id = ? AND cancelled_at IS NULL", order.ID).
+			Count(&liveCount).Error; err != nil {
+			return err
+		}
+		if liveCount == 0 && (order.Status == nil || (*order.Status != "cancelled" && *order.Status != "closed")) {
+			cstatus := "cancelled"
+			reason := "Все позиции отменены"
+			canceller := actor.UserID
+			cTotal := decimal.Zero
+			order.Status = &cstatus
+			order.CancelledAt = &now
+			order.CancelledBy = &canceller
+			order.CancelReason = &reason
+			order.CancelledTotal = &cTotal
+			order.UpdatedAt = now
+			if err := tx.Save(&order).Error; err != nil {
+				return err
+			}
+
+			// Освобождаем стол, если на нём больше нет активных заказов.
+			if order.TableID != nil && *order.TableID != "" {
+				var activeCount int64
+				if err := tx.Model(&models.Order{}).
+					Where("restaurant_id = ? AND table_id = ?", rid, *order.TableID).
+					Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+					Where("id <> ?", order.ID).
+					Count(&activeCount).Error; err != nil {
+					return err
+				}
+				if activeCount == 0 {
+					if err := tx.Model(&models.Table{}).
+						Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+						Updates(map[string]any{
+							"status":           "free",
+							"current_order_id": nil,
+							"opened_at":        nil,
+							"updated_at":       now,
+						}).Error; err != nil {
+						return err
+					}
+					buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+				}
+			}
+			autoCancelled = true
+		}
+
 		voided = &item
 		return nil
 	})
@@ -241,12 +294,17 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 		return nil, err
 	}
 	if s.pub != nil {
-		buf := NewBuffer()
 		buf.Add(EventOrderItemVoided, map[string]any{
 			"order_id": orderID,
 			"item_id":  itemID,
 			"reason":   in.Reason,
 		})
+		if autoCancelled {
+			buf.Add(EventOrderCancelled, map[string]any{
+				"id":     orderID,
+				"reason": "Все позиции отменены",
+			})
+		}
 		s.pub.Flush(ctx, rid, buf)
 	}
 	return voided, nil

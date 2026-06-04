@@ -146,6 +146,61 @@ func TestWrite_CancelOrderAndVoidItem(t *testing.T) {
 	}
 }
 
+// TestVoidLastItem_AutoCancelsOrder — v2.1.1 regression.
+// Когда void'ятся все позиции по одной, заказ должен авто-перейти в cancelled
+// и стол освободиться (если он был занят только этим заказом).
+func TestVoidLastItem_AutoCancelsOrder(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	_, menuItemID, _, _ := seedForWrite(t, f)
+
+	// Order with single item.
+	resp, body := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{
+			{"menu_item_id": menuItemID, "qty": "1"},
+		},
+	})
+	if resp.StatusCode != 201 {
+		t.Fatalf("create %d: %s", resp.StatusCode, body)
+	}
+	var order models.Order
+	_ = json.Unmarshal(body, &order)
+
+	// Fetch item id.
+	_, getBody := f.get(t, "/api/v1/orders/"+order.ID, tok)
+	var detail struct {
+		Order models.Order `json:"order"`
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal(getBody, &detail)
+	if len(detail.Items) != 1 {
+		t.Fatalf("want 1 item, got %d", len(detail.Items))
+	}
+
+	// Void the only item.
+	voidPath := fmt.Sprintf("/api/v1/orders/%s/items/%s/void", order.ID, detail.Items[0].ID)
+	resp2, body2 := f.post(t, voidPath, tok, uuid.NewString(),
+		map[string]any{"reason": "ошибка", "approved_by": "manager-1"})
+	if resp2.StatusCode != 200 {
+		t.Fatalf("void %d: %s", resp2.StatusCode, body2)
+	}
+
+	// Order must be auto-cancelled.
+	_, gb := f.get(t, "/api/v1/orders/"+order.ID, tok)
+	var after struct {
+		Order models.Order `json:"order"`
+	}
+	_ = json.Unmarshal(gb, &after)
+	if after.Order.Status == nil || *after.Order.Status != "cancelled" {
+		t.Errorf("after voiding last item, status = %v, want cancelled", after.Order.Status)
+	}
+	if after.Order.CancelledAt == nil {
+		t.Errorf("cancelled_at must be set")
+	}
+}
+
 func TestWrite_StockReceipt(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
