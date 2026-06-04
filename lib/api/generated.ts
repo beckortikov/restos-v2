@@ -1553,7 +1553,43 @@ export interface paths {
         delete?: never;
         options?: never;
         head?: never;
-        patch?: never;
+        /** Привязать/изменить счёт у открытой смены (recovery legacy-смен без account_id) */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        account_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CashShift"];
+                    };
+                };
+                /** @description Shift not open */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/api/v1/shifts/{id}/close": {
@@ -1740,6 +1776,20 @@ export interface paths {
                         "application/json": components["schemas"]["Order"];
                     };
                 };
+                /**
+                 * @description v2.0.90 — доменные конфликты:
+                 *     - INSUFFICIENT_STOCK: одного или нескольких ингредиентов не хватает (детали в message).
+                 *     - ITEM_STOPPED: позиция в стоп-листе. Передать `override_stop_list: true`
+                 *       в payload и залогиниться как manager/owner для override.
+                 */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
             };
         };
         delete?: never;
@@ -1893,6 +1943,11 @@ export interface paths {
                 content: {
                     "application/json": {
                         items: components["schemas"]["OrderItemInput"][];
+                        /**
+                         * @description v2.0.90 — manager/owner может явно обойти стоп-лист.
+                         *     Без флага позиции в стопе вернут 409 ITEM_STOPPED.
+                         */
+                        override_stop_list?: boolean;
                     };
                 };
             };
@@ -1904,6 +1959,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Order"];
+                    };
+                };
+                /** @description ITEM_STOPPED / INSUFFICIENT_STOCK. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
                     };
                 };
             };
@@ -1967,6 +2031,14 @@ export interface paths {
                         discount_value?: string;
                         discount_reason?: string;
                         /**
+                         * Format: uuid
+                         * @description v2.0.90 — UUID менеджера/owner, одобрившего скидку.
+                         *     Обязателен если эффективная скидка ≥10% (percent>10 или
+                         *     fixed-эквивалент >10% от subtotal). Иначе 403
+                         *     DISCOUNT_REQUIRES_APPROVAL. Approver проверяется по role.
+                         */
+                        approved_by?: string;
+                        /**
                          * @description Override service-charge % для этого закрытия (decimal).
                          *     Если nil — берётся order.service_percent (default ресторана).
                          *     "0" — сервис отключён (кассир снял toggle «Обслуживание»).
@@ -1986,6 +2058,18 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["Order"];
+                    };
+                };
+                /**
+                 * @description DISCOUNT_REQUIRES_APPROVAL — скидка ≥10% без approved_by или approved_by
+                 *     не является manager/owner ресторана.
+                 */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
                     };
                 };
             };
@@ -3453,7 +3537,36 @@ export interface paths {
                 };
             };
         };
-        put?: never;
+        /** PUT-алиас PATCH для совместимости */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["PrinterInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Printer"];
+                    };
+                };
+            };
+        };
         post?: never;
         delete: {
             parameters: {
@@ -8646,6 +8759,10 @@ export interface components {
             block_reason?: string;
             /** @enum {string} */
             edition?: "start" | "business" | "pro";
+            /** @description Per-key grace дней (warning). v2.1.3+. */
+            grace_days?: number;
+            /** @description Per-key warning дней (lock). v2.1.3+. */
+            warning_days?: number;
         };
         /** @description NUMERIC(14,4) как строка ('123.45') */
         Decimal: string;
@@ -8868,6 +8985,16 @@ export interface components {
             payment_type: "paid" | "credit";
             paid_amount?: components["schemas"]["Decimal"];
             due_date?: string;
+            /**
+             * Format: uuid
+             * @description Если указан и `paid=true`, в той же транзакции списывается баланс счёта и создаётся financial_operation (type=out, category=stock_purchase, source_ref=receipt:<id>). Идемпотентность гарантирована UNIQUE index на (restaurant_id, source_ref). Если не указан — приёмка фиксируется без денежной операции (поставщик в долг — кредиторка).
+             */
+            account_id?: string;
+            /**
+             * @description Если false и `account_id` указан — финоп НЕ создаётся (отметка «приёмка сейчас, оплатим потом»).
+             * @default true
+             */
+            paid: boolean;
             lines: {
                 /** Format: uuid */
                 ingredient_id: string;
@@ -9037,6 +9164,12 @@ export interface components {
             /** Format: uuid */
             shift_id?: string;
             items: components["schemas"]["OrderItemInput"][];
+            /**
+             * @description v2.0.90 — флаг manager/owner override стоп-листа. Без него позиции
+             *     с stop_list_override=true или low-stock ингредиентами вернут
+             *     409 ITEM_STOPPED.
+             */
+            override_stop_list?: boolean;
         };
         OrderDetail: {
             order?: components["schemas"]["Order"];
@@ -9088,9 +9221,15 @@ export interface components {
             /** @enum {string} */
             driver?: "tcp" | "usb" | "virtual" | "mock";
             target?: string;
+            /** @description 32=58mm, 42-48=80mm */
             cols?: number;
             is_default?: boolean;
             enabled?: boolean;
+            print_logo?: boolean;
+            print_discount?: boolean;
+            print_service?: boolean;
+            print_tip?: boolean;
+            print_qr_feedback?: boolean;
         };
         PrinterInput: {
             name?: string;
@@ -9099,10 +9238,16 @@ export interface components {
             station?: string;
             /** @enum {string} */
             driver?: "tcp" | "usb" | "virtual" | "mock";
+            /** @description host[:port] — для tcp; :9100 добавляется автоматически если не указан */
             target?: string;
             cols?: number;
             is_default?: boolean;
             enabled?: boolean;
+            print_logo?: boolean;
+            print_discount?: boolean;
+            print_service?: boolean;
+            print_tip?: boolean;
+            print_qr_feedback?: boolean;
         };
         PrintersList: {
             data?: components["schemas"]["Printer"][];
@@ -9692,6 +9837,8 @@ export interface components {
             cogs?: {
                 total?: components["schemas"]["Decimal"];
             };
+            /** @description Стоимость списаний (брак/порча/потери) за период. Вычитается из gross_profit отдельной строкой между COGS и opex. */
+            writeoffs?: components["schemas"]["Decimal"];
             opex?: {
                 total?: components["schemas"]["Decimal"];
                 by_category?: {
