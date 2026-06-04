@@ -47,6 +47,7 @@ type ReceiptInput struct {
 	CashierName    string
 	WaiterName     string
 	TableLabel     string
+	GuestsCount    int
 	Items          []ReceiptItem
 	Subtotal       decimal.Decimal
 	DiscountAmount decimal.Decimal
@@ -147,6 +148,9 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	writeMeta("", in.TableLabel)
 	writeMeta("Официант", in.WaiterName)
 	writeMeta("Кассир", in.CashierName)
+	if in.GuestsCount > 0 {
+		writeMeta("Гостей", strconv.Itoa(in.GuestsCount))
+	}
 
 	// ── Items header ──────────────────────────────────────────────────────
 	b.TextLn(hrLight)

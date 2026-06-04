@@ -694,6 +694,17 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 	hasReceiptP := tx.Where("restaurant_id = ? AND kind = 'receipt' AND is_default = TRUE AND enabled = TRUE",
 		restaurantID).First(&receiptP).Error == nil
 
+	// 2b. Догружаем стол/зону/официанта/кассира — без них чек шёл без шапки
+	// "Стол / Официант / Кассир" (баг v2.0.99).
+	meta := loadOrderPrintMeta(tx, order, true)
+	tableLabel := joinNonEmpty(" · ", meta.ZoneName, meta.TableLabel)
+	// Для takeaway/delivery: подставляем тип, если зоны нет (как в v1 receipt).
+	if tableLabel == "" {
+		if order.Type != nil && *order.Type != "hall" {
+			tableLabel = orderTypeLabel(order)
+		}
+	}
+
 	// 3. Готовим input layout.
 	in := escpos.ReceiptInput{
 		RestaurantName: rest.Name,
@@ -702,9 +713,14 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 		ClosedAt:       now,
 		PaymentMethod:  paymentMethod,
 		Subtotal:       order.Total,
+		DiscountAmount: order.DiscountAmount,
 		ServiceAmount:  order.ServiceAmount,
 		TipAmount:      order.TipAmount,
 		Total:          order.TotalWithService,
+		TableLabel:     tableLabel,
+		WaiterName:     meta.WaiterName,
+		CashierName:    meta.CashierName,
+		GuestsCount:    meta.GuestsCount,
 	}
 	if hasReceiptP {
 		in.Cols = receiptP.Cols

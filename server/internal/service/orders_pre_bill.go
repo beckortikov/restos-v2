@@ -96,6 +96,15 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 		}
 		total := decimal.Normalize(decimal.Add(subtotal, serviceAmount))
 
+		// Догружаем стол/зону/официанта — пре-чек тоже должен показывать,
+		// кому он принадлежит (баг v2.0.99). Кассира на пре-чеке нет, заказ
+		// ещё не закрыт.
+		meta := loadOrderPrintMeta(tx, &order, false)
+		tableLabel := joinNonEmpty(" · ", meta.ZoneName, meta.TableLabel)
+		if tableLabel == "" && order.Type != nil && *order.Type != "hall" {
+			tableLabel = orderTypeLabel(&order)
+		}
+
 		in := escpos.ReceiptInput{
 			RestaurantName:   rest.Name,
 			OrderNumber:      order.OrderNumber,
@@ -105,6 +114,9 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 			DiscountAmount:   order.DiscountAmount,
 			ServiceAmount:    serviceAmount,
 			Total:            total,
+			TableLabel:       tableLabel,
+			WaiterName:       meta.WaiterName,
+			GuestsCount:      meta.GuestsCount,
 			Cols:             receiptP.Cols,
 			SuppressLogo:     !receiptP.PrintLogo,
 			SuppressDiscount: !receiptP.PrintDiscount,

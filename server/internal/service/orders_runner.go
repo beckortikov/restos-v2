@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -9,6 +10,102 @@ import (
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/escpos"
 )
+
+// loadOrderPrintMeta — догружает имена стола, зоны и официанта/кассира для
+// печати. Все поля опциональны: при отсутствии данных возвращаются пустые
+// строки. Один общий хелпер используется и для runner'а, и для receipt/pre-bill.
+type orderPrintMeta struct {
+	TableLabel  string // "Стол №3" или просто Name стола ("VIP-1")
+	ZoneName    string // имя зоны (если есть)
+	WaiterName  string
+	CashierName string
+	GuestsCount int
+}
+
+func loadOrderPrintMeta(tx *gorm.DB, order *models.Order, withCashier bool) orderPrintMeta {
+	var m orderPrintMeta
+	if order.TableID != nil && *order.TableID != "" {
+		var t models.Table
+		if err := tx.Where("id = ?", *order.TableID).First(&t).Error; err == nil {
+			m.TableLabel = formatTableLabel(&t)
+			if t.ZoneID != nil && *t.ZoneID != "" {
+				var z models.Zone
+				if err := tx.Where("id = ?", *t.ZoneID).First(&z).Error; err == nil {
+					m.ZoneName = z.Name
+				}
+			}
+		}
+	}
+	if order.WaiterID != nil && *order.WaiterID != "" {
+		var u models.User
+		if err := tx.Where("id = ?", *order.WaiterID).First(&u).Error; err == nil {
+			if u.Name != nil {
+				m.WaiterName = *u.Name
+			}
+		}
+	}
+	if withCashier && order.CashierID != nil && *order.CashierID != "" {
+		var u models.User
+		if err := tx.Where("id = ?", *order.CashierID).First(&u).Error; err == nil {
+			if u.Name != nil {
+				m.CashierName = *u.Name
+			}
+		}
+	}
+	if order.GuestsCount != nil {
+		m.GuestsCount = *order.GuestsCount
+	}
+	return m
+}
+
+// formatTableLabel — порт v1-логики:
+//
+//	tableName ? (startsWith("стол") ? tableName : "Стол " + tableName) : ""
+//
+// В v4 у Table есть Name (свободная строка типа "VIP-1") и Number. Если
+// Name указан — используем его, иначе строим из Number.
+func formatTableLabel(t *models.Table) string {
+	if t == nil {
+		return ""
+	}
+	if t.Name != nil && *t.Name != "" {
+		nm := *t.Name
+		if strings.HasPrefix(strings.ToLower(nm), "стол") {
+			return nm
+		}
+		return "Стол " + nm
+	}
+	if t.Number != nil {
+		return "Стол №" + intToStr(*t.Number)
+	}
+	return ""
+}
+
+// joinNonEmpty — соединяет непустые значения через sep (v1: filter(Boolean).join(", ")).
+func joinNonEmpty(sep string, parts ...string) string {
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, sep)
+}
+
+// orderTypeLabel — "Зал" / "Доставка" / "Самовывоз".
+func orderTypeLabel(order *models.Order) string {
+	if order == nil || order.Type == nil {
+		return "Зал"
+	}
+	switch *order.Type {
+	case "delivery":
+		return "Доставка"
+	case "takeaway":
+		return "Самовывоз"
+	default:
+		return "Зал"
+	}
+}
 
 // StationResolver — лёгкий interface, подменяемый для тестов.
 //
@@ -85,17 +182,26 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 	var rest models.Restaurant
 	_ = tx.Where("id = ?", restaurantID).First(&rest).Error
 
-	tableLabel := ""
-	if order.TableID != nil {
-		// Без JOIN — фронт сам нарисует «Стол №X», а нам нужен printable label.
-		tableLabel = "Заказ #" + intToStr(order.OrderNumber)
+	// Подгружаем стол / зону / официанта / гостей — повару нужен контекст
+	// (без этого блока v2.0.92 печатал runner без стола и без имени официанта).
+	meta := loadOrderPrintMeta(tx, order, false)
+	zoneLabel := meta.ZoneName
+	typeLbl := orderTypeLabel(order)
+	if zoneLabel == "" && order.Type != nil && *order.Type != "hall" {
+		zoneLabel = typeLbl
 	}
+	guestsLabel := ""
+	if meta.GuestsCount > 0 {
+		guestsLabel = intToStr(meta.GuestsCount) + " гост."
+	}
+	runnerTableLabel := joinNonEmpty(", ", meta.TableLabel, zoneLabel, guestsLabel)
 
 	for station, sItems := range byStation {
 		in := escpos.RunnerInput{
 			Station:     stationLabel(station),
 			OrderNumber: order.OrderNumber,
-			TableLabel:  tableLabel,
+			TableLabel:  runnerTableLabel,
+			WaiterName:  meta.WaiterName,
 			CreatedAt:   now,
 		}
 		for _, it := range sItems {
@@ -196,16 +302,16 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 		byStation[station] = append(byStation[station], it)
 	}
 
-	tableLabel := ""
-	if order.TableID != nil {
-		tableLabel = "Заказ #" + intToStr(order.OrderNumber)
-	}
+	// Стол / зона / официант — повар должен сразу видеть, чей заказ отменяется.
+	meta := loadOrderPrintMeta(tx, order, false)
+	cancelTableLabel := joinNonEmpty(", ", meta.TableLabel, meta.ZoneName)
 
 	for station, sItems := range byStation {
 		in := escpos.CancelRunnerInput{
 			Station:     stationLabel(station),
 			OrderNumber: order.OrderNumber,
-			TableLabel:  tableLabel,
+			TableLabel:  cancelTableLabel,
+			WaiterName:  meta.WaiterName,
 			CancelledAt: now,
 			Reason:      reason,
 		}
