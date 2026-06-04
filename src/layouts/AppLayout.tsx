@@ -8,6 +8,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { AutoReadyWatcher } from '@/components/auto-ready-watcher'
 import { RealtimeCacheBridge } from '@/components/realtime-cache-bridge'
 import { LicenseGate } from '@/components/license-gate'
+import { LicenseWarningBanner } from '@/components/license-warning-banner'
 
 function AppContent() {
   const { user } = useAuth()
@@ -70,6 +71,8 @@ export function AppLayout() {
     <AuthProvider>
       <AuthGuard>
         <LicenseGate>
+          {/* Sticky warning banner — показывается только при state=grace|softLocked. */}
+          <LicenseWarningBanner />
           <AppContent />
         </LicenseGate>
       </AuthGuard>
