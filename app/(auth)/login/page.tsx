@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { UtensilsCrossed, Delete, LogIn, AlertCircle, Settings2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
@@ -77,30 +77,54 @@ export default function LoginPage() {
     }
   }
 
+  // v2.2.3: реальный auto-submit на 4 цифрах с debounce'ом.
+  // Раньше тут был пустой setTimeout с TODO — кассиру приходилось нажимать
+  // «Войти». Теперь: после 4-й цифры ждём 600ms (даём шанс ввести 5-8-значный
+  // PIN) → если pin не вырос → submitPin автоматически. Любой digit/popDigit
+  // сбрасывает timer.
+  const autoSubmitTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  function clearAutoSubmit() {
+    if (autoSubmitTimer.current) {
+      clearTimeout(autoSubmitTimer.current)
+      autoSubmitTimer.current = null
+    }
+  }
+
   function pushDigit(d: string) {
     if (loading) return
     if (pin.length >= 8) return
     const next = pin + d
     setPin(next)
     setError('')
-    if (next.length >= 4 && next.length === 4) {
-      // авто-submit на 4-значном PIN, если ничего больше не вводится
-      setTimeout(() => {
-        // даём шанс пользователю продолжить ввод длиннее
-      }, 300)
+    clearAutoSubmit()
+    if (next.length >= 4) {
+      // Длиннее 4 цифр — submit'им быстрее (юзер закончил ввод). На точно 4
+      // ждём дольше — даём шанс продолжить.
+      const delay = next.length === 4 ? 600 : 300
+      autoSubmitTimer.current = setTimeout(() => {
+        autoSubmitTimer.current = null
+        // Берём актуальный pin из closure — это корректно т.к. next ref'нут.
+        submitPin(next)
+      }, delay)
     }
   }
 
   function popDigit() {
     if (loading) return
+    clearAutoSubmit()
     setPin(p => p.slice(0, -1))
   }
 
   function clearPin() {
     if (loading) return
+    clearAutoSubmit()
     setPin('')
     setError('')
   }
+
+  // Cleanup на unmount.
+  useEffect(() => () => clearAutoSubmit(), [])
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background px-4">
