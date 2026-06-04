@@ -47,7 +47,14 @@ export default function WaiterOrdersPage() {
   useDataSync(['orders', 'order_items', 'tables'], load)
 
   const list = useMemo(() => {
-    const active = orders.filter(o => o.status !== 'done' && o.status !== 'cancelled')
+    // v2.1.2: дополнительно скрываем zombie-заказы (status=active, но все
+    // позиции отменены). Backend invariant из v2.1.1 + миграция 016 их чистит,
+    // но UI-фильтр — последняя линия обороны на случай рейс/race.
+    const active = orders.filter(o => {
+      if (o.status === 'done' || o.status === 'cancelled') return false
+      const alive = o.aliveItemsCount ?? o.items.filter(i => !i.cancelledAt).length
+      return alive > 0
+    })
     const mine = filter === 'mine' ? active.filter(o => o.waiterId === user?.id) : active
     return mine.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
   }, [orders, filter, user?.id])

@@ -154,6 +154,11 @@ func main() {
 	printQueue := printer.NewQueue(gdb, router, printer.QueueConfig{})
 	go printQueue.Run(ctx)
 
+	// Orders cleanup watchdog (v2.1.2) — каждые 5 минут чистит zombie-заказы
+	// (status=active, 0 живых items) и освобождает столы. Подстраховка к
+	// invariant из orders_void.go.
+	go jobs.OrdersCleanupScheduler(ctx, gdb, jobs.OrdersCleanupConfig{})
+
 	// 4. Ждём сигнал или ошибку HTTP.
 	select {
 	case <-ctx.Done():

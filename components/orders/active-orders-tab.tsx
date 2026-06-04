@@ -119,10 +119,17 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
 
   // Активные = всё, кроме done/cancelled. Delivery исключаем повсюду
   // (не используется в нашем продукте).
+  // v2.1.2: дополнительно скрываем zombie-заказы (active-status, но все
+  // позиции отменены). Backend-invariant + миграция 016 их чистят, UI-фильтр
+  // — финальная страховка.
   const visibleOrders = useMemo(
     () => (canViewOthers ? orders : orders.filter(o => o.waiterId === user?.id))
       .filter(o => o.status !== 'done' && o.status !== 'cancelled')
-      .filter(o => o.type !== 'delivery'),
+      .filter(o => o.type !== 'delivery')
+      .filter(o => {
+        const alive = o.aliveItemsCount ?? o.items.filter(i => !i.cancelledAt).length
+        return alive > 0
+      }),
     [orders, canViewOthers, user?.id],
   )
 

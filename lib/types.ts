@@ -266,6 +266,10 @@ export interface Order {
   paymentMethod?: PaymentMethod
   comment?: string
   items: OrderItem[]
+  /** v2.1.2: число живых (не-cancelled) позиций. Заполняется backend slim-payload
+   *  (items_count) или вычисляется из items. Используется UI чтобы скрыть
+   *  zombie-заказы (status=active, но все позиции отменены). */
+  aliveItemsCount?: number
   total: number
   servicePercent?: number
   serviceAmount?: number

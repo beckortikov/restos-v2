@@ -257,6 +257,14 @@ export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[
     refundReason: r.refund_reason ?? undefined,
     tabLabel: r.tab_label ?? undefined,
     items: mappedItems,
+    // v2.1.2: число живых (не-cancelled) позиций. Заполняется из
+    // backend slim-payload (`items_count` — GROUP BY без N+1). Если payload
+    // не slim — считаем из items. UI скрывает заказы с 0 живыми (защита
+    // от legacy-zombies до миграции 016).
+    aliveItemsCount:
+      r.items_count != null
+        ? Number(r.items_count)
+        : mappedItems.filter(i => !i.cancelledAt).length,
   }
 }
 
