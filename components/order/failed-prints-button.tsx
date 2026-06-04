@@ -96,13 +96,18 @@ export function FailedPrintsButton() {
   async function handleRetry(logId: string) {
     setRetryingId(logId)
     try {
-      // v4: POST /api/v1/print/jobs/{id}/retry. Раньше дёргали legacy
-      // /print/retry-job из v1 — backend v4 такого роута не имеет, кассир
-      // получал HTTP 404. См. server/internal/transport/http/router.go.
+      // v4: POST /api/v1/print/jobs/{id}/retry с Bearer из localStorage.
+      // Раньше слали /print/retry-job (legacy v1) + credentials:'include'
+      // (v4 не использует cookies для auth) → 401/404. Fix v2.0.96.
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (typeof localStorage !== 'undefined') {
+        const tok = localStorage.getItem('restos-v4-token')
+        if (tok) headers['Authorization'] = `Bearer ${tok}`
+      }
+      try { headers['Idempotency-Key'] = crypto.randomUUID() } catch { /* noop */ }
       const res = await fetch(`${getApiUrl()}/api/v1/print/jobs/${encodeURIComponent(logId)}/retry`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        headers,
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -147,13 +152,16 @@ export function FailedPrintsButton() {
 
   async function doDismiss(logId: string) {
     try {
-      // v4: POST /api/v1/print/jobs/{id}/dismiss. Endpoint только что добавлен
-      // (см. service/print_jobs.go Dismiss). До v2.0.95 кассир получал HTTP 404
-      // т.к. этого роута не существовало.
+      // v4: POST /api/v1/print/jobs/{id}/dismiss с Bearer токеном.
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (typeof localStorage !== 'undefined') {
+        const tok = localStorage.getItem('restos-v4-token')
+        if (tok) headers['Authorization'] = `Bearer ${tok}`
+      }
+      try { headers['Idempotency-Key'] = crypto.randomUUID() } catch { /* noop */ }
       const res = await fetch(`${getApiUrl()}/api/v1/print/jobs/${encodeURIComponent(logId)}/dismiss`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        headers,
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
