@@ -96,10 +96,13 @@ export function FailedPrintsButton() {
   async function handleRetry(logId: string) {
     setRetryingId(logId)
     try {
-      const res = await fetch(`${getApiUrl()}/print/retry-job`, {
+      // v4: POST /api/v1/print/jobs/{id}/retry. Раньше дёргали legacy
+      // /print/retry-job из v1 — backend v4 такого роута не имеет, кассир
+      // получал HTTP 404. См. server/internal/transport/http/router.go.
+      const res = await fetch(`${getApiUrl()}/api/v1/print/jobs/${encodeURIComponent(logId)}/retry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logId }),
+        credentials: 'include',
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
@@ -144,10 +147,13 @@ export function FailedPrintsButton() {
 
   async function doDismiss(logId: string) {
     try {
-      const res = await fetch(`${getApiUrl()}/print/dismiss-job`, {
+      // v4: POST /api/v1/print/jobs/{id}/dismiss. Endpoint только что добавлен
+      // (см. service/print_jobs.go Dismiss). До v2.0.95 кассир получал HTTP 404
+      // т.к. этого роута не существовало.
+      const res = await fetch(`${getApiUrl()}/api/v1/print/jobs/${encodeURIComponent(logId)}/dismiss`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logId }),
+        credentials: 'include',
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))

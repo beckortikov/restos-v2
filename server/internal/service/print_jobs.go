@@ -136,3 +136,33 @@ func (s *PrintJobsService) Retry(ctx context.Context, id string) (*models.PrintJ
 	}
 	return &job, nil
 }
+
+// Dismiss — кассир пометил failed-job «Не актуально». Помечаем job.status =
+// 'dismissed' (terminal state) — воркер больше не возьмёт, FailedPrintsButton
+// удалит из drawer'а. Из pending/running/done нельзя (409). Это аналог
+// /print/dismiss-job в v1, без которого кассир получает HTTP 404 при клике
+// «Не актуально» в очереди печати.
+func (s *PrintJobsService) Dismiss(ctx context.Context, id string) (*models.PrintJob, error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var job models.PrintJob
+	if err := scoped.Where("id = ?", id).First(&job).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	if job.Status != "failed" && job.Status != "dead" {
+		return nil, apperrors.Wrap("CONFLICT", "only failed/dead jobs can be dismissed", nil)
+	}
+	now := time.Now().UTC()
+	job.Status = "dismissed"
+	job.UpdatedAt = now
+	scoped2, _ := s.r.ForTenant(ctx)
+	if err := scoped2.Save(&job).Error; err != nil {
+		return nil, err
+	}
+	return &job, nil
+}

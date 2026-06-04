@@ -412,6 +412,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/printers/{id}", printersH.Delete)
 			g.Post("/printers/{id}/test", printersH.Test)
 			g.Post("/print/jobs/{id}/retry", printJobsH.Retry)
+			g.Post("/print/jobs/{id}/dismiss", printJobsH.Dismiss)
 
 			// Admin CRUD: users, customers, suppliers, reservations, restaurant.
 			g.Post("/users", usersH.Create)

@@ -40,3 +40,13 @@ func (h *PrintJobsHandler) Retry(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, j)
 }
+
+// Dismiss — POST /api/v1/print/jobs/{id}/dismiss. Кассир пометил «Не актуально».
+func (h *PrintJobsHandler) Dismiss(w http.ResponseWriter, r *http.Request) {
+	j, err := h.svc.Dismiss(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, j)
+}
