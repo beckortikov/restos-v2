@@ -29,6 +29,15 @@ func (b *Builder) Raw(p ...byte) *Builder {
 // Init — ESC @. Сброс всех режимов в дефолт.
 func (b *Builder) Init() *Builder { return b.Raw(0x1B, '@') }
 
+// DisableKanji — FS . (0x1C 0x2E). КРИТИЧНО для XPrinter и китайских клонов:
+// они по умолчанию в Kanji multi-byte режиме (FS &), и без явного отключения
+// байты 0x80..0xFF интерпретируются как китайские double-byte sequences вместо
+// одиночных символов CP866. Симптом: чек печатает «иероглифы» вместо кириллицы
+// даже когда принтер настроен на code-page PC866.
+// Должно быть отправлено ДО Text / CodePageCP866. v1 (TS) посылал эту команду
+// первой после Init — портируем тот же порядок (v2.0.94 fix).
+func (b *Builder) DisableKanji() *Builder { return b.Raw(0x1C, '.') }
+
 // CodePageCP866 — ESC t 17. Выбор кодовой страницы 17 = CP866.
 // На большинстве принтеров (Epson, Xprinter) это валидно.
 func (b *Builder) CodePageCP866() *Builder { return b.Raw(0x1B, 't', 17) }

@@ -31,7 +31,7 @@ func TestPageLayout(in TestPageInput) []byte {
 		now = time.Now()
 	}
 
-	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
+	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
 	b.AlignCenter().FontDouble().Bold(true).TextLn("ТЕСТ ПЕЧАТИ").Bold(false).FontNormal()
 	b.LF()

@@ -75,7 +75,7 @@ func ReceiptLayout(in ReceiptInput) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
+	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
 	// Header.
 	if !in.SuppressLogo {
@@ -167,7 +167,7 @@ func PreBillLayout(in ReceiptInput) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
+	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
 	// Header.
 	if !in.SuppressLogo {
@@ -256,7 +256,7 @@ func RunnerLayout(in RunnerInput) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
+	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
 	b.AlignCenter().FontDouble().Bold(true).TextLn(in.Station).Bold(false).FontNormal()
 	b.LF()
@@ -307,7 +307,7 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
+	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
 	b.AlignCenter().FontDouble().Bold(true).TextLn("!!! ОТМЕНА !!!").FontNormal().Bold(false)
 	b.LF()
@@ -362,7 +362,7 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().CodePageCP866().CharsetRussia()
+	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
 	b.AlignCenter().FontDouble().Bold(true).TextLn(title).Bold(false).FontNormal()
 	b.TextLn(in.RestaurantName).LF()
