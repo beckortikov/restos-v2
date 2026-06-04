@@ -154,8 +154,16 @@ func (s *PrintJobsService) Dismiss(ctx context.Context, id string) (*models.Prin
 		}
 		return nil, err
 	}
-	if job.Status != "failed" && job.Status != "dead" {
-		return nil, apperrors.Wrap("CONFLICT", "only failed/dead jobs can be dismissed", nil)
+	// v2.1.6: разрешить dismiss из любого активного статуса. Worker между
+	// retry-попытками меняет status ↔ pending — если кассир кликает «Не актуально»
+	// в этот момент, раньше отказ 409. Теперь dismiss работает и из pending/
+	// running/failed. Только done не трогаем (заказ уже напечатан — отменять нечего).
+	if job.Status == "done" {
+		return nil, apperrors.Wrap("CONFLICT", "cannot dismiss done job", nil)
+	}
+	if job.Status == "dismissed" {
+		// Идемпотентно — повторный dismiss не должен фейлить.
+		return &job, nil
 	}
 	now := time.Now().UTC()
 	job.Status = "dismissed"

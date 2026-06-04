@@ -313,9 +313,11 @@ func RunnerLayout(in RunnerInput) []byte {
 
 	// ── Minimal feed + partial cut (v1: 0A then 1D 56 42 03) ─────────────
 	b.LF()
-	b.CutWithFeed(3)
-	// 1 короткий пик — повар слышит «прилетел заказ». v2.1.1.
+	// v2.1.6: Beep ДО Cut — иначе на некоторых принтерах команда после
+	// GS V буферизуется для следующего задания, либо парсер останавливается
+	// (симптом: «принтер не печатает»). Сначала пикаем, потом режем.
 	b.Beep(1, 3)
+	b.CutWithFeed(3)
 	return b.Bytes()
 }
 
@@ -382,9 +384,10 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	b.TextLn("--------------------------------")
 
 	b.LF()
-	b.CutWithFeed(3)
-	// 3 длинных пика — отмена, гарантированно ловит внимание повара. v2.1.1.
+	// v2.1.6: Beep ДО Cut (см. RunnerLayout) — пик ставим в hot path
+	// payload'а до cut-команды, иначе на некоторых принтерах теряется.
 	b.Beep(3, 4)
+	b.CutWithFeed(3)
 	return b.Bytes()
 }
 
