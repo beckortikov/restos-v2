@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,13 @@ type CancelOrderInput struct {
 type VoidItemInput struct {
 	Reason     string `json:"reason"`
 	ApprovedBy string `json:"approved_by"` // user_id manager'а
+	// Qty — partial-void (v2.2.4 fix). Если nil/пусто или >= item.Qty —
+	// full void (как раньше). Если < item.Qty — split row: создаём
+	// cancelled-копию на Qty, оригинал уменьшается. Симметрично CancelItem.
+	// Android waiter PWA шлёт qty="1" при тапе «−» на multi-qty позиции
+	// (8 ош → 7), раньше backend это игнорировал и отменял весь row,
+	// затем v2.1.1 invariant отменял весь заказ как «пустой».
+	Qty *string `json:"qty,omitempty"`
 }
 
 // Cancel отменяет открытый заказ целиком.
@@ -184,20 +192,75 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 		now := time.Now().UTC()
 		reason := in.Reason
 		canceller := actor.UserID
-		item.CancelledAt = &now
-		item.CancelledBy = &canceller
-		item.CancelReason = &reason
-		item.UpdatedAt = now
-		if err := tx.Save(&item).Error; err != nil {
-			return err
+
+		// v2.2.4: partial-void через split. Логика симметрична CancelItem.
+		var qtyToVoid decimal.Decimal
+		fullVoid := true
+		if in.Qty != nil && strings.TrimSpace(*in.Qty) != "" {
+			q, perr := decimal.FromString(*in.Qty)
+			if perr != nil {
+				return apperrors.Wrap("VALIDATION", "bad qty: "+*in.Qty, perr)
+			}
+			if !decimal.IsPositive(q) {
+				return apperrors.Wrap("VALIDATION", "qty must be > 0", nil)
+			}
+			if q.Cmp(item.Qty) < 0 {
+				qtyToVoid = q
+				fullVoid = false
+			} else {
+				qtyToVoid = item.Qty
+			}
+		} else {
+			qtyToVoid = item.Qty
+		}
+
+		if fullVoid {
+			item.CancelledAt = &now
+			item.CancelledBy = &canceller
+			item.CancelReason = &reason
+			item.UpdatedAt = now
+			if err := tx.Save(&item).Error; err != nil {
+				return err
+			}
+		} else {
+			// Split: новая cancelled-row на qtyToVoid; оригинал уменьшается.
+			split := models.OrderItem{
+				ID:           uuid.NewString(),
+				OrderID:      item.OrderID,
+				MenuItemID:   item.MenuItemID,
+				Name:         item.Name,
+				Note:         item.Note,
+				Qty:          qtyToVoid,
+				Price:        item.Price,
+				COGS:         item.COGS,
+				Unit:         item.Unit,
+				UnitSize:     item.UnitSize,
+				CancelledAt:  &now,
+				CancelledBy:  &canceller,
+				CancelReason: &reason,
+				CreatedAt:    item.CreatedAt,
+				UpdatedAt:    now,
+			}
+			if err := tx.Create(&split).Error; err != nil {
+				return err
+			}
+			item.Qty = decimal.Sub(item.Qty, qtyToVoid)
+			item.UpdatedAt = now
+			if err := tx.Model(&models.OrderItem{}).
+				Where("id = ?", item.ID).
+				Updates(map[string]any{"qty": item.Qty, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			// Дальнейшие шаги (order_voids, total, runner) работают со split-row.
+			item = split
 		}
 
 		// 3. Audit-friendly запись в order_voids (видна Manager-у).
 		voidID := uuid.NewString()
 		oid := orderID
 		var itemQtyInt int
-		if !item.Qty.IsZero() {
-			f, _ := item.Qty.Float64()
+		if !qtyToVoid.IsZero() {
+			f, _ := qtyToVoid.Float64()
 			itemQtyInt = int(f) // schema хранит int — округление в большую сторону не делаем
 		}
 		approvedBy := in.ApprovedBy
