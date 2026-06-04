@@ -176,7 +176,7 @@ func runeToCP866(r rune) byte {
 	// Если уже не сматчили выше — отбрасываем.
 	case r >= 0x2600 && r <= 0x27BF:
 		return dropRune
-	// Misc Symbols and Pictographs (U+1F300..) уже отрезаны проверкой r > 0xFFFF.
+		// Misc Symbols and Pictographs (U+1F300..) уже отрезаны проверкой r > 0xFFFF.
 	}
 	return '?'
 }

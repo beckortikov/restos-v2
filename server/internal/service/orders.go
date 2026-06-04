@@ -46,9 +46,9 @@ type OrdersFilter struct {
 	Status    string
 	TableID   string
 	ShiftID   string
-	WaiterID  string // filter by orders.waiter_id (для «Мои заказы» в Kotlin APK)
-	CashierID string // filter by orders.cashier_id (для history-таба «по кассиру»)
-	Type      string // filter by orders.type (hall|takeaway|delivery)
+	WaiterID  string     // filter by orders.waiter_id (для «Мои заказы» в Kotlin APK)
+	CashierID string     // filter by orders.cashier_id (для history-таба «по кассиру»)
+	Type      string     // filter by orders.type (hall|takeaway|delivery)
 	From      *time.Time // created_at >=
 	To        *time.Time // created_at <
 	Page      cursor.Page
@@ -74,8 +74,8 @@ type OrderSlim struct {
 	DiscountAmount decimal.Decimal `json:"discount_amount"`
 	TipAmount      decimal.Decimal `json:"tip_amount"`
 	ShiftID        *string         `json:"shift_id,omitempty"`
-	CreatedAt    time.Time       `json:"created_at"`
-	ClosedAt     *time.Time      `json:"closed_at,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	ClosedAt       *time.Time      `json:"closed_at,omitempty"`
 	// Enriched display-only fields (батч-загрузка в List, чтобы избежать N+1 на клиенте).
 	TableName  string `json:"table_name,omitempty"`
 	WaiterName string `json:"waiter_name,omitempty"`
@@ -156,21 +156,21 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 	out := make([]OrderSlim, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, OrderSlim{
-			ID:           r.ID,
-			OrderNumber:  r.OrderNumber,
-			Status:       r.Status,
-			Type:         r.Type,
-			TableID:      r.TableID,
-			WaiterID:     r.WaiterID,
-			GuestsCount:  r.GuestsCount,
+			ID:             r.ID,
+			OrderNumber:    r.OrderNumber,
+			Status:         r.Status,
+			Type:           r.Type,
+			TableID:        r.TableID,
+			WaiterID:       r.WaiterID,
+			GuestsCount:    r.GuestsCount,
 			Total:          r.Total,
 			TotalWithSvc:   r.TotalWithService,
 			ServiceAmount:  r.ServiceAmount,
 			DiscountAmount: r.DiscountAmount,
 			TipAmount:      r.TipAmount,
 			ShiftID:        r.ShiftID,
-			CreatedAt:    r.CreatedAt,
-			ClosedAt:     r.ClosedAt,
+			CreatedAt:      r.CreatedAt,
+			ClosedAt:       r.ClosedAt,
 		})
 	}
 	// Enrich display-only поля (table_name, waiter_name, zone_name) батч-запросами.
@@ -514,4 +514,3 @@ func (s *OrdersService) enrichSlim(ctx context.Context, rows []OrderSlim) error 
 	}
 	return nil
 }
-

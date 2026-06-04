@@ -249,4 +249,3 @@ func (h *OrdersHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, o)
 }
-

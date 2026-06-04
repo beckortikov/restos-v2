@@ -265,11 +265,11 @@ func (s *LicenseService) Activate(ctx context.Context, in ActivateInput) (*Licen
 	expires := p.ExpiresAt
 	noBlock := false
 	updates := map[string]any{
-		"license_key":          in.Token,
-		"license_expires_at":   expires,
-		"is_blocked":           &noBlock,
-		"block_reason":         nil,
-		"updated_at":           now,
+		"license_key":        in.Token,
+		"license_expires_at": expires,
+		"is_blocked":         &noBlock,
+		"block_reason":       nil,
+		"updated_at":         now,
 		// v2.1.3: per-key grace/warning. Старые токены без этих полей →
 		// 0/0 (hard lock сразу при истечении). Защита продавца.
 		"license_grace_days":   p.GraceDays,

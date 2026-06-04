@@ -546,8 +546,6 @@ paths:
                 properties:
                   shift: { $ref: "#/components/schemas/CashShift" }
                   operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
-
-  /api/v1/shifts/{id}:
     patch:
       tags: [shifts]
       summary: Привязать/изменить счёт у открытой смены (recovery legacy-смен без account_id)
