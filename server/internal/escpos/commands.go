@@ -64,6 +64,12 @@ func (b *Builder) FontSize(n byte) *Builder { return b.Raw(0x1D, '!', n) }
 func (b *Builder) FontNormal() *Builder { return b.FontSize(0x00) }
 func (b *Builder) FontDouble() *Builder { return b.FontSize(0x11) }
 
+// FontTall — double height ONLY (single width). GS ! 0x01.
+// Используется для строк где важна высота, но ширина бумаги ограничена
+// (например, items в runner — нужно чтобы повар прочитал издалека, но
+// «Шашлык куриный» помещался на 80mm/58mm без переноса).
+func (b *Builder) FontTall() *Builder { return b.FontSize(0x01) }
+
 // Bold — ESC E n (n=1 on, 0 off).
 func (b *Builder) Bold(on bool) *Builder {
 	if on {

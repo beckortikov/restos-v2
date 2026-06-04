@@ -1,32 +1,40 @@
 // Layout-функции — порт `lib/print-service.ts` на Go.
 //
 // Каждая функция строит ESC/POS поток для конкретного типа документа:
-//   - ReceiptLayout: фискальный чек клиенту (printer = receipt).
+//   - ReceiptLayout: гостевой счёт (final, после оплаты).
+//   - PreBillLayout: предварительный счёт (до оплаты).
 //   - RunnerLayout:  ранер на кухню (printer = station).
 //   - CancelRunnerLayout: отмена позиции на кухню.
-//   - XReportLayout: промежуточный отчёт смены (без обнуления).
-//   - ZReportLayout: финальный отчёт смены при закрытии.
+//   - XReportLayout / ZReportLayout: отчёты смены.
 //
-// Источник: ../restos/lib/print-service.ts функции buildReceipt(), buildRunner(),
-// buildCancelRunner(), buildXReport(), buildZReport().
+// Источник: ../restos/lib/print-service.ts функции buildEscPosRunner(),
+// buildEscPosReceipt(), buildEscPosCancellation(). Это РАБОЧИЙ
+// продакшен-формат v1 — копируем байт-в-байт, не «улучшаем».
 //
-// Ширина по умолчанию — 48 cols (бумага 80mm). Для 58mm передавай ColsNarrow.
+// Ширина по умолчанию — 42 cols (бумага 80mm в v1). Для 58mm передавай Cols58.
+// Runner — всегда 32 cols (как в v1, независимо от paper_width).
 package escpos
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
 const (
-	Cols80 = 48 // ширина в моноширных символах для 80mm
-	Cols58 = 32 // для 58mm
+	// Receipt: 42 cols на 80mm бумаге (v1: RECEIPT_WIDTH=42).
+	Cols80 = 42
+	// 58mm бумага.
+	Cols58 = 32
+	// Runner: фиксированно 32 cols (v1 hard-coded — повару нужны крупные
+	// строки, лишняя ширина не используется, разделитель из 32 дефисов).
+	ColsRunner = 32
 )
 
 // nowFn — обёртка вокруг time.Now, подменяемая в тестах для детерминированных
-// golden-выводов (см. golden_test.go withFixedNow).
+// golden-выводов.
 var nowFn = time.Now
 
 // ReceiptInput — данные для печати чека клиенту.
@@ -38,7 +46,7 @@ type ReceiptInput struct {
 	ClosedAt       time.Time
 	CashierName    string
 	WaiterName     string
-	TableLabel     string // "Стол 5" или "С собой"
+	TableLabel     string
 	Items          []ReceiptItem
 	Subtotal       decimal.Decimal
 	DiscountAmount decimal.Decimal
@@ -46,18 +54,15 @@ type ReceiptInput struct {
 	TipAmount      decimal.Decimal
 	Total          decimal.Decimal
 	PaymentMethod  string
-	Cols           int  // 48 или 32
-	IsReprint      bool // true → шапка «КОПИЯ ЧЕКА» вместо «Чек № N»
-	// Content suppress-flags (миграция 015). Zero-value = старое поведение
-	// (всё печатается). True = принтер настроен «не печатать эту строку».
-	// Tip / QRFeedback по умолчанию выключены и включаются только если
-	// printer.print_tip = true / printer.print_qr_feedback = true.
-	SuppressLogo     bool   // выключить шапку «название ресторана»
-	SuppressDiscount bool   // не печатать строку «Скидка:»
-	SuppressService  bool   // не печатать строку «Сервис:»
-	ShowTip          bool   // печатать строку «Чаевые:» (если TipAmount > 0)
-	ShowQRFeedback   bool   // печатать QR-фидбэк в подвале
-	QRFeedbackURL    string // payload QR (опционально, если ShowQRFeedback)
+	Cols           int
+	IsReprint      bool
+	// Content suppress-flags (миграция 015).
+	SuppressLogo     bool
+	SuppressDiscount bool
+	SuppressService  bool
+	ShowTip          bool
+	ShowQRFeedback   bool
+	QRFeedbackURL    string
 }
 
 // ReceiptItem — одна позиция в чеке.
@@ -66,179 +71,165 @@ type ReceiptItem struct {
 	Qty       decimal.Decimal
 	Price     decimal.Decimal
 	LineTotal decimal.Decimal
-	Note      string // комментарий официанта; печатается строкой "  ! <note>"
+	Note      string
 }
 
-// ReceiptLayout строит байты чека клиенту.
+// ReceiptLayout строит байты гостевого счёта (после оплаты).
+// Порт buildEscPosReceipt() из v1.
 func ReceiptLayout(in ReceiptInput) []byte {
+	return buildReceipt(in, false)
+}
+
+// PreBillLayout — предварительный счёт (до оплаты).
+// Отличия от ReceiptLayout: заголовок «ПРЕДВАРИТЕЛЬНЫЙ СЧЁТ», нет блока
+// «Оплата», футер «Не является фискальным документом».
+func PreBillLayout(in ReceiptInput) []byte {
+	return buildReceipt(in, true)
+}
+
+func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	cols := in.Cols
 	if cols == 0 {
 		cols = Cols80
 	}
+	hrHeavy := strings.Repeat("=", cols)
+	hrLight := strings.Repeat("-", cols)
+
 	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
-	// Header.
+	// v1: bold ON для всего чека — на термопринтерах non-bold печатает блекло.
+	b.Bold(true)
+
+	// ── Header ────────────────────────────────────────────────────────────
+	b.AlignCenter()
 	if !in.SuppressLogo {
-		b.AlignCenter().FontDouble().TextLn(in.RestaurantName).FontNormal()
+		b.TextLn(hrHeavy)
+		// Restaurant name — double height (GS ! 01, не 11 — единичная ширина).
+		b.FontTall()
+		b.TextLn(strings.ToUpper(stripEmoji(in.RestaurantName)))
+		b.FontNormal()
 		if in.RestaurantAddr != "" {
 			b.TextLn(in.RestaurantAddr)
 		}
-		b.LF()
+		b.TextLn(hrHeavy)
 	}
 
-	// Meta.
-	if in.IsReprint {
-		b.AlignCenter().Bold(true).TextLn("КОПИЯ ЧЕКА").Bold(false).AlignLeft()
-		b.LF()
+	// ── Document title — double size (tall, single width) ────────────────
+	b.FontTall()
+	if isPreCheck {
+		b.TextLn("ПРЕДВАРИТЕЛЬНЫЙ СЧЁТ")
+	} else if in.IsReprint {
+		b.TextLn("КОПИЯ ЧЕКА")
+	} else {
+		b.TextLn("ГОСТЕВОЙ СЧЁТ")
 	}
-	b.AlignLeft().Bold(true).TextLnf("Чек № %d", in.OrderNumber).Bold(false)
-	b.TextLnf("Открыт:  %s", in.OpenedAt.Format("02.01.2006 15:04"))
-	b.TextLnf("Закрыт:  %s", in.ClosedAt.Format("02.01.2006 15:04"))
-	if in.TableLabel != "" {
-		b.TextLn(in.TableLabel)
-	}
-	if in.WaiterName != "" {
-		b.TextLnf("Официант: %s", in.WaiterName)
-	}
-	if in.CashierName != "" {
-		b.TextLnf("Кассир:   %s", in.CashierName)
-	}
+	b.FontNormal()
 
-	b.Text(dashes(cols)).LF()
+	// ── Meta block (centered, dashed divider) ────────────────────────────
+	b.TextLn(hrLight)
 
-	// Items.
-	for _, it := range in.Items {
-		// Строка 1: "Название" — длинная, может переноситься.
-		b.TextLn(it.Name)
-		// Строка 2: "qty x price        line_total"
-		left := strconv.Itoa(qtyAsInt(it.Qty)) + " x " + decToShort(it.Price)
-		right := decToShort(it.LineTotal)
-		b.TextLn(PadRow("  "+left, right, cols))
-		if it.Note != "" {
-			b.TextLnf("  ! %s", it.Note)
+	// Чек № / Дата / Стол / Официант / Кассир / Гостей
+	dateStr := in.ClosedAt.Format("02.01.06 15:04")
+	orderRef := "#" + strconv.Itoa(in.OrderNumber)
+
+	writeMeta := func(k, v string) {
+		if v == "" {
+			return
+		}
+		if k == "" {
+			b.TextLn(v)
+		} else {
+			b.TextLn(PadRow(k, v, cols))
 		}
 	}
-	b.Text(dashes(cols)).LF()
+	writeMeta("Чек №", orderRef)
+	writeMeta("Дата", dateStr)
+	writeMeta("", in.TableLabel)
+	writeMeta("Официант", in.WaiterName)
+	writeMeta("Кассир", in.CashierName)
 
-	// Totals.
-	b.TextLn(PadRow("Сумма:", decToShort(in.Subtotal), cols))
-	if !in.DiscountAmount.IsZero() && !in.SuppressDiscount {
-		b.TextLn(PadRow("Скидка:", "-"+decToShort(in.DiscountAmount), cols))
+	// ── Items header ──────────────────────────────────────────────────────
+	b.TextLn(hrLight)
+	b.TextLn(PadRow("Наименование", "Сумма", cols))
+	b.TextLn(hrLight)
+
+	// Items — name+qty + line total на одной строке. v1 ITEM_LEFT_MAX=30 для 42cols.
+	itemLeftMax := cols - 12
+	if itemLeftMax < 10 {
+		itemLeftMax = 10
 	}
+	for _, it := range in.Items {
+		qtyStr := fmtQtyDec(it.Qty)
+		totalStr := fmtMoney(it.LineTotal) + " TJS"
+		nameWithQty := it.Name + " " + qtyStr
+		if visibleRuneCount(nameWithQty) > itemLeftMax {
+			nameWithQty = runeSlice(nameWithQty, itemLeftMax)
+		}
+		b.TextLn(PadRow(nameWithQty, totalStr, cols))
+		if it.Note != "" {
+			b.TextLn("  ! " + it.Note)
+		}
+	}
+	b.TextLn(hrLight)
+
+	// ── Totals: Подытог → Обслуживание → Скидка → Чаевые ─────────────────
+	b.TextLn(PadRow("Подытог", fmtMoney(in.Subtotal)+" TJS", cols))
 	if !in.ServiceAmount.IsZero() && !in.SuppressService {
-		b.TextLn(PadRow("Сервис:", decToShort(in.ServiceAmount), cols))
+		b.TextLn(PadRow("Обслуживание", fmtMoney(in.ServiceAmount)+" TJS", cols))
 	}
-	// Чаевые печатаются только если принтер настроен (ShowTip=true) и они есть.
+	if !in.DiscountAmount.IsZero() && !in.SuppressDiscount {
+		b.TextLn(PadRow("Скидка", "-"+fmtMoney(in.DiscountAmount)+" TJS", cols))
+	}
 	if !in.TipAmount.IsZero() && in.ShowTip {
-		b.TextLn(PadRow("Чаевые:", decToShort(in.TipAmount), cols))
-	}
-	b.Bold(true).FontDouble()
-	b.TextLn(PadRow("ИТОГО:", decToShort(in.Total), cols/2))
-	b.FontNormal().Bold(false)
-
-	if in.PaymentMethod != "" {
-		b.TextLnf("Оплата: %s", paymentLabel(in.PaymentMethod))
+		b.TextLn(PadRow("Чаевые", fmtMoney(in.TipAmount)+" TJS", cols))
 	}
 
-	b.LF().AlignCenter().TextLn("Спасибо за визит!").LF()
+	// ── ИТОГО — double width+height (GS ! 11) ─────────────────────────────
+	b.TextLn(hrHeavy)
+	b.FontDouble()
+	// double-width => budget halves.
+	b.TextLn(PadRow("ИТОГО", fmtMoney(in.Total)+" TJS", cols/2))
+	b.FontNormal()
+	b.TextLn(hrHeavy)
 
+	// ── Payment (пропускаем для pre-check) ────────────────────────────────
+	if !isPreCheck && in.PaymentMethod != "" {
+		b.TextLn(PadRow("Оплата", paymentLabel(in.PaymentMethod), cols))
+	}
+
+	// ── Footer ────────────────────────────────────────────────────────────
+	b.LF()
+	if isPreCheck {
+		b.TextLn("Не является фискальным документом")
+	} else {
+		b.TextLn("СПАСИБО! ЖДЁМ ВАС СНОВА!")
+	}
+	b.TextLn("Powered by RestOS")
+	b.LF()
+
+	// QR-фидбэк (v4-only расширение, после футера).
 	if in.ShowQRFeedback && in.QRFeedbackURL != "" {
-		b.LF().AlignCenter().TextLn("Оцените заведение:").LF()
+		b.TextLn("Оцените заведение:")
 		b.QRCode(in.QRFeedbackURL, 5)
 		b.LF()
 	}
 
-	// Cut с подмоткой 3 строки.
-	b.Feed(3).CutFull()
-	return b.Bytes()
-}
-
-// PreBillLayout — предварительный чек (для гостя перед оплатой).
-//
-// Отличия от ReceiptLayout:
-//   - заголовок «ПРЕДВАРИТЕЛЬНЫЙ ЧЕК» вместо «Чек № N»;
-//   - нет «Оплата:» (метод оплаты ещё не выбран);
-//   - нет «Спасибо за визит!»;
-//   - в конце дисклеймер «не является фискальным чеком».
-//
-// Используется при PrintPreBill — заказ остаётся open, ничего не списывается.
-func PreBillLayout(in ReceiptInput) []byte {
-	cols := in.Cols
-	if cols == 0 {
-		cols = Cols80
-	}
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
-
-	// Header.
-	if !in.SuppressLogo {
-		b.AlignCenter().FontDouble().TextLn(in.RestaurantName).FontNormal()
-		if in.RestaurantAddr != "" {
-			b.TextLn(in.RestaurantAddr)
-		}
-		b.LF()
-	}
-
-	// Title.
-	b.AlignCenter().Bold(true).TextLn("ПРЕДВАРИТЕЛЬНЫЙ ЧЕК").Bold(false)
-	b.LF()
-
-	// Meta.
-	b.AlignLeft()
-	b.TextLnf("Заказ № %d", in.OrderNumber)
-	b.TextLnf("Открыт:    %s", in.OpenedAt.Format("02.01.2006 15:04"))
-	b.TextLnf("Напечатан: %s", in.ClosedAt.Format("02.01.2006 15:04"))
-	if in.TableLabel != "" {
-		b.TextLn(in.TableLabel)
-	}
-	if in.WaiterName != "" {
-		b.TextLnf("Официант:  %s", in.WaiterName)
-	}
-
-	b.Text(dashes(cols)).LF()
-
-	// Items.
-	for _, it := range in.Items {
-		b.TextLn(it.Name)
-		left := strconv.Itoa(qtyAsInt(it.Qty)) + " x " + decToShort(it.Price)
-		right := decToShort(it.LineTotal)
-		b.TextLn(PadRow("  "+left, right, cols))
-		if it.Note != "" {
-			b.TextLnf("  ! %s", it.Note)
-		}
-	}
-	b.Text(dashes(cols)).LF()
-
-	// Totals (без поля «Оплата»).
-	b.TextLn(PadRow("Сумма:", decToShort(in.Subtotal), cols))
-	if !in.DiscountAmount.IsZero() && !in.SuppressDiscount {
-		b.TextLn(PadRow("Скидка:", "-"+decToShort(in.DiscountAmount), cols))
-	}
-	if !in.ServiceAmount.IsZero() && !in.SuppressService {
-		b.TextLn(PadRow("Сервис:", decToShort(in.ServiceAmount), cols))
-	}
-	if !in.TipAmount.IsZero() && in.ShowTip {
-		b.TextLn(PadRow("Чаевые:", decToShort(in.TipAmount), cols))
-	}
-	b.Bold(true).FontDouble()
-	b.TextLn(PadRow("К ОПЛАТЕ:", decToShort(in.Total), cols/2))
-	b.FontNormal().Bold(false)
-
-	b.LF().AlignCenter().TextLn("ПРЕДВАРИТЕЛЬНЫЙ - не является").TextLn("фискальным чеком").LF()
-
-	b.Feed(3).CutFull()
+	// Bold off + partial cut с подмоткой 3 строки (v1: 1D 56 42 03).
+	b.Bold(false)
+	b.CutWithFeed(3)
 	return b.Bytes()
 }
 
 // RunnerInput — данные для печати ранера на кухню.
 type RunnerInput struct {
-	Station     string // "Горячий цех", "Бар"
+	Station     string
 	OrderNumber int
 	TableLabel  string
 	WaiterName  string
 	CreatedAt   time.Time
 	Items       []RunnerItem
 	Comment     string
-	Cols        int
+	Cols        int // игнорируется, runner всегда 32 cols
 }
 
 // RunnerItem — позиция для повара.
@@ -249,44 +240,76 @@ type RunnerItem struct {
 	Comment   string
 }
 
-// RunnerLayout — ранер на станцию (повар видит, что готовить).
-// Без цен, крупные позиции, акцент на стол + время.
+// RunnerLayout — ранер на станцию. Порт buildEscPosRunner() из v1.
+//
+// КРИТИЧНО: используется FontTall (GS ! 01 = double-height, single-width)
+// для items, а НЕ FontDouble (GS ! 11). Иначе на 80mm бумаге длинные
+// названия блюд («Шашлык куриный») переносятся и обрезаются ножом до того
+// как принтер допечатал содержимое.
 func RunnerLayout(in RunnerInput) []byte {
-	cols := in.Cols
-	if cols == 0 {
-		cols = Cols80
-	}
 	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
-	b.AlignCenter().FontDouble().Bold(true).TextLn(in.Station).Bold(false).FontNormal()
-	b.LF()
-	b.AlignLeft().FontDouble().TextLnf("Заказ № %d", in.OrderNumber).FontNormal()
-	if in.TableLabel != "" {
-		b.TextLn(in.TableLabel)
-	}
-	if in.WaiterName != "" {
-		b.TextLnf("Официант: %s", in.WaiterName)
-	}
-	b.TextLnf("Время:    %s", in.CreatedAt.Format("15:04"))
-	b.Text(dashes(cols)).LF()
+	// ── Station header — центр, bold, double-height ──────────────────────
+	b.AlignCenter().Bold(true).FontTall()
+	b.TextLn(strings.ToUpper(in.Station))
+	b.FontNormal().Bold(false)
 
+	// Разделитель 32 char (v1 hard-coded).
+	b.TextLn("________________________________")
+
+	// ── Order info — left align ──────────────────────────────────────────
+	b.AlignLeft()
+	timeStr := in.CreatedAt.Format("15:04")
+	dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
+	if in.WaiterName != "" {
+		dateLine += " " + in.WaiterName
+	}
+	b.TextLn(dateLine)
+
+	// Стол + зона — bold
+	if in.TableLabel != "" {
+		b.Bold(true).TextLn(in.TableLabel).Bold(false)
+	}
+	b.TextLn("--------------------------------")
+
+	// ── Items — bold + double-height (НЕ double-width!) ──────────────────
+	b.FontTall().Bold(true)
 	for _, it := range in.Items {
-		b.FontDouble().TextLnf("%d x %s", it.Qty, it.Name).FontNormal()
-		for _, m := range it.Modifiers {
-			b.TextLnf("  + %s", m)
+		qty := "x" + strconv.Itoa(it.Qty)
+		name := it.Name
+		// padding до ширины 20 (v1: pad = max(0, 20 - len(name) - len(qty)))
+		nameLen := visibleRuneCount(name)
+		qtyLen := visibleRuneCount(qty)
+		pad := 20 - nameLen - qtyLen
+		if pad < 1 {
+			pad = 1
+		}
+		b.TextLn(name + spaces(pad) + qty)
+		if len(it.Modifiers) > 0 {
+			// Modifiers — normal size
+			b.FontNormal()
+			for _, m := range it.Modifiers {
+				b.TextLn("  + " + m)
+			}
+			b.FontTall()
 		}
 		if it.Comment != "" {
-			b.TextLnf("  ! %s", it.Comment)
+			b.FontNormal()
+			b.TextLn("  ! " + it.Comment)
+			b.FontTall()
 		}
 	}
+	b.Bold(false).FontNormal()
 
+	// ── Comment ──────────────────────────────────────────────────────────
 	if in.Comment != "" {
-		b.Text(dashes(cols)).LF()
-		b.Bold(true).TextLn("Комментарий:").Bold(false)
-		b.TextLn(in.Comment)
+		b.TextLn("--------------------------------")
+		b.TextLn("! " + in.Comment)
 	}
 
-	b.Feed(3).CutFull()
+	// ── Minimal feed + partial cut (v1: 0A then 1D 56 42 03) ─────────────
+	b.LF()
+	b.CutWithFeed(3)
 	return b.Bytes()
 }
 
@@ -295,67 +318,90 @@ type CancelRunnerInput struct {
 	Station     string
 	OrderNumber int
 	TableLabel  string
+	WaiterName  string
 	CancelledAt time.Time
-	Items       []RunnerItem // те же поля, но печатаем «ОТМЕНА»
+	Items       []RunnerItem
 	Reason      string
 	Cols        int
 }
 
-// CancelRunnerLayout — отмена позиций. Большой акцент, чтобы повар не пропустил.
+// CancelRunnerLayout — отмена. Порт buildEscPosCancellation() из v1.
+// БОЛЬШОЙ alert-блок (double-width + double-height + bold), чтобы повар
+// гарантированно увидел отмену.
 func CancelRunnerLayout(in CancelRunnerInput) []byte {
-	cols := in.Cols
-	if cols == 0 {
-		cols = Cols80
-	}
 	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
-	b.AlignCenter().FontDouble().Bold(true).TextLn("!!! ОТМЕНА !!!").FontNormal().Bold(false)
-	b.LF()
-	b.AlignLeft().FontDouble().TextLnf("Заказ № %d", in.OrderNumber).FontNormal()
+	// ── Section 1: station header centered ──────────────────────────────
+	b.AlignCenter()
+	b.TextLn("(" + strings.ToUpper(in.Station) + ")")
+	b.TextLn("================================")
+
+	// ── Section 2: order info (left, table bold) ────────────────────────
+	b.AlignLeft()
+	timeStr := in.CancelledAt.Format("15:04")
+	dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
+	if in.WaiterName != "" {
+		dateLine += " " + in.WaiterName
+	}
+	b.TextLn(dateLine)
 	if in.TableLabel != "" {
-		b.TextLn(in.TableLabel)
+		b.Bold(true).TextLn(in.TableLabel).Bold(false)
 	}
-	b.TextLn(in.Station)
-	b.TextLnf("Время:    %s", in.CancelledAt.Format("15:04"))
-	b.Text(dashes(cols)).LF()
 
+	// ── Section 3: BIG ALERT (centered, bold, double w+h) ───────────────
+	b.LF()
+	b.AlignCenter().Bold(true).FontDouble()
+	b.TextLn("*** ОТМЕНА ***")
+	b.TextLn("ВНИМАНИЕ !")
+	b.TextLn("БЛЮДА УДАЛЕНЫ!")
+	b.TextLn("НЕ ГОТОВИТЬ!")
+	b.TextLn("*** ОТМЕНА ***")
+	b.FontNormal().Bold(false).AlignLeft()
+	b.TextLn("--------------------------------")
+
+	// ── Section 4: items (bold + double-height) ─────────────────────────
+	b.FontTall().Bold(true)
 	for _, it := range in.Items {
-		b.FontDouble().TextLnf("x %d  %s", it.Qty, it.Name).FontNormal()
+		qty := "x" + strconv.Itoa(it.Qty)
+		name := "X " + it.Name
+		nameLen := visibleRuneCount(name)
+		qtyLen := visibleRuneCount(qty)
+		pad := 20 - nameLen - qtyLen
+		if pad < 1 {
+			pad = 1
+		}
+		b.TextLn(name + spaces(pad) + qty)
 	}
-	if in.Reason != "" {
-		b.LF().Bold(true).TextLn("Причина:").Bold(false).TextLn(in.Reason)
-	}
+	b.Bold(false).FontNormal()
+	b.TextLn("--------------------------------")
 
-	b.Feed(3).CutFull()
+	b.LF()
+	b.CutWithFeed(3)
 	return b.Bytes()
 }
 
 // ReportInput — общие поля для X/Z-отчёта.
 type ReportInput struct {
 	RestaurantName string
-	ShiftNumber    string // строка, может быть просто id или дата
+	ShiftNumber    string
 	OpenedAt       time.Time
-	ClosedAt       time.Time // нулевое для X-отчёта
+	ClosedAt       time.Time
 	OpeningBalance decimal.Decimal
 	CashRevenue    decimal.Decimal
 	CardRevenue    decimal.Decimal
 	OrdersCount    int
 	AvgCheck       decimal.Decimal
 	ExpectedCash   decimal.Decimal
-	ClosingBalance decimal.Decimal // нулевое для X
+	ClosingBalance decimal.Decimal
 	CashierName    string
 	Cols           int
 }
 
-// XReportLayout — промежуточный отчёт (без обнуления). По нажатию кассира.
-func XReportLayout(in ReportInput) []byte {
-	return reportLayout(in, "X-ОТЧЁТ", false)
-}
+// XReportLayout — промежуточный отчёт.
+func XReportLayout(in ReportInput) []byte { return reportLayout(in, "X-ОТЧЁТ", false) }
 
 // ZReportLayout — финальный отчёт при закрытии смены.
-func ZReportLayout(in ReportInput) []byte {
-	return reportLayout(in, "Z-ОТЧЁТ", true)
-}
+func ZReportLayout(in ReportInput) []byte { return reportLayout(in, "Z-ОТЧЁТ", true) }
 
 func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	cols := in.Cols
@@ -363,9 +409,11 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 		cols = Cols80
 	}
 	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b.Bold(true)
 
-	b.AlignCenter().FontDouble().Bold(true).TextLn(title).Bold(false).FontNormal()
-	b.TextLn(in.RestaurantName).LF()
+	b.AlignCenter().FontTall().TextLn(title).FontNormal()
+	b.TextLn(in.RestaurantName)
+	b.LF()
 
 	b.AlignLeft()
 	b.TextLnf("Смена:   %s", in.ShiftNumber)
@@ -376,7 +424,7 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	if in.CashierName != "" {
 		b.TextLnf("Кассир:  %s", in.CashierName)
 	}
-	b.Text(dashes(cols)).LF()
+	b.TextLn(strings.Repeat("-", cols))
 
 	b.TextLn(PadRow("Остаток на начало:", decToShort(in.OpeningBalance), cols))
 	b.TextLn(PadRow("Кол-во чеков:", strconv.Itoa(in.OrdersCount), cols))
@@ -385,60 +433,81 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	b.TextLn(PadRow("Наличная выручка:", decToShort(in.CashRevenue), cols))
 	b.TextLn(PadRow("Безнал. выручка:", decToShort(in.CardRevenue), cols))
 	total := decimal.Add(in.CashRevenue, in.CardRevenue)
-	b.Bold(true).TextLn(PadRow("Выручка ИТОГО:", decToShort(total), cols)).Bold(false)
+	b.TextLn(PadRow("Выручка ИТОГО:", decToShort(total), cols))
 	b.LF()
 
 	if withClosing {
 		b.TextLn(PadRow("Ожидается касса:", decToShort(in.ExpectedCash), cols))
 		b.TextLn(PadRow("Фактически в кассе:", decToShort(in.ClosingBalance), cols))
 		diff := decimal.Sub(in.ClosingBalance, in.ExpectedCash)
-		b.Bold(true).TextLn(PadRow("Расхождение:", decToShort(diff), cols)).Bold(false)
+		b.TextLn(PadRow("Расхождение:", decToShort(diff), cols))
 	}
 
 	b.LF().AlignCenter().TextLnf("Отпечатан: %s", nowFn().Format("02.01.2006 15:04"))
-	b.Feed(3).CutFull()
+	b.Bold(false).CutWithFeed(3)
 	return b.Bytes()
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
-func dashes(n int) string {
-	if n <= 0 {
-		return ""
-	}
-	out := make([]byte, n)
-	for i := range out {
-		out[i] = '-'
-	}
-	return string(out)
+// fmtMoney — "1234,50" (запятая как разделитель, v1 совместимо).
+func fmtMoney(d decimal.Decimal) string {
+	s := d.RoundBank(2).String()
+	// Decimal.String() даёт точку — заменим на запятую.
+	return strings.Replace(s, ".", ",", 1)
 }
 
-// decToShort — Decimal → "1234.50" (2 знака после запятой) для чеков.
-// 4 знака избыточно для печати; округляем half-even.
+// fmtQtyDec — qty форматирование (целое число → "x2", дробное → "0,5").
+func fmtQtyDec(q decimal.Decimal) string {
+	f, _ := q.Float64()
+	if f == float64(int64(f)) {
+		return "x" + strconv.FormatInt(int64(f), 10)
+	}
+	return "x" + strings.Replace(q.RoundBank(2).String(), ".", ",", 1)
+}
+
+// decToShort — Decimal → "1234.50" (для отчётов, без замены точки).
 func decToShort(d decimal.Decimal) string {
 	return d.RoundBank(2).String()
 }
 
-// qtyAsInt — для чека qty чаще целое (1, 2, 3 порции). Если weight (0.5),
-// возвращаем int(0) — но в чеке мы покажем «1 × ...». Для weighted блюд
-// printer-layout мы расширим в Phase 4.5.
-func qtyAsInt(q decimal.Decimal) int {
-	f, _ := q.Float64()
-	if f < 1 {
-		return 1
+// stripEmoji удаляет emoji/символы вне CP866 — иначе печатается «?».
+func stripEmoji(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		// Базовый ASCII + кириллица + типография CP866.
+		if r < 0x80 || (r >= 0x0400 && r <= 0x04FF) || r == '·' || r == '№' || r == '°' {
+			b.WriteRune(r)
+		}
 	}
-	return int(f)
+	return strings.TrimSpace(b.String())
+}
+
+// dashes — строка из n дефисов.
+func dashes(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("-", n)
+}
+
+// runeSlice — обрезка строки по числу рун (не байт).
+func runeSlice(s string, n int) string {
+	rs := []rune(s)
+	if len(rs) <= n {
+		return s
+	}
+	return string(rs[:n])
 }
 
 // paymentLabel — человеческая надпись по типу оплаты.
+// v1: 'cash' → 'Наличные', card/transfer → 'Безналичные'.
 func paymentLabel(method string) string {
 	switch method {
 	case "cash":
-		return "Наличными"
-	case "card":
-		return "Картой"
-	case "transfer":
-		return "Переводом"
+		return "Наличные"
+	case "card", "transfer":
+		return "Безналичные"
 	default:
 		return method
 	}
