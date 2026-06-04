@@ -52,11 +52,17 @@ const (
 	StateNone    State = "none" // лицензия ещё не активирована
 )
 
-// GraceDays — 7 дней до warning.
-const GraceDays = 7
-
-// WarningDays — ещё 7 дней до lock.
-const WarningDays = 7
+// DefaultGraceDays / DefaultWarningDays — fallback если в restaurants нет
+// значений (теоретически невозможно после миграции 017 — там NOT NULL
+// DEFAULT 7). Оставлены как safety-net для unit-тестов и для read-only
+// клиентов в начальном bootstrap.
+//
+// Реальные значения берутся из restaurants.license_grace_days /
+// license_warning_days, которые копятся из license-токена на activate'е.
+const (
+	DefaultGraceDays   = 7
+	DefaultWarningDays = 7
+)
 
 // MachineInfo — fingerprint текущей машины + restaurant_id/name для
 // активации. Клиент копирует MachineID и Restaurant.ID, отправляет админу,
@@ -122,6 +128,11 @@ type LicenseStatus struct {
 	IsBlocked     bool       `json:"is_blocked"`
 	BlockReason   string     `json:"block_reason,omitempty"`
 	Edition       string     `json:"edition,omitempty"`
+	// GraceDays / WarningDays — фактические периоды этой лицензии
+	// (per-key, v2.1.3+). Используются клиентом для точного UI:
+	// «Истёк 2 дн. назад. Софт заблокируется через 5 дн.».
+	GraceDays   int `json:"grace_days"`
+	WarningDays int `json:"warning_days"`
 }
 
 // Status — для GET /api/v1/license/status. Учитывает ручной is_blocked
@@ -148,15 +159,19 @@ func (s *LicenseService) Status(ctx context.Context) (*LicenseStatus, error) {
 		return out, nil
 	}
 	exp := *r.LicenseExpiresAt
+	graceDays := r.LicenseGraceDays
+	warningDays := r.LicenseWarningDays
+	out.GraceDays = graceDays
+	out.WarningDays = warningDays
 	out.DaysLeft = daysBetween(now, exp)
-	lockAt := exp.AddDate(0, 0, GraceDays+WarningDays)
+	lockAt := exp.AddDate(0, 0, graceDays+warningDays)
 	out.DaysUntilLock = daysBetween(now, lockAt)
 	switch {
 	case out.IsBlocked:
 		out.State = StateLocked
 	case now.Before(exp):
 		out.State = StateActive
-	case now.Before(exp.AddDate(0, 0, GraceDays)):
+	case now.Before(exp.AddDate(0, 0, graceDays)):
 		out.State = StateGrace
 	case now.Before(lockAt):
 		out.State = StateWarning
@@ -177,7 +192,7 @@ func (s *LicenseService) Status(ctx context.Context) (*LicenseStatus, error) {
 func (s *LicenseService) IsLocked(ctx context.Context, restaurantID string) bool {
 	var r models.Restaurant
 	if err := s.db.WithContext(ctx).
-		Select("license_expires_at, is_blocked").
+		Select("license_expires_at, is_blocked, license_grace_days, license_warning_days").
 		Where("id = ?", restaurantID).First(&r).Error; err != nil {
 		// Fail-open: если БД недоступна — не блокируем (лучше короткий abuse,
 		// чем потеря всех касс при network blip).
@@ -194,7 +209,7 @@ func (s *LicenseService) IsLocked(ctx context.Context, restaurantID string) bool
 		// видеть machine_id и активировать.
 		return true
 	}
-	lockAt := r.LicenseExpiresAt.AddDate(0, 0, GraceDays+WarningDays)
+	lockAt := r.LicenseExpiresAt.AddDate(0, 0, r.LicenseGraceDays+r.LicenseWarningDays)
 	return time.Now().UTC().After(lockAt)
 }
 
@@ -250,11 +265,15 @@ func (s *LicenseService) Activate(ctx context.Context, in ActivateInput) (*Licen
 	expires := p.ExpiresAt
 	noBlock := false
 	updates := map[string]any{
-		"license_key":        in.Token,
-		"license_expires_at": expires,
-		"is_blocked":         &noBlock,
-		"block_reason":       nil,
-		"updated_at":         now,
+		"license_key":          in.Token,
+		"license_expires_at":   expires,
+		"is_blocked":           &noBlock,
+		"block_reason":         nil,
+		"updated_at":           now,
+		// v2.1.3: per-key grace/warning. Старые токены без этих полей →
+		// 0/0 (hard lock сразу при истечении). Защита продавца.
+		"license_grace_days":   p.GraceDays,
+		"license_warning_days": p.WarningDays,
 	}
 	// Phase 1 multi-branch: если токен выписан с account_id (сеть),
 	// сохраняем в restaurants.account_id. Empty → NULL (одиночный).

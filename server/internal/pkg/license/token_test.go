@@ -77,6 +77,46 @@ func TestValidateExpired(t *testing.T) {
 	}
 }
 
+func TestTokenGraceWarningRoundtrip(t *testing.T) {
+	pub, priv, _ := GenerateKeypair()
+	in := Payload{
+		RestaurantID: "x",
+		ExpiresAt:    time.Now().Add(time.Hour),
+		GraceDays:    14,
+		WarningDays:  7,
+	}
+	tok, err := Sign(priv, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Parse(tok, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.GraceDays != 14 || out.WarningDays != 7 {
+		t.Errorf("grace/warning roundtrip mismatch: got %d/%d, want 14/7", out.GraceDays, out.WarningDays)
+	}
+}
+
+func TestTokenBackwardCompat_NoGraceFields(t *testing.T) {
+	// Старый токен без grace_days/warning_days → парсится как 0/0
+	// (omitempty в JSON → missing field → нулевое значение).
+	pub, priv, _ := GenerateKeypair()
+	tok, _ := Sign(priv, Payload{
+		RestaurantID: "x",
+		ExpiresAt:    time.Now().Add(time.Hour),
+		// GraceDays / WarningDays не заданы.
+	})
+	out, err := Parse(tok, pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.GraceDays != 0 || out.WarningDays != 0 {
+		t.Errorf("legacy token must parse as 0/0 (secure-by-default), got %d/%d",
+			out.GraceDays, out.WarningDays)
+	}
+}
+
 func TestKeyEncoding(t *testing.T) {
 	pub, priv, _ := GenerateKeypair()
 	pubB64 := EncodeKey(pub)

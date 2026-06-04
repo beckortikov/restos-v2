@@ -119,12 +119,14 @@ func computeState(r models.Restaurant, now time.Time) State {
 		return StateNone
 	}
 	exp := *r.LicenseExpiresAt
+	graceDays := r.LicenseGraceDays
+	warningDays := r.LicenseWarningDays
 	switch {
 	case now.Before(exp):
 		return StateActive
-	case now.Before(exp.AddDate(0, 0, GraceDays)):
+	case now.Before(exp.AddDate(0, 0, graceDays)):
 		return StateGrace
-	case now.Before(exp.AddDate(0, 0, GraceDays+WarningDays)):
+	case now.Before(exp.AddDate(0, 0, graceDays+warningDays)):
 		return StateWarning
 	default:
 		return StateLocked

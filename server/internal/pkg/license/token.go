@@ -59,6 +59,15 @@ type Payload struct {
 	// этот ресторан принадлежит сети с консолидированной отчётностью
 	// (будущий Owner Dashboard читает по account_id).
 	AccountID string `json:"aid,omitempty"`
+	// GraceDays — сколько дней после ExpiresAt софт продолжает работать
+	// с warning «Скоро истечёт». 0 = hard lock сразу при истечении.
+	// v2.1.3+: per-key, выставляется при выписке токена. Старые токены
+	// без поля → 0 (hard lock сразу) — secure-by-default.
+	GraceDays int `json:"grace_days,omitempty"`
+	// WarningDays — сколько дней после ExpiresAt+GraceDays софт работает
+	// с красной плашкой «Истекла». После этого — write-операции 4xx.
+	// 0 = lock сразу после grace.
+	WarningDays int `json:"warning_days,omitempty"`
 }
 
 // CurrentVersion — версия формата. Изменение → отдельный verifier.

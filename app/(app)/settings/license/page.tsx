@@ -115,7 +115,15 @@ export default function ActivateLicensePage() {
                   <div className="text-xs mt-0.5">
                     Действует до {new Date(status.expiresAt).toLocaleDateString('ru-RU')}
                     {status.daysLeft > 0 && ` (осталось ${status.daysLeft} дн.)`}
-                    {status.daysLeft <= 0 && status.daysUntilLock > 0 && ` (grace ${status.daysUntilLock} дн.)`}
+                    {status.daysLeft <= 0 && status.daysUntilLock > 0 && (
+                      <>
+                        {' '}— истёк {Math.abs(status.daysLeft)} дн. назад.
+                        {' '}Софт заблокируется через {status.daysUntilLock} дн.
+                      </>
+                    )}
+                    {status.daysLeft <= 0 && status.daysUntilLock <= 0 && (
+                      <> — софт заблокирован (превышен период {status.graceDays}+{status.warningDays} дн.).</>
+                    )}
                   </div>
                 )}
                 {status.blockReason && (

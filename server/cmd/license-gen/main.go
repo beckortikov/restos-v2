@@ -43,7 +43,20 @@ func usage() {
 	fmt.Fprintln(os.Stderr, strings.TrimSpace(`
 Usage:
   license-gen keypair
-  license-gen issue --priv <base64> --rid <uuid> --days <N> [--edition start|business|pro]
+  license-gen issue --priv <base64> --rid <uuid> --days <N>
+                    [--edition start|business|pro]
+                    [--machine-id <fingerprint>]
+                    [--account-id <uuid>]
+                    [--grace-days <N>] [--warning-days <N>]
+
+Grace/warning periods (v2.1.3+):
+  --grace-days   N дней warning «Скоро истечёт» после expires (default 0 = hard lock сразу)
+  --warning-days N дней красной плашки «Истекла» после grace  (default 0 = lock после grace)
+
+  Примеры:
+    --grace-days 0  --warning-days 0    # новый клиент, hard lock at expires
+    --grace-days 7  --warning-days 7    # важный клиент, привычные 7+7
+    --grace-days 14 --warning-days 14   # VIP, две недели плюс две
 `))
 }
 
@@ -62,6 +75,10 @@ func cmdIssue(args []string) {
 	rid := fs.String("rid", "", "restaurant UUID")
 	days := fs.Int("days", 365, "license duration in days")
 	edition := fs.String("edition", "start", "edition: start|business|pro")
+	machineID := fs.String("machine-id", "", "machine fingerprint (mid). Empty → machine-agnostic")
+	accountID := fs.String("account-id", "", "account UUID (aid) для сети ресторанов")
+	graceDays := fs.Int("grace-days", 0, "дней grace после expires (warning). 0 = hard lock сразу")
+	warningDays := fs.Int("warning-days", 0, "дней warning после grace. 0 = lock после grace")
 	_ = fs.Parse(args)
 
 	if *priv == "" {
@@ -76,6 +93,9 @@ func cmdIssue(args []string) {
 	if *days <= 0 {
 		fail("--days must be > 0")
 	}
+	if *graceDays < 0 || *warningDays < 0 {
+		fail("--grace-days and --warning-days must be >= 0")
+	}
 
 	privKey, err := license.DecodePrivateKey(*priv)
 	if err != nil {
@@ -89,6 +109,10 @@ func cmdIssue(args []string) {
 		IssuedAt:     now,
 		ExpiresAt:    now.AddDate(0, 0, *days),
 		Edition:      license.Edition(*edition),
+		MachineID:    *machineID,
+		AccountID:    *accountID,
+		GraceDays:    *graceDays,
+		WarningDays:  *warningDays,
 	}
 	tok, err := license.Sign(privKey, payload)
 	if err != nil {

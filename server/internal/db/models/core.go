@@ -26,6 +26,10 @@ type Restaurant struct {
 	LocalServerIP      *string         `gorm:"column:local_server_ip" json:"local_server_ip"`
 	LicenseKey         *string         `gorm:"column:license_key" json:"license_key"`
 	LicenseExpiresAt   *time.Time      `gorm:"column:license_expires_at" json:"license_expires_at"`
+	// LicenseGraceDays / LicenseWarningDays — per-key периоды (v2.1.3).
+	// Заполняются из license-токена на activate'е. Дефолт 7+7 для legacy.
+	LicenseGraceDays   int             `gorm:"column:license_grace_days;not null;default:7" json:"license_grace_days"`
+	LicenseWarningDays int             `gorm:"column:license_warning_days;not null;default:7" json:"license_warning_days"`
 	// AccountID — владелец сети (Phase 1 multi-branch). Заполняется при
 	// activate из payload.aid. Empty/NULL → одиночный ресторан.
 	AccountID         *string    `gorm:"column:account_id" json:"account_id,omitempty"`

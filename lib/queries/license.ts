@@ -26,6 +26,10 @@ export interface LicenseStatus {
   isBlocked: boolean
   blockReason?: string
   edition?: string
+  // v2.1.3+: per-key grace/warning периоды. Заполняются из restaurants
+  // на activate'е. Старые серверы (<2.1.3) → 0/0 (бэк отдаёт grace_days по умолчанию).
+  graceDays: number
+  warningDays: number
 }
 
 export async function fetchMachineInfo(): Promise<MachineInfo> {
@@ -38,8 +42,7 @@ export async function fetchMachineInfo(): Promise<MachineInfo> {
   }
 }
 
-export async function fetchLicenseStatus(): Promise<LicenseStatus> {
-  const r: any = await unwrap(api.GET('/api/v1/license/status'))
+function mapStatus(r: any): LicenseStatus {
   return {
     state: (r?.state ?? 'none') as LicenseStatus['state'],
     expiresAt: r?.expires_at ?? undefined,
@@ -48,20 +51,19 @@ export async function fetchLicenseStatus(): Promise<LicenseStatus> {
     isBlocked: Boolean(r?.is_blocked),
     blockReason: r?.block_reason ?? undefined,
     edition: r?.edition ?? undefined,
+    graceDays: Number(r?.grace_days ?? 0),
+    warningDays: Number(r?.warning_days ?? 0),
   }
+}
+
+export async function fetchLicenseStatus(): Promise<LicenseStatus> {
+  const r: any = await unwrap(api.GET('/api/v1/license/status'))
+  return mapStatus(r)
 }
 
 export async function activateLicense(token: string): Promise<LicenseStatus> {
   const r: any = await unwrap(api.POST('/api/v1/license/activate', {
     body: { token },
   }))
-  return {
-    state: (r?.state ?? 'none') as LicenseStatus['state'],
-    expiresAt: r?.expires_at ?? undefined,
-    daysLeft: Number(r?.days_left ?? 0),
-    daysUntilLock: Number(r?.days_until_lock ?? 0),
-    isBlocked: Boolean(r?.is_blocked),
-    blockReason: r?.block_reason ?? undefined,
-    edition: r?.edition ?? undefined,
-  }
+  return mapStatus(r)
 }
