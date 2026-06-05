@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/restos/restos-v4/server/internal/jobs"
 	"github.com/restos/restos-v4/server/internal/pkg/license"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
@@ -11,9 +12,38 @@ import (
 
 type LicenseHandler struct {
 	svc *service.LicenseService
+	ntp *jobs.NTPChecker
 }
 
 func NewLicense(svc *service.LicenseService) *LicenseHandler { return &LicenseHandler{svc: svc} }
+
+// WithNTP — устанавливает NTPChecker для /license/clock-status.
+func (h *LicenseHandler) WithNTP(n *jobs.NTPChecker) *LicenseHandler {
+	h.ntp = n
+	return h
+}
+
+// ClockStatus — GET /api/v1/license/clock-status.
+// Возвращает последний результат NTP-проверки (v2.6.0+). Если drift > 1ч →
+// клиент показывает banner «время на машине сдвинуто, проверьте часы».
+func (h *LicenseHandler) ClockStatus(w http.ResponseWriter, r *http.Request) {
+	if h.ntp == nil {
+		respond.JSON(w, http.StatusOK, map[string]any{
+			"enabled": false,
+			"message": "ntp checker not configured",
+		})
+		return
+	}
+	st := h.ntp.Status()
+	respond.JSON(w, http.StatusOK, map[string]any{
+		"enabled":        true,
+		"last_check_at":  st.LastCheckAt,
+		"ntp_server":     st.NTPServer,
+		"offset_seconds": st.OffsetSeconds,
+		"drift":          st.Drift,
+		"error":          st.Error,
+	})
+}
 
 // Status — GET /api/v1/license/status.
 func (h *LicenseHandler) Status(w http.ResponseWriter, r *http.Request) {

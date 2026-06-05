@@ -62,6 +62,18 @@ func main() {
 	defer stop()
 
 	// 1. Embedded Postgres (если нужен).
+	// v2.6.0: при первом старте генерируем random password и сохраняем в
+	// OS keychain (DPAPI / Keychain / libsecret). При следующих стартах
+	// читаем оттуда. Если keychain недоступен → fallback на cfg.PGPassword
+	// (env/CLI flag) для dev/CI.
+	if cfg.ExternalPGDSN == "" {
+		if pwd, source, err := config.ResolvePGPassword(cfg.PGPassword); err != nil {
+			log.Warn().Err(err).Msg("pg password: keychain unavailable, using fallback from env/flag")
+		} else {
+			cfg.PGPassword = pwd
+			log.Info().Str("source", source).Msg("pg password resolved")
+		}
+	}
 	var sup *pgsupervisor.Supervisor
 	if cfg.ExternalPGDSN == "" {
 		sup, err = pgsupervisor.New(cfg)
@@ -112,6 +124,11 @@ func main() {
 		go service.NewLicenseWatcher(licSvcForWatcher, time.Minute).Run(ctx)
 	}
 
+	// NTP checker (v2.6.0): каждые 6 часов опрашивает pool.ntp.org и
+	// сохраняет drift в shared-структуру. Доступно через /license/clock-status.
+	ntpChecker := jobs.NewNTPChecker()
+	go ntpChecker.Run(ctx)
+
 	srv := &http.Server{
 		Addr: cfg.HTTPAddr,
 		Handler: httpx.NewRouter(httpx.Deps{
@@ -123,6 +140,7 @@ func main() {
 			},
 			LicensePublicKey: licPub,
 			Hub:              hub,
+			NTPChecker:       ntpChecker,
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

@@ -38,7 +38,33 @@ jobs:
         with:
           version: 10
 
-      - name: Build Go sidecar (windows/amd64)
+      # v2.6.1 fix: order changed — frontend нужно собрать ПЕРЕД Go build.
+      # Раньше Go build был первым → бинарь содержал spa/index.html placeholder
+      # → browser на :3001 видел "Frontend assets are not embedded".
+      # Теперь: pnpm install → vite build → copy в server/internal/transport/http/spa
+      # → ТОЛЬКО ПОТОМ go build embed'ит реальный SPA через //go:embed all:spa.
+
+      - name: Install frontend deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        run: pnpm build
+
+      - name: Embed SPA into Go server tree
+        shell: bash
+        run: |
+          rm -rf server/internal/transport/http/spa
+          mkdir -p server/internal/transport/http/spa
+          cp -r dist/. server/internal/transport/http/spa/
+          ls -lh server/internal/transport/http/spa/ | head -10
+
+      - name: Copy frontend into desktop/
+        shell: bash
+        run: |
+          rm -rf desktop/frontend
+          cp -r dist desktop/frontend
+
+      - name: Build Go sidecar (windows/amd64) with embedded SPA
         working-directory: server
         shell: bash
         run: |
@@ -47,18 +73,6 @@ jobs:
             go build -trimpath -ldflags "-s -w" \
             -o ../desktop/resources/restos-server.exe ./cmd/restos-server
           ls -lh ../desktop/resources/
-
-      - name: Install frontend deps
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        run: pnpm build
-
-      - name: Copy frontend into desktop/
-        shell: bash
-        run: |
-          rm -rf desktop/frontend
-          cp -r dist desktop/frontend
 
       - name: Install desktop deps
         working-directory: desktop

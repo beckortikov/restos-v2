@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -22,17 +24,37 @@ import (
 //   - warning: expires+7d .. expires+14d    — read-only? нет, всё работает + красное окно
 //   - locked:  > expires+14d                — write-операции блокируются (write middleware)
 //
-// Кэшируется в памяти на 60 сек (license-check на hot-path не должна бить БД).
+// Hardening (v2.6.0):
+//   - Clock skew check: now() < license_issued_at → tampered → lock
+//   - Signature re-verify: re-parse license_key (token) каждый запрос, если
+//     parsed payload не совпадает с колонками БД → tampered_db → lock.
+//     Кешируется на 60с — Ed25519.Verify ~50us, кэш разгружает hot-path.
 type LicenseService struct {
 	db        *gorm.DB
 	publicKey ed25519.PublicKey
 	pub       *EventPublisher // опционально; nil → SSE-эвенты не публикуются
+
+	// hardening cache: restaurant_id → (verifiedAt, locked, reason).
+	mu    sync.Mutex
+	cache map[string]hardeningCacheEntry
 }
+
+type hardeningCacheEntry struct {
+	verifiedAt  time.Time
+	locked      bool
+	blockReason string // "tampered_db" | "clock_tampered" | "" (ok)
+}
+
+const hardeningCacheTTL = 60 * time.Second
 
 // NewLicenseService — pub_key обычно захардкожен в бинарь (через ldflags) или
 // конфиг. nil → активировать нельзя (только bootstrap-режим dev).
 func NewLicenseService(db *gorm.DB, pubKey ed25519.PublicKey) *LicenseService {
-	return &LicenseService{db: db, publicKey: pubKey}
+	return &LicenseService{
+		db:        db,
+		publicKey: pubKey,
+		cache:     make(map[string]hardeningCacheEntry),
+	}
 }
 
 // WithPublisher — добавляет SSE-эвенты на смену license-состояния.
@@ -50,6 +72,13 @@ const (
 	StateWarning State = "warning"
 	StateLocked  State = "locked"
 	StateNone    State = "none" // лицензия ещё не активирована
+)
+
+// Block reasons (v2.6.0+).
+const (
+	BlockReasonClockTampered = "clock_tampered"  // now() < license_issued_at
+	BlockReasonTamperedDB    = "tampered_db"     // license_key signature mismatch / payload diff
+	BlockReasonImpossible    = "impossible_time" // now > expires + 2 years
 )
 
 // DefaultGraceDays / DefaultWarningDays — fallback если в restaurants нет
@@ -135,6 +164,78 @@ type LicenseStatus struct {
 	WarningDays int `json:"warning_days"`
 }
 
+// hardeningCheck — clock-skew + signature re-verify. Возвращает
+// (locked, reason). Cache 60с per-restaurant.
+//
+// Logic:
+//  1. Если license_issued_at set и now() < issued_at → clock_tampered.
+//  2. Если license_expires_at set и now() > expires + 2 года → impossible_time
+//     (защита от absurdly forward clock).
+//  3. Если license_key (token) set и publicKey set → re-parse.
+//     Подпись invalid → tampered_db.
+//     Parsed payload.expires_at != r.license_expires_at → tampered_db.
+//     Parsed payload.rid != r.id → tampered_db.
+//  4. Если license_key nil (legacy < v2.6.0) → skip signature check, allow
+//     (с warning в audit) — backward compat.
+func (s *LicenseService) hardeningCheck(r models.Restaurant, now time.Time) (bool, string) {
+	// Clock backdate: now < issued_at.
+	if r.LicenseIssuedAt != nil && now.Before(*r.LicenseIssuedAt) {
+		return true, BlockReasonClockTampered
+	}
+	// Impossible forward clock: now > expires + 2 years.
+	if r.LicenseExpiresAt != nil && now.After(r.LicenseExpiresAt.AddDate(2, 0, 0)) {
+		return true, BlockReasonImpossible
+	}
+	// Signature re-verify. Pub key nil → dev mode, skip.
+	if s.publicKey == nil {
+		return false, ""
+	}
+	// license_key nil → legacy < v2.6.0 → skip (backward compat).
+	if r.LicenseKey == nil || *r.LicenseKey == "" {
+		return false, ""
+	}
+	p, err := license.Parse(*r.LicenseKey, s.publicKey)
+	if err != nil {
+		// Подпись битая → кто-то изменил БД.
+		log.Warn().Err(err).Str("rid", r.ID).Msg("license: signature re-verify failed (tampered_db?)")
+		return true, BlockReasonTamperedDB
+	}
+	// Cross-check: parsed payload vs DB columns.
+	if r.LicenseExpiresAt == nil || !p.ExpiresAt.Equal(*r.LicenseExpiresAt) {
+		log.Warn().Str("rid", r.ID).
+			Time("token_exp", p.ExpiresAt).
+			Interface("db_exp", r.LicenseExpiresAt).
+			Msg("license: expires_at mismatch token vs DB (tampered_db)")
+		return true, BlockReasonTamperedDB
+	}
+	if p.RestaurantID != r.ID {
+		return true, BlockReasonTamperedDB
+	}
+	return false, ""
+}
+
+// cachedHardeningCheck — same as hardeningCheck но с 60-сек TTL кэшем.
+func (s *LicenseService) cachedHardeningCheck(r models.Restaurant, now time.Time) (bool, string) {
+	s.mu.Lock()
+	entry, ok := s.cache[r.ID]
+	s.mu.Unlock()
+	if ok && now.Sub(entry.verifiedAt) < hardeningCacheTTL {
+		return entry.locked, entry.blockReason
+	}
+	locked, reason := s.hardeningCheck(r, now)
+	s.mu.Lock()
+	s.cache[r.ID] = hardeningCacheEntry{verifiedAt: now, locked: locked, blockReason: reason}
+	s.mu.Unlock()
+	return locked, reason
+}
+
+// InvalidateCache — сбросить hardening cache (вызывается после Activate).
+func (s *LicenseService) InvalidateCache(rid string) {
+	s.mu.Lock()
+	delete(s.cache, rid)
+	s.mu.Unlock()
+}
+
 // Status — для GET /api/v1/license/status. Учитывает ручной is_blocked
 // (Owner может заблокировать ресторан вручную через backoffice).
 func (s *LicenseService) Status(ctx context.Context) (*LicenseStatus, error) {
@@ -153,6 +254,16 @@ func (s *LicenseService) Status(ctx context.Context) (*LicenseStatus, error) {
 	}
 	if r.BlockReason != nil {
 		out.BlockReason = *r.BlockReason
+	}
+	// Hardening: clock skew + signature re-verify (v2.6.0).
+	if locked, reason := s.cachedHardeningCheck(r, now); locked {
+		out.State = StateLocked
+		out.IsBlocked = true
+		out.BlockReason = reason
+		out.ExpiresAt = r.LicenseExpiresAt
+		out.GraceDays = r.LicenseGraceDays
+		out.WarningDays = r.LicenseWarningDays
+		return out, nil
 	}
 	if r.LicenseExpiresAt == nil {
 		out.State = StateNone
@@ -186,19 +297,20 @@ func (s *LicenseService) Status(ctx context.Context) (*LicenseStatus, error) {
 // Возвращает true, если ресторан в состоянии locked (write нельзя) ИЛИ
 // заблокирован вручную. Read-операции и /license/* допустимы — middleware
 // решает скоупом применения.
-//
-// MVP без кэша: при 100 req/s — 100 SELECT'ов restaurants. Это OK для одной
-// кассы. Кэш добавим если станет узким местом.
 func (s *LicenseService) IsLocked(ctx context.Context, restaurantID string) bool {
 	var r models.Restaurant
 	if err := s.db.WithContext(ctx).
-		Select("license_expires_at, is_blocked, license_grace_days, license_warning_days").
+		Select("id, license_key, license_expires_at, license_issued_at, is_blocked, license_grace_days, license_warning_days").
 		Where("id = ?", restaurantID).First(&r).Error; err != nil {
 		// Fail-open: если БД недоступна — не блокируем (лучше короткий abuse,
 		// чем потеря всех касс при network blip).
 		return false
 	}
 	if r.IsBlocked != nil && *r.IsBlocked {
+		return true
+	}
+	now := time.Now().UTC()
+	if locked, _ := s.cachedHardeningCheck(r, now); locked {
 		return true
 	}
 	if r.LicenseExpiresAt == nil {
@@ -210,7 +322,7 @@ func (s *LicenseService) IsLocked(ctx context.Context, restaurantID string) bool
 		return true
 	}
 	lockAt := r.LicenseExpiresAt.AddDate(0, 0, r.LicenseGraceDays+r.LicenseWarningDays)
-	return time.Now().UTC().After(lockAt)
+	return now.After(lockAt)
 }
 
 // ActivateInput — body POST /api/v1/license/activate.
@@ -275,6 +387,13 @@ func (s *LicenseService) Activate(ctx context.Context, in ActivateInput) (*Licen
 		"license_grace_days":   p.GraceDays,
 		"license_warning_days": p.WarningDays,
 	}
+	// v2.6.0: сохраняем issued_at для clock-skew check. Legacy токены
+	// без iat → zero time → пропускаем (NULL в БД).
+	if !p.IssuedAt.IsZero() {
+		updates["license_issued_at"] = p.IssuedAt
+	} else {
+		updates["license_issued_at"] = nil
+	}
 	// Phase 1 multi-branch: если токен выписан с account_id (сеть),
 	// сохраняем в restaurants.account_id. Empty → NULL (одиночный).
 	if p.AccountID != "" {
@@ -284,6 +403,8 @@ func (s *LicenseService) Activate(ctx context.Context, in ActivateInput) (*Licen
 		Where("id = ?", rid).Updates(updates).Error; err != nil {
 		return nil, err
 	}
+	// Сброс hardening cache (свежая активация — старая запись могла быть locked).
+	s.InvalidateCache(rid)
 	st, err := s.Status(ctx)
 	if err != nil {
 		return nil, err

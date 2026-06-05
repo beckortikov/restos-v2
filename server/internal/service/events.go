@@ -45,6 +45,7 @@ const (
 	EventShiftOpened     = "shift.opened"
 	EventShiftClosed     = "shift.closed"
 	EventLicenseUpdated  = "license.updated" // state changed (грейс/локед) или активирован
+	EventLicenseWarning  = "license.warning" // clock drift / NTP mismatch (v2.6.0)
 )
 
 // EventBuffer накапливает события внутри транзакции.

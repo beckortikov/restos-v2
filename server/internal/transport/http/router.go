@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db"
+	"github.com/restos/restos-v4/server/internal/jobs"
 	"github.com/restos/restos-v4/server/internal/printer"
 	"github.com/restos/restos-v4/server/internal/repo"
 	"github.com/restos/restos-v4/server/internal/service"
@@ -31,6 +32,9 @@ type Deps struct {
 	// Чтобы запустить background-сервисы (LicenseWatcher) поверх того же hub'а,
 	// main создаёт hub сам и передаёт сюда.
 	Hub *sse.Hub
+	// NTPChecker — singleton с последним результатом NTP-проверки.
+	// Если nil → /license/clock-status вернёт empty status.
+	NTPChecker *jobs.NTPChecker
 }
 
 // BuildInfo пробрасывается из main для GET /healthz.
@@ -146,7 +150,7 @@ func NewRouter(deps Deps) http.Handler {
 	printJobsH := handlers.NewPrintJobs(printJobsSvc)
 	importH := handlers.NewImport(importSvc)
 	reportsH := handlers.NewReports(reportsSvc)
-	licenseH := handlers.NewLicense(licenseSvc)
+	licenseH := handlers.NewLicense(licenseSvc).WithNTP(deps.NTPChecker)
 	shadowH := handlers.NewShadow(shadowSvc)
 	usersH := handlers.NewUsers(usersSvc)
 	customersH := handlers.NewCustomers(customersSvc)
@@ -250,6 +254,7 @@ func NewRouter(deps Deps) http.Handler {
 			// License — status + activate + machine-id доступны даже в locked.
 			g.Get("/license/status", licenseH.Status)
 			g.Get("/license/machine-id", licenseH.MachineInfo)
+			g.Get("/license/clock-status", licenseH.ClockStatus)
 			g.Post("/license/activate", licenseH.Activate)
 
 			// Shadow (Phase 8): batch-приём drift-репортов + агрегаты для Owner Dashboard.
