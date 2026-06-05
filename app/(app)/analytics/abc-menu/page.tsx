@@ -61,7 +61,13 @@ function computeABC(menuItems: MenuItem[], orders: Order[]) {
   return sorted.map((item) => {
     cumulative += item.revenue
     const share = totalRevenue > 0 ? (cumulative / totalRevenue) * 100 : 0
-    const abc: ABCClass = share <= 80 ? 'A' : share <= 95 ? 'B' : 'C'
+    // v2.8.2: если total=0 (нет продаж) → все блюда «нет данных» вместо
+    // ошибочного «A» (раньше share=0 ≤ 80 трактовалось как A для всех).
+    // Также если item.revenue=0 (одно блюдо без продаж среди продававшихся)
+    // — это «C», а не «A».
+    const abc: ABCClass = totalRevenue === 0 || item.revenue === 0
+      ? 'C'
+      : share <= 80 ? 'A' : share <= 95 ? 'B' : 'C'
 
     // Menu engineering: popularity (qty) × profitability (margin)
     const highPop = item.qty >= avgQty
@@ -172,8 +178,25 @@ export default function AbcMenuPage() {
     abc: item.abc,
   }))
 
+  // v2.8.2: показываем info-баннер если за период не было продаж.
+  // Раньше все блюда попадали в категорию A из-за бага в computeABC.
+  const totalRevenueAll = items.reduce((s, i) => s + i.revenue, 0)
+  const hasNoSales = totalRevenueAll === 0
+
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+      {hasNoSales && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 flex items-start gap-3">
+          <span className="text-2xl shrink-0">📊</span>
+          <div className="text-sm text-amber-900">
+            <p className="font-semibold">Нет продаж за выбранный период</p>
+            <p className="text-amber-700 mt-0.5">
+              ABC-анализ нуждается в данных о реальных заказах. Все {items.length} блюд
+              показаны как «C» (нет данных). Выберите другой период или дождитесь первых продаж.
+            </p>
+          </div>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">ABC-анализ меню</h1>
