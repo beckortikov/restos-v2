@@ -38,7 +38,8 @@ import { fetchOrders, fetchUsers, fetchZones, fetchReservationForTable, updateRe
 import { toast } from 'sonner'
 import type { Reservation } from '@/lib/types'
 import { ReservationDialog } from '@/components/dialogs/reservation-dialog'
-import { OrderActionsBody, type OrderActionData } from './order-actions-body'
+import { OrderActionsPanel } from '@/components/order/order-actions-panel'
+import { OrderActionsDialog, type OrderActionData } from './order-actions-dialog'
 import {
   Users,
   User as UserIcon,
@@ -94,6 +95,9 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [guestsBusy, setGuestsBusy] = useState(false)
+  // «Дополнительно» внутри OrderActionsPanel открывает legacy OrderActionsDialog
+  // поверх sheet'а карты зала — split-bill / mixed payment / tip / reopen.
+  const [advancedOpen, setAdvancedOpen] = useState(false)
 
   const canEditTables = canDo('tables.edit') || canAccessRoles(['manager', 'owner'])
   const canReserve = canAccessRoles(['manager', 'waiter', 'cashier'])
@@ -190,7 +194,10 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
     }
   }, [orders, guestsBusy])
 
-  /** Переадресует action заказ-level в onAction родителя с orderId стола. */
+  /** Переадресует action заказ-level в onAction родителя с orderId стола.
+   *  Используется legacy OrderActionsDialog (advanced flows) — Panel сам
+   *  вызывает API через cancelOrder/closeOrderWithPayment и не нуждается в
+   *  посреднике. */
   const handleOrderAction = useCallback((action: string, data?: OrderActionData) => {
     if (!table) return
     const orderId = selectedOrderId ?? table.currentOrderId
@@ -393,15 +400,26 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
         {/* Standalone Guests stepper удалён — переехал в top header рядом
             с «Официант», см. поднятый span с классом bg-primary/10. */}
 
-        {/* Body */}
+        {/* Body — единый POS-sidebar (OrderActionsPanel), тот же что и в
+            кассирском POS-экране. Раньше тут был отдельный OrderActionsBody
+            с дублирующей логикой void/discount/payment; перешли на Panel —
+            теперь void последней позиции корректно освобождает стол (через
+            cancelOrderItem + AutoPrintRunner печатает кухонную «ОТМЕНА»). */}
         {order ? (
-          <OrderActionsBody
+          <OrderActionsPanel
             key={order.id}
             order={order}
-            onAction={handleOrderAction}
-            onClose={() => onOpenChange(false)}
+            users={users}
+            onClosed={() => {
+              onOpenChange(false)
+              onAction('refresh', table.id)
+            }}
+            onCancelled={() => {
+              onOpenChange(false)
+              onAction('refresh', table.id)
+            }}
             onItemsChanged={() => onAction('refresh', table.id)}
-            hideMeta
+            onOpenAdvanced={() => setAdvancedOpen(true)}
           />
         ) : table.status === 'reserved' ? (
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
@@ -512,6 +530,22 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
           </div>
         )}
       </SheetContent>
+
+      {/* Advanced OrderActionsDialog — открывается из «Дополнительно» внутри
+          OrderActionsPanel. Покрывает split-bill, смешанную оплату, чаевые,
+          reopen и read-only режим для уже закрытых заказов. */}
+      {order && (
+        <OrderActionsDialog
+          order={order}
+          open={advancedOpen}
+          onOpenChange={setAdvancedOpen}
+          onAction={(action, data) => {
+            handleOrderAction(action, data)
+            setAdvancedOpen(false)
+          }}
+          onItemsChanged={() => onAction('refresh', table.id)}
+        />
+      )}
 
       {table && (
         <ReservationDialog
