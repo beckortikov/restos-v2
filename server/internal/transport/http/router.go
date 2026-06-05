@@ -528,6 +528,12 @@ func NewRouter(deps Deps) http.Handler {
 		})
 	})
 
+	// SPA static — отдаёт embedded React build на всех не-API путях.
+	// Любой браузер в LAN, открывший http://<касса-ip>:3001, получает UI.
+	// См. spa.go.
+	spa := SPAHandler()
+	r.NotFound(spa.ServeHTTP)
+
 	return r
 }
 

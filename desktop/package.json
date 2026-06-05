@@ -1,13 +1,14 @@
 {
   "name": "restos-desktop",
-  "version": "2.4.0",
-  "description": "RestOS v4 Desktop — POS система для ресторанов (Go-бэк + embedded Postgres)",
+  "version": "2.5.0",
+  "description": "RestOS v4 Desktop — POS система для ресторанов (Go-бэк + embedded Postgres, LAN web access)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build-frontend": "cd .. && npx vite build && rm -rf desktop/frontend && cp -r dist desktop/frontend",
-    "build-sidecar-win": "cd ../server && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/restos-server-windows-amd64.exe ./cmd/restos-server && cp bin/restos-server-windows-amd64.exe ../desktop/resources/restos-server.exe",
-    "build-sidecar-mac": "cd ../server && go build -trimpath -o bin/restos-server ./cmd/restos-server && cp bin/restos-server ../desktop/resources/restos-server",
+    "embed-spa": "cd .. && rm -rf server/internal/transport/http/spa && mkdir -p server/internal/transport/http/spa && cp -r dist/. server/internal/transport/http/spa/",
+    "build-sidecar-win": "npm run embed-spa && cd ../server && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/restos-server-windows-amd64.exe ./cmd/restos-server && cp bin/restos-server-windows-amd64.exe ../desktop/resources/restos-server.exe",
+    "build-sidecar-mac": "npm run embed-spa && cd ../server && go build -trimpath -o bin/restos-server ./cmd/restos-server && cp bin/restos-server ../desktop/resources/restos-server",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "npm run build-frontend && npm run build-sidecar-win && electron-builder --win",

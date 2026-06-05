@@ -43,10 +43,24 @@ run-external: ## Run with custom external Postgres: make run-external PG_DSN="ho
 	@if [ -z "$(PG_DSN)" ]; then echo "PG_DSN is required"; exit 1; fi
 	$(GO) run ./cmd/restos-server --external-pg-dsn="$(PG_DSN)"
 
+SPA_DIR := internal/transport/http/spa
+
+.PHONY: embed-spa
+embed-spa: ## Build React frontend (Vite) and copy dist into spa/ for go:embed
+	@echo "→ building frontend (vite) for embed"
+	cd .. && npx vite build
+	rm -rf $(SPA_DIR)
+	mkdir -p $(SPA_DIR)
+	cp -r ../dist/. $(SPA_DIR)/
+	@echo "→ SPA assets staged in $(SPA_DIR)"
+
 .PHONY: build
-build: ## Build local binary into bin/
+build: ## Build local binary into bin/ (assumes SPA already embedded — run `make embed-spa` first for web access)
 	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BIN_NAME) ./cmd/restos-server
+
+.PHONY: build-with-spa
+build-with-spa: embed-spa build ## Embed frontend then build binary (full LAN-web-ready build)
 
 .PHONY: build-all
 build-all: ## Cross-compile for darwin/linux/windows × amd64/arm64
@@ -58,7 +72,7 @@ build-all: ## Cross-compile for darwin/linux/windows × amd64/arm64
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/$(BIN_NAME)-windows-amd64.exe ./cmd/restos-server
 
 .PHONY: build-sidecar
-build-sidecar: build ## Build for current OS and copy as Electron sidecar
+build-sidecar: embed-spa build ## Build for current OS (with embedded SPA) and copy as Electron sidecar
 	mkdir -p $(dir $(SIDECAR_DEST))
 	cp $(BIN_DIR)/$(BIN_NAME) $(SIDECAR_DEST)
 	@echo "→ copied $(BIN_NAME) to $(SIDECAR_DEST)"
@@ -67,7 +81,7 @@ build-sidecar: build ## Build for current OS and copy as Electron sidecar
 # (без target-triple) — main.js per-process выбирает нужный. Мы кладём все
 # 5 бинарей и main.js выбирает по process.platform + process.arch.
 .PHONY: build-sidecar-all
-build-sidecar-all: build-all ## Cross-compile all platforms and copy as Electron sidecars
+build-sidecar-all: embed-spa build-all ## Cross-compile all platforms (with embedded SPA) and copy as Electron sidecars
 	mkdir -p $(dir $(SIDECAR_DEST))
 	cp $(BIN_DIR)/$(BIN_NAME)-darwin-arm64       $(dir $(SIDECAR_DEST))$(BIN_NAME)-darwin-arm64
 	cp $(BIN_DIR)/$(BIN_NAME)-darwin-amd64       $(dir $(SIDECAR_DEST))$(BIN_NAME)-darwin-amd64

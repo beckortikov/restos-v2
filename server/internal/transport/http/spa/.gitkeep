@@ -1,0 +1,1 @@
+# keeps spa/ directory in git for go:embed (contents are gitignored)

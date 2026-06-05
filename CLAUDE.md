@@ -167,6 +167,26 @@ UI-framework **не меняем** — остаёмся на React 19 + Vite + R
 
 **Perf-правила (обязательные):** prod-build без DevTools, виртуализация всех списков >100 строк, `React.memo` на листовых компонентах, Zustand-селекторы, точечная инвалидация React Query на SSE-эвенты, GPU-композитинг для анимаций. Полный чек-лист и целевые бенчмарки — в PRD 10.
 
+## LAN Web Access (v2.5.0+)
+
+Go-бэк отдаёт React SPA на том же порту 3001. Любое устройство в LAN ресторана может открыть `http://<ip-кассы>:3001` в браузере — UI грузится полностью, Electron не нужен.
+
+Реализация:
+- `server/internal/transport/http/spa.go` — `//go:embed all:spa` → `SPAHandler()` отдаёт ассеты + index.html fallback (для React Router F5 на `/operations/pos`).
+- В роутере: `r.NotFound(SPAHandler().ServeHTTP)` после всех `/api/v1/*` и `/sse`.
+- Build pipeline: `make embed-spa` (vite build → `cp dist → server/internal/transport/http/spa/`) → `make build`. Цели `build-sidecar`/`build-sidecar-all` уже включают `embed-spa`.
+- `server/internal/transport/http/spa/` — gitignore (кроме `.gitkeep` + placeholder `index.html`).
+
+Для чего полезно:
+- Owner/manager смотрит отчёты с ноутбука в офисе.
+- Официант на планшете через обычный браузер (помимо Capacitor APK).
+- Диагностика с любого устройства.
+
+Ограничения:
+- Касса (Electron) должна быть запущена — Go-sidecar живёт внутри .dmg/.exe.
+- Лицензия привязана к MachineID кассы, не браузера.
+- Vite dev (порт 5173) → frontend форсирует API на `:3001` (см. `lib/api/v4-typed.ts` `getBaseURL`).
+
 ## Команды (после Phase 0)
 
 ```bash
