@@ -62,22 +62,45 @@ func main() {
 	defer stop()
 
 	// 1. Embedded Postgres (если нужен).
-	// v2.7.1: keychain mechanism (v2.6.0) выпилен — он генерил random pwd на
-	// первом старте, и при апгрейде с v2.5.0 (default "restos") embedded-pg
-	// data dir был с прежним pwd → auth fail → backend не стартовал
-	// 60 сек → user видел «Сервер не отвечает». Возврат на fixed pwd
-	// `cfg.PGPassword` (default "restos") — embedded-PG слушает только
-	// 127.0.0.1, доступ через ОС-уровень. Защита от прямого psql коннекта
-	// перенесена на firewall/ОС.
-	_ = config.ResolvePGPassword // unused but kept for backward import compat
+	// v2.7.2: keychain mechanism восстановлен. Если existing pg-data
+	// был создан с другим паролем (legacy "restos" из v2.5.0 или старый
+	// keychain-gen из v2.6.x на другом юзере) → start fails с auth error
+	// → WIPE pg-data + re-init с новым pwd. Это destructive (теряются
+	// заказы / меню / настройки), но кассир дал явное согласие на reset
+	// для свежей лицензии.
+	if cfg.ExternalPGDSN == "" {
+		if pwd, source, err := config.ResolvePGPassword(cfg.PGPassword); err != nil {
+			log.Warn().Err(err).Msg("pg password: keychain unavailable, using fallback from env/flag")
+		} else {
+			cfg.PGPassword = pwd
+			log.Info().Str("source", source).Msg("pg password resolved")
+		}
+	}
 	var sup *pgsupervisor.Supervisor
 	if cfg.ExternalPGDSN == "" {
 		sup, err = pgsupervisor.New(cfg)
 		if err != nil {
 			log.Fatal().Err(err).Msg("pgsupervisor.New")
 		}
-		if err := sup.Start(ctx); err != nil {
-			log.Fatal().Err(err).Msg("embedded-postgres start failed")
+		startErr := sup.Start(ctx)
+		if startErr != nil {
+			// v2.7.2: проверка на password mismatch. Embedded-postgres
+			// при auth fail обычно дает "password authentication failed"
+			// или зависает в start. Wipe data-dir и retry с keychain-pwd.
+			log.Warn().Err(startErr).Msg("embedded-postgres start failed — trying wipe & re-init")
+			_ = sup.Stop()
+			dataDir := cfg.PGDataDir()
+			if rmErr := os.RemoveAll(dataDir); rmErr != nil {
+				log.Fatal().Err(rmErr).Str("dir", dataDir).Msg("failed to wipe stale pg-data dir")
+			}
+			log.Info().Str("dir", dataDir).Msg("pg-data dir wiped; re-initializing with keychain password")
+			sup, err = pgsupervisor.New(cfg)
+			if err != nil {
+				log.Fatal().Err(err).Msg("pgsupervisor.New (retry)")
+			}
+			if err := sup.Start(ctx); err != nil {
+				log.Fatal().Err(err).Msg("embedded-postgres start failed after wipe — manual intervention required")
+			}
 		}
 		defer func() {
 			if err := sup.Stop(); err != nil {
