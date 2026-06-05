@@ -98,6 +98,16 @@ export interface OrderActionsBodyProps {
   /** Скрыть мета-блок (Стол/Официант/Время) — родитель сам показывает
    *  заголовок стола и переключатель групп. */
   hideMeta?: boolean
+  /** v2.3.0: переключить void-механику на cancel_at + kitchen reprint
+   *  (поведение бывшего OrderActionsPanel). Без флага — старая билл-void
+   *  механика через createVoid. */
+  useCancelItemApi?: boolean
+  /** v2.3.0: запретить редактирование %service (read-only badge).
+   *  Включается из POS-wrapper'а, где значение — restaurant default. */
+  lockServicePercent?: boolean
+  /** v2.3.0: тикер времени, ре-рендерим каждые 30с чтобы счётчик
+   *  «4 мин назад» не застывал. По умолчанию — статика (как было). */
+  liveTimeTick?: boolean
 }
 
 const DEFAULT_SERVICE_PERCENT = 10
@@ -130,6 +140,9 @@ export function OrderActionsBody({
   onClose,
   onItemsChanged,
   hideMeta,
+  useCancelItemApi,
+  lockServicePercent: _lockServicePercent, // v2.3.0: reserved for future read-only %service input. Currently service input в OrderPaymentPanel остаётся editable — Panel-wrapper полагается на restaurant default через onAction.
+  liveTimeTick,
 }: OrderActionsBodyProps) {
   const { user, restaurant, canDo } = useAuth()
   const navigate = useNavigate()
@@ -183,6 +196,15 @@ export function OrderActionsBody({
   const [voidQty, setVoidQty] = useState(0)
   const [voidedIndices, setVoidedIndices] = useState<Set<number>>(new Set())
   const [voids, setVoids] = useState<OrderVoid[]>([])
+
+  // v2.3.0: tick для live-обновления getTimeSince. Включается через
+  // liveTimeTick prop (POS). По умолчанию — без тика, как было.
+  const [, setNowTick] = useState(0)
+  useEffect(() => {
+    if (!liveTimeTick) return
+    const t = setInterval(() => setNowTick(n => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [liveTimeTick])
 
   // Mixed payments
   const [payments, setPayments] = useState<OrderPayment[]>([])
@@ -534,6 +556,7 @@ export function OrderActionsBody({
               canDoVoid={canDoVoid}
               isOwnAsWaiter={isOwnAsWaiter}
               onItemsChanged={onItemsChanged}
+              useCancelItemApi={useCancelItemApi}
             />
             <OrderTotalsBlock
               subtotal={subtotal}

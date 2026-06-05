@@ -14,7 +14,8 @@ import { toast } from 'sonner'
 import { XCircle } from 'lucide-react'
 import { formatCurrency, calcLineTotal, formatQty } from '@/lib/helpers'
 import { VOID_REASON_LABELS, type Order, type VoidReason, type OrderVoid } from '@/lib/types'
-import { createVoid, fetchVoidsForOrder } from '@/lib/queries'
+import { createVoid, fetchVoidsForOrder, cancelOrderItem, cancelOrderItemPartial } from '@/lib/queries'
+import { useAuth } from '@/lib/auth-store'
 
 interface MenuItemMeta {
   id: string
@@ -39,6 +40,12 @@ interface OrderItemsListProps {
   canDoVoid: boolean
   isOwnAsWaiter: boolean
   onItemsChanged?: () => void
+  /** v2.3.0: при true вместо `createVoid` (биллинговый void) используется
+   *  `cancelOrderItem`/`cancelOrderItemPartial` — выставляет cancelled_at,
+   *  AutoPrintRunner печатает кухонную «ОТМЕНА». Это поведение
+   *  OrderActionsPanel (POS). Дефолт false сохраняет совместимость с
+   *  TableDetailSheet / OrdersTab / Waiter. */
+  useCancelItemApi?: boolean
 }
 
 function OrderItemsListInner({
@@ -58,7 +65,9 @@ function OrderItemsListInner({
   canDoVoid,
   isOwnAsWaiter,
   onItemsChanged,
+  useCancelItemApi,
 }: OrderItemsListProps) {
+  const { user } = useAuth()
   return (
     <div className="divide-y divide-border">
       {order.items.map((item, i) => {
@@ -144,14 +153,24 @@ function OrderItemsListInner({
                 <button
                   onClick={async () => {
                     try {
-                      await createVoid({
-                        orderId: order.id,
-                        itemName: item.name,
-                        itemQty: voidQty,
-                        itemPrice: item.price,
-                        reason: voidReason,
-                        menuItemId: item.menuItemId,
-                      })
+                      if (useCancelItemApi && item.id) {
+                        // v2.3.0 POS-path: cancel_at + kitchen reprint.
+                        const reasonLabel = VOID_REASON_LABELS[voidReason]
+                        if (voidQty >= item.qty) {
+                          await cancelOrderItem(item.id, reasonLabel, user?.id)
+                        } else {
+                          await cancelOrderItemPartial(item.id, voidQty, reasonLabel, user?.id)
+                        }
+                      } else {
+                        await createVoid({
+                          orderId: order.id,
+                          itemName: item.name,
+                          itemQty: voidQty,
+                          itemPrice: item.price,
+                          reason: voidReason,
+                          menuItemId: item.menuItemId,
+                        })
+                      }
                       if (voidQty >= item.qty) {
                         setVoidedIndices(prev => new Set(prev).add(i))
                       }
@@ -164,8 +183,8 @@ function OrderItemsListInner({
                         setVoids(fresh)
                       } catch {}
                       onItemsChanged?.()
-                    } catch {
-                      toast.error('Ошибка отмены')
+                    } catch (e) {
+                      toast.error(e instanceof Error ? `Ошибка отмены: ${e.message}` : 'Ошибка отмены')
                     }
                   }}
                   className="w-full text-xs font-medium bg-red-600 text-white rounded-md py-1.5 hover:bg-red-700 transition-colors"
