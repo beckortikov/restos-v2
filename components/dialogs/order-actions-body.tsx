@@ -556,7 +556,7 @@ export function OrderActionsBody({
               canDoVoid={canDoVoid}
               isOwnAsWaiter={isOwnAsWaiter}
               onItemsChanged={onItemsChanged}
-              useCancelItemApi={useCancelItemApi}
+              useCancelItemApi={useCancelItemApi !== false /* v2.3.1: default true */}
             />
             <OrderTotalsBlock
               subtotal={subtotal}

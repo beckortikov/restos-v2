@@ -515,17 +515,15 @@ export default function TableMapPage() {
         .then(() => { toast.success('Заказ готов к выдаче'); refetchAll() })
         .catch(() => toast.error('Ошибка'))
     } else if (action === 'cancel') {
-      const orderId = resolveOrderId()
-      if (!orderId) return
-      deleteOrder(orderId)
-        .then(async () => {
-          await updateTableStatus(tableId, 'free').catch(console.error)
-          toast.success('Заказ отменён')
-          setSheetOpen(false)
-          setSelectedTable(null)
-          refetchAll()
-        })
-        .catch(() => toast.error('Ошибка отмены'))
+      // v2.3.1: legacy path. Современный flow — OrderCancelForm внутри
+      // OrderActionsBody сам вызывает cancelOrder(reason, userId) (правильный
+      // /cancel endpoint, backend освобождает стол + emit SSE table.updated).
+      // Здесь оставляем как fallback на случай если что-то всё ещё emit'ит
+      // 'cancel' action, НО без устаревшего deleteOrder+updateTableStatus
+      // (он насильно ставил free даже multi-group столам). Просто refresh.
+      refetchAll().catch(console.error)
+      setSheetOpen(false)
+      setSelectedTable(null)
     } else if (action === 'add_items') {
       const orderId = resolveOrderId()
       if (!orderId) return

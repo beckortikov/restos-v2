@@ -153,7 +153,12 @@ function OrderItemsListInner({
                 <button
                   onClick={async () => {
                     try {
-                      if (useCancelItemApi && item.id) {
+                      // v2.3.1: useCancelItemApi теперь default=true (в Body).
+                      // Старый createVoid НЕ ставил order_items.cancelled_at →
+                      // backend invariant «void последнего → auto-cancel order»
+                      // не срабатывал → стол оставался «Занят» с пустым заказом.
+                      // Кассир жаловался: «отмена в карте столов — стол не освобождается».
+                      if (useCancelItemApi !== false && item.id) {
                         // v2.3.0 POS-path: cancel_at + kitchen reprint.
                         const reasonLabel = VOID_REASON_LABELS[voidReason]
                         if (voidQty >= item.qty) {
