@@ -40,6 +40,11 @@ import { VOID_REASON_LABELS } from '@/lib/types'
 import {
   Popover, PopoverContent, PopoverTrigger,
 } from '@/components/ui/popover'
+import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { SplitBillDialog } from '@/components/dialogs/split-bill-dialog'
+import { reopenOrder } from '@/lib/queries'
 
 interface OrderActionsPanelProps {
   order: Order
@@ -85,6 +90,10 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   )
   const [waiterPickerOpen, setWaiterPickerOpen] = useState(false)
   const [changingWaiter, setChangingWaiter] = useState(false)
+  // v2.8.0: «Дополнительно» dropdown вместо второго sidebar'а (overlay sheet).
+  // Каждый item открывает либо мини-диалог (split-bill), либо confirm-modal.
+  const [splitOpen, setSplitOpen] = useState(false)
+  const [reopenConfirmOpen, setReopenConfirmOpen] = useState(false)
 
   const handleChangeWaiter = async (newWaiterId: string | null) => {
     if (!order.tableId) {
@@ -998,23 +1007,43 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
           {submitting ? 'Обработка...' : `Закрыть и оплатить · ${formatCurrency(total)}`}
         </button>
 
-        {/* Secondary actions */}
-        <div className={`grid gap-2 ${onOpenAdvanced ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {/* Secondary actions — v2.8.0: «Дополнительно» теперь dropdown menu
+            прямо в sidebar'е, не открывает второй sheet поверх (как было через
+            onOpenAdvanced). Mixed payment / чаевые уже доступны в payment-блоке
+            выше. В dropdown'е — split bill и reopen (требуют отдельных диалогов). */}
+        <div className="grid grid-cols-2 gap-2">
           <button
             onClick={handlePreCheck}
             className="py-2 text-xs font-medium text-muted-foreground border border-border rounded-lg hover:bg-muted inline-flex items-center justify-center gap-1.5"
           >
             <Receipt className="size-3.5" /> Пре-чек
           </button>
-          {onOpenAdvanced ? (
-            <button
-              onClick={onOpenAdvanced}
-              className="py-2 text-xs font-medium text-muted-foreground border border-border rounded-lg hover:bg-muted inline-flex items-center justify-center gap-1.5"
-              title="Разделить счёт, смешанная оплата, чаевые, переоткрытие"
-            >
-              <Settings2 className="size-3.5" /> Дополнительно
-            </button>
-          ) : null}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="py-2 text-xs font-medium text-muted-foreground border border-border rounded-lg hover:bg-muted inline-flex items-center justify-center gap-1.5"
+                title="Разделить счёт, переоткрытие закрытого заказа"
+              >
+                <Settings2 className="size-3.5" /> Дополнительно
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuItem
+                onClick={() => setSplitOpen(true)}
+                className="text-sm cursor-pointer"
+              >
+                ✂️ Разделить счёт
+              </DropdownMenuItem>
+              {order.status === 'done' && (
+                <DropdownMenuItem
+                  onClick={() => setReopenConfirmOpen(true)}
+                  className="text-sm cursor-pointer"
+                >
+                  🔓 Переоткрыть заказ
+                </DropdownMenuItem>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
 
         {/* Cancel order */}
@@ -1256,6 +1285,50 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               className="bg-destructive text-white hover:bg-destructive/90"
             >
               {submitting ? '...' : 'Отменить заказ'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* v2.8.0: «Дополнительно» dropdown items открывают эти диалоги
+          вместо overlay sheet поверх sidebar'а. */}
+      <SplitBillDialog
+        open={splitOpen}
+        onOpenChange={setSplitOpen}
+        order={order}
+        onSuccess={() => {
+          setSplitOpen(false)
+          onItemsChanged?.()
+        }}
+      />
+
+      <AlertDialog open={reopenConfirmOpen} onOpenChange={setReopenConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Переоткрыть заказ #{order.orderNumber ?? order.id.slice(0, 8)}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              • Связанная финансовая операция (выручка) будет удалена.<br />
+              • Заказ выйдет из текущей смены.<br />
+              • Стол вернётся в «Занят», статус — «Счёт».<br />
+              Сумму, скидку и обслуживание можно будет изменить и провести оплату заново.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={async () => {
+                try {
+                  await reopenOrder(order.id)
+                  toast.success('Заказ открыт для редактирования')
+                  setReopenConfirmOpen(false)
+                  onItemsChanged?.()
+                } catch (e: any) {
+                  toast.error(e?.message ?? 'Ошибка переоткрытия')
+                }
+              }}
+              className="bg-amber-600 text-white hover:bg-amber-700"
+            >
+              Переоткрыть
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

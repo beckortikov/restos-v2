@@ -1857,7 +1857,9 @@ export function OrderComposer(props: OrderComposerProps) {
               onSubmitted?.({ orderId: selectedExistingOrder.id, mode: 'add' })
             }}
             onItemsChanged={() => { void refreshTabsItems(); void refreshSelectedVoids() }}
-            onOpenAdvanced={openOrderActions}
+            // v2.8.0: onOpenAdvanced убран — «Дополнительно» теперь dropdown
+            // inline (split-bill + reopen в собственных мини-диалогах внутри
+            // Panel'а). Второй sidebar поверх POS больше не открывается.
           />
         ) : null}
 

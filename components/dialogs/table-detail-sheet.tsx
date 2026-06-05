@@ -95,9 +95,8 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
   const [reservation, setReservation] = useState<Reservation | null>(null)
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null)
   const [guestsBusy, setGuestsBusy] = useState(false)
-  // «Дополнительно» внутри OrderActionsPanel открывает legacy OrderActionsDialog
-  // поверх sheet'а карты зала — split-bill / mixed payment / tip / reopen.
-  const [advancedOpen, setAdvancedOpen] = useState(false)
+  // v2.8.0: advancedOpen state удалён — «Дополнительно» теперь dropdown
+  // inline в OrderActionsPanel, не overlay sheet поверх карты зала.
 
   const canEditTables = canDo('tables.edit') || canAccessRoles(['manager', 'owner'])
   const canReserve = canAccessRoles(['manager', 'waiter', 'cashier'])
@@ -419,7 +418,9 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
               onAction('refresh', table.id)
             }}
             onItemsChanged={() => onAction('refresh', table.id)}
-            onOpenAdvanced={() => setAdvancedOpen(true)}
+            // v2.8.0: убран onOpenAdvanced overlay — теперь «Дополнительно»
+            // открывает inline dropdown внутри Panel'а, а split-bill/reopen
+            // вызывают свои мини-диалоги без второго sidebar'а.
           />
         ) : table.status === 'reserved' ? (
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
@@ -531,21 +532,10 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
         )}
       </SheetContent>
 
-      {/* Advanced OrderActionsDialog — открывается из «Дополнительно» внутри
-          OrderActionsPanel. Покрывает split-bill, смешанную оплату, чаевые,
-          reopen и read-only режим для уже закрытых заказов. */}
-      {order && (
-        <OrderActionsDialog
-          order={order}
-          open={advancedOpen}
-          onOpenChange={setAdvancedOpen}
-          onAction={(action, data) => {
-            handleOrderAction(action, data)
-            setAdvancedOpen(false)
-          }}
-          onItemsChanged={() => onAction('refresh', table.id)}
-        />
-      )}
+      {/* v2.8.0: убран overlay <OrderActionsDialog> — «Дополнительно»
+          теперь dropdown menu внутри OrderActionsPanel (split-bill +
+          reopen открывают свои мини-диалоги). Второй sidebar поверх
+          первого больше не появляется. */}
 
       {table && (
         <ReservationDialog
