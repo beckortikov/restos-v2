@@ -118,6 +118,25 @@ export async function unmarkItemServed(itemId: string): Promise<void> {
   } catch {}
 }
 
+/**
+ * Transfer order — перенос заказа на другой стол и/или другого официанта.
+ * Backend orders_split.go Transfer: освобождает старый стол, занимает новый,
+ * emit'ит SSE table.updated для обоих + order.updated. Воспроизводит
+ * Android waiter PWA flow.
+ *
+ * v2.8.1: добавлено в POS / TableDetailSheet через DropdownMenu «Дополнительно».
+ */
+export async function transferOrder(orderId: string, params: { tableId?: string; waiterId?: string }): Promise<void> {
+  const body: Record<string, unknown> = {}
+  if (params.tableId !== undefined) body.table_id = params.tableId
+  if (params.waiterId !== undefined) body.waiter_id = params.waiterId
+  await unwrap(api.POST('/api/v1/orders/{id}/transfer', {
+    params: { path: { id: orderId } },
+    body: body as any,
+  }))
+  logAction('order.transfer', 'order', orderId, undefined, params)
+}
+
 export async function claimItemCancelPrint(itemId: string): Promise<boolean> {
   const orderId = await _findOrderIdForItem(itemId)
   if (!orderId) return false

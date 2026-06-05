@@ -44,6 +44,7 @@ import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { SplitBillDialog } from '@/components/dialogs/split-bill-dialog'
+import { TransferTableDialog } from '@/components/dialogs/transfer-table-dialog'
 import { reopenOrder } from '@/lib/queries'
 
 interface OrderActionsPanelProps {
@@ -93,6 +94,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   // v2.8.0: «Дополнительно» dropdown вместо второго sidebar'а (overlay sheet).
   // Каждый item открывает либо мини-диалог (split-bill), либо confirm-modal.
   const [splitOpen, setSplitOpen] = useState(false)
+  const [transferOpen, setTransferOpen] = useState(false)
   const [reopenConfirmOpen, setReopenConfirmOpen] = useState(false)
 
   const handleChangeWaiter = async (newWaiterId: string | null) => {
@@ -1034,6 +1036,17 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               >
                 ✂️ Разделить счёт
               </DropdownMenuItem>
+              {/* v2.8.1: Перенос стола — backend API уже был, Android waiter
+                  использовал, в кассирском UI отсутствовал. Доступен только
+                  для активных заказов (не done/cancelled). */}
+              {order.status !== 'done' && order.status !== 'cancelled' && (
+                <DropdownMenuItem
+                  onClick={() => setTransferOpen(true)}
+                  className="text-sm cursor-pointer"
+                >
+                  🔀 Перенести на другой стол
+                </DropdownMenuItem>
+              )}
               {order.status === 'done' && (
                 <DropdownMenuItem
                   onClick={() => setReopenConfirmOpen(true)}
@@ -1298,6 +1311,16 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         order={order}
         onSuccess={() => {
           setSplitOpen(false)
+          onItemsChanged?.()
+        }}
+      />
+
+      <TransferTableDialog
+        open={transferOpen}
+        onOpenChange={setTransferOpen}
+        order={order}
+        onSuccess={() => {
+          // Refetch — backend emit'нул SSE table.updated, но дёрнем явно тоже.
           onItemsChanged?.()
         }}
       />
