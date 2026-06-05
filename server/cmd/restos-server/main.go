@@ -62,18 +62,14 @@ func main() {
 	defer stop()
 
 	// 1. Embedded Postgres (если нужен).
-	// v2.6.0: при первом старте генерируем random password и сохраняем в
-	// OS keychain (DPAPI / Keychain / libsecret). При следующих стартах
-	// читаем оттуда. Если keychain недоступен → fallback на cfg.PGPassword
-	// (env/CLI flag) для dev/CI.
-	if cfg.ExternalPGDSN == "" {
-		if pwd, source, err := config.ResolvePGPassword(cfg.PGPassword); err != nil {
-			log.Warn().Err(err).Msg("pg password: keychain unavailable, using fallback from env/flag")
-		} else {
-			cfg.PGPassword = pwd
-			log.Info().Str("source", source).Msg("pg password resolved")
-		}
-	}
+	// v2.7.1: keychain mechanism (v2.6.0) выпилен — он генерил random pwd на
+	// первом старте, и при апгрейде с v2.5.0 (default "restos") embedded-pg
+	// data dir был с прежним pwd → auth fail → backend не стартовал
+	// 60 сек → user видел «Сервер не отвечает». Возврат на fixed pwd
+	// `cfg.PGPassword` (default "restos") — embedded-PG слушает только
+	// 127.0.0.1, доступ через ОС-уровень. Защита от прямого psql коннекта
+	// перенесена на firewall/ОС.
+	_ = config.ResolvePGPassword // unused but kept for backward import compat
 	var sup *pgsupervisor.Supervisor
 	if cfg.ExternalPGDSN == "" {
 		sup, err = pgsupervisor.New(cfg)
