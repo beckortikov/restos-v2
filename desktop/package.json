@@ -1,6 +1,6 @@
 {
   "name": "restos-desktop",
-  "version": "2.8.2",
+  "version": "3.0.0",
   "description": "RestOS v4 Desktop — POS система для ресторанов (Go-бэк + embedded Postgres, LAN web access)",
   "main": "main.js",
   "scripts": {
@@ -15,8 +15,8 @@
     "dist:mac": "npm run build-frontend && npm run build-sidecar-mac && electron-builder --mac"
   },
   "build": {
-    "appId": "tj.restos.pos",
-    "productName": "RestOS",
+    "appId": "tj.restos.pos.v2",
+    "productName": "RestOS v2",
     "directories": {
       "output": "release"
     },
@@ -60,9 +60,9 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "RestOS",
+      "shortcutName": "RestOS v2",
       "perMachine": false,
-      "artifactName": "RestOS-Setup-${version}.${ext}"
+      "artifactName": "RestOS-v2-Setup-${version}.${ext}"
     },
     "publish": {
       "provider": "github",
