@@ -217,6 +217,13 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			if ri.Qty < 1 {
 				ri.Qty = 1
 			}
+			ri.QtyDec = it.Qty
+			// Весовые блюда (g/kg) — печатаем «250г» / «1,5кг» вместо «x1».
+			if it.MenuItemID != nil {
+				if mi, ok := miByID[*it.MenuItemID]; ok && mi.Unit != nil {
+					ri.Unit = *mi.Unit
+				}
+			}
 			in.Items = append(in.Items, ri)
 		}
 		payload := escpos.RunnerLayout(in)
@@ -327,6 +334,12 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 			ri.Qty = int(f)
 			if ri.Qty < 1 {
 				ri.Qty = 1
+			}
+			ri.QtyDec = it.Qty
+			if it.MenuItemID != nil {
+				if mi, ok := miByID[*it.MenuItemID]; ok && mi.Unit != nil {
+					ri.Unit = *mi.Unit
+				}
 			}
 			in.Items = append(in.Items, ri)
 		}

@@ -237,11 +237,46 @@ type RunnerInput struct {
 }
 
 // RunnerItem — позиция для повара.
+//
+// Qty — целое число порций для «piece» блюд. Для весовых (Unit="g"/"kg")
+// игнорируется, печатается QtyDec с единицей измерения вместо «x1».
 type RunnerItem struct {
 	Name      string
 	Qty       int
+	QtyDec    decimal.Decimal // фактическое qty с дробной частью (для весовых)
+	Unit      string          // "piece"|"g"|"kg" — если пусто/piece → x{Qty}
 	Modifiers []string
 	Comment   string
+}
+
+// fmtRunnerQty — «x2» для штучных, «250г» / «1,5кг» для весовых.
+// Порт логики из v1 lib/print-service.ts:155-160.
+func fmtRunnerQty(it RunnerItem) string {
+	switch it.Unit {
+	case "g":
+		// Целые граммы.
+		g := it.QtyDec.Round(0).IntPart()
+		if g <= 0 {
+			g = int64(it.Qty)
+		}
+		return strconv.FormatInt(g, 10) + "г"
+	case "kg":
+		// До 10 кг — 2 знака, иначе 1; trailing zeros — обрезаем.
+		places := int32(1)
+		if it.QtyDec.LessThan(decimal.FromInt(10)) {
+			places = 2
+		}
+		s := it.QtyDec.Round(places).String()
+		s = strings.Replace(s, ".", ",", 1)
+		// trim trailing zeros after comma
+		if strings.Contains(s, ",") {
+			s = strings.TrimRight(s, "0")
+			s = strings.TrimRight(s, ",")
+		}
+		return s + "кг"
+	default:
+		return "x" + strconv.Itoa(it.Qty)
+	}
 }
 
 // RunnerLayout — ранер на станцию. Порт buildEscPosRunner() из v1.
@@ -279,7 +314,7 @@ func RunnerLayout(in RunnerInput) []byte {
 	// ── Items — bold + double-height (НЕ double-width!) ──────────────────
 	b.FontTall().Bold(true)
 	for _, it := range in.Items {
-		qty := "x" + strconv.Itoa(it.Qty)
+		qty := fmtRunnerQty(it)
 		name := it.Name
 		// padding до ширины 20 (v1: pad = max(0, 20 - len(name) - len(qty)))
 		nameLen := visibleRuneCount(name)
@@ -370,7 +405,7 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	// ── Section 4: items (bold + double-height) ─────────────────────────
 	b.FontTall().Bold(true)
 	for _, it := range in.Items {
-		qty := "x" + strconv.Itoa(it.Qty)
+		qty := fmtRunnerQty(it)
 		name := "X " + it.Name
 		nameLen := visibleRuneCount(name)
 		qtyLen := visibleRuneCount(qty)
