@@ -25,6 +25,8 @@ import {
   fetchAssets,
   fetchLiabilities,
   fetchEquity,
+  fetchBalanceReport,
+  type BalanceReport,
   createAsset,
   updateAsset,
   deleteAsset,
@@ -150,6 +152,7 @@ export default function BalancePage() {
   const [assets, setAssets] = useState<Asset[]>([])
   const [liabilities, setLiabilities] = useState<Liability[]>([])
   const [equity, setEquity] = useState<EquityEntry[]>([])
+  const [report, setReport] = useState<BalanceReport | null>(null)
   const [loading, setLoading] = useState(true)
 
   // Dialog state
@@ -162,13 +165,14 @@ export default function BalancePage() {
 
   const loadData = useCallback(async () => {
     try {
-      const [a, i, s, as_, l, e] = await Promise.all([
+      const [a, i, s, as_, l, e, rep] = await Promise.all([
         fetchFinancialAccounts(),
         fetchIngredients(),
         fetchSuppliers(),
         fetchAssets(),
         fetchLiabilities(),
         fetchEquity(),
+        fetchBalanceReport(),
       ])
       setAccounts(a)
       setIngredients(i)
@@ -176,6 +180,7 @@ export default function BalancePage() {
       setAssets(as_)
       setLiabilities(l)
       setEquity(e)
+      setReport(rep)
     } catch {
       toast.error('Ошибка загрузки данных')
     } finally {
@@ -262,44 +267,52 @@ export default function BalancePage() {
 
   // ─── Calculations ─────────────────────────────────────────────────────────
 
-  // Current assets (auto)
+  // Current assets (auto) — cash + inventory (computed locally; server report
+  // only covers manual assets table).
   const totalCash = dSum(accounts.map(a => a.balance))
   const inventoryValue = dSum(ingredients.map(i => dMul(i.qty, i.pricePerUnit)))
   const totalCurrentAssets = dAdd(totalCash, inventoryValue)
 
-  // Non-current assets (manual) grouped by category
+  // Non-current assets (manual) grouped by category — total comes from server
+  // (decimal-precise), grouping still uses local Asset[] for the category labels.
   const assetsByCategory = new Map<AssetCategory, Asset[]>()
   for (const a of assets) {
     const list = assetsByCategory.get(a.category) ?? []
     list.push(a)
     assetsByCategory.set(a.category, list)
   }
-  const totalNonCurrentAssets = assets.reduce((s, a) => s + a.amount, 0)
+  const totalNonCurrentAssets = report?.total_assets ?? assets.reduce((s, a) => s + a.amount, 0)
 
   const totalAssets = totalCurrentAssets + totalNonCurrentAssets
 
-  // Liabilities — supplier debts (auto)
+  // Liabilities — supplier debts (auto, computed locally)
   const supplierDebts = suppliers.filter((s) => s.currentDebt > 0)
   const totalSupplierDebt = supplierDebts.reduce((s, sup) => s + sup.currentDebt, 0)
 
-  // Liabilities — manual
+  // Liabilities — manual (total from server, grouping local)
   const liabilitiesByCategory = new Map<LiabilityCategory, Liability[]>()
   for (const l of liabilities) {
     const list = liabilitiesByCategory.get(l.category) ?? []
     list.push(l)
     liabilitiesByCategory.set(l.category, list)
   }
-  const totalManualLiabilities = liabilities.reduce((s, l) => s + l.remainingAmount, 0)
+  const totalManualLiabilities = report?.total_liabilities ?? liabilities.reduce((s, l) => s + l.remainingAmount, 0)
   const totalLiabilities = totalSupplierDebt + totalManualLiabilities
 
-  // Equity (manual)
+  // Equity (manual entries — total from server)
   const equityByCategory = new Map<EquityCategory, EquityEntry[]>()
   for (const e of equity) {
     const list = equityByCategory.get(e.category) ?? []
     list.push(e)
     equityByCategory.set(e.category, list)
   }
-  const totalEquity = equity.reduce((s, e) => s + e.amount, 0)
+  const totalEquity = report?.total_equity ?? equity.reduce((s, e) => s + e.amount, 0)
+
+  // computed_equity — derived from operations history server-side.
+  // If it diverges from total_equity (manual entries), surface the discrepancy.
+  const computedEquity = report?.computed_equity ?? 0
+  const equityDiscrepancy = report ? computedEquity - totalEquity : 0
+  const hasEquityDiscrepancy = Math.abs(equityDiscrepancy) >= 1
 
   const totalPassive = totalLiabilities + totalEquity
   const difference = totalAssets - totalPassive
@@ -467,6 +480,20 @@ export default function BalancePage() {
             ))}
             {equity.length === 0 && (
               <div className="px-6 py-4 text-sm text-muted-foreground text-center">Нет записей</div>
+            )}
+            {report && (
+              <div className="px-5 py-3 bg-muted/20 border-t border-border space-y-1">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Расчётный капитал (из операций)</span>
+                  <span className="font-medium text-foreground">{formatCurrency(computedEquity)}</span>
+                </div>
+                {hasEquityDiscrepancy && (
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-amber-600">Расхождение с ручным учётом</span>
+                    <span className="font-semibold text-amber-600">{equityDiscrepancy >= 0 ? '+' : ''}{formatCurrency(equityDiscrepancy)}</span>
+                  </div>
+                )}
+              </div>
             )}
           </BalanceSection>
 

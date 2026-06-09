@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -29,6 +30,15 @@ func (h *OrdersHandler) List(w http.ResponseWriter, r *http.Request) {
 		CashierID: queryString(r, "cashier_id"),
 		Type:      queryString(r, "type"),
 		Page:      parsePage(r),
+	}
+	// ?include=items — батч-загрузка позиций (kill N+1 в fetchOrders).
+	// Принимаем CSV-список на будущее (include=items,modifiers,...).
+	if inc := queryString(r, "include"); inc != "" {
+		for _, p := range strings.Split(inc, ",") {
+			if strings.TrimSpace(p) == "items" {
+				f.WithItems = true
+			}
+		}
 	}
 	// Accept both `from` (Electron POS) and `created_at_from` (Kotlin APK)
 	// — same semantics. Tolerant к двум формам ISO: с секундами и без

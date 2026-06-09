@@ -619,6 +619,13 @@ paths:
         - { in: query, name: type, schema: { type: string } }
         - { in: query, name: from, schema: { type: string, format: date-time } }
         - { in: query, name: to, schema: { type: string, format: date-time } }
+        - in: query
+          name: include
+          description: |
+            CSV-список relation'ов для батч-загрузки. Поддерживается «items»
+            — один SELECT order_items WHERE order_id IN (...), без N+1.
+            Позиции возвращаются в поле `items` каждого OrderSlim.
+          schema: { type: string, example: "items" }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/OrdersSlimList" } } } } }
     post:
       tags: [orders]
@@ -2955,6 +2962,10 @@ components:
         total: { $ref: "#/components/schemas/Decimal" }
         total_with_service: { $ref: "#/components/schemas/Decimal" }
         created_at: { type: string, format: date-time }
+        items:
+          description: Заполняется только при ?include=items. Иначе отсутствует.
+          type: array
+          items: { $ref: "#/components/schemas/OrderItem" }
     OrdersSlimList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/OrderSlim" } }, next_cursor: { type: string } } }
 
     # ─── Printers ──

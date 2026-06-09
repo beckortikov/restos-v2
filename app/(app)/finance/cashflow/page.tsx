@@ -8,7 +8,10 @@ import {
   type FinancialOperation,
   type FinancialAccount,
 } from '@/lib/types'
-import { fetchFinancialOperations, fetchFinancialAccounts, createFinancialOperation } from '@/lib/queries'
+import {
+  fetchFinancialOperations, fetchFinancialAccounts, createFinancialOperation,
+  fetchCashflowReport, type CashflowReport,
+} from '@/lib/queries'
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
@@ -47,19 +50,32 @@ export default function CashflowPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [operations, setOperations] = useState<FinancialOperation[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  const [report, setReport] = useState<CashflowReport | null>(null)
   const [loading, setLoading] = useState(true)
 
   const reloadAll = () => {
-    Promise.all([fetchFinancialOperations(), fetchFinancialAccounts()])
-      .then(([ops, accs]) => { setOperations(ops); setAccounts(accs) })
+    const reportArgs = { from: dateFrom || undefined, to: dateTo || undefined }
+    Promise.all([fetchFinancialOperations(), fetchFinancialAccounts(), fetchCashflowReport(reportArgs)])
+      .then(([ops, accs, rep]) => { setOperations(ops); setAccounts(accs); setReport(rep) })
       .catch(() => {})
   }
 
   useEffect(() => {
-    Promise.all([fetchFinancialOperations(), fetchFinancialAccounts()])
-      .then(([ops, accs]) => { setOperations(ops); setAccounts(accs) })
+    const reportArgs = { from: dateFrom || undefined, to: dateTo || undefined }
+    Promise.all([fetchFinancialOperations(), fetchFinancialAccounts(), fetchCashflowReport(reportArgs)])
+      .then(([ops, accs, rep]) => { setOperations(ops); setAccounts(accs); setReport(rep) })
       .finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // Re-fetch report when date range changes (operations list itself is unfiltered server-side).
+  useEffect(() => {
+    if (loading) return
+    fetchCashflowReport({ from: dateFrom || undefined, to: dateTo || undefined })
+      .then(setReport)
+      .catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dateFrom, dateTo])
 
   // SSE-driven auto-refresh: другой кассир провёл операцию, закрылась смена и т.п.
   useDataSync(['financial_operations', 'cash_shifts'], reloadAll)
@@ -78,8 +94,7 @@ export default function CashflowPage() {
         description: data.description,
         isAuto: false,
       })
-      const ops = await fetchFinancialOperations()
-      setOperations(ops)
+      reloadAll()
     } catch {}
   }
 
@@ -93,9 +108,14 @@ export default function CashflowPage() {
     return matchType && matchActivity && matchDateFrom && matchDateTo
   })
 
-  const totalIn = operations.filter((o) => o.type === 'in').reduce((s, o) => s + o.amount, 0)
-  const totalOut = operations.filter((o) => o.type === 'out').reduce((s, o) => s + o.amount, 0)
-  const netFlow = totalIn - totalOut
+  // Totals from server report (period-aware, decimal-precise).
+  const totalIn = report
+    ? Object.values(report.by_activity).reduce((s, v) => s + v.in, 0)
+    : 0
+  const totalOut = report
+    ? Object.values(report.by_activity).reduce((s, v) => s + v.out, 0)
+    : 0
+  const netFlow = report?.net_total ?? (totalIn - totalOut)
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -169,8 +189,8 @@ export default function CashflowPage() {
         </div>
       </div>
 
-      {/* Charts 2x2 grid */}
-      <CashflowCharts operations={filtered} />
+      {/* Charts driven by server report */}
+      <CashflowCharts report={report} operations={filtered} />
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 items-center">
@@ -267,60 +287,44 @@ const tooltipStyle = {
   fontSize: 12,
 }
 
-function CashflowCharts({ operations }: { operations: FinancialOperation[] }) {
+const ACTIVITY_LABELS_LOCAL: Record<string, string> = {
+  operational: 'Операционная',
+  investment: 'Инвестиционная',
+  financial: 'Финансовая',
+}
+
+function CashflowCharts({ report, operations }: { report: CashflowReport | null; operations: FinancialOperation[] }) {
+  // 1. Out flow by activity (pie) — from server.
   const pieData = useMemo(() => {
-    const map: Record<string, number> = {}
-    operations.filter((o) => o.type === 'out').forEach((o) => {
-      map[o.category] = (map[o.category] || 0) + o.amount
-    })
-    const sorted = Object.entries(map).sort((a, b) => b[1] - a[1])
-    const top6 = sorted.slice(0, 6).map(([name, value]) => ({ name, value }))
-    const rest = sorted.slice(6).reduce((s, [, v]) => s + v, 0)
-    if (rest > 0) top6.push({ name: 'Прочее', value: rest })
-    return top6
-  }, [operations])
+    if (!report) return [] as { name: string; value: number }[]
+    return Object.entries(report.by_activity)
+      .map(([key, v]) => ({ name: ACTIVITY_LABELS_LOCAL[key] ?? key, value: v.out }))
+      .filter((x) => x.value > 0)
+      .sort((a, b) => b.value - a.value)
+  }, [report])
 
+  // 2. In/Out per day from server by_day (last 14 days slice).
   const barData = useMemo(() => {
-    const today = new Date()
-    const days: Record<string, { date: string; income: number; expense: number }> = {}
-    for (let i = 13; i >= 0; i--) {
-      const d = new Date(today)
-      d.setDate(d.getDate() - i)
-      const key = d.toISOString().slice(0, 10)
-      days[key] = { date: key.slice(5), income: 0, expense: 0 }
-    }
-    operations.forEach((op) => {
-      if (days[op.date]) {
-        if (op.type === 'in') days[op.date].income += op.amount
-        else if (op.type === 'out') days[op.date].expense += op.amount
-      }
-    })
-    return Object.values(days)
-  }, [operations])
+    if (!report) return [] as { date: string; income: number; expense: number }[]
+    return report.by_day.slice(-14).map((d) => ({
+      date: d.date.slice(5),
+      income: d.in,
+      expense: d.out,
+    }))
+  }, [report])
 
+  // 3. Cumulative net cash flow from server by_day (last 30 days).
   const areaData = useMemo(() => {
-    const today = new Date()
-    const days: Record<string, { date: string; net: number }> = {}
-    const keys: string[] = []
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(today)
-      d.setDate(d.getDate() - i)
-      const key = d.toISOString().slice(0, 10)
-      days[key] = { date: key.slice(5), net: 0 }
-      keys.push(key)
-    }
-    operations.forEach((op) => {
-      if (days[op.date]) {
-        days[op.date].net += op.type === 'in' ? op.amount : -op.amount
-      }
-    })
+    if (!report) return [] as { date: string; flow: number }[]
+    const slice = report.by_day.slice(-30)
     let cumulative = 0
-    return keys.map((k) => {
-      cumulative += days[k].net
-      return { date: days[k].date, flow: cumulative }
+    return slice.map((d) => {
+      cumulative += d.in - d.out
+      return { date: d.date.slice(5), flow: cumulative }
     })
-  }, [operations])
+  }, [report])
 
+  // 4. Top-5 expense ops — still needs raw ops (server report is aggregated).
   const topExpenses = useMemo(() => {
     return operations
       .filter((o) => o.type === 'out')
@@ -334,9 +338,9 @@ function CashflowCharts({ operations }: { operations: FinancialOperation[] }) {
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-      {/* 1. Расходы по категориям — Pie */}
+      {/* 1. Расходы по видам деятельности — Pie */}
       <div className="bg-card rounded-xl border border-border p-5">
-        <h2 className="text-sm font-semibold text-foreground mb-4">Расходы по категориям</h2>
+        <h2 className="text-sm font-semibold text-foreground mb-4">Расходы по видам деятельности</h2>
         {pieData.length === 0 ? (
           <div className="h-[250px] flex items-center justify-center text-sm text-muted-foreground">Нет данных</div>
         ) : (
@@ -367,31 +371,39 @@ function CashflowCharts({ operations }: { operations: FinancialOperation[] }) {
       {/* 2. Доходы vs Расходы — Grouped Bar */}
       <div className="bg-card rounded-xl border border-border p-5">
         <h2 className="text-sm font-semibold text-foreground mb-4">Доходы vs Расходы (14 дней)</h2>
-        <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={barData} margin={{ top: 5, right: 5, bottom: 5, left: 10 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
-            <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => [formatCurrency(val), '']} />
-            <Legend wrapperStyle={{ fontSize: 12 }} />
-            <Bar dataKey="income" name="Доходы" fill="#5cb85c" radius={[4, 4, 0, 0]} />
-            <Bar dataKey="expense" name="Расходы" fill="#d9534f" radius={[4, 4, 0, 0]} />
-          </BarChart>
-        </ResponsiveContainer>
+        {barData.length === 0 ? (
+          <div className="h-[250px] flex items-center justify-center text-sm text-muted-foreground">Нет данных</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={250}>
+            <BarChart data={barData} margin={{ top: 5, right: 5, bottom: 5, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => [formatCurrency(val), '']} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Bar dataKey="income" name="Доходы" fill="#5cb85c" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="expense" name="Расходы" fill="#d9534f" radius={[4, 4, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       {/* 3. Чистый денежный поток — Area */}
       <div className="bg-card rounded-xl border border-border p-5">
         <h2 className="text-sm font-semibold text-foreground mb-4">Чистый денежный поток (30 дней)</h2>
-        <ResponsiveContainer width="100%" height={250}>
-          <AreaChart data={areaData} margin={{ top: 5, right: 5, bottom: 5, left: 10 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-            <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
-            <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => [formatCurrency(val), '']} />
-            <Area type="monotone" dataKey="flow" name="Чистый поток" stroke="#5cb85c" fill="#5cb85c" fillOpacity={0.15} strokeWidth={2} />
-          </AreaChart>
-        </ResponsiveContainer>
+        {areaData.length === 0 ? (
+          <div className="h-[250px] flex items-center justify-center text-sm text-muted-foreground">Нет данных</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={250}>
+            <AreaChart data={areaData} margin={{ top: 5, right: 5, bottom: 5, left: 10 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 10, fill: 'var(--color-muted-foreground)' }} axisLine={false} tickLine={false} tickFormatter={(v) => `${(v / 1000).toFixed(0)}K`} />
+              <Tooltip contentStyle={tooltipStyle} formatter={(val: number) => [formatCurrency(val), '']} />
+              <Area type="monotone" dataKey="flow" name="Чистый поток" stroke="#5cb85c" fill="#5cb85c" fillOpacity={0.15} strokeWidth={2} />
+            </AreaChart>
+          </ResponsiveContainer>
+        )}
       </div>
 
       {/* 4. Топ-5 расходов — Horizontal Bar */}

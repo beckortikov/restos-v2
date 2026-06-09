@@ -121,6 +121,110 @@ export async function deleteBudgetLine(id: string) {
   logAction('budget.delete', 'budget', id)
 }
 
+// ─── Aggregated reports (server-computed) ─────────────────────────────────
+
+export type PnLReport = {
+  period: { from?: string; to?: string }
+  revenue: { total: number; by_method: { method: string; amount: number }[] }
+  cogs: { total: number }
+  writeoffs: number
+  opex: { total: number; by_category: { category: string; amount: number }[] }
+  gross_profit: number
+  net_profit: number
+  margin_percent: number
+}
+
+export type CashflowReport = {
+  period: { from?: string; to?: string }
+  by_activity: Record<string, { in: number; out: number; net: number }>
+  net_total: number
+  by_day: { date: string; in: number; out: number }[]
+}
+
+export type BalanceReport = {
+  assets: { id: string; name: string; amount: number }[]
+  total_assets: number
+  liabilities: { id: string; name: string; total: number; paid: number; remaining: number }[]
+  total_liabilities: number
+  equity: { id: string; name: string; amount: number }[]
+  total_equity: number
+  computed_equity: number
+}
+
+function isoOrDate(v: Date | string | undefined): string | undefined {
+  if (v == null) return undefined
+  if (v instanceof Date) return v.toISOString()
+  return String(v)
+}
+
+export async function fetchPnLReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<PnLReport> {
+  const query: Record<string, string> = {}
+  const from = isoOrDate(opts.from); if (from) query.from = from
+  const to = isoOrDate(opts.to); if (to) query.to = to
+  const r: any = await unwrap(api.GET('/api/v1/finance/pnl', { params: { query: query as any } }))
+  const revenue = r?.revenue ?? {}
+  const cogs = r?.cogs ?? {}
+  const opex = r?.opex ?? {}
+  return {
+    period: { from: r?.period?.from, to: r?.period?.to },
+    revenue: {
+      total: Number(revenue.total ?? 0),
+      by_method: (revenue.by_method ?? []).map((x: any) => ({ method: String(x.method ?? ''), amount: Number(x.amount ?? 0) })),
+    },
+    cogs: { total: Number(cogs.total ?? 0) },
+    writeoffs: Number(r?.writeoffs ?? 0),
+    opex: {
+      total: Number(opex.total ?? 0),
+      by_category: (opex.by_category ?? []).map((x: any) => ({ category: String(x.category ?? ''), amount: Number(x.amount ?? 0) })),
+    },
+    gross_profit: Number(r?.gross_profit ?? 0),
+    net_profit: Number(r?.net_profit ?? 0),
+    margin_percent: Number(r?.margin_percent ?? 0),
+  }
+}
+
+export async function fetchCashflowReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<CashflowReport> {
+  const query: Record<string, string> = {}
+  const from = isoOrDate(opts.from); if (from) query.from = from
+  const to = isoOrDate(opts.to); if (to) query.to = to
+  const r: any = await unwrap(api.GET('/api/v1/finance/cashflow', { params: { query: query as any } }))
+  const byActivity: Record<string, { in: number; out: number; net: number }> = {}
+  const ba = r?.by_activity ?? {}
+  for (const k of Object.keys(ba)) {
+    const v: any = ba[k] ?? {}
+    byActivity[k] = { in: Number(v.in ?? 0), out: Number(v.out ?? 0), net: Number(v.net ?? 0) }
+  }
+  return {
+    period: { from: r?.period?.from, to: r?.period?.to },
+    by_activity: byActivity,
+    net_total: Number(r?.net_total ?? 0),
+    by_day: (r?.by_day ?? []).map((d: any) => ({
+      date: String(d.date ?? ''),
+      in: Number(d.in ?? 0),
+      out: Number(d.out ?? 0),
+    })),
+  }
+}
+
+export async function fetchBalanceReport(): Promise<BalanceReport> {
+  const r: any = await unwrap(api.GET('/api/v1/finance/balance'))
+  return {
+    assets: (r?.assets ?? []).map((x: any) => ({ id: String(x.id ?? ''), name: String(x.name ?? ''), amount: Number(x.amount ?? 0) })),
+    total_assets: Number(r?.total_assets ?? 0),
+    liabilities: (r?.liabilities ?? []).map((x: any) => ({
+      id: String(x.id ?? ''),
+      name: String(x.name ?? ''),
+      total: Number(x.total ?? 0),
+      paid: Number(x.paid ?? 0),
+      remaining: Number(x.remaining ?? 0),
+    })),
+    total_liabilities: Number(r?.total_liabilities ?? 0),
+    equity: (r?.equity ?? []).map((x: any) => ({ id: String(x.id ?? ''), name: String(x.name ?? ''), amount: Number(x.amount ?? 0) })),
+    total_equity: Number(r?.total_equity ?? 0),
+    computed_equity: Number(r?.computed_equity ?? 0),
+  }
+}
+
 export async function fetchMonthlyRevenue() {
   const res: any = await unwrap(api.GET('/api/v1/finance/monthly-revenue', { params: { query: { months: 12 } } }))
   const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []

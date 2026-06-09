@@ -1731,6 +1731,12 @@ export interface paths {
                     type?: string;
                     from?: string;
                     to?: string;
+                    /**
+                     * @description CSV-список relation'ов для батч-загрузки. Поддерживается «items»
+                     *     — один SELECT order_items WHERE order_id IN (...), без N+1.
+                     *     Позиции возвращаются в поле `items` каждого OrderSlim.
+                     */
+                    include?: string;
                 };
                 header?: never;
                 path?: never;
@@ -9206,6 +9212,8 @@ export interface components {
             total_with_service?: components["schemas"]["Decimal"];
             /** Format: date-time */
             created_at?: string;
+            /** @description Заполняется только при ?include=items. Иначе отсутствует. */
+            items?: components["schemas"]["OrderItem"][];
         };
         OrdersSlimList: {
             data?: components["schemas"]["OrderSlim"][];

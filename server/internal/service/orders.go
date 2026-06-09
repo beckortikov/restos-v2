@@ -43,15 +43,16 @@ func (s *OrdersService) publish(ctx context.Context, restaurantID string, buf *E
 
 // OrdersFilter — фильтры для GET /orders.
 type OrdersFilter struct {
-	Status    string
-	TableID   string
-	ShiftID   string
-	WaiterID  string     // filter by orders.waiter_id (для «Мои заказы» в Kotlin APK)
-	CashierID string     // filter by orders.cashier_id (для history-таба «по кассиру»)
-	Type      string     // filter by orders.type (hall|takeaway|delivery)
-	From      *time.Time // created_at >=
-	To        *time.Time // created_at <
-	Page      cursor.Page
+	Status     string
+	TableID    string
+	ShiftID    string
+	WaiterID   string     // filter by orders.waiter_id (для «Мои заказы» в Kotlin APK)
+	CashierID  string     // filter by orders.cashier_id (для history-таба «по кассиру»)
+	Type       string     // filter by orders.type (hall|takeaway|delivery)
+	From       *time.Time // created_at >=
+	To         *time.Time // created_at <
+	WithItems  bool       // ?include=items → загрузить все order_items одним батчем (kill N+1)
+	Page       cursor.Page
 }
 
 // OrderSlim — компактный DTO для списка. Без items/modifiers — это «карточка»
@@ -83,6 +84,10 @@ type OrderSlim struct {
 	// Counts: число активных (не-cancelled) позиций в заказе. Считается одним
 	// GROUP BY в enrichSlim — без N+1.
 	ItemsCount int `json:"items_count"`
+	// Items — заполняется ТОЛЬКО при ?include=items. Один батч-SELECT для
+	// всех order_id, группировка в Go. Используется аналитикой и кассиром
+	// (вместо 1+N запросов «slim + per-order detail»).
+	Items []models.OrderItem `json:"items,omitempty"`
 }
 
 // orderSlimRow — внутреннее: GORM-биндинг (имена колонок).
@@ -182,7 +187,52 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 	trimmed, next := cursor.Next(out, limit, func(m OrderSlim) cursor.Token {
 		return cursor.Token{Time: m.CreatedAt, ID: m.ID}
 	})
+	// Опциональный батч items — для аналитики и кассира, чтобы не делать
+	// 1 + len(trimmed) HTTP-запросов с фронта. ВАЖНО: после Next() — items
+	// тянем только для того, что реально вернётся клиенту.
+	if f.WithItems && len(trimmed) > 0 {
+		if err := s.attachItems(ctx, trimmed); err != nil {
+			return nil, "", err
+		}
+	}
 	return trimmed, next, nil
+}
+
+// attachItems — батч SELECT order_items WHERE order_id IN (...), группировка по
+// order_id, разложение в OrderSlim.Items. Один запрос вместо N+1.
+//
+// КРИТИЧНО: фильтрация по tenant_id уже выполнена в List через ForTenant; здесь
+// мы тянем items по уже-проверенным order_id. Дополнительный tenant-фильтр на
+// order_items избыточен (PRD 05: order_items.restaurant_id денормализован, но
+// сами order_id принадлежат tenant'у по построению).
+func (s *OrdersService) attachItems(ctx context.Context, orders []OrderSlim) error {
+	if len(orders) == 0 {
+		return nil
+	}
+	ids := make([]string, len(orders))
+	for i, o := range orders {
+		ids[i] = o.ID
+	}
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var items []models.OrderItem
+	if err := scoped.Where("order_id IN ?", ids).
+		Order("created_at ASC").Find(&items).Error; err != nil {
+		return err
+	}
+	byOrder := make(map[string][]models.OrderItem, len(orders))
+	for _, it := range items {
+		if it.OrderID == nil {
+			continue
+		}
+		byOrder[*it.OrderID] = append(byOrder[*it.OrderID], it)
+	}
+	for i := range orders {
+		orders[i].Items = byOrder[orders[i].ID]
+	}
+	return nil
 }
 
 // OrderDetail — заказ со всеми relation'ами (items + modifiers + voids).

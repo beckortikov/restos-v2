@@ -36,7 +36,8 @@ export async function fetchOrders(opts?: FetchOrdersOptions): Promise<Order[]> {
 }
 
 export async function fetchOrdersWithCursor(opts?: FetchOrdersOptions): Promise<FetchOrdersResult> {
-  const query: { limit: number; shift_id?: string; table_id?: string; from?: string; to?: string; status?: string; type?: string; waiter_id?: string; cashier_id?: string; cursor?: string } = { limit: opts?.limit ?? 1000 }
+  const wantItems = !opts?.slim
+  const query: { limit: number; shift_id?: string; table_id?: string; from?: string; to?: string; status?: string; type?: string; waiter_id?: string; cashier_id?: string; cursor?: string; include?: string } = { limit: opts?.limit ?? 1000 }
   if (opts?.shiftId) query.shift_id = opts.shiftId
   if (opts?.tableId) query.table_id = opts.tableId
   if (opts?.status) query.status = opts.status
@@ -46,6 +47,11 @@ export async function fetchOrdersWithCursor(opts?: FetchOrdersOptions): Promise<
   if (opts?.cursor) query.cursor = opts.cursor
   if (opts?.from) query.from = typeof opts.from === 'string' ? opts.from : opts.from.toISOString()
   if (opts?.to) query.to = typeof opts.to === 'string' ? opts.to : opts.to.toISOString()
+  // v3.1.0: batch-загрузка items в одном запросе. Старое поведение делало
+  // 1 + N HTTP-запросов (slim + per-order detail) — на 1000 заказов это 1001
+  // последовательный round-trip и убивало аналитику. Бэк теперь возвращает
+  // items[] прямо в OrderSlim при ?include=items.
+  if (wantItems) query.include = 'items'
   const env: any = await unwrap(api.GET('/api/v1/orders', { params: { query: query as any } }))
   let rows: any[] = Array.isArray(env?.data) ? env.data : Array.isArray(env) ? env : []
   const nextCursor: string | null = (env?.next_cursor as string) ?? (env?.nextCursor as string) ?? null
@@ -53,21 +59,14 @@ export async function fetchOrdersWithCursor(opts?: FetchOrdersOptions): Promise<
     const set = new Set(opts.ids)
     rows = rows.filter(r => set.has(r.id))
   }
-  const wantItems = !opts?.slim
   if (!wantItems) {
     return { orders: rows.map(r => _mapV4Order(r, [])), nextCursor }
   }
-  const out: Order[] = []
-  for (const r of rows) {
-    try {
-      const detail: any = await unwrap(api.GET('/api/v1/orders/{id}', { params: { path: { id: r.id } } }))
-      const items = detail?.items ?? detail?.order_items ?? []
-      _registerItems(r.id, items)
-      out.push(_mapV4Order(detail?.order ?? r, items))
-    } catch {
-      out.push(_mapV4Order(r, []))
-    }
-  }
+  const out: Order[] = rows.map(r => {
+    const items = Array.isArray(r?.items) ? r.items : []
+    _registerItems(r.id, items)
+    return _mapV4Order(r, items)
+  })
   return { orders: out, nextCursor }
 }
 
