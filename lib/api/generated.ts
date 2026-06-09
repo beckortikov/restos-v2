@@ -7259,6 +7259,201 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/abc-menu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ABC-анализ блюд по выручке (Pareto) */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ABCMenuReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/peak-hours": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Гистограмма weekday × hour (загрузка по часам) */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PeakHoursReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/waiters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Статистика по официантам за период */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WaitersReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Оборачиваемость столов за период */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TablesAnalyticsReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/food-cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Food-cost по блюдам (revenue / cogs / margin) */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FoodCostReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/pay": {
         parameters: {
             query?: never;
@@ -9914,6 +10109,115 @@ export interface components {
         };
         MonthlyRevenueList: {
             data?: components["schemas"]["MonthlyRevenue"][];
+        };
+        ABCMenuRow: {
+            /** Format: uuid */
+            menu_item_id?: string;
+            name?: string;
+            qty?: components["schemas"]["Decimal"];
+            revenue?: components["schemas"]["Decimal"];
+            cogs?: components["schemas"]["Decimal"];
+            gross_profit?: components["schemas"]["Decimal"];
+            margin_percent?: components["schemas"]["Decimal"];
+            share?: components["schemas"]["Decimal"];
+            cum_share?: components["schemas"]["Decimal"];
+            /** @enum {string} */
+            class?: "A" | "B" | "C";
+        };
+        ABCMenuReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_revenue?: components["schemas"]["Decimal"];
+            total_cogs?: components["schemas"]["Decimal"];
+            items?: components["schemas"]["ABCMenuRow"][];
+        };
+        PeakHoursCell: {
+            /** @description 0=Sun, 6=Sat (Postgres DOW) */
+            weekday?: number;
+            hour?: number;
+            orders?: number;
+            revenue?: components["schemas"]["Decimal"];
+        };
+        PeakHoursReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_orders?: number;
+            total_revenue?: components["schemas"]["Decimal"];
+            cells?: components["schemas"]["PeakHoursCell"][];
+        };
+        WaiterAnalyticsRow: {
+            waiter_id?: string;
+            name?: string;
+            orders?: number;
+            revenue?: components["schemas"]["Decimal"];
+            items_sold?: components["schemas"]["Decimal"];
+            avg_check?: components["schemas"]["Decimal"];
+            service_amount?: components["schemas"]["Decimal"];
+            tip_amount?: components["schemas"]["Decimal"];
+        };
+        WaitersReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_revenue?: components["schemas"]["Decimal"];
+            total_orders?: number;
+            rows?: components["schemas"]["WaiterAnalyticsRow"][];
+        };
+        TableAnalyticsRow: {
+            table_id?: string;
+            name?: string;
+            zone_name?: string;
+            orders?: number;
+            revenue?: components["schemas"]["Decimal"];
+            avg_check?: components["schemas"]["Decimal"];
+            avg_duration_min?: components["schemas"]["Decimal"];
+            guests_total?: number;
+        };
+        TablesAnalyticsReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_revenue?: components["schemas"]["Decimal"];
+            total_orders?: number;
+            rows?: components["schemas"]["TableAnalyticsRow"][];
+        };
+        FoodCostRow: {
+            /** Format: uuid */
+            menu_item_id?: string;
+            name?: string;
+            qty?: components["schemas"]["Decimal"];
+            revenue?: components["schemas"]["Decimal"];
+            cogs?: components["schemas"]["Decimal"];
+            food_cost_pct?: components["schemas"]["Decimal"];
+            gross_profit?: components["schemas"]["Decimal"];
+            margin_percent?: components["schemas"]["Decimal"];
+        };
+        FoodCostReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_revenue?: components["schemas"]["Decimal"];
+            total_cogs?: components["schemas"]["Decimal"];
+            food_cost_pct?: components["schemas"]["Decimal"];
+            margin_percent?: components["schemas"]["Decimal"];
+            rows?: components["schemas"]["FoodCostRow"][];
         };
         SalaryPayInput: {
             /** Format: uuid */

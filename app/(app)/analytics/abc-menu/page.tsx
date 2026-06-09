@@ -1,85 +1,16 @@
 'use client'
 
-import { lazy, Suspense } from 'react'
-import { useState, useEffect, useMemo } from 'react'
-import { formatCurrency, calcLineTotal, calcLineCogs } from '@/lib/helpers'
-import { dDiv, dMul, dSub, dSum } from '@/lib/decimal'
-import type { ABCClass, MenuItem, Order } from '@/lib/types'
-import { fetchMenuItems, fetchOrders } from '@/lib/queries'
+import { lazy, useState, useEffect, useMemo } from 'react'
+import { formatCurrency } from '@/lib/helpers'
+import type { ABCClass } from '@/lib/types'
+import { fetchABCMenu, type ABCMenuReport } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
 import { Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
-import { DatePeriodFilter, filterByDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { toast } from 'sonner'
 
 const AbcMenuScatter = lazy(() => import('@/components/charts/abc-menu-scatter'))
-
-type MenuClass = 'star' | 'workhorse' | 'puzzle' | 'dog'
-const MENU_CLASS_LABELS: Record<MenuClass, { label: string; emoji: string; color: string; desc: string }> = {
-  star:      { label: 'Звезда',           emoji: '⭐', color: 'text-emerald-600', desc: 'Продвигать' },
-  workhorse: { label: 'Рабочая лошадка', emoji: '🐴', color: 'text-blue-600',    desc: 'Поднять цену' },
-  puzzle:    { label: 'Загадка',          emoji: '❓', color: 'text-amber-600',   desc: 'Продвигать активнее' },
-  dog:       { label: 'Собака',           emoji: '🐕', color: 'text-red-600',     desc: 'Убрать из меню' },
-}
-
-// ABC + Menu Engineering: popularity × profitability
-function computeABC(menuItems: MenuItem[], orders: Order[]) {
-  const salesMap: Record<string, { qty: number; revenue: number; cogs: number }> = {}
-  menuItems.forEach((m) => {
-    salesMap[m.id] = { qty: 0, revenue: 0, cogs: 0 }
-  })
-  orders.forEach((o) => {
-    o.items.forEach((item) => {
-      if (!salesMap[item.menuItemId]) salesMap[item.menuItemId] = { qty: 0, revenue: 0, cogs: 0 }
-      // For weight items (g/kg), accumulate effective portions (qty / unitSize), so
-      // salesMap.qty and averages compare apples-to-apples with piece items.
-      const effectivePortions = item.unit && item.unit !== 'piece'
-        ? item.qty / (item.unitSize && item.unitSize > 0 ? item.unitSize : 1)
-        : item.qty
-      salesMap[item.menuItemId].qty += effectivePortions
-      salesMap[item.menuItemId].revenue += calcLineTotal(item.price, item.qty, item.unit, item.unitSize)
-      salesMap[item.menuItemId].cogs += calcLineCogs(item.cogs, item.qty, item.unit, item.unitSize)
-    })
-  })
-
-  const totalRevenue = dSum(Object.values(salesMap).map(v => v.revenue))
-  const enriched = menuItems.map((m) => {
-    const s = salesMap[m.id] || { qty: 0, revenue: 0, cogs: 0 }
-    const margin = s.revenue > 0
-      ? dMul(dDiv(dSub(s.revenue, s.cogs), s.revenue), 100)
-      : (m.price > 0 ? dMul(dDiv(dSub(m.price, m.cogs), m.price), 100) : 0)
-    return { ...m, ...s, margin }
-  })
-
-  // Calculate medians for menu engineering classification
-  const soldItems = enriched.filter(i => i.qty > 0)
-  const avgQty = soldItems.length > 0 ? dDiv(dSum(soldItems.map(i => i.qty)), soldItems.length) : 0
-  const avgMargin = soldItems.length > 0 ? dDiv(dSum(soldItems.map(i => i.margin)), soldItems.length) : 50
-
-  const sorted = enriched.sort((a, b) => b.revenue - a.revenue)
-
-  let cumulative = 0
-  return sorted.map((item) => {
-    cumulative += item.revenue
-    const share = totalRevenue > 0 ? (cumulative / totalRevenue) * 100 : 0
-    // v2.8.2: если total=0 (нет продаж) → все блюда «нет данных» вместо
-    // ошибочного «A» (раньше share=0 ≤ 80 трактовалось как A для всех).
-    // Также если item.revenue=0 (одно блюдо без продаж среди продававшихся)
-    // — это «C», а не «A».
-    const abc: ABCClass = totalRevenue === 0 || item.revenue === 0
-      ? 'C'
-      : share <= 80 ? 'A' : share <= 95 ? 'B' : 'C'
-
-    // Menu engineering: popularity (qty) × profitability (margin)
-    const highPop = item.qty >= avgQty
-    const highMargin = item.margin >= avgMargin
-    const menuClass: MenuClass = highPop && highMargin ? 'star'
-      : highPop && !highMargin ? 'workhorse'
-      : !highPop && highMargin ? 'puzzle'
-      : 'dog'
-
-    return { ...item, abc, menuClass, share: totalRevenue > 0 ? (item.revenue / totalRevenue) * 100 : 0 }
-  })
-}
 
 const ABC_COLORS: Record<ABCClass, string> = {
   A: 'oklch(0.64 0.18 145)',
@@ -99,28 +30,50 @@ const ABC_DESC: Record<ABCClass, string> = {
   C: 'Слабые — нижние 5%',
 }
 
+interface UIItem {
+  id: string
+  name: string
+  qty: number
+  revenue: number
+  cogs: number
+  margin: number
+  share: number
+  abc: ABCClass
+}
+
 export default function AbcMenuPage() {
   const { canDo } = useAuth()
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([])
-  const [orders, setOrders] = useState<Order[]>([])
+  const [report, setReport] = useState<ABCMenuReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>('month')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
 
   useEffect(() => {
-    Promise.all([fetchMenuItems(), fetchOrders()])
-      .then(([mi, o]) => { setMenuItems(mi); setOrders(o) })
+    setLoading(true)
+    const { from, to } = getDateRange(period, customFrom, customTo)
+    fetchABCMenu({ from: from ?? undefined, to: to ?? undefined })
+      .then(setReport)
+      .catch(() => toast.error('Ошибка загрузки ABC-анализа'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [period, customFrom, customTo])
 
-  const filteredOrders = useMemo(() => filterByDateRange(orders, o => o.closedAt, period, customFrom, customTo), [orders, period, customFrom, customTo])
-
-  const items = useMemo(() => computeABC(menuItems, filteredOrders), [menuItems, filteredOrders])
+  const items: UIItem[] = useMemo(() => {
+    if (!report) return []
+    return report.items.map(it => ({
+      id: it.menu_item_id,
+      name: it.name,
+      qty: Number(it.qty),
+      revenue: Number(it.revenue),
+      cogs: Number(it.cogs),
+      margin: Number(it.margin_percent),
+      share: Number(it.share),
+      abc: it.class,
+    }))
+  }, [report])
 
   const summaryKPIs = useMemo(() => {
     if (items.length === 0) return null
-    const totalItems = items.length
     const aItems = items.filter(i => i.abc === 'A')
     const bItems = items.filter(i => i.abc === 'B')
     const cItems = items.filter(i => i.abc === 'C')
@@ -141,7 +94,7 @@ export default function AbcMenuPage() {
   const recommendations = useMemo(() => {
     const recs: { type: 'warning' | 'tip' | 'opportunity'; text: string }[] = []
     for (const item of items) {
-      if (item.abc === 'C' && item.margin < 30) {
+      if (item.abc === 'C' && item.margin < 30 && item.revenue > 0) {
         recs.push({
           type: 'warning',
           text: `⚠️ Рекомендуем убрать ${item.name} — ${item.share.toFixed(1)}% выручки, маржа ${item.margin.toFixed(1)}%`,
@@ -178,9 +131,7 @@ export default function AbcMenuPage() {
     abc: item.abc,
   }))
 
-  // v2.8.2: показываем info-баннер если за период не было продаж.
-  // Раньше все блюда попадали в категорию A из-за бага в computeABC.
-  const totalRevenueAll = items.reduce((s, i) => s + i.revenue, 0)
+  const totalRevenueAll = report ? Number(report.total_revenue) : 0
   const hasNoSales = totalRevenueAll === 0
 
   return (
@@ -191,8 +142,7 @@ export default function AbcMenuPage() {
           <div className="text-sm text-amber-900">
             <p className="font-semibold">Нет продаж за выбранный период</p>
             <p className="text-amber-700 mt-0.5">
-              ABC-анализ нуждается в данных о реальных заказах. Все {items.length} блюд
-              показаны как «C» (нет данных). Выберите другой период или дождитесь первых продаж.
+              ABC-анализ нуждается в данных о реальных заказах. Выберите другой период или дождитесь первых продаж.
             </p>
           </div>
         </div>
@@ -200,7 +150,7 @@ export default function AbcMenuPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">ABC-анализ меню</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Популярность × Маржинальность — какие блюда оставить, какие убрать</p>
+          <p className="text-muted-foreground text-sm mt-0.5">Какие блюда дают 80% выручки</p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -209,11 +159,11 @@ export default function AbcMenuPage() {
                 items.map(i => ({ ...i })),
                 [
                   { key: 'name', header: 'Блюдо' },
-                  { key: 'category', header: 'Категория' },
                   { key: 'qty', header: 'Продано' },
                   { key: 'revenue', header: 'Выручка' },
                   { key: 'cogs', header: 'Себестоимость' },
                   { key: 'margin', header: 'Маржа %', format: (v) => Number(Number(v).toFixed(1)) },
+                  { key: 'share', header: 'Доля %', format: (v) => Number(Number(v).toFixed(1)) },
                   { key: 'abc', header: 'ABC класс' },
                 ],
                 'ABC-анализ'
@@ -272,7 +222,7 @@ export default function AbcMenuPage() {
         <table className="w-full text-sm min-w-[700px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              {['Класс', 'Тип', 'Блюдо', 'Категория', 'Продано', 'Выручка', 'Маржа', 'Действие'].map((h) => (
+              {['Класс', 'Блюдо', 'Продано', 'Выручка', 'Доля', 'Маржа'].map((h) => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
               ))}
             </tr>
@@ -283,29 +233,20 @@ export default function AbcMenuPage() {
                 <td className="px-4 py-3">
                   <span className={`size-6 rounded font-bold text-xs flex items-center justify-center ${ABC_BG[item.abc]}`}>{item.abc}</span>
                 </td>
-                <td className="px-4 py-3">
-                  <span className={`text-xs font-medium ${MENU_CLASS_LABELS[item.menuClass].color}`}>
-                    {MENU_CLASS_LABELS[item.menuClass].emoji} {MENU_CLASS_LABELS[item.menuClass].label}
-                  </span>
-                </td>
                 <td className="px-4 py-3 font-medium text-foreground">{item.name}</td>
-                <td className="px-4 py-3">
-                  <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{item.category}</span>
-                </td>
                 <td className="px-4 py-3 text-foreground">{item.qty} порц.</td>
                 <td className="px-4 py-3 font-medium text-foreground">{formatCurrency(item.revenue)}</td>
+                <td className="px-4 py-3 text-muted-foreground">{item.share.toFixed(1)}%</td>
                 <td className="px-4 py-3">
                   <span className={`text-sm font-semibold ${item.margin >= 60 ? 'text-emerald-600' : item.margin >= 40 ? 'text-amber-600' : 'text-destructive'}`}>
                     {(item.margin || 0).toFixed(1)}%
                   </span>
                 </td>
-                <td className="px-4 py-3">
-                  <span className={`text-xs font-medium ${MENU_CLASS_LABELS[item.menuClass].color}`}>
-                    {MENU_CLASS_LABELS[item.menuClass].desc}
-                  </span>
-                </td>
               </tr>
             ))}
+            {items.length === 0 && (
+              <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+            )}
           </tbody>
         </table>
         </div>

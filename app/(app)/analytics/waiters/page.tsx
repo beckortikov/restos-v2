@@ -2,20 +2,18 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import type { Order, User } from '@/lib/types'
-import { fetchOrders, fetchUsers } from '@/lib/queries'
+import { fetchWaitersAnalytics, type WaitersReport } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
 import {
-  Trophy,
   TrendingUp,
   ShoppingBag,
-  Clock,
   Users as UsersIcon,
   Star,
   ArrowUpDown,
   Download,
 } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
+import { toast } from 'sonner'
 
 type Period = 'today' | 'week' | 'month' | 'all'
 
@@ -26,25 +24,21 @@ const PERIOD_OPTIONS: { value: Period; label: string }[] = [
   { value: 'all', label: 'Все время' },
 ]
 
-function isInPeriod(dateStr: string, period: Period): boolean {
-  if (period === 'all') return true
-  const d = new Date(dateStr)
+function periodToRange(period: Period): { from?: string; to?: string } {
+  if (period === 'all') return {}
   const now = new Date()
+  const from = new Date()
   if (period === 'today') {
-    return d.toISOString().slice(0, 10) === now.toISOString().slice(0, 10)
+    from.setHours(0, 0, 0, 0)
+  } else if (period === 'week') {
+    from.setDate(now.getDate() - 7)
+  } else {
+    from.setDate(now.getDate() - 30)
   }
-  if (period === 'week') {
-    const weekAgo = new Date(now.getTime() - 7 * 86400000)
-    return d >= weekAgo
-  }
-  if (period === 'month') {
-    const monthAgo = new Date(now.getTime() - 30 * 86400000)
-    return d >= monthAgo
-  }
-  return true
+  return { from: from.toISOString(), to: now.toISOString() }
 }
 
-type SortBy = 'revenue' | 'orders' | 'avgCheck' | 'avgTime'
+type SortBy = 'revenue' | 'orders' | 'avgCheck' | 'items'
 
 interface WaiterStat {
   id: string
@@ -53,75 +47,46 @@ interface WaiterStat {
   orderCount: number
   avgCheck: number
   itemsServed: number
-  avgServiceMin: number
   serviceEarned: number
-  bestDay: string
-  bestDayRevenue: number
-  dailyRevenue: { date: string; revenue: number }[]
+  tipAmount: number
 }
 
 export default function WaitersAnalyticsPage() {
   const { canDo } = useAuth()
-  const [orders, setOrders] = useState<Order[]>([])
-  const [users, setUsers] = useState<User[]>([])
+  const [report, setReport] = useState<WaitersReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('month')
   const [sortBy, setSortBy] = useState<SortBy>('revenue')
 
   useEffect(() => {
-    Promise.all([fetchOrders(), fetchUsers()])
-      .then(([o, u]) => { setOrders(o); setUsers(u) })
+    setLoading(true)
+    const { from, to } = periodToRange(period)
+    fetchWaitersAnalytics({ from, to })
+      .then(setReport)
+      .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [period])
 
-  const waiters = useMemo(() => users.filter(u => u.role === 'waiter'), [users])
-
-  const stats = useMemo<WaiterStat[]>(() => {
-    const closedOrders = orders.filter(o => o.status === 'done' && o.closedAt && isInPeriod(o.closedAt, period))
-
-    return waiters.map(w => {
-      const waiterOrders = closedOrders.filter(o => o.waiterId === w.id)
-      const revenue = waiterOrders.reduce((s, o) => s + o.total, 0)
-      const orderCount = waiterOrders.length
-      const avgCheck = orderCount > 0 ? revenue / orderCount : 0
-      const itemsServed = waiterOrders.reduce((s, o) => s + o.items.reduce((is, i) => is + i.qty, 0), 0)
-
-      // Average service time (created → closed)
-      const serviceTimes = waiterOrders
-        .filter(o => o.createdAt && o.closedAt)
-        .map(o => (new Date(o.closedAt!).getTime() - new Date(o.createdAt).getTime()) / 60000)
-      const avgServiceMin = serviceTimes.length > 0 ? serviceTimes.reduce((s, t) => s + t, 0) / serviceTimes.length : 0
-
-      // Daily revenue breakdown
-      const dailyMap: Record<string, number> = {}
-      waiterOrders.forEach(o => {
-        const day = o.closedAt!.slice(0, 10)
-        dailyMap[day] = (dailyMap[day] || 0) + o.total
-      })
-      const dailyRevenue = Object.entries(dailyMap)
-        .map(([date, rev]) => ({ date, revenue: rev }))
-        .sort((a, b) => a.date.localeCompare(b.date))
-
-      // Best day
-      let bestDay = ''
-      let bestDayRevenue = 0
-      for (const [day, rev] of Object.entries(dailyMap)) {
-        if (rev > bestDayRevenue) { bestDay = day; bestDayRevenue = rev }
-      }
-
-      // Service charge earned
-      const serviceEarned = waiterOrders.reduce((s, o) => s + (o.serviceAmount ?? 0), 0)
-
-      return { id: w.id, name: w.name, revenue, orderCount, avgCheck, itemsServed, avgServiceMin, serviceEarned, bestDay, bestDayRevenue, dailyRevenue }
-    })
-  }, [waiters, orders, period])
+  const stats: WaiterStat[] = useMemo(() => {
+    if (!report) return []
+    return report.rows.map(r => ({
+      id: r.waiter_id,
+      name: r.name,
+      revenue: Number(r.revenue),
+      orderCount: r.orders,
+      avgCheck: Number(r.avg_check),
+      itemsServed: Number(r.items_sold),
+      serviceEarned: Number(r.service_amount),
+      tipAmount: Number(r.tip_amount),
+    }))
+  }, [report])
 
   const sorted = useMemo(() => {
     return [...stats].sort((a, b) => {
       if (sortBy === 'revenue') return b.revenue - a.revenue
       if (sortBy === 'orders') return b.orderCount - a.orderCount
       if (sortBy === 'avgCheck') return b.avgCheck - a.avgCheck
-      if (sortBy === 'avgTime') return a.avgServiceMin - b.avgServiceMin
+      if (sortBy === 'items') return b.itemsServed - a.itemsServed
       return 0
     })
   }, [stats, sortBy])
@@ -168,6 +133,7 @@ export default function WaitersAnalyticsPage() {
                   { key: 'revenue', header: 'Выручка' },
                   { key: 'avgCheck', header: 'Ср. чек', format: (v) => Number(Number(v).toFixed(0)) },
                   { key: 'serviceEarned', header: 'Обслуживание' },
+                  { key: 'tipAmount', header: 'Чаевые' },
                 ],
                 'Аналитика-официанты'
               )
@@ -200,7 +166,7 @@ export default function WaitersAnalyticsPage() {
             <UsersIcon className="size-4 text-muted-foreground" />
             <span className="text-[11px] text-muted-foreground uppercase tracking-wide">Официантов</span>
           </div>
-          <p className="text-2xl font-bold">{waiters.length}</p>
+          <p className="text-2xl font-bold">{stats.length}</p>
         </div>
         <div className="bg-card rounded-xl border border-border p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -252,19 +218,12 @@ export default function WaitersAnalyticsPage() {
                     <p className="text-lg font-bold text-foreground">{formatCurrency(w.avgCheck)}</p>
                   </div>
                   <div>
-                    <p className="text-[10px] text-muted-foreground uppercase">Ср. время</p>
-                    <p className="text-lg font-bold text-foreground">{w.avgServiceMin > 0 ? `${Math.round(w.avgServiceMin)} мин` : '—'}</p>
+                    <p className="text-[10px] text-muted-foreground uppercase">Чаевые</p>
+                    <p className="text-lg font-bold text-foreground">{w.tipAmount > 0 ? formatCurrency(w.tipAmount) : '—'}</p>
                   </div>
                   <div>
                     <p className="text-[10px] text-muted-foreground uppercase">Обслуживание</p>
                     <p className="text-lg font-bold text-emerald-600">{w.serviceEarned > 0 ? formatCurrency(w.serviceEarned) : '—'}</p>
-                  </div>
-                  <div>
-                    <p className="text-[10px] text-muted-foreground uppercase">Лучший день</p>
-                    <p className="text-sm font-bold text-foreground">
-                      {w.bestDay ? `${new Date(w.bestDay).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}` : '—'}
-                    </p>
-                    {w.bestDayRevenue > 0 && <p className="text-[10px] text-emerald-600 font-medium">{formatCurrency(w.bestDayRevenue)}</p>}
                   </div>
                 </div>
               </div>
@@ -281,7 +240,7 @@ export default function WaitersAnalyticsPage() {
           { value: 'revenue' as SortBy, label: 'Выручка' },
           { value: 'orders' as SortBy, label: 'Заказы' },
           { value: 'avgCheck' as SortBy, label: 'Ср. чек' },
-          { value: 'avgTime' as SortBy, label: 'Ср. время' },
+          { value: 'items' as SortBy, label: 'Позиций' },
         ]).map(opt => (
           <button
             key={opt.value}
@@ -301,7 +260,7 @@ export default function WaitersAnalyticsPage() {
           <table className="w-full text-sm min-w-[800px]">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                {['#', 'Официант', 'Заказов', 'Позиций', 'Выручка', 'Обслуж.', 'Ср. чек', 'Ср. время', 'Лучший день'].map(h => (
+                {['#', 'Официант', 'Заказов', 'Позиций', 'Выручка', 'Обслуж.', 'Чаевые', 'Ср. чек'].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -324,27 +283,12 @@ export default function WaitersAnalyticsPage() {
                   <td className="px-4 py-3 text-muted-foreground">{w.itemsServed}</td>
                   <td className="px-4 py-3 font-semibold text-foreground">{formatCurrency(w.revenue)}</td>
                   <td className="px-4 py-3 text-emerald-600 font-medium">{w.serviceEarned > 0 ? formatCurrency(w.serviceEarned) : '—'}</td>
+                  <td className="px-4 py-3 text-foreground">{w.tipAmount > 0 ? formatCurrency(w.tipAmount) : '—'}</td>
                   <td className="px-4 py-3 text-foreground">{w.avgCheck > 0 ? formatCurrency(w.avgCheck) : '—'}</td>
-                  <td className="px-4 py-3 text-foreground">
-                    {w.avgServiceMin > 0 ? (
-                      <span className={`inline-flex items-center gap-1 ${w.avgServiceMin > 60 ? 'text-destructive' : w.avgServiceMin > 30 ? 'text-amber-600' : 'text-emerald-600'}`}>
-                        <Clock className="size-3" />
-                        {Math.round(w.avgServiceMin)} мин
-                      </span>
-                    ) : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground text-xs">
-                    {w.bestDay ? (
-                      <span>
-                        {new Date(w.bestDay).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
-                        <span className="text-emerald-600 font-medium ml-1">{formatCurrency(w.bestDayRevenue)}</span>
-                      </span>
-                    ) : '—'}
-                  </td>
                 </tr>
               ))}
               {sorted.length === 0 && (
-                <tr><td colSpan={9} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
               )}
             </tbody>
           </table>

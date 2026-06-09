@@ -1,11 +1,10 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { lazy, Suspense } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchOrders } from '@/lib/queries'
+import { fetchPeakHours, type PeakHoursReport } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
-import type { Order } from '@/lib/types'
+import { toast } from 'sonner'
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
@@ -50,13 +49,13 @@ const HOURS_RANGE = Array.from({ length: 16 }, (_, i) => i + 8) // 8-23
 
 type Period = 'week' | 'month' | 'all'
 
-function filterOrdersByPeriod(orders: Order[], period: Period): Order[] {
-  if (period === 'all') return orders
+function periodToRange(period: Period): { from?: string; to?: string } {
+  if (period === 'all') return {}
   const now = new Date()
-  const cutoff = new Date()
-  if (period === 'week') cutoff.setDate(now.getDate() - 7)
-  else cutoff.setMonth(now.getMonth() - 1)
-  return orders.filter(o => new Date(o.createdAt) >= cutoff)
+  const from = new Date()
+  if (period === 'week') from.setDate(now.getDate() - 7)
+  else from.setMonth(now.getMonth() - 1)
+  return { from: from.toISOString(), to: now.toISOString() }
 }
 
 function getHeatColor(value: number, max: number): string {
@@ -70,97 +69,105 @@ function getHeatColor(value: number, max: number): string {
 
 export default function PeakHoursPage() {
   const { canDo } = useAuth()
-  const [orders, setOrders] = useState<Order[]>([])
+  const [report, setReport] = useState<PeakHoursReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('all')
 
   useEffect(() => {
-    fetchOrders()
-      .then(setOrders)
+    setLoading(true)
+    const { from, to } = periodToRange(period)
+    fetchPeakHours({ from, to })
+      .then(setReport)
+      .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [period])
 
-  const filtered = useMemo(() => filterOrdersByPeriod(orders, period), [orders, period])
+  // Build dense grid weekday × hour from sparse server cells.
+  // weekday: 0=Sun..6=Sat (Postgres EXTRACT(DOW) === JS Date.getDay())
+  const grid = useMemo(() => {
+    const ordersGrid: Record<string, number> = {}  // key `${hour}-${weekday}`
+    const revenueGrid: Record<string, number> = {} // same key
+    if (report) {
+      for (const c of report.cells) {
+        const key = `${c.hour}-${c.weekday}`
+        ordersGrid[key] = (ordersGrid[key] || 0) + c.orders
+        revenueGrid[key] = (revenueGrid[key] || 0) + Number(c.revenue)
+      }
+    }
+    return { ordersGrid, revenueGrid }
+  }, [report])
 
-  // Hourly revenue data
+  // Hourly revenue (sum across weekdays)
   const hourlyData = useMemo(() => {
     const map: Record<number, number> = {}
     HOURS_RANGE.forEach(h => { map[h] = 0 })
-    filtered.forEach(o => {
-      const hour = new Date(o.createdAt).getHours()
-      if (map[hour] !== undefined) map[hour] += o.total
-    })
+    if (report) {
+      for (const c of report.cells) {
+        if (map[c.hour] !== undefined) map[c.hour] += Number(c.revenue)
+      }
+    }
     const maxRev = Math.max(...Object.values(map), 1)
     return HOURS_RANGE.map(h => ({
       hour: `${h}:00`,
       revenue: map[h],
       intensity: map[h] / maxRev,
     }))
-  }, [filtered])
+  }, [report])
 
-  // Weekday revenue data
+  // Weekday revenue
   const weekdayData = useMemo(() => {
-    // JS getDay: 0=Sun, we want Mon first
-    const map: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 0: 0 }
-    filtered.forEach(o => {
-      const day = new Date(o.createdAt).getDay()
-      map[day] += o.total
-    })
+    const map: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0 }
+    if (report) {
+      for (const c of report.cells) {
+        map[c.weekday] += Number(c.revenue)
+      }
+    }
     const ordered = [1, 2, 3, 4, 5, 6, 0]
     return ordered.map((d, i) => ({
       day: DAY_NAMES_ORDERED[i],
       revenue: map[d],
     }))
-  }, [filtered])
+  }, [report])
 
-  // Heatmap data: hours x days
+  // Heatmap (hours 8-22 × weekdays Mon..Sun)
   const heatmapData = useMemo(() => {
-    const grid: Record<string, number> = {}
     const hours = Array.from({ length: 15 }, (_, i) => i + 8) // 8-22
     const dayIndices = [1, 2, 3, 4, 5, 6, 0]
-    hours.forEach(h => dayIndices.forEach(d => { grid[`${h}-${d}`] = 0 }))
-    filtered.forEach(o => {
-      const date = new Date(o.createdAt)
-      const h = date.getHours()
-      const d = date.getDay()
-      const key = `${h}-${d}`
-      if (grid[key] !== undefined) grid[key] += 1
-    })
-    const maxVal = Math.max(...Object.values(grid), 1)
-    return { grid, hours, dayIndices, maxVal }
-  }, [filtered])
+    const values: number[] = []
+    for (const h of hours) {
+      for (const d of dayIndices) {
+        values.push(grid.ordersGrid[`${h}-${d}`] || 0)
+      }
+    }
+    const maxVal = Math.max(...values, 1)
+    return { grid: grid.ordersGrid, hours, dayIndices, maxVal }
+  }, [grid])
 
   // KPIs
   const kpis = useMemo(() => {
-    if (filtered.length === 0) return null
-    // Revenue per hour
+    if (!report || report.total_orders === 0) return null
+    // Peak hour
     const hourRevMap: Record<number, number> = {}
-    const hourCountMap: Record<number, number> = {}
-    filtered.forEach(o => {
-      const h = new Date(o.createdAt).getHours()
-      hourRevMap[h] = (hourRevMap[h] || 0) + o.total
-      hourCountMap[h] = (hourCountMap[h] || 0) + 1
-    })
+    const hourOrdersMap: Record<number, number> = {}
+    for (const c of report.cells) {
+      hourRevMap[c.hour] = (hourRevMap[c.hour] || 0) + Number(c.revenue)
+      hourOrdersMap[c.hour] = (hourOrdersMap[c.hour] || 0) + c.orders
+    }
     const peakHourEntry = Object.entries(hourRevMap).sort(([, a], [, b]) => b - a)[0]
     const peakHour = peakHourEntry ? Number(peakHourEntry[0]) : 0
     const peakHourRevenue = peakHourEntry ? peakHourEntry[1] : 0
 
     // Busiest day
     const dayRevMap: Record<number, number> = {}
-    filtered.forEach(o => {
-      const d = new Date(o.createdAt).getDay()
-      dayRevMap[d] = (dayRevMap[d] || 0) + o.total
-    })
+    for (const c of report.cells) {
+      dayRevMap[c.weekday] = (dayRevMap[c.weekday] || 0) + Number(c.revenue)
+    }
     const busiestDayEntry = Object.entries(dayRevMap).sort(([, a], [, b]) => b - a)[0]
     const busiestDay = busiestDayEntry ? DAY_NAMES[Number(busiestDayEntry[0])] : '-'
 
-    // Average orders per hour
-    const totalOrders = filtered.length
-    const uniqueHours = new Set(filtered.map(o => {
-      const d = new Date(o.createdAt)
-      return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${d.getHours()}`
-    })).size
-    const avgOrdersPerHour = uniqueHours > 0 ? totalOrders / uniqueHours : 0
+    // Avg orders per active (weekday,hour) cell
+    const activeCells = report.cells.length
+    const avgOrdersPerHour = activeCells > 0 ? report.total_orders / activeCells : 0
 
     return {
       peakHour: `${peakHour}:00`,
@@ -168,16 +175,17 @@ export default function PeakHoursPage() {
       avgOrdersPerHour: avgOrdersPerHour.toFixed(1),
       peakHourRevenue,
     }
-  }, [filtered])
+  }, [report])
 
   // Shift recommendations
   const shiftRecs = useMemo(() => {
     const hourRevMap: Record<number, number> = {}
     HOURS_RANGE.forEach(h => { hourRevMap[h] = 0 })
-    filtered.forEach(o => {
-      const h = new Date(o.createdAt).getHours()
-      if (hourRevMap[h] !== undefined) hourRevMap[h] += o.total
-    })
+    if (report) {
+      for (const c of report.cells) {
+        if (hourRevMap[c.hour] !== undefined) hourRevMap[c.hour] += Number(c.revenue)
+      }
+    }
     const maxRev = Math.max(...Object.values(hourRevMap), 1)
     const peak: string[] = []
     const medium: string[] = []
@@ -189,7 +197,7 @@ export default function PeakHoursPage() {
       else quiet.push(`${h}:00`)
     })
     return { peak, medium, quiet }
-  }, [filtered])
+  }, [report])
 
   if (!canDo('analytics.view')) {
     return <div className="p-6 text-center text-muted-foreground">Нет доступа</div>
@@ -275,7 +283,7 @@ export default function PeakHoursPage() {
               <div key={h} className="grid gap-1 mt-1" style={{ gridTemplateColumns: '60px repeat(7, 1fr)' }}>
                 <div className="text-xs text-muted-foreground flex items-center justify-end pr-2">{h}:00</div>
                 {heatmapData.dayIndices.map(d => {
-                  const val = heatmapData.grid[`${h}-${d}`]
+                  const val = heatmapData.grid[`${h}-${d}`] || 0
                   return (
                     <div
                       key={d}

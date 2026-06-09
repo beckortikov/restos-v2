@@ -2056,6 +2056,38 @@ paths:
         - { in: query, name: year, schema: { type: integer } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MonthlyRevenueList" } } } } }
 
+  # ─── Analytics: серверные агрегаты ───────────────────────────────────────
+  /api/v1/analytics/abc-menu:
+    get:
+      tags: [analytics]
+      summary: ABC-анализ блюд по выручке (Pareto)
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ABCMenuReport" } } } } }
+  /api/v1/analytics/peak-hours:
+    get:
+      tags: [analytics]
+      summary: Гистограмма weekday × hour (загрузка по часам)
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PeakHoursReport" } } } } }
+  /api/v1/analytics/waiters:
+    get:
+      tags: [analytics]
+      summary: Статистика по официантам за период
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaitersReport" } } } } }
+  /api/v1/analytics/tables:
+    get:
+      tags: [analytics]
+      summary: Оборачиваемость столов за период
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TablesAnalyticsReport" } } } } }
+  /api/v1/analytics/food-cost:
+    get:
+      tags: [analytics]
+      summary: Food-cost по блюдам (revenue / cogs / margin)
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FoodCostReport" } } } } }
+
   # ─── Finance: Payroll & service charge ──────────────────────────────────
   /api/v1/finance/salary/pay:
     post:
@@ -3609,6 +3641,102 @@ components:
         orders_count: { type: integer }
         avg_check: { $ref: "#/components/schemas/Decimal" }
     MonthlyRevenueList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/MonthlyRevenue" } } } }
+
+    # ─── Analytics ──────────────────────────────────────────────────────
+    ABCMenuRow:
+      type: object
+      properties:
+        menu_item_id: { type: string, format: uuid }
+        name:         { type: string }
+        qty:          { $ref: "#/components/schemas/Decimal" }
+        revenue:      { $ref: "#/components/schemas/Decimal" }
+        cogs:         { $ref: "#/components/schemas/Decimal" }
+        gross_profit: { $ref: "#/components/schemas/Decimal" }
+        margin_percent: { $ref: "#/components/schemas/Decimal" }
+        share:        { $ref: "#/components/schemas/Decimal" }
+        cum_share:    { $ref: "#/components/schemas/Decimal" }
+        class:        { type: string, enum: [A, B, C] }
+    ABCMenuReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_revenue: { $ref: "#/components/schemas/Decimal" }
+        total_cogs:    { $ref: "#/components/schemas/Decimal" }
+        items: { type: array, items: { $ref: "#/components/schemas/ABCMenuRow" } }
+
+    PeakHoursCell:
+      type: object
+      properties:
+        weekday: { type: integer, minimum: 0, maximum: 6, description: "0=Sun, 6=Sat (Postgres DOW)" }
+        hour:    { type: integer, minimum: 0, maximum: 23 }
+        orders:  { type: integer }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+    PeakHoursReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_orders:  { type: integer }
+        total_revenue: { $ref: "#/components/schemas/Decimal" }
+        cells: { type: array, items: { $ref: "#/components/schemas/PeakHoursCell" } }
+
+    WaiterAnalyticsRow:
+      type: object
+      properties:
+        waiter_id: { type: string }
+        name:      { type: string }
+        orders:    { type: integer }
+        revenue:   { $ref: "#/components/schemas/Decimal" }
+        items_sold: { $ref: "#/components/schemas/Decimal" }
+        avg_check: { $ref: "#/components/schemas/Decimal" }
+        service_amount: { $ref: "#/components/schemas/Decimal" }
+        tip_amount:     { $ref: "#/components/schemas/Decimal" }
+    WaitersReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_revenue: { $ref: "#/components/schemas/Decimal" }
+        total_orders:  { type: integer }
+        rows: { type: array, items: { $ref: "#/components/schemas/WaiterAnalyticsRow" } }
+
+    TableAnalyticsRow:
+      type: object
+      properties:
+        table_id: { type: string }
+        name:     { type: string }
+        zone_name: { type: string }
+        orders:   { type: integer }
+        revenue:  { $ref: "#/components/schemas/Decimal" }
+        avg_check: { $ref: "#/components/schemas/Decimal" }
+        avg_duration_min: { $ref: "#/components/schemas/Decimal" }
+        guests_total: { type: integer }
+    TablesAnalyticsReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_revenue: { $ref: "#/components/schemas/Decimal" }
+        total_orders:  { type: integer }
+        rows: { type: array, items: { $ref: "#/components/schemas/TableAnalyticsRow" } }
+
+    FoodCostRow:
+      type: object
+      properties:
+        menu_item_id: { type: string, format: uuid }
+        name: { type: string }
+        qty:  { $ref: "#/components/schemas/Decimal" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+        cogs:    { $ref: "#/components/schemas/Decimal" }
+        food_cost_pct: { $ref: "#/components/schemas/Decimal" }
+        gross_profit:  { $ref: "#/components/schemas/Decimal" }
+        margin_percent: { $ref: "#/components/schemas/Decimal" }
+    FoodCostReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_revenue: { $ref: "#/components/schemas/Decimal" }
+        total_cogs:    { $ref: "#/components/schemas/Decimal" }
+        food_cost_pct: { $ref: "#/components/schemas/Decimal" }
+        margin_percent: { $ref: "#/components/schemas/Decimal" }
+        rows: { type: array, items: { $ref: "#/components/schemas/FoodCostRow" } }
 
     SalaryPayInput:
       type: object
