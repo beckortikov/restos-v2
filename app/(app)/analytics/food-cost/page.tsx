@@ -5,8 +5,9 @@ import { formatCurrency } from '@/lib/helpers'
 import { useAuth } from '@/lib/auth-store'
 import { Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
-import { fetchFoodCost, type FoodCostReport } from '@/lib/queries/analytics'
+import { fetchFoodCost, fetchIngredientStockValue, fetchFoodCostMonthly, type FoodCostReport, type IngredientStockReport, type FoodCostMonthlyReport } from '@/lib/queries/analytics'
 import { toast } from 'sonner'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts'
 
 const FoodCostBarChart = lazy(() => import('@/components/charts/food-cost-bar-chart'))
 
@@ -37,6 +38,8 @@ export default function FoodCostPage() {
   const [report, setReport] = useState<FoodCostReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('all')
+  const [stockReport, setStockReport] = useState<IngredientStockReport | null>(null)
+  const [monthlyReport, setMonthlyReport] = useState<FoodCostMonthlyReport | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -45,7 +48,16 @@ export default function FoodCostPage() {
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
+    fetchFoodCostMonthly({ from, to })
+      .then(setMonthlyReport)
+      .catch(() => { /* trend chart is optional */ })
   }, [period])
+
+  useEffect(() => {
+    fetchIngredientStockValue({ limit: 10 })
+      .then(setStockReport)
+      .catch(() => { /* stock chart is optional */ })
+  }, [])
 
   const rows: DishRow[] = useMemo(() => {
     if (!report) return []
@@ -191,6 +203,66 @@ export default function FoodCostPage() {
           <p className="text-xs text-muted-foreground">Маржа: {(kpis?.worstMargin.marginPct ?? 0).toFixed(1)}%</p>
         </div>
       </div>
+
+      {/* Top-10 ingredient stock value */}
+      {stockReport && stockReport.items.length > 0 && (
+        <div className="bg-card rounded-xl border border-border p-5">
+          <h2 className="text-sm font-semibold text-foreground mb-1">Топ-10 ингредиентов по стоимости остатка</h2>
+          <p className="text-xs text-muted-foreground mb-4">Всего на складе: {formatCurrency(Number(stockReport.total_value))}</p>
+          <div style={{ width: '100%', height: Math.max(280, stockReport.items.length * 32) }}>
+            <ResponsiveContainer>
+              <BarChart
+                data={stockReport.items.map(it => ({
+                  name: it.name,
+                  value: Number(it.value),
+                  share: Number(it.share),
+                }))}
+                layout="vertical"
+                margin={{ top: 10, right: 60, left: 10, bottom: 10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 11 }} />
+                <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} />
+                <RTooltip
+                  formatter={(v: any, _n, p: any) => [
+                    `${formatCurrency(Number(v))} (${p.payload.share.toFixed(1)}% от склада)`,
+                    'Стоимость',
+                  ]}
+                />
+                <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} label={{ position: 'right', formatter: (v: any) => `${(v / 1000).toFixed(0)}к`, fontSize: 11 }} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
+
+      {/* Food-cost monthly trend */}
+      {monthlyReport && monthlyReport.months.length > 0 && (
+        <div className="bg-card rounded-xl border border-border p-5">
+          <h2 className="text-sm font-semibold text-foreground mb-1">Динамика Food Cost % по месяцам</h2>
+          <p className="text-xs text-muted-foreground mb-4">Food Cost % и маржа по месяцам</p>
+          <div style={{ width: '100%', height: 280 }}>
+            <ResponsiveContainer>
+              <LineChart
+                data={monthlyReport.months.map(m => ({
+                  month: m.month,
+                  foodCostPct: Number(m.food_cost_pct),
+                  marginPct: Number(m.margin_percent),
+                }))}
+                margin={{ top: 10, right: 20, left: 0, bottom: 10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => `${v}%`} />
+                <RTooltip formatter={(v: any) => `${Number(v).toFixed(1)}%`} />
+                <Legend />
+                <Line type="monotone" dataKey="foodCostPct" name="Food Cost %" stroke="#ef4444" strokeWidth={2} />
+                <Line type="monotone" dataKey="marginPct" name="Маржа %" stroke="#10b981" strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* Food cost by dish */}
       {foodCostByDish.length > 0 && (

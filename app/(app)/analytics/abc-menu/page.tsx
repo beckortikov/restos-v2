@@ -3,7 +3,7 @@
 import { lazy, useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
 import type { ABCClass } from '@/lib/types'
-import { fetchABCMenu, type ABCMenuReport } from '@/lib/queries/analytics'
+import { fetchABCMenu, type ABCMenuReport, type EngineeringClass } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
 import { Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
@@ -39,6 +39,35 @@ interface UIItem {
   margin: number
   share: number
   abc: ABCClass
+  me: EngineeringClass
+}
+
+const ME_LABEL: Record<Exclude<EngineeringClass, ''>, string> = {
+  star: 'Звезда',
+  workhorse: 'Рабочая лошадка',
+  puzzle: 'Загадка',
+  dog: 'Собака',
+}
+
+const ME_BADGE: Record<Exclude<EngineeringClass, ''>, string> = {
+  star: 'bg-emerald-100 text-emerald-700',
+  workhorse: 'bg-blue-100 text-blue-700',
+  puzzle: 'bg-amber-100 text-amber-700',
+  dog: 'bg-red-100 text-red-700',
+}
+
+const ME_EMOJI: Record<Exclude<EngineeringClass, ''>, string> = {
+  star: '⭐',
+  workhorse: '🐎',
+  puzzle: '🧩',
+  dog: '🐶',
+}
+
+const ME_DESC: Record<Exclude<EngineeringClass, ''>, string> = {
+  star: 'Много продаж + высокая маржа',
+  workhorse: 'Много продаж, низкая маржа',
+  puzzle: 'Мало продаж, высокая маржа',
+  dog: 'Мало продаж + низкая маржа',
 }
 
 export default function AbcMenuPage() {
@@ -69,6 +98,7 @@ export default function AbcMenuPage() {
       margin: Number(it.margin_percent),
       share: Number(it.share),
       abc: it.class,
+      me: (it.engineering_class ?? '') as EngineeringClass,
     }))
   }, [report])
 
@@ -201,6 +231,32 @@ export default function AbcMenuPage() {
         })}
       </div>
 
+      {/* Menu Engineering quadrants */}
+      {items.some(i => i.me !== '') && (
+        <div className="bg-card rounded-xl border border-border p-5">
+          <h2 className="text-sm font-semibold text-foreground mb-1">Menu Engineering (Boston Matrix)</h2>
+          <p className="text-xs text-muted-foreground mb-4">Классификация по медианам объёма продаж и маржи</p>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {(['star', 'workhorse', 'puzzle', 'dog'] as const).map(cls => {
+              const list = items.filter(i => i.me === cls)
+              return (
+                <div key={cls} className={`rounded-lg p-4 border ${ME_BADGE[cls]} border-current/20`}>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="text-2xl">{ME_EMOJI[cls]}</span>
+                    <div>
+                      <p className="text-sm font-bold">{ME_LABEL[cls]}</p>
+                      <p className="text-[10px] opacity-80">{ME_DESC[cls]}</p>
+                    </div>
+                  </div>
+                  <p className="text-2xl font-bold">{list.length}</p>
+                  <p className="text-[10px] opacity-80 mt-0.5">блюд</p>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {/* Scatter chart: qty vs margin */}
       <div className="bg-card rounded-xl border border-border p-5">
         <h2 className="text-sm font-semibold text-foreground mb-1">Матрица: Объём продаж vs Маржинальность</h2>
@@ -222,7 +278,7 @@ export default function AbcMenuPage() {
         <table className="w-full text-sm min-w-[700px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              {['Класс', 'Блюдо', 'Продано', 'Выручка', 'Доля', 'Маржа'].map((h) => (
+              {['Класс', 'Блюдо', 'Продано', 'Выручка', 'Доля', 'Маржа', 'Класс ME'].map((h) => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
               ))}
             </tr>
@@ -242,10 +298,20 @@ export default function AbcMenuPage() {
                     {(item.margin || 0).toFixed(1)}%
                   </span>
                 </td>
+                <td className="px-4 py-3">
+                  {item.me === '' ? (
+                    <span className="text-muted-foreground text-xs">—</span>
+                  ) : (
+                    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ${ME_BADGE[item.me]}`}>
+                      <span>{ME_EMOJI[item.me]}</span>
+                      {ME_LABEL[item.me]}
+                    </span>
+                  )}
+                </td>
               </tr>
             ))}
             {items.length === 0 && (
-              <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
             )}
           </tbody>
         </table>

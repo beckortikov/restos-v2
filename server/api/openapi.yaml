@@ -2087,6 +2087,19 @@ paths:
       summary: Food-cost по блюдам (revenue / cogs / margin)
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FoodCostReport" } } } } }
+  /api/v1/analytics/food-cost/monthly:
+    get:
+      tags: [analytics]
+      summary: Food-cost тренд по месяцам
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FoodCostMonthlyReport" } } } } }
+  /api/v1/analytics/ingredient-stock-value:
+    get:
+      tags: [analytics]
+      summary: Top-N ингредиентов по сумме на складе (qty × price)
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, default: 10, minimum: 1, maximum: 200 } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/IngredientStockReport" } } } } }
 
   # ─── Finance: Payroll & service charge ──────────────────────────────────
   /api/v1/finance/salary/pay:
@@ -3656,6 +3669,7 @@ components:
         share:        { $ref: "#/components/schemas/Decimal" }
         cum_share:    { $ref: "#/components/schemas/Decimal" }
         class:        { type: string, enum: [A, B, C] }
+        engineering_class: { type: string, enum: [star, workhorse, puzzle, dog], description: "Menu Engineering matrix (Boston): относительно медиан qty и margin." }
     ABCMenuReport:
       type: object
       properties:
@@ -3690,6 +3704,9 @@ components:
         avg_check: { $ref: "#/components/schemas/Decimal" }
         service_amount: { $ref: "#/components/schemas/Decimal" }
         tip_amount:     { $ref: "#/components/schemas/Decimal" }
+        avg_service_min: { $ref: "#/components/schemas/Decimal" }
+        best_day:         { type: string, description: "YYYY-MM-DD c максимальной выручкой" }
+        best_day_revenue: { $ref: "#/components/schemas/Decimal" }
     WaitersReport:
       type: object
       properties:
@@ -3704,11 +3721,15 @@ components:
         table_id: { type: string }
         name:     { type: string }
         zone_name: { type: string }
+        status:    { type: string, description: "live: free|occupied|reserved|bill_requested" }
+        capacity:  { type: integer }
         orders:   { type: integer }
         revenue:  { $ref: "#/components/schemas/Decimal" }
         avg_check: { $ref: "#/components/schemas/Decimal" }
         avg_duration_min: { $ref: "#/components/schemas/Decimal" }
         guests_total: { type: integer }
+        revenue_per_seat: { $ref: "#/components/schemas/Decimal" }
+        occupancy_pct:    { $ref: "#/components/schemas/Decimal" }
     TablesAnalyticsReport:
       type: object
       properties:
@@ -3737,6 +3758,38 @@ components:
         food_cost_pct: { $ref: "#/components/schemas/Decimal" }
         margin_percent: { $ref: "#/components/schemas/Decimal" }
         rows: { type: array, items: { $ref: "#/components/schemas/FoodCostRow" } }
+
+    FoodCostMonth:
+      type: object
+      properties:
+        month: { type: string, description: "YYYY-MM" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+        cogs:    { $ref: "#/components/schemas/Decimal" }
+        food_cost_pct: { $ref: "#/components/schemas/Decimal" }
+        margin_percent: { $ref: "#/components/schemas/Decimal" }
+        orders: { type: integer }
+    FoodCostMonthlyReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        months: { type: array, items: { $ref: "#/components/schemas/FoodCostMonth" } }
+
+    IngredientStockRow:
+      type: object
+      properties:
+        ingredient_id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        price_per_unit: { $ref: "#/components/schemas/Decimal" }
+        value: { $ref: "#/components/schemas/Decimal" }
+        share: { $ref: "#/components/schemas/Decimal" }
+    IngredientStockReport:
+      type: object
+      properties:
+        total_value: { $ref: "#/components/schemas/Decimal" }
+        items: { type: array, items: { $ref: "#/components/schemas/IngredientStockRow" } }
 
     SalaryPayInput:
       type: object

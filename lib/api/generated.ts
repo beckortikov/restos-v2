@@ -7454,6 +7454,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/food-cost/monthly": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Food-cost тренд по месяцам */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FoodCostMonthlyReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/ingredient-stock-value": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Top-N ингредиентов по сумме на складе (qty × price) */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["IngredientStockReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/pay": {
         parameters: {
             query?: never;
@@ -10123,6 +10200,11 @@ export interface components {
             cum_share?: components["schemas"]["Decimal"];
             /** @enum {string} */
             class?: "A" | "B" | "C";
+            /**
+             * @description Menu Engineering matrix (Boston): относительно медиан qty и margin.
+             * @enum {string}
+             */
+            engineering_class?: "star" | "workhorse" | "puzzle" | "dog";
         };
         ABCMenuReport: {
             period?: {
@@ -10162,6 +10244,10 @@ export interface components {
             avg_check?: components["schemas"]["Decimal"];
             service_amount?: components["schemas"]["Decimal"];
             tip_amount?: components["schemas"]["Decimal"];
+            avg_service_min?: components["schemas"]["Decimal"];
+            /** @description YYYY-MM-DD c максимальной выручкой */
+            best_day?: string;
+            best_day_revenue?: components["schemas"]["Decimal"];
         };
         WaitersReport: {
             period?: {
@@ -10178,11 +10264,16 @@ export interface components {
             table_id?: string;
             name?: string;
             zone_name?: string;
+            /** @description live: free|occupied|reserved|bill_requested */
+            status?: string;
+            capacity?: number;
             orders?: number;
             revenue?: components["schemas"]["Decimal"];
             avg_check?: components["schemas"]["Decimal"];
             avg_duration_min?: components["schemas"]["Decimal"];
             guests_total?: number;
+            revenue_per_seat?: components["schemas"]["Decimal"];
+            occupancy_pct?: components["schemas"]["Decimal"];
         };
         TablesAnalyticsReport: {
             period?: {
@@ -10218,6 +10309,39 @@ export interface components {
             food_cost_pct?: components["schemas"]["Decimal"];
             margin_percent?: components["schemas"]["Decimal"];
             rows?: components["schemas"]["FoodCostRow"][];
+        };
+        FoodCostMonth: {
+            /** @description YYYY-MM */
+            month?: string;
+            revenue?: components["schemas"]["Decimal"];
+            cogs?: components["schemas"]["Decimal"];
+            food_cost_pct?: components["schemas"]["Decimal"];
+            margin_percent?: components["schemas"]["Decimal"];
+            orders?: number;
+        };
+        FoodCostMonthlyReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            months?: components["schemas"]["FoodCostMonth"][];
+        };
+        IngredientStockRow: {
+            /** Format: uuid */
+            ingredient_id?: string;
+            name?: string;
+            category?: string;
+            qty?: components["schemas"]["Decimal"];
+            unit?: string;
+            price_per_unit?: components["schemas"]["Decimal"];
+            value?: components["schemas"]["Decimal"];
+            share?: components["schemas"]["Decimal"];
+        };
+        IngredientStockReport: {
+            total_value?: components["schemas"]["Decimal"];
+            items?: components["schemas"]["IngredientStockRow"][];
         };
         SalaryPayInput: {
             /** Format: uuid */

@@ -5,6 +5,7 @@ package handlers
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
@@ -81,6 +82,35 @@ func (h *AnalyticsHandler) FoodCost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.FoodCost(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *AnalyticsHandler) IngredientStockValue(w http.ResponseWriter, r *http.Request) {
+	limit := 10
+	if v := queryString(r, "limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	out, err := h.svc.IngredientStockValue(r.Context(), limit)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *AnalyticsHandler) FoodCostMonthly(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.FoodCostMonthly(r.Context(), f)
 	if err != nil {
 		respond.Error(w, err)
 		return

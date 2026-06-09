@@ -5,6 +5,8 @@ type DecStr = string
 
 export type AnalyticsPeriod = { from?: string; to?: string }
 
+export type EngineeringClass = 'star' | 'workhorse' | 'puzzle' | 'dog' | ''
+
 export interface ABCMenuItem {
   menu_item_id: string
   name: string
@@ -16,6 +18,7 @@ export interface ABCMenuItem {
   share: DecStr
   cum_share: DecStr
   class: 'A' | 'B' | 'C'
+  engineering_class: EngineeringClass
 }
 
 export interface ABCMenuReport {
@@ -48,6 +51,9 @@ export interface WaiterRow {
   avg_check: DecStr
   service_amount: DecStr
   tip_amount: DecStr
+  avg_service_min: DecStr
+  best_day: string
+  best_day_revenue: DecStr
 }
 
 export interface WaitersReport {
@@ -56,6 +62,8 @@ export interface WaitersReport {
   total_orders: number
   rows: WaiterRow[]
 }
+
+export type TableLiveStatus = 'free' | 'occupied' | 'reserved' | 'bill_requested'
 
 export interface TableAnalyticsRow {
   table_id: string
@@ -66,6 +74,10 @@ export interface TableAnalyticsRow {
   avg_check: DecStr
   avg_duration_min: DecStr
   guests_total: number
+  status: TableLiveStatus
+  capacity: number
+  revenue_per_seat: DecStr
+  occupancy_pct: DecStr
 }
 
 export interface TablesAnalyticsReport {
@@ -131,4 +143,49 @@ export async function fetchTablesAnalytics(opts: { from?: Date | string; to?: Da
 export async function fetchFoodCost(opts: { from?: Date | string; to?: Date | string } = {}): Promise<FoodCostReport> {
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/analytics/food-cost', { params: { query: query as any } }))) as FoodCostReport
+}
+
+// --- Ingredient stock value (top-N) ---
+
+export interface IngredientStockRow {
+  ingredient_id: string
+  name: string
+  category: string
+  qty: DecStr
+  unit: string
+  price_per_unit: DecStr
+  value: DecStr
+  share: DecStr
+}
+
+export interface IngredientStockReport {
+  total_value: DecStr
+  items: IngredientStockRow[]
+}
+
+export async function fetchIngredientStockValue(opts: { limit?: number } = {}): Promise<IngredientStockReport> {
+  const query: Record<string, string> = {}
+  if (opts.limit != null) query.limit = String(opts.limit)
+  return (await unwrap(api.GET('/api/v1/analytics/ingredient-stock-value' as any, { params: { query: query as any } }))) as IngredientStockReport
+}
+
+// --- Food-cost monthly trend ---
+
+export interface FoodCostMonth {
+  month: string // "YYYY-MM"
+  revenue: DecStr
+  cogs: DecStr
+  food_cost_pct: DecStr
+  margin_percent: DecStr
+  orders: number
+}
+
+export interface FoodCostMonthlyReport {
+  period: AnalyticsPeriod
+  months: FoodCostMonth[]
+}
+
+export async function fetchFoodCostMonthly(opts: { from?: Date | string; to?: Date | string } = {}): Promise<FoodCostMonthlyReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/analytics/food-cost/monthly' as any, { params: { query: query as any } }))) as FoodCostMonthlyReport
 }

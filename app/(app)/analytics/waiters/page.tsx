@@ -38,7 +38,7 @@ function periodToRange(period: Period): { from?: string; to?: string } {
   return { from: from.toISOString(), to: now.toISOString() }
 }
 
-type SortBy = 'revenue' | 'orders' | 'avgCheck' | 'items'
+type SortBy = 'revenue' | 'orders' | 'avgCheck' | 'items' | 'time'
 
 interface WaiterStat {
   id: string
@@ -49,6 +49,9 @@ interface WaiterStat {
   itemsServed: number
   serviceEarned: number
   tipAmount: number
+  avgServiceMin: number
+  bestDay: string
+  bestDayRevenue: number
 }
 
 export default function WaitersAnalyticsPage() {
@@ -78,6 +81,9 @@ export default function WaitersAnalyticsPage() {
       itemsServed: Number(r.items_sold),
       serviceEarned: Number(r.service_amount),
       tipAmount: Number(r.tip_amount),
+      avgServiceMin: Number(r.avg_service_min),
+      bestDay: r.best_day || '',
+      bestDayRevenue: Number(r.best_day_revenue),
     }))
   }, [report])
 
@@ -87,6 +93,12 @@ export default function WaitersAnalyticsPage() {
       if (sortBy === 'orders') return b.orderCount - a.orderCount
       if (sortBy === 'avgCheck') return b.avgCheck - a.avgCheck
       if (sortBy === 'items') return b.itemsServed - a.itemsServed
+      if (sortBy === 'time') {
+        // fastest first; treat 0 as +Infinity so empty rows sink
+        const av = a.avgServiceMin > 0 ? a.avgServiceMin : Number.POSITIVE_INFINITY
+        const bv = b.avgServiceMin > 0 ? b.avgServiceMin : Number.POSITIVE_INFINITY
+        return av - bv
+      }
       return 0
     })
   }, [stats, sortBy])
@@ -225,6 +237,14 @@ export default function WaitersAnalyticsPage() {
                     <p className="text-[10px] text-muted-foreground uppercase">Обслуживание</p>
                     <p className="text-lg font-bold text-emerald-600">{w.serviceEarned > 0 ? formatCurrency(w.serviceEarned) : '—'}</p>
                   </div>
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase">Ср. время</p>
+                    <p className="text-lg font-bold text-foreground">{w.avgServiceMin > 0 ? `${Math.round(w.avgServiceMin)}мин` : '—'}</p>
+                  </div>
+                  <div title={w.bestDay && w.bestDayRevenue > 0 ? `${formatCurrency(w.bestDayRevenue)}` : undefined}>
+                    <p className="text-[10px] text-muted-foreground uppercase">Лучший день</p>
+                    <p className="text-lg font-bold text-foreground">{w.bestDay || '—'}</p>
+                  </div>
                 </div>
               </div>
             )
@@ -241,6 +261,7 @@ export default function WaitersAnalyticsPage() {
           { value: 'orders' as SortBy, label: 'Заказы' },
           { value: 'avgCheck' as SortBy, label: 'Ср. чек' },
           { value: 'items' as SortBy, label: 'Позиций' },
+          { value: 'time' as SortBy, label: 'По времени' },
         ]).map(opt => (
           <button
             key={opt.value}
@@ -260,7 +281,7 @@ export default function WaitersAnalyticsPage() {
           <table className="w-full text-sm min-w-[800px]">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                {['#', 'Официант', 'Заказов', 'Позиций', 'Выручка', 'Обслуж.', 'Чаевые', 'Ср. чек'].map(h => (
+                {['#', 'Официант', 'Заказов', 'Позиций', 'Выручка', 'Обслуж.', 'Чаевые', 'Ср. чек', 'Ср. время', 'Лучший день'].map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -285,10 +306,19 @@ export default function WaitersAnalyticsPage() {
                   <td className="px-4 py-3 text-emerald-600 font-medium">{w.serviceEarned > 0 ? formatCurrency(w.serviceEarned) : '—'}</td>
                   <td className="px-4 py-3 text-foreground">{w.tipAmount > 0 ? formatCurrency(w.tipAmount) : '—'}</td>
                   <td className="px-4 py-3 text-foreground">{w.avgCheck > 0 ? formatCurrency(w.avgCheck) : '—'}</td>
+                  <td className="px-4 py-3 text-foreground">{w.avgServiceMin > 0 ? `${Math.round(w.avgServiceMin)}мин` : '—'}</td>
+                  <td className="px-4 py-3 text-foreground" title={w.bestDay && w.bestDayRevenue > 0 ? formatCurrency(w.bestDayRevenue) : undefined}>
+                    {w.bestDay ? (
+                      <span className="text-xs">
+                        {w.bestDay}
+                        {w.bestDayRevenue > 0 && <span className="text-muted-foreground ml-1">· {formatCurrency(w.bestDayRevenue)}</span>}
+                      </span>
+                    ) : '—'}
+                  </td>
                 </tr>
               ))}
               {sorted.length === 0 && (
-                <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
               )}
             </tbody>
           </table>

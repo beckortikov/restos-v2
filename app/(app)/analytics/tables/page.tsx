@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchTablesAnalytics, type TablesAnalyticsReport } from '@/lib/queries/analytics'
+import { fetchTablesAnalytics, type TablesAnalyticsReport, type TableLiveStatus } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
 import {
   MapPin,
@@ -11,7 +11,9 @@ import {
   Users as UsersIcon,
   ArrowUpDown,
   Download,
+  Circle,
 } from 'lucide-react'
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip, Legend } from 'recharts'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 
@@ -55,6 +57,31 @@ interface TableStat {
   avgCheck: number
   avgDurationMin: number
   guestsTotal: number
+  status: TableLiveStatus
+  capacity: number
+  revenuePerSeat: number
+  occupancyPct: number
+}
+
+const STATUS_LABEL: Record<TableLiveStatus, string> = {
+  free: 'Свободен',
+  occupied: 'Занят',
+  reserved: 'Бронь',
+  bill_requested: 'Просит счёт',
+}
+
+const STATUS_BADGE: Record<TableLiveStatus, string> = {
+  free: 'bg-emerald-100 text-emerald-700 border-emerald-200',
+  occupied: 'bg-red-100 text-red-700 border-red-200',
+  reserved: 'bg-blue-100 text-blue-700 border-blue-200',
+  bill_requested: 'bg-amber-100 text-amber-700 border-amber-200',
+}
+
+const STATUS_COLOR: Record<TableLiveStatus, string> = {
+  free: '#10b981',
+  occupied: '#ef4444',
+  reserved: '#3b82f6',
+  bill_requested: '#f59e0b',
 }
 
 export default function TablesAnalyticsPage() {
@@ -85,6 +112,10 @@ export default function TablesAnalyticsPage() {
       avgCheck: Number(r.avg_check),
       avgDurationMin: Number(r.avg_duration_min),
       guestsTotal: r.guests_total,
+      status: (r.status || 'free') as TableLiveStatus,
+      capacity: r.capacity || 0,
+      revenuePerSeat: Number(r.revenue_per_seat),
+      occupancyPct: Number(r.occupancy_pct),
     }))
   }, [report])
 
@@ -116,7 +147,16 @@ export default function TablesAnalyticsPage() {
     orders: tableStats.reduce((s, t) => s + t.orderCount, 0),
     guests: tableStats.reduce((s, t) => s + t.guestsTotal, 0),
     avgTurnover: tableStats.length > 0 ? tableStats.reduce((s, t) => s + t.orderCount, 0) / tableStats.length / days : 0,
+    occupiedNow: tableStats.filter(t => t.status !== 'free').length,
   }), [tableStats, days])
+
+  const statusPie = useMemo(() => {
+    const counts: Record<TableLiveStatus, number> = { free: 0, occupied: 0, reserved: 0, bill_requested: 0 }
+    for (const t of tableStats) counts[t.status] = (counts[t.status] || 0) + 1
+    return (['free', 'occupied', 'reserved', 'bill_requested'] as TableLiveStatus[])
+      .map(s => ({ name: STATUS_LABEL[s], value: counts[s], key: s }))
+      .filter(d => d.value > 0)
+  }, [tableStats])
 
   const zoneStats = useMemo(() =>
     zones.map(zoneName => {
@@ -175,7 +215,7 @@ export default function TablesAnalyticsPage() {
       </div>
 
       {/* KPI */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <div className="bg-card rounded-xl border border-border p-4">
           <div className="flex items-center gap-2 mb-2"><MapPin className="size-4 text-muted-foreground" /><span className="text-[11px] text-muted-foreground uppercase tracking-wide">Столов</span></div>
           <p className="text-2xl font-bold">{tableStats.length}</p>
@@ -194,7 +234,33 @@ export default function TablesAnalyticsPage() {
           <p className="text-2xl font-bold">{totals.avgTurnover.toFixed(1)}</p>
           <p className="text-[11px] text-muted-foreground mt-0.5">заказов / стол / день</p>
         </div>
+        <div className="bg-card rounded-xl border border-border p-4">
+          <div className="flex items-center gap-2 mb-2"><Circle className="size-4 text-red-500" /><span className="text-[11px] text-muted-foreground uppercase tracking-wide">Занято сейчас</span></div>
+          <p className="text-2xl font-bold">{totals.occupiedNow}</p>
+          <p className="text-[11px] text-muted-foreground mt-0.5">из {tableStats.length}</p>
+        </div>
       </div>
+
+      {/* Status pie chart */}
+      {statusPie.length > 0 && (
+        <div className="bg-card rounded-xl border border-border p-5">
+          <h2 className="text-sm font-semibold text-foreground mb-1">Статусы столов сейчас</h2>
+          <p className="text-xs text-muted-foreground mb-4">Распределение по live-статусу</p>
+          <div style={{ width: '100%', height: 260 }}>
+            <ResponsiveContainer>
+              <PieChart>
+                <Pie data={statusPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={(d: any) => `${d.name}: ${d.value}`}>
+                  {statusPie.map((entry, idx) => (
+                    <Cell key={idx} fill={STATUS_COLOR[entry.key]} />
+                  ))}
+                </Pie>
+                <RTooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      )}
 
       {/* Zone cards */}
       {zoneStats.length > 0 && (
@@ -243,10 +309,10 @@ export default function TablesAnalyticsPage() {
       {/* Full table */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[800px]">
+          <table className="w-full text-sm min-w-[1100px]">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                {['#', 'Стол', 'Зона', 'Заказов', 'Гостей', 'Выручка', 'Ср. чек', 'Ср. время'].map(h => (
+                {['#', 'Стол', 'Зона', 'Статус', 'Мест', 'Заказов', 'Гостей', 'Выручка', '₸/место', 'Загрузка', 'Ср. чек', 'Ср. время'].map(h => (
                   <th key={h} className="px-3 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -261,9 +327,17 @@ export default function TablesAnalyticsPage() {
                   </td>
                   <td className="px-3 py-3 font-semibold text-foreground">{t.name}</td>
                   <td className="px-3 py-3 text-xs text-muted-foreground">{t.zoneName}</td>
+                  <td className="px-3 py-3">
+                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${STATUS_BADGE[t.status]}`}>
+                      {STATUS_LABEL[t.status]}
+                    </span>
+                  </td>
+                  <td className="px-3 py-3 text-foreground">{t.capacity || '—'}</td>
                   <td className="px-3 py-3 text-foreground">{t.orderCount}</td>
                   <td className="px-3 py-3 text-foreground">{t.guestsTotal}</td>
                   <td className="px-3 py-3 font-semibold text-foreground">{formatCurrency(t.revenue)}</td>
+                  <td className="px-3 py-3 text-foreground">{t.revenuePerSeat > 0 ? formatCurrency(t.revenuePerSeat) : '—'}</td>
+                  <td className="px-3 py-3 text-foreground">{t.occupancyPct > 0 ? `${t.occupancyPct.toFixed(0)}%` : '—'}</td>
                   <td className="px-3 py-3 text-foreground">{t.avgCheck > 0 ? formatCurrency(t.avgCheck) : '—'}</td>
                   <td className="px-3 py-3">
                     {t.avgDurationMin > 0 ? (
@@ -275,7 +349,7 @@ export default function TablesAnalyticsPage() {
                 </tr>
               ))}
               {sorted.length === 0 && (
-                <tr><td colSpan={8} className="px-3 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+                <tr><td colSpan={12} className="px-3 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
               )}
             </tbody>
           </table>
