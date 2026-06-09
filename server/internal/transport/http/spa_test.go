@@ -51,4 +51,3 @@ func TestSPAHandler_GuardsAPIPaths(t *testing.T) {
 		}
 	}
 }
-

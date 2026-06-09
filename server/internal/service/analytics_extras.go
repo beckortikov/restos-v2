@@ -222,13 +222,13 @@ type ForecastReport struct {
 		From *time.Time `json:"from,omitempty"`
 		To   *time.Time `json:"to,omitempty"`
 	} `json:"period"`
-	MonthlyRevenue       []ForecastMonth `json:"monthly_revenue"`
-	FixedCostsMonthly    decimal.Decimal `json:"fixed_costs_monthly"`     // avg opex/мес (без COGS и закупок)
-	AvgGrossMarginPct    decimal.Decimal `json:"avg_gross_margin_pct"`    // (Rev - COGS) / Rev * 100
-	BreakevenRevenue     decimal.Decimal `json:"breakeven_revenue"`       // fixedCosts / (margin/100)
-	ForecastNextMonth    decimal.Decimal `json:"forecast_next_month"`     // linreg по последним 3 мес
-	ForecastNextMonthLabel string        `json:"forecast_next_month_label"` // YYYY-MM
-	HistoricalMonths     int             `json:"historical_months"`
+	MonthlyRevenue         []ForecastMonth `json:"monthly_revenue"`
+	FixedCostsMonthly      decimal.Decimal `json:"fixed_costs_monthly"`       // avg opex/мес (без COGS и закупок)
+	AvgGrossMarginPct      decimal.Decimal `json:"avg_gross_margin_pct"`      // (Rev - COGS) / Rev * 100
+	BreakevenRevenue       decimal.Decimal `json:"breakeven_revenue"`         // fixedCosts / (margin/100)
+	ForecastNextMonth      decimal.Decimal `json:"forecast_next_month"`       // linreg по последним 3 мес
+	ForecastNextMonthLabel string          `json:"forecast_next_month_label"` // YYYY-MM
+	HistoricalMonths       int             `json:"historical_months"`
 }
 
 // EXCLUDED_EXPENSE_CATEGORIES — то же что и на фронте/PnL: не входят в
@@ -238,7 +238,7 @@ var forecastExcludedExpense = map[string]bool{
 	"Себестоимость продукции": true,
 }
 var forecastStockPurchase = map[string]bool{
-	"Закупка продуктов":   true,
+	"Закупка продуктов":  true,
 	"Закупка хозтоваров": true,
 }
 
@@ -429,20 +429,20 @@ func nextMonthLabel(cur string) string {
 // ─── ABC inventory ─────────────────────────────────────────────────────────
 
 type ABCInventoryRow struct {
-	IngredientID  string          `json:"ingredient_id"`
-	Name          string          `json:"name"`
-	Category      string          `json:"category,omitempty"`
-	Unit          string          `json:"unit,omitempty"`
-	Qty           decimal.Decimal `json:"qty"`             // current stock
-	PricePerUnit  decimal.Decimal `json:"price_per_unit"`
-	StockValue    decimal.Decimal `json:"stock_value"`     // qty * price
-	Consumption   decimal.Decimal `json:"consumption"`     // qty consumed in period
-	Turnover      decimal.Decimal `json:"turnover"`        // consumption / qty (раз)
-	DaysOfStock   int             `json:"days_of_stock"`   // qty / (consumption/30)
-	Share         decimal.Decimal `json:"share"`           // % от total consumption value
-	CumShare      decimal.Decimal `json:"cum_share"`
-	Class         string          `json:"class"`           // A|B|C
-	Recommendation string         `json:"recommendation"`
+	IngredientID   string          `json:"ingredient_id"`
+	Name           string          `json:"name"`
+	Category       string          `json:"category,omitempty"`
+	Unit           string          `json:"unit,omitempty"`
+	Qty            decimal.Decimal `json:"qty"` // current stock
+	PricePerUnit   decimal.Decimal `json:"price_per_unit"`
+	StockValue     decimal.Decimal `json:"stock_value"`   // qty * price
+	Consumption    decimal.Decimal `json:"consumption"`   // qty consumed in period
+	Turnover       decimal.Decimal `json:"turnover"`      // consumption / qty (раз)
+	DaysOfStock    int             `json:"days_of_stock"` // qty / (consumption/30)
+	Share          decimal.Decimal `json:"share"`         // % от total consumption value
+	CumShare       decimal.Decimal `json:"cum_share"`
+	Class          string          `json:"class"` // A|B|C
+	Recommendation string          `json:"recommendation"`
 }
 
 type ABCInventoryReport struct {
@@ -621,4 +621,3 @@ func (s *AnalyticsService) ABCInventory(ctx context.Context, f PeriodFilter) (*A
 	out.TotalConsumptionValue = decimal.Normalize(totalConsValue)
 	return out, nil
 }
-

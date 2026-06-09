@@ -51,7 +51,7 @@ type ABCMenuRow struct {
 	MarginPercent decimal.Decimal `json:"margin_percent"`
 	Share         decimal.Decimal `json:"share"`     // % от total revenue
 	CumShare      decimal.Decimal `json:"cum_share"` // нарастающая
-	Class         string          `json:"class"`    // "A"|"B"|"C"
+	Class         string          `json:"class"`     // "A"|"B"|"C"
 	// Menu Engineering (Boston matrix) на основе медиан qty + margin_percent:
 	//   star      — высокая популярность + высокая маржа
 	//   workhorse — высокая популярность + низкая маржа
@@ -303,17 +303,17 @@ func (s *AnalyticsService) PeakHours(ctx context.Context, f PeriodFilter) (*Peak
 // ─── Waiters ───────────────────────────────────────────────────────────────
 
 type WaiterRow struct {
-	WaiterID        string          `json:"waiter_id"`
-	Name            string          `json:"name"`
-	Orders          int             `json:"orders"`
-	Revenue         decimal.Decimal `json:"revenue"`
-	ItemsSold       decimal.Decimal `json:"items_sold"`
-	AvgCheck        decimal.Decimal `json:"avg_check"`
-	ServiceAmount   decimal.Decimal `json:"service_amount"`
-	TipAmount       decimal.Decimal `json:"tip_amount"`
-	AvgServiceMin   decimal.Decimal `json:"avg_service_min"`   // среднее (closed_at - created_at) в минутах
-	BestDay         string          `json:"best_day"`          // YYYY-MM-DD с максимальной выручкой
-	BestDayRevenue  decimal.Decimal `json:"best_day_revenue"`
+	WaiterID       string          `json:"waiter_id"`
+	Name           string          `json:"name"`
+	Orders         int             `json:"orders"`
+	Revenue        decimal.Decimal `json:"revenue"`
+	ItemsSold      decimal.Decimal `json:"items_sold"`
+	AvgCheck       decimal.Decimal `json:"avg_check"`
+	ServiceAmount  decimal.Decimal `json:"service_amount"`
+	TipAmount      decimal.Decimal `json:"tip_amount"`
+	AvgServiceMin  decimal.Decimal `json:"avg_service_min"` // среднее (closed_at - created_at) в минутах
+	BestDay        string          `json:"best_day"`        // YYYY-MM-DD с максимальной выручкой
+	BestDayRevenue decimal.Decimal `json:"best_day_revenue"`
 }
 
 type WaitersReport struct {
@@ -478,7 +478,7 @@ type TableRow struct {
 	TableID        string          `json:"table_id"`
 	Name           string          `json:"name"`
 	ZoneName       string          `json:"zone_name"`
-	Status         string          `json:"status"`         // live: free|occupied|reserved|bill_requested
+	Status         string          `json:"status"` // live: free|occupied|reserved|bill_requested
 	Capacity       int             `json:"capacity"`
 	Orders         int             `json:"orders"`
 	Revenue        decimal.Decimal `json:"revenue"`
