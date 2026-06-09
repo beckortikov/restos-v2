@@ -3623,6 +3623,14 @@ components:
               date: { type: string }
               in: { $ref: "#/components/schemas/Decimal" }
               out: { $ref: "#/components/schemas/Decimal" }
+        out_by_category:
+          description: "v3.5.0 — расход по статьям (financial_operations.category). Только type=out, отсортировано desc."
+          type: array
+          items:
+            type: object
+            properties:
+              category: { type: string }
+              amount: { $ref: "#/components/schemas/Decimal" }
 
     BalanceReport:
       type: object

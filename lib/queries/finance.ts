@@ -139,6 +139,8 @@ export type CashflowReport = {
   by_activity: Record<string, { in: number; out: number; net: number }>
   net_total: number
   by_day: { date: string; in: number; out: number }[]
+  /** v3.5.0 — расход по конкретным статьям, sorted desc. */
+  out_by_category: { category: string; amount: number }[]
 }
 
 export type BalanceReport = {
@@ -202,6 +204,10 @@ export async function fetchCashflowReport(opts: { from?: Date | string; to?: Dat
       date: String(d.date ?? ''),
       in: Number(d.in ?? 0),
       out: Number(d.out ?? 0),
+    })),
+    out_by_category: (r?.out_by_category ?? []).map((c: any) => ({
+      category: String(c.category ?? ''),
+      amount: Number(c.amount ?? 0),
     })),
   }
 }

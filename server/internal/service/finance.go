@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -675,6 +676,14 @@ type CashflowJSON struct {
 	ByActivity map[string]ActivityRow `json:"by_activity"`
 	NetTotal   decimal.Decimal        `json:"net_total"`
 	ByDay      []DayRow               `json:"by_day"`
+	// v3.5.0: расход по конкретным статьям (financial_operations.category).
+	// Только type='out'. Сортировано в Go сверху вниз по amount.
+	OutByCategory []CategoryAmount `json:"out_by_category"`
+}
+
+type CategoryAmount struct {
+	Category string          `json:"category"`
+	Amount   decimal.Decimal `json:"amount"`
 }
 
 type ActivityRow struct {
@@ -768,6 +777,35 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 	for _, k := range keys {
 		out.ByDay = append(out.ByDay, *dayMap[k])
 	}
+
+	// By category — только type='out', сортировка desc по amount в Go.
+	scoped3, _ := s.r.ForTenant(ctx)
+	type catRow struct {
+		Category string          `gorm:"column:category"`
+		Total    decimal.Decimal `gorm:"column:total"`
+	}
+	q3 := scoped3.Table("financial_operations").
+		Select(`COALESCE(NULLIF(category, ''), 'Без категории') AS category,
+		        COALESCE(SUM(amount), 0) AS total`).
+		Where("COALESCE(type, '') = 'out'")
+	if f.From != nil {
+		q3 = q3.Where("created_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q3 = q3.Where("created_at < ?", *f.To)
+	}
+	var crows []catRow
+	_ = q3.Group("category").Scan(&crows).Error
+	out.OutByCategory = make([]CategoryAmount, 0, len(crows))
+	for _, r := range crows {
+		out.OutByCategory = append(out.OutByCategory, CategoryAmount{
+			Category: r.Category,
+			Amount:   decimal.Normalize(r.Total),
+		})
+	}
+	sort.Slice(out.OutByCategory, func(i, j int) bool {
+		return out.OutByCategory[i].Amount.GreaterThan(out.OutByCategory[j].Amount)
+	})
 	return out, nil
 }
 

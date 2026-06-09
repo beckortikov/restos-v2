@@ -294,9 +294,16 @@ const ACTIVITY_LABELS_LOCAL: Record<string, string> = {
 }
 
 function CashflowCharts({ report, operations }: { report: CashflowReport | null; operations: FinancialOperation[] }) {
-  // 1. Out flow by activity (pie) — from server.
+  // 1. Out flow по конкретным статьям (server-side `out_by_category`,
+  // отсортировано desc). Если бэк ничего не отдал (старый сервер) —
+  // фоллбэк на by_activity, чтобы pie не оставался пустым.
   const pieData = useMemo(() => {
     if (!report) return [] as { name: string; value: number }[]
+    if (report.out_by_category && report.out_by_category.length > 0) {
+      return report.out_by_category
+        .filter((c) => c.amount > 0)
+        .map((c) => ({ name: c.category, value: c.amount }))
+    }
     return Object.entries(report.by_activity)
       .map(([key, v]) => ({ name: ACTIVITY_LABELS_LOCAL[key] ?? key, value: v.out }))
       .filter((x) => x.value > 0)

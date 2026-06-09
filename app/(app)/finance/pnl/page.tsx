@@ -6,7 +6,8 @@ import { formatCurrency } from '@/lib/helpers'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts'
-import { Download } from 'lucide-react'
+import { Download, ChefHat } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { exportToExcel } from '@/lib/export-excel'
 import { fetchPnLReport, type PnLReport } from '@/lib/queries/finance'
 import { toast } from 'sonner'
@@ -91,6 +92,14 @@ export default function PnlPage() {
           <p className="text-muted-foreground text-sm mt-0.5">Расчёт на сервере</p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            to="/analytics/food-cost"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors"
+            title="Маржа по каждому блюду — отдельный экран"
+          >
+            <ChefHat className="size-3.5" />
+            Маржа по блюдам
+          </Link>
           <button
             onClick={() => {
               exportToExcel(

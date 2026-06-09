@@ -10228,6 +10228,11 @@ export interface components {
                 in?: components["schemas"]["Decimal"];
                 out?: components["schemas"]["Decimal"];
             }[];
+            /** @description v3.5.0 — расход по статьям (financial_operations.category). Только type=out, отсортировано desc. */
+            out_by_category?: {
+                category?: string;
+                amount?: components["schemas"]["Decimal"];
+            }[];
         };
         BalanceReport: {
             assets?: {
