@@ -321,6 +321,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/food-cost", analyticsH.FoodCost)
 			g.Get("/analytics/food-cost/monthly", analyticsH.FoodCostMonthly)
 			g.Get("/analytics/ingredient-stock-value", analyticsH.IngredientStockValue)
+			g.Get("/analytics/forecast", analyticsH.Forecast)
+			g.Get("/analytics/abc-inventory", analyticsH.ABCInventory)
 			g.Get("/finance/service-accrual/by-waiter", salaryH.AccrualByWaiter)
 			g.Get("/finance/service-accrual/by-shift/{shift_id}", salaryH.AccrualByShift)
 			g.Get("/finance/service-payout/by-waiter", salaryH.PayoutByWaiter)

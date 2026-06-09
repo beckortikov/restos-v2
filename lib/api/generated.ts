@@ -7531,6 +7531,84 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Прогноз выручки + break-even + linreg next month */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ForecastReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/abc-inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** ABC ингредиентов по value расхода + days_of_stock */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ABCInventoryReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/pay": {
         parameters: {
             query?: never;
@@ -10342,6 +10420,56 @@ export interface components {
         IngredientStockReport: {
             total_value?: components["schemas"]["Decimal"];
             items?: components["schemas"]["IngredientStockRow"][];
+        };
+        ForecastMonth: {
+            /** @description YYYY-MM */
+            month?: string;
+            revenue?: components["schemas"]["Decimal"];
+            cogs?: components["schemas"]["Decimal"];
+            gross_profit?: components["schemas"]["Decimal"];
+        };
+        ForecastReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            monthly_revenue?: components["schemas"]["ForecastMonth"][];
+            fixed_costs_monthly?: components["schemas"]["Decimal"];
+            avg_gross_margin_pct?: components["schemas"]["Decimal"];
+            breakeven_revenue?: components["schemas"]["Decimal"];
+            forecast_next_month?: components["schemas"]["Decimal"];
+            forecast_next_month_label?: string;
+            historical_months?: number;
+        };
+        ABCInventoryRow: {
+            /** Format: uuid */
+            ingredient_id?: string;
+            name?: string;
+            category?: string;
+            unit?: string;
+            qty?: components["schemas"]["Decimal"];
+            price_per_unit?: components["schemas"]["Decimal"];
+            stock_value?: components["schemas"]["Decimal"];
+            consumption?: components["schemas"]["Decimal"];
+            turnover?: components["schemas"]["Decimal"];
+            days_of_stock?: number;
+            share?: components["schemas"]["Decimal"];
+            cum_share?: components["schemas"]["Decimal"];
+            /** @enum {string} */
+            class?: "A" | "B" | "C";
+            recommendation?: string;
+        };
+        ABCInventoryReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_consumption_value?: components["schemas"]["Decimal"];
+            items?: components["schemas"]["ABCInventoryRow"][];
         };
         SalaryPayInput: {
             /** Format: uuid */

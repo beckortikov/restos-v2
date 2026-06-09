@@ -189,3 +189,58 @@ export async function fetchFoodCostMonthly(opts: { from?: Date | string; to?: Da
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/analytics/food-cost/monthly' as any, { params: { query: query as any } }))) as FoodCostMonthlyReport
 }
+
+// --- Forecast & break-even ---
+
+export interface ForecastMonth {
+  month: string // "YYYY-MM"
+  revenue: DecStr
+  cogs: DecStr
+  gross_profit: DecStr
+}
+
+export interface ForecastReport {
+  period: AnalyticsPeriod
+  monthly_revenue: ForecastMonth[]
+  fixed_costs_monthly: DecStr
+  avg_gross_margin_pct: DecStr
+  breakeven_revenue: DecStr
+  forecast_next_month: DecStr
+  forecast_next_month_label: string
+  historical_months: number
+}
+
+export async function fetchForecast(opts: { from?: Date | string; to?: Date | string } = {}): Promise<ForecastReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/analytics/forecast' as any, { params: { query: query as any } }))) as ForecastReport
+}
+
+// --- ABC inventory ---
+
+export interface ABCInventoryRow {
+  ingredient_id: string
+  name: string
+  category?: string
+  unit?: string
+  qty: DecStr
+  price_per_unit: DecStr
+  stock_value: DecStr
+  consumption: DecStr
+  turnover: DecStr
+  days_of_stock: number
+  share: DecStr
+  cum_share: DecStr
+  class: 'A' | 'B' | 'C'
+  recommendation: string
+}
+
+export interface ABCInventoryReport {
+  period: AnalyticsPeriod
+  total_consumption_value: DecStr
+  items: ABCInventoryRow[]
+}
+
+export async function fetchABCInventory(opts: { from?: Date | string; to?: Date | string } = {}): Promise<ABCInventoryReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/analytics/abc-inventory' as any, { params: { query: query as any } }))) as ABCInventoryReport
+}

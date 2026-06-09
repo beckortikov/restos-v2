@@ -2100,6 +2100,18 @@ paths:
       parameters:
         - { in: query, name: limit, schema: { type: integer, default: 10, minimum: 1, maximum: 200 } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/IngredientStockReport" } } } } }
+  /api/v1/analytics/forecast:
+    get:
+      tags: [analytics]
+      summary: Прогноз выручки + break-even + linreg next month
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ForecastReport" } } } } }
+  /api/v1/analytics/abc-inventory:
+    get:
+      tags: [analytics]
+      summary: ABC ингредиентов по value расхода + days_of_stock
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ABCInventoryReport" } } } } }
 
   # ─── Finance: Payroll & service charge ──────────────────────────────────
   /api/v1/finance/salary/pay:
@@ -3790,6 +3802,49 @@ components:
       properties:
         total_value: { $ref: "#/components/schemas/Decimal" }
         items: { type: array, items: { $ref: "#/components/schemas/IngredientStockRow" } }
+
+    ForecastMonth:
+      type: object
+      properties:
+        month: { type: string, description: "YYYY-MM" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+        cogs:    { $ref: "#/components/schemas/Decimal" }
+        gross_profit: { $ref: "#/components/schemas/Decimal" }
+    ForecastReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        monthly_revenue: { type: array, items: { $ref: "#/components/schemas/ForecastMonth" } }
+        fixed_costs_monthly: { $ref: "#/components/schemas/Decimal" }
+        avg_gross_margin_pct: { $ref: "#/components/schemas/Decimal" }
+        breakeven_revenue: { $ref: "#/components/schemas/Decimal" }
+        forecast_next_month: { $ref: "#/components/schemas/Decimal" }
+        forecast_next_month_label: { type: string }
+        historical_months: { type: integer }
+
+    ABCInventoryRow:
+      type: object
+      properties:
+        ingredient_id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        unit: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        price_per_unit: { $ref: "#/components/schemas/Decimal" }
+        stock_value: { $ref: "#/components/schemas/Decimal" }
+        consumption: { $ref: "#/components/schemas/Decimal" }
+        turnover: { $ref: "#/components/schemas/Decimal" }
+        days_of_stock: { type: integer }
+        share: { $ref: "#/components/schemas/Decimal" }
+        cum_share: { $ref: "#/components/schemas/Decimal" }
+        class: { type: string, enum: [A, B, C] }
+        recommendation: { type: string }
+    ABCInventoryReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_consumption_value: { $ref: "#/components/schemas/Decimal" }
+        items: { type: array, items: { $ref: "#/components/schemas/ABCInventoryRow" } }
 
     SalaryPayInput:
       type: object

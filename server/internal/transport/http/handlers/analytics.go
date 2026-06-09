@@ -104,6 +104,34 @@ func (h *AnalyticsHandler) IngredientStockValue(w http.ResponseWriter, r *http.R
 	respond.JSON(w, http.StatusOK, out)
 }
 
+func (h *AnalyticsHandler) Forecast(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.Forecast(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *AnalyticsHandler) ABCInventory(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.ABCInventory(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *AnalyticsHandler) FoodCostMonthly(w http.ResponseWriter, r *http.Request) {
 	f, err := parsePeriod(r)
 	if err != nil {
