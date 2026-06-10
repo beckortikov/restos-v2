@@ -137,6 +137,8 @@ def waiter_loop(token: str, table_id: str, menu_items: list, n_orders: int) -> W
     for _ in range(n_orders):
         # Случайные 1-3 позиции.
         chosen = random.sample(menu_items, min(random.randint(1, 3), len(menu_items)))
+        # ВАЖНО: backend ждёт qty и price как строки (Decimal scale=4).
+        # Передаёшь float — VALIDATION error.
         body = {
             "table_id": table_id,
             "type": "hall",
@@ -144,8 +146,8 @@ def waiter_loop(token: str, table_id: str, menu_items: list, n_orders: int) -> W
             "items": [
                 {
                     "menu_item_id": it["id"],
-                    "qty": random.choice([1, 1, 1, 2]),
-                    "price": float(it["price"]),
+                    "qty": str(random.choice([1, 1, 1, 2])),
+                    "price": str(it["price"]),
                 }
                 for it in chosen
             ],
@@ -246,8 +248,9 @@ def run_round(token: str, tables: list, menu: list, n_waiters: int, n_orders: in
     log.log(f"  create: {fmt_lat(create_all)}")
     log.log(f"  cancel: {fmt_lat(cancel_all)}")
     log.log(f"  errors: {err_count} ({err_rate:.1f}%)")
-    if err_count and err_count <= 5:
-        for e in errors_all[:5]:
+    # Всегда показываем первые 3 ошибки — без этого непонятно что не так.
+    if err_count:
+        for e in errors_all[:3]:
             log.log(f"    ! {e}")
 
     return {

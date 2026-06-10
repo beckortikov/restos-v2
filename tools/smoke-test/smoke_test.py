@@ -529,7 +529,7 @@ def test_99_write_cycle(client):
         "table_id": free_table["id"],
         "type": "hall",
         "guests_count": 1,
-        "items": [{"menu_item_id": menu[0]["id"], "qty": 1, "price": menu[0]["price"]}],
+        "items": [{"menu_item_id": menu[0]["id"], "qty": "1", "price": str(menu[0]["price"])}],
     }
     r, ms = client.post("/api/v1/orders", body)
     if r.status_code not in (200, 201):
