@@ -20,6 +20,8 @@ RestOS smoke test — read-only проверка работающей кассы
 Лог появится в smoke-test.log в текущей папке.
 """
 
+from __future__ import annotations  # для list[dict] на Python 3.8
+
 import json
 import os
 import sys

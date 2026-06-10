@@ -31,6 +31,8 @@ RestOS load test — найти предел кассы по конкурент�
 (только audit_log и order_voids растут).
 """
 
+from __future__ import annotations  # для list[float] на Python 3.8
+
 import argparse
 import os
 import random
