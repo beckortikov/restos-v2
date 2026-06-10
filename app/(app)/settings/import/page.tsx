@@ -3,7 +3,7 @@
 import { useState, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { createZone, createTable, fetchZones, fetchTables, createMenuItem, createIngredient, fetchMenuItems, fetchIngredients } from '@/lib/queries'
-import { api, unwrap } from '@/lib/api'
+import { api, unwrap, getBaseURL } from '@/lib/api'
 import {
   parseFloorMapExcel, parseDishesExcel, parseTechCardsExcel, parseIngredientsExcel,
   type ParsedFloorMap, type ParsedDishList, type ParsedTechCards, type ParsedIngredientList,
@@ -119,15 +119,16 @@ export default function ImportPage() {
     try {
       const fd = new FormData()
       fd.append('file', file)
-      // openapi-fetch не годится для multipart — берём raw fetch + bearer.
-      const stored = localStorage.getItem('restos-auth-user')
-      const token = stored ? JSON.parse(stored)?.token : null
-      const baseURL = (typeof window !== 'undefined' && window.location.port === '5173')
-        ? 'http://127.0.0.1:3001'
-        : ''
-      const res = await fetch(baseURL + path, {
+      // openapi-fetch не годится для multipart — берём raw fetch + те же
+      // headers что и обычные API-запросы (Bearer + Idempotency-Key).
+      const token = localStorage.getItem('restos-v4-token')
+      const headers: Record<string, string> = {
+        'Idempotency-Key': crypto.randomUUID(),
+      }
+      if (token) headers['Authorization'] = `Bearer ${token}`
+      const res = await fetch(getBaseURL() + path, {
         method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        headers,
         body: fd,
       })
       if (!res.ok) {
