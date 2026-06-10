@@ -154,17 +154,15 @@ def test_00_environment(client):
 
 
 def test_01_server_alive(client):
-    """Бэк отвечает на /api/v1/system/version (или просто 4xx без auth)."""
+    """Бэк отвечает на login с пустым body → 400 VALIDATION (=alive)."""
     log("")
     log("=" * 70)
     log("1. SERVER ALIVE")
     log("=" * 70)
-    log("GET /api/v1/system/version (или openapi.yaml)")
-    # Пробуем сначала /api/v1/system/version, fallback на /docs
-    r, ms = client.get("/api/v1/system/version")
-    if r.status_code == 404:
-        r, ms = client.get("/docs")
-    assert r.status_code in (200, 401, 403), f"server мёртвый: {r.status_code}"
+    log("POST /api/v1/auth/login (empty body)")
+    # Любой 4xx/200 = server жив. ConnectionRefused = сервер мёртв.
+    r, ms = client.post("/api/v1/auth/login", {})
+    assert r.status_code < 500, f"server мёртвый: {r.status_code} {r.text[:100]}"
     log_result("server.alive", True, ms, f"http {r.status_code}")
 
 

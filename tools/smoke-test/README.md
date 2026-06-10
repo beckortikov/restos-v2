@@ -31,6 +31,23 @@ postgres напрямую.
 
 ## Шаг 3 — задать env-vars
 
+### PowerShell (синяя консоль, по умолчанию в Windows 10/11)
+
+```powershell
+$env:RESTOS_BASE_URL = "http://127.0.0.1:3001"
+$env:RESTOS_RESTAURANT_ID = "<сюда uuid ресторана>"
+$env:RESTOS_PIN = "<сюда PIN>"
+
+# Проверить:
+echo $env:RESTOS_RESTAURANT_ID
+```
+
+⚠ В PowerShell **`set NAME=value` НЕ работает** — это alias для
+`Set-Variable` и задаёт обычную PS-variable, не env-var. Пиши только
+`$env:NAME = "value"`.
+
+### CMD (чёрная консоль, старый стиль)
+
 ```cmd
 set RESTOS_BASE_URL=http://127.0.0.1:3001
 set RESTOS_RESTAURANT_ID=<сюда uuid ресторана>
