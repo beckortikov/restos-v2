@@ -201,10 +201,12 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 // attachItems — батч SELECT order_items WHERE order_id IN (...), группировка по
 // order_id, разложение в OrderSlim.Items. Один запрос вместо N+1.
 //
-// КРИТИЧНО: фильтрация по tenant_id уже выполнена в List через ForTenant; здесь
-// мы тянем items по уже-проверенным order_id. Дополнительный tenant-фильтр на
-// order_items избыточен (PRD 05: order_items.restaurant_id денормализован, но
-// сами order_id принадлежат tenant'у по построению).
+// КРИТИЧНО: НЕ используем ForTenant — у order_items НЕТ колонки restaurant_id
+// (она только на orders). Tenant-фильтрация уже выполнена в List по orders,
+// так что order_id'ы в этом срезе УЖЕ принадлежат текущему tenant'у.
+//
+// v3.1.0 regression: использовали ForTenant и получали SQLSTATE 42703
+// «column restaurant_id does not exist» — фиксим в v3.8.3.
 func (s *OrdersService) attachItems(ctx context.Context, orders []OrderSlim) error {
 	if len(orders) == 0 {
 		return nil
@@ -213,12 +215,9 @@ func (s *OrdersService) attachItems(ctx context.Context, orders []OrderSlim) err
 	for i, o := range orders {
 		ids[i] = o.ID
 	}
-	scoped, err := s.r.ForTenant(ctx)
-	if err != nil {
-		return err
-	}
 	var items []models.OrderItem
-	if err := scoped.Where("order_id IN ?", ids).
+	if err := s.r.DB().WithContext(ctx).
+		Where("order_id IN ?", ids).
 		Order("created_at ASC").Find(&items).Error; err != nil {
 		return err
 	}

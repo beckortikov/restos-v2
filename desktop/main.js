@@ -33,6 +33,56 @@ let tray = null
 let goProc = null
 let goReady = false
 
+// ─── Migration from shared restos-desktop userData ─────────────────────────
+//
+// v3.8.3 fix: до v3.8.2 поле `name` в package.json было "restos-desktop" —
+// то же что у v1. Electron использует name для app.getPath('userData'), так
+// что v1 и v2 писали в одну папку %APPDATA%\restos-desktop\, перетирая друг
+// друга (v2 wipe'нул PGlite-данные v1 при первом запуске, v1 потом не
+// стартовал — WASM crash).
+//
+// Чиним: name теперь "restos-desktop-v2" → userData = %APPDATA%\restos-desktop-v2\.
+// При старте проверяем — если в новой папке пусто, но в старой есть наши
+// данные (Postgres-формат, не PGlite), переносим их.
+function migrateUserDataFromSharedDir() {
+  try {
+    const newDir = app.getPath('userData')  // restos-desktop-v2
+    const oldDir = path.join(path.dirname(newDir), 'restos-desktop')  // shared с v1
+    if (!fs.existsSync(oldDir)) return
+    if (oldDir === newDir) return
+
+    // В старой папке должны быть НАШИ файлы (pgdata = Postgres-формат).
+    // pglite v1 НЕ создаёт pgdata — у него pglite/* подпапки. Этим
+    // отличаем «наши данные» от «чужих v1».
+    const oldPgData = path.join(oldDir, 'pgdata')
+    if (!fs.existsSync(oldPgData)) return  // нет нашего pgdata → ничего двигать
+
+    // Если в новой папке уже что-то есть — не трогаем.
+    const newPgData = path.join(newDir, 'pgdata')
+    if (fs.existsSync(newPgData)) return
+
+    console.log('[migration] v2 data found in shared restos-desktop dir, moving to', newDir)
+    // Создаём новую папку и переносим только наши подпапки.
+    fs.mkdirSync(newDir, { recursive: true })
+    const ourDirs = ['pgdata', 'pg-cache', 'pg-runtime', 'backups', 'logs']
+    for (const sub of ourDirs) {
+      const src = path.join(oldDir, sub)
+      const dst = path.join(newDir, sub)
+      if (fs.existsSync(src) && !fs.existsSync(dst)) {
+        try {
+          fs.renameSync(src, dst)
+          console.log('[migration]   moved', sub)
+        } catch (e) {
+          console.error('[migration]   FAILED to move', sub, e.message)
+        }
+      }
+    }
+    console.log('[migration] v1 data (если была — pglite/*) осталась в', oldDir)
+  } catch (e) {
+    console.error('[migration] error:', e)
+  }
+}
+
 // ─── Logger ────────────────────────────────────────────────────────────────
 function setupFileLogger() {
   try {
@@ -270,6 +320,8 @@ if (!gotTheLock) {
 
   app.on('ready', async () => {
     setupFileLogger()
+    // 0) v3.8.3: перенос данных из shared restos-desktop dir (было общим с v1).
+    migrateUserDataFromSharedDir()
     // 1) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
     //    освободить порты 3002 (HTTP API) и 54330 (embedded PG).
     killStaleSidecars()
