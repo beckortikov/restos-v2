@@ -3,15 +3,2641 @@
   "children": [
     {
       "type": "frame",
-      "id": "bi8Au",
+      "id": "VJlxx",
       "x": 0,
       "y": 0,
-      "name": "Frame",
+      "name": "Slide 1 — Cover",
       "clip": true,
-      "width": 800,
-      "height": 600,
-      "fill": "#FFFFFF",
-      "layout": "none"
+      "width": 1080,
+      "height": 1350,
+      "fill": "$white",
+      "layout": "vertical",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "DexR4",
+          "name": "Top Accent Bar",
+          "width": "fill_container",
+          "height": 8,
+          "fill": "$accent",
+          "layout": "none"
+        },
+        {
+          "type": "frame",
+          "id": "hvV2x",
+          "name": "Main Content",
+          "width": "fill_container",
+          "height": "fill_container",
+          "layout": "vertical",
+          "gap": 40,
+          "padding": [
+            60,
+            80
+          ],
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "JnDQo",
+              "name": "Logo Row",
+              "gap": 20,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "MVJkw",
+                  "name": "Logo Box",
+                  "width": 80,
+                  "height": 80,
+                  "fill": "$accent",
+                  "cornerRadius": 20,
+                  "layout": "vertical",
+                  "justifyContent": "center",
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "UYr5o",
+                      "name": "Logo R",
+                      "fill": "$white",
+                      "content": "R",
+                      "fontFamily": "Inter",
+                      "fontSize": 48,
+                      "fontWeight": "800"
+                    }
+                  ]
+                },
+                {
+                  "type": "text",
+                  "id": "WkG05",
+                  "name": "Logo Name",
+                  "fill": "$text-dark",
+                  "content": "RestOS",
+                  "fontFamily": "Inter",
+                  "fontSize": 48,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "HPfuO",
+              "name": "Hook",
+              "fill": "$text-dark",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Ваш ресторан\nна автопилоте",
+              "lineHeight": 1.05,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 90,
+              "fontWeight": "800"
+            },
+            {
+              "type": "text",
+              "id": "kODYJ",
+              "name": "Sub Hook",
+              "fill": "$muted",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "Система управления, которая\nэкономит время и деньги",
+              "lineHeight": 1.35,
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 40,
+              "fontWeight": "normal"
+            },
+            {
+              "type": "frame",
+              "id": "fS8la",
+              "name": "Stats Bar",
+              "width": "fill_container",
+              "fill": "#FFF7ED",
+              "cornerRadius": 24,
+              "padding": [
+                28,
+                32
+              ],
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "SnKlk",
+                  "name": "Stat заказ",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "v5oAal",
+                      "name": "Stat Value заказ",
+                      "fill": "$accent",
+                      "content": "10 сек",
+                      "fontFamily": "Inter",
+                      "fontSize": 44,
+                      "fontWeight": "800"
+                    },
+                    {
+                      "type": "text",
+                      "id": "YK0UD",
+                      "name": "Stat Label заказ",
+                      "fill": "$muted",
+                      "content": "заказ",
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "rectangle",
+                  "id": "J4Cq8f",
+                  "name": "Divider 1",
+                  "fill": "#FDBA74",
+                  "width": 2,
+                  "height": 60
+                },
+                {
+                  "type": "frame",
+                  "id": "esjhz",
+                  "name": "Stat чек",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "st7m2",
+                      "name": "Stat Value чек",
+                      "fill": "$accent",
+                      "content": "2 сек",
+                      "fontFamily": "Inter",
+                      "fontSize": 44,
+                      "fontWeight": "800"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ckz7N",
+                      "name": "Stat Label чек",
+                      "fill": "$muted",
+                      "content": "чек",
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "rectangle",
+                  "id": "eqhdR",
+                  "name": "Divider 2",
+                  "fill": "#FDBA74",
+                  "width": 2,
+                  "height": 60
+                },
+                {
+                  "type": "frame",
+                  "id": "RLBy6",
+                  "name": "Stat отчёт",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 4,
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "sy9oL",
+                      "name": "Stat Value отчёт",
+                      "fill": "$accent",
+                      "content": "1 клик",
+                      "fontFamily": "Inter",
+                      "fontSize": 44,
+                      "fontWeight": "800"
+                    },
+                    {
+                      "type": "text",
+                      "id": "yLZf5",
+                      "name": "Stat Label отчёт",
+                      "fill": "$muted",
+                      "content": "отчёт",
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "mudjL",
+              "name": "CTA Pill",
+              "width": 640,
+              "height": 88,
+              "fill": "$accent",
+              "cornerRadius": 44,
+              "gap": 12,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "A9sOk1",
+                  "name": "CTA Text",
+                  "fill": "$white",
+                  "content": "Узнать больше",
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "mNtHn",
+                  "name": "CTA Arrow",
+                  "fill": "$white",
+                  "content": "→",
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "THLeH",
+              "name": "Social Proof",
+              "fill": "$muted",
+              "textGrowth": "fixed-width",
+              "width": "fill_container",
+              "content": "150+ ресторанов уже работают на RestOS",
+              "textAlign": "center",
+              "fontFamily": "Inter",
+              "fontSize": 30,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "a2Uln9",
+          "layoutPosition": "absolute",
+          "x": 930,
+          "y": 1290,
+          "name": "Page Number",
+          "fill": "$muted",
+          "content": "1 / 7",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "n8FkO",
+      "x": 1180,
+      "y": 0,
+      "name": "Slide 2 — Pain",
+      "clip": true,
+      "width": 1080,
+      "height": 1350,
+      "fill": "$white",
+      "layout": "vertical",
+      "gap": 40,
+      "padding": 80,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "vpWR3",
+          "name": "Logo Header",
+          "gap": 14,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "aWltI",
+              "name": "Logo Icon",
+              "width": 60,
+              "height": 60,
+              "fill": "$accent",
+              "cornerRadius": 16,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "nywpC",
+                  "name": "Logo Letter",
+                  "fill": "$white",
+                  "content": "R",
+                  "fontFamily": "Inter",
+                  "fontSize": 36,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "xslki",
+              "name": "Logo Name",
+              "fill": "$text-dark",
+              "content": "RestOS",
+              "fontFamily": "Inter",
+              "fontSize": 36,
+              "fontWeight": "700"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "ic4fR",
+          "name": "Emoji",
+          "fill": "$text-dark",
+          "content": "😩",
+          "fontFamily": "Inter",
+          "fontSize": 200,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "zVDJF",
+          "name": "Title",
+          "fill": "$text-dark",
+          "content": "Знакомо?",
+          "fontFamily": "Inter",
+          "fontSize": 90,
+          "fontWeight": "800"
+        },
+        {
+          "type": "frame",
+          "id": "qHNuX",
+          "name": "Pain Points",
+          "width": 920,
+          "layout": "vertical",
+          "gap": 24,
+          "children": [
+            {
+              "type": "frame",
+              "id": "YjBSS",
+              "name": "Pain Кассир теряет 3 мину",
+              "width": "fill_container",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "i6qH2",
+                  "name": "Dash",
+                  "fill": "$muted",
+                  "content": "—",
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "ZJFjf",
+                  "name": "Text",
+                  "fill": "$text-dark",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Кассир теряет 3 минуты на каждый заказ",
+                  "lineHeight": 1.2,
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "lung4",
+              "name": "Pain Официант перепутал с",
+              "width": "fill_container",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "t0MBMb",
+                  "name": "Dash",
+                  "fill": "$muted",
+                  "content": "—",
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "RlsM7",
+                  "name": "Text",
+                  "fill": "$text-dark",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Официант перепутал стол — гости злятся",
+                  "lineHeight": 1.2,
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "D2quvN",
+              "name": "Pain Повар не получил отм",
+              "width": "fill_container",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "XZWe3",
+                  "name": "Dash",
+                  "fill": "$muted",
+                  "content": "—",
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "bTg2F",
+                  "name": "Text",
+                  "fill": "$text-dark",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Повар не получил отмену — выкинули 2 порции",
+                  "lineHeight": 1.2,
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "HURzn",
+              "name": "Pain Владелец не знает ре",
+              "width": "fill_container",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "L5s1Xb",
+                  "name": "Dash",
+                  "fill": "$muted",
+                  "content": "—",
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                },
+                {
+                  "type": "text",
+                  "id": "NSrqE",
+                  "name": "Text",
+                  "fill": "$text-dark",
+                  "textGrowth": "fixed-width",
+                  "width": "fill_container",
+                  "content": "Владелец не знает реальную выручку до Z-отчёта",
+                  "lineHeight": 1.2,
+                  "fontFamily": "Inter",
+                  "fontSize": 44,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "X2449D",
+          "name": "Bottom Text",
+          "fill": "$muted",
+          "content": "Это лечится",
+          "fontFamily": "Inter",
+          "fontSize": 44,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "wtwPD",
+          "layoutPosition": "absolute",
+          "x": 970,
+          "y": 1290,
+          "name": "Page Number",
+          "fill": "$muted",
+          "content": "2 / 7",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "KHSH1",
+          "layoutPosition": "absolute",
+          "x": 980,
+          "y": 640,
+          "name": "Swipe Arrow",
+          "width": 64,
+          "height": 64,
+          "fill": "#F3F4F6",
+          "cornerRadius": 32,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "yZsLA",
+              "name": "Arrow Icon",
+              "fill": "$muted",
+              "content": "→",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "SzTxk",
+          "layoutPosition": "absolute",
+          "x": 980,
+          "y": 640,
+          "name": "Swipe Arrow",
+          "width": 64,
+          "height": 64,
+          "fill": "#F3F4F6",
+          "cornerRadius": 32,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "UObOT",
+              "name": "Arrow",
+              "fill": "$muted",
+              "content": "→",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "qORiH",
+      "x": 2360,
+      "y": 0,
+      "name": "Slide 3 — Solution",
+      "clip": true,
+      "width": 1080,
+      "height": 1350,
+      "fill": "$white",
+      "layout": "vertical",
+      "gap": 32,
+      "padding": [
+        60,
+        64
+      ],
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "tpVpb",
+          "layoutPosition": "absolute",
+          "x": 970,
+          "y": 1290,
+          "name": "Page Number",
+          "fill": "$muted",
+          "content": "3 / 7",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "HXjYl",
+          "layoutPosition": "absolute",
+          "x": 980,
+          "y": 640,
+          "name": "Swipe Arrow",
+          "width": 64,
+          "height": 64,
+          "fill": "#F3F4F6",
+          "cornerRadius": 32,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "ZMiXO",
+              "name": "Arrow Icon",
+              "fill": "$muted",
+              "content": "→",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "u4aZz",
+          "name": "Logo Header",
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "Blf5T",
+              "name": "Logo Icon",
+              "width": 56,
+              "height": 56,
+              "fill": "$accent",
+              "cornerRadius": 14,
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "S8L3f",
+                  "name": "Logo R",
+                  "fill": "$white",
+                  "content": "R",
+                  "fontFamily": "Inter",
+                  "fontSize": 30,
+                  "fontWeight": "800"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "naJog",
+              "name": "Logo Text",
+              "fill": "$text-dark",
+              "content": "RestOS",
+              "fontFamily": "Inter",
+              "fontSize": 34,
+              "fontWeight": "700"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "V9tAm2",
+          "name": "Label",
+          "fill": "$accent",
+          "content": "Решение",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 32,
+          "fontWeight": "600"
+        },
+        {
+          "type": "text",
+          "id": "h4jJ6",
+          "name": "Title",
+          "fill": "$text-dark",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Всё в одном\nприложении",
+          "lineHeight": 1.08,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 64,
+          "fontWeight": "800"
+        },
+        {
+          "type": "frame",
+          "id": "RcPPa",
+          "name": "Feature Grid",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 20,
+          "children": [
+            {
+              "type": "frame",
+              "id": "QvuYu",
+              "name": "Row 1",
+              "width": "fill_container",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "JAbyU",
+                  "name": "Card POS-касса",
+                  "width": "fill_container",
+                  "fill": "#FFF7ED",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": [
+                    28,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "prH56",
+                      "name": "Icon POS-касса",
+                      "width": 64,
+                      "height": 64,
+                      "fill": "$white",
+                      "cornerRadius": 32,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "pMFif",
+                          "name": "Emoji POS-касса",
+                          "fill": "$text-dark",
+                          "content": "⚡",
+                          "fontFamily": "Inter",
+                          "fontSize": 32,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "uFZHq",
+                      "name": "Title POS-касса",
+                      "fill": "$text-dark",
+                      "content": "POS-касса",
+                      "fontFamily": "Inter",
+                      "fontSize": 34,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "h4vGn",
+                      "name": "Desc POS-касса",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Старт за 3 сек,\nкарта зала, столы",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "vBcA5",
+                  "name": "Card KDS кухня",
+                  "width": "fill_container",
+                  "fill": "#FEF3C7",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": [
+                    28,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "SYzPf",
+                      "name": "Icon KDS кухня",
+                      "width": 64,
+                      "height": 64,
+                      "fill": "$white",
+                      "cornerRadius": 32,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "hMnes",
+                          "name": "Emoji KDS кухня",
+                          "fill": "$text-dark",
+                          "content": "🍳",
+                          "fontFamily": "Inter",
+                          "fontSize": 32,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "SVM5b",
+                      "name": "Title KDS кухня",
+                      "fill": "$text-dark",
+                      "content": "KDS кухня",
+                      "fontFamily": "Inter",
+                      "fontSize": 34,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "x5OXIr",
+                      "name": "Desc KDS кухня",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Таймеры, раннеры,\nавто-печать",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "EGEzR",
+              "name": "Row 2",
+              "width": "fill_container",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "k0giDZ",
+                  "name": "Card ABC-анализ",
+                  "width": "fill_container",
+                  "fill": "#EFF6FF",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": [
+                    28,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "q1JA4x",
+                      "name": "Icon ABC-анализ",
+                      "width": 64,
+                      "height": 64,
+                      "fill": "$white",
+                      "cornerRadius": 32,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "V116We",
+                          "name": "Emoji ABC-анализ",
+                          "fill": "$text-dark",
+                          "content": "📊",
+                          "fontFamily": "Inter",
+                          "fontSize": 32,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "wK4JU",
+                      "name": "Title ABC-анализ",
+                      "fill": "$text-dark",
+                      "content": "ABC-анализ",
+                      "fontFamily": "Inter",
+                      "fontSize": 34,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "F1wYO",
+                      "name": "Desc ABC-анализ",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Меню, склад, столы\nв реальном времени",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "F95zFe",
+                  "name": "Card Отчёты",
+                  "width": "fill_container",
+                  "fill": "#F0FDF4",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 12,
+                  "padding": [
+                    28,
+                    24
+                  ],
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "kHTrZ",
+                      "name": "Icon Отчёты",
+                      "width": 64,
+                      "height": 64,
+                      "fill": "$white",
+                      "cornerRadius": 32,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "FuhHe",
+                          "name": "Emoji Отчёты",
+                          "fill": "$text-dark",
+                          "content": "📋",
+                          "fontFamily": "Inter",
+                          "fontSize": 32,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "F5mUX",
+                      "name": "Title Отчёты",
+                      "fill": "$text-dark",
+                      "content": "Отчёты",
+                      "fontFamily": "Inter",
+                      "fontSize": 34,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "B1jM53",
+                      "name": "Desc Отчёты",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "По смене, официанту,\nблюду — в 1 клик",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "aZJxH",
+          "name": "Bottom Text",
+          "fill": "$muted",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Windows  · работает офлайн в LAN",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 30,
+          "fontWeight": "normal"
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "DLC5W",
+      "x": 3540,
+      "y": 0,
+      "name": "Slide 4 — Speed",
+      "clip": true,
+      "width": 1080,
+      "height": 1350,
+      "fill": "$white",
+      "layout": "vertical",
+      "gap": 40,
+      "padding": 80,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "tkWyy",
+          "name": "Logo Header",
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "gLAsq",
+              "name": "Logo Square",
+              "width": 60,
+              "height": 60,
+              "fill": "$accent",
+              "cornerRadius": 16,
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "I9lOj",
+                  "name": "Logo R",
+                  "fill": "$white",
+                  "content": "R",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "Rjwdc",
+              "name": "Logo Text",
+              "fill": "$text-dark",
+              "content": "RestOS",
+              "fontFamily": "Inter",
+              "fontSize": 36,
+              "fontWeight": "700"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "rZd1t",
+          "name": "Title",
+          "fill": "$text-dark",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Скорость, которая\nспасает выручку",
+          "lineHeight": 1.1,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 72,
+          "fontWeight": "700"
+        },
+        {
+          "type": "frame",
+          "id": "qU7b4",
+          "name": "Feature Grid",
+          "width": "fill_container",
+          "layout": "vertical",
+          "gap": 32,
+          "children": [
+            {
+              "type": "frame",
+              "id": "b9g52g",
+              "name": "Row 1",
+              "width": "fill_container",
+              "gap": 32,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "l07AQ",
+                  "name": "Card Заказ за 10 сек",
+                  "width": "fill_container",
+                  "fill": "#FFF7ED",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "l5SwCr",
+                      "name": "Icon Circle",
+                      "width": 72,
+                      "height": 72,
+                      "fill": "$accent",
+                      "cornerRadius": 36,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "w9g0Q",
+                          "name": "Emoji",
+                          "fill": "$white",
+                          "content": "⚡",
+                          "fontFamily": "Inter",
+                          "fontSize": 36,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "q9SKM",
+                      "name": "Card Title",
+                      "fill": "$text-dark",
+                      "content": "Заказ за 10 сек",
+                      "fontFamily": "Inter",
+                      "fontSize": 36,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Z1fnV",
+                      "name": "Card Desc",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Официант с телефона —\nтап и на кухню",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "uwJBZ",
+                  "name": "Card Чек за 2 сек",
+                  "width": "fill_container",
+                  "fill": "#FFF7ED",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "xnE7L",
+                      "name": "Icon Circle",
+                      "width": 72,
+                      "height": 72,
+                      "fill": "$accent",
+                      "cornerRadius": 36,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "JitQC",
+                          "name": "Emoji",
+                          "fill": "$white",
+                          "content": "🧾",
+                          "fontFamily": "Inter",
+                          "fontSize": 36,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "o257zk",
+                      "name": "Card Title",
+                      "fill": "$text-dark",
+                      "content": "Чек за 2 сек",
+                      "fontFamily": "Inter",
+                      "fontSize": 36,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "QiI8S",
+                      "name": "Card Desc",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Пре-чек, разделить,\nоплатить — в 1 sidebar",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "AoHmw",
+              "name": "Row 2",
+              "width": "fill_container",
+              "gap": 32,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "Q9mYYd",
+                  "name": "Card Печать мгновенно",
+                  "width": "fill_container",
+                  "fill": "#FFF7ED",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "pt82p",
+                      "name": "Icon Circle",
+                      "width": 72,
+                      "height": 72,
+                      "fill": "$accent",
+                      "cornerRadius": 36,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "zcOiL",
+                          "name": "Emoji",
+                          "fill": "$white",
+                          "content": "🖨",
+                          "fontFamily": "Inter",
+                          "fontSize": 36,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "A8l885",
+                      "name": "Card Title",
+                      "fill": "$text-dark",
+                      "content": "Печать мгновенно",
+                      "fontFamily": "Inter",
+                      "fontSize": 36,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "UnaOs",
+                      "name": "Card Desc",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "Раннер на кухню +\nчек гостю автоматом",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "p3q4a",
+                  "name": "Card Отчёт в 1 клик",
+                  "width": "fill_container",
+                  "fill": "#FFF7ED",
+                  "cornerRadius": 24,
+                  "layout": "vertical",
+                  "gap": 16,
+                  "padding": 28,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "kA1Tk",
+                      "name": "Icon Circle",
+                      "width": 72,
+                      "height": 72,
+                      "fill": "$accent",
+                      "cornerRadius": 36,
+                      "layout": "vertical",
+                      "justifyContent": "center",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Z0SYQu",
+                          "name": "Emoji",
+                          "fill": "$white",
+                          "content": "📊",
+                          "fontFamily": "Inter",
+                          "fontSize": 36,
+                          "fontWeight": "normal"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "id": "n70Br",
+                      "name": "Card Title",
+                      "fill": "$text-dark",
+                      "content": "Отчёт в 1 клик",
+                      "fontFamily": "Inter",
+                      "fontSize": 36,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "ffqxe",
+                      "name": "Card Desc",
+                      "fill": "$muted",
+                      "textGrowth": "fixed-width",
+                      "width": "fill_container",
+                      "content": "По смене, официанту,\nблюду — всё под рукой",
+                      "lineHeight": 1.3,
+                      "fontFamily": "Inter",
+                      "fontSize": 26,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "m4c0J",
+          "name": "Bottom Stat",
+          "fill": "$text-dark",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "+30% столов на одного официанта",
+          "lineHeight": 1.2,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 44,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "tfN6n",
+          "layoutPosition": "absolute",
+          "x": 930,
+          "y": 1290,
+          "name": "Page Number",
+          "fill": "$muted",
+          "content": "4 / 7",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "anuEr",
+          "layoutPosition": "absolute",
+          "x": 980,
+          "y": 640,
+          "name": "Swipe Arrow",
+          "width": 64,
+          "height": 64,
+          "fill": "#F3F4F6",
+          "cornerRadius": 32,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "RB1YY",
+              "name": "Arrow Icon",
+              "fill": "$muted",
+              "content": "→",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "W2yJ0",
+      "x": 4720,
+      "y": 0,
+      "name": "Slide 5 — Owner Control",
+      "clip": true,
+      "width": 1080,
+      "height": 1350,
+      "fill": "$white",
+      "layout": "vertical",
+      "gap": 36,
+      "padding": 80,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "ga0Dv",
+          "name": "Logo Header",
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "Gf7wW",
+              "name": "Logo Icon",
+              "width": 60,
+              "height": 60,
+              "fill": "$accent",
+              "cornerRadius": 16,
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "GuaMf",
+                  "name": "Logo R",
+                  "fill": "$white",
+                  "content": "R",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "HK7YF",
+              "name": "Logo Text",
+              "fill": "$text-dark",
+              "content": "RestOS",
+              "fontFamily": "Inter",
+              "fontSize": 36,
+              "fontWeight": "700"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "XXbk3",
+          "name": "Title",
+          "fill": "$text-dark",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Рука на пульсе.\nВсегда",
+          "lineHeight": 1.1,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 72,
+          "fontWeight": "700"
+        },
+        {
+          "type": "text",
+          "id": "mnmnO",
+          "name": "Subtitle",
+          "fill": "$muted",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Владелец видит всё — из любой точки",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 36,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "N8NV23",
+          "name": "Dashboard Card",
+          "width": "fill_container",
+          "fill": "#FAFAFA",
+          "cornerRadius": 28,
+          "stroke": "#E5E7EB",
+          "strokeWidth": 1,
+          "layout": "vertical",
+          "gap": 28,
+          "padding": [
+            32,
+            36
+          ],
+          "children": [
+            {
+              "type": "frame",
+              "id": "KXBih",
+              "name": "Dash Header",
+              "width": "fill_container",
+              "justifyContent": "space_between",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "W7Dme",
+                  "name": "Dash Title",
+                  "fill": "$text-dark",
+                  "content": "Отчёт по смене",
+                  "fontFamily": "Inter",
+                  "fontSize": 28,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "frame",
+                  "id": "S1zIrb",
+                  "name": "Live Badge",
+                  "fill": "#ECFDF5",
+                  "cornerRadius": 12,
+                  "gap": 8,
+                  "padding": [
+                    6,
+                    14
+                  ],
+                  "alignItems": "center",
+                  "children": [
+                    {
+                      "type": "ellipse",
+                      "id": "w1Egl",
+                      "name": "Live Dot",
+                      "fill": "#22C55E",
+                      "width": 10,
+                      "height": 10
+                    },
+                    {
+                      "type": "text",
+                      "id": "vR4pw",
+                      "name": "Live Text",
+                      "fill": "#16A34A",
+                      "content": "Live",
+                      "fontFamily": "Inter",
+                      "fontSize": 22,
+                      "fontWeight": "600"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "JPgRk",
+              "name": "Stats Row",
+              "width": "fill_container",
+              "gap": 16,
+              "children": [
+                {
+                  "type": "frame",
+                  "id": "eERPf",
+                  "name": "Stat Выручка",
+                  "width": "fill_container",
+                  "fill": "#FFFFFF",
+                  "cornerRadius": 16,
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": [
+                    20,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "a7Gtmy",
+                      "name": "Label Выручка",
+                      "fill": "$muted",
+                      "content": "Выручка",
+                      "fontFamily": "Inter",
+                      "fontSize": 22,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "dofZl",
+                      "name": "Value Выручка",
+                      "fill": "$accent",
+                      "content": "48 200",
+                      "fontFamily": "Inter",
+                      "fontSize": 40,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mVNNi",
+                      "name": "Unit Выручка",
+                      "fill": "$muted",
+                      "content": "TJS",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "JnXrX",
+                  "name": "Stat Чеков",
+                  "width": "fill_container",
+                  "fill": "#FFFFFF",
+                  "cornerRadius": 16,
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": [
+                    20,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "BRrT7",
+                      "name": "Label Чеков",
+                      "fill": "$muted",
+                      "content": "Чеков",
+                      "fontFamily": "Inter",
+                      "fontSize": 22,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "mgz6C",
+                      "name": "Value Чеков",
+                      "fill": "$text-dark",
+                      "content": "127",
+                      "fontFamily": "Inter",
+                      "fontSize": 40,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "TpFdU",
+                      "name": "Unit Чеков",
+                      "fill": "$muted",
+                      "content": "TJS",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "VAhdA",
+                  "name": "Stat Ср. чек",
+                  "width": "fill_container",
+                  "fill": "#FFFFFF",
+                  "cornerRadius": 16,
+                  "layout": "vertical",
+                  "gap": 6,
+                  "padding": [
+                    20,
+                    16
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "id": "xplH6",
+                      "name": "Label Ср. чек",
+                      "fill": "$muted",
+                      "content": "Ср. чек",
+                      "fontFamily": "Inter",
+                      "fontSize": 22,
+                      "fontWeight": "normal"
+                    },
+                    {
+                      "type": "text",
+                      "id": "RmvZh",
+                      "name": "Value Ср. чек",
+                      "fill": "$text-dark",
+                      "content": "379",
+                      "fontFamily": "Inter",
+                      "fontSize": 40,
+                      "fontWeight": "700"
+                    },
+                    {
+                      "type": "text",
+                      "id": "Pozc7",
+                      "name": "Unit Ср. чек",
+                      "fill": "$muted",
+                      "content": "TJS",
+                      "fontFamily": "Inter",
+                      "fontSize": 18,
+                      "fontWeight": "normal"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "p6duiP",
+              "name": "Plan Fact Section",
+              "width": "fill_container",
+              "layout": "vertical",
+              "gap": 20,
+              "children": [
+                {
+                  "type": "text",
+                  "id": "AVYz7",
+                  "name": "PF Title",
+                  "fill": "$text-dark",
+                  "content": "План / Факт",
+                  "fontFamily": "Inter",
+                  "fontSize": 24,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "frame",
+                  "id": "pDXmm",
+                  "name": "PF Выручка",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "aRw0y",
+                      "name": "PF Label Row Выручка",
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "zDhNg",
+                          "name": "PF Name Выручка",
+                          "fill": "$muted",
+                          "content": "Выручка",
+                          "fontFamily": "Inter",
+                          "fontSize": 22,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "t0LA3",
+                          "name": "PF Values Выручка",
+                          "fill": "$text-dark",
+                          "content": "48 200 / 60 000  (80%)",
+                          "fontFamily": "Inter",
+                          "fontSize": 22,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "ycSeX",
+                      "name": "PF Bar BG Выручка",
+                      "width": "fill_container",
+                      "height": 14,
+                      "fill": "#E5E7EB",
+                      "cornerRadius": 7,
+                      "layout": "none",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "cornerRadius": 7,
+                          "id": "HrV01",
+                          "x": 0,
+                          "y": 0,
+                          "name": "PF Bar Fill Выручка",
+                          "fill": "$accent",
+                          "width": 448,
+                          "height": 14
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "eenWR",
+                  "name": "PF Чеков",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "uW2lH",
+                      "name": "PF Label Row Чеков",
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Q8r1R",
+                          "name": "PF Name Чеков",
+                          "fill": "$muted",
+                          "content": "Чеков",
+                          "fontFamily": "Inter",
+                          "fontSize": 22,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "JtLhO",
+                          "name": "PF Values Чеков",
+                          "fill": "$text-dark",
+                          "content": "127 / 150  (85%)",
+                          "fontFamily": "Inter",
+                          "fontSize": 22,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "CqFk1",
+                      "name": "PF Bar BG Чеков",
+                      "width": "fill_container",
+                      "height": 14,
+                      "fill": "#E5E7EB",
+                      "cornerRadius": 7,
+                      "layout": "none",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "cornerRadius": 7,
+                          "id": "gH2mI",
+                          "x": 0,
+                          "y": 0,
+                          "name": "PF Bar Fill Чеков",
+                          "fill": "#22C55E",
+                          "width": 476,
+                          "height": 14
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "frame",
+                  "id": "fpcmx",
+                  "name": "PF Ср. чек",
+                  "width": "fill_container",
+                  "layout": "vertical",
+                  "gap": 8,
+                  "children": [
+                    {
+                      "type": "frame",
+                      "id": "e5HuQ5",
+                      "name": "PF Label Row Ср. чек",
+                      "width": "fill_container",
+                      "justifyContent": "space_between",
+                      "alignItems": "center",
+                      "children": [
+                        {
+                          "type": "text",
+                          "id": "Z1ZWKK",
+                          "name": "PF Name Ср. чек",
+                          "fill": "$muted",
+                          "content": "Ср. чек",
+                          "fontFamily": "Inter",
+                          "fontSize": 22,
+                          "fontWeight": "normal"
+                        },
+                        {
+                          "type": "text",
+                          "id": "ZUPIt",
+                          "name": "PF Values Ср. чек",
+                          "fill": "$text-dark",
+                          "content": "379 / 400  (95%)",
+                          "fontFamily": "Inter",
+                          "fontSize": 22,
+                          "fontWeight": "600"
+                        }
+                      ]
+                    },
+                    {
+                      "type": "frame",
+                      "id": "Y1FdP1",
+                      "name": "PF Bar BG Ср. чек",
+                      "width": "fill_container",
+                      "height": 14,
+                      "fill": "#E5E7EB",
+                      "cornerRadius": 7,
+                      "layout": "none",
+                      "children": [
+                        {
+                          "type": "rectangle",
+                          "cornerRadius": 7,
+                          "id": "Hodxg",
+                          "x": 0,
+                          "y": 0,
+                          "name": "PF Bar Fill Ср. чек",
+                          "fill": "#3B82F6",
+                          "width": 532,
+                          "height": 14
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "tvlQu",
+          "name": "Reports Row",
+          "width": "fill_container",
+          "gap": 12,
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "O0ABpo",
+              "name": "Report ДДС",
+              "fill": "#FFF7ED",
+              "cornerRadius": 20,
+              "padding": [
+                10,
+                20
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "L9Zfln",
+                  "name": "Report Text ДДС",
+                  "fill": "$accent",
+                  "content": "ДДС",
+                  "fontFamily": "Inter",
+                  "fontSize": 26,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "piz20",
+              "name": "Report ОПиУ",
+              "fill": "#FFF7ED",
+              "cornerRadius": 20,
+              "padding": [
+                10,
+                20
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "HqQ40",
+                  "name": "Report Text ОПиУ",
+                  "fill": "$accent",
+                  "content": "ОПиУ",
+                  "fontFamily": "Inter",
+                  "fontSize": 26,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "QjrfP",
+              "name": "Report По блюду",
+              "fill": "#FFF7ED",
+              "cornerRadius": 20,
+              "padding": [
+                10,
+                20
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "kYcu7",
+                  "name": "Report Text По блюду",
+                  "fill": "$accent",
+                  "content": "По блюду",
+                  "fontFamily": "Inter",
+                  "fontSize": 26,
+                  "fontWeight": "600"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Ow1i9",
+              "name": "Report По часу",
+              "fill": "#FFF7ED",
+              "cornerRadius": 20,
+              "padding": [
+                10,
+                20
+              ],
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "usg0Y",
+                  "name": "Report Text По часу",
+                  "fill": "$accent",
+                  "content": "По часу",
+                  "fontFamily": "Inter",
+                  "fontSize": 26,
+                  "fontWeight": "600"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "zVVfg",
+          "name": "Bottom Text",
+          "fill": "$muted",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Бюджет · план/факт · аналитика по смене",
+          "lineHeight": 1.3,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 36,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "IJWaL",
+          "layoutPosition": "absolute",
+          "x": 930,
+          "y": 1290,
+          "name": "Page Number",
+          "fill": "$muted",
+          "content": "5 / 7",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "ZEM0C",
+          "layoutPosition": "absolute",
+          "x": 980,
+          "y": 640,
+          "name": "Swipe Arrow",
+          "width": 64,
+          "height": 64,
+          "fill": "#F3F4F6",
+          "cornerRadius": 32,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "bRHPg",
+              "name": "Arrow Icon",
+              "fill": "$muted",
+              "content": "→",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "Y3xy68",
+      "x": 5900,
+      "y": 0,
+      "name": "Slide 6 — Why Choose",
+      "clip": true,
+      "width": 1080,
+      "height": 1350,
+      "fill": "$white",
+      "layout": "vertical",
+      "gap": 36,
+      "padding": 80,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "frame",
+          "id": "aF2SO",
+          "name": "Logo Header",
+          "gap": 16,
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "RhU5w",
+              "name": "Logo Icon",
+              "width": 60,
+              "height": 60,
+              "fill": "$accent",
+              "cornerRadius": 16,
+              "layout": "vertical",
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hTSly",
+                  "name": "Logo R",
+                  "fill": "$white",
+                  "content": "R",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "700"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "id": "rpaP5",
+              "name": "Logo Text",
+              "fill": "$text-dark",
+              "content": "RestOS",
+              "fontFamily": "Inter",
+              "fontSize": 36,
+              "fontWeight": "700"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "i7DYC",
+          "name": "Title",
+          "fill": "$text-dark",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Уже работает в:",
+          "lineHeight": 1.1,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 80,
+          "fontWeight": "700"
+        },
+        {
+          "type": "frame",
+          "id": "f3ydK",
+          "name": "Stats Row",
+          "width": "fill_container",
+          "gap": 16,
+          "justifyContent": "space_between",
+          "children": [
+            {
+              "type": "frame",
+              "id": "bdeRL",
+              "name": "Stat ресторанов",
+              "width": "fill_container",
+              "height": 140,
+              "layout": "vertical",
+              "gap": 8,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "ZiZGj",
+                  "name": "Num ресторанов",
+                  "fill": "$accent",
+                  "content": "150+",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 72,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "VJxDz",
+                  "name": "Label ресторанов",
+                  "fill": "$muted",
+                  "content": "ресторанов",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "bLw1q",
+              "name": "Stat uptime",
+              "width": "fill_container",
+              "height": 140,
+              "layout": "vertical",
+              "gap": 8,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hcee5",
+                  "name": "Num uptime",
+                  "fill": "$text-dark",
+                  "content": "99.9%",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 72,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "g1WMbe",
+                  "name": "Label uptime",
+                  "fill": "$muted",
+                  "content": "uptime",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "Oed0k",
+              "name": "Stat средний заказ",
+              "width": "fill_container",
+              "height": 140,
+              "layout": "vertical",
+              "gap": 8,
+              "justifyContent": "center",
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "Dnl3h",
+                  "name": "Num средний заказ",
+                  "fill": "$text-dark",
+                  "content": "10 сек",
+                  "textAlign": "center",
+                  "fontFamily": "Inter",
+                  "fontSize": 72,
+                  "fontWeight": "700"
+                },
+                {
+                  "type": "text",
+                  "id": "XyAIo",
+                  "name": "Label средний заказ",
+                  "fill": "$muted",
+                  "content": "средний заказ",
+                  "fontFamily": "Inter",
+                  "fontSize": 32,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "Q4Ip6",
+          "name": "Cities Row",
+          "gap": 40,
+          "justifyContent": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "MVSN9",
+              "name": "City Худжанд",
+              "layout": "vertical",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 24,
+                  "id": "sW8HC",
+                  "name": "City Logo Душанбе",
+                  "fill": "#FED7AA",
+                  "width": 120,
+                  "height": 120
+                },
+                {
+                  "type": "text",
+                  "id": "WSorz",
+                  "name": "City Name Душанбе",
+                  "fill": "$muted",
+                  "content": "Худжанд",
+                  "fontFamily": "Inter",
+                  "fontSize": 28,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "MM5bP",
+              "name": "City Душанбе",
+              "layout": "vertical",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 24,
+                  "id": "ORVr9",
+                  "name": "City Logo Алматы",
+                  "fill": "#FDBA74",
+                  "width": 120,
+                  "height": 120
+                },
+                {
+                  "type": "text",
+                  "id": "ZFE09",
+                  "name": "City Name Алматы",
+                  "fill": "$muted",
+                  "content": "Душанбе",
+                  "fontFamily": "Inter",
+                  "fontSize": 28,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "OgUxI",
+              "name": "City Ташкент",
+              "layout": "vertical",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 24,
+                  "id": "avY2j",
+                  "name": "City Logo Бишкек",
+                  "fill": "#FED7AA",
+                  "width": 120,
+                  "height": 120
+                },
+                {
+                  "type": "text",
+                  "id": "Hpm12",
+                  "name": "City Name Бишкек",
+                  "fill": "$muted",
+                  "content": "Ташкент",
+                  "fontFamily": "Inter",
+                  "fontSize": 28,
+                  "fontWeight": "normal"
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "cxpa7",
+              "name": "City Шымкент",
+              "layout": "vertical",
+              "gap": 12,
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "rectangle",
+                  "cornerRadius": 24,
+                  "id": "LGVE3",
+                  "name": "City Logo Москва",
+                  "fill": "#FDBA74",
+                  "width": 120,
+                  "height": 120
+                },
+                {
+                  "type": "text",
+                  "id": "xGHyU",
+                  "name": "City Name Москва",
+                  "fill": "$muted",
+                  "content": "Шымкент",
+                  "fontFamily": "Inter",
+                  "fontSize": 28,
+                  "fontWeight": "normal"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "aRZpF",
+          "name": "Quote",
+          "fill": "$text-dark",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "«Кассирки перестали материться —\nтеперь сами учат новеньких»",
+          "lineHeight": 1.35,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 34,
+          "fontWeight": "normal",
+          "fontStyle": "italic"
+        },
+        {
+          "type": "text",
+          "id": "x1mHLC",
+          "name": "Quote Attribution",
+          "fill": "$muted",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "— Рамзан, кафе «У Раджа», Душанбе",
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "text",
+          "id": "BlMvz",
+          "layoutPosition": "absolute",
+          "x": 930,
+          "y": 1290,
+          "name": "Page Number",
+          "fill": "$muted",
+          "content": "6 / 7",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "flJTe",
+          "layoutPosition": "absolute",
+          "x": 980,
+          "y": 640,
+          "name": "Swipe Arrow",
+          "width": 64,
+          "height": 64,
+          "fill": "#F3F4F6",
+          "cornerRadius": 32,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "pIX0O",
+              "name": "Arrow Icon",
+              "fill": "$muted",
+              "content": "→",
+              "fontFamily": "Inter",
+              "fontSize": 28,
+              "fontWeight": "normal"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "GjOFw",
+      "x": 7080,
+      "y": 0,
+      "name": "Slide 7 — CTA",
+      "clip": true,
+      "width": 1080,
+      "height": 1350,
+      "fill": "$white",
+      "layout": "vertical",
+      "gap": 36,
+      "padding": 80,
+      "justifyContent": "center",
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "text",
+          "id": "bj6Uz",
+          "layoutPosition": "absolute",
+          "x": 930,
+          "y": 1290,
+          "name": "Page Number",
+          "fill": "$muted",
+          "content": "7 / 7",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "BRaR5",
+          "name": "DM Circle",
+          "width": 160,
+          "height": 160,
+          "fill": "$accent",
+          "cornerRadius": 80,
+          "layout": "vertical",
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "vQkAu",
+              "name": "DM Icon",
+              "fill": "$white",
+              "content": "✉",
+              "fontFamily": "Inter",
+              "fontSize": 80,
+              "fontWeight": "normal"
+            }
+          ]
+        },
+        {
+          "type": "text",
+          "id": "VQhyi",
+          "name": "Title",
+          "fill": "$text-dark",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Попробуйте\nбесплатно\n14 дней",
+          "lineHeight": 1.08,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 88,
+          "fontWeight": "800"
+        },
+        {
+          "type": "text",
+          "id": "N2dpe",
+          "name": "Subtitle",
+          "fill": "$muted",
+          "textGrowth": "fixed-width",
+          "width": "fill_container",
+          "content": "Установим за 1 вечер —\nнапишите в Директ ↓",
+          "lineHeight": 1.35,
+          "textAlign": "center",
+          "fontFamily": "Inter",
+          "fontSize": 40,
+          "fontWeight": "normal"
+        },
+        {
+          "type": "frame",
+          "id": "CVfqj",
+          "name": "CTA Button",
+          "width": 760,
+          "height": 120,
+          "fill": "$accent",
+          "cornerRadius": 60,
+          "gap": 16,
+          "justifyContent": "center",
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "text",
+              "id": "Ix0Kc",
+              "name": "CTA Text",
+              "fill": "$white",
+              "content": "Написать в Директ",
+              "fontFamily": "Inter",
+              "fontSize": 48,
+              "fontWeight": "700"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "frame",
+      "id": "D8738",
+      "x": 0,
+      "y": -140,
+      "name": "Logo Header",
+      "reusable": true,
+      "gap": 16,
+      "alignItems": "center",
+      "children": [
+        {
+          "type": "rectangle",
+          "cornerRadius": 16,
+          "id": "MXYA3",
+          "name": "Logo Icon",
+          "fill": "$accent",
+          "width": 60,
+          "height": 60
+        },
+        {
+          "type": "text",
+          "id": "f5i9n",
+          "layoutPosition": "absolute",
+          "x": 19,
+          "y": 12,
+          "name": "Logo R",
+          "fill": "$white",
+          "content": "R",
+          "fontFamily": "Inter",
+          "fontSize": 28,
+          "fontWeight": "800"
+        },
+        {
+          "type": "text",
+          "id": "BpUaU",
+          "name": "Logo Text",
+          "fill": "$text-dark",
+          "content": "RestOS",
+          "fontFamily": "Inter",
+          "fontSize": 36,
+          "fontWeight": "700"
+        }
+      ]
     }
-  ]
+  ],
+  "variables": {
+    "accent": {
+      "type": "color",
+      "value": "#F97316"
+    },
+    "text-dark": {
+      "type": "color",
+      "value": "#1A1A1A"
+    },
+    "muted": {
+      "type": "color",
+      "value": "#6B7280"
+    },
+    "white": {
+      "type": "color",
+      "value": "#FFFFFF"
+    },
+    "telegram-blue": {
+      "type": "color",
+      "value": "#229ED9"
+    }
+  }
 }
