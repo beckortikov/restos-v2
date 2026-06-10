@@ -25,13 +25,13 @@ const SINCE_MS = 24 * 60 * 60 * 1000 // last 24h
 const FETCH_LIMIT = 50
 
 function getApiUrl(): string {
-  if (typeof window === 'undefined') return 'http://localhost:3001'
+  if (typeof window === 'undefined') return 'http://localhost:3002'
   const w = window as { restosDesktop?: { apiUrl?: string } }
   if (w.restosDesktop?.apiUrl) return w.restosDesktop.apiUrl
   const lan = localStorage.getItem('restos-local-server-url')
   const mode = localStorage.getItem('restos-active-mode')
   if (lan && mode === 'local') return lan
-  return 'http://localhost:3001'
+  return 'http://localhost:3002'
 }
 
 function formatTime(iso: string) {

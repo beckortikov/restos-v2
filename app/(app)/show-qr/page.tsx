@@ -33,7 +33,9 @@ export default function ShowQrPage() {
         if (cancel) return
         setLanIp(ip)
 
-        const port = 3001
+        // v3.8.0: порт сдвинут с 3001 на 3002 чтобы не конфликтовать с
+        // v1 (старая restos). См. desktop/main.js API_PORT.
+        const port = 3002
         const localUrl = `http://${ip}:${port}`
         const connectUrl = `${localUrl}/connect?local=${encodeURIComponent(localUrl)}`
         const dataUrl = await QRCode.toDataURL(connectUrl, {
@@ -93,7 +95,7 @@ export default function ShowQrPage() {
             <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/40 px-3 py-2.5 rounded-lg">
               <Wifi className="size-4 shrink-0" />
               <span>
-                Сеть: <code className="font-mono text-foreground">{lanIp}:3001</code>
+                Сеть: <code className="font-mono text-foreground">{lanIp}:3002</code>
               </span>
             </div>
           )}

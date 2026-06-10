@@ -13,10 +13,10 @@ try { pkgVersion = require('./package.json').version } catch {}
 // the preload doesn't run (shouldn't happen), so we use localhost as default.
 contextBridge.exposeInMainWorld('restosDesktop', {
   isDesktop: true,
-  apiUrl: 'http://localhost:3001',
-  printServerUrl: 'http://localhost:3001',
-  connectUrl: 'http://localhost:3001/connect',
-  waiterUrl: 'http://localhost:3001',
+  apiUrl: 'http://localhost:3002',
+  printServerUrl: 'http://localhost:3002',
+  connectUrl: 'http://localhost:3002/connect',
+  waiterUrl: 'http://localhost:3002',
   version: pkgVersion,
 
   // Auto-updater — IPC instead of HTTP (v1 had Express endpoints; v4 has Go-only API).
