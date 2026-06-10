@@ -699,49 +699,58 @@ type AddUserFormProps = {
 
 const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'other']
 
+// Используем UNCONTROLLED inputs (defaultValue + native <form> + FormData).
+// Раньше controlled-inputs с useState внутри memo-обёртки в редких случаях
+// «зависали»: реальная причина — поведение Chromium в Electron + WebKit
+// сочетание input + контекст-провайдер пересоздающий value. Uncontrolled
+// inputs полностью иммунны к re-render → пользовательский ввод никогда не
+// теряется. На submit читаем все поля одним FormData(form).
 const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel }: AddUserFormProps) {
-  const [name, setName] = useState('')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('1234')
-  const [role, setRole] = useState<UserRoleType>('waiter')
-  const [salary, setSalary] = useState(0)
-
+  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const fd = new FormData(e.currentTarget)
+    onSubmit({
+      name: String(fd.get('name') || '').trim(),
+      username: String(fd.get('username') || '').trim(),
+      password: String(fd.get('password') || '') || '1234',
+      role: (String(fd.get('role') || 'waiter')) as UserRoleType,
+      salary: Number(fd.get('salary') || 0),
+    })
+  }
   return (
-    <div className="bg-card rounded-xl border border-border p-5 space-y-3">
+    <form onSubmit={handleSubmit} className="bg-card rounded-xl border border-border p-5 space-y-3">
       <h3 className="text-sm font-semibold text-foreground">Новый сотрудник</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Имя <span className="text-destructive">*</span></label>
-          <input value={name} onChange={e => setName(e.target.value)} placeholder="Иванов Иван" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          <input name="name" required autoFocus defaultValue="" placeholder="Иванов Иван" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
         </div>
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Логин <span className="text-destructive">*</span></label>
-          <input value={username} onChange={e => setUsername(e.target.value)} placeholder="ivanov" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          <input name="username" required defaultValue="" placeholder="ivanov" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
         </div>
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Пароль</label>
-          <input value={password} onChange={e => setPassword(e.target.value)} placeholder="1234" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          <input name="password" defaultValue="1234" placeholder="1234" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
         </div>
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Роль</label>
-          <select value={role} onChange={e => setRole(e.target.value as UserRoleType)} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm">
+          <select name="role" defaultValue="waiter" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm">
             {STAFF_ROLES_LIST.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
           </select>
         </div>
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Зарплата</label>
-          <input type="number" min={0} value={salary || ''} onChange={e => setSalary(Number(e.target.value))} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          <input name="salary" type="number" min={0} defaultValue="" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
         </div>
       </div>
       <div className="flex gap-2">
-        <button
-          onClick={() => onSubmit({ name, username, password, role, salary })}
-          disabled={submitting || !name.trim() || !username.trim()}
+        <button type="submit" disabled={submitting}
           className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium disabled:opacity-50">
           {submitting ? 'Добавление...' : 'Добавить'}
         </button>
-        <button onClick={onCancel} className="px-3 py-2 text-sm text-muted-foreground">Отмена</button>
+        <button type="button" onClick={onCancel} className="px-3 py-2 text-sm text-muted-foreground">Отмена</button>
       </div>
-    </div>
+    </form>
   )
 })
