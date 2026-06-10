@@ -11,7 +11,6 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
-	"github.com/restos/restos-v4/server/internal/jobs"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
@@ -178,10 +177,6 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 		buf.Add(EventShiftClosed, map[string]any{"id": closed.ID})
 		s.pub.Flush(ctx, rid, buf)
 	}
-	// v3.6.0: fire-and-forget архивация старых закрытых заказов.
-	// Не блокирует ответ кассиру. Если упадёт — лог, ничего страшного,
-	// при следующем закрытии смены попробуем ещё раз.
-	jobs.RunArchiveAsync(s.r.DB(), jobs.DefaultArchiveConfig())
 	return closed, nil
 }
 
