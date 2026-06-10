@@ -495,10 +495,31 @@ def test_12_sse_handshake(client):
 
 # ─── Optional write cycle (опасно — реально создаёт заказ) ─────────────────
 
-WRITE_ENABLED = "--write" in sys.argv or os.environ.get("RESTOS_WRITE") == "1"
+
+def pytest_addoption(parser):
+    """Регистрируем --write флаг чтобы pytest не ругался."""
+    parser.addoption(
+        "--write",
+        action="store_true",
+        default=False,
+        help="Включить create-order/cancel цикл (test_99_write_cycle).",
+    )
 
 
-@pytest.mark.skipif(not WRITE_ENABLED, reason="запусти с --write чтобы включить create-order/cancel цикл")
+# Env-var тоже поддерживаем — удобнее в PowerShell.
+WRITE_ENABLED = os.environ.get("RESTOS_WRITE") == "1"
+
+
+@pytest.fixture
+def write_enabled(request):
+    """True если флаг --write передан или RESTOS_WRITE=1 в env."""
+    return WRITE_ENABLED or request.config.getoption("--write")
+
+
+@pytest.mark.skipif(
+    not (WRITE_ENABLED or "--write" in sys.argv),
+    reason="запусти с --write или RESTOS_WRITE=1 чтобы включить create-order/cancel цикл",
+)
 def test_99_write_cycle(client):
     """ОСТОРОЖНО: создаёт заказ, добавляет позицию, отменяет. Только для теста на пустой машине."""
     log("")
