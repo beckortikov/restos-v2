@@ -2,7 +2,7 @@
 //
 // Architecture:
 //   [Electron main] spawns Go-binary as sidecar child process →
-//   Go-server embeds Postgres 16 + serves http://127.0.0.1:3001 →
+//   Go-server embeds Postgres 16 + serves http://127.0.0.1:3002 →
 //   BrowserWindow loads bundled frontend (file://) which fetches API.
 //
 // On quit: kill Go child cleanly (Postgres stops gracefully via Go).
@@ -74,7 +74,7 @@ function sidecarPath() {
 //   1. taskkill restos-server.exe — наш бинарь, всегда безопасно.
 //   2. Читаем pgdata/postmaster.pid → берём PID нашего embedded-postgres
 //      → kill только этот PID. Не трогаем чужие postgres.exe.
-//   3. Fallback: если postmaster.pid не существует, но порт 54329 занят —
+//   3. Fallback: если postmaster.pid не существует, но порт 54330 занят —
 //      kill процесса именно на этом порту (а не всех postgres.exe).
 function killStaleSidecars() {
   const isWin = process.platform === 'win32'
@@ -104,12 +104,12 @@ function killStaleSidecars() {
     }
   } catch {}
 
-  // 3) Fallback: kill процесса на порту 54329 если lock-файл отсутствует
+  // 3) Fallback: kill процесса на порту 54330 если lock-файл отсутствует
   //    или kill по pid не сработал.
   if (!killedByLock) {
     try {
       if (isWin) {
-        const out = execSync('netstat -ano | findstr :54329', { encoding: 'utf8' })
+        const out = execSync('netstat -ano | findstr :54330', { encoding: 'utf8' })
         const pids = new Set()
         for (const line of out.split('\n')) {
           const m = line.trim().match(/\s+(\d+)\s*$/)
@@ -118,9 +118,9 @@ function killStaleSidecars() {
         for (const pid of pids) {
           try { execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: 'ignore' }) } catch {}
         }
-        if (pids.size > 0) console.log('[sidecar] killed port:54329 holders', [...pids].join(','))
+        if (pids.size > 0) console.log('[sidecar] killed port:54330 holders', [...pids].join(','))
       } else {
-        execSync('lsof -ti:54329 | xargs -r kill -9 2>/dev/null || true', { stdio: 'ignore' })
+        execSync('lsof -ti:54330 | xargs -r kill -9 2>/dev/null || true', { stdio: 'ignore' })
       }
     } catch {}
   }
@@ -128,7 +128,9 @@ function killStaleSidecars() {
   console.log('[sidecar] cleanup done')
 }
 
-// Проверка что порт 3001 свободен. Если занят — пробуем убить владельца.
+// Проверка что порт API_PORT (3002 в v3.8+) свободен. Если занят — пробуем
+// убить владельца (стало быть, прошлый зомби-инстанс самого v2, а не v1 —
+// v1 живёт на 3001 и не конфликтует).
 function ensurePortFree(port) {
   return new Promise((resolve) => {
     const tester = net.createServer()
@@ -165,8 +167,8 @@ function startSidecar() {
     ...process.env,
     RESTOS_DATA_DIR: app.getPath('userData'),
     // Bind on 0.0.0.0 so the waiter's Kotlin APK can reach the sidecar over
-    // LAN (e.g. http://192.168.x.y:3001). Electron itself fetches via
-    // http://127.0.0.1:3001 which works identically.
+    // LAN (e.g. http://192.168.x.y:3002). Electron itself fetches via
+    // http://127.0.0.1:3002 which works identically.
     RESTOS_HTTP_ADDR: `0.0.0.0:${API_PORT}`,
     // Cache PG binary so embedded-postgres reuses it across runs.
     RESTOS_PG_CACHE: path.join(app.getPath('userData'), 'pg-cache'),
@@ -269,10 +271,10 @@ if (!gotTheLock) {
   app.on('ready', async () => {
     setupFileLogger()
     // 1) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
-    //    освободить порты 3001 (HTTP API) и 54329 (embedded PG).
+    //    освободить порты 3002 (HTTP API) и 54330 (embedded PG).
     killStaleSidecars()
     await ensurePortFree(API_PORT)
-    await ensurePortFree(54329)
+    await ensurePortFree(54330)
     // 2) Стартуем sidecar.
     startSidecar()
     try {
