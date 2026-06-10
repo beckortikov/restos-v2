@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -109,8 +110,11 @@ class Client:
     def get(self, path: str, params: dict = None):
         return self.request("GET", path, params=params)
 
-    def post(self, path: str, json_body: dict = None):
-        return self.request("POST", path, json=json_body)
+    def post(self, path: str, json_body: dict = None, idempotency: bool = False):
+        kw = {"json": json_body}
+        if idempotency:
+            kw["headers"] = {**self._headers(), "Idempotency-Key": str(uuid.uuid4())}
+        return self.request("POST", path, **kw)
 
 
 @pytest.fixture(scope="session")
@@ -552,7 +556,7 @@ def test_99_write_cycle(client):
         "guests_count": 1,
         "items": [{"menu_item_id": menu[0]["id"], "qty": "1", "price": str(menu[0]["price"])}],
     }
-    r, ms = client.post("/api/v1/orders", body)
+    r, ms = client.post("/api/v1/orders", body, idempotency=True)
     if r.status_code not in (200, 201):
         log_result("write.create_order", False, ms, f"http {r.status_code}: {r.text[:200]}")
         pytest.fail("create failed")
@@ -562,7 +566,7 @@ def test_99_write_cycle(client):
 
     # 3. Отменяем заказ.
     log(f"POST /api/v1/orders/{order_id[:8]}.../cancel")
-    r, ms = client.post(f"/api/v1/orders/{order_id}/cancel", {"reason": "smoke-test cleanup"})
+    r, ms = client.post(f"/api/v1/orders/{order_id}/cancel", {"reason": "smoke-test cleanup"}, idempotency=True)
     log_result("write.cancel_order", r.status_code in (200, 204), ms, f"http {r.status_code}")
 
 

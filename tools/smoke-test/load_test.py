@@ -39,6 +39,7 @@ import random
 import statistics
 import sys
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
@@ -155,7 +156,12 @@ def waiter_loop(token: str, table_id: str, menu_items: list, n_orders: int) -> W
         # create
         t0 = time.perf_counter()
         try:
-            r = s.post(BASE_URL + "/api/v1/orders", json=body, timeout=30)
+            r = s.post(
+                BASE_URL + "/api/v1/orders",
+                json=body,
+                headers={"Idempotency-Key": str(uuid.uuid4())},
+                timeout=30,
+            )
         except Exception as e:
             res.errors.append(f"create network: {e}")
             continue
@@ -181,6 +187,7 @@ def waiter_loop(token: str, table_id: str, menu_items: list, n_orders: int) -> W
             r = s.post(
                 BASE_URL + f"/api/v1/orders/{order_id}/cancel",
                 json={"reason": "load-test"},
+                headers={"Idempotency-Key": str(uuid.uuid4())},
                 timeout=30,
             )
         except Exception as e:
