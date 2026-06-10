@@ -59,14 +59,19 @@ func makeHook(action string) func(*gorm.DB) {
 		if entry == nil {
 			return
 		}
-		// Пишем в той же транзакции, но в новом Statement.
-		// NewDB=true даёт чистый Statement, при этом транзакция (ConnPool из tx)
-		// остаётся той же — GORM это гарантирует. SkipHooks отключает наш же
-		// callback, чтобы не было рекурсии (audit_log в skipTables, но
-		// SkipHooks — дешевле и явнее).
-		if err := tx.Session(&gorm.Session{NewDB: true, SkipHooks: true}).
-			Create(entry).Error; err != nil {
-			log.Error().Err(err).Str("table", table).Msg("audit hook: insert failed")
+		// v3.6.0: async push в worker. Раньше INSERT внутри той же tx
+		// удлинял каждую мутацию на 3-15мс. Теперь хук моментален,
+		// воркер сам пишет batch'ами.
+		//
+		// Fallback: если StartWorker не вызван (тесты), пишем синхронно
+		// в той же tx — старое поведение для compat.
+		if globalWorker != nil {
+			globalWorker.push(entry)
+		} else {
+			if err := tx.Session(&gorm.Session{NewDB: true, SkipHooks: true}).
+				Create(entry).Error; err != nil {
+				log.Error().Err(err).Str("table", table).Msg("audit hook: insert failed (sync fallback)")
+			}
 		}
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/config"
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/jobs"
@@ -120,6 +121,10 @@ func main() {
 		log.Fatal().Err(err).Msg("migrations failed")
 	}
 
+	// Audit worker — async writer для audit_log. Должен стартовать ДО первой
+	// мутации (т.е. до запуска HTTP-сервера). Останавливается при shutdown.
+	audit.StartWorker(gdb)
+
 	// 3. HTTP. License pubkey декодируем (если задан).
 	var licPub []byte
 	if cfg.LicensePublicKey != "" {
@@ -211,6 +216,9 @@ func main() {
 		log.Error().Err(err).Msg("HTTP shutdown")
 	}
 	log.Info().Msg("HTTP stopped")
+	// Audit worker — даём ему 5 сек слить оставшиеся события.
+	audit.StopWorker(5 * time.Second)
+	log.Info().Msg("audit worker stopped")
 	// embedded-postgres stop вызовется через defer.
 }
 
