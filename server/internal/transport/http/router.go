@@ -344,6 +344,8 @@ func NewRouter(deps Deps) http.Handler {
 
 			g.Post("/menu/items/import", importH.MenuItems)
 			g.Post("/stock/ingredients/import", importH.Ingredients)
+			g.Post("/users/import", importH.Users)
+			g.Post("/tables/import", importH.Tables)
 		})
 
 		// Write-эндпоинты — Auth + License + Idempotency.

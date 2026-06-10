@@ -10,11 +10,11 @@ import {
 } from '@/lib/import-excel'
 import {
   Upload, FileSpreadsheet, CheckCircle2, AlertTriangle, MapPin, Armchair,
-  Loader2, Download, ChefHat, Package, X, ArrowLeft,
+  Loader2, Download, ChefHat, Package, X, ArrowLeft, Users as UsersIcon, KeyRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
 
-type ImportType = null | 'floor-map' | 'menu' | 'techcards' | 'inventory'
+type ImportType = null | 'floor-map' | 'menu' | 'techcards' | 'inventory' | 'users' | 'tables-server'
 type ImportStep = 'upload' | 'preview' | 'importing' | 'done'
 
 const IMPORT_CARDS = [
@@ -54,6 +54,24 @@ const IMPORT_CARDS = [
     template: '/docs/шаблон-техкарты.xlsx',
     ready: true,
   },
+  {
+    type: 'users' as const,
+    icon: UsersIcon,
+    color: 'bg-indigo-100 text-indigo-600',
+    title: 'Сотрудники',
+    desc: 'name, username, role, pin, salary',
+    template: null,
+    ready: true,
+  },
+  {
+    type: 'tables-server' as const,
+    icon: Armchair,
+    color: 'bg-fuchsia-100 text-fuchsia-600',
+    title: 'Столы (single sheet)',
+    desc: 'name, number, zone, capacity',
+    template: null,
+    ready: true,
+  },
 ]
 
 export default function ImportPage() {
@@ -83,10 +101,57 @@ export default function ImportPage() {
       } else if (activeType === 'inventory') {
         const result = await parseIngredientsExcel(file)
         setParsedIngredients(result)
+      } else if (activeType === 'users' || activeType === 'tables-server') {
+        // Server-side import — отправляем файл напрямую на бэкенд.
+        await handleServerImport(file, activeType)
+        return
       }
       setStep('preview')
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Ошибка чтения файла')
+    }
+  }
+
+  const handleServerImport = async (file: File, kind: 'users' | 'tables-server') => {
+    setStep('importing')
+    const path = kind === 'users' ? '/api/v1/users/import' : '/api/v1/tables/import'
+    const label = kind === 'users' ? 'сотрудников' : 'столов'
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      // openapi-fetch не годится для multipart — берём raw fetch + bearer.
+      const stored = localStorage.getItem('restos-auth-user')
+      const token = stored ? JSON.parse(stored)?.token : null
+      const baseURL = (typeof window !== 'undefined' && window.location.port === '5173')
+        ? 'http://127.0.0.1:3001'
+        : ''
+      const res = await fetch(baseURL + path, {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        body: fd,
+      })
+      if (!res.ok) {
+        const txt = await res.text()
+        throw new Error(`HTTP ${res.status}: ${txt.slice(0, 200)}`)
+      }
+      const body = await res.json()
+      const created = Number(body.created || 0)
+      const updated = Number(body.updated || 0)
+      const errors = (body.errors || []).map((e: any) => `строка ${e.row}: ${e.message}`)
+      const generatedPins = body.generated_pins || []
+      setImportResult({
+        created: created + updated,
+        label: `${created} новых ${label}, ${updated} обновлено`,
+        errors,
+        generatedPins,
+      } as any)
+      setStep('done')
+      if (errors.length === 0) toast.success(`Импорт: ${created + updated} ${label}`)
+      else toast.warning(`С ошибками: ${errors.length}`)
+    } catch (err) {
+      setImportResult({ created: 0, label: '0', errors: [err instanceof Error ? err.message : String(err)] } as any)
+      setStep('done')
+      toast.error(err instanceof Error ? err.message : 'Ошибка импорта')
     }
   }
 
@@ -502,6 +567,105 @@ export default function ImportPage() {
                   Открыть карту зала →
                 </a>
               </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ═══ Server-side Import (users / tables single-sheet) ═══ */}
+      {(activeType === 'users' || activeType === 'tables-server') && (
+        <>
+          {step === 'upload' && (
+            <div className="space-y-4">
+              <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-5 space-y-2">
+                <h3 className="text-sm font-semibold text-indigo-900">Формат файла</h3>
+                {activeType === 'users' ? (
+                  <div className="text-xs text-indigo-800 space-y-1">
+                    <p>Колонки (header'ы — case-insensitive):</p>
+                    <p><code className="bg-indigo-100 px-1 rounded">name</code> (обязательно), <code className="bg-indigo-100 px-1 rounded">username</code>, <code className="bg-indigo-100 px-1 rounded">role</code> (owner|manager|cashier|cook|waiter), <code className="bg-indigo-100 px-1 rounded">pin</code> (если пусто — сгенерируется), <code className="bg-indigo-100 px-1 rounded">salary</code>, <code className="bg-indigo-100 px-1 rounded">position</code>, <code className="bg-indigo-100 px-1 rounded">station</code>, <code className="bg-indigo-100 px-1 rounded">phone</code></p>
+                    <p className="pt-1"><strong>PIN'ы автогенерируются</strong> и показываются после импорта — раздай сотрудникам.</p>
+                  </div>
+                ) : (
+                  <div className="text-xs text-indigo-800 space-y-1">
+                    <p>Колонки: <code className="bg-indigo-100 px-1 rounded">name</code> (обязательно), <code className="bg-indigo-100 px-1 rounded">number</code>, <code className="bg-indigo-100 px-1 rounded">zone</code> (имя — автосоздаётся), <code className="bg-indigo-100 px-1 rounded">capacity</code></p>
+                    <p className="pt-1">Все столы создаются со статусом <strong>free</strong>.</p>
+                  </div>
+                )}
+              </div>
+              <div
+                onClick={() => fileRef.current?.click()}
+                className="border-2 border-dashed border-border rounded-2xl p-10 text-center cursor-pointer hover:border-primary/40 hover:bg-primary/5 transition-all group"
+              >
+                <div className="size-14 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-3 group-hover:bg-primary/10 transition-colors">
+                  <Upload className="size-6 text-muted-foreground group-hover:text-primary transition-colors" />
+                </div>
+                <p className="font-medium text-foreground">Загрузить .xlsx</p>
+                <p className="text-sm text-muted-foreground mt-1">Один лист с заголовком в первой строке</p>
+                <input ref={fileRef} type="file" accept=".xlsx,.xls,.xlsm" onChange={handleFileSelect} className="hidden" />
+              </div>
+            </div>
+          )}
+
+          {step === 'importing' && (
+            <div className="bg-card rounded-2xl border border-border p-12 text-center">
+              <Loader2 className="size-10 text-primary mx-auto mb-3 animate-spin" />
+              <p className="font-medium text-foreground">Импортируем...</p>
+            </div>
+          )}
+
+          {step === 'done' && importResult && (
+            <div className="space-y-4">
+              <div className={`rounded-2xl border-2 p-8 text-center ${importResult.errors.length === 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+                {importResult.errors.length === 0 ? <CheckCircle2 className="size-14 text-emerald-500 mx-auto mb-3" /> : <AlertTriangle className="size-14 text-amber-500 mx-auto mb-3" />}
+                <h3 className="text-xl font-bold text-foreground">{importResult.label}</h3>
+              </div>
+              {(importResult as any).generatedPins?.length > 0 && (
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-5 space-y-3">
+                  <h4 className="text-sm font-semibold text-amber-900 flex items-center gap-2">
+                    <KeyRound className="size-4" />Сгенерированные PIN-коды ({(importResult as any).generatedPins.length})
+                  </h4>
+                  <p className="text-xs text-amber-800">⚠ Запиши и раздай сотрудникам — после закрытия страницы они больше не отобразятся (PIN хранится в БД хэшированным).</p>
+                  <div className="bg-white rounded-lg border border-amber-200 max-h-80 overflow-y-auto">
+                    <table className="w-full text-xs">
+                      <thead className="sticky top-0 bg-amber-100">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-amber-900 font-medium">Имя</th>
+                          <th className="px-3 py-2 text-left text-amber-900 font-medium">Роль</th>
+                          <th className="px-3 py-2 text-right text-amber-900 font-medium">PIN</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(importResult as any).generatedPins.map((p: any, i: number) => (
+                          <tr key={i} className="border-t border-amber-100">
+                            <td className="px-3 py-1.5 font-medium">{p.name}</td>
+                            <td className="px-3 py-1.5 text-muted-foreground">{p.role}</td>
+                            <td className="px-3 py-1.5 text-right font-mono font-bold text-base">{p.pin}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <button
+                    onClick={() => {
+                      const rows = (importResult as any).generatedPins.map((p: any) => `${p.name},${p.username || ''},${p.role},${p.pin}`).join('\n')
+                      navigator.clipboard.writeText('Имя,Логин,Роль,PIN\n' + rows)
+                      toast.success('Скопировано в буфер обмена (CSV)')
+                    }}
+                    className="w-full px-3 py-2 text-xs font-medium border border-amber-300 rounded-lg hover:bg-amber-100"
+                  >
+                    Скопировать как CSV
+                  </button>
+                </div>
+              )}
+              {importResult.errors.length > 0 && (
+                <div className="bg-card rounded-xl border border-border p-4">
+                  <h4 className="text-sm font-semibold text-destructive mb-2">Ошибки</h4>
+                  <ul className="text-xs text-muted-foreground space-y-1 max-h-40 overflow-y-auto">{importResult.errors.map((e, i) => <li key={i}>• {e}</li>)}</ul>
+                </div>
+              )}
+              <button onClick={reset} className="w-full px-4 py-2.5 text-sm font-medium text-foreground bg-card border border-border rounded-xl hover:bg-muted">
+                Импортировать ещё
+              </button>
             </div>
           )}
         </>

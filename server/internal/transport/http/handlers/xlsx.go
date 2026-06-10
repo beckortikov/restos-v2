@@ -50,6 +50,38 @@ func (h *ImportHandler) Ingredients(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, res)
 }
 
+// Users — POST /api/v1/users/import.
+func (h *ImportHandler) Users(w http.ResponseWriter, r *http.Request) {
+	file, err := openUpload(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	defer file.Close()
+	res, err := h.svc.ImportUsers(r.Context(), file)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}
+
+// Tables — POST /api/v1/tables/import.
+func (h *ImportHandler) Tables(w http.ResponseWriter, r *http.Request) {
+	file, err := openUpload(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	defer file.Close()
+	res, err := h.svc.ImportTables(r.Context(), file)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}
+
 // openUpload — общий хэлпер: достаём первый файл из multipart, кап 20MB.
 func openUpload(r *http.Request) (multipartFile, error) {
 	if err := r.ParseMultipartForm(20 << 20); err != nil {

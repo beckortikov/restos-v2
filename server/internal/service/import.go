@@ -19,10 +19,20 @@ import (
 
 // ImportResult — стандартный ответ всех импортёров.
 type ImportResult struct {
-	Created int           `json:"created"`
-	Updated int           `json:"updated"`
-	Skipped int           `json:"skipped"` // пустые строки
-	Errors  []ImportError `json:"errors,omitempty"`
+	Created       int            `json:"created"`
+	Updated       int            `json:"updated"`
+	Skipped       int            `json:"skipped"` // пустые строки
+	Errors        []ImportError  `json:"errors,omitempty"`
+	GeneratedPINs []GeneratedPIN `json:"generated_pins,omitempty"` // только для ImportUsers
+}
+
+// GeneratedPIN — авто-сгенерированный PIN для нового сотрудника.
+// Возвращается в UI чтобы менеджер мог раздать новые PIN'ы.
+type GeneratedPIN struct {
+	Name     string `json:"name"`
+	Username string `json:"username,omitempty"`
+	Role     string `json:"role"`
+	PIN      string `json:"pin"`
 }
 
 // ImportError — ошибка валидации в конкретной строке xlsx.
@@ -323,8 +333,327 @@ func (s *ImportService) ImportIngredients(ctx context.Context, r io.Reader) (*Im
 // parseBool — толерантный к разным написаниям. Excel часто пишет "TRUE"/"true"/"1".
 func parseBool(s string) bool {
 	switch s {
-	case "true", "TRUE", "True", "1", "yes", "YES", "да":
+	case "true", "TRUE", "True", "1", "yes", "YES", "да", "Да":
 		return true
 	}
 	return false
+}
+
+// ImportUsers — POST /api/v1/users/import.
+//
+// Колонки: name (обяз), username, role (owner|manager|cashier|cook|waiter),
+// pin (4 цифры; если пусто — авто-генерируется), salary, position, station, phone.
+//
+// Upsert ключ = (restaurant_id, username) если username задан, иначе
+// (restaurant_id, name).
+//
+// Если pin не задан — генерируем уникальный 4-значный. Возвращаемые
+// сгенерированные PIN'ы кладём в ImportResult.GeneratedPINs (по строкам).
+// Импортёр в UI должен показать их единым списком чтобы кассир/менеджер
+// разнёс по сотрудникам.
+func (s *ImportService) ImportUsers(ctx context.Context, r io.Reader) (*ImportResult, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := xlsx.Read(r)
+	if err != nil {
+		return nil, apperrors.Wrap("BAD_REQUEST", "bad xlsx", err)
+	}
+	if len(rows) < 1 {
+		return &ImportResult{}, nil
+	}
+	headers := xlsx.IndexHeader(rows[0])
+	if _, ok := headers["name"]; !ok {
+		return nil, apperrors.Wrap("VALIDATION", "header 'name' is required", nil)
+	}
+
+	res := &ImportResult{}
+	now := time.Now().UTC()
+
+	// Соберём существующие PIN'ы чтобы избежать коллизий при автогенерации.
+	usedPINs := make(map[string]bool)
+	var existingPINs []string
+	_ = s.r.DB().WithContext(ctx).
+		Table("users").
+		Where("restaurant_id = ? AND pin IS NOT NULL", rid).
+		Pluck("pin", &existingPINs).Error
+	for _, p := range existingPINs {
+		usedPINs[p] = true
+	}
+
+	validRoles := map[string]bool{
+		"owner": true, "manager": true, "cashier": true,
+		"cook": true, "waiter": true,
+	}
+
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+
+		for i, row := range rows[1:] {
+			rowNum := i + 2
+			name := xlsx.Cell(row, headers, "name")
+			if name == "" {
+				res.Skipped++
+				continue
+			}
+			username := xlsx.Cell(row, headers, "username")
+			role := xlsx.Cell(row, headers, "role")
+			if role == "" {
+				role = "waiter"
+			}
+			if !validRoles[role] {
+				res.Errors = append(res.Errors, ImportError{Row: rowNum,
+					Message: fmt.Sprintf("bad role %q (valid: owner|manager|cashier|cook|waiter)", role)})
+				continue
+			}
+
+			pin := xlsx.Cell(row, headers, "pin")
+			if pin == "" {
+				pin = genUniquePIN(usedPINs)
+			}
+			usedPINs[pin] = true
+
+			// Найти существующего: сначала по username, потом по name.
+			var existing models.User
+			q := tx.Where("restaurant_id = ?", rid)
+			if username != "" {
+				q = q.Where("username = ?", username)
+			} else {
+				q = q.Where("name = ?", name)
+			}
+			lookupErr := q.First(&existing).Error
+
+			updates := map[string]any{
+				"name":       name,
+				"role":       role,
+				"updated_at": now,
+			}
+			if username != "" {
+				updates["username"] = username
+			}
+			if pin != "" {
+				updates["pin"] = pin
+			}
+			if v := xlsx.Cell(row, headers, "position"); v != "" {
+				updates["position"] = v
+			}
+			if v := xlsx.Cell(row, headers, "station"); v != "" {
+				updates["station"] = v
+			}
+			if v := xlsx.Cell(row, headers, "phone"); v != "" {
+				updates["phone"] = v
+			}
+			if v := xlsx.Cell(row, headers, "salary"); v != "" {
+				if d, e := decimal.FromString(v); e == nil {
+					updates["salary"] = d
+				}
+			}
+
+			if lookupErr == nil {
+				if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
+					continue
+				}
+				res.Updated++
+			} else {
+				u := &models.User{
+					ID:           uuid.NewString(),
+					Name:         &name,
+					Role:         &role,
+					RestaurantID: &rid,
+					CreatedAt:    now,
+					UpdatedAt:    now,
+				}
+				if username != "" {
+					u.Username = &username
+				}
+				if pin != "" {
+					u.PIN = &pin
+				}
+				if v := xlsx.Cell(row, headers, "position"); v != "" {
+					u.Position = &v
+				}
+				if v := xlsx.Cell(row, headers, "station"); v != "" {
+					u.Station = &v
+				}
+				if v := xlsx.Cell(row, headers, "phone"); v != "" {
+					u.Phone = &v
+				}
+				if v := xlsx.Cell(row, headers, "salary"); v != "" {
+					if d, e := decimal.FromString(v); e == nil {
+						u.Salary = d
+					}
+				}
+				if err := tx.Create(u).Error; err != nil {
+					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
+					continue
+				}
+				res.Created++
+				res.GeneratedPINs = append(res.GeneratedPINs, GeneratedPIN{
+					Name:     name,
+					Username: username,
+					Role:     role,
+					PIN:      pin,
+				})
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// ImportTables — POST /api/v1/tables/import.
+//
+// Колонки: name (обяз), number, zone (имя зоны — авто-создаётся если не
+// существует), capacity.
+//
+// Upsert ключ = (restaurant_id, name). Status у новых столов = 'free'.
+// Зоны: если в файле есть имя зоны которой нет в БД — создаём.
+func (s *ImportService) ImportTables(ctx context.Context, r io.Reader) (*ImportResult, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := xlsx.Read(r)
+	if err != nil {
+		return nil, apperrors.Wrap("BAD_REQUEST", "bad xlsx", err)
+	}
+	if len(rows) < 1 {
+		return &ImportResult{}, nil
+	}
+	headers := xlsx.IndexHeader(rows[0])
+	if _, ok := headers["name"]; !ok {
+		return nil, apperrors.Wrap("VALIDATION", "header 'name' is required", nil)
+	}
+
+	res := &ImportResult{}
+	now := time.Now().UTC()
+
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+
+		// Кэш зон по имени для быстрого upsert'а.
+		zoneCache := make(map[string]string)
+		var existingZones []models.Zone
+		if err := tx.Where("restaurant_id = ?", rid).Find(&existingZones).Error; err != nil {
+			return err
+		}
+		for _, z := range existingZones {
+			zoneCache[z.Name] = z.ID
+		}
+
+		for i, row := range rows[1:] {
+			rowNum := i + 2
+			name := xlsx.Cell(row, headers, "name")
+			if name == "" {
+				res.Skipped++
+				continue
+			}
+
+			// Резолв zone_id: создаём зону если нет.
+			var zoneID *string
+			if zoneName := xlsx.Cell(row, headers, "zone"); zoneName != "" {
+				if id, ok := zoneCache[zoneName]; ok {
+					zoneID = &id
+				} else {
+					z := &models.Zone{
+						ID:           uuid.NewString(),
+						Name:         zoneName,
+						RestaurantID: &rid,
+						CreatedAt:    now,
+						UpdatedAt:    now,
+					}
+					if err := tx.Create(z).Error; err != nil {
+						res.Errors = append(res.Errors, ImportError{Row: rowNum,
+							Message: fmt.Sprintf("create zone %q: %s", zoneName, err.Error())})
+						continue
+					}
+					zoneCache[zoneName] = z.ID
+					zoneID = &z.ID
+				}
+			}
+
+			var existing models.Table
+			lookupErr := tx.Where("restaurant_id = ? AND name = ?", rid, name).
+				First(&existing).Error
+
+			updates := map[string]any{
+				"name":       name,
+				"updated_at": now,
+			}
+			if v := xlsx.Cell(row, headers, "number"); v != "" {
+				if n, e := strconv.Atoi(v); e == nil {
+					updates["number"] = n
+				}
+			}
+			if v := xlsx.Cell(row, headers, "capacity"); v != "" {
+				if n, e := strconv.Atoi(v); e == nil {
+					updates["capacity"] = n
+				}
+			}
+			if zoneID != nil {
+				updates["zone_id"] = *zoneID
+			}
+
+			if lookupErr == nil {
+				if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
+					continue
+				}
+				res.Updated++
+			} else {
+				free := "free"
+				cap4 := 4
+				t := &models.Table{
+					ID:           uuid.NewString(),
+					Name:         &name,
+					Capacity:     &cap4,
+					ZoneID:       zoneID,
+					Status:       &free,
+					RestaurantID: &rid,
+					CreatedAt:    now,
+					UpdatedAt:    now,
+				}
+				if v := xlsx.Cell(row, headers, "number"); v != "" {
+					if n, e := strconv.Atoi(v); e == nil {
+						t.Number = &n
+					}
+				}
+				if v := xlsx.Cell(row, headers, "capacity"); v != "" {
+					if n, e := strconv.Atoi(v); e == nil {
+						t.Capacity = &n
+					}
+				}
+				if err := tx.Create(t).Error; err != nil {
+					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
+					continue
+				}
+				res.Created++
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// genUniquePIN — 4-значный PIN, избегая used. Не использует 0000.
+func genUniquePIN(used map[string]bool) string {
+	for i := 0; i < 1000; i++ {
+		// Простой LCG в диапазоне [0001, 9999], детерминированно по времени+i.
+		now := time.Now().UnixNano()
+		v := int((now/int64(i+1))%9999) + 1
+		s := fmt.Sprintf("%04d", v)
+		if !used[s] && s != "0000" {
+			return s
+		}
+	}
+	// Fallback — крайне маловероятно при 10к попыток.
+	return fmt.Sprintf("%04d", time.Now().Nanosecond()%9999+1)
 }
