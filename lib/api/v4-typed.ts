@@ -31,19 +31,19 @@ export function getBaseURL(): string {
     const stored = localStorage.getItem('restos-v4-api-url')
     if (stored) return stored
   }
-  // 3. Браузер открыл SPA напрямую с http://<ip-кассы>:3001 — same-origin,
+  // 3. Браузер открыл SPA напрямую с http://<ip-кассы>:3002 — same-origin,
   //    API живёт на том же хосте/порту. Пустой baseURL → relative paths.
-  //    Виттовский dev-сервер на :5173 при этом всё ещё ходит на :3001 (см. ниже).
+  //    Виттовский dev-сервер на :5173 при этом всё ещё ходит на :3002 (см. ниже).
   if (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
     const { protocol, hostname, port } = window.location
     // Vite dev-server (5173/3000) → форсируем go-бэк на 3001.
     if (port === '5173' || port === '3000') {
-      return `${protocol}//${hostname}:3001`
+      return `${protocol}//${hostname}:3002`
     }
     return '' // same-origin
   }
   // 4. SSR / node — fallback на дефолт.
-  return 'http://127.0.0.1:3001'
+  return 'http://127.0.0.1:3002'
 }
 
 const authMiddleware: Middleware = {

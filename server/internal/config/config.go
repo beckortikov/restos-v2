@@ -49,9 +49,13 @@ func LoadFromFlags() (*Config, error) {
 	c := &Config{}
 
 	// Default to 0.0.0.0 so the Kotlin APK officianta can reach the sidecar
-	// over LAN (cashier exposes http://<lan-ip>:3001 in the QR). Electron
-	// still fetches via 127.0.0.1:3001 — both interfaces are bound.
-	flag.StringVar(&c.HTTPAddr, "http-addr", envOr("RESTOS_HTTP_ADDR", "0.0.0.0:3001"),
+	// over LAN (cashier exposes http://<lan-ip>:3002 in the QR). Electron
+	// still fetches via 127.0.0.1:3002 — both interfaces are bound.
+	//
+	// v3.8.0: port был 3001, но v1 (старая restos) тоже на 3001 — обе
+	// одновременно работать не могли. Сдвинули v2 на 3002 чтобы клиент
+	// мог гонять v1 и v2 параллельно (на одной машине).
+	flag.StringVar(&c.HTTPAddr, "http-addr", envOr("RESTOS_HTTP_ADDR", "0.0.0.0:3002"),
 		"HTTP listen address")
 	flag.StringVar(&c.ExternalPGDSN, "external-pg-dsn", envOr("RESTOS_EXTERNAL_PG_DSN", ""),
 		"External Postgres DSN (dev only). If set, embedded-postgres is not started.")
@@ -65,7 +69,9 @@ func LoadFromFlags() (*Config, error) {
 		"Base64-encoded Ed25519 public key for license verification (empty = dev mode)")
 
 	var pgPort uint
-	flag.UintVar(&pgPort, "pg-port", uint(envOrUint("RESTOS_PG_PORT", 54329)),
+	// v3.8.0: было 54329 (как у v1), сдвинуто на 54330 чтобы embedded-PG
+	// v1 и v2 одновременно работали на одной машине.
+	flag.UintVar(&pgPort, "pg-port", uint(envOrUint("RESTOS_PG_PORT", 54330)),
 		"Embedded Postgres port (loopback only)")
 
 	flag.StringVar(&c.PGUser, "pg-user", envOr("RESTOS_PG_USER", "restos"), "Embedded PG user")

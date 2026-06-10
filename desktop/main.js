@@ -22,7 +22,10 @@ const http = require('http')
 const { spawn, execSync } = require('child_process')
 const { autoUpdater } = require('electron-updater')
 
-const API_PORT = 3001
+// v3.8.0: было 3001 — конфликт с v1 (старая restos слушает 3001).
+// Теперь v2 на 3002 чтобы обе версии могли работать одновременно
+// на одной машине.
+const API_PORT = 3002
 const API_BASE = `http://127.0.0.1:${API_PORT}`
 
 let mainWindow = null
