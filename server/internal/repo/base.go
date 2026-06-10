@@ -81,6 +81,27 @@ func (r *Repo) ForTenant(ctx context.Context) (*gorm.DB, error) {
 		Where("restaurant_id = ?", rid), nil
 }
 
+// ForTenantQualified — аналог ForTenant, но WHERE использует квалифицированное
+// имя колонки "<tableAlias>.restaurant_id". Используется в аналитических
+// запросах, где несколько JOIN-таблиц имеют поле restaurant_id (orders, tables,
+// zones, menu_items, users и т.д.) — PostgreSQL иначе выдаёт
+// "column reference 'restaurant_id' is ambiguous".
+//
+// Пример:
+//
+//	scoped, err := r.ForTenantQualified(ctx, "o")  // orders AS o + LEFT JOIN users u
+//	q := scoped.Table("orders AS o").Joins("LEFT JOIN users u ON ...")
+func (r *Repo) ForTenantQualified(ctx context.Context, tableAlias string) (*gorm.DB, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("repo.ForTenantQualified: %w", err)
+	}
+	col := tableAlias + ".restaurant_id"
+	return r.db.Session(&gorm.Session{NewDB: true}).
+		WithContext(ctx).
+		Where(col+" = ?", rid), nil
+}
+
 // Raw возвращает «голый» gorm.DB без скоупа.
 // Используется ТОЛЬКО для:
 //   - login/auth (читаем по PIN/username до того, как знаем restaurant_id);

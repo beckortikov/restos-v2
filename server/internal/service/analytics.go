@@ -78,7 +78,9 @@ type ABCMenuReport struct {
 //
 // Когда нет продаж — items[] пуст, все нули, fronend показывает empty-state.
 func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMenuReport, error) {
-	scoped, err := s.r.ForTenant(ctx)
+	// ForTenantQualified вместо ForTenant: orders + menu_items оба имеют
+	// restaurant_id → PostgreSQL "ambiguous column" без квалификатора.
+	scoped, err := s.r.ForTenantQualified(ctx, "o")
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +330,8 @@ type WaitersReport struct {
 
 // Waiters — статистика по официантам. waiter_id NULL → группа «без официанта».
 func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*WaitersReport, error) {
-	scoped, err := s.r.ForTenant(ctx)
+	// ForTenantQualified: orders + users оба имеют restaurant_id.
+	scoped, err := s.r.ForTenantQualified(ctx, "o")
 	if err != nil {
 		return nil, err
 	}
@@ -502,7 +505,8 @@ type TablesReport struct {
 // Tables — оборачиваемость столов. AvgDuration — среднее (closed_at-created_at)
 // в минутах.
 func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesReport, error) {
-	scoped, err := s.r.ForTenant(ctx)
+	// ForTenantQualified: orders + tables + zones все имеют restaurant_id.
+	scoped, err := s.r.ForTenantQualified(ctx, "o")
 	if err != nil {
 		return nil, err
 	}
@@ -546,7 +550,8 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 	}
 
 	// Также добавляем столы без закрытых заказов (для live-status картины).
-	scopedT, _ := s.r.ForTenant(ctx)
+	// ForTenantQualified: tables + zones оба имеют restaurant_id.
+	scopedT, _ := s.r.ForTenantQualified(ctx, "t")
 	type freeTblRow struct {
 		TableID  string  `gorm:"column:id"`
 		Name     *string `gorm:"column:name"`
@@ -672,7 +677,8 @@ type FoodCostReport struct {
 
 // FoodCost — себестоимость по блюдам. Сорт по food_cost_pct desc (худшие сверху).
 func (s *AnalyticsService) FoodCost(ctx context.Context, f PeriodFilter) (*FoodCostReport, error) {
-	scoped, err := s.r.ForTenant(ctx)
+	// ForTenantQualified: orders + menu_items оба имеют restaurant_id.
+	scoped, err := s.r.ForTenantQualified(ctx, "o")
 	if err != nil {
 		return nil, err
 	}
