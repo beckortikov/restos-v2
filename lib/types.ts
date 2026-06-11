@@ -790,7 +790,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'kitchen.cooking': ['/operations/kitchen'],
   'tables.edit': ['/operations/table-map'],
   'tables.reserve': ['/operations/table-map'],
-  'shifts.manage': ['/operations/shifts'],
+  'shifts.manage': ['/operations/shifts', '/settings/backup'],
   'pos.access': ['/operations/pos', '/cashier', '/show-qr'],
   'inventory.view': ['/warehouse/inventory'],
   'inventory.manage': ['/warehouse/inventory', '/warehouse/receipts', '/warehouse/inventory-check', '/warehouse/history', '/warehouse/supply-expenses'],
@@ -808,7 +808,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'printers.manage': ['/settings/printers'],
   'users.manage': ['/settings/users'],
   'audit.view': ['/settings/audit'],
-  'data.import': ['/settings/import'],
+  'data.import': ['/settings/import', '/settings/backup'],
 }
 
 // Default permissions per role

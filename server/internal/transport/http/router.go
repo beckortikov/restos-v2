@@ -35,6 +35,9 @@ type Deps struct {
 	// NTPChecker — singleton с последним результатом NTP-проверки.
 	// Если nil → /license/clock-status вернёт empty status.
 	NTPChecker *jobs.NTPChecker
+	// BackupCfg — пути/DSN для ручного backup/restore через UI. Если
+	// BackupsDir пуст — endpoints вернут ошибку (dev без embedded PG).
+	BackupCfg service.BackupServiceConfig
 }
 
 // BuildInfo пробрасывается из main для GET /healthz.
@@ -186,6 +189,8 @@ func NewRouter(deps Deps) http.Handler {
 	auditReadsH := handlers.NewAuditReads(auditReadsSvc)
 	waiterStatsH := handlers.NewWaiterStats(timeEntriesSvc)
 	eventsH := handlers.NewEvents(hub)
+	backupSvc := service.NewBackupService(deps.BackupCfg)
+	backupH := handlers.NewBackup(backupSvc)
 
 	r.Route("/api/v1", func(api chi.Router) {
 		// Публичные endpoint'ы (login + bootstrap).
@@ -332,11 +337,16 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/restaurants", restaurantsH.List)
 			g.Get("/restaurants/{id}", restaurantsH.Get)
 			g.Get("/restaurants/{id}/stats", restaurantsH.Stats)
+
+			// Backup — list/download read-only.
+			g.Get("/backup/list", backupH.List)
+			g.Get("/backup/download/{name}", backupH.Download)
 		})
 
-		// Imports — multipart, без Idempotency (upsert by name семантически идемпотентен).
+		// Imports + Backup — multipart / долгие операции, без Idempotency.
+		// Таймаут 5 минут: pg_dump/pg_restore большой БД может занять время.
 		api.Group(func(g chi.Router) {
-			g.Use(chimw.Timeout(60 * time.Second))
+			g.Use(chimw.Timeout(5 * time.Minute))
 			g.Use(middleware.Auth(authSvc))
 			if deps.LicensePublicKey != nil {
 				g.Use(middleware.LicenseRequired(licenseSvc))
@@ -346,6 +356,12 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/stock/ingredients/import", importH.Ingredients)
 			g.Post("/users/import", importH.Users)
 			g.Post("/tables/import", importH.Tables)
+
+			// Backup — create / restore / delete.
+			g.Post("/backup/create", backupH.Create)
+			g.Post("/backup/restore", backupH.RestoreUpload)
+			g.Post("/backup/{name}/restore", backupH.RestoreExisting)
+			g.Delete("/backup/{name}", backupH.Delete)
 		})
 
 		// Write-эндпоинты — Auth + License + Idempotency.

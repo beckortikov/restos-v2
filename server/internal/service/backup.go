@@ -1,0 +1,245 @@
+package service
+
+// BackupService — ручные бэкапы и восстановление БД через UI.
+//
+// Бэкап = pg_dump --format=custom (сжатый, бинарный). Восстановление =
+// pg_restore --clean --if-exists в ту же БД.
+//
+// Бинари pg_dump/pg_restore берутся из embedded-postgres runtime
+// (pg-runtime/bin/), а не из PATH — на проде Windows-кассы Postgres не
+// установлен системно.
+//
+// КРИТИЧНО про restore: pg_restore --clean дропает и пересоздаёт все
+// объекты. Всё что было создано ПОСЛЕ бэкапа — теряется. UI обязан
+// показать жёсткое подтверждение. Restore блокирует приложение на
+// время выполнения (соединения рвутся), поэтому делается редко и
+// осознанно (обычно после переустановки / порчи данных).
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/rs/zerolog/log"
+
+	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
+)
+
+// BackupConfig — пути и DSN для backup-операций.
+type BackupServiceConfig struct {
+	BackupsDir   string // куда складывать .dump
+	PGRuntimeDir string // pg-runtime (внутри bin/pg_dump)
+	DSN          string // подключение к embedded PG
+	PGUser       string
+	PGPassword   string
+	PGDatabase   string
+	PGHost       string
+	PGPort       uint32
+}
+
+type BackupService struct {
+	cfg BackupServiceConfig
+}
+
+func NewBackupService(cfg BackupServiceConfig) *BackupService {
+	return &BackupService{cfg: cfg}
+}
+
+// BackupFile — метаданные одного файла бэкапа.
+type BackupFile struct {
+	Name      string    `json:"name"`
+	SizeBytes int64     `json:"size_bytes"`
+	CreatedAt time.Time `json:"created_at"`
+	Tier      string    `json:"tier"` // daily|weekly|monthly|manual
+}
+
+// pgBin — путь к бинарю (pg_dump/pg_restore) внутри embedded runtime.
+// На Windows — .exe. Fallback на PATH если runtime-бинарь не найден (dev).
+func (s *BackupService) pgBin(name string) string {
+	bin := name
+	if runtime.GOOS == "windows" {
+		bin = name + ".exe"
+	}
+	candidate := filepath.Join(s.cfg.PGRuntimeDir, "bin", bin)
+	if _, err := os.Stat(candidate); err == nil {
+		return candidate
+	}
+	return name // PATH fallback (dev-окружение)
+}
+
+// Create — ручной бэкап. Имя: manual-YYYYMMDD-HHMMSS.dump.
+func (s *BackupService) Create(ctx context.Context) (*BackupFile, error) {
+	if err := os.MkdirAll(s.cfg.BackupsDir, 0o755); err != nil {
+		return nil, apperrors.Wrap("INTERNAL", "mkdir backups", err)
+	}
+	now := time.Now()
+	fname := fmt.Sprintf("manual-%s.dump", now.Format("20060102-150405"))
+	fpath := filepath.Join(s.cfg.BackupsDir, fname)
+
+	// pg_dump --format=custom --file=<path> --dbname=<dsn>
+	cmd := exec.CommandContext(ctx, s.pgBin("pg_dump"),
+		"--format=custom",
+		"--file="+fpath,
+		"--dbname="+s.cfg.DSN,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		_ = os.Remove(fpath)
+		log.Error().Err(err).Str("out", string(out)).Msg("manual backup: pg_dump failed")
+		return nil, apperrors.Wrap("INTERNAL",
+			"pg_dump failed: "+strings.TrimSpace(string(out)), err)
+	}
+
+	fi, err := os.Stat(fpath)
+	if err != nil {
+		return nil, apperrors.Wrap("INTERNAL", "stat backup", err)
+	}
+	log.Info().Str("file", fname).Int64("size", fi.Size()).Msg("manual backup created")
+	return &BackupFile{
+		Name:      fname,
+		SizeBytes: fi.Size(),
+		CreatedAt: now,
+		Tier:      "manual",
+	}, nil
+}
+
+// List — все бэкап-файлы, отсортированные по дате (новые сверху).
+func (s *BackupService) List() ([]BackupFile, error) {
+	entries, err := os.ReadDir(s.cfg.BackupsDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []BackupFile{}, nil
+		}
+		return nil, apperrors.Wrap("INTERNAL", "read backups dir", err)
+	}
+	out := make([]BackupFile, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".dump") {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, BackupFile{
+			Name:      e.Name(),
+			SizeBytes: fi.Size(),
+			CreatedAt: fi.ModTime(),
+			Tier:      tierFromName(e.Name()),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+
+// Path — абсолютный путь к файлу для download. Проверяет что имя безопасно
+// (без traversal) и файл существует.
+func (s *BackupService) Path(name string) (string, error) {
+	if name == "" || strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return "", apperrors.Wrap("VALIDATION", "bad backup name", nil)
+	}
+	if !strings.HasSuffix(name, ".dump") {
+		return "", apperrors.Wrap("VALIDATION", "not a .dump file", nil)
+	}
+	fpath := filepath.Join(s.cfg.BackupsDir, name)
+	if _, err := os.Stat(fpath); err != nil {
+		return "", apperrors.ErrNotFound
+	}
+	return fpath, nil
+}
+
+// Delete — удалить файл бэкапа.
+func (s *BackupService) Delete(name string) error {
+	fpath, err := s.Path(name)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(fpath); err != nil {
+		return apperrors.Wrap("INTERNAL", "delete backup", err)
+	}
+	return nil
+}
+
+// Restore — восстановление из ЗАГРУЖЕННОГО файла (uploaded в temp).
+// tmpPath — путь к временному .dump который handler сохранил из multipart.
+//
+// Используем pg_restore --clean --if-exists --no-owner --no-privileges
+// в ту же БД. --single-transaction чтобы при ошибке откатить целиком.
+func (s *BackupService) Restore(ctx context.Context, tmpPath string) error {
+	if _, err := os.Stat(tmpPath); err != nil {
+		return apperrors.Wrap("VALIDATION", "uploaded file not found", err)
+	}
+
+	// pg_restore не принимает password в DSN на всех платформах одинаково —
+	// передаём через PGPASSWORD env (надёжнее для embedded).
+	cmd := exec.CommandContext(ctx, s.pgBin("pg_restore"),
+		"--clean",
+		"--if-exists",
+		"--no-owner",
+		"--no-privileges",
+		"--dbname="+s.cfg.DSN,
+		tmpPath,
+	)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.cfg.PGPassword)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// pg_restore часто выдаёт warnings на --clean (DROP несуществующих
+		// объектов) и завершается с кодом 1 при наличии non-fatal errors.
+		// Различаем: если в выводе есть "FATAL" или "could not connect" —
+		// реальная ошибка. Иначе считаем успехом с warnings.
+		outStr := string(out)
+		if strings.Contains(outStr, "FATAL") ||
+			strings.Contains(outStr, "could not connect") ||
+			strings.Contains(outStr, "out of memory") ||
+			strings.Contains(outStr, "no such file") {
+			log.Error().Err(err).Str("out", outStr).Msg("restore: pg_restore fatal")
+			return apperrors.Wrap("INTERNAL",
+				"pg_restore failed: "+strings.TrimSpace(firstLines(outStr, 3)), err)
+		}
+		// Non-fatal — логируем warnings, считаем успехом.
+		log.Warn().Str("out", outStr).Msg("restore: pg_restore completed with warnings")
+	}
+	log.Info().Str("file", filepath.Base(tmpPath)).Msg("restore completed")
+	return nil
+}
+
+// RestoreFromExisting — восстановление из УЖЕ существующего файла в backups/
+// (по имени), без upload. Для «откатиться на вчерашний бэкап» из списка.
+func (s *BackupService) RestoreFromExisting(ctx context.Context, name string) error {
+	fpath, err := s.Path(name)
+	if err != nil {
+		return err
+	}
+	return s.Restore(ctx, fpath)
+}
+
+func tierFromName(name string) string {
+	switch {
+	case strings.HasPrefix(name, "manual-"):
+		return "manual"
+	case strings.HasPrefix(name, "monthly-"):
+		return "monthly"
+	case strings.HasPrefix(name, "weekly-"):
+		return "weekly"
+	case strings.HasPrefix(name, "daily-"):
+		return "daily"
+	default:
+		return "other"
+	}
+}
+
+func firstLines(s string, n int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}

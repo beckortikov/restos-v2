@@ -165,6 +165,16 @@ func main() {
 			LicensePublicKey: licPub,
 			Hub:              hub,
 			NTPChecker:       ntpChecker,
+			BackupCfg: service.BackupServiceConfig{
+				BackupsDir:   cfg.BackupsDir(),
+				PGRuntimeDir: cfg.PGRuntimeDir(),
+				DSN:          cfg.ActiveDSN(),
+				PGUser:       cfg.PGUser,
+				PGPassword:   cfg.PGPassword,
+				PGDatabase:   cfg.PGDatabase,
+				PGHost:       "127.0.0.1",
+				PGPort:       cfg.PGPort,
+			},
 		}),
 		ReadHeaderTimeout: 10 * time.Second,
 	}

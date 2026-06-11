@@ -78,6 +78,7 @@ const Users = () => L(() => import('@/app/(app)/settings/users/page'))
 const Printers = () => L(() => import('@/app/(app)/settings/printers/page'))
 const PrintersQueue = () => L(() => import('@/app/(app)/settings/printers/queue/page'))
 const Import = () => L(() => import('@/app/(app)/settings/import/page'))
+const Backup = () => L(() => import('@/app/(app)/settings/backup/page'))
 const Customers = () => L(() => import('@/app/(app)/settings/customers/page'))
 const Audit = () => L(() => import('@/app/(app)/settings/audit/page'))
 const License = () => L(() => import('@/app/(app)/settings/license/page'))
@@ -162,6 +163,7 @@ export function AppRouter() {
         <Route path="/settings/printers" element={<Printers />} />
         <Route path="/settings/printers/queue" element={<PrintersQueue />} />
         <Route path="/settings/import" element={<Import />} />
+        <Route path="/settings/backup" element={<Backup />} />
         <Route path="/settings/customers" element={<Customers />} />
         <Route path="/settings/audit" element={<Audit />} />
         <Route path="/settings/license" element={<License />} />
