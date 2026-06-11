@@ -570,19 +570,16 @@ function detectLanIps() {
       candidates.push({ iface: name, address: addr.address })
     }
   }
-  // Эвристика «лучший»:
-  //   1. Имя интерфейса содержит «Wi-Fi» / «Wireless» / «WLAN» — приоритет 1
-  //   2. Обычный Ethernet (типа «Ethernet», «Local Area Connection») — приоритет 2
-  //   3. Hyper-V / Docker / VirtualBox / vEthernet — приоритет 3 (низший)
-  //   4. По умолчанию — приоритет 2
-  const rank = (iface) => {
-    const n = iface.toLowerCase()
-    if (/wi-?fi|wlan|wireless|802\.11/.test(n)) return 1
-    if (/v(ethernet|switch)|virtual|hyper-?v|docker|virtualbox|wsl|tailscale|wireguard|loopback/.test(n)) return 3
-    return 2
-  }
-  candidates.sort((a, b) => rank(a.iface) - rank(b.iface))
-  return candidates
+  const isWifi = (iface) => /wi-?fi|wlan|wireless|802\.11/i.test(iface)
+  const isVirtual = (iface) => /v(ethernet|switch)|virtual|hyper-?v|docker|virtualbox|wsl|tailscale|wireguard|loopback/i.test(iface)
+
+  // v3.8.6: возвращаем ТОЛЬКО WiFi-адаптеры (телефон официанта почти всегда
+  // на WiFi). Если у кассы нет WiFi-адаптера вообще (редкость — только
+  // Ethernet или кабельная-only касса) — fallback к обычным Ethernet,
+  // отсеивая виртуальные (Hyper-V/Docker/VPN).
+  const wifi = candidates.filter((c) => isWifi(c.iface))
+  if (wifi.length > 0) return wifi
+  return candidates.filter((c) => !isVirtual(c.iface))
 }
 
 ipcMain.handle('get-lan-ip', () => {

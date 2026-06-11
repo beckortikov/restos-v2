@@ -125,12 +125,12 @@ export default function ShowQrPage() {
             </div>
           )}
 
-          {/* v3.8.5: показываем все интерфейсы кассы. Если телефон не
-              видит выбранный — кассир кликает другой. */}
+          {/* v3.8.6: бэк теперь отдаёт только WiFi-адаптеры. Селектор
+              нужен только если у кассы две WiFi-карты — редкий кейс. */}
           {ips.length > 1 && (
             <div className="space-y-1.5 border-t border-border pt-3">
               <p className="text-xs font-medium text-foreground">
-                У кассы несколько сетей — выбери ту в которой сидит телефон официанта:
+                У кассы несколько WiFi — выбери ту к которой подключён телефон:
               </p>
               <div className="flex flex-col gap-1.5">
                 {ips.map((i) => (
