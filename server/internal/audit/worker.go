@@ -48,9 +48,9 @@ type worker struct {
 	once   sync.Once
 
 	// Counters для observability (опц.).
-	mu        sync.Mutex
-	pushedCnt uint64
-	wroteCnt  uint64
+	mu         sync.Mutex
+	pushedCnt  uint64
+	wroteCnt   uint64
 	droppedCnt uint64
 }
 
