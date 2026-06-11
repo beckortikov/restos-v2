@@ -1,6 +1,6 @@
 {
   "name": "restos-desktop-v2",
-  "version": "3.9.0",
+  "version": "3.9.1",
   "description": "RestOS v4 Desktop — POS система для ресторанов (Go-бэк + embedded Postgres, LAN web access)",
   "main": "main.js",
   "scripts": {

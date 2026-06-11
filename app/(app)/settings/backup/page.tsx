@@ -18,6 +18,7 @@ type BackupFile = {
 
 const TIER_LABELS: Record<string, string> = {
   manual: 'Ручной',
+  shift: 'Закрытие смены',
   daily: 'Ежедневный',
   weekly: 'Недельный',
   monthly: 'Месячный',
@@ -26,6 +27,7 @@ const TIER_LABELS: Record<string, string> = {
 
 const TIER_COLORS: Record<string, string> = {
   manual: 'bg-primary/10 text-primary',
+  shift: 'bg-violet-100 text-violet-600',
   daily: 'bg-blue-100 text-blue-600',
   weekly: 'bg-amber-100 text-amber-600',
   monthly: 'bg-emerald-100 text-emerald-600',
@@ -276,7 +278,7 @@ export default function BackupPage() {
       <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-1.5">
         <p className="text-xs text-blue-800 flex items-start gap-2">
           <CheckCircle2 className="size-4 shrink-0 mt-0.5" />
-          <span>Касса автоматически делает ежедневный бэкап в 3:00. Здесь можно создать дополнительную копию вручную перед важными изменениями.</span>
+          <span>Касса автоматически делает копию <strong>при каждом закрытии смены</strong> и дополнительно ежедневно в 3:00. Здесь можно создать копию вручную перед важными изменениями.</span>
         </p>
         <p className="text-xs text-blue-800 flex items-start gap-2">
           <Download className="size-4 shrink-0 mt-0.5" />

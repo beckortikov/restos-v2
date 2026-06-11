@@ -191,6 +191,11 @@ func NewRouter(deps Deps) http.Handler {
 	eventsH := handlers.NewEvents(hub)
 	backupSvc := service.NewBackupService(deps.BackupCfg)
 	backupH := handlers.NewBackup(backupSvc)
+	// v3.9.1: авто-бэкап при закрытии смены. Только если BackupsDir
+	// сконфигурирован (прод с embedded PG) — в тестах nil-cfg → пропускаем.
+	if deps.BackupCfg.BackupsDir != "" {
+		shiftsSvc = shiftsSvc.WithBackup(backupSvc)
+	}
 
 	r.Route("/api/v1", func(api chi.Router) {
 		// Публичные endpoint'ы (login + bootstrap).

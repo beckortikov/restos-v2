@@ -109,6 +109,66 @@ func (s *BackupService) Create(ctx context.Context) (*BackupFile, error) {
 	}, nil
 }
 
+// CreateAuto — авто-бэкап при закрытии смены. Имя shift-YYYYMMDD-HHMMSS.dump.
+// После создания применяет ротацию: оставляет последние keepShiftBackups
+// shift-бэкапов (чтобы за месяц не накопить 60+ файлов).
+func (s *BackupService) CreateAuto(ctx context.Context) (*BackupFile, error) {
+	if err := os.MkdirAll(s.cfg.BackupsDir, 0o755); err != nil {
+		return nil, apperrors.Wrap("INTERNAL", "mkdir backups", err)
+	}
+	now := time.Now()
+	fname := fmt.Sprintf("shift-%s.dump", now.Format("20060102-150405"))
+	fpath := filepath.Join(s.cfg.BackupsDir, fname)
+
+	cmd := exec.CommandContext(ctx, s.pgBin("pg_dump"),
+		"--format=custom",
+		"--file="+fpath,
+		"--dbname="+s.cfg.DSN,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		_ = os.Remove(fpath)
+		log.Error().Err(err).Str("out", string(out)).Msg("auto backup (shift close): pg_dump failed")
+		return nil, apperrors.Wrap("INTERNAL",
+			"pg_dump failed: "+strings.TrimSpace(string(out)), err)
+	}
+
+	// Ротация shift-бэкапов: оставляем последние 14 (≈2 недели смен).
+	s.rotateShiftBackups(14)
+
+	fi, err := os.Stat(fpath)
+	if err != nil {
+		return nil, apperrors.Wrap("INTERNAL", "stat backup", err)
+	}
+	log.Info().Str("file", fname).Int64("size", fi.Size()).Msg("auto backup (shift close) created")
+	return &BackupFile{Name: fname, SizeBytes: fi.Size(), CreatedAt: now, Tier: "shift"}, nil
+}
+
+// rotateShiftBackups удаляет старые shift-*.dump, оставляя keep самых свежих.
+func (s *BackupService) rotateShiftBackups(keep int) {
+	if keep <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(s.cfg.BackupsDir)
+	if err != nil {
+		return
+	}
+	var shifts []os.DirEntry
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasPrefix(e.Name(), "shift-") && strings.HasSuffix(e.Name(), ".dump") {
+			shifts = append(shifts, e)
+		}
+	}
+	if len(shifts) <= keep {
+		return
+	}
+	// Имена shift-YYYYMMDD-HHMMSS сортируются лексикографически = хронологически.
+	sort.Slice(shifts, func(i, j int) bool { return shifts[i].Name() < shifts[j].Name() })
+	for _, e := range shifts[:len(shifts)-keep] {
+		_ = os.Remove(filepath.Join(s.cfg.BackupsDir, e.Name()))
+	}
+}
+
 // List — все бэкап-файлы, отсортированные по дате (новые сверху).
 func (s *BackupService) List() ([]BackupFile, error) {
 	entries, err := os.ReadDir(s.cfg.BackupsDir)
@@ -223,6 +283,8 @@ func (s *BackupService) RestoreFromExisting(ctx context.Context, name string) er
 
 func tierFromName(name string) string {
 	switch {
+	case strings.HasPrefix(name, "shift-"):
+		return "shift"
 	case strings.HasPrefix(name, "manual-"):
 		return "manual"
 	case strings.HasPrefix(name, "monthly-"):

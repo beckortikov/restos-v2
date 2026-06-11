@@ -177,6 +177,23 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 		buf.Add(EventShiftClosed, map[string]any{"id": closed.ID})
 		s.pub.Flush(ctx, rid, buf)
 	}
+	// v3.9.1: авто-бэкап при закрытии смены. Fire-and-forget — не блокирует
+	// ответ кассиру. pg_dump за 2-15с в фоне. Касса работает 12-16ч/день,
+	// закрытие смены = гарантированно работающая машина (не надеемся на
+	// «комп включён ночью» как у 3:00-cron).
+	if s.backup != nil {
+		go func() {
+			bctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if f, err := s.backup.CreateAuto(bctx); err != nil {
+				// Не критично — ежедневный 3:00-cron подстрахует. Логируем.
+				// (BackupService.CreateAuto уже логирует детали.)
+				_ = err
+			} else {
+				_ = f
+			}
+		}()
+	}
 	return closed, nil
 }
 

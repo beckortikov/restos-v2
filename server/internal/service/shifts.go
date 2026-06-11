@@ -13,12 +13,20 @@ import (
 )
 
 type ShiftsService struct {
-	r   *repo.Repo
-	pub *EventPublisher // опционально; nil → no-op
+	r      *repo.Repo
+	pub    *EventPublisher // опционально; nil → no-op
+	backup *BackupService  // опционально; nil → авто-бэкап при close выключен
 }
 
 func NewShiftsService(r *repo.Repo) *ShiftsService {
 	return &ShiftsService{r: r}
+}
+
+// WithBackup включает авто-бэкап при закрытии смены. Вызывается из router
+// после wiring'а BackupService.
+func (s *ShiftsService) WithBackup(b *BackupService) *ShiftsService {
+	s.backup = b
+	return s
 }
 
 // ShiftsFilter — фильтры для GET /shifts.
