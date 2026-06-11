@@ -102,6 +102,9 @@ class NetworkProbe @Inject constructor(
 
     private companion object {
         const val INTERVAL_MS = 15_000L
-        const val PROBE_TIMEOUT_MS = 3_000L
+        // v3.8.4: было 3с — на холодном старте кассы (Postgres warming up)
+        // не хватало. 10с покрывает 99% реальных случаев без бесконечного
+        // зависания при настоящей сетевой проблеме.
+        const val PROBE_TIMEOUT_MS = 10_000L
     }
 }

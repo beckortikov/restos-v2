@@ -36,9 +36,12 @@ class OnboardingViewModel @Inject constructor(
     private val _state = MutableStateFlow(OnboardingUiState())
     val state: StateFlow<OnboardingUiState> = _state.asStateFlow()
 
+    // v3.8.4: 3с было слишком жёстко — кассирский бэк на холодном старте мог
+    // не успеть ответить даже когда браузер открывал тот же URL. Поднял до
+    // 10с connect / 10с read (~6с типично достаточно, плюс запас).
     private val probeClient = OkHttpClient.Builder()
-        .connectTimeout(3, TimeUnit.SECONDS)
-        .readTimeout(3, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(10, TimeUnit.SECONDS)
         .retryOnConnectionFailure(false)
         .build()
 
@@ -133,7 +136,7 @@ class OnboardingViewModel @Inject constructor(
                 )
             }
         } catch (e: java.net.SocketTimeoutException) {
-            ProbeResult(error = "Таймаут (3с): сервер не отвечает. Проверьте IP/порт.")
+            ProbeResult(error = "Таймаут (10с): сервер не отвечает. Проверьте IP/порт.")
         } catch (e: java.net.ConnectException) {
             ProbeResult(error = "Connection refused: на этом IP:порте никто не слушает.")
         } catch (e: java.net.UnknownHostException) {
