@@ -182,8 +182,16 @@ private fun filterMenu(state: NewOrderUiState): List<MenuItemDto> {
     val q = state.search.trim().lowercase()
     val byCat = if (state.selectedCategoryId == null || q.isNotBlank()) state.items
     else state.items.filter { it.category == state.selectedCategoryId }
-    return if (q.isBlank()) byCat
+    val filtered = if (q.isBlank()) byCat
     else byCat.filter { it.name.lowercase().contains(q) }
+
+    // Блюда уже добавленные в заказ — поднимаем в топ списка, чтобы официант
+    // быстро видел/менял их количество. Внутри групп (в корзине / не в корзине)
+    // сохраняем исходный порядок (stable sort by partition).
+    if (state.cart.isEmpty()) return filtered
+    val inCart = state.cart.map { it.menuItemId }.toSet()
+    val (selected, rest) = filtered.partition { it.id in inCart }
+    return selected + rest
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
