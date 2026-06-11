@@ -27,6 +27,9 @@ contextBridge.exposeInMainWorld('restosDesktop', {
 
   // LAN IP — для QR-кода официанту, чтобы подключиться к этой кассе по локалке.
   getLanIp: () => ipcRenderer.invoke('get-lan-ip'),
+  // v3.8.5: список всех IPv4 интерфейсов кассы (WiFi/Ethernet/...) — UI
+  // показывает их кассиру чтобы выбрал правильную сеть для QR.
+  getLanIps: () => ipcRenderer.invoke('get-lan-ips'),
 
   // License blocked
   onBlocked: (callback) => ipcRenderer.on('license-blocked', (_, data) => callback(data)),

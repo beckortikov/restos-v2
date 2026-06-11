@@ -548,23 +548,52 @@ ipcMain.handle('check-update', async () => {
 ipcMain.handle('get-update-status', () => updateState)
 
 // ─── LAN IP detection ──────────────────────────────────────────────────────
-// Возвращает первый non-internal IPv4 адрес — это адрес который видят
-// другие устройства в той же WiFi-сети (телефон официанта).
-ipcMain.handle('get-lan-ip', () => {
-  try {
-    const os = require('os')
-    const ifs = os.networkInterfaces()
-    for (const name of Object.keys(ifs)) {
-      for (const addr of ifs[name] || []) {
-        if (addr.family === 'IPv4' && !addr.internal) {
-          return addr.address
-        }
-      }
+// Возвращает «лучший» (для backward compat) и весь список non-internal IPv4
+// адресов — каждый соответствует одному из сетевых интерфейсов кассы.
+//
+// На кассе часто несколько IP:
+//   - WiFi (192.168.1.X) — на нём сидят телефоны официантов
+//   - Ethernet (10.0.0.X) — кабель в роутер
+//   - Hyper-V/Docker (172.16.X.X) — виртуальные интерфейсы, бесполезны для LAN
+//   - VPN (10.8.0.X, 100.64.X.X) — Tailscale/WireGuard, тоже бесполезны
+//
+// Раньше брали ПЕРВЫЙ попавшийся — если первым был Ethernet а телефон на WiFi,
+// QR показывал неверный URL → телефон не подключался. v3.8.5: UI выводит
+// список и юзер выбирает.
+function detectLanIps() {
+  const os = require('os')
+  const ifs = os.networkInterfaces()
+  const candidates = []
+  for (const name of Object.keys(ifs)) {
+    for (const addr of ifs[name] || []) {
+      if (addr.family !== 'IPv4' || addr.internal) continue
+      candidates.push({ iface: name, address: addr.address })
     }
-  } catch (e) {
-    console.error('[get-lan-ip] error:', e)
   }
-  return '127.0.0.1'
+  // Эвристика «лучший»:
+  //   1. Имя интерфейса содержит «Wi-Fi» / «Wireless» / «WLAN» — приоритет 1
+  //   2. Обычный Ethernet (типа «Ethernet», «Local Area Connection») — приоритет 2
+  //   3. Hyper-V / Docker / VirtualBox / vEthernet — приоритет 3 (низший)
+  //   4. По умолчанию — приоритет 2
+  const rank = (iface) => {
+    const n = iface.toLowerCase()
+    if (/wi-?fi|wlan|wireless|802\.11/.test(n)) return 1
+    if (/v(ethernet|switch)|virtual|hyper-?v|docker|virtualbox|wsl|tailscale|wireguard|loopback/.test(n)) return 3
+    return 2
+  }
+  candidates.sort((a, b) => rank(a.iface) - rank(b.iface))
+  return candidates
+}
+
+ipcMain.handle('get-lan-ip', () => {
+  const list = detectLanIps()
+  return list[0]?.address || '127.0.0.1'
+})
+
+// v3.8.5: для UI который хочет показать ВСЕ интерфейсы (например, страница QR
+// предлагает юзеру выбрать какой IP вшить в QR).
+ipcMain.handle('get-lan-ips', () => {
+  return detectLanIps()
 })
 
 ipcMain.handle('capture-screenshot', async () => {

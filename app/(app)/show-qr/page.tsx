@@ -15,28 +15,53 @@ import { ArrowLeft, Smartphone, Wifi, AlertCircle } from 'lucide-react'
  * Официант: открывает URL → /connect страница ловит ?local=, сохраняет в
  * localStorage его телефона → редирект на /login для PIN ввода.
  */
+type IfaceIp = { iface: string; address: string }
+
 export default function ShowQrPage() {
   const navigate = useNavigate()
   const [lanIp, setLanIp] = useState<string>('')
   const [qrDataUrl, setQrDataUrl] = useState<string>('')
   const [error, setError] = useState<string>('')
+  const [ips, setIps] = useState<IfaceIp[]>([])
 
+  // v3.8.5: на кассе может быть несколько сетевых интерфейсов (WiFi +
+  // Ethernet + VPN). В QR нужен IP той сети где сидит телефон официанта,
+  // иначе он не подключится. Загружаем список и предлагаем выбор.
   useEffect(() => {
     let cancel = false
     ;(async () => {
       try {
-        const d = (window as { restosDesktop?: { getLanIp?: () => Promise<string> } }).restosDesktop
-        let ip = '127.0.0.1'
-        if (d?.getLanIp) {
-          ip = await d.getLanIp()
+        const d = (window as any).restosDesktop
+        let list: IfaceIp[] = []
+        if (d?.getLanIps) {
+          list = await d.getLanIps()
+        } else if (d?.getLanIp) {
+          const ip = await d.getLanIp()
+          list = [{ iface: 'auto', address: ip }]
         }
         if (cancel) return
-        setLanIp(ip)
+        if (!list || list.length === 0) {
+          list = [{ iface: 'fallback', address: '127.0.0.1' }]
+        }
+        setIps(list)
+        // Авто-выбираем первый (он уже отранжирован — WiFi приоритет).
+        setLanIp(list[0].address)
+      } catch (e) {
+        if (cancel) return
+        setError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    return () => { cancel = true }
+  }, [])
 
-        // v3.8.0: порт сдвинут с 3001 на 3002 чтобы не конфликтовать с
-        // v1 (старая restos). См. desktop/main.js API_PORT.
+  // Перегенерируем QR при смене выбранного IP.
+  useEffect(() => {
+    if (!lanIp) return
+    let cancel = false
+    ;(async () => {
+      try {
         const port = 3002
-        const localUrl = `http://${ip}:${port}`
+        const localUrl = `http://${lanIp}:${port}`
         const connectUrl = `${localUrl}/connect?local=${encodeURIComponent(localUrl)}`
         const dataUrl = await QRCode.toDataURL(connectUrl, {
           width: 320,
@@ -50,7 +75,7 @@ export default function ShowQrPage() {
       }
     })()
     return () => { cancel = true }
-  }, [])
+  }, [lanIp])
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center bg-background p-6">
@@ -97,6 +122,32 @@ export default function ShowQrPage() {
               <span>
                 Сеть: <code className="font-mono text-foreground">{lanIp}:3002</code>
               </span>
+            </div>
+          )}
+
+          {/* v3.8.5: показываем все интерфейсы кассы. Если телефон не
+              видит выбранный — кассир кликает другой. */}
+          {ips.length > 1 && (
+            <div className="space-y-1.5 border-t border-border pt-3">
+              <p className="text-xs font-medium text-foreground">
+                У кассы несколько сетей — выбери ту в которой сидит телефон официанта:
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {ips.map((i) => (
+                  <button
+                    key={i.address}
+                    onClick={() => setLanIp(i.address)}
+                    className={`flex items-center justify-between gap-2 px-3 py-2 rounded-lg text-xs border transition-colors ${
+                      lanIp === i.address
+                        ? 'border-primary bg-primary/10 text-foreground'
+                        : 'border-border hover:bg-muted text-muted-foreground'
+                    }`}
+                  >
+                    <span className="font-mono">{i.address}</span>
+                    <span className="text-[10px] opacity-60 truncate">{i.iface}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
