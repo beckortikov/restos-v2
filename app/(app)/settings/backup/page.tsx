@@ -282,7 +282,7 @@ export default function BackupPage() {
         </p>
         <p className="text-xs text-blue-800 flex items-start gap-2">
           <Download className="size-4 shrink-0 mt-0.5" />
-          <span>Скачайте копию на USB-флешку или отправьте себе — это защита если выйдет из строя компьютер кассы.</span>
+          <span>Копия каждого бэкапа также сохраняется в папку <strong>«RestOS-Backups» на Рабочем столе</strong> — оттуда легко скинуть на USB-флешку.</span>
         </p>
       </div>
 

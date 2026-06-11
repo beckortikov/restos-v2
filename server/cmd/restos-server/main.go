@@ -167,6 +167,7 @@ func main() {
 			NTPChecker:       ntpChecker,
 			BackupCfg: service.BackupServiceConfig{
 				BackupsDir:   cfg.BackupsDir(),
+				DesktopDir:   cfg.DesktopBackupsDir(),
 				PGRuntimeDir: cfg.PGRuntimeDir(),
 				DSN:          cfg.ActiveDSN(),
 				PGUser:       cfg.PGUser,

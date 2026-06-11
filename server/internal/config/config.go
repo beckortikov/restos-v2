@@ -41,6 +41,20 @@ type Config struct {
 	// license-токенов. Если пусто → активация лицензии недоступна
 	// (dev/bootstrap режим: write работает без license-middleware).
 	LicensePublicKey string
+
+	// DesktopDir — путь к рабочему столу (из Electron app.getPath('desktop')).
+	// Если задан — бэкапы дополнительно копируются в <DesktopDir>/RestOS-Backups/
+	// чтобы владелец легко находил файлы. Пусто → копия на десктоп выключена.
+	DesktopDir string
+}
+
+// DesktopBackupsDir — папка на рабочем столе для копий бэкапов. Пусто если
+// DesktopDir не задан.
+func (c *Config) DesktopBackupsDir() string {
+	if c.DesktopDir == "" {
+		return ""
+	}
+	return filepath.Join(c.DesktopDir, "RestOS-Backups")
 }
 
 // LoadFromFlags парсит CLI флаги и переменные окружения.
@@ -67,6 +81,8 @@ func LoadFromFlags() (*Config, error) {
 		"Log level: debug|info|warn|error")
 	flag.StringVar(&c.LicensePublicKey, "license-public-key", envOr("RESTOS_LICENSE_PUBLIC_KEY", ""),
 		"Base64-encoded Ed25519 public key for license verification (empty = dev mode)")
+	flag.StringVar(&c.DesktopDir, "desktop-dir", envOr("RESTOS_DESKTOP_DIR", ""),
+		"Desktop path for backup copies (from Electron). Empty = no desktop copy")
 
 	var pgPort uint
 	// v3.8.0: было 54329 (как у v1), сдвинуто на 54330 чтобы embedded-PG

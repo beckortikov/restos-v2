@@ -240,6 +240,10 @@ function startSidecar() {
   const env = {
     ...process.env,
     RESTOS_DATA_DIR: app.getPath('userData'),
+    // v3.9.2: путь к рабочему столу — бэк копирует туда бэкапы (RestOS-Backups/)
+    // чтобы владелец легко находил и скидывал на флешку. Electron знает
+    // локализованный путь (Рабочий стол / Desktop).
+    RESTOS_DESKTOP_DIR: app.getPath('desktop'),
     // Bind on 0.0.0.0 so the waiter's Kotlin APK can reach the sidecar over
     // LAN (e.g. http://192.168.x.y:3002). Electron itself fetches via
     // http://127.0.0.1:3002 which works identically.

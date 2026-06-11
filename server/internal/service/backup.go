@@ -18,6 +18,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,9 +32,36 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 )
 
+func ioCopy(dst io.Writer, src io.Reader) (int64, error) { return io.Copy(dst, src) }
+
+// rotateDir удаляет старые *.dump в dir, оставляя keep самых свежих по имени.
+func rotateDir(dir string, keep int) {
+	if keep <= 0 {
+		return
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var files []os.DirEntry
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".dump") {
+			files = append(files, e)
+		}
+	}
+	if len(files) <= keep {
+		return
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name() < files[j].Name() })
+	for _, e := range files[:len(files)-keep] {
+		_ = os.Remove(filepath.Join(dir, e.Name()))
+	}
+}
+
 // BackupConfig — пути и DSN для backup-операций.
 type BackupServiceConfig struct {
 	BackupsDir   string // куда складывать .dump
+	DesktopDir   string // <Desktop>/RestOS-Backups для удобной копии (опц.)
 	PGRuntimeDir string // pg-runtime (внутри bin/pg_dump)
 	DSN          string // подключение к embedded PG
 	PGUser       string
@@ -41,6 +69,41 @@ type BackupServiceConfig struct {
 	PGDatabase   string
 	PGHost       string
 	PGPort       uint32
+}
+
+// copyToDesktop — копирует свежий .dump в <Desktop>/RestOS-Backups/, если
+// DesktopDir задан. Best-effort: ошибка копирования не валит бэкап (основной
+// файл уже в BackupsDir). Ротация на десктопе — оставляем 14 последних.
+func (s *BackupService) copyToDesktop(srcPath, fname string) {
+	if s.cfg.DesktopDir == "" {
+		return
+	}
+	dstDir := s.cfg.DesktopDir
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		log.Warn().Err(err).Msg("backup: mkdir desktop dir failed")
+		return
+	}
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return
+	}
+	defer src.Close()
+	dstPath := filepath.Join(dstDir, fname)
+	dst, err := os.Create(dstPath)
+	if err != nil {
+		log.Warn().Err(err).Msg("backup: create desktop copy failed")
+		return
+	}
+	if _, err := ioCopy(dst, src); err != nil {
+		dst.Close()
+		_ = os.Remove(dstPath)
+		log.Warn().Err(err).Msg("backup: copy to desktop failed")
+		return
+	}
+	dst.Close()
+	log.Info().Str("path", dstPath).Msg("backup: copied to desktop")
+	// Ротация на десктопе — не засоряем рабочий стол.
+	rotateDir(dstDir, 14)
 }
 
 type BackupService struct {
@@ -100,6 +163,7 @@ func (s *BackupService) Create(ctx context.Context) (*BackupFile, error) {
 	if err != nil {
 		return nil, apperrors.Wrap("INTERNAL", "stat backup", err)
 	}
+	s.copyToDesktop(fpath, fname)
 	log.Info().Str("file", fname).Int64("size", fi.Size()).Msg("manual backup created")
 	return &BackupFile{
 		Name:      fname,
@@ -140,6 +204,7 @@ func (s *BackupService) CreateAuto(ctx context.Context) (*BackupFile, error) {
 	if err != nil {
 		return nil, apperrors.Wrap("INTERNAL", "stat backup", err)
 	}
+	s.copyToDesktop(fpath, fname)
 	log.Info().Str("file", fname).Int64("size", fi.Size()).Msg("auto backup (shift close) created")
 	return &BackupFile{Name: fname, SizeBytes: fi.Size(), CreatedAt: now, Tier: "shift"}, nil
 }
