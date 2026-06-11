@@ -33,6 +33,30 @@ let tray = null
 let goProc = null
 let goReady = false
 
+// ─── Windows Firewall rule (idempotent, best-effort) ──────────────────────
+//
+// v3.8.4: бэк слушает 0.0.0.0:3002, но Windows Firewall блокирует входящие
+// от других IP пока правило не создано. Installer (installer.nsh)
+// добавляет его при установке, но если юзер выключал firewall, потом
+// включил, или правило случайно удалили — добавим повторно при старте.
+//
+// `nsExec/cmd /c netsh` — best-effort, без elevation; если netsh
+// требует админ-прав и не получает, тихо игнорируем (не блокируем старт).
+function ensureWindowsFirewallRule() {
+  if (process.platform !== 'win32') return
+  try {
+    // Try add (silently). Если правило уже есть — добавит ещё одно с тем же
+    // именем, что не вредит (Windows их объединит).
+    const cmd = `netsh advfirewall firewall add rule name="RestOS v2 HTTP" dir=in action=allow protocol=TCP localport=${API_PORT} profile=any`
+    execSync(cmd, { stdio: 'ignore', windowsHide: true, timeout: 5000 })
+    console.log('[firewall] rule for port', API_PORT, 'ensured')
+  } catch (e) {
+    // Молча — без админских прав netsh может не сработать. Installer уже
+    // покрыл этот случай при установке.
+    console.log('[firewall] could not add rule (likely needs admin):', e.message || '')
+  }
+}
+
 // ─── Migration from shared restos-desktop userData ─────────────────────────
 //
 // v3.8.3 fix: до v3.8.2 поле `name` в package.json было "restos-desktop" —
@@ -322,6 +346,9 @@ if (!gotTheLock) {
     setupFileLogger()
     // 0) v3.8.3: перенос данных из shared restos-desktop dir (было общим с v1).
     migrateUserDataFromSharedDir()
+    // 0.5) v3.8.4: best-effort добавление firewall rule (installer его уже
+    //      добавил, но если юзер выключал firewall — restore при старте).
+    ensureWindowsFirewallRule()
     // 1) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
     //    освободить порты 3002 (HTTP API) и 54330 (embedded PG).
     killStaleSidecars()

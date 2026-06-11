@@ -1,6 +1,6 @@
 {
   "name": "restos-desktop-v2",
-  "version": "3.8.3",
+  "version": "3.8.4",
   "description": "RestOS v4 Desktop — POS система для ресторанов (Go-бэк + embedded Postgres, LAN web access)",
   "main": "main.js",
   "scripts": {
@@ -47,7 +47,8 @@
       "createStartMenuShortcut": true,
       "shortcutName": "RestOS v2",
       "perMachine": false,
-      "artifactName": "RestOS-v2-Setup-${version}.${ext}"
+      "artifactName": "RestOS-v2-Setup-${version}.${ext}",
+      "include": "installer.nsh"
     },
     "publish": {
       "provider": "github",
