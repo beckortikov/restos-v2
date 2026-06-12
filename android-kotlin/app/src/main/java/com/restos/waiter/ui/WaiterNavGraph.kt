@@ -108,9 +108,12 @@ fun WaiterNavGraph(
                 SelectTableForNewOrderScreen(
                     onBack = { navController.popBackStack() },
                     onPick = { tableId ->
-                        navController.navigate(Routes.orderNew(tableId)) {
-                            popUpTo(Routes.APP)
-                        }
+                        // НЕ делаем popUpTo(APP) — оставляем экран выбора стола
+                        // в back-стеке. Тогда «Отмена» в NewOrderScreen мгновенно
+                        // возвращает на выбор стола (готовый экран в стеке, без
+                        // перезагрузки главного). При создании заказа стек
+                        // схлопывается в onOrderCreated → orderDetail с popUpTo(APP).
+                        navController.navigate(Routes.orderNew(tableId))
                     },
                 )
             }
