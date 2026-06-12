@@ -922,24 +922,38 @@ private fun TotalsBlock(order: OrderDto) {
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            val subtotalBd = order.subtotal.toBigDecimalSafe()
+            val discountBd = order.discountAmount.toBigDecimalSafe()
+            // service_amount бэк заполняет только при ЗАКРЫТИИ заказа. Для
+            // открытого заказа официант должен видеть ожидаемое обслуживание —
+            // считаем его из service_percent заказа (subtotal × %/100).
+            val percentBd = order.servicePercent.toBigDecimalSafe()
+            val storedSvc = order.serviceChargeAmount.toBigDecimalSafe()
+            val serviceBd = if (storedSvc > BigDecimal.ZERO) {
+                storedSvc
+            } else if (percentBd > BigDecimal.ZERO) {
+                (subtotalBd * percentBd).divide(BigDecimal(100), 2, java.math.RoundingMode.HALF_EVEN)
+            } else {
+                BigDecimal.ZERO
+            }
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text("Подытог", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f))
-                Text(formatCurrency(order.subtotal.toBigDecimalSafe()), fontSize = 13.sp)
+                Text(formatCurrency(subtotalBd), fontSize = 13.sp)
             }
-            if (order.serviceChargeAmount.toBigDecimalSafe() > BigDecimal.ZERO) {
+            if (serviceBd > BigDecimal.ZERO) {
                 Row(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(
-                        "Обслуживание",
+                        if (percentBd > BigDecimal.ZERO) "Обслуживание (${percentBd.stripTrailingZeros().toPlainString()}%)" else "Обслуживание",
                         fontSize = 13.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
                     )
-                    Text(formatCurrency(order.serviceChargeAmount.toBigDecimalSafe()), fontSize = 13.sp)
+                    Text(formatCurrency(serviceBd), fontSize = 13.sp)
                 }
             }
             if (order.discountAmount.toBigDecimalSafe() > BigDecimal.ZERO) {
@@ -960,13 +974,21 @@ private fun TotalsBlock(order: OrderDto) {
                 }
             }
             Spacer(Modifier.height(6.dp))
+            // Итого: если service_amount уже в order.total (закрытый заказ) —
+            // берём order.total. Иначе считаем subtotal + обслуживание − скидка
+            // (открытый заказ, где бэк ещё не зафиксировал service_amount).
+            val displayTotal = if (storedSvc > BigDecimal.ZERO) {
+                order.total.toBigDecimalSafe()
+            } else {
+                subtotalBd + serviceBd - discountBd
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text("Итого", fontWeight = FontWeight.SemiBold, fontSize = 16.sp)
                 Text(
-                    formatCurrency(order.total.toBigDecimalSafe()),
+                    formatCurrency(displayTotal),
                     fontWeight = FontWeight.Bold,
                     fontSize = 16.sp,
                 )

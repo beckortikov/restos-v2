@@ -83,12 +83,14 @@ fun NewOrderScreen(
         }
     }
 
-    if (!state.guestsConfirmed && !state.loading) {
-        GuestsDialog(
-            onDismiss = onBack,
-            onPick = viewModel::setGuests,
-        )
-    }
+    // ВРЕМЕННО отключено: диалог выбора количества гостей после выбора стола.
+    // Заказ создаётся с guests=1 по умолчанию. Вернуть — раскомментировать.
+    // if (!state.guestsConfirmed && !state.loading) {
+    //     GuestsDialog(
+    //         onDismiss = onBack,
+    //         onPick = viewModel::setGuests,
+    //     )
+    // }
 
     Scaffold(
         topBar = {
