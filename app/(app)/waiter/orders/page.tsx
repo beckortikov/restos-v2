@@ -1,15 +1,17 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { ClipboardList, Loader2, Plus } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
-import { fetchOrders, fetchTables } from '@/lib/queries'
-import type { Order, Table } from '@/lib/types'
+import { fetchOrders } from '@/lib/queries'
+import type { Order } from '@/lib/types'
 import { ORDER_STATUS_LABELS } from '@/lib/types'
+import { queryKeys } from '@/lib/query-client'
+import { useTables } from '@/hooks/queries'
 import { formatCurrency, getTimeSince, startOfToday } from '@/lib/helpers'
 import { useWaiterViewMode } from '@/lib/waiter/view-mode'
-import { useDataSync } from '@/hooks/use-data-sync'
 
 type Filter = 'mine' | 'all'
 
@@ -17,34 +19,19 @@ export default function WaiterOrdersPage() {
   const navigate = useNavigate()
   const { user } = useAuth()
   const [viewMode] = useWaiterViewMode()
-  const [orders, setOrders] = useState<Order[]>([])
-  const [tables, setTables] = useState<Table[]>([])
-  const [loading, setLoading] = useState(true)
   const [filter, setFilter] = useState<Filter>('mine')
 
-  const load = useCallback(async () => {
-    try {
-      // Slim — list cards only show order_number/status/total/createdAt/
-      // tabLabel + tableId. Non-slim pulled payments/discount_*/cancel_*
-      // JSON for nothing.
-      const [o, t] = await Promise.all([fetchOrders({ from: startOfToday(), slim: true }), fetchTables()])
-      setOrders(o); setTables(t)
-    } finally {
-      setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    load()
-    // Aligned with /waiter/tables (8s) so the two tabs stay in sync when
-    // SSE drops. Previously orders polled every 60s while tables every 8s
-    // — same waiter would see a stale "my order" 50s after the table
-    // already updated.
-    const iv = setInterval(load, 8_000)
-    return () => clearInterval(iv)
-  }, [load])
-
-  useDataSync(['orders', 'order_items', 'tables'], load)
+  // v3.9.21: data-слой на React Query. SSE инвалидирует через
+  // useQuerySseBridge. refetchInterval 8с — страховка для Android Capacitor
+  // WebView, где SSE может «замёрзнуть» в фоне (refetchOnWindowFocus off).
+  const ordersQuery = useQuery({
+    queryKey: [...queryKeys.orders.list('waiter'), 'slim'],
+    queryFn: () => fetchOrders({ from: startOfToday(), slim: true }),
+    refetchInterval: 8_000,
+  })
+  const orders = useMemo(() => ordersQuery.data ?? [], [ordersQuery.data])
+  const { data: tables = [] } = useTables({ refetchInterval: 8_000 })
+  const loading = ordersQuery.isLoading
 
   const list = useMemo(() => {
     // v2.1.2: дополнительно скрываем zombie-заказы (status=active, но все

@@ -17,35 +17,44 @@ import { queryKeys } from '@/lib/query-client'
 import { fetchMenuItems, fetchMenuCategoriesFull, type FetchMenuItemsOptions } from '@/lib/queries/menu'
 import { fetchTables, fetchZones } from '@/lib/queries/tables'
 
+// QueryOpts — опции, которые экраны переопределяют. Главное —
+// refetchInterval для waiter-экранов на Android Capacitor, где SSE может
+// «замёрзнуть» в фоне (поллинг как страховка).
+type QueryOpts = { refetchInterval?: number; staleTime?: number; enabled?: boolean }
+
 // useMenuItems — меню с кэшем. Меню меняется редко → длинный staleTime.
-export function useMenuItems(opts?: FetchMenuItemsOptions) {
+export function useMenuItems(opts?: FetchMenuItemsOptions, q?: QueryOpts) {
   return useQuery({
     queryKey: [...queryKeys.menu.items, opts ?? null],
     queryFn: () => fetchMenuItems(opts),
     staleTime: 5 * 60_000, // меню стабильно — 5 мин свежесть
+    ...q,
   })
 }
 
-export function useMenuCategories() {
+export function useMenuCategories(q?: QueryOpts) {
   return useQuery({
     queryKey: queryKeys.menu.categories,
     queryFn: fetchMenuCategoriesFull,
     staleTime: 5 * 60_000,
+    ...q,
   })
 }
 
 // useTables — столы. Меняются часто (статусы) → SSE-инвалидация важна.
-export function useTables() {
+export function useTables(q?: QueryOpts) {
   return useQuery({
     queryKey: queryKeys.tables.all,
     queryFn: fetchTables,
+    ...q,
   })
 }
 
-export function useZones() {
+export function useZones(q?: QueryOpts) {
   return useQuery({
     queryKey: queryKeys.zones.all,
     queryFn: fetchZones,
     staleTime: 5 * 60_000, // зоны меняются редко
+    ...q,
   })
 }
