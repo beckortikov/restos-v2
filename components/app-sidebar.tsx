@@ -31,8 +31,6 @@ import {
   Building2,
   Trash2,
   Monitor,
-  Sun,
-  Moon,
   Printer,
   Shield,
   Upload,
@@ -49,7 +47,6 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
-import { setTheme, getStoredTheme, type ThemeMode } from '@/lib/theme'
 import { useState, createContext, useContext, useEffect } from 'react'
 import { DesktopUpdateButton } from '@/components/desktop-update-button'
 import { BugReportDialog } from '@/components/bug-report-dialog'
@@ -165,37 +162,6 @@ export function ZoomControls() {
         >
           <Plus className="size-3.5" />
         </button>
-      </div>
-    </div>
-  )
-}
-
-// ThemeToggle — переключатель Светлая / Тёмная / Система в футере сайдбара.
-export function ThemeToggle() {
-  const [mode, setMode] = useState<ThemeMode>(() => getStoredTheme())
-  const opts: { v: ThemeMode; icon: React.ReactNode; title: string }[] = [
-    { v: 'light', icon: <Sun className="size-3.5" />, title: 'Светлая' },
-    { v: 'dark', icon: <Moon className="size-3.5" />, title: 'Тёмная' },
-    { v: 'system', icon: <Monitor className="size-3.5" />, title: 'Как в системе' },
-  ]
-  return (
-    <div className="mt-2 px-2 pt-2 border-t border-sidebar-border">
-      <div className="flex items-center gap-1">
-        {opts.map((o) => (
-          <button
-            key={o.v}
-            type="button"
-            onClick={() => { setTheme(o.v); setMode(o.v) }}
-            title={o.title}
-            className={`flex-1 h-8 rounded-md flex items-center justify-center transition-colors ${
-              mode === o.v
-                ? 'bg-sidebar-accent text-sidebar-foreground'
-                : 'text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent/60'
-            }`}
-          >
-            {o.icon}
-          </button>
-        ))}
       </div>
     </div>
   )
@@ -482,7 +448,6 @@ function SidebarContent({
             onExpandSidebar={() => onToggleCollapsed?.()}
           />
         ))}
-        {!collapsed && <ThemeToggle />}
         {!collapsed && <ZoomControls />}
       </nav>
 

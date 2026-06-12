@@ -47,12 +47,15 @@ export function setTheme(mode: ThemeMode): void {
 }
 
 // initTheme — вызывается один раз при старте приложения (до рендера).
+//
+// v3.9.16: тёмная тема отключена по решению — форсируем светлую и чистим
+// сохранённый выбор, чтобы у тех, кто успел включить dark, вернулась
+// светлая. CSS-токены .dark остаются в коде на будущее, но не активируются.
 export function initTheme(): void {
-  applyTheme(getStoredTheme())
-  // Если режим 'system' — реагируем на смену темы ОС.
-  if (typeof window !== 'undefined' && window.matchMedia) {
-    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
-      if (getStoredTheme() === 'system') applyTheme('system')
-    })
+  if (typeof document !== 'undefined') {
+    document.documentElement.classList.remove('dark')
+  }
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem(STORAGE_KEY)
   }
 }
