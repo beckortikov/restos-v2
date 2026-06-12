@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 import { formatCurrency, getTimeSince, startOfToday } from '@/lib/helpers'
@@ -16,14 +16,13 @@ import {
 } from '@/lib/types'
 import {
   fetchOrders,
-  fetchTables,
-  fetchMenuItems,
   updateOrderStatus,
   deductStockForOrder,
 } from '@/lib/queries'
 import { ChevronRight, CheckCircle2, Circle, Flame, FlaskConical } from 'lucide-react'
 import { toast } from 'sonner'
-import { useDataSync } from '@/hooks/use-data-sync'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useTables, useMenuItems } from '@/hooks/queries'
 
 const COLUMNS: { status: OrderStatus; label: string; color: string; headerBg: string }[] = [
   { status: 'new', label: 'Новые', color: 'bg-status-new', headerBg: 'bg-status-new-soft border-status-new-border' },
@@ -207,38 +206,40 @@ export default function KitchenPage() {
   const [searchParams] = useSearchParams()
   const stationParam = searchParams.get('station') as MenuStation | null
 
-  const [orders, setOrders] = useState<Order[]>([])
-  const [tablesData, setTablesData] = useState<Table[]>([])
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([])
-  const [loading, setLoading] = useState(true)
   const [mobileTab, setMobileTab] = useState<OrderStatus>('new')
   const [stationFilter, setStationFilter] = useState<MenuStation | 'all'>(stationParam || 'all')
 
   const KITCHEN_STATIONS: MenuStation[] = ['hot_kitchen', 'cold_kitchen', 'grill']
 
-  const refetchAll = useCallback(() => {
-    return Promise.all([fetchOrders({ from: startOfToday() }), fetchTables(), fetchMenuItems()])
-      .then(([o, t, m]) => {
-        setOrders(o.filter((order) => order.status !== 'done' && order.status !== 'served' && order.status !== 'cancelled'))
-        setTablesData(t)
-        setMenuItems(m)
-      })
-  }, [])
+  // v3.9.18: data-слой кухни на React Query. Заказы инвалидируются по SSE
+  // через useQuerySseBridge (orders/order_items → ['orders']); столы/меню
+  // деду­плицируются с другими экранами. Кухня — первый мигрированный экран.
+  const qc = useQueryClient()
+  const KITCHEN_ORDERS_KEY = ['orders', 'list', 'kitchen'] as const
 
+  const ordersQuery = useQuery({
+    queryKey: KITCHEN_ORDERS_KEY,
+    queryFn: () => fetchOrders({ from: startOfToday() }),
+    // Кухня показывает только «в работе» — фильтруем в select, чтобы кэш
+    // обновлялся при любом изменении, а UI видел отфильтрованное.
+    select: (all: Order[]) => all.filter(
+      (o) => o.status !== 'done' && o.status !== 'served' && o.status !== 'cancelled',
+    ),
+  })
+  const orders = useMemo(() => ordersQuery.data ?? [], [ordersQuery.data])
+  const { data: tablesData = [] } = useTables()
+  const { data: menuItems = [] } = useMenuItems()
+  const loading = ordersQuery.isLoading
+
+  // Refetch при возврате во вкладку (страховка если SSE прозевал event,
+  // например WebView заморозил EventSource). React Query refetchOnWindowFocus
+  // отключён глобально, поэтому делаем вручную.
   useEffect(() => {
-    refetchAll().finally(() => setLoading(false))
-  }, [refetchAll])
-
-  // SSE-driven auto-refresh — заменяет старый polling каждые 8с.
-  useDataSync(['orders', 'order_items'], () => { refetchAll().catch(console.error) })
-
-  // Refetch при возврате во вкладку (на случай если SSE прозевал event,
-  // например, мобильный WebView заморозил EventSource).
-  useEffect(() => {
-    const onVisible = () => { if (!document.hidden) refetchAll().catch(console.error) }
+    const onVisible = () => { if (!document.hidden) qc.invalidateQueries({ queryKey: KITCHEN_ORDERS_KEY }) }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [refetchAll])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qc])
 
   // Filter orders by station — only show orders that have items for this station
   const filteredOrders = useMemo(() => {
@@ -267,7 +268,11 @@ export default function KitchenPage() {
         }
       })
       .catch(() => toast.error('Ошибка обновления заказа'))
-    setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, status: newStatus } : o)))
+    // Оптимистично обновляем кэш — карточка сразу переезжает в новую колонку.
+    // SSE-инвалидация затем подтянет канонические данные с сервера.
+    qc.setQueryData<Order[]>(KITCHEN_ORDERS_KEY, (prev) =>
+      (prev ?? []).map((o) => (o.id === id ? { ...o, status: newStatus } : o)),
+    )
   }
 
   const cols = COLUMNS.map((col) => ({
