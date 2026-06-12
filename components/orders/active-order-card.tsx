@@ -13,13 +13,13 @@ import type { Order, OrderStatus, OrderVoid, Table, User } from '@/lib/types'
 import { ordersEqualShallow } from './order-row'
 
 const STATUS_BADGE: Record<OrderStatus, { label: string; cls: string }> = {
-  new: { label: 'Новый', cls: 'bg-amber-100 text-amber-800' },
-  cooking: { label: 'Готовится', cls: 'bg-amber-100 text-amber-900' },
-  ready: { label: 'Готов', cls: 'bg-emerald-100 text-emerald-800' },
-  served: { label: 'Готов', cls: 'bg-emerald-100 text-emerald-800' },
-  bill_requested: { label: 'Запрошен счёт', cls: 'bg-blue-100 text-blue-800' },
+  new: { label: 'Новый', cls: 'bg-status-cooking-soft text-status-cooking-text' },
+  cooking: { label: 'Готовится', cls: 'bg-status-cooking-soft text-status-cooking-text' },
+  ready: { label: 'Готов', cls: 'bg-status-ready-soft text-status-ready-text' },
+  served: { label: 'Готов', cls: 'bg-status-ready-soft text-status-ready-text' },
+  bill_requested: { label: 'Запрошен счёт', cls: 'bg-status-new-soft text-status-new-text' },
   done: { label: 'Оплачен', cls: 'bg-muted text-muted-foreground' },
-  cancelled: { label: 'Отменён', cls: 'bg-zinc-200 text-zinc-700' },
+  cancelled: { label: 'Отменён', cls: 'bg-muted text-muted-foreground' },
 }
 
 const TYPE_BADGE: Record<string, { label: string; cls: string; stripe: string }> = {

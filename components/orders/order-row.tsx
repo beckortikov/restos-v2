@@ -16,13 +16,13 @@ import {
 } from '@/lib/types'
 
 export const STATUS_STYLE: Record<OrderStatus, string> = {
-  new: 'bg-blue-100 text-blue-700',
-  cooking: 'bg-amber-100 text-amber-700',
-  ready: 'bg-emerald-100 text-emerald-700',
-  served: 'bg-teal-100 text-teal-700',
-  bill_requested: 'bg-amber-100 text-amber-700',
+  new: 'bg-status-new-soft text-status-new-text',
+  cooking: 'bg-status-cooking-soft text-status-cooking-text',
+  ready: 'bg-status-ready-soft text-status-ready-text',
+  served: 'bg-status-ready-soft text-status-ready-text',
+  bill_requested: 'bg-status-bill-soft text-status-bill-text',
   done: 'bg-muted text-muted-foreground',
-  cancelled: 'bg-zinc-200 text-zinc-700',
+  cancelled: 'bg-muted text-muted-foreground',
 }
 
 export const TYPE_LABELS: Record<string, string> = {
