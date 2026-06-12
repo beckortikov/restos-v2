@@ -9,10 +9,14 @@ import { AutoReadyWatcher } from '@/components/auto-ready-watcher'
 import { RealtimeCacheBridge } from '@/components/realtime-cache-bridge'
 import { LicenseGate } from '@/components/license-gate'
 import { LicenseWarningBanner } from '@/components/license-warning-banner'
+import { useQuerySseBridge } from '@/hooks/use-query-sse-bridge'
 
 function AppContent() {
   const { user } = useAuth()
   const { pathname } = useLocation()
+  // SSE → точечная инвалидация React Query кэшей (для мигрированных экранов).
+  // Старые экраны на use-data-sync работают параллельно.
+  useQuerySseBridge()
   const isWaiterRoute = pathname.startsWith('/waiter')
   const isWaiterUser = user?.role === 'waiter'
   // Waiter UI replaces the admin shell entirely on /waiter/* and for waiter
