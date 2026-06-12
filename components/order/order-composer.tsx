@@ -864,6 +864,12 @@ export function OrderComposer(props: OrderComposerProps) {
         msg.toLowerCase().includes('econn') ||
         msg.toLowerCase().includes('timeout')
       ) {
+        // Сразу помечаем сервер недоступным — баннер «Нет связи» в waiter-shell
+        // появится мгновенно (не ждём 15-сек probe).
+        try {
+          const { markLanUnreachable } = await import('@/lib/waiter/lan-guard')
+          markLanUnreachable()
+        } catch { /* not-waiter or import failed — toast'а ниже достаточно */ }
         toast.error('Нет связи с заведением', {
           description: 'Корзина сохранена. Подключитесь к Wi-Fi заведения и попробуйте снова.',
           duration: 6000,

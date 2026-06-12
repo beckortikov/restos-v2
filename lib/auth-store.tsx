@@ -15,7 +15,7 @@ const ROLE_HOME: Record<UserRole, string> = {
   superadmin: '/admin',
   owner: '/dashboard',
   manager: '/dashboard',
-  waiter: '/login', // web-waiter удалён — официант в Kotlin-приложении
+  waiter: '/waiter/tables',
   cashier: '/operations/pos',
   cook: '/operations/kitchen',
   storekeeper: '/warehouse/inventory',
@@ -230,8 +230,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return roles.includes(user.role)
   }
 
-  const homeRoute = user ? ROLE_HOME[user.role] : '/login'
-  // web-waiter удалён (v3.9.19) — официант работает в Kotlin-приложении.
+  let homeRoute = user ? ROLE_HOME[user.role] : '/login'
+  if (user?.role === 'waiter' && typeof window !== 'undefined') {
+    try {
+      const pref = localStorage.getItem('restos-waiter-home-screen')
+      if (pref === 'menu') homeRoute = '/waiter/order/new'
+    } catch {}
+  }
   const restaurantId = user?.restaurantId || getV4RestaurantId() || null
 
   return (

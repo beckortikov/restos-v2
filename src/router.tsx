@@ -23,8 +23,11 @@ const Connect = () => L(() => import('@/app/connect/page'))
 // Dashboard
 const Dashboard = () => L(() => import('@/app/(app)/dashboard/page'))
 
-// Web-waiter UI удалён (v3.9.19): официант работает только в отдельном
-// Kotlin-приложении. Роль waiter остаётся для назначения заказов.
+// Waiter (dedicated UI for role=waiter)
+const WaiterTables = () => L(() => import('@/app/(app)/waiter/tables/page'))
+const WaiterOrders = () => L(() => import('@/app/(app)/waiter/orders/page'))
+const WaiterOrderNew = () => L(() => import('@/app/(app)/waiter/order/new/page'))
+const WaiterOrderDetail = () => L(() => import('@/app/(app)/waiter/order/[id]/page'))
 
 // Cashier
 const CashierSettings = () => L(() => import('@/app/(app)/cashier/settings/page'))
@@ -103,7 +106,12 @@ export function AppRouter() {
       <Route element={<AppLayout />}>
         <Route path="/dashboard" element={<Dashboard />} />
 
-        {/* Web-waiter удалён — официант только в Kotlin-приложении. */}
+        {/* Waiter app */}
+        <Route path="/waiter" element={<Navigate to="/waiter/tables" replace />} />
+        <Route path="/waiter/tables" element={<WaiterTables />} />
+        <Route path="/waiter/orders" element={<WaiterOrders />} />
+        <Route path="/waiter/order/new" element={<WaiterOrderNew />} />
+        <Route path="/waiter/order/:id" element={<WaiterOrderDetail />} />
 
         {/* Cashier */}
         <Route path="/cashier" element={<Navigate to="/cashier/settings" replace />} />
