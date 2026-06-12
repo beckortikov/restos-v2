@@ -12,7 +12,11 @@ const Router: typeof BrowserRouter =
 import * as Sentry from '@sentry/react'
 import { AppRouter } from './router'
 import { ErrorBoundary } from '@/components/error-boundary'
+import { initTheme } from '@/lib/theme'
 import './index.css'
+
+// Применяем сохранённую тему ДО первого рендера — без вспышки светлого.
+initTheme()
 // Bundle Inter font locally — works offline, more readable
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
