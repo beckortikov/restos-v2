@@ -6,6 +6,7 @@ import { fetchRestaurantById, fetchUsersByRestaurant, getRestaurantStats, create
 import { formatCurrency } from '@/lib/helpers'
 import { ROLE_LABELS, type Restaurant, type User, type UserRole } from '@/lib/types'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { Link } from 'react-router-dom'
 import {
   ArrowLeft, Building2, Users, ShoppingBag, TrendingUp,
@@ -124,7 +125,7 @@ export default function RestaurantDetailPage() {
       setNewUserName(''); setNewUserUsername(''); setNewUserRole('waiter'); setNewUserSalary(0)
       toast.success(`${user.name} добавлен`)
     } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 
@@ -272,7 +273,7 @@ export default function RestaurantDetailPage() {
       setPasswordUser(null)
       setNewPassword('')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка обновления пароля')
+      toast.error(humanizeError(e, 'Ошибка обновления пароля'))
     } finally {
       setSavingPassword(false)
     }
@@ -284,7 +285,7 @@ export default function RestaurantDetailPage() {
       await updateUser(u.id, { password: '1234' })
       toast.success(`Пароль сброшен на 1234`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка сброса пароля')
+      toast.error(humanizeError(e, 'Ошибка сброса пароля'))
     }
   }
 
@@ -639,7 +640,7 @@ export default function RestaurantDetailPage() {
                   const s = await getRestaurantStats(restaurant.id)
                   setStats(s)
                 } catch (e) {
-                  toast.error(e instanceof Error ? e.message : 'Ошибка сброса операций')
+                  toast.error(humanizeError(e, 'Ошибка сброса операций'))
                 } finally {
                   setClearingOps(false)
                 }
@@ -700,7 +701,7 @@ export default function RestaurantDetailPage() {
                   setDeleteOpen(false)
                   navigate('/admin/restaurants')
                 } catch (e) {
-                  toast.error(e instanceof Error ? e.message : 'Ошибка удаления')
+                  toast.error(humanizeError(e, 'Ошибка удаления'))
                 } finally {
                   setDeleting(false)
                 }
@@ -808,7 +809,7 @@ function SeedDataSection({ restaurantId, restaurantName }: { restaurantId: strin
       toast.success(`Создано: ${result.zones} зон, ${result.tables} столов, ${result.accounts} счетов, ${result.ingredients} ингредиентов, ${result.menuItems} блюд, ${result.techCardLines} техкарт`)
       setSeeded(true)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка создания данных')
+      toast.error(humanizeError(e, 'Ошибка создания данных'))
     } finally {
       setSeeding(false)
     }

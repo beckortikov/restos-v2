@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { fetchAllRestaurants, fetchAllUsers, createRestaurant, createUserForRestaurant } from '@/lib/queries'
 import type { Restaurant, User } from '@/lib/types'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { Link } from 'react-router-dom'
 import { Plus, Building2, Search, Monitor, ShieldOff } from 'lucide-react'
 import {
@@ -79,7 +80,7 @@ export default function AdminRestaurantsPage() {
       // Refetch users
       fetchAllUsers().then(setUsers)
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : 'Ошибка'
+      const msg = humanizeError(e, 'Ошибка')
       toast.error(msg)
     } finally {
       setCreating(false)

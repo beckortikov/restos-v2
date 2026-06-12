@@ -15,6 +15,7 @@ import {
 import { fetchUsersByRestaurant, updateUserPermissions, createUserForRestaurant, deleteUser, updateUser, generateUniquePin } from '@/lib/queries'
 import { Shield, Save, RotateCcw, Check, Minus, Plus, Trash2, Users, Search, Pencil, Grid3X3, List, X, KeyRound } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 type PermMap = Record<string, Record<string, boolean>>
 type Tab = 'staff' | 'matrix'
@@ -121,7 +122,7 @@ export default function UserPermissionsPage() {
       setDirty(prev => { const n = new Set(prev); n.delete(emp.id); return n })
       toast.success(`Права ${emp.name} сохранены`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка сохранения')
+      toast.error(humanizeError(e, 'Ошибка сохранения'))
     } finally { setSaving(null) }
   }
 
@@ -149,7 +150,7 @@ export default function UserPermissionsPage() {
       await loadEmployees()
     } catch (e) {
       console.error('[createUser]', e)
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     } finally {
       setAddingUser(false)
     }
@@ -168,7 +169,7 @@ export default function UserPermissionsPage() {
       // Полная диагностика в консоли + понятное сообщение пользователю.
       // Без этого юзер видит только «Ошибка», а в DevTools — ничего.
       console.error('[deleteUser]', emp.id, emp.name, e)
-      const msg = e instanceof Error ? e.message : 'Ошибка удаления'
+      const msg = humanizeError(e, 'Ошибка удаления')
       toast.error(`Не удалось удалить: ${msg}`)
     }
   }
@@ -210,7 +211,7 @@ export default function UserPermissionsPage() {
       setEditingEmp(null)
       await loadEmployees()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     } finally { setSavingEdit(false) }
   }
 
@@ -653,7 +654,7 @@ export default function UserPermissionsPage() {
                         const pin = await generateUniquePin(user?.restaurantId || '')
                         setEditForm(p => ({ ...p, pin }))
                         toast.success(`PIN: ${pin}`)
-                      } catch (e) { toast.error(e instanceof Error ? e.message : 'Ошибка') }
+                      } catch (e) { toast.error(humanizeError(e, 'Ошибка')) }
                     }}
                       className="px-3 py-2 text-xs font-medium text-primary border border-primary/30 bg-primary/5 rounded-lg hover:bg-primary/10 transition-colors whitespace-nowrap">
                       Сгенерировать

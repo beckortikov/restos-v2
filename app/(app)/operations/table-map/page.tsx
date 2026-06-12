@@ -45,6 +45,7 @@ import { AddItemsDialog } from '@/components/dialogs/add-items-dialog'
 import { ManageZoneDialog } from '@/components/dialogs/manage-zone-dialog'
 import { ManageTableDialog } from '@/components/dialogs/manage-table-dialog'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 const STATUS_STYLE: Record<TableStatus, { bg: string; border: string; dot: string; label: string }> = {
   free: { bg: 'bg-status-free-soft hover:brightness-95', border: 'border-status-free-border', dot: 'bg-status-free', label: 'text-status-free-text' },
@@ -402,7 +403,7 @@ export default function TableMapPage() {
           setMergePrimaryId(null)
           refetchAll()
         })
-        .catch((e) => toast.error(e instanceof Error ? e.message : 'Ошибка объединения'))
+        .catch((e) => toast.error(humanizeError(e, 'Ошибка объединения')))
       return
     }
     // Любой клик по столу — открываем TableDetailSheet. Раньше для
@@ -536,7 +537,7 @@ export default function TableMapPage() {
       if (!orderId) return
       import('@/lib/queries').then(({ reopenOrder }) => reopenOrder(orderId))
         .then(() => { toast.success('Заказ открыт для редактирования'); setSheetOpen(false); setSelectedTable(null); refetchAll() })
-        .catch((e) => toast.error(e instanceof Error ? e.message : 'Ошибка reopen'))
+        .catch((e) => toast.error(humanizeError(e, 'Ошибка reopen')))
     } else if (action === 'pay') {
       // Open full order-actions-dialog with discounts, tips, split, mixed payment
       const orderId = resolveOrderId()
@@ -934,7 +935,7 @@ export default function TableMapPage() {
               await reopenOrder(selectedOrder.id)
               toast.success('Заказ открыт для редактирования')
             } catch (e) {
-              toast.error(e instanceof Error ? e.message : 'Ошибка reopen')
+              toast.error(humanizeError(e, 'Ошибка reopen'))
             }
             setOrderActionsOpen(false)
             setSelectedOrder(null)

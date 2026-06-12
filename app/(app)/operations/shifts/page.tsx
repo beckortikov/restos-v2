@@ -9,6 +9,7 @@ import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation
 import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useDataSync } from '@/hooks/use-data-sync'
 
@@ -218,7 +219,7 @@ export default function ShiftsPage() {
       toast.success(`Выплачено ${formatCurrency(row.toPay)}: ${row.waiterName}`)
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка выплаты')
+      toast.error(humanizeError(e, 'Ошибка выплаты'))
     } finally {
       setPayingService(null)
     }
@@ -233,7 +234,7 @@ export default function ShiftsPage() {
       setAttachAccountId('')
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка привязки счёта')
+      toast.error(humanizeError(e, 'Ошибка привязки счёта'))
     } finally {
       setAttaching(false)
     }
@@ -259,7 +260,7 @@ export default function ShiftsPage() {
       setOpenBalance(0)
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка открытия смены')
+      toast.error(humanizeError(e, 'Ошибка открытия смены'))
     }
   }
 
@@ -274,7 +275,7 @@ export default function ShiftsPage() {
       setExpCategory(EXPENSE_CATEGORIES[0])
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 
@@ -289,7 +290,7 @@ export default function ShiftsPage() {
       toast.success('Расход удалён')
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка удаления расхода')
+      toast.error(humanizeError(e, 'Ошибка удаления расхода'))
     }
   }
 
@@ -334,7 +335,7 @@ export default function ShiftsPage() {
       await printShiftZ(shiftId)
       toast.success('Z-отчёт отправлен на принтер')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка печати Z-отчёта')
+      toast.error(humanizeError(e, 'Ошибка печати Z-отчёта'))
     }
   }
 
@@ -343,7 +344,7 @@ export default function ShiftsPage() {
       await printShiftX(shiftId)
       toast.success('X-отчёт отправлен на принтер')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка печати X-отчёта')
+      toast.error(humanizeError(e, 'Ошибка печати X-отчёта'))
     }
   }
 
@@ -429,7 +430,7 @@ export default function ShiftsPage() {
                 <Printer className="size-3.5" />Печать Z
               </button>
               <button
-                onClick={() => { exportShiftToXlsx(activeShift).catch(e => toast.error(e instanceof Error ? e.message : 'Ошибка экспорта')) }}
+                onClick={() => { exportShiftToXlsx(activeShift).catch(e => toast.error(humanizeError(e, 'Ошибка экспорта'))) }}
                 className="inline-flex items-center gap-1.5 px-3 py-2 bg-card border border-border text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap"
                 title="Экспорт текущей смены в Excel"
               >

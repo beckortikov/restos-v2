@@ -13,6 +13,7 @@ import {
   Loader2, Download, ChefHat, Package, X, ArrowLeft, Users as UsersIcon, KeyRound,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 type ImportType = null | 'floor-map' | 'menu' | 'techcards' | 'inventory' | 'users' | 'tables-server'
 type ImportStep = 'upload' | 'preview' | 'importing' | 'done'
@@ -916,7 +917,7 @@ function ExportMenuBanner() {
       await exportMenuTemplate()
       toast.success('Меню выгружено в Excel')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка экспорта')
+      toast.error(humanizeError(e, 'Ошибка экспорта'))
     } finally {
       setBusy(false)
     }

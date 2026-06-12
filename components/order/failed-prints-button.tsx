@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Printer, RefreshCw, ExternalLink, Clock, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { fetchPrintJobs, type PrintJournalEntry } from '@/lib/queries'
 import { decodeCP866Hex } from '@/lib/cp866'
 import {
@@ -120,7 +121,7 @@ export function FailedPrintsButton() {
       setItems(prev => prev.filter(j => j.id !== logId))
       setTimeout(reload, 2000)
     } catch (e) {
-      toast.error(`Не удалось: ${e instanceof Error ? e.message : 'ошибка'}`)
+      toast.error(`Не удалось: ${humanizeError(e, 'ошибка')}`)
     } finally {
       setRetryingId(null)
     }
@@ -172,7 +173,7 @@ export function FailedPrintsButton() {
       setItems(prev => prev.filter(j => j.id !== logId))
       setTimeout(reload, 1500)
     } catch (e) {
-      toast.error(`Не удалось: ${e instanceof Error ? e.message : 'ошибка'}`)
+      toast.error(`Не удалось: ${humanizeError(e, 'ошибка')}`)
     }
   }
 

@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { humanizeError } from '@/lib/errors'
 import { useNavigate } from 'react-router-dom'
 import { UtensilsCrossed, Delete, LogIn, AlertCircle, Settings2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
@@ -68,7 +69,7 @@ export default function LoginPage() {
         setPin('')
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Ошибка входа')
+      setError(humanizeError(e, 'Ошибка входа'))
       setPin('')
     } finally {
       // Always release the spinner. If the user-effect already

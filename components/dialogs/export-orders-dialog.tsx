@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { X, Loader2, FileDown } from 'lucide-react'
 import {
   BottomSheet as Dialog,
@@ -114,7 +115,7 @@ export function ExportOrdersDialog({ open, onOpenChange, tables, users }: Export
       toast.success(`Выгружено заказов: ${orders.length}`)
       onOpenChange(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка экспорта')
+      toast.error(humanizeError(e, 'Ошибка экспорта'))
     } finally {
       setLoading(false)
     }

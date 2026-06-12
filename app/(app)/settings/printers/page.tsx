@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import { Printer, Plus, Trash2, CheckCircle2, ListOrdered, Star, ServerCog, Loader2, Pencil, FileText } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { useAuth } from '@/lib/auth-store'
 import {
   listPrinters,
@@ -183,7 +184,7 @@ export default function PrinterSettingsPage() {
       const rows = await listPrinters()
       setPrinters(rows)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Не удалось загрузить принтеры')
+      toast.error(humanizeError(e, 'Не удалось загрузить принтеры'))
     } finally {
       setLoading(false)
     }
@@ -231,7 +232,7 @@ export default function PrinterSettingsPage() {
       setForm(DEFAULT_FORM)
       await reload()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Ошибка'
+      const msg = humanizeError(e, 'Ошибка')
       toast.error(`Ошибка: ${msg}`)
     } finally {
       setSaving(false)
@@ -243,7 +244,7 @@ export default function PrinterSettingsPage() {
       await updatePrinter(p.id, { enabled: !p.enabled })
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 
@@ -253,7 +254,7 @@ export default function PrinterSettingsPage() {
       toast.success(`«${p.name}» выбран по умолчанию`)
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 
@@ -263,7 +264,7 @@ export default function PrinterSettingsPage() {
       await testPrinter(p.id)
       toast.success(`Тест отправлен на «${p.name}» — смотри очередь печати`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка тестовой печати')
+      toast.error(humanizeError(e, 'Ошибка тестовой печати'))
     } finally {
       setTesting(null)
     }
@@ -277,7 +278,7 @@ export default function PrinterSettingsPage() {
       setDeleteTarget(null)
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка удаления')
+      toast.error(humanizeError(e, 'Ошибка удаления'))
     }
   }
 

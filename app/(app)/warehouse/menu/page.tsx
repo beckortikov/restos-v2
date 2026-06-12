@@ -12,6 +12,7 @@ import { CreateMenuItemDialog } from '@/components/dialogs/create-menu-item-dial
 import { EditMenuItemDialog } from '@/components/dialogs/edit-menu-item-dialog'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { useDataSync } from '@/hooks/use-data-sync'
 
 export default function MenuPage() {
@@ -110,7 +111,7 @@ export default function MenuPage() {
       setMenuItems(updated)
       toast.success('Блюдо удалено')
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Ошибка при удалении блюда'
+      const msg = humanizeError(e, 'Ошибка при удалении блюда')
       toast.error(msg)
     }
   }

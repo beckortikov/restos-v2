@@ -11,6 +11,7 @@ import { type Ingredient, type WriteoffReason, WRITEOFF_REASON_LABELS } from '@/
 import { useAuth } from '@/lib/auth-store'
 import { Search, Minus, Plus, X, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 const REASONS: WriteoffReason[] = ['spoilage', 'breakage', 'tasting', 'expired', 'other']
 
@@ -127,7 +128,7 @@ export function CreateWriteoffDialog({ open, onOpenChange, onSuccess }: {
       onOpenChange(false)
       onSuccess()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     } finally {
       setSaving(false)
     }

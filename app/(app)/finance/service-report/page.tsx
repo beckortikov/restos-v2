@@ -8,6 +8,7 @@ import type { User } from '@/lib/types'
 import { exportToExcel } from '@/lib/export-excel'
 import { HandCoins, Download } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
 
 // Локальная ISO-строка без TZ-конверсии. toISOString() сдвигает в UTC и в
@@ -97,7 +98,7 @@ export default function ServiceReportPage() {
       built.sort((a, b) => b.accrued - a.accrued)
       setRows(built)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка загрузки')
+      toast.error(humanizeError(e, 'Ошибка загрузки'))
     } finally {
       setLoading(false)
     }

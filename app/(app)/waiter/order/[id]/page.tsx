@@ -22,6 +22,7 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { WeightInputSheet } from '@/components/dialogs/weight-input-sheet'
 import { PrintReceipt, type ReceiptData } from '@/components/print-receipt'
 
@@ -209,7 +210,7 @@ export default function WaiterOrderDetailPage() {
       const updated = fresh[0]
       if (updated) setOrders(prev => prev.map(o => o.id === targetId ? updated : o))
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка отмены')
+      toast.error(humanizeError(e, 'Ошибка отмены'))
     } finally {
       setBusy(false)
       setCancelItemId(null)
@@ -240,7 +241,7 @@ export default function WaiterOrderDetailPage() {
       toast.success('Заказ отменён')
       navigate('/waiter/tables')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка отмены')
+      toast.error(humanizeError(e, 'Ошибка отмены'))
     } finally {
       setBusy(false)
       setCancelOrderOpen(false)
@@ -276,7 +277,7 @@ export default function WaiterOrderDetailPage() {
       // в фоне. Раньше пользователь тут ловил +200–800 мс ожидания на 4G.
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Не удалось добавить')
+      toast.error(humanizeError(e, 'Не удалось добавить'))
     } finally {
       setAdding(null)
     }
@@ -302,7 +303,7 @@ export default function WaiterOrderDetailPage() {
       // в фоне. Раньше пользователь тут ловил +200–800 мс ожидания на 4G.
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Не удалось добавить')
+      toast.error(humanizeError(e, 'Не удалось добавить'))
     } finally {
       setAdding(null)
     }
@@ -320,7 +321,7 @@ export default function WaiterOrderDetailPage() {
       // в фоне. Раньше пользователь тут ловил +200–800 мс ожидания на 4G.
       void load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Не удалось сменить стол')
+      toast.error(humanizeError(e, 'Не удалось сменить стол'))
     } finally {
       setMovingTable(false)
     }
@@ -337,7 +338,7 @@ export default function WaiterOrderDetailPage() {
       // догонит через RealtimeCacheBridge.
       setOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'served' } : o))
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     } finally {
       setBusy(false)
     }
@@ -386,7 +387,7 @@ export default function WaiterOrderDetailPage() {
       toast.success(jobId ? `Пре-чек отправлен на печать (${jobId.slice(0, 8)}…)` : 'Пре-чек отправлен на печать')
       setReceiptOpen(false)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка печати')
+      toast.error(humanizeError(e, 'Ошибка печати'))
     } finally {
       setPrinting(false)
     }
@@ -478,7 +479,7 @@ export default function WaiterOrderDetailPage() {
                       if (fresh[0]) setOrders(prev => prev.map(o => o.id === activeId ? fresh[0] : o))
                     }
                   } catch (e) {
-                    toast.error(e instanceof Error ? e.message : 'Ошибка')
+                    toast.error(humanizeError(e, 'Ошибка'))
                   }
                 }}
                 status={order.status}
@@ -703,7 +704,7 @@ export default function WaiterOrderDetailPage() {
             toast.success('Стол передан')
             navigate('/waiter/tables')
           } catch (e) {
-            toast.error(e instanceof Error ? e.message : 'Ошибка передачи')
+            toast.error(humanizeError(e, 'Ошибка передачи'))
           } finally {
             setBusy(false)
             setTransferOpen(false)

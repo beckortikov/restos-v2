@@ -8,6 +8,7 @@ import { fetchSemiStock, fetchMenuItems, fetchIngredients, fetchWriteoffs, creat
 import { PackageCheck, FlaskConical, UtensilsCrossed, Trash2, Minus, Plus, X, History } from 'lucide-react'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { api, unwrap } from '@/lib/api'
 
 const WRITEOFF_REASONS: { value: WriteoffReason; label: string }[] = [
@@ -108,7 +109,7 @@ export default function ShowcasePage() {
       setWriteoffTarget(null)
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка списания')
+      toast.error(humanizeError(e, 'Ошибка списания'))
     } finally {
       setSubmitting(false)
     }

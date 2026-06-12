@@ -13,6 +13,7 @@ import {
 import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
 
 function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string } {
@@ -131,7 +132,7 @@ export default function PayrollPage() {
         setMyActiveEntry(active)
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка загрузки табеля')
+      toast.error(humanizeError(e, 'Ошибка загрузки табеля'))
     } finally {
       setTimeLoading(false)
     }
@@ -228,7 +229,7 @@ export default function PayrollPage() {
       closeDialog()
       await reload()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     } finally { setPaying(false) }
   }
 
@@ -241,7 +242,7 @@ export default function PayrollPage() {
       toast.success('Смена начата')
       await loadTimeEntries()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 
@@ -252,7 +253,7 @@ export default function PayrollPage() {
       toast.success('Смена завершена')
       await loadTimeEntries()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 
@@ -274,7 +275,7 @@ export default function PayrollPage() {
       toast.success('Запись обновлена')
       await loadTimeEntries()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 
@@ -284,7 +285,7 @@ export default function PayrollPage() {
       toast.success('Запись удалена')
       await loadTimeEntries()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка')
+      toast.error(humanizeError(e, 'Ошибка'))
     }
   }
 

@@ -14,6 +14,7 @@ import {
   Flame, Clock, Package, Trash2, TrendingUp, BookOpen, X, ChevronDown, ChevronRight,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { formatCurrency } from '@/lib/helpers'
 
 const STATION_ICONS: Record<string, string> = {
@@ -87,7 +88,7 @@ export default function BatchCookingPage() {
         setQty(calc.maxPortions > 0 ? 1 : 0)
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка расчёта')
+      toast.error(humanizeError(e, 'Ошибка расчёта'))
       setProducingId(null)
     }
     setCalcLoading(false)

@@ -9,6 +9,7 @@ import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccoun
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import {
   Dialog,
@@ -67,7 +68,7 @@ export default function AccountsPage() {
       setAddAccountDialogOpen(false)
       toast.success(`Счёт «${newAcc.name}» создан`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка создания счёта')
+      toast.error(humanizeError(e, 'Ошибка создания счёта'))
     } finally {
       setAddingSaving(false)
     }
@@ -92,7 +93,7 @@ export default function AccountsPage() {
       setEditingAccount(null)
       toast.success(`Счёт «${updated.name}» обновлён`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка обновления')
+      toast.error(humanizeError(e, 'Ошибка обновления'))
     } finally {
       setEditSaving(false)
     }
@@ -118,7 +119,7 @@ export default function AccountsPage() {
       setOperations(ops)
       toast.success('Операция создана')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка создания операции')
+      toast.error(humanizeError(e, 'Ошибка создания операции'))
     }
   }
 

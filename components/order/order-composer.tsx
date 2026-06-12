@@ -7,6 +7,7 @@ import {
   CreditCard, X, Users as UsersIcon, LayoutGrid, List, ChefHat, Zap, Receipt, ArrowLeft,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, calcLineCogs, calcLineTotal, voidedItemFlags, startOfToday, getTimeSince } from '@/lib/helpers'
 import { dMul, dDiv, dSum } from '@/lib/decimal'
@@ -817,7 +818,7 @@ export function OrderComposer(props: OrderComposerProps) {
           // Заказ создан, но закрытие/оплата упала — пусть кассир закроет
           // через OrderActionsDialog. Не выкидываем — заказ уже в БД.
           console.error('[OrderComposer] inline pay failed:', e)
-          toast.error(`Заказ создан, но оплата не прошла: ${e instanceof Error ? e.message : ''}`)
+          toast.error(`Заказ создан, но оплата не прошла: ${humanizeError(e)}`)
         }
       } else {
         toast.success(`Заказ создан: ${formatCurrency(total)}`)
@@ -849,7 +850,7 @@ export function OrderComposer(props: OrderComposerProps) {
           return
         }
       }
-      const msg = e instanceof Error ? e.message : 'Ошибка'
+      const msg = humanizeError(e, 'Ошибка')
       if (msg.includes('Недостаточно ингредиентов')) {
         toast.error('Не хватает ингредиентов', {
           description: msg.replace('Недостаточно ингредиентов: ', '').replace(/Недостаточно ингредиентов \(\d+\): /, ''),
@@ -2272,7 +2273,7 @@ export function OrderComposer(props: OrderComposerProps) {
               void refreshTabsItems()
             }
           } catch (e) {
-            toast.error(e instanceof Error ? e.message : 'Ошибка действия')
+            toast.error(humanizeError(e, 'Ошибка действия'))
           }
         }}
       />

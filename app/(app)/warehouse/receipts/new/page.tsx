@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import {
   ArrowLeft,
   Search,
@@ -249,7 +250,7 @@ export default function NewReceiptPage() {
       toast.success('Накладная создана')
       navigate('/warehouse/receipts')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка создания накладной')
+      toast.error(humanizeError(e, 'Ошибка создания накладной'))
       setSubmitting(false)
     }
   }

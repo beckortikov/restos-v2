@@ -7,6 +7,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Search, FileDown, Loader2, Printer, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 import { useAuth } from '@/lib/auth-store'
 import { startOfDay, endOfDay, formatCurrency } from '@/lib/helpers'
@@ -130,7 +131,7 @@ export function HistoryOrdersTab() {
       }
     } catch (e) {
       console.error('[history] load failed:', e)
-      toast.error(e instanceof Error ? e.message : 'Ошибка загрузки')
+      toast.error(humanizeError(e, 'Ошибка загрузки'))
     } finally {
       setLoading(false)
       setLoadingMore(false)
@@ -217,7 +218,7 @@ export function HistoryOrdersTab() {
       setRefundOrderObj(null)
       await load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка возврата')
+      toast.error(humanizeError(e, 'Ошибка возврата'))
     } finally {
       setRefundSubmitting(false)
     }
@@ -229,7 +230,7 @@ export function HistoryOrdersTab() {
       await reprintOrderReceipt(o.id)
       toast.success('Чек отправлен на принтер')
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка перепечатки')
+      toast.error(humanizeError(e, 'Ошибка перепечатки'))
     } finally {
       setReprintingId(null)
     }
@@ -297,7 +298,7 @@ export function HistoryOrdersTab() {
       })
       toast.success(`Выгружено заказов: ${all.length}`)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка экспорта')
+      toast.error(humanizeError(e, 'Ошибка экспорта'))
     } finally {
       setExporting(false)
     }

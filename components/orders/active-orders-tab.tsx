@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 import { useAuth } from '@/lib/auth-store'
 import { useDataSync } from '@/hooks/use-data-sync'
@@ -249,7 +250,7 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
     } else if (action === 'reopen') {
       reopenOrder(orderId)
         .then(() => { toast.success('Заказ открыт для редактирования'); return refetchAll() })
-        .catch(e => toast.error(e instanceof Error ? e.message : 'Ошибка reopen'))
+        .catch(e => toast.error(humanizeError(e, 'Ошибка reopen')))
       setActionsDialogOpen(false)
       setSelectedOrder(null)
     }

@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-store'
 import { updateRestaurant as updateRestaurantQuery, fetchRestaurantById } from '@/lib/queries'
 import { clearRestaurantOperations, clearRestaurantMenu } from '@/lib/queries'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
@@ -430,7 +431,7 @@ function ClearOpsCard({ restaurantId, restaurantName }: { restaurantId: string; 
                   toast.success(`Операции сброшены (${total} записей удалено)`)
                   setOpen(false)
                 } catch (e) {
-                  toast.error(e instanceof Error ? e.message : 'Ошибка сброса операций')
+                  toast.error(humanizeError(e, 'Ошибка сброса операций'))
                 } finally {
                   setBusy(false)
                 }
@@ -501,7 +502,7 @@ function ClearMenuCard({ restaurantId, restaurantName }: { restaurantId: string;
                   toast.success(`Меню очищено (${total} записей удалено)`)
                   setOpen(false)
                 } catch (e) {
-                  toast.error(e instanceof Error ? e.message : 'Ошибка очистки меню')
+                  toast.error(humanizeError(e, 'Ошибка очистки меню'))
                 } finally {
                   setBusy(false)
                 }
