@@ -24,11 +24,28 @@
   --border: oklch(0.9 0.008 55);
   --input: oklch(0.9 0.008 55);
   --ring: oklch(0.62 0.16 45);
-  /* Status colors */
+  /* Status colors — «dot»/сильный акцент */
   --status-free: oklch(0.64 0.18 145);
   --status-occupied: oklch(0.57 0.22 27);
   --status-bill: oklch(0.75 0.18 80);
   --status-cooking: oklch(0.55 0.18 240);
+  --status-reserved: oklch(0.58 0.16 255);
+  --status-ready: oklch(0.64 0.18 145);
+  /* Status — мягкий фон плитки (light) */
+  --status-free-soft: oklch(0.96 0.03 145);
+  --status-occupied-soft: oklch(0.96 0.03 27);
+  --status-bill-soft: oklch(0.96 0.04 80);
+  --status-reserved-soft: oklch(0.96 0.03 255);
+  /* Status — читаемый текст-метка (light) */
+  --status-free-text: oklch(0.45 0.13 145);
+  --status-occupied-text: oklch(0.48 0.16 27);
+  --status-bill-text: oklch(0.48 0.12 70);
+  --status-reserved-text: oklch(0.46 0.13 255);
+  /* Status — бордер плитки (light) */
+  --status-free-border: oklch(0.85 0.07 145);
+  --status-occupied-border: oklch(0.85 0.08 27);
+  --status-bill-border: oklch(0.85 0.09 80);
+  --status-reserved-border: oklch(0.85 0.07 255);
   /* Charts */
   --chart-1: oklch(0.62 0.16 45);
   --chart-2: oklch(0.55 0.15 185);
@@ -80,6 +97,26 @@
   --sidebar-accent-foreground: oklch(0.88 0.006 255);
   --sidebar-border: oklch(0.2 0.012 255);
   --sidebar-ring: oklch(0.68 0.18 45);
+  /* Status — dark overrides. Сильный акцент чуть ярче, мягкий фон —
+     тёмный приглушённый, текст — светлый читаемый. */
+  --status-free: oklch(0.7 0.16 145);
+  --status-occupied: oklch(0.62 0.2 27);
+  --status-bill: oklch(0.78 0.16 80);
+  --status-cooking: oklch(0.62 0.16 240);
+  --status-reserved: oklch(0.64 0.15 255);
+  --status-ready: oklch(0.7 0.16 145);
+  --status-free-soft: oklch(0.26 0.05 145);
+  --status-occupied-soft: oklch(0.27 0.06 27);
+  --status-bill-soft: oklch(0.27 0.05 80);
+  --status-reserved-soft: oklch(0.26 0.05 255);
+  --status-free-text: oklch(0.82 0.13 145);
+  --status-occupied-text: oklch(0.82 0.13 27);
+  --status-bill-text: oklch(0.85 0.13 85);
+  --status-reserved-text: oklch(0.82 0.12 255);
+  --status-free-border: oklch(0.4 0.08 145);
+  --status-occupied-border: oklch(0.42 0.1 27);
+  --status-bill-border: oklch(0.42 0.09 80);
+  --status-reserved-border: oklch(0.4 0.08 255);
 }
 
 @theme inline {
@@ -89,6 +126,20 @@
   --color-status-occupied: var(--status-occupied);
   --color-status-bill: var(--status-bill);
   --color-status-cooking: var(--status-cooking);
+  --color-status-reserved: var(--status-reserved);
+  --color-status-ready: var(--status-ready);
+  --color-status-free-soft: var(--status-free-soft);
+  --color-status-occupied-soft: var(--status-occupied-soft);
+  --color-status-bill-soft: var(--status-bill-soft);
+  --color-status-reserved-soft: var(--status-reserved-soft);
+  --color-status-free-text: var(--status-free-text);
+  --color-status-occupied-text: var(--status-occupied-text);
+  --color-status-bill-text: var(--status-bill-text);
+  --color-status-reserved-text: var(--status-reserved-text);
+  --color-status-free-border: var(--status-free-border);
+  --color-status-occupied-border: var(--status-occupied-border);
+  --color-status-bill-border: var(--status-bill-border);
+  --color-status-reserved-border: var(--status-reserved-border);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

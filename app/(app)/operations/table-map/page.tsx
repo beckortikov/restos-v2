@@ -47,10 +47,10 @@ import { ManageTableDialog } from '@/components/dialogs/manage-table-dialog'
 import { toast } from 'sonner'
 
 const STATUS_STYLE: Record<TableStatus, { bg: string; border: string; dot: string; label: string }> = {
-  free: { bg: 'bg-emerald-50 hover:bg-emerald-100', border: 'border-emerald-200', dot: 'bg-emerald-500', label: 'text-emerald-700' },
-  occupied: { bg: 'bg-red-50 hover:bg-red-100', border: 'border-red-200', dot: 'bg-red-500', label: 'text-red-700' },
-  reserved: { bg: 'bg-blue-50 hover:bg-blue-100', border: 'border-blue-200', dot: 'bg-blue-500', label: 'text-blue-700' },
-  bill_requested: { bg: 'bg-amber-50 hover:bg-amber-100', border: 'border-amber-300', dot: 'bg-amber-500', label: 'text-amber-700' },
+  free: { bg: 'bg-status-free-soft hover:brightness-95', border: 'border-status-free-border', dot: 'bg-status-free', label: 'text-status-free-text' },
+  occupied: { bg: 'bg-status-occupied-soft hover:brightness-95', border: 'border-status-occupied-border', dot: 'bg-status-occupied', label: 'text-status-occupied-text' },
+  reserved: { bg: 'bg-status-reserved-soft hover:brightness-95', border: 'border-status-reserved-border', dot: 'bg-status-reserved', label: 'text-status-reserved-text' },
+  bill_requested: { bg: 'bg-status-bill-soft hover:brightness-95', border: 'border-status-bill-border', dot: 'bg-status-bill', label: 'text-status-bill-text' },
 }
 
 interface TableCardProps {
