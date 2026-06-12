@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/cursor"
@@ -185,18 +186,30 @@ func (s *FinancialAccountsService) Transfer(ctx context.Context, in AccountTrans
 	var result AccountTransferResult
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
-		var from, to models.FinancialAccount
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.FromID).First(&from).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return apperrors.Wrap("NOT_FOUND", "from account not found", nil)
-			}
+		// Блокируем ОБА счёта одним запросом с ORDER BY id — это берёт
+		// row-lock'и в детерминированном порядке и исключает deadlock при
+		// встречных переводах A→B / B→A. Без FOR UPDATE два параллельных
+		// перевода читали старый баланс и теряли один из них (порча денег).
+		var locked []models.FinancialAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id IN ?", rid, []string{*in.FromID, *in.ToID}).
+			Order("id ASC").Find(&locked).Error; err != nil {
 			return err
 		}
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.ToID).First(&to).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return apperrors.Wrap("NOT_FOUND", "to account not found", nil)
+		var from, to models.FinancialAccount
+		for i := range locked {
+			switch locked[i].ID {
+			case *in.FromID:
+				from = locked[i]
+			case *in.ToID:
+				to = locked[i]
 			}
-			return err
+		}
+		if from.ID == "" {
+			return apperrors.Wrap("NOT_FOUND", "from account not found", nil)
+		}
+		if to.ID == "" {
+			return apperrors.Wrap("NOT_FOUND", "to account not found", nil)
 		}
 		if decimal.IsNegative(decimal.Sub(from.Balance, amount)) {
 			return apperrors.Wrap("CONFLICT", "insufficient funds on from account", nil)
@@ -388,7 +401,10 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 		var acc models.FinancialAccount
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
+		// FOR UPDATE: блокируем счёт на время read-modify-write баланса,
+		// иначе параллельные операции теряют друг друга (порча денег).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.Wrap("VALIDATION", "account not found", nil)
 			}
@@ -1100,7 +1116,10 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 		var acc models.FinancialAccount
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
+		// FOR UPDATE: блокируем счёт на время read-modify-write баланса,
+		// иначе параллельные операции теряют друг друга (порча денег).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.Wrap("VALIDATION", "account not found", nil)
 			}

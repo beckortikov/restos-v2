@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -464,10 +465,11 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		}
 		if !in.SkipReceipt {
 			if err := s.enqueueReceipt(tx, rid, &order, receiptPM, now); err != nil {
-				// Не валим транзакцию из-за печати — клиент может перепечатать вручную.
-				// Но логируем как warning.
-				// log в worker'е увидим всё равно — здесь оставим без явного логирования.
-				_ = err
+				// Не валим транзакцию из-за печати — клиент может перепечатать
+				// вручную. Но раньше ошибку проглатывали (_ = err) и провал
+				// постановки чека в очередь было невозможно диагностировать.
+				log.Warn().Err(err).Str("order_id", order.ID).
+					Msg("close_order: enqueue receipt failed (order closed anyway)")
 			}
 		}
 
