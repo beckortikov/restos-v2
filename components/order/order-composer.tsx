@@ -1074,18 +1074,18 @@ export function OrderComposer(props: OrderComposerProps) {
                     </div>
                   </button>
                   {inCart ? (
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => updateQty(item.id, -1)} className="size-8 rounded-lg bg-muted flex items-center justify-center active:scale-90" aria-label="Убрать">
-                        <Minus className="size-4" />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button onClick={() => updateQty(item.id, -1)} className="size-11 rounded-lg bg-muted flex items-center justify-center active:scale-90" aria-label="Убрать">
+                        <Minus className="size-5" />
                       </button>
-                      <span className="min-w-7 text-center text-sm font-bold text-foreground">{inCart.qty}</span>
-                      <button onClick={() => addToCart(item)} className="size-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center active:scale-90" aria-label="Добавить">
-                        <Plus className="size-4" />
+                      <span className="min-w-8 text-center text-base font-bold text-foreground">{inCart.qty}</span>
+                      <button onClick={() => addToCart(item)} className="size-11 rounded-lg bg-primary text-primary-foreground flex items-center justify-center active:scale-90" aria-label="Добавить">
+                        <Plus className="size-5" />
                       </button>
                     </div>
                   ) : (
-                    <button onClick={() => addToCart(item)} className="size-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center active:scale-90 shrink-0" aria-label="Добавить">
-                      <Plus className="size-4" />
+                    <button onClick={() => addToCart(item)} className="size-11 rounded-lg bg-primary text-primary-foreground flex items-center justify-center active:scale-90 shrink-0" aria-label="Добавить">
+                      <Plus className="size-5" />
                     </button>
                   )}
                 </div>
@@ -1943,13 +1943,13 @@ export function OrderComposer(props: OrderComposerProps) {
                       </p>
                       <p className="text-xs text-muted-foreground">{formatPriceLabel(line.price, line.unit, line.unitSize)}</p>
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => updateQty(line.menuItemId, -1)} className="size-7 rounded-lg border border-border flex items-center justify-center hover:bg-muted">
-                        <Minus className="size-3" />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button onClick={() => updateQty(line.menuItemId, -1)} className="size-10 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:scale-90" aria-label="Убрать">
+                        <Minus className="size-4" />
                       </button>
-                      <span className="text-sm font-bold w-10 text-center">{isWeight ? formatQty(line.qty, line.unit) : line.qty}</span>
-                      <button onClick={() => updateQty(line.menuItemId, 1)} className="size-7 rounded-lg border border-border flex items-center justify-center hover:bg-muted">
-                        <Plus className="size-3" />
+                      <span className="text-base font-bold w-10 text-center">{isWeight ? formatQty(line.qty, line.unit) : line.qty}</span>
+                      <button onClick={() => updateQty(line.menuItemId, 1)} className="size-10 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:scale-90" aria-label="Добавить">
+                        <Plus className="size-4" />
                       </button>
                     </div>
                     <span className="text-sm font-bold text-foreground min-w-[5.5rem] text-right whitespace-nowrap tabular-nums">{formatCurrency(lineTotal(line))}</span>

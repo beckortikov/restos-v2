@@ -8,6 +8,7 @@ import {
   CheckCircle2, AlertTriangle, HardDrive, Clock,
 } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 type BackupFile = {
   name: string
@@ -71,7 +72,7 @@ export default function BackupPage() {
       const body = await res.json()
       setFiles(Array.isArray(body?.data) ? body.data : [])
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Не удалось загрузить список')
+      toast.error(humanizeError(e))
     } finally {
       setLoading(false)
     }
@@ -93,7 +94,7 @@ export default function BackupPage() {
       toast.success('Бэкап создан')
       await load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка создания бэкапа')
+      toast.error(humanizeError(e))
     } finally {
       setCreating(false)
     }
@@ -116,7 +117,7 @@ export default function BackupPage() {
         a.click()
         URL.revokeObjectURL(url)
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : 'Ошибка скачивания')
+        toast.error(humanizeError(e))
       }
     })()
   }
@@ -132,7 +133,7 @@ export default function BackupPage() {
       toast.success('Бэкап удалён')
       await load()
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка удаления')
+      toast.error(humanizeError(e))
     }
   }
 
@@ -174,7 +175,7 @@ export default function BackupPage() {
       // Перезагружаем — данные изменились кардинально.
       setTimeout(() => window.location.reload(), 1500)
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : 'Ошибка восстановления')
+      toast.error(humanizeError(e))
     } finally {
       setRestoring(false)
     }

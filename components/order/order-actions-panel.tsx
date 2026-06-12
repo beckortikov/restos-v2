@@ -14,6 +14,7 @@ import { CreditCard, X, Tag, Trash2, Settings2, Receipt, AlertTriangle, FileText
 import { toast } from 'sonner'
 
 import { useAuth } from '@/lib/auth-store'
+import { humanizeError } from '@/lib/errors'
 import { calcLineCogs, calcLineTotal, formatCurrency, getTimeSince, visibleReceiptItems, voidedItemFlags } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub, dSum } from '@/lib/decimal'
 import {
@@ -117,7 +118,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
       setWaiterPickerOpen(false)
       onItemsChanged?.()
     } catch (e) {
-      toast.error(e instanceof Error ? `Ошибка передачи: ${e.message}` : 'Ошибка передачи')
+      toast.error('Не удалось передать заказ', { description: humanizeError(e) })
     }
     setChangingWaiter(false)
   }
@@ -368,7 +369,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
       setCloseReceiptData(null)
       onClosed?.()
     } catch (e) {
-      toast.error(e instanceof Error ? `Ошибка оплаты: ${e.message}` : 'Ошибка оплаты')
+      toast.error('Не удалось провести оплату', { description: humanizeError(e) })
     }
     setSubmitting(false)
   }
