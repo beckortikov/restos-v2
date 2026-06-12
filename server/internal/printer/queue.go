@@ -47,6 +47,11 @@ type QueueConfig struct {
 	BaseBackoff  time.Duration // default 2s (×2^attempts)
 }
 
+// staleJobAge — print job старше этого порога не печатается (runner/cancel
+// уже неактуален: повар приготовил или смена закрылась). Защита от backlog'а
+// зависших pending-job'ов когда принтер был офлайн.
+const staleJobAge = 15 * time.Minute
+
 func (c *QueueConfig) defaults() {
 	if c.PollInterval == 0 {
 		c.PollInterval = time.Second
@@ -74,6 +79,12 @@ func NewQueue(db *gorm.DB, router Router, cfg QueueConfig) *Queue {
 //
 //	go queue.Run(ctx)
 func (q *Queue) Run(ctx context.Context) {
+	// v3.9.3: startup-sweep. Помечаем все зависшие pending/running job'ы
+	// старше staleJobAge как failed — иначе при рестарте sidecar'а касса
+	// печатает накопленный исторический backlog. Также восстанавливает
+	// orphaned 'running' job'ы (sidecar упал во время печати).
+	q.sweepStaleJobs(ctx)
+
 	log.Info().Dur("poll", q.cfg.PollInterval).Msg("print queue: started")
 	t := time.NewTicker(q.cfg.PollInterval)
 	defer t.Stop()
@@ -87,6 +98,27 @@ func (q *Queue) Run(ctx context.Context) {
 				log.Warn().Err(err).Msg("print queue: tick error")
 			}
 		}
+	}
+}
+
+// sweepStaleJobs помечает зависшие pending/running job'ы старше staleJobAge
+// как failed. Вызывается один раз при старте Run(). Чистит backlog который
+// иначе напечатался бы при первом же tick'е после рестарта.
+func (q *Queue) sweepStaleJobs(ctx context.Context) {
+	cutoff := time.Now().UTC().Add(-staleJobAge)
+	res := q.db.WithContext(ctx).Model(&models.PrintJob{}).
+		Where("status IN ? AND created_at < ?", []string{"pending", "running"}, cutoff).
+		Updates(map[string]any{
+			"status":     "failed",
+			"last_error": "stale on restart (older than 15m)",
+			"updated_at": time.Now().UTC(),
+		})
+	if res.Error != nil {
+		log.Warn().Err(res.Error).Msg("print queue: startup sweep failed")
+		return
+	}
+	if res.RowsAffected > 0 {
+		log.Info().Int64("swept", res.RowsAffected).Msg("print queue: startup sweep — stale jobs marked failed")
 	}
 }
 
@@ -113,8 +145,14 @@ func (q *Queue) claim(ctx context.Context) ([]*models.PrintJob, error) {
 		// updated_at + backoff(attempts) < now. backoff = base * 2^attempts.
 		// Реализуем через WHERE: created_at <= now-base ИЛИ status='pending' AND attempts=0.
 		// Упрощённо: берём все pending; если backoff не подошёл — skip в процессе.
+		// v3.9.3: age-фильтр. Runner/cancel-runner который не напечатался за
+		// staleAfter (15 мин) — операционно бесполезен: повар уже либо
+		// приготовил, либо смена закрылась. Без этого фильтра при перезапуске
+		// касса печатала весь исторический backlog зависших pending-job'ов
+		// (принтер был офлайн ночью → job'ы копились → утром все печатались).
+		staleAfter := now.Add(-staleJobAge)
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("status = ?", "pending").
+			Where("status = ? AND created_at > ?", "pending", staleAfter).
 			Order("created_at ASC").
 			Limit(q.cfg.BatchSize).
 			Find(&jobs).Error; err != nil {

@@ -39,7 +39,28 @@ func RunOrdersCleanupOnce(ctx context.Context, db *gorm.DB) (int, int, error) {
 	var cancelledOrders, freedTables int
 
 	err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// 1. Найти zombies.
+		// 0. Table-anchored reconciliation (v3.9.3). Освобождаем столы которые
+		// помечены 'occupied', но НА НИХ НЕТ активных заказов. Это ловит
+		// зомби-столы которые зомби-order pass ниже не видит: все заказы уже
+		// closed/cancelled/refunded, но free-on-close по какой-то причине не
+		// сработал (race, частичная tx, ручной SQL, refund-путь).
+		tableSweep := tx.Exec(`
+			UPDATE tables t
+			SET status = 'free', current_order_id = NULL, opened_at = NULL, updated_at = NOW()
+			WHERE t.status = 'occupied'
+			  AND NOT EXISTS (
+				SELECT 1 FROM orders o
+				WHERE o.table_id = t.id::text
+				  AND o.restaurant_id IS NOT DISTINCT FROM t.restaurant_id
+				  AND o.status IN ('new','open','cooking','ready','served','bill_requested')
+			  )
+		`)
+		if tableSweep.Error != nil {
+			return tableSweep.Error
+		}
+		freedTables += int(tableSweep.RowsAffected)
+
+		// 1. Найти zombies (active order с 0 живыми позициями).
 		var rows []orderRow
 		if err := tx.Raw(`
 			SELECT o.id, o.table_id, o.restaurant_id
