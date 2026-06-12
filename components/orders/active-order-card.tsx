@@ -23,9 +23,9 @@ const STATUS_BADGE: Record<OrderStatus, { label: string; cls: string }> = {
 }
 
 const TYPE_BADGE: Record<string, { label: string; cls: string; stripe: string }> = {
-  hall: { label: 'Зал', cls: 'bg-orange-100 text-orange-800', stripe: 'bg-orange-500' },
-  takeaway: { label: 'С собой', cls: 'bg-emerald-100 text-emerald-800', stripe: 'bg-emerald-500' },
-  delivery: { label: 'Доставка', cls: 'bg-sky-100 text-sky-800', stripe: 'bg-sky-500' },
+  hall: { label: 'Зал', cls: 'bg-orange-100 text-orange-800 dark:bg-orange-950/50 dark:text-orange-300', stripe: 'bg-orange-500' },
+  takeaway: { label: 'С собой', cls: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300', stripe: 'bg-emerald-500' },
+  delivery: { label: 'Доставка', cls: 'bg-sky-100 text-sky-800 dark:bg-sky-950/50 dark:text-sky-300', stripe: 'bg-sky-500' },
 }
 
 function formatHHMM(iso: string): string {

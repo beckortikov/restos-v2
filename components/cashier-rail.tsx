@@ -16,7 +16,8 @@ import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
 import { type User } from '@/lib/types'
 import { useAppZoom } from '@/components/app-sidebar'
-import { Plus, Minus } from 'lucide-react'
+import { Plus, Minus, Sun, Moon } from 'lucide-react'
+import { setTheme, getStoredTheme, type ThemeMode } from '@/lib/theme'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -105,6 +106,23 @@ export function CashierRail({ effectiveUser }: CashierRailProps) {
     )
   }
 
+  function RailThemeToggle() {
+    const [mode, setMode] = useState<ThemeMode>(() => getStoredTheme())
+    const next: ThemeMode = mode === 'dark' ? 'light' : 'dark'
+    return (
+      <div className="w-full px-1 py-1.5 mb-1 border-t border-sidebar-border">
+        <button
+          type="button"
+          onClick={() => { setTheme(next); setMode(next) }}
+          title={mode === 'dark' ? 'Светлая тема' : 'Тёмная тема'}
+          className="w-full h-8 rounded-md flex items-center justify-center text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+        >
+          {mode === 'dark' ? <Sun className="size-4" /> : <Moon className="size-4" />}
+        </button>
+      </div>
+    )
+  }
+
   function railItem(item: RailItem) {
     const Icon = item.icon
     const active = isActive(pathname, item.href)
@@ -154,6 +172,7 @@ export function CashierRail({ effectiveUser }: CashierRailProps) {
         {/* Zoom controls — компактная вертикальная версия для узкого rail'а (88px).
             Логика та же что в общем AppSidebar: localStorage 'restos.zoom',
             50-200% шаг 10, применяется через document.documentElement.style.fontSize. */}
+        <RailThemeToggle />
         <RailZoomControls />
 
         {/* Refresh page — над профилем */}

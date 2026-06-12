@@ -32,8 +32,8 @@ export const TYPE_LABELS: Record<string, string> = {
 }
 
 export const TYPE_BADGE_STYLE: Record<string, string> = {
-  takeaway: 'bg-orange-100 text-orange-700 border border-orange-200',
-  delivery: 'bg-sky-100 text-sky-700 border border-sky-200',
+  takeaway: 'bg-orange-100 text-orange-700 border border-orange-200 dark:bg-orange-950/50 dark:text-orange-300 dark:border-orange-900',
+  delivery: 'bg-sky-100 text-sky-700 border border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-900',
 }
 
 export const PAYMENT_LABELS: Record<string, string> = {
