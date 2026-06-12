@@ -36,7 +36,7 @@ export function getBaseURL(): string {
   //    Виттовский dev-сервер на :5173 при этом всё ещё ходит на :3002 (см. ниже).
   if (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
     const { protocol, hostname, port } = window.location
-    // Vite dev-server (5173/3000) → форсируем go-бэк на 3001.
+    // Vite dev-server (5173/3000) → форсируем go-бэк на 3002.
     if (port === '5173' || port === '3000') {
       return `${protocol}//${hostname}:3002`
     }
