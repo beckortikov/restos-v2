@@ -785,7 +785,7 @@ export const PERMISSION_GROUPS: { label: string; keys: PermissionKey[] }[] = [
 
 // Nav routes that each permission grants access to
 const PERMISSION_NAV_MAP: Record<string, string[]> = {
-  'orders.create': ['/operations/table-map', '/operations/orders', '/waiter'],
+  'orders.create': ['/operations/table-map', '/operations/orders'],
   'orders.close': ['/operations/orders'],
   'kitchen.cooking': ['/operations/kitchen'],
   'tables.edit': ['/operations/table-map'],
