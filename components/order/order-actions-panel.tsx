@@ -707,16 +707,23 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
           <p className="text-sm text-muted-foreground text-center py-6">Нет позиций</p>
         ) : order.items.map((item, idx) => {
           const voided = voidFlags[idx]
+          // Официант отметил блюдо поданным в Kotlin-приложении (servedAt /
+          // kitchenStatus='served'). Подсвечиваем зелёным, чтобы кассир видел
+          // что гость уже получил.
+          const served = !voided && (item.servedAt != null || item.kitchenStatus === 'served')
           return (
             <div
               key={`${item.id ?? idx}-${idx}`}
               className={`flex items-center gap-2 rounded-xl p-2.5 border ${
-                voided ? 'bg-muted/40 border-dashed border-border/60' : 'bg-background border-border'
+                voided ? 'bg-muted/40 border-dashed border-border/60'
+                  : served ? 'bg-status-ready-soft border-status-ready-border'
+                  : 'bg-background border-border'
               }`}
             >
               <span className={`text-base shrink-0 ${voided ? 'opacity-40' : ''}`}>{item.emoji ?? '·'}</span>
               <div className="flex-1 min-w-0">
-                <p className={`text-xs font-medium truncate ${voided ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                <p className={`text-xs font-medium truncate flex items-center gap-1 ${voided ? 'text-muted-foreground line-through' : served ? 'text-status-ready-text' : 'text-foreground'}`}>
+                  {served && <CheckCircle2 className="size-3.5 shrink-0 text-status-ready" />}
                   {item.name}
                 </p>
                 <p className={`text-[10px] ${voided ? 'text-muted-foreground/70 line-through' : 'text-muted-foreground'}`}>
