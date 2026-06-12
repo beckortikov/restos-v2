@@ -26,9 +26,9 @@ import { toast } from 'sonner'
 import { useDataSync } from '@/hooks/use-data-sync'
 
 const COLUMNS: { status: OrderStatus; label: string; color: string; headerBg: string }[] = [
-  { status: 'new', label: 'Новые', color: 'bg-blue-500', headerBg: 'bg-blue-50 border-blue-200' },
-  { status: 'cooking', label: 'Готовится', color: 'bg-amber-500', headerBg: 'bg-amber-50 border-amber-200' },
-  { status: 'ready', label: 'К выдаче', color: 'bg-emerald-500', headerBg: 'bg-emerald-50 border-emerald-200' },
+  { status: 'new', label: 'Новые', color: 'bg-status-new', headerBg: 'bg-status-new-soft border-status-new-border' },
+  { status: 'cooking', label: 'Готовится', color: 'bg-status-cooking', headerBg: 'bg-status-cooking-soft border-status-cooking-border' },
+  { status: 'ready', label: 'К выдаче', color: 'bg-status-ready', headerBg: 'bg-status-ready-soft border-status-ready-border' },
 ]
 
 function KitchenCard({ order, tablesData, menuItems, onMove, activeStation }: { order: Order; tablesData: Table[]; menuItems: MenuItem[]; onMove: (id: string, status: OrderStatus) => void; activeStation: MenuStation | 'all' }) {
@@ -133,7 +133,7 @@ function KitchenCard({ order, tablesData, menuItems, onMove, activeStation }: { 
                     <div key={item.menuItemId} className="flex items-center gap-2 text-muted-foreground">
                       <span className="text-xs">{STATION_ICONS[mi?.station ?? 'hot_kitchen']}</span>
                       <span className="text-xs flex-1 line-through opacity-60">{item.name}</span>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 font-medium">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-ready-soft text-status-ready-text font-medium">
                         {STATION_LABELS[mi?.station ?? 'hot_kitchen']}
                       </span>
                       <span className="text-[10px] font-semibold">x{item.qty}</span>
@@ -181,7 +181,7 @@ function KitchenCard({ order, tablesData, menuItems, onMove, activeStation }: { 
               const mi = menuItems.find((m) => m.id === item.menuItemId)
               return mi?.cookTimeMin ?? 0
             }))
-            return maxCook > 0 ? <span className="text-[10px] font-medium text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded">⏱ ~{maxCook} мин</span> : null
+            return maxCook > 0 ? <span className="text-[10px] font-medium text-status-cooking-text bg-status-cooking-soft px-1.5 py-0.5 rounded">⏱ ~{maxCook} мин</span> : null
           })()}
         </div>
         {next && (
@@ -189,8 +189,8 @@ function KitchenCard({ order, tablesData, menuItems, onMove, activeStation }: { 
             onClick={() => onMove(order.id, next)}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
               next === 'ready'
-                ? 'bg-emerald-500 text-white hover:bg-emerald-600'
-                : 'bg-amber-500 text-white hover:bg-amber-600'
+                ? 'bg-status-ready text-white hover:brightness-110'
+                : 'bg-status-cooking text-white hover:brightness-110'
             }`}
           >
             {next === 'ready' && <CheckCircle2 className="size-3.5" />}

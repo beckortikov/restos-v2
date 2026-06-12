@@ -46,6 +46,19 @@
   --status-occupied-border: oklch(0.85 0.08 27);
   --status-bill-border: oklch(0.85 0.09 80);
   --status-reserved-border: oklch(0.85 0.07 255);
+  /* KDS-палитра кухни: new(синий) / cooking(янтарный) / ready(зелёный).
+     Конвенция кухонного дисплея, отдельная от статусов столов. */
+  --status-new: oklch(0.55 0.16 255);
+  --status-cooking: oklch(0.72 0.16 70);
+  --status-new-soft: oklch(0.96 0.03 255);
+  --status-cooking-soft: oklch(0.96 0.05 75);
+  --status-ready-soft: oklch(0.96 0.03 145);
+  --status-new-text: oklch(0.46 0.13 255);
+  --status-cooking-text: oklch(0.48 0.13 65);
+  --status-ready-text: oklch(0.45 0.13 145);
+  --status-new-border: oklch(0.85 0.07 255);
+  --status-cooking-border: oklch(0.85 0.1 75);
+  --status-ready-border: oklch(0.85 0.07 145);
   /* Charts */
   --chart-1: oklch(0.62 0.16 45);
   --chart-2: oklch(0.55 0.15 185);
@@ -117,6 +130,18 @@
   --status-occupied-border: oklch(0.42 0.1 27);
   --status-bill-border: oklch(0.42 0.09 80);
   --status-reserved-border: oklch(0.4 0.08 255);
+  /* KDS-палитра — dark */
+  --status-new: oklch(0.64 0.15 255);
+  --status-cooking: oklch(0.76 0.15 75);
+  --status-new-soft: oklch(0.26 0.05 255);
+  --status-cooking-soft: oklch(0.28 0.06 75);
+  --status-ready-soft: oklch(0.26 0.05 145);
+  --status-new-text: oklch(0.82 0.12 255);
+  --status-cooking-text: oklch(0.85 0.13 80);
+  --status-ready-text: oklch(0.82 0.13 145);
+  --status-new-border: oklch(0.4 0.08 255);
+  --status-cooking-border: oklch(0.44 0.1 75);
+  --status-ready-border: oklch(0.4 0.08 145);
 }
 
 @theme inline {
@@ -140,6 +165,16 @@
   --color-status-occupied-border: var(--status-occupied-border);
   --color-status-bill-border: var(--status-bill-border);
   --color-status-reserved-border: var(--status-reserved-border);
+  --color-status-new: var(--status-new);
+  --color-status-new-soft: var(--status-new-soft);
+  --color-status-cooking-soft: var(--status-cooking-soft);
+  --color-status-ready-soft: var(--status-ready-soft);
+  --color-status-new-text: var(--status-new-text);
+  --color-status-cooking-text: var(--status-cooking-text);
+  --color-status-ready-text: var(--status-ready-text);
+  --color-status-new-border: var(--status-new-border);
+  --color-status-cooking-border: var(--status-cooking-border);
+  --color-status-ready-border: var(--status-ready-border);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
