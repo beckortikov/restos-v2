@@ -122,18 +122,76 @@ type BackupFile struct {
 	Tier      string    `json:"tier"` // daily|weekly|monthly|manual
 }
 
-// pgBin — путь к бинарю (pg_dump/pg_restore) внутри embedded runtime.
-// На Windows — .exe. Fallback на PATH если runtime-бинарь не найден (dev).
-func (s *BackupService) pgBin(name string) string {
+// pgBin ищет бинарь (pg_dump/pg_restore) в нескольких местах по порядку:
+//  1. embedded runtime (pg-runtime/bin) — если используется embedded-postgres
+//  2. PATH — если PostgreSQL установлен системно и в PATH
+//  3. типовые системные пути установки PostgreSQL (Windows/macOS/Linux)
+//
+// v3.9.5: раньше при external/system PostgreSQL (pg-runtime пустой) падали
+// на «pg_dump» из PATH, которого на Windows-кассе нет → exec-ошибка с пустым
+// выводом. Теперь сканируем реальные пути установки. Возвращает ("", false)
+// если бинарь нигде не найден — вызывающий выдаёт понятную ошибку.
+func (s *BackupService) pgBin(name string) (string, bool) {
 	bin := name
 	if runtime.GOOS == "windows" {
 		bin = name + ".exe"
 	}
-	candidate := filepath.Join(s.cfg.PGRuntimeDir, "bin", bin)
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
+
+	// 1. Embedded runtime.
+	if s.cfg.PGRuntimeDir != "" {
+		c := filepath.Join(s.cfg.PGRuntimeDir, "bin", bin)
+		if _, err := os.Stat(c); err == nil {
+			return c, true
+		}
 	}
-	return name // PATH fallback (dev-окружение)
+
+	// 2. PATH.
+	if p, err := exec.LookPath(bin); err == nil {
+		return p, true
+	}
+
+	// 3. Типовые системные пути. Берём САМУЮ НОВУЮ версию (pg_dump новее
+	// сервера всегда совместим; старее — нет). Сортируем glob по убыванию.
+	var globs []string
+	switch runtime.GOOS {
+	case "windows":
+		globs = []string{
+			`C:\Program Files\PostgreSQL\*\bin\` + bin,
+			`C:\Program Files (x86)\PostgreSQL\*\bin\` + bin,
+		}
+	case "darwin":
+		globs = []string{
+			"/Library/PostgreSQL/*/bin/" + bin,
+			"/opt/homebrew/opt/postgresql@*/bin/" + bin,
+			"/usr/local/opt/postgresql@*/bin/" + bin,
+			"/opt/homebrew/bin/" + bin,
+			"/usr/local/bin/" + bin,
+		}
+	default: // linux
+		globs = []string{
+			"/usr/lib/postgresql/*/bin/" + bin,
+			"/usr/pgsql-*/bin/" + bin,
+			"/usr/bin/" + bin,
+		}
+	}
+	var best string
+	for _, g := range globs {
+		matches, _ := filepath.Glob(g)
+		sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+		for _, m := range matches {
+			if _, err := os.Stat(m); err == nil {
+				best = m
+				break
+			}
+		}
+		if best != "" {
+			break
+		}
+	}
+	if best != "" {
+		return best, true
+	}
+	return "", false
 }
 
 // Create — ручной бэкап. Имя: manual-YYYYMMDD-HHMMSS.dump.
@@ -145,18 +203,22 @@ func (s *BackupService) Create(ctx context.Context) (*BackupFile, error) {
 	fname := fmt.Sprintf("manual-%s.dump", now.Format("20060102-150405"))
 	fpath := filepath.Join(s.cfg.BackupsDir, fname)
 
+	dumpBin, ok := s.pgBin("pg_dump")
+	if !ok {
+		return nil, apperrors.Wrap("INTERNAL", pgToolNotFoundMsg("pg_dump"), nil)
+	}
 	// pg_dump --format=custom --file=<path> --dbname=<dsn>
-	cmd := exec.CommandContext(ctx, s.pgBin("pg_dump"),
+	cmd := exec.CommandContext(ctx, dumpBin,
 		"--format=custom",
 		"--file="+fpath,
 		"--dbname="+s.cfg.DSN,
 	)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.cfg.PGPassword)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(fpath)
-		log.Error().Err(err).Str("out", string(out)).Msg("manual backup: pg_dump failed")
-		return nil, apperrors.Wrap("INTERNAL",
-			"pg_dump failed: "+strings.TrimSpace(string(out)), err)
+		log.Error().Err(err).Str("bin", dumpBin).Str("out", string(out)).Msg("manual backup: pg_dump failed")
+		return nil, apperrors.Wrap("INTERNAL", pgDumpErrMsg(out, err), err)
 	}
 
 	fi, err := os.Stat(fpath)
@@ -173,6 +235,23 @@ func (s *BackupService) Create(ctx context.Context) (*BackupFile, error) {
 	}, nil
 }
 
+// pgToolNotFoundMsg — понятная ошибка когда бинарь pg_dump/pg_restore нигде
+// не найден (ни embedded runtime, ни PATH, ни системные пути).
+func pgToolNotFoundMsg(tool string) string {
+	return tool + " не найден: PostgreSQL client tools не установлены или " +
+		"embedded-runtime повреждён. Переустановите кассу или установите PostgreSQL."
+}
+
+// pgDumpErrMsg строит сообщение из stderr pg_dump'а ИЛИ самой exec-ошибки
+// (когда stderr пустой — например, версионный mismatch или сетевой сбой).
+func pgDumpErrMsg(out []byte, err error) string {
+	s := strings.TrimSpace(string(out))
+	if s == "" && err != nil {
+		s = err.Error()
+	}
+	return "pg_dump failed: " + s
+}
+
 // CreateAuto — авто-бэкап при закрытии смены. Имя shift-YYYYMMDD-HHMMSS.dump.
 // После создания применяет ротацию: оставляет последние keepShiftBackups
 // shift-бэкапов (чтобы за месяц не накопить 60+ файлов).
@@ -184,17 +263,21 @@ func (s *BackupService) CreateAuto(ctx context.Context) (*BackupFile, error) {
 	fname := fmt.Sprintf("shift-%s.dump", now.Format("20060102-150405"))
 	fpath := filepath.Join(s.cfg.BackupsDir, fname)
 
-	cmd := exec.CommandContext(ctx, s.pgBin("pg_dump"),
+	dumpBin, ok := s.pgBin("pg_dump")
+	if !ok {
+		return nil, apperrors.Wrap("INTERNAL", pgToolNotFoundMsg("pg_dump"), nil)
+	}
+	cmd := exec.CommandContext(ctx, dumpBin,
 		"--format=custom",
 		"--file="+fpath,
 		"--dbname="+s.cfg.DSN,
 	)
+	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.cfg.PGPassword)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(fpath)
-		log.Error().Err(err).Str("out", string(out)).Msg("auto backup (shift close): pg_dump failed")
-		return nil, apperrors.Wrap("INTERNAL",
-			"pg_dump failed: "+strings.TrimSpace(string(out)), err)
+		log.Error().Err(err).Str("bin", dumpBin).Str("out", string(out)).Msg("auto backup (shift close): pg_dump failed")
+		return nil, apperrors.Wrap("INTERNAL", pgDumpErrMsg(out, err), err)
 	}
 
 	// Ротация shift-бэкапов: оставляем последние 14 (≈2 недели смен).
@@ -305,7 +388,11 @@ func (s *BackupService) Restore(ctx context.Context, tmpPath string) error {
 
 	// pg_restore не принимает password в DSN на всех платформах одинаково —
 	// передаём через PGPASSWORD env (надёжнее для embedded).
-	cmd := exec.CommandContext(ctx, s.pgBin("pg_restore"),
+	restoreBin, ok := s.pgBin("pg_restore")
+	if !ok {
+		return apperrors.Wrap("INTERNAL", pgToolNotFoundMsg("pg_restore"), nil)
+	}
+	cmd := exec.CommandContext(ctx, restoreBin,
 		"--clean",
 		"--if-exists",
 		"--no-owner",
