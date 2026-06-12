@@ -35,13 +35,22 @@ func TestPercent(t *testing.T) {
 	}
 }
 
-func TestDivRoundPanicsOnZero(t *testing.T) {
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic on division by zero")
-		}
-	}()
-	DivRound(MustFromString("1"), Zero)
+func TestDivRoundZeroReturnsZero(t *testing.T) {
+	// v3.9.11: деление на ноль возвращает Zero, а не паникует.
+	got := DivRound(MustFromString("1"), Zero)
+	if !got.IsZero() {
+		t.Fatalf("DivRound(1, 0) = %s, want 0", got.String())
+	}
+}
+
+func TestDivRoundOr(t *testing.T) {
+	fb := MustFromString("99")
+	if got := DivRoundOr(MustFromString("1"), Zero, fb); !got.Equal(fb) {
+		t.Fatalf("DivRoundOr(1, 0, 99) = %s, want 99", got.String())
+	}
+	if got := DivRoundOr(MustFromString("10"), MustFromString("2"), fb).String(); got != "5" && got != "5.0000" {
+		t.Fatalf("DivRoundOr(10, 2, 99) = %s, want 5", got)
+	}
 }
 
 func TestFromStringError(t *testing.T) {

@@ -64,10 +64,26 @@ func Sub(d1, d2 Decimal) Decimal { return d1.Sub(d2) }
 func Mul(d1, d2 Decimal) Decimal { return d1.Mul(d2) }
 
 // DivRound — d1 / d2 с явным округлением half-even до Scale.
-// На div-by-zero паникует — это программная ошибка, валидировать ДО вызова.
+//
+// При делении на ноль возвращает Zero (а НЕ паникует). Так безопаснее для
+// нашего кода: десятки вызывающих делят на данные, которые легитимно бывают
+// нулевыми (выручка за пустой период, кол-во заказов = 0, YieldPercent и
+// т.п.). Финансово 0 — корректный дефолт: нет выручки → 0% маржи, нет
+// заказов → 0 средний чек. Раньше паника ловилась chi Recoverer'ом и
+// превращалась в 500 на отчётах — теперь отчёт просто показывает 0.
+//
+// Если нужен явный контроль над делением на ноль — используйте DivRoundOr.
 func DivRound(d1, d2 Decimal) Decimal {
 	if d2.IsZero() {
-		panic("decimal.DivRound: division by zero")
+		return Zero
+	}
+	return d1.DivRound(d2, Scale)
+}
+
+// DivRoundOr — как DivRound, но при делении на ноль возвращает fallback.
+func DivRoundOr(d1, d2, fallback Decimal) Decimal {
+	if d2.IsZero() {
+		return fallback
 	}
 	return d1.DivRound(d2, Scale)
 }
