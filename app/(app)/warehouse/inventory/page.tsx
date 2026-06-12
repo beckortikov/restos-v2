@@ -1,16 +1,17 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useRef } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { type Ingredient } from '@/lib/types'
 import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient } from '@/lib/queries'
+import { queryKeys } from '@/lib/query-client'
 
 import { Search, AlertTriangle, TrendingDown, Package, Plus } from 'lucide-react'
 import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
 import { toast } from 'sonner'
-import { useDataSync } from '@/hooks/use-data-sync'
 
 function StockLevel({ qty, minQty }: { qty: number; minQty: number }) {
   const pct = Math.min(100, (qty / (minQty * 3)) * 100)
@@ -91,25 +92,29 @@ export default function InventoryPage() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [tab, setTab] = useState<'food' | 'supplies'>('food')
-  const [ingredients, setIngredients] = useState<Ingredient[]>([])
-  const [ingredientCategories, setIngredientCategories] = useState<string[]>([])
-  const [loading, setLoading] = useState(true)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingIngredient, setEditingIngredient] = useState<Ingredient | undefined>(undefined)
 
-  const reload = useCallback(() => {
-    fetchIngredients().then(setIngredients).catch(() => {})
-    fetchIngredientCategories().then(setIngredientCategories).catch(() => {})
-  }, [])
-
-  useEffect(() => {
-    fetchIngredients().then((data) => { setIngredients(data); setLoading(false) }).catch(() => setLoading(false))
-    fetchIngredientCategories().then(setIngredientCategories)
-  }, [reload])
-
-  // SSE-driven auto-refresh — заменяет polling каждые 2с.
-  // Ingredients qty меняется через stock_movements (см. CLAUDE.md правило #5).
-  useDataSync(['ingredients', 'stock_movements'], reload)
+  // v3.9.22: data-слой на React Query. SSE (ingredients/stock_movements →
+  // ['stock','ingredients']) инвалидирует через useQuerySseBridge. qty
+  // меняется через stock_movements (CLAUDE.md правило #5).
+  const qc = useQueryClient()
+  const CATS_KEY = ['stock', 'ingredient-categories'] as const
+  const ingredientsQuery = useQuery({
+    queryKey: queryKeys.stock.ingredients,
+    queryFn: fetchIngredients,
+  })
+  const ingredients = ingredientsQuery.data ?? []
+  const { data: ingredientCategories = [] } = useQuery({
+    queryKey: CATS_KEY,
+    queryFn: fetchIngredientCategories,
+    staleTime: 5 * 60_000,
+  })
+  const loading = ingredientsQuery.isLoading
+  const reloadStock = () => {
+    qc.invalidateQueries({ queryKey: queryKeys.stock.ingredients })
+    qc.invalidateQueries({ queryKey: CATS_KEY })
+  }
 
   async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; isFood?: boolean }) {
     try {
@@ -147,9 +152,7 @@ export default function InventoryPage() {
         })
         toast.success('Ингредиент добавлен')
       }
-      const updated = await fetchIngredients()
-      setIngredients(updated)
-      fetchIngredientCategories().then(setIngredientCategories)
+      reloadStock()
     } catch {
       toast.error('Ошибка при сохранении ингредиента')
     }
