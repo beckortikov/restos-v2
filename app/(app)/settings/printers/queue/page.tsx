@@ -15,6 +15,7 @@ import {
   subscribeVirtualMode,
   getHistoryHiddenBefore,
   clearHistoryView,
+  resetHistoryView,
 } from '@/lib/queries/printers'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { decodeCP866Hex } from '@/lib/cp866'
@@ -208,8 +209,16 @@ export default function PrintQueuePage() {
           История ({filteredHistory.length})
         </h2>
         {filteredHistory.length === 0 ? (
-          <div className="text-sm text-muted-foreground italic py-8 text-center bg-muted/20 rounded-xl border border-dashed border-border">
-            Нет записей за выбранные фильтры
+          <div className="text-sm text-muted-foreground italic py-8 text-center bg-muted/20 rounded-xl border border-dashed border-border space-y-2">
+            <div>Нет записей за выбранные фильтры</div>
+            {hiddenBefore && history.length > 0 && (
+              <button
+                onClick={() => { resetHistoryView(); setHistory([...history]) }}
+                className="not-italic text-xs px-3 py-1.5 rounded-lg border border-border hover:bg-muted text-foreground"
+              >
+                Показать скрытую историю ({history.length})
+              </button>
+            )}
           </div>
         ) : (
           <div className="space-y-1">

@@ -163,3 +163,9 @@ export function clearHistoryView(): void {
   if (typeof window === 'undefined') return
   localStorage.setItem(HIDDEN_BEFORE_KEY, String(Date.now()))
 }
+
+// Отменить «Очистить историю» — снова показать весь журнал.
+export function resetHistoryView(): void {
+  if (typeof window === 'undefined') return
+  localStorage.removeItem(HIDDEN_BEFORE_KEY)
+}
