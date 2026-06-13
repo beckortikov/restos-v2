@@ -55,6 +55,7 @@ import {
   Plus,
   FileText,
   RotateCcw,
+  Receipt,
 } from 'lucide-react'
 
 interface FinancialAccount {
@@ -278,6 +279,18 @@ export function OrderActionsBody({
       }
       return
     }
+    // Закрытый заказ → повторная печать КОПИИ через бэкенд (regenerate от
+    // текущего order.Total). Раньше тут был только тост-заглушка.
+    if (order.status === 'done') {
+      try {
+        const { reprintOrderReceipt } = await import('@/lib/queries')
+        const { jobId } = await reprintOrderReceipt(order.id)
+        toast.success(jobId ? `Копия чека отправлена (${jobId.slice(0, 8)}…)` : 'Копия чека отправлена на печать')
+      } catch (e) {
+        toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
+      }
+      return
+    }
     toast.info('Чек уже отправлен на печать бэкендом при закрытии заказа')
   }, [receiptData, order])
 
@@ -375,6 +388,28 @@ export function OrderActionsBody({
     setPendingCloseData(null)
   }, [])
 
+  /** «Посмотреть чек» закрытого заказа → превью финального чека (как в v1).
+   *  Из превью кнопка «Печать чека» (handlePrint) шлёт КОПИЮ на бэкенд. */
+  const handleViewClosedReceipt = useCallback(() => {
+    const acct = accounts.find(a => a.id === (order as { accountId?: string }).accountId)
+    const receipt = buildReceiptData(
+      order,
+      { tables, users, zones, restaurant, currentUser: user, voids },
+      {
+        isPreCheck: false,
+        includeService: !!(order.servicePercent && order.servicePercent > 0),
+        servicePercent: order.servicePercent ?? 0,
+        discountAmount: order.discountAmount,
+        discountReason: order.discountReason,
+        tipAmount: order.tipAmount,
+        paymentMethod: order.paymentMethod,
+        accountName: acct?.name,
+      },
+    )
+    setReceiptData(receipt)
+    setShowReceipt(true)
+  }, [order, accounts, tables, users, zones, restaurant, user, voids])
+
   const isOwnAsWaiter = role === 'waiter' && order.waiterId === user?.id
   const canDoVoid = canDo('orders.void')
 
@@ -444,7 +479,7 @@ export function OrderActionsBody({
               className="flex-1 inline-flex items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
             >
               <Printer className="size-4" />
-              Печать чека
+              {order.status === 'done' ? 'Печать копии' : 'Печать чека'}
             </button>
             <button
               onClick={onClose}
@@ -556,6 +591,18 @@ export function OrderActionsBody({
             <CheckCircle2 className="size-4" />
             Заказ оплачен и закрыт
           </div>
+        )}
+
+        {/* Повтор чека — превью финального чека + печать КОПИИ (как «Посмотреть
+            чек» в v1, по образцу iiko). Гейтится правом orders.reprint. */}
+        {order.status === 'done' && canDo('orders.reprint') && (
+          <button
+            onClick={handleViewClosedReceipt}
+            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-5 py-3 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+          >
+            <Receipt className="size-4" />
+            Посмотреть чек
+          </button>
         )}
 
         {order.status === 'done' && canDo('orders.cancel') && !order.isSplit && (
