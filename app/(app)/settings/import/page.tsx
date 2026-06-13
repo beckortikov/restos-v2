@@ -113,6 +113,28 @@ export default function ImportPage() {
     }
   }
 
+  // Скачивание шаблона. В Electron SPA грузится через file:// — root-relative
+  // «/docs/...» указывал бы на корень диска, а не на встроенные файлы. Поэтому
+  // тянем файл с Go-бэка (getBaseURL → http://127.0.0.1:3002/docs/...) как blob
+  // и сохраняем через object-URL. Работает и в Electron, и в LAN-браузере.
+  const downloadTemplate = async (templatePath: string) => {
+    try {
+      const res = await fetch(getBaseURL() + templatePath)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = templatePath.split('/').pop() || 'template.xlsx'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      toast.error(humanizeError(err, 'Не удалось скачать шаблон'))
+    }
+  }
+
   const handleServerImport = async (file: File, kind: 'users' | 'tables-server') => {
     setStep('importing')
     const path = kind === 'users' ? '/api/v1/users/import' : '/api/v1/tables/import'
@@ -428,10 +450,10 @@ export default function ImportPage() {
                   <p className="text-sm font-medium text-foreground">Шаблон карты зала</p>
                   <p className="text-xs text-muted-foreground">Excel с примерами зон и столов</p>
                 </div>
-                <a href="/docs/шаблон-карта-зала.xlsx" download
+                <button type="button" onClick={() => downloadTemplate('/docs/шаблон-карта-зала.xlsx')}
                   className="flex items-center gap-1.5 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
                   <Download className="size-4" />Скачать
-                </a>
+                </button>
               </div>
 
               {/* Upload area */}
@@ -688,10 +710,10 @@ export default function ImportPage() {
                     <p className="text-sm font-medium text-foreground">Шаблон техкарт</p>
                     <p className="text-xs text-muted-foreground">Excel с листами: Блюда, Техкарты, Ингредиенты</p>
                   </div>
-                  <a href={activeCard.template} download
+                  <button type="button" onClick={() => downloadTemplate(activeCard.template!)}
                     className="flex items-center gap-1.5 px-3 py-2 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 transition-colors">
                     <Download className="size-3.5" />Скачать
-                  </a>
+                  </button>
                 </div>
               )}
 
