@@ -1,12 +1,19 @@
 'use client'
 
 /**
- * OrderItemsList — список позиций заказа с inline-формой void (списания) +
- * выбора количества и причины. Извлечён из OrderActionsBody.
+ * OrderItemsList — список позиций заказа с inline-формой отмены (выбор кол-ва
+ * и причины). Извлечён из OrderActionsBody.
+ *
+ * Отмена идёт через `cancelOrderItem`/`cancelOrderItemPartial` (выставляют
+ * `order_items.cancelled_at`), как в основной POS-панели. Раньше тут был
+ * `createVoid` (запись в `order_voids` без cancelled_at) — два параллельных
+ * механизма на одном заказе давали двойное вычёркивание одноимённых строк и
+ * не уведомляли кухню. Теперь механизм единый: cancelled_at → SSE →
+ * AutoPrintRunner печатает кухонную «ОТМЕНА», стол освобождается при отмене
+ * последней живой позиции.
  *
  * State (`voidingItemIdx`, `voidReason`, `voidQty`, `voidedIndices`) — лежит в
- * родителе и пробрасывается; компонент чисто презентационный + вызывает
- * createVoid через переданный handler.
+ * родителе и пробрасывается; компонент чисто презентационный.
  */
 
 import { memo } from 'react'
@@ -14,7 +21,7 @@ import { toast } from 'sonner'
 import { XCircle } from 'lucide-react'
 import { formatCurrency, calcLineTotal, formatQty } from '@/lib/helpers'
 import { VOID_REASON_LABELS, type Order, type VoidReason, type OrderVoid } from '@/lib/types'
-import { createVoid, fetchVoidsForOrder } from '@/lib/queries'
+import { cancelOrderItem, cancelOrderItemPartial } from '@/lib/queries'
 
 interface MenuItemMeta {
   id: string
@@ -102,7 +109,7 @@ function OrderItemsListInner({
                   <button
                     onClick={() => { setVoidingItemIdx(isVoiding ? null : i); setVoidQty(item.qty) }}
                     className="text-red-400 hover:text-red-600 transition-colors p-0.5"
-                    title="Списать позицию (для отчётности)"
+                    title="Отменить позицию"
                   >
                     <XCircle className="size-4" />
                   </button>
@@ -143,26 +150,23 @@ function OrderItemsListInner({
                 </div>
                 <button
                   onClick={async () => {
+                    if (!item.id) { toast.error('Позиция не найдена'); return }
+                    const itemId = item.id
+                    const reasonLabel = VOID_REASON_LABELS[voidReason]
+                    const fullCancel = voidQty >= item.qty
                     try {
-                      await createVoid({
-                        orderId: order.id,
-                        itemName: item.name,
-                        itemQty: voidQty,
-                        itemPrice: item.price,
-                        reason: voidReason,
-                        menuItemId: item.menuItemId,
-                      })
-                      if (voidQty >= item.qty) {
+                      if (fullCancel) {
+                        await cancelOrderItem(itemId, reasonLabel)
+                        // Оптимистично подсвечиваем строку — после refetch
+                        // прилетит cancelled_at и закрепит «Отменено».
                         setVoidedIndices(prev => new Set(prev).add(i))
+                      } else {
+                        await cancelOrderItemPartial(itemId, voidQty, reasonLabel)
                       }
                       setVoidingItemIdx(null)
                       setVoidReason('guest_changed_mind')
                       setVoidQty(0)
                       toast.success(`Отменено: ${item.name} × ${voidQty}`)
-                      try {
-                        const fresh = await fetchVoidsForOrder(order.id)
-                        setVoids(fresh)
-                      } catch {}
                       onItemsChanged?.()
                     } catch {
                       toast.error('Ошибка отмены')
