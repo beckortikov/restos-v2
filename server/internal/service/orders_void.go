@@ -90,9 +90,20 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 			return err
 		}
 
-		// Cancel-runner на станции — для всех не-отменённых items заказа.
+		// v3.9.25 (вариант 1): отменяем ещё НЕ напечатанные runner-задачи этого
+		// заказа — они не должны выйти на принтер. Без этого отменённый «с собой»
+		// заказ всё равно печатался, когда исходный runner ещё висел в pending.
+		if err := tx.Model(&models.PrintJob{}).
+			Where("order_id = ? AND status = ? AND printed_at IS NULL", order.ID, "pending").
+			Updates(map[string]any{"status": "cancelled", "updated_at": now}).Error; err != nil {
+			return err
+		}
+
+		// Cancel-runner печатаем ТОЛЬКО для позиций, которые кухня уже видела
+		// (printed_at != null). Если заказ ещё не печатался — отменять на кухне
+		// нечего, ничего не печатаем (вариант 1).
 		var liveItems []models.OrderItem
-		if err := tx.Where("order_id = ? AND cancelled_at IS NULL", order.ID).
+		if err := tx.Where("order_id = ? AND cancelled_at IS NULL AND printed_at IS NOT NULL", order.ID).
 			Find(&liveItems).Error; err != nil {
 			return err
 		}
