@@ -110,6 +110,20 @@ describe('visibleReceiptItems', () => {
     const v = mkVoid({ itemName: 'C', itemQty: 1, itemPrice: 30 })
     expect(visibleReceiptItems([a, b, c], [v])).toEqual([a])
   })
+
+  // Регрессия (жалоба «один отменил — два отменился»): две идентичные строки,
+  // одна жёстко отменена (cancelled_at), и при этом существует void-запись на
+  // тот же name|price (то же списание, продублированное в order_voids). Раньше
+  // вычёркивались ОБЕ → POS-подытог расходился с order.total/чеком. Должна
+  // остаться одна живая строка.
+  it('cancelledAt row consumes a matching void so an identical live row survives', () => {
+    const cancelled = mkItem({ name: 'Салат', qty: 1, price: 7, cancelledAt: '2025-01-01T10:00:00Z' })
+    const live = mkItem({ name: 'Салат', qty: 1, price: 7 })
+    const v = mkVoid({ itemName: 'Салат', itemQty: 1, itemPrice: 7 })
+    expect(visibleReceiptItems([cancelled, live], [v])).toEqual([live])
+    // Порядок не важен — живая строка перед отменённой даёт тот же результат.
+    expect(visibleReceiptItems([live, cancelled], [v])).toEqual([live])
+  })
 })
 
 describe('voidedItemFlags', () => {
@@ -148,6 +162,14 @@ describe('voidedItemFlags', () => {
     const v = mkVoid({ itemName: 'Чай', itemQty: 1, itemPrice: 6 })
     // First row gets consumed → flagged true; second row stays.
     expect(voidedItemFlags([a1, a2], [v])).toEqual([true, false])
+  })
+
+  it('cancelledAt row consumes a matching void so the live duplicate is not flagged', () => {
+    const cancelled = mkItem({ name: 'Салат', qty: 1, price: 7, cancelledAt: '2025-01-01T10:00:00Z' })
+    const live = mkItem({ name: 'Салат', qty: 1, price: 7 })
+    const v = mkVoid({ itemName: 'Салат', itemQty: 1, itemPrice: 7 })
+    expect(voidedItemFlags([cancelled, live], [v])).toEqual([true, false])
+    expect(voidedItemFlags([live, cancelled], [v])).toEqual([false, true])
   })
 
   // The two helpers SHARE matching semantics. They must agree on every row

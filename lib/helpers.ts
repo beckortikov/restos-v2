@@ -22,11 +22,7 @@ import type { Order, OrderItem, OrderVoid } from './types'
  *  только в локальном Set текущей сессии и терялась после reopen. */
 export function voidedItemFlags(items: OrderItem[], voids?: OrderVoid[] | null): boolean[] {
   if (!voids || voids.length === 0) return items.map(i => !!i.cancelledAt)
-  const voidedQty = new Map<string, number>()
-  for (const v of voids) {
-    const key = `${v.itemName}|${v.itemPrice}`
-    voidedQty.set(key, (voidedQty.get(key) ?? 0) + (v.itemQty ?? 0))
-  }
+  const voidedQty = buildVoidBuckets(items, voids)
   return items.map(i => {
     if (i.cancelledAt) return true
     const key = `${i.name}|${i.price}`
@@ -42,13 +38,30 @@ export function voidedItemFlags(items: OrderItem[], voids?: OrderVoid[] | null):
   })
 }
 
-export function visibleReceiptItems(items: OrderItem[], voids?: OrderVoid[] | null): OrderItem[] {
-  if (!voids || voids.length === 0) return items.filter(i => !i.cancelledAt)
+/** Сумма void.qty по ключу (name|price) ЗА ВЫЧЕТОМ количеств уже жёстко
+ *  отменённых (cancelled_at) одноимённых позиций. Void на позицию, которая
+ *  одновременно помечена cancelled_at — это то же самое списание; нельзя
+ *  применить его повторно к живой одноимённой строке. Без этого одна отмена
+ *  при двух идентичных строках вычёркивала обе, и POS-подытог расходился с
+ *  order.total/чеком (жалоба: «один отменил — два отменился»). */
+function buildVoidBuckets(items: OrderItem[], voids: OrderVoid[]): Map<string, number> {
   const voidedQty = new Map<string, number>()
   for (const v of voids) {
     const key = `${v.itemName}|${v.itemPrice}`
     voidedQty.set(key, (voidedQty.get(key) ?? 0) + (v.itemQty ?? 0))
   }
+  for (const i of items) {
+    if (!i.cancelledAt) continue
+    const key = `${i.name}|${i.price}`
+    const voided = voidedQty.get(key) ?? 0
+    if (voided > 0) voidedQty.set(key, Math.max(0, voided - (i.qty ?? 0)))
+  }
+  return voidedQty
+}
+
+export function visibleReceiptItems(items: OrderItem[], voids?: OrderVoid[] | null): OrderItem[] {
+  if (!voids || voids.length === 0) return items.filter(i => !i.cancelledAt)
+  const voidedQty = buildVoidBuckets(items, voids)
   return items.filter(i => {
     if (i.cancelledAt) return false
     const key = `${i.name}|${i.price}`
