@@ -65,6 +65,10 @@ package-lock.json
 
 # Spreadsheets и временные документы (project-specific)
 *.xlsx
+# …но шаблоны импорта — продуктовые ассеты, их коммитим (иначе сборка без
+# них даёт битое скачивание: бэк отдаёт HTML вместо .xlsx).
+!public/docs/*.xlsx
+!server/internal/transport/http/docs/*.xlsx
 .~lock*
 correction.txt
 ins.md

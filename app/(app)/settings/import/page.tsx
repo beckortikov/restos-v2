@@ -122,6 +122,14 @@ export default function ImportPage() {
       const res = await fetch(getBaseURL() + templatePath)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const blob = await res.blob()
+      // Защита от битого скачивания: если бэк (например, собранный без
+      // шаблонов) вернул SPA index.html вместо .xlsx, blob будет text/html.
+      // Тогда сохранять нельзя — Excel выдаст «формат или расширение не
+      // являются допустимыми». Лучше честная ошибка, чем битый файл.
+      const ct = (blob.type || res.headers.get('content-type') || '').toLowerCase()
+      if (ct.includes('text/html')) {
+        throw new Error('Шаблон не найден на сервере (получен HTML вместо .xlsx). Обновите кассу.')
+      }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url

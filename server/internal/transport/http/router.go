@@ -569,6 +569,12 @@ func NewRouter(deps Deps) http.Handler {
 		})
 	})
 
+	// Статические Excel-шаблоны импорта — вшиты в бинарь напрямую (docs.go),
+	// независимо от embed-spa pipeline. Явный роут с честным 404 на miss,
+	// чтобы скачивание шаблона никогда не отдавало SPA index.html под видом
+	// .xlsx (иначе Excel: «формат или расширение не являются допустимыми»).
+	r.Handle("/docs/*", DocsHandler())
+
 	// SPA static — отдаёт embedded React build на всех не-API путях.
 	// Любой браузер в LAN, открывший http://<касса-ip>:3001, получает UI.
 	// См. spa.go.
