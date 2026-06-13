@@ -110,6 +110,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Restore from localStorage on mount; токен валидируется первым же API-вызовом.
   useEffect(() => {
+    let storedRid: string | undefined
     try {
       const stored = localStorage.getItem(STORAGE_KEY)
       const storedRestaurant = localStorage.getItem(RESTAURANT_STORAGE_KEY)
@@ -120,10 +121,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (storedRestaurant) {
         const parsed = JSON.parse(storedRestaurant) as Restaurant
-        if (parsed?.id) setRestaurant(parsed)
+        if (parsed?.id) { setRestaurant(parsed); storedRid = parsed.id }
       }
     } catch {}
     setLoading(false)
+
+    // Освежаем ресторан из БД в фоне. localStorage может быть устаревшим:
+    // настройки (tech_cards_enabled, service_percent, …) могли изменить на
+    // другом терминале или в прошлой сессии — без рефетча useAuth().restaurant
+    // врёт (баг: create-menu-item-dialog показывал техкарту, хотя она выключена
+    // в настройках; settings-страница грузит свежее из БД и расходилась).
+    try {
+      const tok = getV4Token()
+      const rid = storedRid || getV4RestaurantId()
+      if (tok && rid) {
+        void (async () => {
+          try {
+            const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } } }))
+            if (restResp) {
+              const rest = mapResponseRestaurant(restResp)
+              setRestaurant(rest)
+              localStorage.setItem(RESTAURANT_STORAGE_KEY, JSON.stringify(rest))
+            }
+          } catch {}
+        })()
+      }
+    } catch {}
   }, [])
 
   // Глобальный слушатель: при 401 от любого v4-вызова — выкидываем пользователя.
@@ -274,6 +297,9 @@ function mapResponseRestaurant(row: any): Restaurant {
     servicePercent: Number(row.service_percent || 0),
     timezone: row.timezone || 'Asia/Tashkent',
     enforceStockCheck: !!row.enforce_stock_check,
-    techCardsEnabled: !!row.tech_cards_enabled,
+    // Дефолт техкарт — true (как в БД `default:true` и lib/queries/_mappers).
+    // Раньше тут был `!!row.tech_cards_enabled` → null/undefined давал false,
+    // расходясь с настройками (react-query маппер) и бэком.
+    techCardsEnabled: row.tech_cards_enabled ?? true,
   } as Restaurant
 }
