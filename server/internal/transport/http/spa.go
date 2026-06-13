@@ -43,11 +43,13 @@ func SPAHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 
-		// Defensive guards — never shadow API/SSE/health/docs.
+		// Defensive guards — never shadow API/SSE/health.
+		// НЕ блокируем /docs — там статические шаблоны импорта
+		// (spa/docs/шаблон-*.xlsx). Swagger UI на /docs не зарегистрирован.
+		// Раньше guard «HasPrefix(p, "/docs")» 404'ил скачивание шаблонов.
 		if strings.HasPrefix(p, "/api/") ||
 			strings.HasPrefix(p, "/sse") ||
-			p == "/healthz" || p == "/readyz" ||
-			strings.HasPrefix(p, "/docs") {
+			p == "/healthz" || p == "/readyz" {
 			http.NotFound(w, r)
 			return
 		}
