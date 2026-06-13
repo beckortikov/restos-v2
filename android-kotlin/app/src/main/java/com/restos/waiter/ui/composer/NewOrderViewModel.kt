@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
+import java.math.RoundingMode
 import java.util.UUID
 import javax.inject.Inject
 
@@ -34,7 +35,27 @@ data class CartLine(
     val name: String,
     val price: String,
     val qty: Int,
-)
+    // Весовые блюда: unit "g"/"kg", weightQty — выбранный вес (decimal-строка).
+    // Для штучных weightQty == null и сумма считается по qty.
+    val unit: String = "piece",
+    val unitSize: String = "1",
+    val weightQty: String? = null,
+) {
+    val isWeight: Boolean get() = weightQty != null
+}
+
+/** Весовое блюдо — продаётся по граммам/кг, а не поштучно. */
+fun MenuItemDto.isWeighed(): Boolean = unit.isNotBlank() && unit != "piece"
+
+/** Сумма одной строки: вес → price * (вес / unitSize); штука → price * qty. */
+fun CartLine.lineTotal(): BigDecimal {
+    val p = runCatching { BigDecimal(price) }.getOrDefault(BigDecimal.ZERO)
+    if (!isWeight) return p * qty.toBigDecimal()
+    val w = runCatching { BigDecimal(weightQty) }.getOrDefault(BigDecimal.ZERO)
+    val size = runCatching { BigDecimal(unitSize) }.getOrDefault(BigDecimal.ONE)
+        .let { if (it <= BigDecimal.ZERO) BigDecimal.ONE else it }
+    return p.multiply(w.divide(size, 4, RoundingMode.HALF_EVEN))
+}
 
 data class NewOrderUiState(
     val loading: Boolean = true,
@@ -49,6 +70,8 @@ data class NewOrderUiState(
     val busy: Boolean = false,
     val error: String? = null,
     val createdOrderId: String? = null,
+    // Когда != null — открыт диалог ввода веса для этого блюда.
+    val weightItem: MenuItemDto? = null,
 )
 
 @HiltViewModel
@@ -142,7 +165,9 @@ class NewOrderViewModel @Inject constructor(
         val draft = draftStore.current().firstOrNull {
             it.tableId == tableId && it.waiterId == me
         } ?: return
-        val cart = draft.lines.map { CartLine(it.menuItemId, it.nameAtAdd, it.price, it.qty) }
+        val cart = draft.lines.map {
+            CartLine(it.menuItemId, it.nameAtAdd, it.price, it.qty, it.unit, it.unitSize, it.weightQty)
+        }
         _state.update {
             it.copy(cart = cart, guests = draft.guestsCount, guestsConfirmed = true)
         }
@@ -154,16 +179,64 @@ class NewOrderViewModel @Inject constructor(
         _state.update { it.copy(guests = n.coerceIn(1, 99), guestsConfirmed = true) }
     }
 
+    /**
+     * Тап по блюду. Весовое (unit != piece) → открываем диалог ввода веса.
+     * Штучное → сразу +1 в корзину.
+     */
+    fun pick(item: MenuItemDto) {
+        if (!item.isAvailable) return
+        if (item.isWeighed()) {
+            _state.update { it.copy(weightItem = item) }
+        } else {
+            addToCart(item)
+        }
+    }
+
+    fun dismissWeight() { _state.update { it.copy(weightItem = null) } }
+
+    /** Подтверждение веса из диалога: создаём/заменяем весовую строку. */
+    fun confirmWeight(grams: BigDecimal) {
+        val item = _state.value.weightItem ?: return
+        if (grams <= BigDecimal.ZERO) { dismissWeight(); return }
+        val w = grams.stripTrailingZeros().toPlainString()
+        _state.update { s ->
+            val existing = s.cart.find { it.menuItemId == item.id && it.isWeight }
+            val newCart = if (existing != null) {
+                s.cart.map { if (it.menuItemId == item.id && it.isWeight) it.copy(weightQty = w) else it }
+            } else {
+                s.cart + CartLine(
+                    menuItemId = item.id,
+                    name = item.name,
+                    price = item.price,
+                    qty = 1,
+                    unit = item.unit,
+                    unitSize = item.unitSize,
+                    weightQty = w,
+                )
+            }
+            // Очищаем поиск — удобно искать следующее блюдо.
+            s.copy(cart = newCart, weightItem = null, search = "")
+        }
+        persistDraft()
+    }
+
+    /** Текущий вес блюда в корзине (для предзаполнения диалога), либо null. */
+    fun currentWeight(menuItemId: String): String? =
+        _state.value.cart.firstOrNull { it.menuItemId == menuItemId && it.isWeight }?.weightQty
+
     fun addToCart(item: MenuItemDto) {
         if (!item.isAvailable) return
         _state.update { s ->
-            val existing = s.cart.find { it.menuItemId == item.id }
+            val existing = s.cart.find { it.menuItemId == item.id && !it.isWeight }
             val newCart = if (existing != null) {
-                s.cart.map { if (it.menuItemId == item.id) it.copy(qty = it.qty + 1) else it }
+                s.cart.map {
+                    if (it.menuItemId == item.id && !it.isWeight) it.copy(qty = it.qty + 1) else it
+                }
             } else {
                 s.cart + CartLine(item.id, item.name, item.price, qty = 1)
             }
-            s.copy(cart = newCart)
+            // Очищаем поиск после добавления — удобно вводить следующее блюдо.
+            s.copy(cart = newCart, search = "")
         }
         persistDraft()
     }
@@ -171,7 +244,7 @@ class NewOrderViewModel @Inject constructor(
     fun increment(menuItemId: String) {
         _state.update { s ->
             s.copy(cart = s.cart.map {
-                if (it.menuItemId == menuItemId) it.copy(qty = it.qty + 1) else it
+                if (it.menuItemId == menuItemId && !it.isWeight) it.copy(qty = it.qty + 1) else it
             })
         }
         persistDraft()
@@ -180,7 +253,7 @@ class NewOrderViewModel @Inject constructor(
     fun decrement(menuItemId: String) {
         _state.update { s ->
             s.copy(cart = s.cart.mapNotNull {
-                if (it.menuItemId != menuItemId) it
+                if (it.menuItemId != menuItemId || it.isWeight) it
                 else if (it.qty <= 1) null
                 else it.copy(qty = it.qty - 1)
             })
@@ -193,10 +266,8 @@ class NewOrderViewModel @Inject constructor(
         persistDraft()
     }
 
-    fun cartTotal(): BigDecimal = _state.value.cart.fold(BigDecimal.ZERO) { acc, line ->
-        val price = runCatching { BigDecimal(line.price) }.getOrDefault(BigDecimal.ZERO)
-        acc + price * line.qty.toBigDecimal()
-    }
+    fun cartTotal(): BigDecimal =
+        _state.value.cart.fold(BigDecimal.ZERO) { acc, line -> acc + line.lineTotal() }
 
     fun submit() {
         val s = _state.value
@@ -207,7 +278,9 @@ class NewOrderViewModel @Inject constructor(
                 ?: UUID.randomUUID().toString().also { pendingIdemKey = it }
             try {
                 val items = s.cart.map {
-                    NewOrderItem(menuItemId = it.menuItemId, qty = it.qty)
+                    // Весовая строка → qty = вес (decimal-строка); штучная → qty (Int).
+                    if (it.isWeight) NewOrderItem(menuItemId = it.menuItemId, qty = it.weightQty!!)
+                    else NewOrderItem(menuItemId = it.menuItemId, qty = it.qty)
                 }
                 val resultOrderId: String = if (isAppendMode) {
                     val resp = ordersApi.addItems(
@@ -265,7 +338,15 @@ class NewOrderViewModel @Inject constructor(
                         waiterId = uid,
                         guestsCount = current.guests,
                         lines = current.cart.map {
-                            DraftLine(it.menuItemId, it.name, it.price, it.qty)
+                            DraftLine(
+                                menuItemId = it.menuItemId,
+                                nameAtAdd = it.name,
+                                price = it.price,
+                                qty = it.qty,
+                                unit = it.unit,
+                                unitSize = it.unitSize,
+                                weightQty = it.weightQty,
+                            )
                         },
                     ),
                 )

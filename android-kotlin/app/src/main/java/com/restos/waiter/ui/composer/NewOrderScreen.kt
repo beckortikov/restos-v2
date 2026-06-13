@@ -91,6 +91,16 @@ fun NewOrderScreen(
         )
     }
 
+    // Диалог ввода веса для весового блюда (граммы/кг).
+    state.weightItem?.let { wItem ->
+        WeightDialog(
+            item = wItem,
+            initialGrams = viewModel.currentWeight(wItem.id),
+            onDismiss = viewModel::dismissWeight,
+            onConfirm = viewModel::confirmWeight,
+        )
+    }
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -141,7 +151,7 @@ fun NewOrderScreen(
                 state = state,
                 onSearch = viewModel::setSearch,
                 onSelectCategory = viewModel::selectCategory,
-                onAdd = viewModel::addToCart,
+                onAdd = viewModel::pick,
                 onInc = viewModel::increment,
                 onDec = viewModel::decrement,
                 onRemove = viewModel::remove,
@@ -285,10 +295,10 @@ private fun MenuList(
         contentPadding = PaddingValues(bottom = 96.dp),
     ) {
         items(items, key = { it.id }) { item ->
-            val qty = cart.firstOrNull { it.menuItemId == item.id }?.qty ?: 0
+            val line = cart.firstOrNull { it.menuItemId == item.id }
             MenuListRow(
                 item = item,
-                qtyInCart = qty,
+                line = line,
                 onPick = { onPick(item) },
                 onInc = { onInc(item.id) },
                 onDec = { onDec(item.id) },
@@ -300,13 +310,15 @@ private fun MenuList(
 @Composable
 private fun MenuListRow(
     item: MenuItemDto,
-    qtyInCart: Int,
+    line: CartLine?,
     onPick: () -> Unit,
     onInc: () -> Unit,
     onDec: () -> Unit,
 ) {
     val disabled = !item.isAvailable
-    val inCart = qtyInCart > 0
+    val isWeight = item.isWeighed()
+    val qtyInCart = line?.qty ?: 0
+    val inCart = if (isWeight) line?.isWeight == true else qtyInCart > 0
     val bg = if (inCart) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f)
     else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
 
@@ -337,14 +349,15 @@ private fun MenuListRow(
                         .copy(alpha = if (disabled) 0.4f else 1f),
                 )
                 Text(
-                    text = formatCurrency(item.price.toBigDecimalSafe()),
+                    text = formatCurrency(item.price.toBigDecimalSafe()) +
+                        if (isWeight) " / ${weightUnitLabel(item)}" else "",
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium,
                     color = if (disabled) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
                     else MaterialTheme.colorScheme.primary,
                 )
             }
-            // Справа: либо [-] qty [+], либо только [+]
+            // Справа: стоп / весовая пилюля / [-] qty [+] / [+]
             if (disabled) {
                 Surface(
                     color = Color(0xFFFEE2E2),
@@ -356,6 +369,30 @@ private fun MenuListRow(
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            } else if (isWeight) {
+                // Весовое блюдо: тап по строке/пилюле → диалог ввода веса.
+                if (inCart && line?.weightQty != null) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        onClick = onPick,
+                    ) {
+                        Text(
+                            formatWeight(line.weightQty, item.unit),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        )
+                    }
+                } else {
+                    QtySquare(
+                        text = "+",
+                        bg = MaterialTheme.colorScheme.primary,
+                        fg = MaterialTheme.colorScheme.onPrimary,
+                        onClick = onPick,
                     )
                 }
             } else if (inCart) {
@@ -659,3 +696,17 @@ private fun CartBar(
 
 private fun String.toBigDecimalSafe(): BigDecimal =
     runCatching { BigDecimal(this) }.getOrDefault(BigDecimal.ZERO)
+
+/** Метка цены для весового блюда: «100г» / «кг». */
+private fun weightUnitLabel(item: MenuItemDto): String {
+    if (item.unit == "kg") return "кг"
+    val size = item.unitSize.toBigDecimalSafe()
+    val n = if (size > BigDecimal.ZERO) size.stripTrailingZeros().toPlainString() else "100"
+    return "${n}г"
+}
+
+/** Формат выбранного веса в строке корзины: «250 г» / «0.5 кг». */
+private fun formatWeight(weight: String, unit: String): String {
+    val v = weight.toBigDecimalSafe().stripTrailingZeros().toPlainString()
+    return if (unit == "kg") "$v кг" else "$v г"
+}

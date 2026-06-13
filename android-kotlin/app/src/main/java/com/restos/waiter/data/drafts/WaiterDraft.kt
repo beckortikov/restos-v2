@@ -24,4 +24,8 @@ data class DraftLine(
     val price: String,
     val qty: Int = 1,
     val note: String = "",
+    // Весовые блюда (unit != "piece"): вес как decimal-строка; для штучных — null.
+    val unit: String = "piece",
+    val unitSize: String = "1",
+    val weightQty: String? = null,
 )
