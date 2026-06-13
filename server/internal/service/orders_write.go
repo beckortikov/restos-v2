@@ -319,9 +319,16 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 			}
 			return err
 		}
-		if order.Status == nil || (*order.Status != "open" && *order.Status != "new") {
-			return apperrors.Wrap("CONFLICT", "order is not open", nil)
+		// Дозаказ запрещён только для закрытого/оплаченного заказа — как v1
+		// addItemsToOrder, который блокировал лишь status==='done'. Любой
+		// активный статус ОК; отменённый «оживляем», ready/served сбрасываем в
+		// cooking ниже (порт v1). Раньше тут было `!= open && != new` → официант
+		// не мог дозаказать в cancelled (после отмены всех позиций заказ авто-
+		// отменяется) / ready / served — отбивалось 409 «order is not open».
+		if order.Status != nil && *order.Status == "closed" {
+			return apperrors.Wrap("CONFLICT", "order is closed", nil)
 		}
+		wasCancelled := order.Status != nil && *order.Status == "cancelled"
 
 		// Загружаем меню/мод-ы аналогично Create.
 		menuIDs := make([]string, 0, len(in.Items))
@@ -422,8 +429,40 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		order.Total = decimal.Normalize(decimal.Add(order.Total, extra))
 		order.TotalWithService = order.Total
 		order.UpdatedAt = now
+		// Возврат заказа в работу при дозаказе (порт v1 addItemsToOrder):
+		//   cancelled      → снимаем отмену, заказ снова активен (open);
+		//   ready / served → возвращаем в cooking, т.к. новым позициям нужна кухня.
+		if order.Status != nil {
+			switch *order.Status {
+			case "cancelled":
+				openStatus := "open"
+				order.Status = &openStatus
+				order.CancelledAt = nil
+				order.CancelledBy = nil
+				order.CancelReason = nil
+				order.ReadyAt = nil
+			case "ready", "served":
+				cooking := "cooking"
+				order.Status = &cooking
+				order.ReadyAt = nil
+			}
+		}
 		if err := tx.Save(&order).Error; err != nil {
 			return err
+		}
+		// Авто-отмена освободила стол — при «оживлении» заказа занимаем обратно.
+		if wasCancelled && order.TableID != nil && *order.TableID != "" {
+			if err := tx.Model(&models.Table{}).
+				Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+				Updates(map[string]any{
+					"status":           "occupied",
+					"current_order_id": order.ID,
+					"opened_at":        now,
+					"updated_at":       now,
+				}).Error; err != nil {
+				return err
+			}
+			buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
 		}
 		// Runner-jobs: и свежесозданные, и merged-в-printed (с delta).
 		// enqueueRunners сам считает qty - qty_printed на каждой строке.
