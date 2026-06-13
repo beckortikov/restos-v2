@@ -75,6 +75,19 @@ func visibleSubtotal(items []vtItem, voids []vtVoid) decimal.Decimal {
 	return decimal.Normalize(sum)
 }
 
+// seedManager — пользователь с ролью manager (для approved_by в скидках ≥10%).
+func seedManager(t *testing.T, gdb *gorm.DB, rid string) string {
+	t.Helper()
+	id := uuid.NewString()
+	name, pin, role := "Manager", "9999", "manager"
+	if err := gdb.Create(&models.User{
+		ID: id, Name: &name, PIN: &pin, Role: &role, RestaurantID: &rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
 func vtCreateMenuItem(t *testing.T, gdb *gorm.DB, rid, name, price string) string {
 	t.Helper()
 	mi := &models.MenuItem{

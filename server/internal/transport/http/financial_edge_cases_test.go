@@ -47,10 +47,9 @@ func TestFinancialEdgeCases(t *testing.T) {
 		var ord models.Order
 		_ = json.Unmarshal(b, &ord)
 
-		// Close cash 100. service_percent=0 — тест проверяет refund «чистой»
-		// суммы; ресторан по умолчанию имеет 10% (см. setupE2E), задаём явно.
+		// Close cash 100 (ресторан в setupE2E без обслуживания → total чистый).
 		cr, cb := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", ord.ID), tok, uuid.NewString(),
-			map[string]any{"payment_method": "cash", "account_id": accID, "shift_id": sid, "service_percent": "0"})
+			map[string]any{"payment_method": "cash", "account_id": accID, "shift_id": sid})
 		if cr.StatusCode != 200 {
 			t.Fatalf("close %d: %s", cr.StatusCode, cb)
 		}
@@ -454,8 +453,7 @@ func TestFinancialEdgeCases(t *testing.T) {
 
 		cr, cb := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", ord.ID), tok, uuid.NewString(),
 			map[string]any{
-				"shift_id":        sid,
-				"service_percent": "0", // ресторан по умолчанию 10%; платежи 50+50=100 = total без сервиса
+				"shift_id": sid,
 				"payments": []map[string]any{
 					{"method": "cash", "amount": "50", "account_id": cashID},
 					{"method": "card", "amount": "50", "account_id": bankID},

@@ -138,14 +138,18 @@ func TestPhase5_SplitEqualRoundingFairness(t *testing.T) {
 func TestPhase5_SplitByItems(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
-	_, menuItemID, _, _ := seedForWrite(t, f)
+	gdb, menuItemID, _, _ := seedForWrite(t, f)
 
-	order, itemIDs := createTestOrder(t, f, tok, menuItemID, 3) // 3 × 25 = 75
+	// Split-by-items нужны ОТДЕЛЬНЫЕ строки — берём 3 разных блюда по 25
+	// (одинаковые схлопнулись бы в одну строку из-за iiko-merge).
+	mi2 := vtCreateMenuItem(t, gdb, f.rid, "Lagman", "25")
+	mi3 := vtCreateMenuItem(t, gdb, f.rid, "Tea", "25")
+	orderID, itemIDs := phase13_createOrderDistinctItems(t, f, tok, menuItemID, mi2, mi3) // 3 × 25 = 75
 	if len(itemIDs) != 3 {
 		t.Fatalf("want 3 items, got %d", len(itemIDs))
 	}
 
-	splitPath := fmt.Sprintf("/api/v1/orders/%s/split", order.ID)
+	splitPath := fmt.Sprintf("/api/v1/orders/%s/split", orderID)
 	resp, body := f.post(t, splitPath, tok, uuid.NewString(),
 		map[string]any{
 			"mode": "by_items",

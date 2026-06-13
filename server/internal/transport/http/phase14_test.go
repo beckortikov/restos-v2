@@ -76,10 +76,9 @@ func TestPhase14_ShiftZReport(t *testing.T) {
 	orderID, _ := phase13_createOrder(t, f, tok, menuItemID, 2) // total = 50
 	closePath := fmt.Sprintf("/api/v1/orders/%s/close", orderID)
 	r, b := f.post(t, closePath, tok, uuid.NewString(), map[string]any{
-		"payment_method":  "cash",
-		"account_id":      accountID,
-		"shift_id":        shiftID,
-		"service_percent": "0", // ресторан по умолчанию 10%; тест ждёт revenue=50 без сервиса
+		"payment_method": "cash",
+		"account_id":     accountID,
+		"shift_id":       shiftID,
 	})
 	if r.StatusCode != 200 {
 		t.Fatalf("close order: %d %s", r.StatusCode, b)

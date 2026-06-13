@@ -214,14 +214,18 @@ func TestWrite_CreateAddClose(t *testing.T) {
 	if err := gdb.Where("description = ?", "order:"+created.ID).Find(&movements).Error; err != nil {
 		t.Fatal(err)
 	}
-	// 3 порции × 1 tech_card_line = 3 движения, каждое 0.2 кг
-	if len(movements) != 3 {
-		t.Errorf("want 3 stock movements, got %d", len(movements))
+	// Все позиции — одно и то же блюдо, поэтому iiko-merge сливает их в одну
+	// строку: 2 порции при create + 1 при add. Stock-движения агрегируются по
+	// событию списания (а не по порции), но суммарно списывается 3 × 0.2 = 0.6 кг.
+	if len(movements) == 0 {
+		t.Errorf("want stock movements, got 0")
 	}
+	sumQty := decimal.Zero
 	for _, m := range movements {
-		if !m.Qty.Equal(decimal.MustFromString("-0.2")) {
-			t.Errorf("movement qty = %s, want -0.2", m.Qty.String())
-		}
+		sumQty = decimal.Add(sumQty, m.Qty)
+	}
+	if !sumQty.Equal(decimal.MustFromString("-0.6")) {
+		t.Errorf("total stock deducted = %s, want -0.6 (3 порции × 0.2)", sumQty.String())
 	}
 
 	// shift aggregates: 1 заказ, cash_revenue = 80, avg_check = 80.

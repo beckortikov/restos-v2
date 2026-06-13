@@ -89,7 +89,9 @@ func TestPhase19_CreateOrder_StockOK(t *testing.T) {
 	}
 }
 
-// TestPhase19_CreateOrder_StockShort — strict + недостаточно → 400.
+// TestPhase19_CreateOrder_StockShort — strict + недостаточно → 409
+// INSUFFICIENT_STOCK (доменный конфликт, требующий override/коррекции склада —
+// см. respond.go statusForCode, v2.0.90).
 func TestPhase19_CreateOrder_StockShort(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
@@ -100,8 +102,8 @@ func TestPhase19_CreateOrder_StockShort(t *testing.T) {
 	resp, body := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
 		"items": []map[string]any{{"menu_item_id": menuItemID, "qty": "100"}},
 	})
-	if resp.StatusCode != 400 {
-		t.Fatalf("want 400 VALIDATION, got %d: %s", resp.StatusCode, body)
+	if resp.StatusCode != 409 {
+		t.Fatalf("want 409 INSUFFICIENT_STOCK, got %d: %s", resp.StatusCode, body)
 	}
 }
 
@@ -144,12 +146,12 @@ func TestPhase19_CreateOrder_RaceReservation(t *testing.T) {
 		t.Fatalf("first order: want 201, got %d: %s", resp1.StatusCode, body1)
 	}
 
-	// 2й заказ: 2 порции × 0.2 = 0.4 кг → но осталось только 0.2 кг → 400.
+	// 2й заказ: 2 порции × 0.2 = 0.4 кг → но осталось только 0.2 кг → 409 INSUFFICIENT_STOCK.
 	resp2, body2 := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
 		"items": []map[string]any{{"menu_item_id": menuItemID, "qty": "2"}},
 	})
-	if resp2.StatusCode != 400 {
-		t.Fatalf("second order: want 400 due to reservation, got %d: %s", resp2.StatusCode, body2)
+	if resp2.StatusCode != 409 {
+		t.Fatalf("second order: want 409 due to reservation, got %d: %s", resp2.StatusCode, body2)
 	}
 }
 

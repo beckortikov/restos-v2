@@ -118,6 +118,9 @@ func TestPhase20_CloseOrder_WithDiscount_Fixed(t *testing.T) {
 	tok := f.login(t)
 	gdb, menuItemID, shiftID, accountID := seedForWrite(t, f)
 
+	// Скидка 7 на 50 = 14% ≥10% → требуется approved_by (manager/owner), см.
+	// orders_close.go DISCOUNT_REQUIRES_APPROVAL (v2.0.90).
+	mgr := seedManager(t, gdb, f.rid)
 	oid, _ := createOpenOrder(t, f, tok, menuItemID, "2")
 	resp, body := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", oid), tok, uuid.NewString(), map[string]any{
 		"payment_method": "card",
@@ -125,6 +128,7 @@ func TestPhase20_CloseOrder_WithDiscount_Fixed(t *testing.T) {
 		"shift_id":       shiftID,
 		"discount_type":  "fixed",
 		"discount_value": "7",
+		"approved_by":    mgr,
 	})
 	if resp.StatusCode != 200 {
 		t.Fatalf("close %d: %s", resp.StatusCode, body)
@@ -197,11 +201,14 @@ func TestPhase20_CloseOrder_DiscountPlusMultiPayment(t *testing.T) {
 	tok := f.login(t)
 	gdb, menuItemID, shiftID, accountID := seedForWrite(t, f)
 
+	// Скидка 10 на 50 = 20% ≥10% → требуется approved_by (manager/owner).
+	mgr := seedManager(t, gdb, f.rid)
 	oid, _ := createOpenOrder(t, f, tok, menuItemID, "2") // 50
 	resp, body := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", oid), tok, uuid.NewString(), map[string]any{
 		"shift_id":       shiftID,
 		"discount_type":  "fixed",
 		"discount_value": "10",
+		"approved_by":    mgr,
 		"payments": []map[string]any{
 			{"method": "cash", "amount": "20", "account_id": accountID},
 			{"method": "card", "amount": "20", "account_id": accountID},

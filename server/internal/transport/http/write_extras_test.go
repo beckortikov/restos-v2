@@ -77,13 +77,16 @@ func TestWrite_ShiftsOpenCloseOperations(t *testing.T) {
 func TestWrite_CancelOrderAndVoidItem(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
-	_, menuItemID, _, _ := seedForWrite(t, f)
+	gdb, menuItemID, _, _ := seedForWrite(t, f)
+	// Два РАЗНЫХ блюда — одинаковые слились бы в одну строку (iiko-merge), и
+	// отмена «одной позиции» обнулила бы заказ вместо остатка 25.
+	menuItemID2 := vtCreateMenuItem(t, gdb, f.rid, "Lagman", "25")
 
 	// Create order with 2 items.
 	resp, body := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
 		"items": []map[string]any{
 			{"menu_item_id": menuItemID, "qty": "1"},
-			{"menu_item_id": menuItemID, "qty": "1"},
+			{"menu_item_id": menuItemID2, "qty": "1"},
 		},
 	})
 	if resp.StatusCode != 201 {

@@ -50,6 +50,25 @@ func phase13_createOrderDistinct(t *testing.T, f *e2eFixture, tok string, menuIt
 	return o.ID
 }
 
+// phase13_createOrderDistinctItems — как выше, но возвращает ещё и ID позиций
+// (через GET деталь). Нужен split-тестам, которым важны отдельные item_id.
+func phase13_createOrderDistinctItems(t *testing.T, f *e2eFixture, tok string, menuItemIDs ...string) (string, []string) {
+	t.Helper()
+	orderID := phase13_createOrderDistinct(t, f, tok, menuItemIDs...)
+	_, gb := f.get(t, "/api/v1/orders/"+orderID, tok)
+	var d struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal(gb, &d)
+	ids := make([]string, len(d.Items))
+	for i, it := range d.Items {
+		ids[i] = it.ID
+	}
+	return orderID, ids
+}
+
 // ─── Splits lifecycle: equal → pay each → auto-close ──────────────────────
 
 func TestPhase13_SplitsLifecycle(t *testing.T) {
