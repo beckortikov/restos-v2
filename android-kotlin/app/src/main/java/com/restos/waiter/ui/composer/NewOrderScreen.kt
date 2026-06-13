@@ -168,7 +168,7 @@ private fun ComposerBody(
     onAdd: (MenuItemDto) -> Unit,
     onInc: (String) -> Unit,
     onDec: (String) -> Unit,
-    @Suppress("UNUSED_PARAMETER") onRemove: (String) -> Unit,
+    onRemove: (String) -> Unit,
 ) {
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         SearchField(state.search, onSearch)
@@ -184,6 +184,7 @@ private fun ComposerBody(
             onPick = onAdd,
             onInc = onInc,
             onDec = onDec,
+            onRemove = onRemove,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -278,6 +279,7 @@ private fun MenuList(
     onPick: (MenuItemDto) -> Unit,
     onInc: (String) -> Unit,
     onDec: (String) -> Unit,
+    onRemove: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (items.isEmpty()) {
@@ -302,6 +304,7 @@ private fun MenuList(
                 onPick = { onPick(item) },
                 onInc = { onInc(item.id) },
                 onDec = { onDec(item.id) },
+                onRemove = { onRemove(item.id) },
             )
         }
     }
@@ -314,6 +317,7 @@ private fun MenuListRow(
     onPick: () -> Unit,
     onInc: () -> Unit,
     onDec: () -> Unit,
+    onRemove: () -> Unit,
 ) {
     val disabled = !item.isAvailable
     val isWeight = item.isWeighed()
@@ -372,20 +376,29 @@ private fun MenuListRow(
                     )
                 }
             } else if (isWeight) {
-                // Весовое блюдо: тап по строке/пилюле → диалог ввода веса.
+                // Весовое блюдо: [−] убирает из выбора, пилюля → диалог веса.
                 if (inCart && line?.weightQty != null) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        onClick = onPick,
-                    ) {
-                        Text(
-                            formatWeight(line.weightQty, item.unit),
-                            color = MaterialTheme.colorScheme.onPrimary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        QtySquare(
+                            text = "−",
+                            bg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                            fg = MaterialTheme.colorScheme.onSurface,
+                            onClick = onRemove,
                         )
+                        Spacer(Modifier.width(8.dp))
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            onClick = onPick,
+                        ) {
+                            Text(
+                                formatWeight(line.weightQty, item.unit),
+                                color = MaterialTheme.colorScheme.onPrimary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
+                        }
                     }
                 } else {
                     QtySquare(
