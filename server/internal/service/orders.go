@@ -71,6 +71,10 @@ type OrderSlim struct {
 	TotalWithSvc decimal.Decimal `json:"total_with_service"`
 	// Money breakdown — нужны waiter-dashboard'у для суммирования сегодняшних
 	// service/tip/discount без второго запроса детальки.
+	// ServicePercent — чтобы карта/официант (calcOrderDisplayTotal) считали
+	// обслуживание по проценту, зафиксированному на заказе, а не по дефолту
+	// ресторана. Без него незакрытые заказы показывали неверный итог.
+	ServicePercent decimal.Decimal `json:"service_percent"`
 	ServiceAmount  decimal.Decimal `json:"service_amount"`
 	DiscountAmount decimal.Decimal `json:"discount_amount"`
 	TipAmount      decimal.Decimal `json:"tip_amount"`
@@ -101,6 +105,7 @@ type orderSlimRow struct {
 	GuestsCount      *int            `gorm:"column:guests_count"`
 	Total            decimal.Decimal `gorm:"column:total"`
 	TotalWithService decimal.Decimal `gorm:"column:total_with_service"`
+	ServicePercent   decimal.Decimal `gorm:"column:service_percent"`
 	ServiceAmount    decimal.Decimal `gorm:"column:service_amount"`
 	DiscountAmount   decimal.Decimal `gorm:"column:discount_amount"`
 	TipAmount        decimal.Decimal `gorm:"column:tip_amount"`
@@ -110,7 +115,7 @@ type orderSlimRow struct {
 }
 
 const slimSelect = `id, order_number, status, "type", table_id, waiter_id, guests_count,
-total, total_with_service, service_amount, discount_amount, tip_amount,
+total, total_with_service, service_percent, service_amount, discount_amount, tip_amount,
 shift_id, created_at, closed_at`
 
 // List — постраничный slim-список. Использует индекс
@@ -170,6 +175,7 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 			GuestsCount:    r.GuestsCount,
 			Total:          r.Total,
 			TotalWithSvc:   r.TotalWithService,
+			ServicePercent: r.ServicePercent,
 			ServiceAmount:  r.ServiceAmount,
 			DiscountAmount: r.DiscountAmount,
 			TipAmount:      r.TipAmount,

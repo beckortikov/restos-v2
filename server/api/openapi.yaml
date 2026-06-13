@@ -3018,6 +3018,8 @@ components:
         status: { type: string }
         total: { $ref: "#/components/schemas/Decimal" }
         total_with_service: { $ref: "#/components/schemas/Decimal" }
+        service_percent: { $ref: "#/components/schemas/Decimal" }
+        service_amount: { $ref: "#/components/schemas/Decimal" }
         created_at: { type: string, format: date-time }
         items:
           description: Заполняется только при ?include=items. Иначе отсутствует.

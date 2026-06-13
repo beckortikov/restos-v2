@@ -9,8 +9,8 @@ import {
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useAuth } from '@/lib/auth-store'
-import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, calcLineCogs, calcLineTotal, voidedItemFlags, startOfToday, getTimeSince } from '@/lib/helpers'
-import { dMul, dDiv, dSum } from '@/lib/decimal'
+import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, calcLineCogs, calcLineTotal, voidedItemFlags, startOfToday, getTimeSince, calcOrderDisplayTotal } from '@/lib/helpers'
+import { dMul, dDiv, dSum, dRound, dAdd } from '@/lib/decimal'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { WeightInputSheet } from '@/components/dialogs/weight-input-sheet'
 import {
@@ -575,6 +575,17 @@ export function OrderComposer(props: OrderComposerProps) {
 
   const total = dSum(cart.map(lineTotal))
   const totalItems = cart.length
+  // Итог с обслуживанием — единый с картой столов (calcOrderDisplayTotal) и
+  // чеком. Обслуживание начисляется только на зал; takeaway/delivery — 0
+  // (см. handleSubmit). Процент берём из настроек ресторана: бэк фиксирует
+  // ровно его на order.service_percent при создании (orders_write.go), поэтому
+  // композер и карта сходятся в копейку. В режиме дозаказа (isAddMode) cart —
+  // это дельта позиций, а не весь заказ, поэтому обслуживание на неё не
+  // навешиваем (итог всего заказа с обслуживанием показывает панель оплаты).
+  const isDozakaz = isAddMode || !!existingOrderId
+  const servicePercent = (!isDozakaz && orderType === 'hall') ? (restaurant?.servicePercent ?? 0) : 0
+  const serviceAmount = servicePercent > 0 ? dRound(dDiv(dMul(total, servicePercent), 100)) : 0
+  const totalWithService = dAdd(total, serviceAmount)
   // Индекс корзины по menuItemId — для O(1) lookup в .map() рендера плиток
   // (раньше cart.find() на каждой плитке давало O(N×M), заметный лаг при
   // большой корзине + большом меню).
@@ -821,7 +832,7 @@ export function OrderComposer(props: OrderComposerProps) {
           toast.error(`Заказ создан, но оплата не прошла: ${humanizeError(e)}`)
         }
       } else {
-        toast.success(`Заказ создан: ${formatCurrency(total)}`)
+        toast.success(`Заказ создан: ${formatCurrency(totalWithService)}`)
       }
       setCart([])
       setSelectedTableId('')
@@ -943,7 +954,7 @@ export function OrderComposer(props: OrderComposerProps) {
   // Submit button label
   const submitLabel = isAddMode || existingOrderId
     ? `Дозаказ · ${formatCurrency(total)}`
-    : `Создать заказ · ${formatCurrency(total)}`
+    : `Создать заказ · ${formatCurrency(totalWithService)}`
   const submitDisabled = cart.length === 0 || submitting
     || (!isAddMode && orderType === 'hall' && !selectedTableId)
 
@@ -1283,7 +1294,7 @@ export function OrderComposer(props: OrderComposerProps) {
                   {num}
                 </span>
                 <span className="text-[11px] text-muted-foreground tabular-nums leading-snug">
-                  {itemsCount} поз · {formatCurrency(t.total)}{since ? ` · ${since}` : ''}
+                  {itemsCount} поз · {formatCurrency(t.order ? calcOrderDisplayTotal(t.order, restaurant?.servicePercent) : t.total)}{since ? ` · ${since}` : ''}
                 </span>
               </button>
             )
@@ -1985,7 +1996,12 @@ export function OrderComposer(props: OrderComposerProps) {
           <div className="flex items-end justify-between gap-2">
             <div className="min-w-0">
               <p className="text-xs text-muted-foreground">{totalItems} позиц{totalItems === 1 ? 'ия' : totalItems < 5 ? 'ии' : 'ий'}</p>
-              <p className="text-2xl font-bold text-foreground tabular-nums leading-tight">{formatCurrency(total)}</p>
+              {serviceAmount > 0 && (
+                <p className="text-xs text-muted-foreground tabular-nums leading-tight">
+                  {formatCurrency(total)} + обслуж. {servicePercent}% · {formatCurrency(serviceAmount)}
+                </p>
+              )}
+              <p className="text-2xl font-bold text-foreground tabular-nums leading-tight">{formatCurrency(totalWithService)}</p>
             </div>
             {cart.length > 0 && (
               <button
@@ -2023,14 +2039,14 @@ export function OrderComposer(props: OrderComposerProps) {
                   disabled={submitDisabled}
                   className="py-4 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {submitting ? '...' : `Нал · ${formatCurrency(total)}`}
+                  {submitting ? '...' : `Нал · ${formatCurrency(totalWithService)}`}
                 </button>
                 <button
                   onClick={() => handleSubmit('card')}
                   disabled={submitDisabled}
                   className="py-4 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {submitting ? '...' : `Карта · ${formatCurrency(total)}`}
+                  {submitting ? '...' : `Карта · ${formatCurrency(totalWithService)}`}
                 </button>
               </div>
             </div>
@@ -2187,7 +2203,7 @@ export function OrderComposer(props: OrderComposerProps) {
                               : sinceOpen ? ` · ${sinceOpen}` : ''}
                           </span>
                           <span className="font-semibold tabular-nums whitespace-nowrap">
-                            {formatCurrency(o.totalWithService ?? o.total)}
+                            {formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}
                           </span>
                         </div>
                       </button>
