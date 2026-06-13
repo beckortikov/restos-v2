@@ -426,6 +426,12 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	return b.Bytes()
 }
 
+// ReportExpenseLine — строка расхода по категории для X/Z-отчёта.
+type ReportExpenseLine struct {
+	Category string
+	Amount   decimal.Decimal
+}
+
 // ReportInput — общие поля для X/Z-отчёта.
 type ReportInput struct {
 	RestaurantName string
@@ -440,7 +446,11 @@ type ReportInput struct {
 	ExpectedCash   decimal.Decimal
 	ClosingBalance decimal.Decimal
 	CashierName    string
-	Cols           int
+	// Движение денег по кассе (HoReCa-стандарт). Внесения/изъятия/расходы.
+	CashIn      decimal.Decimal
+	Withdrawals decimal.Decimal
+	Expenses    []ReportExpenseLine
+	Cols        int
 }
 
 // XReportLayout — промежуточный отчёт.
@@ -481,6 +491,30 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	total := decimal.Add(in.CashRevenue, in.CardRevenue)
 	b.TextLn(PadRow("Выручка ИТОГО:", decToShort(total), cols))
 	b.LF()
+
+	// ── Движение денег по кассе (HoReCa) ──────────────────────────────────
+	// Остаток + нал.выручка + внесения − изъятия − расходы = ожидается касса.
+	expensesTotal := decimal.Zero
+	for _, e := range in.Expenses {
+		expensesTotal = decimal.Add(expensesTotal, e.Amount)
+	}
+	hasMovement := !in.CashIn.IsZero() || !in.Withdrawals.IsZero() || !expensesTotal.IsZero()
+	if hasMovement {
+		b.TextLn("ДВИЖЕНИЕ ПО КАССЕ")
+		if !in.CashIn.IsZero() {
+			b.TextLn(PadRow("Внесения:", "+"+decToShort(in.CashIn), cols))
+		}
+		if !in.Withdrawals.IsZero() {
+			b.TextLn(PadRow("Изъятия:", "-"+decToShort(in.Withdrawals), cols))
+		}
+		if !expensesTotal.IsZero() {
+			b.TextLn(PadRow("Расходы:", "-"+decToShort(expensesTotal), cols))
+			for _, e := range in.Expenses {
+				b.TextLn(PadRow("  "+stripEmoji(e.Category), decToShort(e.Amount), cols))
+			}
+		}
+		b.LF()
+	}
 
 	if withClosing {
 		b.TextLn(PadRow("Ожидается касса:", decToShort(in.ExpectedCash), cols))

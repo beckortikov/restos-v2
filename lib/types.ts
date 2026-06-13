@@ -615,6 +615,9 @@ export interface CashShiftOperation {
   type: CashShiftOpType
   amount: number
   description?: string
+  /** Категория расхода. Заполнена только для расходов (cash_out с категорией);
+   *  для внесения/изъятия пустая. См. cash_shift_operations.category. */
+  category?: string
   createdBy?: string
   createdByName?: string
   createdAt: string

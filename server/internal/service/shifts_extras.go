@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -101,6 +102,9 @@ type ShiftExpenseInput struct {
 	Type        string  `json:"type"`
 	Amount      string  `json:"amount"`
 	Description *string `json:"description,omitempty"`
+	// Category — категория расхода. Для type=expense/cash_out сохраняется в
+	// cash_shift_operations.category (структурно, не в тексте описания).
+	Category *string `json:"category,omitempty"`
 }
 
 // AddExpense — POST /api/v1/shifts/{id}/expenses.
@@ -117,10 +121,15 @@ func (s *ShiftsService) AddExpense(ctx context.Context, shiftID string, in Shift
 	if in.Description != nil {
 		desc = *in.Description
 	}
+	category := ""
+	if in.Category != nil {
+		category = *in.Category
+	}
 	return s.AddOperation(ctx, shiftID, ShiftOperationInput{
 		Type:        typ,
 		Amount:      in.Amount,
 		Description: desc,
+		Category:    category,
 	})
 }
 
@@ -245,6 +254,13 @@ type ZReportSalesByOrderType struct {
 	Total       decimal.Decimal `json:"total"`
 }
 
+// ZReportExpenseByCategory — расход в разрезе категории (для свода/X-Z).
+type ZReportExpenseByCategory struct {
+	Category string          `json:"category"`
+	Count    int             `json:"count"`
+	Amount   decimal.Decimal `json:"amount"`
+}
+
 // ZReport — body GET /api/v1/shifts/{id}/zreport.
 type ZReport struct {
 	Shift            ZReportShift                `json:"shift"`
@@ -255,6 +271,14 @@ type ZReport struct {
 	GuestsCount      int                         `json:"guests_count"`
 	Operations       []models.CashShiftOperation `json:"operations"`
 	Discrepancy      decimal.Decimal             `json:"discrepancy"`
+	// Движение денег по кассе (HoReCa-стандарт для X/Z и свода):
+	//   CashIn       — внесения (cash_in)
+	//   Withdrawals  — изъятия/инкассация (cash_out БЕЗ категории)
+	//   ExpensesTotal/ExpensesByCategory — расходы (cash_out С категорией)
+	CashIn             decimal.Decimal            `json:"cash_in"`
+	Withdrawals        decimal.Decimal            `json:"withdrawals"`
+	ExpensesTotal      decimal.Decimal            `json:"expenses_total"`
+	ExpensesByCategory []ZReportExpenseByCategory `json:"expenses_by_category"`
 	// Previous — выжимка предыдущей закрытой смены (для delta-chip на UI).
 	// nil, если это первая смена ресторана.
 	Previous *PreviousSummary `json:"previous,omitempty"`
@@ -307,6 +331,52 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		return nil, err
 	}
 	out.Operations = ops
+
+	// Движение денег по кассе из операций смены:
+	//   cash_in              → внесения
+	//   cash_out + category   → расход (агрегируем по категории)
+	//   cash_out без категории → изъятие (инкассация)
+	out.CashIn = decimal.Zero
+	out.Withdrawals = decimal.Zero
+	out.ExpensesTotal = decimal.Zero
+	expByCat := map[string]*ZReportExpenseByCategory{}
+	catOrder := []string{}
+	for _, op := range ops {
+		t := ""
+		if op.Type != nil {
+			t = *op.Type
+		}
+		switch t {
+		case "cash_in":
+			out.CashIn = decimal.Add(out.CashIn, op.Amount)
+		case "cash_out":
+			cat := ""
+			if op.Category != nil {
+				cat = strings.TrimSpace(*op.Category)
+			}
+			if cat == "" {
+				out.Withdrawals = decimal.Add(out.Withdrawals, op.Amount)
+				continue
+			}
+			out.ExpensesTotal = decimal.Add(out.ExpensesTotal, op.Amount)
+			row, ok := expByCat[cat]
+			if !ok {
+				row = &ZReportExpenseByCategory{Category: cat}
+				expByCat[cat] = row
+				catOrder = append(catOrder, cat)
+			}
+			row.Count++
+			row.Amount = decimal.Add(row.Amount, op.Amount)
+		}
+	}
+	out.CashIn = decimal.Normalize(out.CashIn)
+	out.Withdrawals = decimal.Normalize(out.Withdrawals)
+	out.ExpensesTotal = decimal.Normalize(out.ExpensesTotal)
+	for _, cat := range catOrder {
+		row := expByCat[cat]
+		row.Amount = decimal.Normalize(row.Amount)
+		out.ExpensesByCategory = append(out.ExpensesByCategory, *row)
+	}
 
 	// Revenue по способу оплаты — из orders (закрытых) в этой смене.
 	type aggRow struct {

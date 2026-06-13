@@ -2183,6 +2183,17 @@ paths:
                   guests_count: { type: integer }
                   operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
                   discrepancy: { type: string }
+                  cash_in: { type: string, description: "Внесения за смену" }
+                  withdrawals: { type: string, description: "Изъятия (cash_out без категории)" }
+                  expenses_total: { type: string, description: "Сумма расходов (cash_out с категорией)" }
+                  expenses_by_category:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        category: { type: string }
+                        count: { type: integer }
+                        amount: { type: string }
                   previous:
                     type: object
                     nullable: true
@@ -2269,6 +2280,7 @@ paths:
                 type: { type: string, enum: [cash_in, cash_out, expense] }
                 amount: { type: string }
                 description: { type: string }
+                category: { type: string, description: "Категория расхода (только для expense/cash_out). Структурное поле для свода/экспорта/X-Z." }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
 
   /api/v1/shifts/{id}/expenses/{op_id}:
@@ -2911,6 +2923,7 @@ components:
         type: { type: string, enum: [cash_in, cash_out] }
         amount: { $ref: "#/components/schemas/Decimal" }
         description: { type: string }
+        category: { type: string, nullable: true, description: "Категория расхода; NULL для внесения/изъятия" }
     ShiftsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/CashShift" } }, next_cursor: { type: string } } }
 
     # ─── Orders ──

@@ -184,6 +184,28 @@ export default function ShiftsPage() {
     return dSub(dAdd(dAdd(activeShift.openingBalance, liveRevenue.cashRevenue), cashIn), cashOut)
   }, [activeShift, shiftOps, liveRevenue.cashRevenue])
 
+  // Движение денег по кассе: внесения / изъятия (cash_out без категории) /
+  // расходы (cash_out С категорией, агрегируем по категории).
+  const cashMovement = useMemo(() => {
+    const cashIn = dSum(shiftOps.filter(o => o.type === 'cash_in').map(o => o.amount))
+    const withdrawalOps = shiftOps.filter(o => o.type === 'cash_out' && !o.category)
+    const expenseOps = shiftOps.filter(o => o.type === 'cash_out' && !!o.category)
+    const withdrawals = dSum(withdrawalOps.map(o => o.amount))
+    const expensesTotal = dSum(expenseOps.map(o => o.amount))
+    const byCat = new Map<string, { amount: number; count: number }>()
+    for (const o of expenseOps) {
+      const c = o.category || 'Прочее'
+      const cur = byCat.get(c) ?? { amount: 0, count: 0 }
+      cur.amount += o.amount
+      cur.count++
+      byCat.set(c, cur)
+    }
+    const byCategory = Array.from(byCat.entries())
+      .map(([category, v]) => ({ category, amount: v.amount, count: v.count }))
+      .sort((a, b) => b.amount - a.amount)
+    return { cashIn, withdrawals, expensesTotal, expenseOps, byCategory }
+  }, [shiftOps])
+
   // SSE-driven auto-refresh — заменяет polling каждые 2с активной смены.
   // Live revenue зависит от заказов (closeOrder) и операций смены.
   const liveRefresh = useCallback(() => {
@@ -593,6 +615,28 @@ export default function ShiftsPage() {
                   </div>
                 )}
               </div>
+
+              {/* Расходы — раньше в своде их не было вовсе (#3). Итог + разбор
+                  по категориям из движения по кассе. */}
+              <div className="bg-muted/40 rounded-xl p-4 border border-border">
+                <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5"><Banknote className="size-3.5 text-muted-foreground" />Расходы</h3>
+                {cashMovement.expenseOps.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Расходов за смену нет</p>
+                ) : (
+                  <div className="space-y-1.5 text-sm">
+                    {cashMovement.byCategory.map(c => (
+                      <div key={c.category} className="flex items-center justify-between">
+                        <span className="text-muted-foreground truncate pr-2">{c.category} <span className="text-[11px]">({c.count})</span></span>
+                        <span className="font-medium text-destructive tabular-nums">{formatCurrency(c.amount)}</span>
+                      </div>
+                    ))}
+                    <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
+                      <span>Итого расходов</span>
+                      <span className="tabular-nums text-destructive">{formatCurrency(cashMovement.expensesTotal)}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           ) : (
             /* Tab «Официанты» — per-waiter breakdown по frame «16. Официанты» */
@@ -636,18 +680,59 @@ export default function ShiftsPage() {
 
           {/* Cash operations summary */}
           {shiftOps.length > 0 && (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <div className="bg-muted/50 rounded-lg p-3">
                 <p className="text-xs text-muted-foreground">Нач. остаток</p>
                 <p className="text-sm font-bold text-foreground">{formatCurrency(activeShift.openingBalance)}</p>
               </div>
               <div className="bg-muted/50 rounded-lg p-3">
                 <p className="text-xs text-muted-foreground">Внесения</p>
-                <p className="text-sm font-bold text-emerald-600">{formatCurrency(shiftOps.filter(o => o.type === 'cash_in').reduce((s, o) => s + o.amount, 0))}</p>
+                <p className="text-sm font-bold text-emerald-600">{formatCurrency(cashMovement.cashIn)}</p>
               </div>
               <div className="bg-muted/50 rounded-lg p-3">
                 <p className="text-xs text-muted-foreground">Изъятия</p>
-                <p className="text-sm font-bold text-destructive">{formatCurrency(shiftOps.filter(o => o.type === 'cash_out').reduce((s, o) => s + o.amount, 0))}</p>
+                <p className="text-sm font-bold text-destructive">{formatCurrency(cashMovement.withdrawals)}</p>
+              </div>
+              <div className="bg-muted/50 rounded-lg p-3">
+                <p className="text-xs text-muted-foreground">Расходы</p>
+                <p className="text-sm font-bold text-destructive">{formatCurrency(cashMovement.expensesTotal)}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Расходы по категориям — структурный разбор (раньше расходы были
+              «спрятаны» в Изъятиях). Каждая строка кликабельна на удаление. */}
+          {cashMovement.expenseOps.length > 0 && (
+            <div className="bg-rose-50/50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-900 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-rose-900 dark:text-rose-200 flex items-center gap-1.5">
+                  <Banknote className="size-4" />Расходы из смены
+                </h3>
+                <p className="text-xs text-rose-700 dark:text-rose-300">
+                  Итого: <span className="font-bold">{formatCurrency(cashMovement.expensesTotal)}</span>
+                </p>
+              </div>
+              <div className="space-y-1.5">
+                {cashMovement.expenseOps.map(op => (
+                  <div key={op.id} className="flex items-center justify-between gap-2 text-sm bg-white/60 dark:bg-black/20 rounded-lg px-3 py-2">
+                    <div className="min-w-0">
+                      <span className="font-medium text-foreground">{op.category}</span>
+                      {op.description && <span className="text-muted-foreground"> · {op.description}</span>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="font-semibold tabular-nums text-destructive">−{formatCurrency(op.amount)}</span>
+                      {activeShift.status === 'open' && (
+                        <button
+                          onClick={() => handleDeleteExpense(op.id, op.amount, op.category)}
+                          className="text-muted-foreground hover:text-destructive transition-colors"
+                          title="Удалить расход"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           )}

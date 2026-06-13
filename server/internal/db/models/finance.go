@@ -71,9 +71,12 @@ type CashShiftOperation struct {
 	Type        *string         `json:"type"`
 	Amount      decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"amount"`
 	Description *string         `json:"description"`
-	CreatedBy   *string         `gorm:"column:created_by" json:"created_by"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
+	// Category — категория расхода (Закупка/Зарплата/Хозтовары…). Заполнена
+	// только для расходов (cash_out с категорией). NULL → изъятие/внесение.
+	Category  *string   `json:"category"`
+	CreatedBy *string   `gorm:"column:created_by" json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (CashShiftOperation) TableName() string { return "cash_shift_operations" }

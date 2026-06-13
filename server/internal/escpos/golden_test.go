@@ -118,6 +118,33 @@ func TestGolden_ZReport(t *testing.T) {
 	})
 }
 
+// Z-отчёт с блоком «Движение по кассе»: внесения, изъятия, расходы по категориям.
+func TestGolden_ZReportWithMovement(t *testing.T) {
+	in := ReportInput{
+		RestaurantName: "Ресторан Старая Душанбе",
+		ShiftNumber:    "2026-05-25 / shift-1",
+		OpenedAt:       fixedTime,
+		ClosedAt:       fixedTime.Add(8 * time.Hour),
+		OpeningBalance: decimal.MustFromString("1000"),
+		CashRevenue:    decimal.MustFromString("5400"),
+		CardRevenue:    decimal.MustFromString("3200"),
+		OrdersCount:    18,
+		AvgCheck:       decimal.MustFromString("477.78"),
+		ExpectedCash:   decimal.MustFromString("5980"),
+		ClosingBalance: decimal.MustFromString("5980"),
+		CashierName:    "Анна",
+		CashIn:         decimal.MustFromString("500"),
+		Withdrawals:    decimal.MustFromString("300"),
+		Expenses: []ReportExpenseLine{
+			{Category: "Закупка продуктов", Amount: decimal.MustFromString("450")},
+			{Category: "Хозтовары", Amount: decimal.MustFromString("170")},
+		},
+	}
+	withFixedNow(t, fixedTime.Add(8*time.Hour), func() {
+		assertGolden(t, "zreport_movement.hex", ZReportLayout(in))
+	})
+}
+
 // ─── helpers ──────────────────────────────────────────────────────────────
 
 // assertGolden сравнивает actual с testdata/<name>. Hex-эталон удобен для

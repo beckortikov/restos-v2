@@ -92,9 +92,12 @@ export async function exportShiftToXlsx(shift: CashShift): Promise<void> {
   // воиднутые блюда (иначе расходится с чеком/выручкой смены).
   const voidsByOrderId = await fetchVoidsForOrders(orders.map(o => o.id)).catch(() => new Map())
 
-  // Расходы за смену = financial_operations с этим shiftId и type=out (исключаем
-  // системные operations, тут категория не «Выплата обслуживания»).
-  const expenses = allOps.filter(o => o.shiftId === shift.id && o.type === 'out' && o.category !== 'Выплата обслуживания')
+  // Расходы за смену = операции кассы cash_out С категорией (расход), а НЕ
+  // financial_operations (раньше лист «Расходы» был пуст — расходы живут в
+  // cash_shift_operations.category, не в financial_operations). Изъятия —
+  // cash_out БЕЗ категории.
+  const expenseOps = ops.filter(o => o.type === 'cash_out' && !!o.category)
+  const withdrawalOps = ops.filter(o => o.type === 'cash_out' && !o.category)
 
   const userById = new Map(users.map(u => [u.id, u]))
   const tableById = new Map(tables.map(t => [t.id, t]))
@@ -122,8 +125,8 @@ export async function exportShiftToXlsx(shift: CashShift): Promise<void> {
   }
 
   const cashIn = num(ops.filter(o => o.type === 'cash_in').reduce((s, o) => s + o.amount, 0))
-  const cashOut = num(ops.filter(o => o.type === 'cash_out').reduce((s, o) => s + o.amount, 0))
-  const expensesTotal = num(expenses.reduce((s, o) => s + o.amount, 0))
+  const cashOut = num(withdrawalOps.reduce((s, o) => s + o.amount, 0))
+  const expensesTotal = num(expenseOps.reduce((s, o) => s + o.amount, 0))
   const totalRevenue = num(shift.cashRevenue + shift.cardRevenue)
   const diff = shift.closingBalance != null && shift.expectedCash != null
     ? num(shift.closingBalance - shift.expectedCash)
@@ -159,8 +162,8 @@ export async function exportShiftToXlsx(shift: CashShift): Promise<void> {
   const summary = summaryPairs.map(([k, v]) => ({ Параметр: k, Значение: v }))
   appendSheet(wb, 'Сводка', summary, ['Параметр', 'Значение'])
 
-  // Лист 2: Операции (внесения/изъятия)
-  const opsRows = ops.map(o => ({
+  // Лист 2: Операции (внесения/изъятия) — расходы исключены, у них свой лист.
+  const opsRows = ops.filter(o => o.type === 'cash_in' || (o.type === 'cash_out' && !o.category)).map(o => ({
     'Время': fmtDate(o.createdAt),
     'Тип': o.type === 'cash_in' ? 'Внесение' : 'Изъятие',
     'Сумма': num(o.amount),
@@ -169,16 +172,15 @@ export async function exportShiftToXlsx(shift: CashShift): Promise<void> {
   }))
   appendSheet(wb, 'Операции', opsRows, ['Время', 'Тип', 'Сумма', 'Описание', 'Кто'])
 
-  // Лист 3: Расходы
-  const expRows = expenses.map(e => ({
-    'Дата': fmtDate(e.date),
-    'Категория': e.category,
+  // Лист 3: Расходы (cash_out с категорией).
+  const expRows = expenseOps.map(e => ({
+    'Время': fmtDate(e.createdAt),
+    'Категория': e.category ?? '',
     'Сумма': num(e.amount),
-    'Счёт': e.accountName ?? '',
     'Описание': e.description ?? '',
-    'Контрагент': e.counterparty ?? '',
+    'Кто': e.createdByName ?? '',
   }))
-  appendSheet(wb, 'Расходы', expRows, ['Дата', 'Категория', 'Сумма', 'Счёт', 'Описание', 'Контрагент'])
+  appendSheet(wb, 'Расходы', expRows, ['Время', 'Категория', 'Сумма', 'Описание', 'Кто'])
 
   // Лист 4: Заказы
   const orderRows = orders.map(o => {

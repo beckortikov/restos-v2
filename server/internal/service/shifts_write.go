@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,9 @@ type ShiftOperationInput struct {
 	Type        string `json:"type"` // cash_in | cash_out
 	Amount      string `json:"amount"`
 	Description string `json:"description"`
+	// Category — заполнена только для расходов (cash_out с категорией). Для
+	// внесения/изъятия пустая → хранится NULL, операция считается изъятием.
+	Category string `json:"category,omitempty"`
 }
 
 // WithPublisher — fluent setter (как в OrdersService).
@@ -302,12 +306,17 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 		typ := in.Type
 		desc := in.Description
 		creator := actor.UserID
+		var category *string
+		if c := strings.TrimSpace(in.Category); c != "" {
+			category = &c
+		}
 		newOp := &models.CashShiftOperation{
 			ID:          uuid.NewString(),
 			ShiftID:     &sid,
 			Type:        &typ,
 			Amount:      amt,
 			Description: &desc,
+			Category:    category,
 			CreatedBy:   &creator,
 			CreatedAt:   now,
 			UpdatedAt:   now,

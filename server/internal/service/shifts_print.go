@@ -99,6 +99,11 @@ func (s *ShiftsService) printReport(ctx context.Context, shiftID, jobType string
 		AvgCheck:       zr.Shift.AvgCheck,
 		ClosingBalance: zr.Shift.ClosingBalance,
 		CashierName:    cashierName,
+		CashIn:         zr.CashIn,
+		Withdrawals:    zr.Withdrawals,
+	}
+	for _, e := range zr.ExpensesByCategory {
+		in.Expenses = append(in.Expenses, escpos.ReportExpenseLine{Category: e.Category, Amount: e.Amount})
 	}
 	if zr.Shift.ClosedAt != nil {
 		in.ClosedAt = *zr.Shift.ClosedAt

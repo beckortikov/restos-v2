@@ -89,7 +89,10 @@ export async function createShiftExpense(shiftId: string, amount: number, catego
     body: {
       type: 'expense',
       amount: String(amount),
-      description: `${category}: ${description}`,
+      // Категория — структурным полем (cash_shift_operations.category), а не
+      // префиксом в description. Позволяет агрегировать в своде/экспорте/X-Z.
+      category,
+      description: description || null,
     } as any,
   }))
   logAction('shift.expense', 'shift', shiftId, `Расход из смены: ${category}`, { amount, category, description })
@@ -130,6 +133,11 @@ export interface ShiftZReport {
   salesByWaiter: { waiterId: string; name: string; ordersCount: number; total: number; avgCheck: number }[]
   salesByCategory: { name: string; qty: number; total: number }[]
   salesByOrderType: { type: string; ordersCount: number; total: number }[]
+  // Движение денег по кассе (внесения/изъятия/расходы по категориям).
+  cashIn: number
+  withdrawals: number
+  expensesTotal: number
+  expensesByCategory: { category: string; count: number; amount: number }[]
   previous?: ShiftZReportPrevious | null
 }
 
@@ -164,6 +172,14 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
       type: String(t.type ?? 'hall'),
       ordersCount: Number(t.orders_count ?? 0),
       total: Number(t.total ?? 0),
+    })),
+    cashIn: Number(r?.cash_in ?? 0),
+    withdrawals: Number(r?.withdrawals ?? 0),
+    expensesTotal: Number(r?.expenses_total ?? 0),
+    expensesByCategory: (r?.expenses_by_category ?? []).map((e: any) => ({
+      category: String(e.category ?? '—'),
+      count: Number(e.count ?? 0),
+      amount: Number(e.amount ?? 0),
     })),
     previous: r?.previous
       ? {
@@ -208,6 +224,7 @@ function mapShiftOperation(r: any, fallbackShiftId: string): CashShiftOperation 
     type: r.type as CashShiftOperation['type'],
     amount: Number(r.amount ?? 0),
     description: r.description ?? undefined,
+    category: r.category ?? undefined,
     createdBy: r.created_by ?? undefined,
     createdByName: undefined,
     createdAt: r.created_at,
