@@ -216,7 +216,7 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
     <>
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="md:h-full h-[95vh] flex flex-col md:!max-w-lg lg:!max-w-xl p-0">
-        <SheetHeader className="px-4 pt-4 pb-2 border-b">
+        <SheetHeader className="shrink-0 px-4 pt-4 pb-2 border-b">
           <SheetTitle className="flex items-center gap-3">
             <span>{table.name}</span>
             <span
@@ -356,7 +356,7 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
 
         {/* Group tabs — переключатель активных групп за столом */}
         {openOrders.length > 0 && (
-          <div className="px-4 py-2 border-b flex items-center gap-2 overflow-x-auto">
+          <div className="shrink-0 px-4 py-2 border-b flex items-center gap-2 overflow-x-auto">
             {openOrders.map((o, i) => {
               const active = o.id === selectedOrderId
               const ready = o.status === 'ready'
@@ -405,23 +405,29 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
             теперь void последней позиции корректно освобождает стол (через
             cancelOrderItem + AutoPrintRunner печатает кухонную «ОТМЕНА»). */}
         {order ? (
-          <OrderActionsPanel
-            key={order.id}
-            order={order}
-            users={users}
-            onClosed={() => {
-              onOpenChange(false)
-              onAction('refresh', table.id)
-            }}
-            onCancelled={() => {
-              onOpenChange(false)
-              onAction('refresh', table.id)
-            }}
-            onItemsChanged={() => onAction('refresh', table.id)}
-            // v2.8.0: убран onOpenAdvanced overlay — теперь «Дополнительно»
-            // открывает inline dropdown внутри Panel'а, а split-bill/reopen
-            // вызывают свои мини-диалоги без второго sidebar'а.
-          />
+          // flex-1 min-h-0 — Panel'у даём ровно остаток высоты под header'ом и
+          // табами групп. Без этого Panel (root h-full) забирал всю высоту листа
+          // поверх header+табов → ряд групп схлопывался, а кнопки оплаты
+          // уезжали за нижний край (фидбек кассира по карте зала).
+          <div className="flex-1 min-h-0 flex flex-col">
+            <OrderActionsPanel
+              key={order.id}
+              order={order}
+              users={users}
+              onClosed={() => {
+                onOpenChange(false)
+                onAction('refresh', table.id)
+              }}
+              onCancelled={() => {
+                onOpenChange(false)
+                onAction('refresh', table.id)
+              }}
+              onItemsChanged={() => onAction('refresh', table.id)}
+              // v2.8.0: убран onOpenAdvanced overlay — теперь «Дополнительно»
+              // открывает inline dropdown внутри Panel'а, а split-bill/reopen
+              // вызывают свои мини-диалоги без второго sidebar'а.
+            />
+          </div>
         ) : table.status === 'reserved' ? (
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
             {reservation && (

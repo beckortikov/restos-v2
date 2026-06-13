@@ -354,7 +354,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         user?.id,
         selectedAccountId || undefined,
         acct?.name,
-        servicePercent,
+        includeService ? servicePercent : 0,  // «С собой»/доставка — без обслуживания
         serviceAmount,
         total,
         0,
@@ -795,7 +795,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
           Service применяется к меню-цене (subtotal), а скидка — к итогу
           (subtotal + service). Это ресторанная норма: «service на чек,
           скидка с финальной суммы». */}
-      <div className="border-t border-border bg-card p-3 space-y-2.5">
+      <div className="shrink-0 border-t border-border bg-card p-3 space-y-2.5">
         {/* Subtotal */}
         <div className="flex justify-between items-center text-sm">
           <span className="text-muted-foreground">Подытог</span>

@@ -94,6 +94,12 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 		if !order.ServicePercent.IsZero() && serviceAmount.IsZero() {
 			serviceAmount = decimal.Normalize(decimal.Percent(subtotal, order.ServicePercent))
 		}
+		// Обслуживание — только для зала. «С собой» (takeaway) и доставка не
+		// облагаются, даже если у заказа остался ненулевой percent (старые
+		// заказы до фикса). См. orders_write/orders_close.
+		if order.Type != nil && *order.Type != "hall" {
+			serviceAmount = decimal.Zero
+		}
 		total := decimal.Normalize(decimal.Add(subtotal, serviceAmount))
 
 		// Догружаем стол/зону/официанта — пре-чек тоже должен показывать,
