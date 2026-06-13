@@ -427,6 +427,27 @@ private fun CardCompactBody(card: TableCardSnapshot) {
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        // Официант — мелким шрифтом (не для черновика без заказа).
+        if (!card.isDraftOnly) {
+            card.waiter?.let { user ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Outlined.Person,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        modifier = Modifier.size(11.dp),
+                    )
+                    Spacer(Modifier.width(3.dp))
+                    Text(
+                        user.displayName,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+        }
 
         // Тонкий разделитель
         Spacer(Modifier.height(8.dp))
