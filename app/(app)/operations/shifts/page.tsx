@@ -187,12 +187,18 @@ export default function ShiftsPage() {
   // SSE-driven auto-refresh — заменяет polling каждые 2с активной смены.
   // Live revenue зависит от заказов (closeOrder) и операций смены.
   const liveRefresh = useCallback(() => {
+    // Пауза live-обновлений пока открыта любая форма ввода. Иначе SSE-эвент
+    // (официант через Kotlin меняет заказ → orders/financial_operations) вызывал
+    // reload → перерисовку формы → сброс фокуса, и инпуты «зависали» во время
+    // ввода расхода/внесения/изъятия. После закрытия формы обновления
+    // возобновляются (submit-обработчики и так вызывают reload).
+    if (showExpense || showOp !== null || showClose || showOpen) return
     if (!activeShift) { reload().catch(console.error); return }
     fetchShiftRevenue(activeShift.id).then(setLiveRevenue).catch(() => {})
     fetchShiftOperations(activeShift.id).then(setShiftOps).catch(() => {})
     fetchShiftZReport(activeShift.id).then(setZReport).catch(() => {})
     loadServiceRows(activeShift).catch(() => {})
-  }, [activeShift, reload, loadServiceRows])
+  }, [activeShift, reload, loadServiceRows, showExpense, showOp, showClose, showOpen])
   useDataSync(
     ['cash_shifts', 'cash_shift_operations', 'orders', 'financial_operations'],
     liveRefresh,
