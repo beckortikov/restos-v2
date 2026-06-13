@@ -8,11 +8,14 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -23,7 +26,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.restos.waiter.data.menu.MenuItemDto
@@ -57,12 +63,14 @@ fun WeightDialog(
         if (isKg) listOf("0.2", "0.5", "1", "1.5", "2").map { BigDecimal(it) }
         else listOf("100", "200", "300", "500", "1000").map { BigDecimal(it) }
 
+    fun fmt(v: BigDecimal): String = v.stripTrailingZeros().toPlainString()
+
     val start = runCatching { BigDecimal(initialGrams) }.getOrNull()
         ?.takeIf { it > BigDecimal.ZERO }
         ?: if (isKg) BigDecimal("0.5") else BigDecimal("100")
-    var value by remember { mutableStateOf(start) }
-
-    fun fmt(v: BigDecimal): String = v.stripTrailingZeros().toPlainString()
+    // text — редактируемый источник правды; −/+ и пресеты пишут в него.
+    var text by remember { mutableStateOf(fmt(start)) }
+    val value = parseWeight(text)
     val lineTotal = price.multiply(value.divide(unitSize, 4, RoundingMode.HALF_EVEN))
 
     AlertDialog(
@@ -70,33 +78,56 @@ fun WeightDialog(
         title = { Text(item.name, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                // − [ вес ] +
+                // − [ редактируемый вес ] +
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     StepBtn("−", modifier = Modifier.size(56.dp)) {
-                        value = (value - step).coerceAtLeast(BigDecimal.ZERO)
+                        text = fmt((value - step).coerceAtLeast(BigDecimal.ZERO))
                     }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text("${fmt(value)} $unitLabel", fontSize = 30.sp, fontWeight = FontWeight.Bold)
-                        Text(
-                            formatCurrency(lineTotal),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { raw ->
+                            // Пускаем только цифры и один разделитель (.,).
+                            val cleaned = raw.replace(',', '.').filter { it.isDigit() || it == '.' }
+                            val oneDot = cleaned.indexOf('.').let { i ->
+                                if (i < 0) cleaned else cleaned.substring(0, i + 1) +
+                                    cleaned.substring(i + 1).replace(".", "")
+                            }
+                            text = oneDot
+                        },
+                        suffix = { Text(unitLabel) },
+                        singleLine = true,
+                        textStyle = TextStyle(
+                            fontSize = 28.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                        ),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.width(150.dp),
+                    )
+                    StepBtn("+", modifier = Modifier.size(56.dp)) {
+                        text = fmt(value + step)
                     }
-                    StepBtn("+", modifier = Modifier.size(56.dp)) { value += step }
                 }
+                // Цена за выбранный вес.
+                Text(
+                    formatCurrency(lineTotal),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                )
                 // Пресеты
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(presets) { p ->
                         Surface(
                             shape = RoundedCornerShape(50),
                             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            onClick = { value = p },
+                            onClick = { text = fmt(p) },
                         ) {
                             Text(
                                 "${fmt(p)} $unitLabel",
@@ -134,6 +165,10 @@ fun WeightDialog(
         },
     )
 }
+
+/** Парсинг введённого веса: пустое/«.»/мусор → 0. */
+private fun parseWeight(text: String): BigDecimal =
+    runCatching { BigDecimal(text) }.getOrDefault(BigDecimal.ZERO)
 
 @Composable
 private fun StepBtn(label: String, modifier: Modifier, onClick: () -> Unit) {
