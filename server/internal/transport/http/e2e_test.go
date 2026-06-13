@@ -64,6 +64,15 @@ func setupE2E(t *testing.T) *e2eFixture {
 	if err := gdb.Create(&models.Restaurant{ID: rid, Name: "E2E", TechCardsEnabled: &techOff}).Error; err != nil {
 		t.Fatal(err)
 	}
+	// service_percent колонка имеет DEFAULT 10 (prod-поведение). В e2e зануляем
+	// детерминированно: большинство финансовых тестов ассертят «чистые» суммы
+	// без обслуживания и закрывают заказ БЕЗ явного service_percent. Без этого
+	// они проходили только случайно (от состояния БД соседних тестов). Тесты,
+	// которым нужен сервис, задают service_percent явно в /close (он override'ит).
+	if err := gdb.Model(&models.Restaurant{}).Where("id = ?", rid).
+		Update("service_percent", 0).Error; err != nil {
+		t.Fatal(err)
+	}
 	name := "Cashier"
 	pin := "1234"
 	role := "cashier"

@@ -190,11 +190,16 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 		// при ServiceAmount==0). Раньше pre-bill пересчитывал percent на лету,
 		// но проверка `if !order.ServicePercent.IsZero()` отказывала когда
 		// percent действительно 0 → ничего не считалось.
+		//
+		// Обслуживание — только для зала. Заказы «С собой» (takeaway) и
+		// доставка обслуживанием не облагаются, поэтому процент = 0.
 		var restServicePercent decimal.Decimal
-		_ = tx.Model(&models.Restaurant{}).
-			Select("COALESCE(service_percent, 0)").
-			Where("id = ?", rid).
-			Scan(&restServicePercent).Error
+		if typ == "hall" {
+			_ = tx.Model(&models.Restaurant{}).
+				Select("COALESCE(service_percent, 0)").
+				Where("id = ?", rid).
+				Scan(&restServicePercent).Error
+		}
 
 		order := &models.Order{
 			ID:             uuid.NewString(),

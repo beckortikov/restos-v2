@@ -283,6 +283,11 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			}
 			servicePercent = decimal.Normalize(sp)
 		}
+		// Обслуживание — только для зала. «С собой» (takeaway) и доставка
+		// не облагаются, даже если в input прилетел ненулевой процент.
+		if order.Type != nil && *order.Type != "hall" {
+			servicePercent = decimal.Zero
+		}
 		serviceAmount := decimal.Zero
 		if !servicePercent.IsZero() {
 			serviceAmount = decimal.Normalize(decimal.Percent(discountedTotal, servicePercent))

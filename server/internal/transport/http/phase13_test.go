@@ -31,6 +31,25 @@ func phase13_createOrder(t *testing.T, f *e2eFixture, tok, menuItemID string, qt
 	return o.ID, o.Total
 }
 
+// phase13_createOrderDistinct — заказ из РАЗНЫХ позиций (по одной qty=1 на
+// каждый menuItemID). Нужен там, где тесту важны отдельные строки: iiko-style
+// merge схлопывает одинаковые позиции в одну, поэтому qty-N одного блюда не
+// даёт N строк.
+func phase13_createOrderDistinct(t *testing.T, f *e2eFixture, tok string, menuItemIDs ...string) string {
+	t.Helper()
+	items := make([]map[string]any, len(menuItemIDs))
+	for i, id := range menuItemIDs {
+		items[i] = map[string]any{"menu_item_id": id, "qty": "1"}
+	}
+	r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{"items": items})
+	if r.StatusCode != 201 {
+		t.Fatalf("create order (distinct): %d %s", r.StatusCode, b)
+	}
+	var o models.Order
+	_ = json.Unmarshal(b, &o)
+	return o.ID
+}
+
 // ─── Splits lifecycle: equal → pay each → auto-close ──────────────────────
 
 func TestPhase13_SplitsLifecycle(t *testing.T) {
@@ -138,9 +157,12 @@ func TestPhase13_SplitsLifecycle(t *testing.T) {
 func TestPhase13_SplitsByItems(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
-	_, menuItemID, _, accountID := seedForWrite(t, f)
+	gdb, menuItemID, _, accountID := seedForWrite(t, f)
+	// Split-by-items требует ОТДЕЛЬНЫХ строк — берём два разных блюда (одинаковые
+	// схлопнулись бы в одну строку из-за iiko-merge).
+	menuItemID2 := vtCreateMenuItem(t, gdb, f.rid, "Lagman", "25")
 
-	orderID, _ := phase13_createOrder(t, f, tok, menuItemID, 2)
+	orderID := phase13_createOrderDistinct(t, f, tok, menuItemID, menuItemID2)
 
 	// Need item IDs — GET order.
 	gr, gb := f.get(t, fmt.Sprintf("/api/v1/orders/%s", orderID), tok)
@@ -367,8 +389,10 @@ func TestPhase13_ItemCancel(t *testing.T) {
 	_ = json.Unmarshal(gb, &detail)
 	itemID := detail.Items[0].ID
 
+	// Два одинаковых Plov сливаются в одну строку qty=2 (iiko-merge). Чтобы
+	// отменить «одну порцию» и проверить total 25, делаем partial-cancel qty 1.
 	r, b := f.post(t, fmt.Sprintf("/api/v1/orders/%s/items/%s/cancel", orderID, itemID), tok, uuid.NewString(),
-		map[string]any{"reason": "guest changed mind"})
+		map[string]any{"reason": "guest changed mind", "qty": "1"})
 	if r.StatusCode != 200 {
 		t.Fatalf("cancel item: %d %s", r.StatusCode, b)
 	}

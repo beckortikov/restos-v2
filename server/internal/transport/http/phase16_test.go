@@ -24,10 +24,13 @@ import (
 func TestPhase16_SplitByItems_PartialQty(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
-	_, menuItemID, _, _ := seedForWrite(t, f)
+	gdb, menuItemID, _, _ := seedForWrite(t, f)
 
-	// Заказ с 3 позициями (qty=1 каждая, price=25 в seedForWrite).
-	orderID, _ := phase13_createOrder(t, f, tok, menuItemID, 3)
+	// Заказ с 3 РАЗНЫМИ позициями по 25 (одинаковые схлопнулись бы в одну
+	// строку из-за iiko-merge, а split-by-items нужны отдельные item_id).
+	menuItemID2 := vtCreateMenuItem(t, gdb, f.rid, "Lagman", "25")
+	menuItemID3 := vtCreateMenuItem(t, gdb, f.rid, "Tea", "25")
+	orderID := phase13_createOrderDistinct(t, f, tok, menuItemID, menuItemID2, menuItemID3)
 
 	// Получаем item IDs.
 	gr, gb := f.get(t, fmt.Sprintf("/api/v1/orders/%s", orderID), tok)
@@ -84,9 +87,10 @@ func TestPhase16_SplitByItems_PartialQty(t *testing.T) {
 func TestPhase16_SplitByItems_ExceedsQty(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
-	_, menuItemID, _, _ := seedForWrite(t, f)
+	gdb, menuItemID, _, _ := seedForWrite(t, f)
 
-	orderID, _ := phase13_createOrder(t, f, tok, menuItemID, 2)
+	menuItemID2 := vtCreateMenuItem(t, gdb, f.rid, "Lagman", "25")
+	orderID := phase13_createOrderDistinct(t, f, tok, menuItemID, menuItemID2)
 	_, gb := f.get(t, fmt.Sprintf("/api/v1/orders/%s", orderID), tok)
 	var detail struct {
 		Items []models.OrderItem `json:"items"`
