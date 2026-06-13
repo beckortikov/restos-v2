@@ -505,7 +505,13 @@ type CreateVoidInput struct {
 	CreatedByName  *string `json:"created_by_name,omitempty"`
 }
 
-// CreateVoid — standalone insert в order_voids. Не модифицирует order/items.
+// CreateVoid — биллинговое списание позиции: пишет запись в order_voids И
+// уменьшает order.total на price×qty (как делал v1 createVoid в
+// restos/lib/supabase-queries.ts). Без этого пересчёта скаляр order.total
+// оставался завышенным: карта/официант (читают order.total) показывали старую
+// сумму, а диалог оплаты (считает из visibleReceiptItems по order_voids) —
+// уменьшенную. cancelled_at на самом order_item НЕ ставим — позицию из чека
+// исключает фильтр по order_voids (см. restos/lib/helpers.ts visibleReceiptItems).
 func (s *OrdersService) CreateVoid(ctx context.Context, in CreateVoidInput) (*models.OrderVoid, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
@@ -531,7 +537,7 @@ func (s *OrdersService) CreateVoid(ctx context.Context, in CreateVoidInput) (*mo
 	oid := in.OrderID
 	itemName := in.ItemName
 	reason := in.Reason
-	v := models.OrderVoid{
+	v := &models.OrderVoid{
 		ID:             uuid.NewString(),
 		OrderID:        &oid,
 		ItemName:       &itemName,
@@ -545,14 +551,60 @@ func (s *OrdersService) CreateVoid(ctx context.Context, in CreateVoidInput) (*mo
 		RestaurantID:   &rid,
 		CreatedAt:      now,
 	}
-	scoped, err := s.r.ForTenant(ctx)
+
+	var tableID *string
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+
+		// Lock order (если ещё открыт). Закрытый/отменённый — total не трогаем,
+		// но запись в order_voids всё равно создаём (исторический аудит).
+		var order models.Order
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, oid).
+			First(&order).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+
+		if err := tx.Create(v).Error; err != nil {
+			return err
+		}
+
+		mutable := order.Status == nil || (*order.Status != "closed" && *order.Status != "cancelled")
+		if mutable {
+			lineTotal := decimal.Normalize(decimal.Mul(price, decimal.FromInt(int64(qty))))
+			newTotal := decimal.Sub(order.Total, lineTotal)
+			if decimal.IsNegative(newTotal) {
+				newTotal = decimal.Zero
+			}
+			order.Total = decimal.Normalize(newTotal)
+			order.TotalWithService = order.Total
+			order.UpdatedAt = now
+			if err := tx.Save(&order).Error; err != nil {
+				return err
+			}
+			tableID = order.TableID
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := scoped.Create(&v).Error; err != nil {
-		return nil, err
+
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventOrderItemVoided, map[string]any{
+			"order_id": oid,
+			"reason":   reason,
+		})
+		if tableID != nil {
+			buf.Add(EventTableUpdated, map[string]any{"id": *tableID})
+		}
+		s.pub.Flush(ctx, rid, buf)
 	}
-	return &v, nil
+	return v, nil
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

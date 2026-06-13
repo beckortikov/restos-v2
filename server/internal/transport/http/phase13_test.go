@@ -294,6 +294,48 @@ func TestPhase13_VoidsList(t *testing.T) {
 		t.Fatalf("create void: %d %s", cr.StatusCode, cb)
 	}
 
+	// Регрессия: CreateVoid (POST /voids) обязан уменьшать order.total на
+	// price×qty. Раньше он его не трогал → карта/официант (читают order.total)
+	// показывали завышенную сумму, а диалог оплаты — уменьшенную. Проверяем на
+	// отдельном живом заказе (orderID выше уже обнулён первым void-ом).
+	// Детейл-эндпоинт отдаёт total под вложенным "order" (OrderDetail).
+	order2ID, _ := phase13_createOrder(t, f, tok, menuItemID, 2)
+	_, vb2 := f.get(t, fmt.Sprintf("/api/v1/orders/%s", order2ID), tok)
+	var d2 struct {
+		Order struct {
+			Total decimal.Decimal `json:"total"`
+		} `json:"order"`
+		Items []struct {
+			Name  string          `json:"name"`
+			Price decimal.Decimal `json:"price"`
+		} `json:"items"`
+	}
+	_ = json.Unmarshal(vb2, &d2)
+	unitPrice := d2.Items[0].Price
+	total2 := d2.Order.Total
+	vcr, vcb := f.post(t, "/api/v1/voids", tok, uuid.NewString(), map[string]any{
+		"order_id":   order2ID,
+		"item_name":  d2.Items[0].Name,
+		"item_qty":   1,
+		"item_price": unitPrice.String(),
+		"reason":     "ad-hoc correction",
+	})
+	if vcr.StatusCode != 201 {
+		t.Fatalf("create void on order2: %d %s", vcr.StatusCode, vcb)
+	}
+	_, tb1 := f.get(t, fmt.Sprintf("/api/v1/orders/%s", order2ID), tok)
+	var after struct {
+		Order struct {
+			Total decimal.Decimal `json:"total"`
+		} `json:"order"`
+	}
+	_ = json.Unmarshal(tb1, &after)
+	wantTotal := decimal.Sub(total2, unitPrice)
+	if after.Order.Total.Cmp(wantTotal) != 0 {
+		t.Errorf("order.total после CreateVoid = %s, ожидалось %s (было %s − %s)",
+			after.Order.Total, wantTotal, total2, unitPrice)
+	}
+
 	// /voids?order_ids=
 	mr, mb := f.get(t, fmt.Sprintf("/api/v1/voids?order_ids=%s", orderID), tok)
 	if mr.StatusCode != 200 {
