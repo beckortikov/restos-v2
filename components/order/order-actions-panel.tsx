@@ -362,7 +362,8 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         discountType ?? undefined,
         discountValue || undefined,
         discountReason || undefined,
-        undefined,
+        undefined,      // payments
+        !alsoPrint,     // skipReceipt — «Закрыть без печати» не должно печатать
       )
       toast.success(alsoPrint ? 'Заказ оплачен · чек отправлен на печать' : 'Заказ оплачен')
       setCloseReceiptOpen(false)
