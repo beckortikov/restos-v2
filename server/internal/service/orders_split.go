@@ -381,6 +381,24 @@ func (s *OrdersService) Transfer(ctx context.Context, orderID string, in Transfe
 						}).Error; err != nil {
 						return err
 					}
+				} else {
+					// На старом столе остались другие активные заказы.
+					// Переключаем его current_order_id на следующий старейший активный заказ.
+					var nextActive models.Order
+					if err := tx.Where("restaurant_id = ? AND table_id = ?", rid, oldTableID).
+						Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+						Where("id <> ?", order.ID).
+						Order("created_at ASC").
+						First(&nextActive).Error; err == nil {
+						if err := tx.Model(&models.Table{}).
+							Where("id = ? AND restaurant_id = ?", oldTableID, rid).
+							Updates(map[string]any{
+								"current_order_id": nextActive.ID,
+								"updated_at":       now,
+							}).Error; err != nil {
+							return err
+						}
+					}
 				}
 			}
 			// Новый стол: занят + current_order_id. opened_at — оставляем если

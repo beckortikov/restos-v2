@@ -133,6 +133,24 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 					return err
 				}
 				buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+			} else {
+				// Переключаем current_order_id на следующий старейший активный заказ этого стола
+				var nextActive models.Order
+				if err := tx.Where("restaurant_id = ? AND table_id = ?", rid, *order.TableID).
+					Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+					Where("id <> ?", order.ID).
+					Order("created_at ASC").
+					First(&nextActive).Error; err == nil {
+					if err := tx.Model(&models.Table{}).
+						Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+						Updates(map[string]any{
+							"current_order_id": nextActive.ID,
+							"updated_at":       now,
+						}).Error; err != nil {
+						return err
+					}
+					buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+				}
 			}
 		}
 
@@ -356,6 +374,24 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 						return err
 					}
 					buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+				} else {
+					// Переключаем current_order_id на следующий старейший активный заказ этого стола
+					var nextActive models.Order
+					if err := tx.Where("restaurant_id = ? AND table_id = ?", rid, *order.TableID).
+						Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+						Where("id <> ?", order.ID).
+						Order("created_at ASC").
+						First(&nextActive).Error; err == nil {
+						if err := tx.Model(&models.Table{}).
+							Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
+							Updates(map[string]any{
+								"current_order_id": nextActive.ID,
+								"updated_at":       now,
+							}).Error; err != nil {
+							return err
+						}
+						buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
+					}
 				}
 			}
 			autoCancelled = true

@@ -658,8 +658,8 @@ func (s *TablesWriteService) Unmerge(ctx context.Context, id string) (*models.Ta
 
 // CleanupStuck — POST /admin/cleanup/stuck-tables.
 // «Стуками» считаем столы со status='occupied' и без current_order_id, либо
-// с current_order_id указывающим на закрытый/отменённый order. Возвращаем им
-// status='free'.
+// с current_order_id указывающим на закрытый/отменённый/несуществующий order.
+// Возвращаем им status='free' только если на них действительно нет активных заказов.
 type CleanupResult struct {
 	Cleaned int64 `json:"cleaned"`
 }
@@ -667,23 +667,63 @@ type CleanupResult struct {
 func (s *TablesWriteService) CleanupStuck(ctx context.Context) (*CleanupResult, error) {
 	var total int64
 	err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		now := time.Now().UTC()
+
 		// 1. occupied без current_order_id.
 		scoped1, err := tr.ForTenant(ctx)
 		if err != nil {
 			return err
 		}
-		res1 := scoped1.Model(&models.Table{}).
+		var occupiedWithoutOrder []models.Table
+		if err := scoped1.
 			Where("status = ? AND (current_order_id IS NULL OR current_order_id = '')", "occupied").
-			Updates(map[string]any{
-				"status":     "free",
-				"updated_at": time.Now().UTC(),
-			})
-		if res1.Error != nil {
-			return res1.Error
+			Find(&occupiedWithoutOrder).Error; err != nil {
+			return err
 		}
-		total += res1.RowsAffected
+		for _, tb := range occupiedWithoutOrder {
+			var activeCount int64
+			scopedO, _ := tr.ForTenant(ctx)
+			if err := scopedO.Model(&models.Order{}).
+				Where("table_id = ?", tb.ID).
+				Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+				Count(&activeCount).Error; err != nil {
+				return err
+			}
+			if activeCount > 0 {
+				// Есть активные заказы. Привязываем к старейшему активному заказу.
+				var oldestActive models.Order
+				scopedO2, _ := tr.ForTenant(ctx)
+				if err := scopedO2.Where("table_id = ?", tb.ID).
+					Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+					Order("created_at ASC").
+					First(&oldestActive).Error; err == nil {
+					scopedU, _ := tr.ForTenant(ctx)
+					if err := scopedU.Model(&models.Table{}).Where("id = ?", tb.ID).
+						Updates(map[string]any{
+							"current_order_id": oldestActive.ID,
+							"updated_at":       now,
+						}).Error; err != nil {
+						return err
+					}
+					total++
+				}
+			} else {
+				// Нет активных заказов — освобождаем.
+				scopedU, _ := tr.ForTenant(ctx)
+				if err := scopedU.Model(&models.Table{}).Where("id = ?", tb.ID).
+					Updates(map[string]any{
+						"status":           "free",
+						"current_order_id": nil,
+						"opened_at":        nil,
+						"updated_at":       now,
+					}).Error; err != nil {
+					return err
+				}
+				total++
+			}
+		}
 
-		// 2. occupied с current_order_id ссылающимся на closed/cancelled.
+		// 2. occupied с current_order_id ссылающимся на closed/cancelled/несуществующий.
 		scoped2, _ := tr.ForTenant(ctx)
 		var stuck []models.Table
 		if err := scoped2.
@@ -697,36 +737,102 @@ func (s *TablesWriteService) CleanupStuck(ctx context.Context) (*CleanupResult, 
 			}
 			scopedO, _ := tr.ForTenant(ctx)
 			var o models.Order
-			if err := scopedO.Where("id = ?", *tb.CurrentOrderID).First(&o).Error; err != nil {
+			err := scopedO.Where("id = ?", *tb.CurrentOrderID).First(&o).Error
+			isStuck := false
+			if err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					// order вообще нет — освобождаем.
+					isStuck = true
+				} else {
+					return err
+				}
+			} else if o.Status != nil && (*o.Status == "closed" || *o.Status == "cancelled") {
+				isStuck = true
+			}
+
+			if isStuck {
+				var activeCount int64
+				scopedO2, _ := tr.ForTenant(ctx)
+				if err := scopedO2.Model(&models.Order{}).
+					Where("table_id = ?", tb.ID).
+					Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+					Count(&activeCount).Error; err != nil {
+					return err
+				}
+				if activeCount > 0 {
+					// Есть другие активные заказы. Переназначаем.
+					var oldestActive models.Order
+					scopedO3, _ := tr.ForTenant(ctx)
+					if err := scopedO3.Where("table_id = ?", tb.ID).
+						Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+						Order("created_at ASC").
+						First(&oldestActive).Error; err == nil {
+						scopedU, _ := tr.ForTenant(ctx)
+						if err := scopedU.Model(&models.Table{}).Where("id = ?", tb.ID).
+							Updates(map[string]any{
+								"current_order_id": oldestActive.ID,
+								"updated_at":       now,
+							}).Error; err != nil {
+							return err
+						}
+						total++
+					}
+				} else {
+					// Нет активных заказов — освобождаем.
 					scopedU, _ := tr.ForTenant(ctx)
 					if err := scopedU.Model(&models.Table{}).Where("id = ?", tb.ID).
 						Updates(map[string]any{
 							"status":           "free",
 							"current_order_id": nil,
-							"updated_at":       time.Now().UTC(),
+							"opened_at":        nil,
+							"updated_at":       now,
 						}).Error; err != nil {
 						return err
 					}
 					total++
-					continue
 				}
-				return err
-			}
-			if o.Status != nil && (*o.Status == "closed" || *o.Status == "cancelled") {
-				scopedU, _ := tr.ForTenant(ctx)
-				if err := scopedU.Model(&models.Table{}).Where("id = ?", tb.ID).
-					Updates(map[string]any{
-						"status":           "free",
-						"current_order_id": nil,
-						"updated_at":       time.Now().UTC(),
-					}).Error; err != nil {
-					return err
-				}
-				total++
 			}
 		}
+
+		// 3. Авто-исправление (healing): столы со статусом 'free' (или null), у которых есть активные заказы.
+		// Переводим их в 'occupied' и привязываем к старейшему активному заказу.
+		scoped3, _ := tr.ForTenant(ctx)
+		var freeTables []models.Table
+		if err := scoped3.
+			Where("status = ? OR status IS NULL OR status = ''", "free").
+			Find(&freeTables).Error; err != nil {
+			return err
+		}
+		for _, tb := range freeTables {
+			var activeCount int64
+			scopedO, _ := tr.ForTenant(ctx)
+			if err := scopedO.Model(&models.Order{}).
+				Where("table_id = ?", tb.ID).
+				Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+				Count(&activeCount).Error; err != nil {
+				return err
+			}
+			if activeCount > 0 {
+				var oldestActive models.Order
+				scopedO2, _ := tr.ForTenant(ctx)
+				if err := scopedO2.Where("table_id = ?", tb.ID).
+					Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+					Order("created_at ASC").
+					First(&oldestActive).Error; err == nil {
+					scopedU, _ := tr.ForTenant(ctx)
+					if err := scopedU.Model(&models.Table{}).Where("id = ?", tb.ID).
+						Updates(map[string]any{
+							"status":           "occupied",
+							"current_order_id": oldestActive.ID,
+							"opened_at":        oldestActive.CreatedAt,
+							"updated_at":       now,
+						}).Error; err != nil {
+						return err
+					}
+					total++
+				}
+			}
+		}
+
 		return nil
 	})
 	if err != nil {
