@@ -30,8 +30,16 @@ import {
   type ReceiptPaymentType,
   type Supplier,
   type Ingredient,
+  type FinancialAccount,
 } from '@/lib/types'
-import { fetchSuppliers, fetchIngredients, createReceipt } from '@/lib/queries'
+import { fetchSuppliers, fetchIngredients, createReceipt, createSupplier, createIngredient, fetchFinancialAccounts } from '@/lib/queries'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from '@/components/ui/dialog'
 
 interface ReceiptLineForm {
   ingredientId: string // empty string for manually-added free-form line
@@ -44,17 +52,21 @@ interface ReceiptLineForm {
 type CategoryFilter = 'all' | 'food' | 'nonfood'
 
 // ─── Supplier combobox (same UX as legacy dialog) ──────────────────────────
+// ─── Supplier combobox (same UX as legacy dialog) ──────────────────────────
 function SupplierCombobox({
   suppliers,
   selectedId,
   onSelect,
+  onSupplierCreated,
 }: {
   suppliers: Supplier[]
   selectedId: string
   onSelect: (id: string) => void
+  onSupplierCreated: (newSup: Supplier) => void
 }) {
   const [query, setQuery] = useState('')
   const [isOpen, setIsOpen] = useState(false)
+  const [creating, setCreating] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -69,6 +81,33 @@ function SupplierCombobox({
   const filtered = suppliers
     .filter((s) => s.name.toLowerCase().includes(query.toLowerCase()))
     .slice(0, 8)
+
+  const handleCreate = async () => {
+    if (creating || !query.trim()) return
+    setCreating(true)
+    try {
+      const newSup = await createSupplier({
+        name: query.trim(),
+        contactPerson: '',
+        phone: '',
+        categories: [],
+        paymentTermsDays: 0,
+        creditLimit: 0,
+        currentDebt: 0,
+      })
+      if (newSup) {
+        onSupplierCreated(newSup)
+        onSelect(newSup.id)
+        setQuery('')
+        setIsOpen(false)
+        toast.success(`Поставщик «${newSup.name}» создан`)
+      }
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка создания поставщика'))
+    } finally {
+      setCreating(false)
+    }
+  }
 
   if (selected) {
     return (
@@ -101,7 +140,7 @@ function SupplierCombobox({
           className="w-full pl-8 pr-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
       </div>
-      {isOpen && filtered.length > 0 && (
+      {isOpen && (filtered.length > 0 || query.trim() !== '') && (
         <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto bg-card border border-border rounded-lg shadow-lg">
           {filtered.map((s) => (
             <button
@@ -117,6 +156,17 @@ function SupplierCombobox({
               {s.name}
             </button>
           ))}
+          {query.trim() !== '' && (
+            <button
+              type="button"
+              onClick={handleCreate}
+              disabled={creating}
+              className="w-full text-left px-3 py-2 text-sm text-primary hover:bg-muted font-medium border-t border-border flex items-center gap-1.5 transition-colors disabled:opacity-50"
+            >
+              <Plus className="size-3.5" />
+              {creating ? 'Создание...' : `Создать поставщика «${query}»`}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -129,6 +179,7 @@ export default function NewReceiptPage() {
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
+  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [loading, setLoading] = useState(true)
 
   const [supplierId, setSupplierId] = useState('')
@@ -137,16 +188,30 @@ export default function NewReceiptPage() {
   const [paymentType, setPaymentType] = useState<ReceiptPaymentType>('paid')
   const [paidAmount, setPaidAmount] = useState(0)
   const [note, setNote] = useState('')
+  const [accountId, setAccountId] = useState('')
 
   const [filter, setFilter] = useState<CategoryFilter>('all')
   const [search, setSearch] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  // Quick Ingredient creation state
+  const [showCreateIngredientModal, setShowCreateIngredientModal] = useState(false)
+  const [newIngName, setNewIngName] = useState('')
+  const [newIngUnit, setNewIngUnit] = useState('кг')
+  const [newIngCategory, setNewIngCategory] = useState('Продукты')
+  const [newIngIsFood, setNewIngIsFood] = useState(true)
+  const [newIngPrice, setNewIngPrice] = useState(0)
+  const [newIngMinQty, setNewIngMinQty] = useState(0)
+  const [creatingIngredient, setCreatingIngredient] = useState(false)
+
   useEffect(() => {
-    Promise.all([fetchSuppliers(), fetchIngredients()])
-      .then(([s, i]) => {
+    Promise.all([fetchSuppliers(), fetchIngredients(), fetchFinancialAccounts()])
+      .then(([s, i, accs]) => {
         setSuppliers(s)
         setIngredients(i)
+        setAccounts(accs)
+        const defaultAcc = accs.find((a) => a.type === 'cash')?.id || accs[0]?.id || ''
+        setAccountId(defaultAcc)
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -197,6 +262,41 @@ export default function NewReceiptPage() {
     })
   }
 
+  const handleCreateIngredient = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (creatingIngredient || !newIngName.trim()) return
+    setCreatingIngredient(true)
+    try {
+      const ing = await createIngredient({
+        name: newIngName.trim(),
+        category: newIngCategory.trim() || 'Продукты',
+        qty: 0,
+        min_qty: newIngMinQty || 0,
+        unit: newIngUnit,
+        price_per_unit: newIngPrice || 0,
+        is_food: newIngIsFood,
+      })
+      if (ing) {
+        setIngredients((prev) => [...prev, ing])
+        addOrIncrementIngredient(ing)
+        setShowCreateIngredientModal(false)
+        setSearch('')
+        // Reset dialog fields
+        setNewIngName('')
+        setNewIngUnit('кг')
+        setNewIngCategory('Продукты')
+        setNewIngIsFood(true)
+        setNewIngPrice(0)
+        setNewIngMinQty(0)
+        toast.success(`Товар «${ing.name}» создан и добавлен в накладную`)
+      }
+    } catch (err) {
+      toast.error(humanizeError(err, 'Ошибка создания товара'))
+    } finally {
+      setCreatingIngredient(false)
+    }
+  }
+
   function addManualLine() {
     setLines((prev) => [
       ...prev,
@@ -227,7 +327,8 @@ export default function NewReceiptPage() {
   const canSubmit =
     !!supplierId &&
     lines.length > 0 &&
-    lines.every((l) => l.name.trim().length > 0 && l.qty > 0 && l.pricePerUnit >= 0)
+    lines.every((l) => l.name.trim().length > 0 && l.qty > 0 && l.pricePerUnit >= 0) &&
+    ((paymentType !== 'paid' && paymentType !== 'partial') || !!accountId)
 
   async function handleSubmit() {
     if (!canSubmit || submitting) return
@@ -246,6 +347,7 @@ export default function NewReceiptPage() {
         paidAmount: finalPaid,
         debtAmount: debt,
         lines,
+        accountId: (paymentType === 'paid' || paymentType === 'partial') ? accountId || undefined : undefined,
       })
       toast.success('Накладная создана')
       navigate('/warehouse/receipts')
@@ -303,6 +405,7 @@ export default function NewReceiptPage() {
                 suppliers={suppliers}
                 selectedId={supplierId}
                 onSelect={setSupplierId}
+                onSupplierCreated={(newSup) => setSuppliers((prev) => [...prev, newSup])}
               />
             </div>
             <div className="space-y-1.5">
@@ -356,6 +459,15 @@ export default function NewReceiptPage() {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    if (filteredIngredients.length === 1) {
+                      e.preventDefault()
+                      addOrIncrementIngredient(filteredIngredients[0])
+                      setSearch('')
+                    }
+                  }
+                }}
                 placeholder="Поиск ингредиента..."
                 className="w-full pl-9 pr-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
@@ -363,8 +475,21 @@ export default function NewReceiptPage() {
 
             {/* Ingredient grid */}
             {filteredIngredients.length === 0 ? (
-              <div className="py-10 text-center text-sm text-muted-foreground">
-                Ничего не найдено
+              <div className="py-10 text-center space-y-3">
+                <div className="text-sm text-muted-foreground">Ничего не найдено</div>
+                {search.trim() !== '' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewIngName(search.trim())
+                      setShowCreateIngredientModal(true)
+                    }}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors"
+                  >
+                    <Plus className="size-3.5" />
+                    Создать новый продукт «{search.trim()}»
+                  </button>
+                )}
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
@@ -510,7 +635,7 @@ export default function NewReceiptPage() {
               className="w-full flex items-center justify-center gap-1.5 py-2 text-sm text-primary hover:bg-primary/10 rounded-lg border border-dashed border-border transition-colors"
             >
               <Plus className="size-4" />
-              Добавить вручную
+              Добавить услугу / доставку (без учета на складе)
             </button>
           </div>
 
@@ -558,6 +683,26 @@ export default function NewReceiptPage() {
               </div>
             )}
 
+            {(paymentType === 'paid' || paymentType === 'partial') && (
+              <div className="space-y-1.5">
+                <label className="text-xs font-medium text-muted-foreground">
+                  Списать со счёта
+                </label>
+                <select
+                  value={accountId}
+                  onChange={(e) => setAccountId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 font-medium"
+                >
+                  <option value="">Выберите счёт...</option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} ({a.type === 'cash' ? 'Наличные' : 'Банк'}) — {formatCurrency(a.balance)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-muted-foreground">Заметка</label>
               <textarea
@@ -584,6 +729,119 @@ export default function NewReceiptPage() {
           </div>
         </div>
       </div>
+
+      <Dialog open={showCreateIngredientModal} onOpenChange={setShowCreateIngredientModal}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Создать новый продукт</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleCreateIngredient} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Название</label>
+              <input
+                type="text"
+                required
+                value={newIngName}
+                onChange={(e) => setNewIngName(e.target.value)}
+                placeholder="Например, Картофель"
+                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Ед. измерения</label>
+                <select
+                  value={newIngUnit}
+                  onChange={(e) => setNewIngUnit(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  {['кг', 'г', 'л', 'мл', 'шт', 'порц', 'бут', 'пач'].map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Категория</label>
+                <input
+                  type="text"
+                  value={newIngCategory}
+                  onChange={(e) => setNewIngCategory(e.target.value)}
+                  placeholder="Продукты"
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Тип товара</label>
+              <div className="flex gap-2">
+                {(
+                  [
+                    { v: true, label: 'Продукт / ингредиент' },
+                    { v: false, label: 'Хозтовары / другое' },
+                  ] as { v: boolean; label: string }[]
+                ).map((t) => (
+                  <button
+                    key={t.label}
+                    type="button"
+                    onClick={() => setNewIngIsFood(t.v)}
+                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                      newIngIsFood === t.v
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-card border-border text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Мин. остаток</label>
+                <DecimalInput
+                  min={0}
+                  value={newIngMinQty}
+                  onChange={(v) => setNewIngMinQty(v)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Закупочная цена</label>
+                <DecimalInput
+                  min={0}
+                  value={newIngPrice}
+                  onChange={(v) => setNewIngPrice(v)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-2">
+              <button
+                type="button"
+                onClick={() => setShowCreateIngredientModal(false)}
+                className="px-4 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={creatingIngredient || !newIngName.trim()}
+                className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {creatingIngredient ? 'Создание...' : 'Создать и добавить'}
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
