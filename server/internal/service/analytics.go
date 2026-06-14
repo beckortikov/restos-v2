@@ -560,10 +560,14 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 		Capacity *int    `gorm:"column:capacity"`
 	}
 	var allTbls []freeTblRow
+	// У таблицы tables нет колонки is_deleted (она у menu_items) — фильтр
+	// `t.is_deleted = false` всегда падал с «column does not exist», из-за чего
+	// live-статус столов молча не грузился. Столы удаляются физически, поэтому
+	// доп. фильтр не нужен.
 	_ = scopedT.Table("tables AS t").
 		Select("t.id, t.name, z.name AS zone_name, t.status, t.capacity").
 		Joins("LEFT JOIN zones z ON z.id = t.zone_id").
-		Where("t.is_deleted = false").Scan(&allTbls).Error
+		Scan(&allTbls).Error
 	seen := make(map[string]bool, len(rows))
 	for _, r := range rows {
 		if r.TableID != nil {

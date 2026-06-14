@@ -1,5 +1,5 @@
 import { Outlet, useLocation } from 'react-router-dom'
-import { AuthProvider, AuthGuard, useAuth } from '@/lib/auth-store'
+import { AuthGuard, useAuth } from '@/lib/auth-store'
 import { AppSidebar, MobileHeader, MobileSidebar, SidebarProvider } from '@/components/app-sidebar'
 import { WaiterShell } from '@/components/waiter/waiter-shell'
 import { CashierShell } from '@/components/cashier-shell'
@@ -71,15 +71,14 @@ function AppContent() {
 }
 
 export function AppLayout() {
+  // AuthProvider — в корне (src/main.tsx), здесь только guard + лицензия.
   return (
-    <AuthProvider>
-      <AuthGuard>
-        <LicenseGate>
-          {/* Sticky warning banner — показывается только при state=grace|softLocked. */}
-          <LicenseWarningBanner />
-          <AppContent />
-        </LicenseGate>
-      </AuthGuard>
-    </AuthProvider>
+    <AuthGuard>
+      <LicenseGate>
+        {/* Sticky warning banner — показывается только при state=grace|softLocked. */}
+        <LicenseWarningBanner />
+        <AppContent />
+      </LicenseGate>
+    </AuthGuard>
   )
 }

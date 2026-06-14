@@ -137,7 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (tok && rid) {
         void (async () => {
           try {
-            const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } } }))
+            const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } }, headers: { 'X-Skip-Auth-Expire': '1' } }))
             if (restResp) {
               const rest = mapResponseRestaurant(restResp)
               setRestaurant(rest)
@@ -185,9 +185,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       Sentry.setUser({ id: mapped.id, username: mapped.name, extra: { role: mapped.role, restaurantId: mapped.restaurantId } })
 
       // Подтянуть детальный профиль (permissions) + ресторан в фоне.
+      // X-Skip-Auth-Expire: транзиентный 401 этих фоновых дозагрузок не должен
+      // выкидывать только что вошедшего кассира обратно на PIN.
+      const bg = { headers: { 'X-Skip-Auth-Expire': '1' } }
       void (async () => {
         try {
-          const userResp: any = await unwrap(api.GET('/api/v1/users/{id}', { params: { path: { id: mapped.id } } }))
+          const userResp: any = await unwrap(api.GET('/api/v1/users/{id}', { params: { path: { id: mapped.id } }, ...bg }))
           if (userResp) {
             const full = { ...mapped, ...mapResponseUser(userResp) }
             setUser(full)
@@ -195,7 +198,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }
         } catch {}
         try {
-          const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } } }))
+          const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } }, ...bg }))
           if (restResp) {
             const rest = mapResponseRestaurant(restResp)
             setRestaurant(rest)

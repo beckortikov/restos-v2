@@ -67,8 +67,13 @@ const idemMiddleware: Middleware = {
 }
 
 const authExpiredMiddleware: Middleware = {
-  async onResponse({ response }) {
-    if (response.status === 401 && typeof window !== 'undefined') {
+  async onResponse({ request, response }) {
+    // Фоновые/некритичные дозагрузки (профиль, ресторан сразу после логина)
+    // помечаются заголовком и НЕ должны выкидывать только что вошедшего юзера
+    // глобальным logout'ом при транзиентном 401 — иначе свежий вход
+    // откатывается на экран PIN. Critical-запросы (как раньше) логаутят.
+    if (response.status === 401 && typeof window !== 'undefined'
+        && request?.headers?.get('X-Skip-Auth-Expire') !== '1') {
       try {
         window.dispatchEvent(new CustomEvent('restos:auth:expired'))
       } catch {}

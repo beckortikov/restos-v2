@@ -1,10 +1,6 @@
 import { Outlet } from 'react-router-dom'
-import { AuthProvider } from '@/lib/auth-store'
 
+// AuthProvider живёт в корне (src/main.tsx). Здесь — просто Outlet.
 export function AuthLayout() {
-  return (
-    <AuthProvider>
-      <Outlet />
-    </AuthProvider>
-  )
+  return <Outlet />
 }

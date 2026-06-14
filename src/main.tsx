@@ -13,6 +13,7 @@ import * as Sentry from '@sentry/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import { AppRouter } from './router'
 import { ErrorBoundary } from '@/components/error-boundary'
+import { AuthProvider } from '@/lib/auth-store'
 import { queryClient } from '@/lib/query-client'
 import { initTheme } from '@/lib/theme'
 import './index.css'
@@ -114,7 +115,14 @@ createRoot(document.getElementById('root')!).render(
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>
         <Router>
-          <AppRouter />
+          {/* Единый AuthProvider в корне (внутри Router). Раньше провайдер
+              дублировался в AuthLayout и AppLayout, а состояние входа жило
+              только в localStorage — при переходе /login → /operations/pos
+              провайдер перемонтировался и ловил гонку (фоновый 401 →
+              logout → откат на PIN; белый экран при смене юзера). */}
+          <AuthProvider>
+            <AppRouter />
+          </AuthProvider>
         </Router>
       </QueryClientProvider>
     </ErrorBoundary>
