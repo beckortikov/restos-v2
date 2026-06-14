@@ -975,7 +975,11 @@ export default function ShiftsPage() {
                       ) : (
                         <ArrowUpFromLine className="size-3.5 text-destructive" />
                       )}
-                      <span className="text-foreground">{op.description || (op.type === 'cash_in' ? 'Внесение' : 'Изъятие')}</span>
+                      <span className="text-foreground">
+                        {op.category
+                          ? (op.description ? `${op.category} · ${op.description}` : op.category)
+                          : (op.description || (op.type === 'cash_in' ? 'Внесение' : 'Изъятие'))}
+                      </span>
                     </div>
                     <div className="flex items-center gap-3">
                       <span className={`font-medium ${op.type === 'cash_in' ? 'text-emerald-600' : 'text-destructive'}`}>
@@ -986,8 +990,8 @@ export default function ShiftsPage() {
                       </span>
                       {op.type === 'cash_out' && (
                         <button
-                          onClick={() => handleDeleteExpense(op.id, op.amount, op.description)}
-                          title="Удалить расход (баланс счёта будет скорректирован)"
+                          onClick={() => handleDeleteExpense(op.id, op.amount, op.category || op.description || 'Изъятие')}
+                          title="Удалить операцию (баланс счёта будет скорректирован)"
                           className="p-1 rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
                         >
                           <Trash2 className="size-3.5" />
