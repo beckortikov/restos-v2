@@ -9,6 +9,7 @@ import {
 } from '@/lib/types'
 import { api, unwrap, setV4Token, clearV4Token, getV4Token, getV4RestaurantId, clearV4RestaurantId, v4ErrorMessage } from '@/lib/api'
 import * as Sentry from '@sentry/react'
+import { queryClient } from '@/lib/query-client'
 
 // Default redirect after login per role
 const ROLE_HOME: Record<UserRole, string> = {
@@ -76,15 +77,13 @@ export function AuthGuard({ children }: { children: ReactNode }) {
     }
   }, [user, loading, pathname, navigate, hasAccess, homeRoute])
 
-  if (loading) {
+  if (loading || !user) {
     return (
       <div className="flex items-center justify-center h-screen bg-background">
         <div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
       </div>
     )
   }
-
-  if (!user) return null
 
   return <>{children}</>
 }
@@ -220,6 +219,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.removeItem(RESTAURANT_STORAGE_KEY)
     clearV4Token()
     Sentry.setUser(null)
+    try {
+      queryClient.cancelQueries()
+      queryClient.clear()
+    } catch {}
     // Намеренно не удаляем restaurant_id — он остаётся для следующего login.
     void api.POST('/api/v1/auth/logout', { body: undefined as any }).catch(() => {})
   }

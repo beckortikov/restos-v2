@@ -356,7 +356,7 @@ func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*Waiter
 		        COALESCE(SUM(o.service_amount), 0) AS service_amount,
 		        COALESCE(SUM(o.tip_amount), 0) AS tip_amount,
 		        COALESCE(AVG(EXTRACT(EPOCH FROM (o.closed_at - o.created_at))), 0) AS avg_dur_sec`).
-		Joins("LEFT JOIN users u ON u.id = o.waiter_id").
+		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed")
 	if f.From != nil {
 		q = q.Where("o.closed_at >= ?", *f.From)
@@ -535,8 +535,8 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 		        COALESCE(SUM(o.total_with_service), 0) AS revenue,
 		        COALESCE(AVG(EXTRACT(EPOCH FROM (o.closed_at - o.created_at))), 0) AS avg_dur_sec,
 		        COALESCE(SUM(o.guests_count), 0) AS guests_total`).
-		Joins("LEFT JOIN tables t ON t.id = o.table_id").
-		Joins("LEFT JOIN zones z ON z.id = t.zone_id").
+		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
+		Joins("LEFT JOIN zones z ON z.id::text = t.zone_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed")
 	if f.From != nil {
 		q = q.Where("o.closed_at >= ?", *f.From)
@@ -566,7 +566,7 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 	// доп. фильтр не нужен.
 	_ = scopedT.Table("tables AS t").
 		Select("t.id, t.name, z.name AS zone_name, t.status, t.capacity").
-		Joins("LEFT JOIN zones z ON z.id = t.zone_id").
+		Joins("LEFT JOIN zones z ON z.id::text = t.zone_id").
 		Scan(&allTbls).Error
 	seen := make(map[string]bool, len(rows))
 	for _, r := range rows {
