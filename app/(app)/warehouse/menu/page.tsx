@@ -1,21 +1,21 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub } from '@/lib/decimal'
 import { type MenuItem, type MenuStation, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
-import { fetchMenuItems, createMenuItem as createMenuItemDb, updateMenuItem, toggleMenuAvailability, fetchMenuCategories, fetchMenuCategoriesFull, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride, createIngredient } from '@/lib/queries'
+import { fetchMenuItems, toggleMenuAvailability, fetchMenuCategories, fetchMenuCategoriesFull, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
 import { type MenuCategory } from '@/lib/queries'
 import { Search, ChevronDown, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X } from 'lucide-react'
-import { CreateMenuItemDialog } from '@/components/dialogs/create-menu-item-dialog'
-import { EditMenuItemDialog } from '@/components/dialogs/edit-menu-item-dialog'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useDataSync } from '@/hooks/use-data-sync'
 
 export default function MenuPage() {
+  const navigate = useNavigate()
   const { canDo } = useAuth()
   const canSeeFinancials = canDo('menu.view_cost')
   const canEdit = canDo('menu.edit')
@@ -23,9 +23,6 @@ export default function MenuPage() {
   const [category, setCategory] = useState('all')
   const [station, setStation] = useState<'all' | MenuStation>('all')
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editDialogOpen, setEditDialogOpen] = useState(false)
-  const [editingItem, setEditingItem] = useState<MenuItem | null>(null)
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [menuCategoriesFull, setMenuCategoriesFull] = useState<MenuCategory[]>([])
@@ -50,82 +47,6 @@ export default function MenuPage() {
   // SSE-driven auto-refresh при изменении меню (другой кассир добавил позицию,
   // менеджер обновил техкарту, и т.п.).
   useDataSync(['menu_items', 'menu_categories', 'tech_card_lines'], () => { reloadAll().catch(console.error) })
-
-  async function handleCreateMenuItem(data: { name: string; category: string; price: number; emoji: string; cogs: number; isAvailable: boolean; isPurchased?: boolean; purchasePrice?: number; purchaseUnit?: string; purchaseMinQty?: number; isBatchCooking?: boolean; lowStockThreshold?: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; saleStep?: number; techCard: { name: string; qty: number; unit: string; ingredientId?: string; semiId?: string }[] }) {
-    try {
-      let finalData = { ...data }
-
-      // Purchased item: auto-create ingredient + set tech card
-      if (data.isPurchased && data.purchasePrice && data.purchaseUnit) {
-        const ing = await createIngredient({
-          name: data.name,
-          category: data.category,
-          qty: 0,
-          min_qty: data.purchaseMinQty ?? 0,
-          unit: data.purchaseUnit,
-          price_per_unit: data.purchasePrice,
-        })
-        if (ing) {
-          finalData = {
-            ...data,
-            cogs: data.purchasePrice,
-            techCard: [{ name: data.name, qty: 1, unit: data.purchaseUnit, ingredientId: ing.id }],
-          }
-        }
-      }
-
-      await createMenuItemDb({
-        ...finalData,
-        stopListOverride: false,
-        station: 'hot_kitchen',
-        preparedQty: 0,
-        isBatchCooking: finalData.isBatchCooking ?? false,
-      })
-      await reloadAll()
-      toast.success(data.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
-    } catch {
-      toast.error('Ошибка при добавлении')
-    }
-  }
-
-  function openEditDialog(item: MenuItem) {
-    setEditingItem(item)
-    setEditDialogOpen(true)
-  }
-
-  async function handleEditSubmit(data: { name: string; category: string; price: number; emoji: string; cogs: number; isAvailable: boolean; isBatchCooking?: boolean; lowStockThreshold?: number; techCard: { name: string; qty: number; unit: string; ingredientId?: string; semiId?: string }[] }) {
-    if (!editingItem) return
-    try {
-      await updateMenuItem(editingItem.id, data)
-      toast.success('Блюдо обновлено')
-      await reloadAll()
-    } catch {
-      toast.error('Ошибка при обновлении')
-    }
-  }
-
-  async function handleDeleteMenuItem(id: string) {
-    try {
-      await deleteMenuItem(id)
-      const updated = await fetchMenuItems()
-      setMenuItems(updated)
-      toast.success('Блюдо удалено')
-    } catch (e) {
-      const msg = humanizeError(e, 'Ошибка при удалении блюда')
-      toast.error(msg)
-    }
-  }
-
-  async function handleArchiveMenuItem(id: string) {
-    try {
-      await archiveMenuItem(id)
-      const updated = await fetchMenuItems()
-      setMenuItems(updated)
-      toast.success('Блюдо отправлено в архив')
-    } catch {
-      toast.error('Ошибка при архивировании блюда')
-    }
-  }
 
   async function handleToggleAvailability(id: string) {
     const item = menuItems.find((m) => m.id === id)
@@ -165,7 +86,7 @@ export default function MenuPage() {
         </div>
         {canEdit && (
           <button
-            onClick={() => setDialogOpen(true)}
+            onClick={() => navigate('/warehouse/menu/new')}
             className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
           >
             + Добавить блюдо
@@ -484,7 +405,7 @@ export default function MenuPage() {
                     <span className="text-muted-foreground">Маржа: <span className="font-semibold text-emerald-600">{item.price > 0 ? dRound(dMul(dDiv(dSub(item.price, item.cogs), item.price), 100), 0) : 0}%</span></span>
                     {canEdit && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); openEditDialog(item) }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/warehouse/menu/${item.id}`) }}
                         className="flex items-center gap-1 ml-auto text-xs text-primary hover:underline"
                       >
                         <Pencil className="size-3" />
@@ -499,22 +420,6 @@ export default function MenuPage() {
         </div>
       )}
 
-      <CreateMenuItemDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onSubmit={handleCreateMenuItem}
-      />
-
-      {editingItem && (
-        <EditMenuItemDialog
-          open={editDialogOpen}
-          onOpenChange={setEditDialogOpen}
-          menuItem={editingItem}
-          onSubmit={handleEditSubmit}
-          onDelete={handleDeleteMenuItem}
-          onArchive={handleArchiveMenuItem}
-        />
-      )}
       </>
       )}
     </div>

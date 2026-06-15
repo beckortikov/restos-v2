@@ -45,6 +45,8 @@ const Showcase = () => L(() => import('@/app/(app)/operations/showcase/page'))
 // Warehouse
 const Inventory = () => L(() => import('@/app/(app)/warehouse/inventory/page'))
 const Menu = () => L(() => import('@/app/(app)/warehouse/menu/page'))
+const MenuNew = () => L(() => import('@/app/(app)/warehouse/menu/new/page'))
+const MenuEdit = () => L(() => import('@/app/(app)/warehouse/menu/[id]/page'))
 const Receipts = () => L(() => import('@/app/(app)/warehouse/receipts/page'))
 const ReceiptsNew = () => L(() => import('@/app/(app)/warehouse/receipts/new/page'))
 const Semi = () => L(() => import('@/app/(app)/warehouse/semi/page'))
@@ -130,6 +132,8 @@ export function AppRouter() {
         {/* Warehouse */}
         <Route path="/warehouse/inventory" element={<Inventory />} />
         <Route path="/warehouse/menu" element={<Menu />} />
+        <Route path="/warehouse/menu/new" element={<MenuNew />} />
+        <Route path="/warehouse/menu/:id" element={<MenuEdit />} />
         <Route path="/warehouse/receipts" element={<Receipts />} />
         <Route path="/warehouse/receipts/new" element={<ReceiptsNew />} />
         <Route path="/warehouse/semi" element={<Semi />} />

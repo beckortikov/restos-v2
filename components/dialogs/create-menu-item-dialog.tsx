@@ -218,7 +218,7 @@ export function CreateMenuItemDialog({ open, onOpenChange, onSubmit }: CreateMen
       })
       if (ing) {
         setIngredients((prev) => [...prev, ing])
-        selectIngredient(quickCreateTargetIndex, ing.id)
+        selectIngredient(quickCreateTargetIndex, ing.id, ing)
         setQuickCreateOpen(false)
         // Reset fields
         setQuickCreateName('')
@@ -251,8 +251,8 @@ export function CreateMenuItemDialog({ open, onOpenChange, onSubmit }: CreateMen
     })
   }
 
-  function selectIngredient(index: number, id: string) {
-    const ing = ingredients.find((i) => i.id === id)
+  function selectIngredient(index: number, id: string, customIng?: Ingredient) {
+    const ing = customIng || ingredients.find((i) => i.id === id)
     if (!ing) return
     updateTechLine(index, { ingredientId: id, semiId: undefined, name: ing.name, unit: ing.unit })
   }
