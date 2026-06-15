@@ -18,9 +18,10 @@ import {
   type Ingredient,
   type SemiFinishedType,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createIngredient } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
+import { toast } from 'sonner'
 
 interface MenuItemForm {
   name: string
@@ -69,6 +70,7 @@ function IngredientCombobox({
   onSelectIngredient,
   onSelectSemi,
   onClear,
+  onQuickCreate,
 }: {
   ingredients: Ingredient[]
   semiTypes: SemiFinishedType[]
@@ -78,6 +80,7 @@ function IngredientCombobox({
   onSelectIngredient: (id: string) => void
   onSelectSemi: (id: string) => void
   onClear: () => void
+  onQuickCreate?: (name: string) => void
 }) {
   const [query, setQuery] = useState('')
   const [isOpen, setIsOpen] = useState(false)
@@ -120,8 +123,8 @@ function IngredientCombobox({
           className="w-full pl-7 pr-2 py-1.5 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
         />
       </div>
-      {isOpen && hasResults && (
-        <div className="absolute z-50 mt-1 w-full max-h-48 overflow-y-auto bg-card border border-border rounded-lg shadow-lg">
+      {isOpen && (hasResults || query.trim() !== '') && (
+        <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto bg-card border border-border rounded-lg shadow-lg">
           {filteredIngs.length > 0 && (
             <>
               <div className="px-2 py-1 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/50">Ингредиенты</div>
@@ -147,6 +150,20 @@ function IngredientCombobox({
                 </button>
               ))}
             </>
+          )}
+          {query.trim() !== '' && (
+            <button
+              type="button"
+              onClick={() => {
+                onQuickCreate?.(query.trim())
+                setQuery('')
+                setIsOpen(false)
+              }}
+              className="w-full text-left px-3 py-2 text-xs font-medium text-primary hover:bg-primary/5 transition-colors border-t border-border flex items-center gap-1.5"
+            >
+              <Plus className="size-3.5" />
+              <span>Создать продукт «{query.trim()}»</span>
+            </button>
           )}
         </div>
       )}
@@ -177,6 +194,50 @@ export function EditMenuItemDialog({ open, onOpenChange, menuItem, onSubmit, onD
   const [semiTypes, setSemiTypes] = useState<SemiFinishedType[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [dataLoaded, setDataLoaded] = useState(false)
+
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false)
+  const [quickCreateName, setQuickCreateName] = useState('')
+  const [quickCreateTargetIndex, setQuickCreateTargetIndex] = useState<number | null>(null)
+  const [newIngUnit, setNewIngUnit] = useState('кг')
+  const [newIngCategory, setNewIngCategory] = useState('Продукты')
+  const [newIngPrice, setNewIngPrice] = useState(0)
+  const [newIngMinQty, setNewIngMinQty] = useState(0)
+  const [newIngIsFood, setNewIngIsFood] = useState(true)
+  const [creatingIngredient, setCreatingIngredient] = useState(false)
+
+  const handleQuickCreateIngredient = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (creatingIngredient || !quickCreateName.trim() || quickCreateTargetIndex === null) return
+    setCreatingIngredient(true)
+    try {
+      const ing = await createIngredient({
+        name: quickCreateName.trim(),
+        category: newIngCategory.trim() || 'Продукты',
+        qty: 0,
+        min_qty: newIngMinQty || 0,
+        unit: newIngUnit,
+        price_per_unit: newIngPrice || 0,
+        is_food: newIngIsFood,
+      })
+      if (ing) {
+        setIngredients((prev) => [...prev, ing])
+        selectIngredient(quickCreateTargetIndex, ing.id)
+        setQuickCreateOpen(false)
+        // Reset fields
+        setQuickCreateName('')
+        setNewIngUnit('кг')
+        setNewIngCategory('Продукты')
+        setNewIngPrice(0)
+        setNewIngMinQty(0)
+        setNewIngIsFood(true)
+        toast.success(`Товар «${ing.name}» создан и добавлен в техкарту`)
+      }
+    } catch (err) {
+      toast.error('Ошибка создания товара')
+    } finally {
+      setCreatingIngredient(false)
+    }
+  }
 
   useEffect(() => {
     if (open && !dataLoaded) {
@@ -458,6 +519,11 @@ export function EditMenuItemDialog({ open, onOpenChange, menuItem, onSubmit, onD
                       onSelectIngredient={(id) => selectIngredient(i, id)}
                       onSelectSemi={(id) => selectSemi(i, id)}
                       onClear={() => clearTechLine(i)}
+                      onQuickCreate={(name) => {
+                        setQuickCreateName(name)
+                        setQuickCreateTargetIndex(i)
+                        setQuickCreateOpen(true)
+                      }}
                     />
                   </div>
                   <div className="w-20 space-y-1">
@@ -516,6 +582,119 @@ export function EditMenuItemDialog({ open, onOpenChange, menuItem, onSubmit, onD
           </button>
         </DialogFooter>
       </DialogContent>
+
+      <Dialog open={quickCreateOpen} onOpenChange={setQuickCreateOpen}>
+        <DialogContent className="sm:max-w-md rounded-xl z-[60]">
+          <DialogHeader>
+            <DialogTitle>Создать новый продукт</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleQuickCreateIngredient} className="space-y-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Название</label>
+              <input
+                type="text"
+                required
+                value={quickCreateName}
+                onChange={(e) => setQuickCreateName(e.target.value)}
+                placeholder="Например, Картофель"
+                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+            
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Ед. измерения</label>
+                <select
+                  value={newIngUnit}
+                  onChange={(e) => setNewIngUnit(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  {['кг', 'г', 'л', 'мл', 'шт', 'порц', 'бут', 'пач'].map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Категория</label>
+                <input
+                  type="text"
+                  value={newIngCategory}
+                  onChange={(e) => setNewIngCategory(e.target.value)}
+                  placeholder="Продукты"
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Тип товара</label>
+              <div className="flex gap-2">
+                {(
+                  [
+                    { v: true, label: 'Продукт / ингредиент' },
+                    { v: false, label: 'Хозтовары / другое' },
+                  ] as { v: boolean; label: string }[]
+                ).map((t) => (
+                  <button
+                    key={t.label}
+                    type="button"
+                    onClick={() => setNewIngIsFood(t.v)}
+                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+                      newIngIsFood === t.v
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-card border-border text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Мин. остаток</label>
+                <DecimalInput
+                  min={0}
+                  value={newIngMinQty}
+                  onChange={(v) => setNewIngMinQty(v)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Закупочная цена</label>
+                <DecimalInput
+                  min={0}
+                  value={newIngPrice}
+                  onChange={(v) => setNewIngPrice(v)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+            </div>
+
+            <DialogFooter className="pt-2">
+              <button
+                type="button"
+                onClick={() => setQuickCreateOpen(false)}
+                className="px-4 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="submit"
+                disabled={creatingIngredient || !quickCreateName.trim()}
+                className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {creatingIngredient ? 'Создание...' : 'Создать и добавить'}
+              </button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
     </Dialog>
   )
 }
