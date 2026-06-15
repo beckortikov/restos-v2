@@ -19,7 +19,7 @@
 import { memo } from 'react'
 import { toast } from 'sonner'
 import { XCircle } from 'lucide-react'
-import { formatCurrency, calcLineTotal, formatQty } from '@/lib/helpers'
+import { formatCurrency, calcLineTotal, formatQty, getTimeSince } from '@/lib/helpers'
 import { VOID_REASON_LABELS, type Order, type VoidReason, type OrderVoid } from '@/lib/types'
 import { cancelOrderItem, cancelOrderItemPartial } from '@/lib/queries'
 
@@ -79,14 +79,19 @@ function OrderItemsListInner({
         const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize)
         const qtyLabel = isWeight ? formatQty(item.qty, item.unit) : `x${item.qty}`
         const visuallyMuted = isVoided || isCancelled
+        const itemCreatedAt = item.createdAt || order.createdAt
+        const itemTimeSince = itemCreatedAt ? getTimeSince(itemCreatedAt) : null
         return (
           <div key={i} className={`px-4 py-2.5 ${visuallyMuted ? 'opacity-50 bg-muted/30' : ''}`}>
             <div className="flex items-center justify-between">
               <div className="text-sm flex items-center gap-1 flex-wrap">
                 <span className={`font-medium ${visuallyMuted ? 'line-through' : ''}`}>{item.name}</span>
                 <span className="text-muted-foreground"> {qtyLabel}</span>
+                {itemTimeSince && (
+                  <span className="ml-1.5 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">⏱ {itemTimeSince}</span>
+                )}
                 {mi?.cookTimeMin && (
-                  <span className="ml-1.5 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">⏱ {mi.cookTimeMin} мин</span>
+                  <span className="ml-1.5 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">TC: {mi.cookTimeMin} мин</span>
                 )}
                 {mi && mi.station === 'bar' && (
                   <span className="ml-1.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-blue-50 text-blue-700">☕ Бар</span>

@@ -55,7 +55,7 @@ export const ORDERS_SLIM_SELECT =
   'guests_count,' +
   'payment_method,tab_label,' +
   'ready_at,closed_at,created_at,' +
-  'order_items(id,cancelled_at,name,qty,price,unit,unit_size,cogs,menu_item_id)'
+  'order_items(id,cancelled_at,name,qty,price,unit,unit_size,cogs,menu_item_id,created_at)'
 
 export const SHIFT_SELECT = '*, opener:users!cash_shifts_opened_by_fkey(name), closer:users!cash_shifts_closed_by_fkey(name)'
 
@@ -203,6 +203,7 @@ export function _mapV4OrderItem(i: Record<string, any>): OrderItem {
     servedBy: i.served_by ?? undefined,
     note: (i.note as string | null | undefined) ?? null,
     kitchenStatus: i.kitchen_status ?? null,
+    createdAt: i.created_at ?? i.createdAt,
     modifiers: Array.isArray(i.modifiers)
       ? i.modifiers.map((m: any) => ({
           modifierId: m.modifier_id ?? m.id ?? undefined,

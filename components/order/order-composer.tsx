@@ -1918,8 +1918,11 @@ export function OrderComposer(props: OrderComposerProps) {
                           <p className={`text-xs font-medium truncate ${voided ? 'text-muted-foreground line-through' : 'text-amber-950'}`}>
                             {it.name}
                           </p>
-                          <p className={`text-[10px] ${voided ? 'text-muted-foreground line-through' : 'text-amber-700'}`}>
-                            ×{it.unit && it.unit !== 'piece' ? formatQty(it.qty, it.unit) : it.qty} · {formatPriceLabel(it.price, it.unit, it.unitSize)}
+                          <p className={`text-[10px] ${voided ? 'text-muted-foreground line-through' : 'text-amber-700'} flex items-center gap-1.5 flex-wrap`}>
+                            <span>×{it.unit && it.unit !== 'piece' ? formatQty(it.qty, it.unit) : it.qty} · {formatPriceLabel(it.price, it.unit, it.unitSize)}</span>
+                            {it.createdAt && (
+                              <span className="text-[10px] text-amber-700/80 bg-amber-100/50 px-1.5 py-0.5 rounded shrink-0">⏱ {getTimeSince(it.createdAt)}</span>
+                            )}
                           </p>
                         </div>
                         <span className={`text-xs font-semibold min-w-[5rem] text-right whitespace-nowrap tabular-nums ${

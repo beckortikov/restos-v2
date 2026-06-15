@@ -56,6 +56,7 @@ import {
   FileText,
   RotateCcw,
   Receipt,
+  Loader2,
 } from 'lucide-react'
 
 interface FinancialAccount {
@@ -191,6 +192,7 @@ export function OrderActionsBody({
   const [addPaymentMethod, setAddPaymentMethod] = useState<PaymentType>('cash')
   const [addPaymentAccountId, setAddPaymentAccountId] = useState<string>('')
   const [addPaymentAmount, setAddPaymentAmount] = useState('')
+  const [reprinting, setReprinting] = useState(false)
 
   // Initial data load (one-shot). При смене order.id перезагружаем voids/splits ниже.
   useEffect(() => {
@@ -410,6 +412,20 @@ export function OrderActionsBody({
     setShowReceipt(true)
   }, [order, accounts, tables, users, zones, restaurant, user, voids])
 
+  const handleReprintDirect = useCallback(async () => {
+    if (!order?.id) return
+    setReprinting(true)
+    try {
+      const { reprintOrderReceipt } = await import('@/lib/queries')
+      const { jobId } = await reprintOrderReceipt(order.id)
+      toast.success(jobId ? `Копия чека отправлена (${jobId.slice(0, 8)}…)` : 'Копия чека отправлена на печать')
+    } catch (e) {
+      toast.error(e instanceof Error ? `Ошибка печати: ${e.message}` : 'Ошибка печати')
+    } finally {
+      setReprinting(false)
+    }
+  }, [order?.id])
+
   const isOwnAsWaiter = role === 'waiter' && order.waiterId === user?.id
   const canDoVoid = canDo('orders.void')
 
@@ -596,13 +612,23 @@ export function OrderActionsBody({
         {/* Повтор чека — превью финального чека + печать КОПИИ (как «Посмотреть
             чек» в v1, по образцу iiko). Гейтится правом orders.reprint. */}
         {order.status === 'done' && canDo('orders.reprint') && (
-          <button
-            onClick={handleViewClosedReceipt}
-            className="w-full inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-5 py-3 text-sm font-medium text-foreground hover:bg-muted transition-colors"
-          >
-            <Receipt className="size-4" />
-            Посмотреть чек
-          </button>
+          <div className="flex gap-2 w-full">
+            <button
+              onClick={handleReprintDirect}
+              disabled={reprinting}
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-5 py-3 text-sm font-medium text-foreground hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              {reprinting ? <Loader2 className="size-4 animate-spin" /> : <Printer className="size-4" />}
+              Печать копии
+            </button>
+            <button
+              onClick={handleViewClosedReceipt}
+              className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-card px-5 py-3 text-sm font-medium text-foreground hover:bg-muted transition-colors"
+            >
+              <Receipt className="size-4" />
+              Посмотреть чек
+            </button>
+          </div>
         )}
 
         {order.status === 'done' && canDo('orders.cancel') && !order.isSplit && (

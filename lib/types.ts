@@ -253,6 +253,8 @@ export interface OrderItem {
   /** Computed бэком per-item: pending/cooking/ready/served/cancelled.
    *  Колонки в БД нет — выводится в service/orders.go::computeItemKitchenStatus. */
   kitchenStatus?: string | null
+  /** ISO timestamp when this specific order item was added to the database. */
+  createdAt?: string
 }
 
 export interface Order {

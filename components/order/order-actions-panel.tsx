@@ -727,8 +727,11 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
                   {served && <CheckCircle2 className="size-3.5 shrink-0 text-status-ready" />}
                   {item.name}
                 </p>
-                <p className={`text-[10px] ${voided ? 'text-muted-foreground/70 line-through' : 'text-muted-foreground'}`}>
-                  ×{item.qty} · {formatCurrency(item.price)}
+                <p className={`text-[10px] ${voided ? 'text-muted-foreground/70 line-through' : 'text-muted-foreground'} flex items-center gap-1.5 flex-wrap`}>
+                  <span>×{item.qty} · {formatCurrency(item.price)}</span>
+                  {item.createdAt && (
+                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">⏱ {getTimeSince(item.createdAt)}</span>
+                  )}
                 </p>
                 {item.note ? (
                   <p className="text-[10px] italic text-amber-700/90 dark:text-amber-300/90 truncate">
