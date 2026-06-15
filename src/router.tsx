@@ -51,7 +51,10 @@ const Receipts = () => L(() => import('@/app/(app)/warehouse/receipts/page'))
 const ReceiptsNew = () => L(() => import('@/app/(app)/warehouse/receipts/new/page'))
 const Semi = () => L(() => import('@/app/(app)/warehouse/semi/page'))
 const Suppliers = () => L(() => import('@/app/(app)/warehouse/suppliers/page'))
+const SuppliersNew = () => L(() => import('@/app/(app)/warehouse/suppliers/new/page'))
+const SuppliersEdit = () => L(() => import('@/app/(app)/warehouse/suppliers/[id]/page'))
 const Writeoffs = () => L(() => import('@/app/(app)/warehouse/writeoffs/page'))
+const WriteoffsNew = () => L(() => import('@/app/(app)/warehouse/writeoffs/new/page'))
 const SupplyExpenses = () => L(() => import('@/app/(app)/warehouse/supply-expenses/page'))
 const History = () => L(() => import('@/app/(app)/warehouse/history/page'))
 const InventoryCheck = () => L(() => import('@/app/(app)/warehouse/inventory-check/page'))
@@ -138,7 +141,10 @@ export function AppRouter() {
         <Route path="/warehouse/receipts/new" element={<ReceiptsNew />} />
         <Route path="/warehouse/semi" element={<Semi />} />
         <Route path="/warehouse/suppliers" element={<Suppliers />} />
+        <Route path="/warehouse/suppliers/new" element={<SuppliersNew />} />
+        <Route path="/warehouse/suppliers/:id" element={<SuppliersEdit />} />
         <Route path="/warehouse/writeoffs" element={<Writeoffs />} />
+        <Route path="/warehouse/writeoffs/new" element={<WriteoffsNew />} />
         <Route path="/warehouse/supply-expenses" element={<SupplyExpenses />} />
         <Route path="/warehouse/history" element={<History />} />
         <Route path="/warehouse/inventory-check" element={<InventoryCheck />} />

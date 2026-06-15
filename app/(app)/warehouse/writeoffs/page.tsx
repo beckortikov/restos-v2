@@ -1,20 +1,20 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { type StockWriteoff, type WriteoffReason, WRITEOFF_REASON_LABELS } from '@/lib/types'
 import { fetchWriteoffs } from '@/lib/queries'
 import { Trash2, Plus, ChevronDown, ChevronRight, Filter } from 'lucide-react'
-import { CreateWriteoffDialog } from '@/components/dialogs/create-writeoff-dialog'
 
 const ALL_REASONS: WriteoffReason[] = ['spoilage', 'breakage', 'tasting', 'expired', 'other']
 
 export default function WriteoffsPage() {
   const { canDo } = useAuth()
+  const navigate = useNavigate()
   const [writeoffs, setWriteoffs] = useState<StockWriteoff[]>([])
   const [loading, setLoading] = useState(true)
-  const [dialogOpen, setDialogOpen] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [reasonFilter, setReasonFilter] = useState<WriteoffReason | 'all'>('all')
 
@@ -60,7 +60,7 @@ export default function WriteoffsPage() {
         </div>
         {canDo('writeoffs.create') && (
           <button
-            onClick={() => setDialogOpen(true)}
+            onClick={() => navigate('/warehouse/writeoffs/new')}
             className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
           >
             <Plus className="size-4" />
@@ -189,11 +189,6 @@ export default function WriteoffsPage() {
         })}
       </div>
 
-      <CreateWriteoffDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        onSuccess={reload}
-      />
     </div>
   )
 }

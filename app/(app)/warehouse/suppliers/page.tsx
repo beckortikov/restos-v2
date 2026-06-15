@@ -1,12 +1,12 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { type Supplier } from '@/lib/types'
-import { fetchSuppliers, createSupplier as createSupplierDb, updateSupplier, deleteSupplier } from '@/lib/queries'
+import { fetchSuppliers, updateSupplier, deleteSupplier } from '@/lib/queries'
 import { Phone, User, AlertTriangle, Plus, Search, Pencil, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users } from 'lucide-react'
-import { CreateSupplierDialog } from '@/components/dialogs/create-supplier-dialog'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
 
@@ -15,8 +15,7 @@ type DebtFilter = 'all' | 'with_debt' | 'no_debt' | 'over_limit'
 export default function SuppliersPage() {
   const { canDo } = useAuth()
   const isManager = canDo('suppliers.manage')
-  const [dialogOpen, setDialogOpen] = useState(false)
-  const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null)
+  const navigate = useNavigate()
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -82,29 +81,7 @@ export default function SuppliersPage() {
     return Array.from(map.entries()).sort((a, b) => b[1].count - a[1].count)
   }, [suppliers])
 
-  async function handleCreateOrUpdate(data: { name: string; contactPerson: string; phone: string; categories: string[]; paymentTermsDays: number; creditLimit: number }) {
-    try {
-      if (editingSupplier) {
-        await updateSupplier(editingSupplier.id, {
-          name: data.name,
-          contact_person: data.contactPerson,
-          phone: data.phone,
-          categories: data.categories,
-          payment_terms_days: data.paymentTermsDays,
-          credit_limit: data.creditLimit,
-        })
-        toast.success('Поставщик обновлён')
-      } else {
-        await createSupplierDb({ ...data, currentDebt: 0 })
-        toast.success('Поставщик добавлен')
-      }
-      await reload()
-    } catch (e) {
-      console.error(e)
-      toast.error(editingSupplier ? 'Ошибка обновления' : 'Ошибка создания')
-    }
-    setEditingSupplier(null)
-  }
+
 
   async function handleDelete(sup: Supplier) {
     if (!confirm(`Удалить поставщика "${sup.name}"? Это действие необратимо.`)) return
@@ -154,7 +131,7 @@ export default function SuppliersPage() {
         </div>
         {isManager && (
           <button
-            onClick={() => { setEditingSupplier(null); setDialogOpen(true) }}
+            onClick={() => navigate('/warehouse/suppliers/new')}
             className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
           >
             <Plus className="size-4" />
@@ -386,7 +363,7 @@ export default function SuppliersPage() {
                           </button>
                         )}
                         <button
-                          onClick={() => { setEditingSupplier(sup); setDialogOpen(true) }}
+                          onClick={() => navigate('/warehouse/suppliers/' + sup.id)}
                           title="Редактировать"
                           className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                         >
@@ -467,12 +444,7 @@ export default function SuppliersPage() {
         })}
       </div>
 
-      <CreateSupplierDialog
-        open={dialogOpen}
-        onOpenChange={(open) => { setDialogOpen(open); if (!open) setEditingSupplier(null) }}
-        onSubmit={handleCreateOrUpdate}
-        editingSupplier={editingSupplier}
-      />
+
     </div>
   )
 }
