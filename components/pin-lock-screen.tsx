@@ -51,23 +51,31 @@ export function PinLockScreen({ restaurantId, restaurantName, onUnlock, onLogout
   // Validate when 4 digits entered
   useEffect(() => {
     if (pin.length !== 4) return
+    let active = true
     setLoading(true)
     validatePin(pin, restaurantId)
       .then(user => {
+        if (!active) return
         if (user) {
           onUnlock(user)
         } else {
           setError('Неверный PIN-код')
           setShake(true)
-          setTimeout(() => { setShake(false); setPin('') }, 600)
+          setTimeout(() => { if (active) { setShake(false); setPin('') } }, 600)
         }
       })
       .catch(() => {
+        if (!active) return
         setError('Ошибка проверки')
         setShake(true)
-        setTimeout(() => { setShake(false); setPin('') }, 600)
+        setTimeout(() => { if (active) { setShake(false); setPin('') } }, 600)
       })
-      .finally(() => setLoading(false))
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => {
+      active = false
+    }
   }, [pin, restaurantId, onUnlock])
 
   // Keyboard input

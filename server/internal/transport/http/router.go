@@ -211,6 +211,7 @@ func NewRouter(deps Deps) http.Handler {
 			// клиенту убедиться, что http://<host>:3001 — это RestOS v4, до
 			// логина. Возвращает {machine_id, restaurant_id, restaurant_name}.
 			g.Get("/public/machine-info", licenseH.PublicMachineInfo)
+			g.Post("/users/validate-pin", usersH.ValidatePIN)
 		})
 
 		// Защищённые endpoints с обычным таймаутом.
@@ -458,7 +459,6 @@ func NewRouter(deps Deps) http.Handler {
 			// Admin CRUD: users, customers, suppliers, reservations, restaurant.
 			g.Post("/users", usersH.Create)
 			g.Post("/users/generate-pin", usersH.GeneratePIN)
-			g.Post("/users/validate-pin", usersH.ValidatePIN)
 			g.Patch("/users/{id}", usersH.Patch)
 			g.Delete("/users/{id}", usersH.Delete)
 			g.Post("/customers", customersH.Create)

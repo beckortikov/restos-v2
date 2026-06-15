@@ -48,6 +48,7 @@ export default function LoginPage() {
   }, [user, navigate, homeRoute])
 
   async function submitPin(value: string) {
+    if (loading) return
     if (value.length < 4) {
       setError('PIN не может быть короче 4 цифр')
       return
@@ -203,7 +204,7 @@ export default function LoginPage() {
 
             <button
               type="button"
-              onClick={() => submitPin(pin)}
+              onClick={() => { clearAutoSubmit(); submitPin(pin) }}
               disabled={loading || pin.length < 4}
               className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-3.5 rounded-xl text-base font-semibold hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >

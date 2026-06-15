@@ -296,13 +296,19 @@ func (s *UsersService) ValidatePIN(ctx context.Context, restaurantID, pin string
 	if pin == "" {
 		return nil, apperrors.Wrap("VALIDATION", "pin is required", nil)
 	}
+	var q *gorm.DB
 	scoped, err := s.r.ForTenant(ctx)
-	if err != nil {
-		return nil, err
-	}
-	q := scoped.Where("pin IS NOT NULL")
-	if restaurantID != "" {
-		q = q.Where("restaurant_id = ?", restaurantID)
+	if err == nil {
+		q = scoped.Where("pin IS NOT NULL")
+		if restaurantID != "" {
+			q = q.Where("restaurant_id = ?", restaurantID)
+		}
+	} else {
+		// Fallback для публичного вызова (без JWT токена)
+		if restaurantID == "" {
+			return nil, apperrors.Wrap("VALIDATION", "restaurant_id is required for public pin validation", nil)
+		}
+		q = s.r.Raw().WithContext(ctx).Where("restaurant_id = ? AND pin IS NOT NULL", restaurantID)
 	}
 	var matches []models.User
 	if err := q.Find(&matches).Error; err != nil {
