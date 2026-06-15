@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchTablesAnalytics, type TablesAnalyticsReport, type TableLiveStatus } from '@/lib/queries/analytics'
+import { fetchTablesAnalytics, fetchPeakHours, type TablesAnalyticsReport, type TableLiveStatus, type PeakHoursReport } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
 import {
   MapPin,
@@ -13,7 +13,7 @@ import {
   Download,
   Circle,
 } from 'lucide-react'
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip, Legend } from 'recharts'
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip, Legend, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 
@@ -87,6 +87,7 @@ const STATUS_COLOR: Record<TableLiveStatus, string> = {
 export default function TablesAnalyticsPage() {
   const { canDo } = useAuth()
   const [report, setReport] = useState<TablesAnalyticsReport | null>(null)
+  const [peak, setPeak] = useState<PeakHoursReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('month')
   const [zoneFilter, setZoneFilter] = useState<string>('all')
@@ -99,7 +100,24 @@ export default function TablesAnalyticsPage() {
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
+    // Почасовая загрузка за период — для графика «Загрузка по часам дня».
+    fetchPeakHours({ from, to }).then(setPeak).catch(() => setPeak(null))
   }, [period])
+
+  // Загрузка по часам дня: суммируем заказы по часу (0..23) из peak-hours-ячеек.
+  const hourlyData = useMemo(() => {
+    const byHour = new Array(24).fill(0) as number[]
+    for (const c of peak?.cells ?? []) {
+      if (c.hour >= 0 && c.hour < 24) byHour[c.hour] += Number(c.orders) || 0
+    }
+    const max = Math.max(...byHour, 1)
+    return byHour.map((orders, hour) => ({
+      hour: `${String(hour).padStart(2, '0')}`,
+      orders,
+      intensity: orders / max,
+    }))
+  }, [peak])
+  const hasHourly = useMemo(() => hourlyData.some(d => d.orders > 0), [hourlyData])
 
   const allStats: TableStat[] = useMemo(() => {
     if (!report) return []
@@ -241,26 +259,59 @@ export default function TablesAnalyticsPage() {
         </div>
       </div>
 
-      {/* Status pie chart */}
-      {statusPie.length > 0 && (
-        <div className="bg-card rounded-xl border border-border p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-1">Статусы столов сейчас</h2>
-          <p className="text-xs text-muted-foreground mb-4">Распределение по live-статусу</p>
-          <div style={{ width: '100%', height: 260 }}>
-            <ResponsiveContainer>
-              <PieChart>
-                <Pie data={statusPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={(d: any) => `${d.name}: ${d.value}`}>
-                  {statusPie.map((entry, idx) => (
-                    <Cell key={idx} fill={STATUS_COLOR[entry.key]} />
-                  ))}
-                </Pie>
-                <RTooltip />
-                <Legend />
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
+      {/* Загрузка по часам дня (как в v1) + компактный live-статус справа */}
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+        <div className="xl:col-span-2 bg-card rounded-xl border border-border p-5">
+          <h2 className="text-sm font-semibold text-foreground mb-1">Загрузка по часам дня</h2>
+          <p className="text-xs text-muted-foreground mb-4">Заказы по часам за выбранный период</p>
+          {hasHourly ? (
+            <div style={{ width: '100%', height: 240 }}>
+              <ResponsiveContainer>
+                <BarChart data={hourlyData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={1} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <Tooltip formatter={(v: number) => [`${v} заказов`, 'Заказы']} labelStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="orders" radius={[3, 3, 0, 0]}>
+                    {hourlyData.map((entry, i) => {
+                      const base = [255, 237, 213]
+                      const target = [232, 124, 79]
+                      const t = entry.intensity
+                      const r = Math.round(base[0] + (target[0] - base[0]) * t)
+                      const g = Math.round(base[1] + (target[1] - base[1]) * t)
+                      const b = Math.round(base[2] + (target[2] - base[2]) * t)
+                      return <Cell key={i} fill={`rgb(${r},${g},${b})`} />
+                    })}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground py-12 text-center">Нет данных за период</p>
+          )}
         </div>
-      )}
+
+        {/* Статусы столов сейчас — компактный live-снимок (операционный) */}
+        {statusPie.length > 0 && (
+          <div className="bg-card rounded-xl border border-border p-5">
+            <h2 className="text-sm font-semibold text-foreground mb-1">Статусы столов сейчас</h2>
+            <p className="text-xs text-muted-foreground mb-4">Текущий снимок</p>
+            <div style={{ width: '100%', height: 200 }}>
+              <ResponsiveContainer>
+                <PieChart>
+                  <Pie data={statusPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={(d: any) => `${d.value}`}>
+                    {statusPie.map((entry, idx) => (
+                      <Cell key={idx} fill={STATUS_COLOR[entry.key]} />
+                    ))}
+                  </Pie>
+                  <RTooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Zone cards */}
       {zoneStats.length > 0 && (
