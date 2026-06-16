@@ -46,14 +46,17 @@ func TestQueue_HappyPath(t *testing.T) {
 
 	rid := uuid.NewString()
 	payload := []byte{0x1B, 0x40, 'H', 'i'} // ESC @ + "Hi"
+	// Свежий created_at: иначе v3.9.3 startup-sweep (staleJobAge 15m) пометит
+	// джоб failed до печати. Реальный чек тоже ставится с created_at=now.
+	now := time.Now().UTC()
 	if err := gdb.Create(&models.PrintJob{
 		ID:           uuid.NewString(),
 		Type:         "receipt",
 		Payload:      payload,
 		Status:       "pending",
 		RestaurantID: &rid,
-		CreatedAt:    time.Now().UTC().Add(-time.Hour), // создан давно, backoff неактуален
-		UpdatedAt:    time.Now().UTC().Add(-time.Hour),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -106,14 +109,19 @@ func TestQueue_RetryOnFailure(t *testing.T) {
 	rid := uuid.NewString()
 	mock.FailNext = true // первый Send упадёт; FailNext сбрасывается → второй пройдёт
 
+	// Свежий created_at: v3.9.3 ввёл startup-sweep + claim-фильтр, которые
+	// гасят pending-джобы старше staleJobAge (15m) в failed. Старый -1h
+	// таймстамп помечался stale ещё до ретрая, и тест падал. Реальный чек
+	// тоже ставится с created_at=now, так что это корректный сценарий.
+	now := time.Now().UTC()
 	if err := gdb.Create(&models.PrintJob{
 		ID:           uuid.NewString(),
 		Type:         "receipt",
 		Payload:      []byte{0x1B, 0x40},
 		Status:       "pending",
 		RestaurantID: &rid,
-		CreatedAt:    time.Now().UTC().Add(-time.Hour),
-		UpdatedAt:    time.Now().UTC().Add(-time.Hour),
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
