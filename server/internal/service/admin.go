@@ -720,8 +720,36 @@ func (s *ReservationsService) Create(ctx context.Context, in ReservationInput) (
 		}
 		r.ReservedAt = &t
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(r).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped.Create(r).Error; err != nil {
+			return err
+		}
+		// Side-effect: помечаем стол как 'reserved', иначе бронь не видна на
+		// карте зала (она читает table.status, а не список броней). Только если
+		// стол сейчас свободен — занятый/чужой статус не перетираем. Обратный
+		// переход (seated→occupied, cancelled→free) уже делает Patch.
+		status := "active"
+		if r.Status != nil && *r.Status != "" {
+			status = *r.Status
+		}
+		if r.TableID != nil && *r.TableID != "" && status == "active" {
+			scopedT, err := tr.ForTenant(ctx)
+			if err != nil {
+				return err
+			}
+			if err := scopedT.Model(&models.Table{}).
+				Where("id = ? AND status = ?", *r.TableID, "free").
+				Updates(map[string]any{"status": "reserved", "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return r, nil
