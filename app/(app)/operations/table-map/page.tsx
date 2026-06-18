@@ -92,10 +92,17 @@ function TableCardInner({ table, tableOrders, fallbackOrder, waiter, servicePerc
   // но без бейджа «К выдаче!», ring-pulse и подмены статуса. Управление статусом — у официанта.
   const showQuietReadyDot = hasReadyOrder && hideReadyHighlight
 
+  // v4 redesign: единая высота, статус-пилюль в углу, сумма-герой для занятых,
+  // нижний ряд (время · официант) прижат к низу, свободные столы — тихие с
+  // числом мест внизу. Цвета — те же status-токены.
+  const pillCls = isReadyForPickup
+    ? 'border-emerald-300 text-emerald-600'
+    : `${style.border} ${style.label}`
+
   return (
     <div
       onClick={onClick}
-      className={`relative rounded-xl border-2 p-4 md:p-4 cursor-pointer transition-colors active:scale-[0.97] flex flex-col min-h-[140px] ${style.bg} ${style.border} ${
+      className={`relative rounded-xl border p-3.5 cursor-pointer transition-colors active:scale-[0.97] flex flex-col justify-between min-h-[150px] ${style.bg} ${style.border} ${
         isSelected ? 'ring-2 ring-amber-500 ring-offset-2 shadow-lg' :
         isReadyForPickup ? 'ring-2 ring-emerald-400 ring-offset-1' :
         table.status === 'bill_requested' ? 'ring-2 ring-amber-400 ring-offset-1' : ''
@@ -120,25 +127,6 @@ function TableCardInner({ table, tableOrders, fallbackOrder, waiter, servicePerc
           className="absolute -top-1 -right-1 size-2.5 rounded-full bg-emerald-500 ring-2 ring-card"
         />
       )}
-
-      {/* Status dot */}
-      <div className="flex items-start justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <div className={`size-2.5 rounded-full ${isReadyForPickup ? 'bg-emerald-500' : style.dot}`} />
-          <span className="text-sm font-semibold text-foreground">{table.name}</span>
-        </div>
-        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-          <Users className="size-3" />
-          {table.capacity}
-        </div>
-      </div>
-
-      {/* Status label */}
-      <p className={`text-sm font-semibold ${isReadyForPickup ? 'text-emerald-600' : style.label}`}>
-        {isReadyForPickup ? '🍽 К выдаче!' : STATUS_LABELS[table.status]}
-        {!isReadyForPickup && table.status === 'bill_requested' && ' !!'}
-      </p>
-
       {/* Multi-tab badge — top-right corner when 2+ open tabs */}
       {tabsCount >= 2 && !isReadyForPickup && !isMerged && (
         <div className="absolute -top-2 -right-2 bg-purple-600 text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-lg">
@@ -146,49 +134,57 @@ function TableCardInner({ table, tableOrders, fallbackOrder, waiter, servicePerc
         </div>
       )}
 
-      {/* Order info */}
-      {order && (
-        <div className="mt-2 space-y-1">
-          <p className="text-sm text-foreground font-bold">{formatCurrency(tabsCount >= 2 ? tabsTotal : calcOrderDisplayTotal(order, servicePercent))}</p>
-          <p className="text-xs text-muted-foreground">
-            {tabsCount >= 2
-              ? `${tabsCount} групп · ${totalItems} поз.`
-              : hideReadyHighlight && (order.status === 'ready' || order.status === 'served')
-                ? `${order.items.length} поз.`
-                : `${order.items.length} поз. · ${ORDER_STATUS_LABELS[order.status]}`}
-          </p>
-          {/* Auto-ready countdown */}
-          {order.status === 'cooking' && order.expectedReadyAt && (() => {
-            const diffMs = new Date(order.expectedReadyAt).getTime() - Date.now()
-            const diffMin = Math.ceil(diffMs / 60000)
-            if (diffMin > 0) {
-              return (
-                <p className="text-xs text-blue-600 font-semibold flex items-center gap-1">
-                  <Clock className="size-3" />Готов через {diffMin} мин
-                </p>
-              )
-            }
-            return (
-              <p className="text-xs text-emerald-600 font-bold flex items-center gap-1">
-                🍽️ Можно подавать!
-              </p>
-            )
-          })()}
+      {/* TOP: имя + статус-пилюль; для занятых — сумма-герой */}
+      <div>
+        <div className="flex items-start justify-between gap-2">
+          {table.status === 'free' ? (
+            <div className="flex items-center gap-2">
+              <div className={`size-2.5 rounded-full ${style.dot}`} />
+              <span className="text-[15px] font-semibold text-foreground">{table.name}</span>
+            </div>
+          ) : (
+            <span className="text-[15px] font-semibold text-foreground">{table.name}</span>
+          )}
+          {table.status !== 'free' && (
+            <span className={`shrink-0 text-[11px] font-semibold px-2 py-0.5 rounded-full bg-card border ${pillCls}`}>
+              {isReadyForPickup ? 'К выдаче' : STATUS_LABELS[table.status]}
+            </span>
+          )}
         </div>
-      )}
 
-      {/* Time */}
-      {timeSince && (
-        <div className={`flex items-center gap-1 mt-2 text-xs ${isLongSitting ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
-          <Clock className="size-3" />
-          {timeSince}
-          {isLongSitting && <AlertCircle className="size-3 ml-0.5" />}
+        {order && (
+          <div className="mt-2.5">
+            <p className="text-2xl font-bold text-foreground leading-none">
+              {formatCurrency(tabsCount >= 2 ? tabsTotal : calcOrderDisplayTotal(order, servicePercent))}
+            </p>
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              {tabsCount >= 2 ? `${tabsCount} групп · ${totalItems} поз.` : `${order.items.length} поз.`}
+            </p>
+            {/* Auto-ready countdown */}
+            {order.status === 'cooking' && order.expectedReadyAt && (() => {
+              const diffMs = new Date(order.expectedReadyAt).getTime() - Date.now()
+              const diffMin = Math.ceil(diffMs / 60000)
+              return diffMin > 0
+                ? <p className="mt-1 text-xs text-blue-600 font-semibold flex items-center gap-1"><Clock className="size-3" />Готов через {diffMin} мин</p>
+                : <p className="mt-1 text-xs text-emerald-600 font-bold">🍽️ Можно подавать!</p>
+            })()}
+          </div>
+        )}
+      </div>
+
+      {/* BOTTOM: занятый — время · официант; свободный/бронь — число мест */}
+      {table.status !== 'free' && order ? (
+        <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+          <span className={`flex items-center gap-1 ${isLongSitting ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
+            <Clock className="size-3" />{timeSince || '—'}{isLongSitting && <AlertCircle className="size-3" />}
+          </span>
+          {waiter && <span className="text-muted-foreground truncate max-w-[50%]">{waiter.name.split(' ')[0]}</span>}
         </div>
-      )}
-
-      {/* Waiter — only when table is actually occupied (defensive: stale waiter_id may persist after free) */}
-      {waiter && table.status !== 'free' && order && (
-        <p className="mt-1 text-xs text-muted-foreground truncate">{waiter.name.split(' ')[0]}</p>
+      ) : (
+        <div className="mt-2">
+          {table.status === 'free' && <p className={`text-[13px] font-semibold ${style.label}`}>{STATUS_LABELS.free}</p>}
+          <p className="mt-0.5 text-xs text-muted-foreground flex items-center gap-1"><Users className="size-3" />{table.capacity} мест</p>
+        </div>
       )}
     </div>
   )
