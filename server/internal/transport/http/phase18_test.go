@@ -541,3 +541,117 @@ func TestPhase18_SeedDemo(t *testing.T) {
 			counts.Zones, counts.Tables, counts.MenuItems, counts.Ingredients)
 	}
 }
+
+func TestPhase18_WaiterTransferOnClose(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, shiftID, accountID := seedForWrite(t, f)
+
+	// 1. Create two waiters.
+	waiterRole := "waiter"
+	w1Name := "Waiter 1"
+	w1ID := uuid.NewString()
+	if err := gdb.Create(&models.User{ID: w1ID, Name: &w1Name, Role: &waiterRole, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	w2Name := "Waiter 2"
+	w2ID := uuid.NewString()
+	if err := gdb.Create(&models.User{ID: w2ID, Name: &w2Name, Role: &waiterRole, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Create table.
+	tableID := uuid.NewString()
+	tableNum := 88
+	statusOccupied := "occupied"
+	tbl := &models.Table{
+		ID: tableID, Number: &tableNum, Status: &statusOccupied, WaiterID: &w1ID,
+		RestaurantID: &f.rid, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}
+	if err := gdb.Create(tbl).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// 3. Create two orders for this table, assigned to different waiters.
+	// Order 1 is older.
+	now := time.Now().UTC()
+	statusNew := "new"
+	order1ID := uuid.NewString()
+	order1 := &models.Order{
+		ID: order1ID, RestaurantID: &f.rid, TableID: &tableID, WaiterID: &w1ID, Status: &statusNew,
+		ShiftID: &shiftID, Total: decimal.MustFromString("50"), TotalWithService: decimal.MustFromString("50"),
+		CreatedAt: now.Add(-10 * time.Minute), UpdatedAt: now.Add(-10 * time.Minute),
+	}
+	if err := gdb.Create(order1).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Order 2 is newer.
+	order2ID := uuid.NewString()
+	order2 := &models.Order{
+		ID: order2ID, RestaurantID: &f.rid, TableID: &tableID, WaiterID: &w2ID, Status: &statusNew,
+		ShiftID: &shiftID, Total: decimal.MustFromString("75"), TotalWithService: decimal.MustFromString("75"),
+		CreatedAt: now.Add(-5 * time.Minute), UpdatedAt: now.Add(-5 * time.Minute),
+	}
+	if err := gdb.Create(order2).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Table's current_order_id points to order1 (the oldest active order).
+	if err := gdb.Model(&models.Table{}).Where("id = ?", tableID).Updates(map[string]any{
+		"current_order_id": order1ID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// 4. Close the oldest order (order1).
+	r, b := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", order1ID), tok, uuid.NewString(), map[string]any{
+		"payment_method": "cash",
+		"account_id":     accountID,
+		"shift_id":       shiftID,
+	})
+	if r.StatusCode != 200 {
+		t.Fatalf("close order1 failed (%d): %s", r.StatusCode, b)
+	}
+
+	// 5. Verify that waiter is updated to waiter2 and current_order_id is updated to order2ID.
+	var tblAfter models.Table
+	if err := gdb.First(&tblAfter, "id = ?", tableID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tblAfter.Status == nil || *tblAfter.Status != "occupied" {
+		t.Errorf("expected table status occupied, got %v", tblAfter.Status)
+	}
+	if tblAfter.CurrentOrderID == nil || *tblAfter.CurrentOrderID != order2ID {
+		t.Errorf("expected current_order_id = %s, got %v", order2ID, tblAfter.CurrentOrderID)
+	}
+	if tblAfter.WaiterID == nil || *tblAfter.WaiterID != w2ID {
+		t.Errorf("expected waiter_id = %s, got %v", w2ID, tblAfter.WaiterID)
+	}
+
+	// 6. Close the second order (order2).
+	r2, b2 := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", order2ID), tok, uuid.NewString(), map[string]any{
+		"payment_method": "cash",
+		"account_id":     accountID,
+		"shift_id":       shiftID,
+	})
+	if r2.StatusCode != 200 {
+		t.Fatalf("close order2 failed (%d): %s", r2.StatusCode, b2)
+	}
+
+	// 7. Verify table is now free, current_order_id is nil, waiter_id is nil.
+	var tblFinal models.Table
+	if err := gdb.First(&tblFinal, "id = ?", tableID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tblFinal.Status == nil || *tblFinal.Status != "free" {
+		t.Errorf("expected table status free, got %v", tblFinal.Status)
+	}
+	if tblFinal.CurrentOrderID != nil {
+		t.Errorf("expected current_order_id nil, got %s", *tblFinal.CurrentOrderID)
+	}
+	if tblFinal.WaiterID != nil {
+		t.Errorf("expected waiter_id nil, got %s", *tblFinal.WaiterID)
+	}
+}
+

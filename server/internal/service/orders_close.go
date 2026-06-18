@@ -496,6 +496,7 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 					Updates(map[string]any{
 						"status":           "free",
 						"current_order_id": nil,
+						"waiter_id":        nil,
 						"opened_at":        nil,
 						"updated_at":       now,
 					}).Error; err != nil {
@@ -514,9 +515,10 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 						Where("id = ? AND restaurant_id = ?", *order.TableID, rid).
 						Updates(map[string]any{
 							"current_order_id": nextActive.ID,
+							"waiter_id":        nextActive.WaiterID,
 							"updated_at":       now,
 						}).Error; err != nil {
-						return err
+							return err
 					}
 					buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
 				}
