@@ -137,6 +137,32 @@ func (s *BackupService) pgBin(name string) (string, bool) {
 		bin = name + ".exe"
 	}
 
+	// 0. Environment variable override (e.g., passed from Electron)
+	envKey := "RESTOS_PG_DUMP_PATH"
+	if name == "pg_restore" {
+		envKey = "RESTOS_PG_RESTORE_PATH"
+	}
+	if envVal := os.Getenv(envKey); envVal != "" {
+		if _, err := os.Stat(envVal); err == nil {
+			return envVal, true
+		}
+	}
+
+	// 0.1. Relative to the running server executable
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		// Option A: next to the executable
+		c := filepath.Join(execDir, bin)
+		if _, err := os.Stat(c); err == nil {
+			return c, true
+		}
+		// Option B: inside a bin/ subdirectory next to the executable
+		cSub := filepath.Join(execDir, "bin", bin)
+		if _, err := os.Stat(cSub); err == nil {
+			return cSub, true
+		}
+	}
+
 	// 1. Embedded runtime.
 	if s.cfg.PGRuntimeDir != "" {
 		c := filepath.Join(s.cfg.PGRuntimeDir, "bin", bin)

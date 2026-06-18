@@ -37,6 +37,14 @@
         {
           "from": "resources/restos-server.exe",
           "to": "restos-server.exe"
+        },
+        {
+          "from": "resources/pg_dump.exe",
+          "to": "pg_dump.exe"
+        },
+        {
+          "from": "resources/pg_restore.exe",
+          "to": "pg_restore.exe"
         }
       ]
     },

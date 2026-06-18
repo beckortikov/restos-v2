@@ -256,6 +256,27 @@ function startSidecar() {
     RESTOS_LICENSE_PUBLIC_KEY: 'NNsxnnh+jyMTw6GvrhfkbWTwMueYzG6zQ7RCN4x7qjM=',
   }
 
+  // Resolve pg_dump and pg_restore paths in resources and pass as environment variables
+  const pgDumpName = process.platform === 'win32' ? 'pg_dump.exe' : 'pg_dump'
+  const pgRestoreName = process.platform === 'win32' ? 'pg_restore.exe' : 'pg_restore'
+  let pgDumpPath = ''
+  let pgRestorePath = ''
+  if (app.isPackaged) {
+    pgDumpPath = path.join(process.resourcesPath, pgDumpName)
+    pgRestorePath = path.join(process.resourcesPath, pgRestoreName)
+  } else {
+    const localDump = path.join(__dirname, 'resources', pgDumpName)
+    const localRestore = path.join(__dirname, 'resources', pgRestoreName)
+    if (fs.existsSync(localDump)) pgDumpPath = localDump
+    if (fs.existsSync(localRestore)) pgRestorePath = localRestore
+  }
+  if (pgDumpPath && fs.existsSync(pgDumpPath)) {
+    env.RESTOS_PG_DUMP_PATH = pgDumpPath
+  }
+  if (pgRestorePath && fs.existsSync(pgRestorePath)) {
+    env.RESTOS_PG_RESTORE_PATH = pgRestorePath
+  }
+
   goProc = spawn(exe, [], {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
