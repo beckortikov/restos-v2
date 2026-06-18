@@ -369,11 +369,17 @@ export default function TableMapPage() {
       return a.name.localeCompare(b.name, undefined, { numeric: true })
     })
 
+  const visibleTableIds = new Set(visibleTables.map(t => t.id))
+  const ACTIVE_ORDER_STATUSES = ['new', 'open', 'cooking', 'ready', 'served', 'bill_requested']
   const stats = {
     free: visibleTables.filter(t => t.status === 'free').length,
     occupied: visibleTables.filter(t => t.status === 'occupied').length,
     bill: visibleTables.filter(t => t.status === 'bill_requested').length,
     reserved: visibleTables.filter(t => t.status === 'reserved').length,
+    // Выручка «на столах сейчас» — сумма открытых заказов видимой зоны.
+    revenue: ordersData
+      .filter(o => o.tableId && visibleTableIds.has(o.tableId) && ACTIVE_ORDER_STATUSES.includes(o.status))
+      .reduce((s, o) => s + calcOrderDisplayTotal(o, servicePercent), 0),
   }
 
   function handleTableClick(table: Table) {
@@ -721,14 +727,25 @@ export default function TableMapPage() {
             ) : 'Реальное время · автообновление'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {/* Legend */}
-          <div className="flex items-center gap-3 sm:gap-4 text-xs text-muted-foreground flex-wrap">
-            <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-full bg-emerald-500 inline-block" />Свободен ({stats.free})</span>
-            <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-full bg-red-500 inline-block" />Занят ({stats.occupied})</span>
-            <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-full bg-amber-500 inline-block animate-pulse" />Счёт ({stats.bill})</span>
-            <span className="flex items-center gap-1.5"><span className="size-2.5 rounded-full bg-blue-500 inline-block" />Резерв ({stats.reserved})</span>
-          </div>
+      </div>
+
+      {/* Summary cards — Свободно / Занято / Бронь / Выручка */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        <div className="rounded-xl px-3.5 py-2.5 bg-status-free-soft">
+          <p className="text-xs text-status-free-text">Свободно</p>
+          <p className="text-2xl font-bold text-status-free-text leading-tight">{stats.free}</p>
+        </div>
+        <div className="rounded-xl px-3.5 py-2.5 bg-status-occupied-soft">
+          <p className="text-xs text-status-occupied-text">Занято</p>
+          <p className="text-2xl font-bold text-status-occupied-text leading-tight">{stats.occupied}</p>
+        </div>
+        <div className="rounded-xl px-3.5 py-2.5 bg-status-reserved-soft">
+          <p className="text-xs text-status-reserved-text">Бронь</p>
+          <p className="text-2xl font-bold text-status-reserved-text leading-tight">{stats.reserved}</p>
+        </div>
+        <div className="rounded-xl px-3.5 py-2.5 bg-card border border-border">
+          <p className="text-xs text-muted-foreground">Выручка</p>
+          <p className="text-2xl font-bold text-foreground leading-tight tabular-nums">{formatCurrency(stats.revenue)}</p>
         </div>
       </div>
 
@@ -744,10 +761,10 @@ export default function TableMapPage() {
                 setZoneDialogOpen(true)
               }
             }}
-            className={`px-4 py-2.5 md:py-1.5 rounded-xl md:rounded-lg text-sm font-medium transition-colors border ${
+            className={`px-4 py-2 md:py-1.5 rounded-full text-sm font-medium transition-colors border ${
               activeZone === z.id
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'bg-card border-border text-foreground hover:bg-muted'
+                ? 'bg-[#D85A30] text-white border-[#D85A30]'
+                : 'bg-card border-border text-muted-foreground hover:bg-muted'
             }`}
           >
             {z.name}
