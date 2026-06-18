@@ -158,7 +158,11 @@ function TableCardInner({ table, tableOrders, fallbackOrder, waiter, servicePerc
               {formatCurrency(tabsCount >= 2 ? tabsTotal : calcOrderDisplayTotal(order, servicePercent))}
             </p>
             <p className="mt-1.5 text-xs text-muted-foreground">
-              {tabsCount >= 2 ? `${tabsCount} групп · ${totalItems} поз.` : `${order.items.length} поз.`}
+              {tabsCount >= 2
+                ? `${tabsCount} групп · ${totalItems} поз.`
+                : hideReadyHighlight && (order.status === 'ready' || order.status === 'served')
+                  ? `${order.items.length} поз.`
+                  : `${order.items.length} поз. · ${ORDER_STATUS_LABELS[order.status]}`}
             </p>
             {/* Auto-ready countdown */}
             {order.status === 'cooking' && order.expectedReadyAt && (() => {
@@ -172,13 +176,16 @@ function TableCardInner({ table, tableOrders, fallbackOrder, waiter, servicePerc
         )}
       </div>
 
-      {/* BOTTOM: занятый — время · официант; свободный/бронь — число мест */}
+      {/* BOTTOM: занятый — мест · время · официант; свободный/бронь — число мест */}
       {table.status !== 'free' && order ? (
         <div className="mt-2 flex items-center justify-between gap-2 text-xs">
-          <span className={`flex items-center gap-1 ${isLongSitting ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
-            <Clock className="size-3" />{timeSince || '—'}{isLongSitting && <AlertCircle className="size-3" />}
+          <span className="flex items-center gap-2.5 min-w-0">
+            <span className="flex items-center gap-1 text-muted-foreground"><Users className="size-3" />{table.capacity}</span>
+            <span className={`flex items-center gap-1 ${isLongSitting ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>
+              <Clock className="size-3" />{timeSince || '—'}{isLongSitting && <AlertCircle className="size-3" />}
+            </span>
           </span>
-          {waiter && <span className="text-muted-foreground truncate max-w-[50%]">{waiter.name.split(' ')[0]}</span>}
+          {waiter && <span className="text-muted-foreground truncate max-w-[40%]">{waiter.name.split(' ')[0]}</span>}
         </div>
       ) : (
         <div className="mt-2">
