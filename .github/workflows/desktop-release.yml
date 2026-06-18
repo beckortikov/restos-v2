@@ -74,6 +74,27 @@ jobs:
             -o ../desktop/resources/restos-server.exe ./cmd/restos-server
           ls -lh ../desktop/resources/
 
+      # Бандлим клиентские утилиты pg_dump/pg_restore (PG16) + их DLL в
+      # desktop/resources. Embedded-postgres (zonky) кладёт только серверные
+      # бинари (initdb/pg_ctl/postgres), а раннер GitHub имеет старый PG14
+      # (pg_dump 14 не сдампит сервер PG16). Поэтому тянем EDB PG16-бинари.
+      # main.js передаёт RESTOS_PG_DUMP_PATH=resources/pg_dump.exe, а backup.go
+      # добавляет resources в PATH для DLL — см. service/backup.go.
+      - name: Bundle PostgreSQL 16 client tools (pg_dump/pg_restore + DLLs)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://get.enterprisedb.com/postgresql/postgresql-16.6-1-windows-x64-binaries.zip'
+          Invoke-WebRequest -Uri $url -OutFile pg.zip
+          Expand-Archive -Path pg.zip -DestinationPath pgdist -Force
+          $bin = Join-Path (Join-Path 'pgdist' 'pgsql') 'bin'
+          New-Item -ItemType Directory -Force -Path 'desktop/resources' | Out-Null
+          Copy-Item (Join-Path $bin 'pg_dump.exe')    'desktop/resources/' -Force
+          Copy-Item (Join-Path $bin 'pg_restore.exe') 'desktop/resources/' -Force
+          Copy-Item (Join-Path $bin '*.dll')          'desktop/resources/' -Force
+          if (-not (Test-Path 'desktop/resources/pg_dump.exe')) { throw 'pg_dump.exe not bundled' }
+          Get-ChildItem 'desktop/resources' | Select-Object Name, Length
+
       - name: Install desktop deps
         working-directory: desktop
         run: npm install --no-save
