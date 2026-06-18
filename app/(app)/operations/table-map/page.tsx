@@ -370,16 +370,17 @@ export default function TableMapPage() {
     })
 
   const visibleTableIds = new Set(visibleTables.map(t => t.id))
-  const ACTIVE_ORDER_STATUSES = ['new', 'open', 'cooking', 'ready', 'served', 'bill_requested']
   const stats = {
     free: visibleTables.filter(t => t.status === 'free').length,
     occupied: visibleTables.filter(t => t.status === 'occupied').length,
     bill: visibleTables.filter(t => t.status === 'bill_requested').length,
     reserved: visibleTables.filter(t => t.status === 'reserved').length,
-    // Выручка «на столах сейчас» — сумма открытых заказов видимой зоны.
+    // Выручка = заработано за сегодня по закрытым заказам видимой зоны.
+    // Копится при закрытии столов (раньше считалась по открытым → при закрытии
+    // стола падала в 0). ordersData грузится с startOfToday, закрытые включены.
     revenue: ordersData
-      .filter(o => o.tableId && visibleTableIds.has(o.tableId) && ACTIVE_ORDER_STATUSES.includes(o.status))
-      .reduce((s, o) => s + calcOrderDisplayTotal(o, servicePercent), 0),
+      .filter(o => o.tableId && visibleTableIds.has(o.tableId) && o.status === 'done')
+      .reduce((s, o) => s + (o.totalWithService ?? o.total ?? 0), 0),
   }
 
   function handleTableClick(table: Table) {
