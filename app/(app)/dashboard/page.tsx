@@ -226,7 +226,13 @@ export default function DashboardPage() {
 
   // Revenue
   const todayOrders = useMemo(() => orders.filter(o => o.status === 'done' && o.closedAt?.startsWith(todayStr)), [orders, todayStr])
-  const todayRevenue = useMemo(() => todayOrders.reduce((s, o) => s + o.total, 0), [todayOrders])
+  // Выручка = total_with_service (товар − скидка + сервис + чай) — то, что реально
+  // пришло в кассу (см. close_order: финоп revenue и баланс счёта идут на эту сумму).
+  // Сервис начисляется на чек целиком, поэтому корректно входит и в выручку, и в
+  // средний чек, и в разбивки по чеку (часы/официанты). Donut по блюдам — отдельно,
+  // там база item-level (сервис не привязан к конкретному блюду).
+  const orderRevenue = (o: typeof todayOrders[number]) => o.totalWithService ?? o.total
+  const todayRevenue = useMemo(() => todayOrders.reduce((s, o) => s + orderRevenue(o), 0), [todayOrders])
   const todayOrdersCount = useMemo(() => orders.filter(o => o.createdAt?.startsWith(todayStr)).length, [orders, todayStr])
   const avgCheck = todayOrders.length > 0 ? todayRevenue / todayOrders.length : 0
 
@@ -272,7 +278,7 @@ export default function DashboardPage() {
     for (let h = 10; h <= 22; h++) buckets[h] = 0
     todayOrders.forEach(o => {
       const h = new Date(o.createdAt).getHours()
-      if (h >= 10 && h <= 22) buckets[h] += o.total
+      if (h >= 10 && h <= 22) buckets[h] += orderRevenue(o)
     })
     return Object.entries(buckets).map(([h, rev]) => ({ hour: `${h}:00`, revenue: rev }))
   }, [todayOrders])
@@ -306,7 +312,7 @@ export default function DashboardPage() {
     if (!w) return
     if (!waiterStats[o.waiterId]) waiterStats[o.waiterId] = { name: w.name, orders: 0, revenue: 0 }
     waiterStats[o.waiterId].orders++
-    waiterStats[o.waiterId].revenue += o.total
+    waiterStats[o.waiterId].revenue += orderRevenue(o)
   })
   const topWaiters = Object.values(waiterStats).sort((a, b) => b.revenue - a.revenue).slice(0, 5)
 
