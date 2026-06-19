@@ -6,7 +6,7 @@
 
 **RestOS v4 — монорепо** с React-фронтом и новым Go-бэком. Фронт скопирован из v1 (`../restos/`) **без изменений** в подпапки `src/`, `app/`, `components/`, `lib/`, `hooks/`, `styles/`, `public/`, `tests/`. Electron-обёртка в `desktop/`. Capacitor APK официанта в `android/`. Go-бэк будет в `server/`.
 
-Старый Node.js-бэк (api-server.js, db.js, sync.js) **выведен из обращения** и лежит в `archive/legacy-node-backend/` как reference (удалится в Phase 10).
+Старый Node.js-бэк (api-server.js, db.js, sync.js) **выведен из обращения и удалён** из репо (раньше лежал в `archive/legacy-node-backend/` как reference). При необходимости сверяться с поведением v1 — исходники в `../restos/`.
 
 Цель — заменить рабочий Node.js + PGlite + Express на **Go (chi + GORM + PostgreSQL 16)**, фронт-код останется на месте (адаптация API-слоя — Phase 2, см. PRD 10).
 
@@ -56,13 +56,9 @@ restos-v4/
 │
 ├── server/                  — Go-бэк (структура ниже)
 │
-├── docs/
-│   ├── prd/                 — PRD 00–10
-│   └── decisions/           — ADR-001, ADR-002
-│
-└── archive/
-    └── legacy-node-backend/ — старые api-server.js / db.js / sync.js / standalone.js
-                              на reference. На удаление после Phase 10.
+└── docs/
+    ├── prd/                 — PRD 00–10
+    └── decisions/           — ADR-001, ADR-002
 ```
 
 Внутри `server/` (создаётся в Phase 0):
@@ -153,7 +149,7 @@ server/
 
 ### Что трогаем в Phase 7
 
-- `desktop/main.js` — переписывается под spawn Go-бинаря и удаление `require('./api-server')` и т.п. (их и так уже нет — они в archive/).
+- `desktop/main.js` — переписывается под spawn Go-бинаря и удаление `require('./api-server')` и т.п. (их и так уже нет — старый Node-бэк удалён из репо).
 
 ### Фронт-стек (для фазы 2 адаптации)
 
@@ -215,13 +211,15 @@ make update-golden                  # обновить snapshot-эталоны E
 - Работаем в основном worktree `/Users/behzod/Documents/projects/restos-v4`, **не** через `.claude/worktrees`.
 - В коммит-сообщении при работе над фичами писать, какая Phase + что внутри (например: `feat(orders): close_order service with revenue entry — Phase 3`).
 
-## Источники для портирования (внутри этого репо)
+## Источники для портирования
+
+Старый Node-бэк удалён из этого репо — исходники для сверки лежат в v1-репо `../restos/desktop/`.
 
 | Где | Что | Куда переезжает |
 |---|---|---|
-| `archive/legacy-node-backend/db.js` | Исходная схема БД (PGlite) | `server/internal/db/migrations/001_init.up.sql` (1:1, PG-нативно) |
-| `archive/legacy-node-backend/api-server.js` | Исходные 28 эндпоинтов | `server/internal/transport/http/handlers/` (чистый REST) |
-| `archive/legacy-node-backend/sync.js` | Sync с Supabase | **Не портируем** (см. PRD 07 Future-Cloud) |
+| `../restos/desktop/db.js` | Исходная схема БД (PGlite) | `server/internal/db/migrations/001_init.up.sql` (1:1, PG-нативно) |
+| `../restos/desktop/api-server.js` | Исходные 28 эндпоинтов | `server/internal/transport/http/handlers/` (чистый REST) |
+| `../restos/desktop/sync.js` | Sync с Supabase | **Не портируем** (см. PRD 07 Future-Cloud) |
 | `lib/supabase-queries.ts` | 5702 строки бизнес-логики на фронте | `server/internal/service/` (бэк-логика) + `lib/api/` (тонкий клиент) |
 | `lib/print-service.ts` | ESC/POS layout (1063 строки) | `server/internal/escpos/` + golden tests |
 | `lib/print-queue.ts` | Очередь печати | `server/internal/printer/queue.go` |
