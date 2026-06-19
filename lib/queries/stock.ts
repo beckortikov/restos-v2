@@ -288,10 +288,27 @@ function mapIngredient(r: Record<string, unknown>): Ingredient {
   } as Ingredient
 }
 
+// Бэкенд пишет в stock_movements.type сырые значения (receipt/writeoff/
+// supply_expense/inventory_correction/batch_out/semi_out + in/out). UI знает
+// канонические in/out/semi/audit/adj/batch — нормализуем, иначе TYPE_META[type]
+// = undefined и история падает «Cannot read properties of undefined (Icon)».
+const STOCK_MOVEMENT_TYPE_MAP: Record<string, StockMovement['type']> = {
+  in: 'in',
+  out: 'out',
+  receipt: 'in',
+  writeoff: 'out',
+  supply_expense: 'out',
+  inventory_correction: 'audit',
+  batch_out: 'batch',
+  semi_out: 'semi',
+  semi_in: 'semi',
+  batch_in: 'batch',
+}
+
 function mapStockMovement(r: Record<string, unknown>): StockMovement {
   return {
     id: r.id as string,
-    type: r.type as StockMovement['type'],
+    type: (STOCK_MOVEMENT_TYPE_MAP[String(r.type)] ?? 'adj') as StockMovement['type'],
     ingredientId: (r.ingredient_id as string | null) ?? undefined,
     ingredientName: (r.ingredient_name as string) ?? '',
     description: (r.description as string) ?? '',

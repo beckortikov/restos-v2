@@ -64,7 +64,9 @@ export default function HistoryPage() {
           <p className="text-center text-muted-foreground text-sm py-10">Нет записей</p>
         ) : (
           filtered.map((m) => {
-            const meta = TYPE_META[m.type]
+            // Фолбэк на 'adj' — защита от неизвестного/нового типа движения,
+            // чтобы история не падала «Cannot read properties of undefined».
+            const meta = TYPE_META[m.type] ?? TYPE_META.adj
             const Icon = meta.Icon
             return (
               <div key={m.id} className="flex items-center gap-4 px-5 py-3.5 hover:bg-muted/30 transition-colors">
