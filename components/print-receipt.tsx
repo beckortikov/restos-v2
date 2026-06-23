@@ -178,18 +178,30 @@ export const PrintReceipt = forwardRef<HTMLDivElement, PrintReceiptProps>(
 
         {/* Payment method — hidden for pre-check */}
         {!data.isPreCheck && (
-          <>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '2px' }}>
-              <span>Оплата</span>
-              <span>{data.paymentMethod ? PAYMENT_LABELS[data.paymentMethod] : '—'}</span>
-            </div>
-            {data.accountName && (
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
-                <span>Счёт</span>
-                <span>{data.accountName}</span>
+          data.payments && data.payments.length > 0 ? (
+            <>
+              <div style={{ fontSize: '11px', marginBottom: '2px' }}>Оплата (смешанная)</div>
+              {data.payments.map((p, i) => (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '1px', paddingLeft: '8px' }}>
+                  <span>{PAYMENT_LABELS[p.method]}{p.accountName ? ` · ${p.accountName}` : ''}</span>
+                  <span>{formatCurrency(p.amount)}</span>
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', marginBottom: '2px' }}>
+                <span>Оплата</span>
+                <span>{data.paymentMethod ? PAYMENT_LABELS[data.paymentMethod] : '—'}</span>
               </div>
-            )}
-          </>
+              {data.accountName && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                  <span>Счёт</span>
+                  <span>{data.accountName}</span>
+                </div>
+              )}
+            </>
+          )
         )}
 
         {/* Divider */}

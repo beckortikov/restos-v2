@@ -392,13 +392,16 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
 
   const handleFinalizeAndPrint = async ({ alsoPrint }: { alsoPrint: boolean }) => {
     if (submitting || !closeReceiptData) return
-    await doClose(alsoPrint)
+    // Если набраны смешанные платежи — закрываем мульти-сплитом, иначе одиночная.
+    await doClose(alsoPrint, payments.length > 0 ? payments : undefined)
   }
 
-  // Смешанная оплата: валидируем покрытие суммы и открытую смену, затем закрываем.
+  // Смешанная оплата: валидируем покрытие суммы и открытую смену, затем показываем
+  // превью чека (тот же drawer, что и для одиночной оплаты). Финализация — из
+  // кнопок drawer'а через handleFinalizeAndPrint (payments уже в state).
   const mixedPaid = useMemo(() => Number(dRound(dSum(payments.map(p => p.amount)))), [payments])
   const mixedRemaining = Number(dRound(dSub(total, mixedPaid)))
-  const handleMixedClose = async (alsoPrint: boolean) => {
+  const handleMixedContinue = async () => {
     if (submitting) return
     if (visibleItems.length === 0) { toast.error('Нет позиций для оплаты'); return }
     if (payments.length === 0 || mixedRemaining > 0) {
@@ -415,7 +418,22 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         return
       }
     } catch { /* network hiccup — server-side gate ловит */ }
-    await doClose(alsoPrint, payments)
+    const data = buildReceiptData(
+      order,
+      { restaurant, currentUser: user, voids },
+      {
+        isPreCheck: false,
+        includeService,
+        servicePercent,
+        discountAmount: discountAmount > 0 ? discountAmount : undefined,
+        discountReason: discountReason || undefined,
+        paymentMethod: payments[0]?.method,
+        payments: payments.map(p => ({ method: p.method, amount: p.amount, accountName: p.accountName })),
+      },
+    )
+    setMixedOpen(false)
+    setCloseReceiptData(data)
+    setCloseReceiptOpen(true)
   }
 
   const handleCancel = async () => {
@@ -1209,12 +1227,18 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
             • Только печать — напечатать чек, заказ остался открытым.
             • Закрыть и распечатать — closeOrderWithPayment + печать +
               закрыть drawer. Это happy-path. */}
-      <Sheet open={closeReceiptOpen} onOpenChange={(o) => { if (!submitting) setCloseReceiptOpen(o) }}>
+      <Sheet open={closeReceiptOpen} onOpenChange={(o) => {
+        if (submitting) return
+        setCloseReceiptOpen(o)
+        // Назад из превью при смешанной оплате — возвращаем в форму платежей,
+        // не теряя набранные платежи.
+        if (!o && payments.length > 0) setMixedOpen(true)
+      }}>
         <SheetContent className="md:h-full h-[95vh] flex flex-col md:!max-w-lg lg:!max-w-xl">
           <SheetHeader>
             <SheetTitle className="flex items-center gap-2">
               <button
-                onClick={() => { if (!submitting) setCloseReceiptOpen(false) }}
+                onClick={() => { if (!submitting) { setCloseReceiptOpen(false); if (payments.length > 0) setMixedOpen(true) } }}
                 disabled={submitting}
                 className="size-7 rounded-md hover:bg-muted inline-flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-40"
                 title="Назад"
@@ -1225,7 +1249,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               Закрытие заказа
             </SheetTitle>
             <SheetDescription>
-              Заказ #{order.orderNumber ?? order.id.slice(-6)} · {paymentMethod === 'cash' ? 'Наличные' : 'Безналичные'} · {formatCurrency(total)}
+              Заказ #{order.orderNumber ?? order.id.slice(-6)} · {payments.length > 0 ? 'Смешанная' : (paymentMethod === 'cash' ? 'Наличные' : 'Безналичные')} · {formatCurrency(total)}
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto px-4 flex flex-col items-center py-4">
@@ -1396,19 +1420,12 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
 
           <SheetFooter className="px-4 flex-col gap-2 sm:flex-col">
             <button
-              onClick={() => handleMixedClose(true)}
+              onClick={handleMixedContinue}
               disabled={submitting || payments.length === 0 || mixedRemaining > 0}
               className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-4 text-base font-bold md:py-3 md:text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
-              <CheckCircle2 className="size-4" />
-              {submitting ? 'Обработка...' : `Закрыть и распечатать · ${formatCurrency(total)}`}
-            </button>
-            <button
-              onClick={() => handleMixedClose(false)}
-              disabled={submitting || payments.length === 0 || mixedRemaining > 0}
-              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
-            >
-              <CheckCircle2 className="size-4" />Закрыть без печати
+              <Receipt className="size-4" />
+              {mixedRemaining > 0 ? `Остаток ${formatCurrency(mixedRemaining)}` : `Продолжить к чеку · ${formatCurrency(total)}`}
             </button>
           </SheetFooter>
         </SheetContent>

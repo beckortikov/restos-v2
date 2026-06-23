@@ -40,6 +40,9 @@ export interface ReceiptPrintData {
   total: number
   paymentMethod?: PaymentMethod
   accountName?: string
+  /** Смешанная оплата: разбивка по платежам. Если задано — на чеке печатается
+   *  список платежей вместо одной строки «Оплата». */
+  payments?: { method: PaymentMethod; amount: number; accountName?: string }[]
   createdAt: string
   closedAt: string
   isPreCheck?: boolean
@@ -69,6 +72,8 @@ export interface BuildReceiptOpts {
   /** Только для финального чека (isPreCheck=false). */
   paymentMethod?: PaymentMethod
   accountName?: string
+  /** Смешанная оплата — разбивка по платежам (нал/безнал + счёт). */
+  payments?: { method: PaymentMethod; amount: number; accountName?: string }[]
 }
 
 export function buildReceiptData(
@@ -121,6 +126,7 @@ export function buildReceiptData(
     total,
     paymentMethod: opts.paymentMethod,
     accountName: opts.accountName,
+    payments: opts.payments && opts.payments.length > 0 ? opts.payments : undefined,
     createdAt: order.createdAt,
     closedAt: new Date().toISOString(),
     isPreCheck: opts.isPreCheck,
