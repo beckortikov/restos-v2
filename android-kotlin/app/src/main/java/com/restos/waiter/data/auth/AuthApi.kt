@@ -50,7 +50,10 @@ data class UserDto(
     val username: String,
     @SerialName("full_name") val fullName: String = "",
     val role: String,
-    val permissions: List<String> = emptyList(),
+    // ВАЖНО: НЕ объявляем `permissions` — бэкенд отдаёт его ОБЪЕКТОМ
+    // ({actions:{…}}), а не списком. Объявленное поле List<String> ломало
+    // десериализацию всего ответа /users (→ пустой список официантов в
+    // «Передать другому официанту»). Ключ игнорируется (ignoreUnknownKeys=true).
 ) {
     val displayName: String get() = fullName.ifBlank { username }
 
