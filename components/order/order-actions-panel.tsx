@@ -36,7 +36,8 @@ import {
   Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
 import { PrintReceipt, type ReceiptData } from '@/components/print-receipt'
-import type { FinancialAccount, Order, OrderVoid, User, VoidReason } from '@/lib/types'
+import type { FinancialAccount, Order, OrderPayment, OrderVoid, User, VoidReason } from '@/lib/types'
+import { Banknote, Building2, Wallet } from 'lucide-react'
 import { VOID_REASON_LABELS } from '@/lib/types'
 import {
   Popover, PopoverContent, PopoverTrigger,
@@ -127,6 +128,15 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   const [paymentMethod, setPaymentMethod] = useState<'cash' | 'noncash'>('cash')
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState<string>('')
+
+  // Смешанная оплата (часть нал + часть безнал, с выбором банка по каждому
+  // платежу). Открывается из «Дополнительно». Пустой массив payments = обычная
+  // одиночная оплата по paymentMethod выше.
+  const [mixedOpen, setMixedOpen] = useState(false)
+  const [payments, setPayments] = useState<OrderPayment[]>([])
+  const [addMethod, setAddMethod] = useState<'cash' | 'noncash'>('cash')
+  const [addAccountId, setAddAccountId] = useState<string>('')
+  const [addAmount, setAddAmount] = useState<string>('')
 
   // Service charge ---------------------------------------------------------
   const [includeService, setIncludeService] = useState(isHallOrder(order.type))
@@ -336,8 +346,11 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   // дополнительно не печатает. Раньше тут был client-side printReceiptDirect
   // через legacy print-server (Path A) — теперь весь pipeline server-side
   // (Path B): backend → print_jobs → worker → driver.
-  const handleFinalizeAndPrint = async ({ alsoPrint }: { alsoPrint: boolean }) => {
-    if (submitting || !closeReceiptData) return
+  // Общий вызов закрытия+оплаты. mixedPayments — для смешанной оплаты (если
+  // переданы и непусты, paymentMethod/accountId игнорируются, бэк разносит по
+  // каждому платежу его account_id).
+  const doClose = async (alsoPrint: boolean, mixedPayments?: OrderPayment[]) => {
+    const useMixed = !!mixedPayments && mixedPayments.length > 0
     setSubmitting(true)
     try {
       const acct = accounts.find(a => a.id === selectedAccountId)
@@ -347,13 +360,13 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
       )
       await closeOrderWithPayment(
         order.id,
-        paymentMethod === 'cash' ? 'cash' : 'card',
+        useMixed ? mixedPayments![0].method : (paymentMethod === 'cash' ? 'cash' : 'card'),
         order.tableId || null,
         subtotal,
         cogs,
         user?.id,
-        selectedAccountId || undefined,
-        acct?.name,
+        useMixed ? undefined : (selectedAccountId || undefined),
+        useMixed ? undefined : acct?.name,
         includeService ? servicePercent : 0,  // «С собой»/доставка — без обслуживания
         serviceAmount,
         total,
@@ -362,17 +375,47 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         discountType ?? undefined,
         discountValue || undefined,
         discountReason || undefined,
-        undefined,      // payments
+        useMixed ? mixedPayments : undefined,
         !alsoPrint,     // skipReceipt — «Закрыть без печати» не должно печатать
       )
       toast.success(alsoPrint ? 'Заказ оплачен · чек отправлен на печать' : 'Заказ оплачен')
       setCloseReceiptOpen(false)
       setCloseReceiptData(null)
+      setMixedOpen(false)
+      setPayments([])
       onClosed?.()
     } catch (e) {
       toast.error('Не удалось провести оплату', { description: humanizeError(e) })
     }
     setSubmitting(false)
+  }
+
+  const handleFinalizeAndPrint = async ({ alsoPrint }: { alsoPrint: boolean }) => {
+    if (submitting || !closeReceiptData) return
+    await doClose(alsoPrint)
+  }
+
+  // Смешанная оплата: валидируем покрытие суммы и открытую смену, затем закрываем.
+  const mixedPaid = useMemo(() => Number(dRound(dSum(payments.map(p => p.amount)))), [payments])
+  const mixedRemaining = Number(dRound(dSub(total, mixedPaid)))
+  const handleMixedClose = async (alsoPrint: boolean) => {
+    if (submitting) return
+    if (visibleItems.length === 0) { toast.error('Нет позиций для оплаты'); return }
+    if (payments.length === 0 || mixedRemaining > 0) {
+      toast.error('Платежи не покрывают сумму заказа')
+      return
+    }
+    try {
+      const shift = await fetchActiveShift()
+      if (!shift) {
+        toast.error('Откройте кассовую смену перед оплатой', {
+          action: { label: 'Открыть смену', onClick: () => navigate('/operations/shifts') },
+          duration: 6000,
+        })
+        return
+      }
+    } catch { /* network hiccup — server-side gate ловит */ }
+    await doClose(alsoPrint, payments)
   }
 
   const handleCancel = async () => {
@@ -984,31 +1027,47 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         {/* Payment method */}
         <div className="grid grid-cols-2 gap-2">
           <button
-            onClick={() => setPaymentMethod('cash')}
+            onClick={() => {
+              setPaymentMethod('cash')
+              const cash = accounts.find(a => a.type === 'cash')
+              if (cash) setSelectedAccountId(cash.id)
+            }}
             className={`py-2.5 rounded-lg text-sm font-medium border-2 transition-colors ${
               paymentMethod === 'cash' ? 'border-primary bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:bg-muted'
             }`}
           >Наличные</button>
           <button
-            onClick={() => setPaymentMethod('noncash')}
+            onClick={() => {
+              setPaymentMethod('noncash')
+              // Авто-выбор банковского счёта, если текущий выбранный — кассовый.
+              const cur = accounts.find(a => a.id === selectedAccountId)
+              if (!cur || cur.type === 'cash') {
+                const bank = accounts.find(a => a.type !== 'cash')
+                if (bank) setSelectedAccountId(bank.id)
+              }
+            }}
             className={`py-2.5 rounded-lg text-sm font-medium border-2 transition-colors ${
               paymentMethod === 'noncash' ? 'border-primary bg-primary/5 text-primary' : 'border-border text-muted-foreground hover:bg-muted'
             }`}
           >Безналичные</button>
         </div>
 
-        {/* Account picker for noncash. Only shown when there's more than one
-            non-cash account; otherwise we silently use the auto-selected one. */}
-        {paymentMethod === 'noncash' && accounts.filter(a => a.type !== 'cash').length > 1 && (
-          <select
-            value={selectedAccountId}
-            onChange={e => setSelectedAccountId(e.target.value)}
-            className="w-full px-2.5 py-2 text-sm border border-border rounded-lg bg-background"
-          >
-            {accounts.filter(a => a.type !== 'cash').map(a => (
-              <option key={a.id} value={a.id}>{a.name}</option>
-            ))}
-          </select>
+        {/* Account picker for noncash — показываем всегда при безналичной оплате,
+            чтобы кассир видел и мог выбрать банк/счёт зачисления (даже если счёт
+            один). */}
+        {paymentMethod === 'noncash' && accounts.filter(a => a.type !== 'cash').length >= 1 && (
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">Банк / счёт зачисления</label>
+            <select
+              value={selectedAccountId}
+              onChange={e => setSelectedAccountId(e.target.value)}
+              className="w-full px-2.5 py-2 text-sm border border-border rounded-lg bg-background"
+            >
+              {accounts.filter(a => a.type !== 'cash').map(a => (
+                <option key={a.id} value={a.id}>{a.name}</option>
+              ))}
+            </select>
+          </div>
         )}
 
         {/* Main CTA */}
@@ -1021,10 +1080,9 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
           {submitting ? 'Обработка...' : `Закрыть и оплатить · ${formatCurrency(total)}`}
         </button>
 
-        {/* Secondary actions — v2.8.0: «Дополнительно» теперь dropdown menu
-            прямо в sidebar'е, не открывает второй sheet поверх (как было через
-            onOpenAdvanced). Mixed payment / чаевые уже доступны в payment-блоке
-            выше. В dropdown'е — split bill и reopen (требуют отдельных диалогов). */}
+        {/* Secondary actions — «Дополнительно» dropdown прямо в sidebar'е.
+            В dropdown'е: смешанная оплата (нал+безнал с выбором банка),
+            split bill, перенос стола, reopen. */}
         <div className="grid grid-cols-2 gap-2">
           <button
             onClick={handlePreCheck}
@@ -1042,6 +1100,21 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
+              {order.status !== 'done' && order.status !== 'cancelled' && (
+                <DropdownMenuItem
+                  onClick={() => {
+                    setPayments([])
+                    setAddMethod('cash')
+                    const cash = accounts.find(a => a.type === 'cash')
+                    setAddAccountId(cash?.id ?? accounts[0]?.id ?? '')
+                    setAddAmount('')
+                    setMixedOpen(true)
+                  }}
+                  className="text-sm cursor-pointer"
+                >
+                  💳 Смешанная оплата
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem
                 onClick={() => setSplitOpen(true)}
                 className="text-sm cursor-pointer"
@@ -1179,6 +1252,163 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
             >
               <CheckCircle2 className="size-4" />
               Закрыть без печати
+            </button>
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
+
+      {/* Смешанная оплата */}
+      <Sheet open={mixedOpen} onOpenChange={(o) => { if (!submitting) setMixedOpen(o) }}>
+        <SheetContent className="md:h-full h-[95vh] flex flex-col md:!max-w-md">
+          <SheetHeader>
+            <SheetTitle className="flex items-center gap-2">
+              <CreditCard className="size-5 text-primary" />
+              Смешанная оплата
+            </SheetTitle>
+            <SheetDescription>
+              Заказ #{order.orderNumber ?? order.id.slice(-6)} · {formatCurrency(total)}
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
+            {/* Сводка */}
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="rounded-lg border border-border py-2">
+                <p className="text-[10px] uppercase text-muted-foreground">К оплате</p>
+                <p className="text-sm font-bold tabular-nums">{formatCurrency(total)}</p>
+              </div>
+              <div className="rounded-lg border border-border py-2">
+                <p className="text-[10px] uppercase text-muted-foreground">Внесено</p>
+                <p className="text-sm font-bold tabular-nums">{formatCurrency(mixedPaid)}</p>
+              </div>
+              <div className={`rounded-lg border py-2 ${mixedRemaining > 0 ? 'border-amber-300 bg-amber-50' : 'border-emerald-300 bg-emerald-50'}`}>
+                <p className="text-[10px] uppercase text-muted-foreground">Остаток</p>
+                <p className="text-sm font-bold tabular-nums">{formatCurrency(Math.max(0, mixedRemaining))}</p>
+              </div>
+            </div>
+
+            {/* Список платежей */}
+            {payments.length > 0 && (
+              <div className="space-y-1.5">
+                {payments.map((p, idx) => (
+                  <div key={idx} className="flex items-center justify-between rounded-xl border border-border px-3 py-2.5">
+                    <div className="flex items-center gap-2 text-sm">
+                      {p.method === 'cash' ? <Banknote className="size-4 text-muted-foreground" /> : <CreditCard className="size-4 text-muted-foreground" />}
+                      <span className="font-medium">{p.method === 'cash' ? 'Наличные' : 'Безналичные'}</span>
+                      {p.accountName && <span className="text-xs text-muted-foreground">({p.accountName})</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-bold tabular-nums">{formatCurrency(p.amount)}</span>
+                      <button
+                        onClick={() => setPayments(prev => prev.filter((_, i) => i !== idx))}
+                        className="p-1 rounded text-muted-foreground hover:text-red-500 transition-colors"
+                      ><Trash2 className="size-3.5" /></button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Форма добавления платежа */}
+            {mixedRemaining > 0 && (
+              <div className="rounded-xl border border-border p-3 space-y-3">
+                <div className="grid grid-cols-2 gap-2">
+                  {([['cash', 'Наличные'], ['noncash', 'Безналичные']] as const).map(([val, label]) => (
+                    <button
+                      key={val}
+                      onClick={() => {
+                        setAddMethod(val)
+                        const targetType = val === 'cash' ? 'cash' : 'bank'
+                        const first = accounts.find(a => a.type === targetType) ?? accounts.find(a => val === 'cash' ? a.type === 'cash' : a.type !== 'cash')
+                        setAddAccountId(first?.id ?? '')
+                      }}
+                      className={`flex items-center justify-center gap-2 rounded-xl border-2 p-2.5 transition-all ${
+                        addMethod === val ? 'border-primary bg-primary/5 text-primary' : 'border-border hover:border-muted-foreground/30'
+                      }`}
+                    >
+                      {val === 'cash' ? <Banknote className="size-4" /> : <CreditCard className="size-4" />}
+                      <span className="text-xs font-medium">{label}</span>
+                    </button>
+                  ))}
+                </div>
+
+                {(() => {
+                  const filtered = accounts.filter(a => addMethod === 'cash' ? a.type === 'cash' : a.type !== 'cash')
+                  if (filtered.length === 0) {
+                    return <p className="text-xs text-amber-600">Нет счёта типа «{addMethod === 'cash' ? 'Касса' : 'Банк'}» — создайте в Финансы → Счета.</p>
+                  }
+                  if (filtered.length === 1) {
+                    return (
+                      <div className="flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm">
+                        {addMethod === 'cash' ? <Wallet className="size-4 text-muted-foreground" /> : <Building2 className="size-4 text-muted-foreground" />}
+                        <span className="font-medium">{filtered[0].name}</span>
+                        <CheckCircle2 className="size-4 text-primary ml-auto" />
+                      </div>
+                    )
+                  }
+                  return (
+                    <div className="space-y-1">
+                      <label className="text-xs text-muted-foreground">Банк / счёт зачисления</label>
+                      <select
+                        value={addAccountId}
+                        onChange={e => setAddAccountId(e.target.value)}
+                        className="w-full px-2.5 py-2 text-sm border border-border rounded-lg bg-background"
+                      >
+                        {filtered.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                      </select>
+                    </div>
+                  )
+                })()}
+
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder={`Сумма (макс. ${formatCurrency(mixedRemaining)})`}
+                  value={addAmount}
+                  onChange={e => setAddAmount(e.target.value)}
+                  className="w-full py-2 px-3 rounded-lg border-2 border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                />
+
+                <button
+                  onClick={() => {
+                    const filtered = accounts.filter(a => addMethod === 'cash' ? a.type === 'cash' : a.type !== 'cash')
+                    const accId = addAccountId || filtered[0]?.id || ''
+                    if (!accId) { toast.error('Нет счёта для зачисления'); return }
+                    const raw = addAmount ? Number(addAmount) : mixedRemaining
+                    const amt = Number(dRound(Math.min(raw, mixedRemaining)))
+                    if (!(amt > 0)) return
+                    const acc = accounts.find(a => a.id === accId)
+                    setPayments(prev => [...prev, {
+                      method: addMethod === 'cash' ? 'cash' : 'card',
+                      amount: amt,
+                      accountId: accId,
+                      accountName: acc?.name,
+                    }])
+                    setAddAmount('')
+                  }}
+                  className="w-full py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 transition-colors"
+                >
+                  <Plus className="size-4 inline -mt-0.5 mr-1" />Добавить платёж
+                </button>
+              </div>
+            )}
+          </div>
+
+          <SheetFooter className="px-4 flex-col gap-2 sm:flex-col">
+            <button
+              onClick={() => handleMixedClose(true)}
+              disabled={submitting || payments.length === 0 || mixedRemaining > 0}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-5 py-4 text-base font-bold md:py-3 md:text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <CheckCircle2 className="size-4" />
+              {submitting ? 'Обработка...' : `Закрыть и распечатать · ${formatCurrency(total)}`}
+            </button>
+            <button
+              onClick={() => handleMixedClose(false)}
+              disabled={submitting || payments.length === 0 || mixedRemaining > 0}
+              className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-border px-4 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50 transition-colors"
+            >
+              <CheckCircle2 className="size-4" />Закрыть без печати
             </button>
           </SheetFooter>
         </SheetContent>
