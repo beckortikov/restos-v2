@@ -169,6 +169,33 @@ export async function seedMenuCategories(_restaurantId: string): Promise<number>
   return count
 }
 
+/**
+ * Заводит недостающие записи MenuCategory из категорий существующих блюд.
+ * Нужно для меню, импортированных до того, как импорт стал создавать записи
+ * категорий: без записи у категории нет id → в управлении меню не работает
+ * удаление/сортировка. Идемпотентно: создаёт только отсутствующие.
+ * Возвращает актуальный полный список категорий.
+ */
+export async function syncMenuCategoriesFromItems(): Promise<MenuCategory[]> {
+  const [items, existing] = await Promise.all([fetchMenuItems(), fetchMenuCategoriesFull()])
+  const existingLc = new Set(existing.map(c => c.name.toLocaleLowerCase('ru-RU')))
+  const missing: string[] = []
+  const seen = new Set<string>()
+  for (const it of items) {
+    const name = (it.category ?? '').trim()
+    if (!name) continue
+    const key = name.toLocaleLowerCase('ru-RU')
+    if (existingLc.has(key) || seen.has(key)) continue
+    seen.add(key)
+    missing.push(name)
+  }
+  if (missing.length === 0) return existing
+  for (const name of missing) {
+    try { await createMenuCategory(name) } catch {}
+  }
+  return fetchMenuCategoriesFull()
+}
+
 export async function fetchIngredientCategories(): Promise<string[]> {
   const res: any = await unwrap(api.GET('/api/v1/stock/ingredient-categories'))
   const rows: unknown = res?.data ?? []

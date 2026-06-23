@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub } from '@/lib/decimal'
 import { type MenuItem, type MenuStation, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
-import { fetchMenuItems, toggleMenuAvailability, fetchMenuCategories, fetchMenuCategoriesFull, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
+import { fetchMenuItems, toggleMenuAvailability, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
 import { type MenuCategory } from '@/lib/queries'
 import { Search, ChevronDown, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X } from 'lucide-react'
 import { DishImage } from '@/components/dish-image'
@@ -36,7 +36,11 @@ export default function MenuPage() {
     // Load independently — if one fails, others still work
     fetchMenuItems().then(setMenuItems).catch(() => {})
     fetchMenuCategories().then(setMenuCategories).catch(() => {})
-    fetchMenuCategoriesFull().then(setMenuCategoriesFull).catch(() => {})
+    // Синхронизируем записи категорий из блюд (для «старых» импортов без записей),
+    // чтобы у чипов категорий появились id и работало удаление/сортировка.
+    syncMenuCategoriesFromItems()
+      .then(setMenuCategoriesFull)
+      .catch(() => { fetchMenuCategoriesFull().then(setMenuCategoriesFull).catch(() => {}) })
     fetchStopList().then(setStopList).catch(() => {})
   }
 
