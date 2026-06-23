@@ -324,6 +324,9 @@ export function OrderComposer(props: OrderComposerProps) {
   const [orderType, setOrderType] = useState<OrderType>(newProps?.initialOrderType ?? 'hall')
   const [selectedTableId, setSelectedTableId] = useState<string>(newProps?.initialTableId ?? '')
   const [showTablePicker, setShowTablePicker] = useState<boolean>(!newProps?.initialTableId)
+  // Активная зона в пикере столов — зоны показываются сегмент-табами (дизайн
+  // «POS — Заказ» / Zone tabs), показываем столы только выбранной зоны.
+  const [pickerZoneId, setPickerZoneId] = useState<string | null>(null)
   const [guestsCount, setGuestsCount] = useState<number>(newProps?.initialGuests ?? 1)
   const [pendingTabLabel, setPendingTabLabel] = useState<string>(newProps?.initialTabLabel ?? '')
 
@@ -1354,27 +1357,46 @@ export function OrderComposer(props: OrderComposerProps) {
           </button>
         ) : (
           <div className="bg-background border border-border rounded-xl p-3 space-y-3">
-            {zones.length === 0 ? (
-              <p className="text-xs text-muted-foreground text-center py-2">Нет зон</p>
-            ) : zones.map(zone => {
-              // Скрываем merged-secondary столы (mergedWith != null) — они
-              // живут «внутри» primary'я после объединения. Раньше такие
-              // столы продолжали светиться отдельной плиткой в POS, и кассир
-              // мог открыть пустой merged-secondary вместо primary'я.
-              const zoneTables = tables.filter(t => t.zone === zone.id && !t.mergedWith).slice().sort((a, b) => {
+            {(() => {
+              // Зоны со столами (скрываем merged-secondary: mergedWith != null —
+              // они живут «внутри» primary'я после объединения).
+              const zonesWithTables = zones.filter(z => tables.some(t => t.zone === z.id && !t.mergedWith))
+              if (zonesWithTables.length === 0) {
+                return <p className="text-xs text-muted-foreground text-center py-2">Нет зон</p>
+              }
+              // Активная зона: выбранная вкладка → зона выбранного стола → первая.
+              const activeZoneId =
+                (pickerZoneId && zonesWithTables.some(z => z.id === pickerZoneId)) ? pickerZoneId
+                : (selectedTable && zonesWithTables.some(z => z.id === selectedTable.zone)) ? selectedTable.zone
+                : zonesWithTables[0].id
+              const zoneTables = tables.filter(t => t.zone === activeZoneId && !t.mergedWith).slice().sort((a, b) => {
                 const an = parseInt(a.name, 10), bn = parseInt(b.name, 10)
                 if (!isNaN(an) && !isNaN(bn) && an !== bn) return an - bn
                 return a.name.localeCompare(b.name, undefined, { numeric: true })
               })
-              if (zoneTables.length === 0) return null
               return (
-                <div key={zone.id}>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2 px-0.5">{zone.name}</p>
-                  {/* Bigger tile per cashier UX request — was tight px-2.5 py-1.5
-                      pills that took roughly 28×60px each. Now ~52×88px which
-                      hits the comfortable touch-target minimum (≥48px) and
-                      surfaces more state. Sidebar height grows naturally as
-                      the grid wraps — that's the desired behaviour. */}
+                <>
+                  {/* Zone tabs — сегмент-контрол (дизайн «POS — Заказ» / Zone tabs):
+                      трек с бордером, табы fill, активный = primary + белый текст. */}
+                  {zonesWithTables.length > 1 && (
+                    <div className="flex gap-1 p-1 bg-muted rounded-xl border border-border">
+                      {zonesWithTables.map(z => {
+                        const active = z.id === activeZoneId
+                        return (
+                          <button key={z.id}
+                            onClick={() => setPickerZoneId(z.id)}
+                            className={`flex-1 min-w-0 truncate px-3 py-2.5 rounded-lg text-sm text-center transition-colors ${
+                              active
+                                ? 'bg-primary text-primary-foreground font-semibold shadow-sm'
+                                : 'text-muted-foreground font-medium hover:text-foreground'
+                            }`}
+                          >
+                            {z.name}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
                   <div className="grid grid-cols-3 gap-2">
                     {zoneTables.map(t => {
                       const isFree = t.status === 'free'
@@ -1417,9 +1439,9 @@ export function OrderComposer(props: OrderComposerProps) {
                       )
                     })}
                   </div>
-                </div>
+                </>
               )
-            })}
+            })()}
           </div>
         )}
 
