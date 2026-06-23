@@ -369,18 +369,14 @@ export default function TableMapPage() {
       return a.name.localeCompare(b.name, undefined, { numeric: true })
     })
 
-  const visibleTableIds = new Set(visibleTables.map(t => t.id))
   const stats = {
     free: visibleTables.filter(t => t.status === 'free').length,
     occupied: visibleTables.filter(t => t.status === 'occupied').length,
     bill: visibleTables.filter(t => t.status === 'bill_requested').length,
     reserved: visibleTables.filter(t => t.status === 'reserved').length,
-    // Выручка = заработано за сегодня по закрытым заказам видимой зоны.
-    // Копится при закрытии столов (раньше считалась по открытым → при закрытии
-    // стола падала в 0). ordersData грузится с startOfToday, закрытые включены.
-    revenue: ordersData
-      .filter(o => o.tableId && visibleTableIds.has(o.tableId) && o.status === 'done')
-      .reduce((s, o) => s + (o.totalWithService ?? o.total ?? 0), 0),
+    // Выручка в карте зала — заглушка 0 (по требованию). Реальная выручка
+    // смотрится в отчётах по смене и аналитике, а не на карте столов.
+    revenue: 0,
   }
 
   function handleTableClick(table: Table) {
