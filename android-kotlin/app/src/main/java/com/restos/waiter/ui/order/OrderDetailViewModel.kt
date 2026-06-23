@@ -31,6 +31,8 @@ data class OrderDetailUiState(
     val waiters: List<UserDto> = emptyList(),
     val groups: List<OrderDto> = emptyList(),
     val search: String = "",
+    // Имя выбранной категории в дозаказ-поиске (null = «Все»).
+    val selectedCategoryId: String? = null,
     val busy: Boolean = false,
     val error: String? = null,
     val toast: String? = null,
@@ -134,6 +136,7 @@ class OrderDetailViewModel @Inject constructor(
     }
 
     fun setSearch(query: String) { _state.update { it.copy(search = query) } }
+    fun selectCategory(name: String?) { _state.update { it.copy(selectedCategoryId = name) } }
 
     fun openCancelItem(item: OrderItemDto) {
         _dialog.value = OrderDetailDialog.CancelItem(item)

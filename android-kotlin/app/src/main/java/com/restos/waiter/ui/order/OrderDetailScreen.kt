@@ -176,6 +176,7 @@ fun OrderDetailScreen(
                     state = state,
                     onAddItem = viewModel::addItem,
                     onSearch = viewModel::setSearch,
+                    onSelectCategory = viewModel::selectCategory,
                     onCancelItem = viewModel::openCancelItem,
                     onIncrementItem = viewModel::incrementItem,
                     onDecrementItem = viewModel::decrementItem,
@@ -381,6 +382,7 @@ private fun OrderBody(
     state: OrderDetailUiState,
     onAddItem: (MenuItemDto) -> Unit,
     onSearch: (String) -> Unit,
+    onSelectCategory: (String?) -> Unit,
     onCancelItem: (OrderItemDto) -> Unit,
     onToggleServed: (OrderItemDto) -> Unit,
     onEditNote: (OrderItemDto) -> Unit,
@@ -391,12 +393,24 @@ private fun OrderBody(
 ) {
     val order = state.order!!
     val items = order.items.filter { it.cancelledAt == null }
-    val searchResults = remember(state.search, state.menu) {
+    // Категории дозаказ-поиска — по именам из меню (как на вебе/в композере).
+    val categories = remember(state.menu) {
+        state.menu.mapNotNull { it.category?.trim()?.takeIf { c -> c.isNotEmpty() } }
+            .distinct()
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val searchResults = remember(state.search, state.menu, state.selectedCategoryId) {
         val q = state.search.trim().lowercase()
-        if (q.isBlank()) emptyList()
-        else state.menu
-            .filter { it.isAvailable && it.name.lowercase().contains(q) }
-            .take(8)
+        when {
+            // Текстовый поиск важнее фильтра категории.
+            q.isNotBlank() -> state.menu
+                .filter { it.isAvailable && it.name.lowercase().contains(q) }
+                .take(8)
+            // Выбрана категория → показываем её блюда (даже без ввода).
+            state.selectedCategoryId != null -> state.menu
+                .filter { it.isAvailable && it.category?.trim() == state.selectedCategoryId }
+            else -> emptyList()
+        }
     }
 
     LazyColumn(
@@ -423,8 +437,11 @@ private fun OrderBody(
                 AddItemSearch(
                     query = state.search,
                     results = searchResults,
+                    categories = categories,
+                    selectedCategory = state.selectedCategoryId,
                     busy = state.busy,
                     onQuery = onSearch,
+                    onSelectCategory = onSelectCategory,
                     onPick = onAddItem,
                 )
             }
@@ -609,8 +626,11 @@ private fun StatusBadge(status: String, label: String) {
 private fun AddItemSearch(
     query: String,
     results: List<MenuItemDto>,
+    categories: List<String>,
+    selectedCategory: String?,
     busy: Boolean,
     onQuery: (String) -> Unit,
+    onSelectCategory: (String?) -> Unit,
     onPick: (MenuItemDto) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -638,6 +658,19 @@ private fun AddItemSearch(
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             enabled = !busy,
         )
+        // Чипы категорий под поиском: тап показывает блюда категории (без ввода).
+        if (categories.isNotEmpty() && query.isBlank()) {
+            androidx.compose.foundation.lazy.LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    CategoryChip("Все", active = selectedCategory == null, onClick = { onSelectCategory(null) })
+                }
+                items(categories) { cat ->
+                    CategoryChip(cat, active = cat == selectedCategory, onClick = { onSelectCategory(cat) })
+                }
+            }
+        }
         if (results.isNotEmpty()) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
@@ -678,6 +711,25 @@ private fun AddItemSearch(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CategoryChip(label: String, active: Boolean, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (active) MaterialTheme.colorScheme.primary
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        onClick = onClick,
+    ) {
+        Text(
+            label,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = if (active) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        )
     }
 }
 

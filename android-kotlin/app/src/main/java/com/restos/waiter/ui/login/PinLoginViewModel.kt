@@ -3,6 +3,7 @@ package com.restos.waiter.ui.login
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.restos.waiter.data.auth.AuthRepository
+import com.restos.waiter.data.config.ServerConfigStore
 import com.restos.waiter.data.net.ApiException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +22,7 @@ data class PinLoginUiState(
 @HiltViewModel
 class PinLoginViewModel @Inject constructor(
     private val repo: AuthRepository,
+    private val config: ServerConfigStore,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(PinLoginUiState())
@@ -46,6 +48,19 @@ class PinLoginViewModel @Inject constructor(
 
     fun clear() {
         _state.update { it.copy(pin = "", error = null) }
+    }
+
+    /**
+     * Сброс привязки к серверу (ре-онбординг). Чистим сессию и сохранённый
+     * адрес сервера/ресторана → навигация уходит на онбординг (через onDone).
+     */
+    fun resetServer(onDone: () -> Unit) {
+        viewModelScope.launch {
+            runCatching { repo.logout() }
+            config.clear()
+            _state.update { PinLoginUiState() }
+            onDone()
+        }
     }
 
     fun submit(onSuccess: () -> Unit) {

@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Backspace
 import androidx.compose.material.icons.outlined.Restaurant
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,6 +28,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -42,9 +46,28 @@ import com.restos.waiter.R
 @Composable
 fun PinLoginScreen(
     onLoggedIn: () -> Unit,
+    onResetServer: () -> Unit = {},
     viewModel: PinLoginViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var confirmReset by remember { mutableStateOf(false) }
+
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            title = { Text("Сбросить сервер?", fontWeight = FontWeight.SemiBold) },
+            text = { Text("Привязка к серверу и текущая сессия будут сброшены. Нужно будет заново подключиться к кассе (QR / IP).") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmReset = false
+                    viewModel.resetServer(onResetServer)
+                }) { Text("Сбросить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) { Text("Отмена") }
+            },
+        )
+    }
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
@@ -143,10 +166,10 @@ fun PinLoginScreen(
             Spacer(Modifier.height(8.dp))
 
             TextButton(
-                onClick = viewModel::clear,
-                enabled = !state.loading && state.pin.isNotEmpty(),
+                onClick = { confirmReset = true },
+                enabled = !state.loading,
             ) {
-                Text("Сбросить")
+                Text("Сбросить сервер")
             }
         }
     }

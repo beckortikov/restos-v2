@@ -47,14 +47,39 @@ data class CartLine(
 /** Весовое блюдо — продаётся по граммам/кг, а не поштучно. */
 fun MenuItemDto.isWeighed(): Boolean = unit.isNotBlank() && unit != "piece"
 
-/** Сумма одной строки: вес → price * (вес / unitSize); штука → price * qty. */
+/**
+ * Сумма одной строки: вес → price * (вес/unitSize) * порции; штука → price * qty.
+ * Для весовой строки `qty` = число порций (например «3 по 100г»), `weightQty` —
+ * вес ОДНОЙ порции.
+ */
 fun CartLine.lineTotal(): BigDecimal {
     val p = runCatching { BigDecimal(price) }.getOrDefault(BigDecimal.ZERO)
     if (!isWeight) return p * qty.toBigDecimal()
     val w = runCatching { BigDecimal(weightQty) }.getOrDefault(BigDecimal.ZERO)
     val size = runCatching { BigDecimal(unitSize) }.getOrDefault(BigDecimal.ONE)
         .let { if (it <= BigDecimal.ZERO) BigDecimal.ONE else it }
-    return p.multiply(w.divide(size, 4, RoundingMode.HALF_EVEN))
+    val onePortion = p.multiply(w.divide(size, 4, RoundingMode.HALF_EVEN))
+    return onePortion.multiply(qty.coerceAtLeast(1).toBigDecimal())
+}
+
+/**
+ * Список категорий для чипов — ВСЕГДА по именам (selectedCategoryId хранит имя),
+ * т.к. menu_items.category на бэке — это имя, а не id. Берём имена API-категорий
+ * (по sortOrder), плюс любые категории, встречающиеся в блюдах. Если записей
+ * категорий нет (старый импорт) — выводим уникальные категории из самих блюд.
+ */
+private fun buildCategories(apiCats: List<CategoryDto>, items: List<MenuItemDto>): List<CategoryDto> {
+    val names = LinkedHashSet<String>()
+    apiCats.sortedBy { it.sortOrder }.forEach { c -> c.name.trim().takeIf { it.isNotEmpty() }?.let(names::add) }
+    if (names.isEmpty()) {
+        items.mapNotNull { it.category?.trim()?.takeIf { c -> c.isNotEmpty() } }
+            .distinct()
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+            .forEach(names::add)
+    } else {
+        items.forEach { it.category?.trim()?.takeIf { c -> c.isNotEmpty() }?.let(names::add) }
+    }
+    return names.mapIndexed { i, n -> CategoryDto(id = n, name = n, sortOrder = i) }
 }
 
 data class NewOrderUiState(
@@ -117,9 +142,9 @@ class NewOrderViewModel @Inject constructor(
             _state.update {
                 it.copy(
                     loading = false,
-                    categories = cachedCats.sortedBy { c -> c.sortOrder },
+                    categories = buildCategories(cachedCats, cachedItems),
                     items = cachedItems,
-                    selectedCategoryId = cachedCats.firstOrNull()?.id,
+                    selectedCategoryId = null,
                 )
             }
         }
@@ -148,9 +173,9 @@ class NewOrderViewModel @Inject constructor(
                 it.copy(
                     loading = false,
                     table = table,
-                    categories = cats.sortedBy { c -> c.sortOrder },
+                    categories = buildCategories(cats, items),
                     items = items,
-                    selectedCategoryId = cats.firstOrNull()?.id,
+                    selectedCategoryId = null,
                 )
             }
         } catch (e: Throwable) {
@@ -194,21 +219,25 @@ class NewOrderViewModel @Inject constructor(
 
     fun dismissWeight() { _state.update { it.copy(weightItem = null) } }
 
-    /** Подтверждение веса из диалога: создаём/заменяем весовую строку. */
-    fun confirmWeight(grams: BigDecimal) {
+    /**
+     * Подтверждение из диалога веса: вес ОДНОЙ порции + число порций.
+     * Создаём/заменяем весовую строку (qty = порции, weightQty = вес порции).
+     */
+    fun confirmWeight(grams: BigDecimal, portions: Int) {
         val item = _state.value.weightItem ?: return
         if (grams <= BigDecimal.ZERO) { dismissWeight(); return }
         val w = grams.stripTrailingZeros().toPlainString()
+        val p = portions.coerceAtLeast(1)
         _state.update { s ->
             val existing = s.cart.find { it.menuItemId == item.id && it.isWeight }
             val newCart = if (existing != null) {
-                s.cart.map { if (it.menuItemId == item.id && it.isWeight) it.copy(weightQty = w) else it }
+                s.cart.map { if (it.menuItemId == item.id && it.isWeight) it.copy(weightQty = w, qty = p) else it }
             } else {
                 s.cart + CartLine(
                     menuItemId = item.id,
                     name = item.name,
                     price = item.price,
-                    qty = 1,
+                    qty = p,
                     unit = item.unit,
                     unitSize = item.unitSize,
                     weightQty = w,
@@ -220,9 +249,13 @@ class NewOrderViewModel @Inject constructor(
         persistDraft()
     }
 
-    /** Текущий вес блюда в корзине (для предзаполнения диалога), либо null. */
+    /** Текущий вес одной порции в корзине (для предзаполнения диалога), либо null. */
     fun currentWeight(menuItemId: String): String? =
         _state.value.cart.firstOrNull { it.menuItemId == menuItemId && it.isWeight }?.weightQty
+
+    /** Текущее число порций весовой строки (для предзаполнения диалога). */
+    fun currentPortions(menuItemId: String): Int =
+        _state.value.cart.firstOrNull { it.menuItemId == menuItemId && it.isWeight }?.qty ?: 1
 
     fun addToCart(item: MenuItemDto) {
         if (!item.isAvailable) return
@@ -277,10 +310,16 @@ class NewOrderViewModel @Inject constructor(
             val idemKey = pendingIdemKey
                 ?: UUID.randomUUID().toString().also { pendingIdemKey = it }
             try {
-                val items = s.cart.map {
-                    // Весовая строка → qty = вес (decimal-строка); штучная → qty (Int).
-                    if (it.isWeight) NewOrderItem(menuItemId = it.menuItemId, qty = it.weightQty!!)
-                    else NewOrderItem(menuItemId = it.menuItemId, qty = it.qty)
+                val items = s.cart.flatMap { line ->
+                    if (line.isWeight) {
+                        // «N по 100г» → N отдельных позиций по весу одной порции,
+                        // чтобы чек/кухня печатали порции отдельными строками.
+                        List(line.qty.coerceAtLeast(1)) {
+                            NewOrderItem(menuItemId = line.menuItemId, qty = line.weightQty!!)
+                        }
+                    } else {
+                        listOf(NewOrderItem(menuItemId = line.menuItemId, qty = line.qty))
+                    }
                 }
                 val resultOrderId: String = if (isAppendMode) {
                     val resp = ordersApi.addItems(

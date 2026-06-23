@@ -96,8 +96,9 @@ fun NewOrderScreen(
         WeightDialog(
             item = wItem,
             initialGrams = viewModel.currentWeight(wItem.id),
+            initialPortions = viewModel.currentPortions(wItem.id),
             onDismiss = viewModel::dismissWeight,
-            onConfirm = viewModel::confirmWeight,
+            onConfirm = { grams, portions -> viewModel.confirmWeight(grams, portions) },
         )
     }
 
@@ -243,6 +244,13 @@ private fun CategoriesRow(
     androidx.compose.foundation.lazy.LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
+        item {
+            Chip(
+                label = "Все",
+                active = selectedId == null,
+                onClick = { onSelect(null) },
+            )
+        }
         items(categories, key = { it.id }) { cat ->
             Chip(
                 label = cat.name,
@@ -392,7 +400,8 @@ private fun MenuListRow(
                             onClick = onPick,
                         ) {
                             Text(
-                                formatWeight(line.weightQty, item.unit),
+                                if (line.qty > 1) "${line.qty} × ${formatWeight(line.weightQty, item.unit)}"
+                                else formatWeight(line.weightQty, item.unit),
                                 color = MaterialTheme.colorScheme.onPrimary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Bold,

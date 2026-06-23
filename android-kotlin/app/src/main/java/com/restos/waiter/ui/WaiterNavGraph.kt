@@ -87,6 +87,11 @@ fun WaiterNavGraph(
                         popUpTo(Routes.LOGIN) { inclusive = true }
                     }
                 },
+                onResetServer = {
+                    navController.navigate(Routes.ONBOARDING) {
+                        popUpTo(Routes.LOGIN) { inclusive = true }
+                    }
+                },
             )
         }
         composable(Routes.APP) {
