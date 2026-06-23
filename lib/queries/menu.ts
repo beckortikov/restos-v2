@@ -113,6 +113,17 @@ export async function fetchMenuCategories(): Promise<string[]> {
     if (deduped.length > 0) return deduped
   } catch {}
 
+  // Fallback: явных записей-категорий нет (например меню импортировано, а
+  // категории-записи не заводились). Берём категории из самих блюд — показываем
+  // РЕАЛЬНОЕ меню, а не дефолтный seed.
+  try {
+    const items = await fetchMenuItems()
+    const derived = dedupe(items.map(i => ({ name: (i.category ?? '').trim() })))
+      .sort((a, b) => a.localeCompare(b, 'ru'))
+    if (derived.length > 0) return derived
+  } catch {}
+
+  // Совсем пустой ресторан (нет ни категорий, ни блюд) — дефолтный набор.
   return [...SEED_MENU_CATEGORIES]
 }
 

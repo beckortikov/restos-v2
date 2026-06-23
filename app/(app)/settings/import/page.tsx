@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { createZone, createTable, fetchZones, fetchTables, createMenuItem, createIngredient, fetchMenuItems, fetchIngredients } from '@/lib/queries'
+import { createZone, createTable, fetchZones, fetchTables, createMenuItem, createIngredient, fetchMenuItems, fetchIngredients, createMenuCategory, fetchMenuCategoriesFull } from '@/lib/queries'
 import { api, unwrap, getBaseURL } from '@/lib/api'
 import {
   parseFloorMapExcel, parseDishesExcel, parseTechCardsExcel, parseIngredientsExcel,
@@ -250,6 +250,24 @@ export default function ImportPage() {
     setStep('importing')
     const errors: string[] = []
     let created = 0
+
+    // Сначала заводим записи категорий из импортированного меню (без дублей с
+    // уже существующими). Без этого категории нигде не «настоящие» — список
+    // подменялся дефолтным seed'ом в управлении меню и дропдаунах создания блюд.
+    const uniqueCats = Array.from(new Set(
+      parsedDishes.dishes.map(d => (d.category ?? '').trim()).filter(Boolean),
+    ))
+    let existingLc = new Set<string>()
+    try {
+      const ex = await fetchMenuCategoriesFull()
+      existingLc = new Set(ex.map(c => c.name.toLocaleLowerCase('ru-RU')))
+    } catch {}
+    for (const name of uniqueCats) {
+      const key = name.toLocaleLowerCase('ru-RU')
+      if (existingLc.has(key)) continue
+      try { await createMenuCategory(name); existingLc.add(key) } catch {}
+    }
+
     for (const dish of parsedDishes.dishes) {
       try {
         await createMenuItem({
