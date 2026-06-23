@@ -60,7 +60,8 @@ function isHidden(item: MenuItem) {
 function lineTotal(l: CartLine) {
   if (l.unit === 'piece') return dMul(l.price, l.qty)
   const size = l.unitSize > 0 ? l.unitSize : 1
-  return dMul(l.price, dDiv(l.qty, size))
+  const onePortion = dMul(l.price, dDiv(l.qty, size))
+  return dMul(onePortion, l.portionQty && l.portionQty > 0 ? l.portionQty : 1)
 }
 
 // ─── iiko-style helpers (новый редизайн POS) ─────────────────────────────────
@@ -616,7 +617,8 @@ export function OrderComposer(props: OrderComposerProps) {
     }
     if (item.unit && item.unit !== 'piece') {
       setWeightItem(item)
-      setWeightValue(item.saleStep && item.saleStep > 0 ? item.saleStep : (item.unitSize || 100))
+      // Дефолтный вес: 0.1 кг = 100 г.
+      setWeightValue(item.unit === 'kg' ? 0.1 : 100)
       return
     }
     setCart(prev => {
@@ -643,7 +645,7 @@ export function OrderComposer(props: OrderComposerProps) {
     setSearch('')
   }, [canOrderStopped, stoppedIds, stopReasons])
 
-  const confirmWeight = useCallback(() => {
+  const confirmWeight = useCallback((portionQty: number = 1) => {
     if (!weightItem || weightValue <= 0) return
     const needsOverride = stoppedIds.has(weightItem.id)
     setCart(prev => [...prev, {
@@ -655,6 +657,7 @@ export function OrderComposer(props: OrderComposerProps) {
       cogs: weightItem.cogs,
       unit: weightItem.unit ?? 'g',
       unitSize: weightItem.unitSize || 100,
+      portionQty: portionQty > 1 ? portionQty : undefined,
       overrideStopList: needsOverride || undefined,
     }])
     setWeightItem(null)
@@ -708,15 +711,22 @@ export function OrderComposer(props: OrderComposerProps) {
     // в body запроса. Без флага backend вернёт 409 ITEM_STOPPED.
     const overrideStopList = cart.some(l => l.overrideStopList)
     try {
-      const items: OrderItem[] = cart.map(l => ({
-        menuItemId: l.menuItemId,
-        name: l.name,
-        qty: l.qty,
-        price: l.price,
-        cogs: l.cogs,
-        unit: l.unit,
-        unitSize: l.unitSize,
-      }))
+      // Весовую строку с portionQty>1 («4 по 100г») разворачиваем в N отдельных
+      // OrderItem'ов по qty каждый — чтобы чек и кухонный бегунок печатали порции
+      // отдельными строками (бэк печатает по одной строке на order_item).
+      const items: OrderItem[] = cart.flatMap(l => {
+        const portions = l.portionQty && l.portionQty > 1 ? l.portionQty : 1
+        const one: OrderItem = {
+          menuItemId: l.menuItemId,
+          name: l.name,
+          qty: l.qty,
+          price: l.price,
+          cogs: l.cogs,
+          unit: l.unit,
+          unitSize: l.unitSize,
+        }
+        return Array.from({ length: portions }, () => ({ ...one }))
+      })
 
       if (existingOrderId) {
         await addItemsToOrder(existingOrderId, items, { overrideStopList })
@@ -801,7 +811,11 @@ export function OrderComposer(props: OrderComposerProps) {
           const servicePercent = 0
           const serviceAmount = 0
           const totalWithService = total
-          const cogs = dSum(cart.map(l => l.unit === 'piece' ? dMul(l.cogs, l.qty) : dMul(l.cogs, dDiv(l.qty, l.unitSize > 0 ? l.unitSize : 1))))
+          const cogs = dSum(cart.map(l => {
+            const portions = l.portionQty && l.portionQty > 1 ? l.portionQty : 1
+            const one = l.unit === 'piece' ? dMul(l.cogs, l.qty) : dMul(l.cogs, dDiv(l.qty, l.unitSize > 0 ? l.unitSize : 1))
+            return dMul(one, portions)
+          }))
           const paymentMethod: 'cash' | 'card' = inlinePayMethod === 'card' ? 'card' : 'cash'
           await closeOrderWithPayment(
             order.id,
@@ -1179,7 +1193,7 @@ export function OrderComposer(props: OrderComposerProps) {
               <div className="flex-1 min-w-0">
                 <p className="text-base font-medium truncate">
                   {line.emoji} {line.name}
-                  {isWeight && <span className="text-sm text-muted-foreground ml-1">{formatQty(line.qty, line.unit)}</span>}
+                  {isWeight && <span className="text-sm text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
                 </p>
                 <p className="text-sm text-primary font-semibold">{formatCurrency(lineTotal(line))}</p>
               </div>
@@ -1954,7 +1968,7 @@ export function OrderComposer(props: OrderComposerProps) {
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-medium text-foreground truncate">
                         {line.name}
-                        {isWeight && <span className="text-[10px] text-muted-foreground ml-1">{formatQty(line.qty, line.unit)}</span>}
+                        {isWeight && <span className="text-[10px] text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
                       </p>
                       <p className="text-xs text-muted-foreground">{formatPriceLabel(line.price, line.unit, line.unitSize)}</p>
                     </div>

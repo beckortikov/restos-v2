@@ -254,9 +254,8 @@ export default function WaiterOrderDetailPage() {
     // Весовое блюдо: спросить грамм/кг, как в композере.
     if (menuItem.unit && menuItem.unit !== 'piece') {
       setWeightItem(menuItem)
-      setWeightValue(menuItem.saleStep && menuItem.saleStep > 0
-        ? menuItem.saleStep
-        : (menuItem.unitSize || 100))
+      // Дефолтный вес: 0.1 кг = 100 г.
+      setWeightValue(menuItem.unit === 'kg' ? 0.1 : 100)
       setSearch('')
       return
     }
@@ -283,11 +282,14 @@ export default function WaiterOrderDetailPage() {
     }
   }
 
-  async function confirmWeightAdd() {
+  async function confirmWeightAdd(portionQty: number = 1) {
     if (!order || !weightItem || weightValue <= 0) return
     setAdding(weightItem.id)
     try {
-      await addItemsToOrder(order.id, [{
+      // «4 по 100г» → N отдельных позиций по qty каждая (разбивка по порциям
+      // в чеке/кухне). Бэк печатает по строке на order_item.
+      const portions = portionQty > 1 ? portionQty : 1
+      const one = {
         menuItemId: weightItem.id,
         name: weightItem.name,
         qty: weightValue,
@@ -295,7 +297,8 @@ export default function WaiterOrderDetailPage() {
         cogs: weightItem.cogs ?? 0,
         unit: weightItem.unit,
         unitSize: weightItem.unitSize ?? 1,
-      }])
+      }
+      await addItemsToOrder(order.id, Array.from({ length: portions }, () => ({ ...one })))
       toast.success(`+ ${weightItem.name}`)
       setWeightItem(null)
       setWeightValue(0)

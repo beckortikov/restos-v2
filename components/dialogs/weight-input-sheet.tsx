@@ -28,7 +28,9 @@ interface WeightInputSheetProps {
   value: number
   onChange: (v: number) => void
   onClose: () => void
-  onConfirm: () => void
+  /** Подтверждение добавления. portionQty — сколько одинаковых порций по `value`
+   *  добавить (по умолчанию 1). При >1 строка в чеке печатается по порциям. */
+  onConfirm: (portionQty: number) => void
   /** If this sheet is rendered inside another vaul drawer, set true to use NestedRoot. */
   nested?: boolean
 }
@@ -87,13 +89,15 @@ function WeightBody({
   value: number
   onChange: (v: number) => void
   onClose: () => void
-  onConfirm: () => void
+  onConfirm: (portionQty: number) => void
 }) {
+  const [portions, setPortions] = React.useState(1)
   const step = item.saleStep && item.saleStep > 0 ? item.saleStep : 10
   const unitSize = item.unitSize || 100
-  const calcPrice = dMul(item.price, dDiv(value, unitSize))
+  const onePortionPrice = dMul(item.price, dDiv(value, unitSize))
+  const calcPrice = dMul(onePortionPrice, portions)
   const unitLabel = item.unit === 'kg' ? 'кг' : 'г'
-  const presets = item.unit === 'kg' ? [0.2, 0.5, 1, 1.5, 2] : [100, 200, 300, 500, 1000]
+  const presets = item.unit === 'kg' ? [0.1, 0.15, 0.2, 0.25, 0.3] : [100, 150, 200, 250, 300]
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-3">
@@ -109,7 +113,9 @@ function WeightBody({
       <div className="bg-primary/5 border border-primary/20 rounded-xl p-3 sm:p-4 text-center">
         <p className="text-[10px] sm:text-xs uppercase text-muted-foreground mb-0.5 sm:mb-1">К оплате</p>
         <p className="text-2xl sm:text-3xl font-bold text-primary">{formatCurrency(calcPrice)}</p>
-        <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">за {value}{unitLabel}</p>
+        <p className="text-xs sm:text-sm text-muted-foreground mt-0.5 sm:mt-1">
+          {portions > 1 ? `${portions} × ${value}${unitLabel}` : `за ${value}${unitLabel}`}
+        </p>
       </div>
       <div>
         <label className="text-xs font-medium text-muted-foreground mb-1 block">Вес ({unitLabel})</label>
@@ -139,13 +145,29 @@ function WeightBody({
           >{p}{unitLabel}</button>
         ))}
       </div>
+      <div>
+        <label className="text-xs font-medium text-muted-foreground mb-1 block">
+          Кол-во порций {portions > 1 && <span className="text-foreground/70">· печатается {portions} строками по {value}{unitLabel}</span>}
+        </label>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setPortions(p => Math.max(1, p - 1))}
+            className="size-11 sm:size-12 shrink-0 rounded-xl bg-muted text-foreground font-bold text-xl active:scale-95 flex items-center justify-center"
+          >−</button>
+          <div className="flex-1 min-w-0 text-center text-xl sm:text-2xl font-bold py-2.5 sm:py-3 rounded-xl border-2 border-border bg-background">{portions}</div>
+          <button
+            onClick={() => setPortions(p => p + 1)}
+            className="size-11 sm:size-12 shrink-0 rounded-xl bg-muted text-foreground font-bold text-xl active:scale-95 flex items-center justify-center"
+          >+</button>
+        </div>
+      </div>
       <div className="flex gap-2 sm:gap-3 pt-1">
         <button
           onClick={onClose}
           className="flex-1 px-3 py-3 text-sm font-medium text-foreground bg-muted rounded-xl"
         >Отмена</button>
         <button
-          onClick={onConfirm}
+          onClick={() => onConfirm(portions)}
           disabled={value <= 0}
           className="flex-[2] px-3 py-3 text-sm font-semibold text-primary-foreground bg-primary rounded-xl disabled:opacity-50 active:scale-95"
         >Добавить · {formatCurrency(calcPrice)}</button>

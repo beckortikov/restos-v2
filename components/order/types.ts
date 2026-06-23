@@ -9,6 +9,11 @@ export interface CartLine {
   cogs: number
   unit: 'piece' | 'g' | 'kg'
   unitSize: number
+  /** Кол-во порций для весовой позиции (например «4 по 100г»). В корзине
+   *  хранится одной строкой; при отправке заказа разворачивается в N отдельных
+   *  OrderItem'ов по `qty` каждый — чтобы чек/кухня печатали по порции отдельно.
+   *  undefined/1 — обычная одиночная порция. Для штучных позиций не используется. */
+  portionQty?: number
   /** Set to true when a manager/owner-permission user explicitly bypasses
    *  the backend stop-list for this dish. Causes the order request to
    *  carry `override_stop_list: true`, allowing the backend to accept the
