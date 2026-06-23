@@ -134,6 +134,11 @@ data class NewOrderItem(
     val qty: String,
     val note: String = "",
     @SerialName("modifier_ids") val modifierIds: List<String> = emptyList(),
+    // Для весовых порций («N по 100г») передаём unit/unit_size — это делает
+    // позицию НЕсливаемой на бэке (iiko-pre-merge схлопывает только позиции без
+    // override-полей), поэтому 3×100г остаются 3 строками, а не 0.3кг.
+    @SerialName("unit") val unit: String? = null,
+    @SerialName("unit_size") val unitSize: String? = null,
 ) {
     constructor(menuItemId: String, qty: Int, note: String = "") :
         this(menuItemId = menuItemId, qty = qty.toString(), note = note)

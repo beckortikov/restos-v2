@@ -312,10 +312,16 @@ class NewOrderViewModel @Inject constructor(
             try {
                 val items = s.cart.flatMap { line ->
                     if (line.isWeight) {
-                        // «N по 100г» → N отдельных позиций по весу одной порции,
-                        // чтобы чек/кухня печатали порции отдельными строками.
+                        // «N по 100г» → N отдельных позиций по весу одной порции.
+                        // unit/unit_size делают каждую позицию НЕсливаемой на бэке
+                        // (иначе iiko-pre-merge схлопнул бы их в одну 0.3кг).
                         List(line.qty.coerceAtLeast(1)) {
-                            NewOrderItem(menuItemId = line.menuItemId, qty = line.weightQty!!)
+                            NewOrderItem(
+                                menuItemId = line.menuItemId,
+                                qty = line.weightQty!!,
+                                unit = line.unit,
+                                unitSize = line.unitSize,
+                            )
                         }
                     } else {
                         listOf(NewOrderItem(menuItemId = line.menuItemId, qty = line.qty))
