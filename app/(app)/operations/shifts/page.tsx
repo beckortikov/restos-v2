@@ -1,7 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
+import { OwnerPinGate } from '@/components/owner-pin-gate'
 import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
 import { type CashShift, type CashShiftOperation, type FinancialAccount } from '@/lib/types'
@@ -38,7 +40,16 @@ function DeltaChip({ current, previous, hasPrevious }: { current: number; previo
 }
 
 export default function ShiftsPage() {
-  const { user, canDo } = useAuth()
+  const { user, canDo, restaurantId, homeRoute } = useAuth()
+  const navigate = useNavigate()
+  // Раздел «Смены» под ПИН владельца. Кассир может открыть смену без ПИН (когда
+  // активной смены нет — показываем только форму открытия). Любой другой доступ
+  // к разделу (история, X/Z-отчёты, закрытие, пересчёт) — после ввода ПИН владельца.
+  // Владелец/superadmin заходят без запроса ПИН.
+  const isOwnerRole = user?.role === 'owner' || user?.role === 'superadmin'
+  const [unlocked, setUnlocked] = useState(false)
+  // Кассир без активной смены явно запросил вход в управление (история/отчёты).
+  const [requestOwner, setRequestOwner] = useState(false)
   const [activeShift, setActiveShift] = useState<CashShift | null>(null)
   const [shiftOps, setShiftOps] = useState<CashShiftOperation[]>([])
   const [history, setHistory] = useState<CashShift[]>([])
@@ -286,6 +297,12 @@ export default function ShiftsPage() {
       toast.success('Смена открыта')
       setShowOpen(false)
       setOpenBalance(0)
+      // Кассир открыл смену без ПИН — уводим на рабочий экран, чтобы он не
+      // упёрся в гейт ПИН владельца (управление сменой защищено).
+      if (!isOwnerRole && !unlocked) {
+        navigate(homeRoute || '/operations/table-map')
+        return
+      }
       await reload()
     } catch (e) {
       toast.error(humanizeError(e, 'Ошибка открытия смены'))
@@ -411,6 +428,106 @@ export default function ShiftsPage() {
 
   if (!canDo('shifts.manage')) {
     return <div className="p-6 flex items-center justify-center h-64"><p className="text-muted-foreground">Нет доступа</p></div>
+  }
+
+  // Форма открытия смены — единственное, что доступно кассиру без ПИН владельца.
+  const openShiftCard = (
+    <div key={`open-form-${history[0]?.id ?? 'fresh'}`} className="bg-card rounded-xl border border-border p-8 text-center space-y-4">
+      <Receipt className="size-12 text-muted-foreground/30 mx-auto" />
+      <div>
+        <p className="font-medium text-foreground">Нет активной смены</p>
+        <p className="text-sm text-muted-foreground mt-1">Откройте смену чтобы начать принимать заказы</p>
+      </div>
+
+      {!showOpen ? (
+        <button
+          onClick={() => setShowOpen(true)}
+          className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors"
+        >
+          <Play className="size-4" />Открыть смену
+        </button>
+      ) : (
+        <div className="max-w-sm mx-auto space-y-3 text-left">
+          {cashAccounts.length === 0 ? (
+            /* Hard-block: без cash-счёта смена работать не может (выплаты + расходы). */
+            <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3 space-y-2">
+              <p className="font-medium">❌ Нет счёта типа «Касса»</p>
+              <p>Создайте счёт в разделе{' '}
+                <a href="/finance/accounts" className="underline font-medium hover:text-rose-900">Финансы → Счета</a>
+                {' '}— без него смена не сможет принимать выплаты и расходы.</p>
+            </div>
+          ) : (
+            /* Всегда показываем селект — даже если счёт один, кассир должен видеть какой именно. */
+            <div>
+              <label className="text-xs text-muted-foreground block mb-1">Счёт смены</label>
+              <select value={openAccountId} onChange={e => setOpenAccountId(e.target.value)}
+                disabled={cashAccounts.length === 1}
+                className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-70">
+                {cashAccounts.map(a => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}{a.type !== 'cash' ? ` (${a.type === 'bank' ? 'банк' : a.type})` : ''}
+                  </option>
+                ))}
+              </select>
+              {cashAccounts.length === 1 && (
+                <p className="text-[11px] text-muted-foreground mt-1">Единственный счёт автоматически выбран.</p>
+              )}
+              {cashAccounts.every(a => a.type !== 'cash') && (
+                <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded mt-1.5 px-2 py-1">
+                  ⚠ В списке нет cash-счётов. Используется счёт другого типа — корректно работать будет, но в /finance/accounts желательно изменить тип на «Касса (наличные)».
+                </p>
+              )}
+            </div>
+          )}
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Начальный остаток в кассе</label>
+            <DecimalInput min={0} value={openBalance} onChange={v => setOpenBalance(v)}
+              className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
+          </div>
+          <div className="flex gap-2 justify-center">
+            <button onClick={handleOpen}
+              disabled={cashAccounts.length === 0 || !openAccountId}
+              className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">
+              Открыть
+            </button>
+            <button onClick={() => setShowOpen(false)} className="px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground">Отмена</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+
+  // Гейт ПИН владельца. Владелец/superadmin — без запроса. Кассир: если есть
+  // активная смена (или он явно запросил управление) — требуем ПИН владельца;
+  // иначе показываем только форму открытия смены.
+  if (!isOwnerRole && !unlocked) {
+    if (activeShift || requestOwner) {
+      return (
+        <OwnerPinGate
+          restaurantId={restaurantId ?? ''}
+          sectionLabel="Смены"
+          onSuccess={() => { setUnlocked(true); setRequestOwner(false) }}
+          onBack={() => { if (activeShift) navigate(homeRoute || '/operations/table-map'); else setRequestOwner(false) }}
+        />
+      )
+    }
+    return (
+      <div className="h-full overflow-y-auto">
+        <div className="p-4 md:p-6 space-y-5 max-w-2xl mx-auto pb-24">
+          <div className="mb-1">
+            <h1 className="text-xl font-bold text-foreground">Кассовые смены</h1>
+            <p className="text-muted-foreground text-sm mt-0.5">Откройте смену, чтобы начать работу</p>
+          </div>
+          {openShiftCard}
+          <button
+            onClick={() => setRequestOwner(true)}
+            className="w-full flex items-center justify-center gap-2 py-3 text-sm text-muted-foreground hover:text-foreground transition-colors"
+          >
+            Управление сменами (ПИН владельца)
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -1005,71 +1122,7 @@ export default function ShiftsPage() {
           )}
         </div>
       ) : (
-        /* No active shift — key forces clean remount после закрытия предыдущей смены,
-           иначе DecimalInput и состояние формы могут «залипнуть». */
-        <div key={`open-form-${history[0]?.id ?? 'fresh'}`} className="bg-card rounded-xl border border-border p-8 text-center space-y-4">
-          <Receipt className="size-12 text-muted-foreground/30 mx-auto" />
-          <div>
-            <p className="font-medium text-foreground">Нет активной смены</p>
-            <p className="text-sm text-muted-foreground mt-1">Откройте смену чтобы начать принимать заказы</p>
-          </div>
-
-          {!showOpen ? (
-            <button
-              onClick={() => setShowOpen(true)}
-              className="inline-flex items-center gap-2 bg-primary text-primary-foreground px-5 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors"
-            >
-              <Play className="size-4" />Открыть смену
-            </button>
-          ) : (
-            <div className="max-w-sm mx-auto space-y-3 text-left">
-              {cashAccounts.length === 0 ? (
-                /* Hard-block: без cash-счёта смена работать не может (выплаты + расходы). */
-                <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-lg p-3 space-y-2">
-                  <p className="font-medium">❌ Нет счёта типа «Касса»</p>
-                  <p>Создайте счёт в разделе{' '}
-                    <a href="/finance/accounts" className="underline font-medium hover:text-rose-900">Финансы → Счета</a>
-                    {' '}— без него смена не сможет принимать выплаты и расходы.</p>
-                </div>
-              ) : (
-                /* Всегда показываем селект — даже если счёт один, кассир должен видеть какой именно. */
-                <div>
-                  <label className="text-xs text-muted-foreground block mb-1">Счёт смены</label>
-                  <select value={openAccountId} onChange={e => setOpenAccountId(e.target.value)}
-                    disabled={cashAccounts.length === 1}
-                    className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 disabled:opacity-70">
-                    {cashAccounts.map(a => (
-                      <option key={a.id} value={a.id}>
-                        {a.name}{a.type !== 'cash' ? ` (${a.type === 'bank' ? 'банк' : a.type})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {cashAccounts.length === 1 && (
-                    <p className="text-[11px] text-muted-foreground mt-1">Единственный счёт автоматически выбран.</p>
-                  )}
-                  {cashAccounts.every(a => a.type !== 'cash') && (
-                    <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded mt-1.5 px-2 py-1">
-                      ⚠ В списке нет cash-счётов. Используется счёт другого типа — корректно работать будет, но в /finance/accounts желательно изменить тип на «Касса (наличные)».
-                    </p>
-                  )}
-                </div>
-              )}
-              <div>
-                <label className="text-xs text-muted-foreground block mb-1">Начальный остаток в кассе</label>
-                <DecimalInput min={0} value={openBalance} onChange={v => setOpenBalance(v)}
-                  className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
-              </div>
-              <div className="flex gap-2 justify-center">
-                <button onClick={handleOpen}
-                  disabled={cashAccounts.length === 0 || !openAccountId}
-                  className="px-5 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed">
-                  Открыть
-                </button>
-                <button onClick={() => setShowOpen(false)} className="px-3 py-2.5 text-sm text-muted-foreground hover:text-foreground">Отмена</button>
-              </div>
-            </div>
-          )}
-        </div>
+        openShiftCard
       )}
 
       {/* Shift history */}
