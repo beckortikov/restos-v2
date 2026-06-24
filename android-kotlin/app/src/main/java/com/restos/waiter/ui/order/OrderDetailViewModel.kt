@@ -150,15 +150,11 @@ class OrderDetailViewModel @Inject constructor(
     fun dismissDialog() { _dialog.value = OrderDetailDialog.None }
 
     fun saveItemNote(item: OrderItemDto, note: String) {
-        // TODO(v4-port): сервер не поддерживает set_item_note — обновляем
-        // только локально в UI, чтобы пользователь видел свою заметку.
-        runAction(busyToast = if (note.isBlank()) "Комментарий очищен" else "Комментарий сохранён локально") {
-            _state.update { s ->
-                val o = s.order ?: return@update s
-                s.copy(order = o.copy(items = o.items.map {
-                    if (it.id == item.id) it.copy(note = note) else it
-                }))
-            }
+        // Бэкенд поддерживает PATCH /orders/{id}/items/{itemId}/note — сохраняем
+        // на сервере (раньше был local-only stub, комментарий терялся на SSE-refresh).
+        runAction(busyToast = if (note.isBlank()) "Комментарий очищен" else "Комментарий сохранён") {
+            val updated = repo.setItemNote(orderId, item.id, note)
+            _state.update { it.copy(order = updated) }
             _dialog.value = OrderDetailDialog.None
         }
     }
