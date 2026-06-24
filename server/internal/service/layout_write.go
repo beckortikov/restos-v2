@@ -341,10 +341,14 @@ func (s *TablesWriteService) AssignWaiter(ctx context.Context, id string, in Ass
 		} else {
 			orderUpdates = map[string]any{"waiter_id": *in.WaiterID, "updated_at": time.Now().UTC()}
 		}
-		// Сначала получим список ID для SSE emit'а.
+		// Каскадим только на АКТИВНЫЕ заказы. Терминальный статус заказа —
+		// "closed" (не "done"!). Раньше тут стоял "done", из-за чего закрытые
+		// заказы НЕ исключались и переназначение официанта стола ретроактивно
+		// переписывало waiter_id уже закрытых заказов → их обслуживание уезжало
+		// новому официанту. Исключаем closed + cancelled.
 		var openOrders []models.Order
 		if err := scopedO.Where("table_id = ?", id).
-			Where("status NOT IN ?", []string{"done", "cancelled"}).
+			Where("status NOT IN ?", []string{"closed", "cancelled"}).
 			Select("id").Find(&openOrders).Error; err == nil {
 			for _, o := range openOrders {
 				affectedOrderIDs = append(affectedOrderIDs, o.ID)
@@ -353,7 +357,7 @@ func (s *TablesWriteService) AssignWaiter(ctx context.Context, id string, in Ass
 		scopedU, _ := tr.ForTenant(ctx)
 		if err := scopedU.Model(&models.Order{}).
 			Where("table_id = ?", id).
-			Where("status NOT IN ?", []string{"done", "cancelled"}).
+			Where("status NOT IN ?", []string{"closed", "cancelled"}).
 			Updates(orderUpdates).Error; err != nil {
 			return err
 		}
