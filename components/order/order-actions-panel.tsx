@@ -192,7 +192,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   // deltaQty задан → partial cancel (минус N штук, остальные позиции остаются).
   // Не задан → full cancel всей строки.
   // ids — для отмены всей весовой группы «100г × N» (отменяем все строки сразу).
-  const [voidingItem, setVoidingItem] = useState<{ id: string; name: string; qty: number; price: number; deltaQty?: number; ids?: string[] } | null>(null)
+  const [voidingItem, setVoidingItem] = useState<{ id: string; name: string; qty: number; price: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; deltaQty?: number; ids?: string[] } | null>(null)
   const [voidReason, setVoidReason] = useState<VoidReason>('guest_changed_mind')
 
   // Note-edit state: { id, name, draftNote } или null.
@@ -620,6 +620,8 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
       name: item.name,
       qty: item.qty,
       price: item.price,
+      unit: item.unit,
+      unitSize: item.unitSize,
       deltaQty: isPartial ? 1 : undefined,
     })
   }
@@ -880,7 +882,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
                 <>
                   <button
                     onClick={() => isWeight
-                      ? setVoidingItem({ id: row.ids[row.ids.length - 1], name: item.name, qty: item.qty, price: item.price })
+                      ? setVoidingItem({ id: row.ids[row.ids.length - 1], name: item.name, qty: item.qty, price: item.price, unit: item.unit, unitSize: item.unitSize })
                       : handleDecrementItem(item)}
                     disabled={adjustingItemId === item.id}
                     title={isWeight ? (isGroup ? 'Убрать одну порцию' : 'Отменить позицию') : (item.qty > 1 ? 'Уменьшить (-1)' : 'Отменить позицию')}
@@ -1519,7 +1521,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               {voidingItem
                 ? (voidingItem.deltaQty != null && voidingItem.deltaQty < voidingItem.qty
                   ? `«${voidingItem.name}» — минус ${voidingItem.deltaQty} из ${voidingItem.qty}. Остаток ${voidingItem.qty - voidingItem.deltaQty} останется в заказе.`
-                  : `«${voidingItem.name}» (×${voidingItem.qty}) — ${formatCurrency(voidingItem.price * voidingItem.qty)}. Если позиция уже напечатана на кухню — туда уйдёт уведомление об отмене.`)
+                  : `«${voidingItem.name}» (${voidingItem.unit && voidingItem.unit !== 'piece' ? formatQty(voidingItem.qty, voidingItem.unit) : '×' + voidingItem.qty}) — ${formatCurrency(calcLineTotal(voidingItem.price, voidingItem.qty, voidingItem.unit, voidingItem.unitSize))}. Если позиция уже напечатана на кухню — туда уйдёт уведомление об отмене.`)
                 : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
