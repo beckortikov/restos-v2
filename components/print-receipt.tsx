@@ -114,14 +114,18 @@ export const PrintReceipt = forwardRef<HTMLDivElement, PrintReceiptProps>(
 
         {/* Items — одна строка «{name} ×{qty}    {lineTotal}», модификаторы отдельно */}
         {printableItems.map((item, i) => {
-          const qtyStr = item.unit && item.unit !== 'piece' ? formatQty(item.qty, item.unit) : `×${item.qty}`
+          const portions = item.portions && item.portions > 1 ? item.portions : 1
+          const baseQtyStr = item.unit && item.unit !== 'piece' ? formatQty(item.qty, item.unit) : `×${item.qty}`
+          // Слитые весовые порции: «100г × 3».
+          const qtyStr = portions > 1 ? `${baseQtyStr} × ${portions}` : baseQtyStr
+          const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize) * portions
           return (
             <div key={i} style={{ marginBottom: '3px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
                 <span style={{ flex: 1, marginRight: '8px', wordBreak: 'break-word' }}>
                   {item.name} <span style={{ fontWeight: 600 }}>{qtyStr}</span>
                 </span>
-                <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{formatCurrency(calcLineTotal(item.price, item.qty, item.unit, item.unitSize))}</span>
+                <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{formatCurrency(lineTotal)}</span>
               </div>
               {item.modifiers && item.modifiers.length > 0 && (
                 <div style={{ fontSize: '11px', paddingLeft: '8px' }}>

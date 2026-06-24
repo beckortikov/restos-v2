@@ -204,25 +204,20 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			WaiterName:  meta.WaiterName,
 			CreatedAt:   now,
 		}
-		for _, it := range sItems {
-			ri := escpos.RunnerItem{}
-			if it.Name != nil {
-				ri.Name = *it.Name
+		// Группируем одинаковые весовые порции в одну строку «100г × 3».
+		// Unit берём из order_item (бэкенд всегда проставляет его из меню).
+		for _, g := range groupPrintItems(sItems) {
+			ri := escpos.RunnerItem{
+				Name:    g.Name,
+				Comment: g.Note,
+				QtyDec:  g.Qty,
+				Unit:    g.Unit,
+				Count:   g.Count,
 			}
-			if it.Note != nil {
-				ri.Comment = *it.Note
-			}
-			f, _ := it.Qty.Float64()
+			f, _ := g.Qty.Float64()
 			ri.Qty = int(f)
 			if ri.Qty < 1 {
 				ri.Qty = 1
-			}
-			ri.QtyDec = it.Qty
-			// Весовые блюда (g/kg) — печатаем «250г» / «1,5кг» вместо «x1».
-			if it.MenuItemID != nil {
-				if mi, ok := miByID[*it.MenuItemID]; ok && mi.Unit != nil {
-					ri.Unit = *mi.Unit
-				}
 			}
 			in.Items = append(in.Items, ri)
 		}

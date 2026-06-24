@@ -133,19 +133,16 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 		if rest.Address != nil {
 			in.RestaurantAddr = *rest.Address
 		}
-		for _, it := range items {
-			ri := escpos.ReceiptItem{
-				Qty:       it.Qty,
-				Price:     it.Price,
-				LineTotal: decimal.Normalize(decimal.Mul(it.Price, it.Qty)),
-			}
-			if it.Name != nil {
-				ri.Name = *it.Name
-			}
-			if it.Note != nil {
-				ri.Note = *it.Note
-			}
-			in.Items = append(in.Items, ri)
+		for _, g := range groupPrintItems(items) {
+			in.Items = append(in.Items, escpos.ReceiptItem{
+				Name:      g.Name,
+				Qty:       g.Qty,
+				Price:     g.Price,
+				LineTotal: g.LineTotal,
+				Note:      g.Note,
+				Unit:      g.Unit,
+				Count:     g.Count,
+			})
 		}
 
 		payload := escpos.PreBillLayout(in)

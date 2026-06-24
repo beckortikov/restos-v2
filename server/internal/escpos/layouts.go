@@ -73,6 +73,10 @@ type ReceiptItem struct {
 	Price     decimal.Decimal
 	LineTotal decimal.Decimal
 	Note      string
+	// Unit — piece|g|kg. Для g/kg qty печатается как «100г»/«0,1кг» вместо «x…».
+	Unit string
+	// Count — кол-во одинаковых весовых порций, слитых в строку. >1 → «… × N».
+	Count int
 }
 
 // ReceiptLayout строит байты гостевого счёта (после оплаты).
@@ -163,9 +167,17 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 		itemLeftMax = 10
 	}
 	for _, it := range in.Items {
+		// Вес печатаем как «100г»/«0,1кг»; штучные — как «x3».
 		qtyStr := fmtQtyDec(it.Qty)
+		if it.Unit == "g" || it.Unit == "kg" {
+			qtyStr = fmtWeightQty(it.Qty, it.Unit)
+		}
 		totalStr := fmtMoney(it.LineTotal) + " TJS"
 		nameWithQty := it.Name + " " + qtyStr
+		// Слитые одинаковые весовые порции: «Блюдо 100г × 3».
+		if it.Count > 1 {
+			nameWithQty += " × " + strconv.Itoa(it.Count)
+		}
 		if visibleRuneCount(nameWithQty) > itemLeftMax {
 			nameWithQty = runeSlice(nameWithQty, itemLeftMax)
 		}
@@ -247,34 +259,48 @@ type RunnerItem struct {
 	Unit      string          // "piece"|"g"|"kg" — если пусто/piece → x{Qty}
 	Modifiers []string
 	Comment   string
+	// Count — кол-во одинаковых весовых порций, слитых в строку (>1 → «… × N»).
+	Count int
 }
 
-// fmtRunnerQty — «x2» для штучных, «250г» / «1,5кг» для весовых.
-// Порт логики из v1 lib/print-service.ts:155-160.
-func fmtRunnerQty(it RunnerItem) string {
-	switch it.Unit {
+// fmtWeightQty — «250г» / «1,5кг» для весовых порций.
+func fmtWeightQty(q decimal.Decimal, unit string) string {
+	switch unit {
 	case "g":
-		// Целые граммы.
-		g := it.QtyDec.Round(0).IntPart()
-		if g <= 0 {
-			g = int64(it.Qty)
-		}
+		g := q.Round(0).IntPart()
 		return strconv.FormatInt(g, 10) + "г"
 	case "kg":
-		// До 10 кг — 2 знака, иначе 1; trailing zeros — обрезаем.
 		places := int32(1)
-		if it.QtyDec.LessThan(decimal.FromInt(10)) {
+		if q.LessThan(decimal.FromInt(10)) {
 			places = 2
 		}
-		s := it.QtyDec.Round(places).String()
+		s := q.Round(places).String()
 		s = strings.Replace(s, ".", ",", 1)
-		// trim trailing zeros after comma
 		if strings.Contains(s, ",") {
 			s = strings.TrimRight(s, "0")
 			s = strings.TrimRight(s, ",")
 		}
 		return s + "кг"
 	default:
+		return q.String()
+	}
+}
+
+// fmtRunnerQty — «x2» для штучных, «250г» / «1,5кг» для весовых.
+// Порт логики из v1 lib/print-service.ts:155-160.
+func fmtRunnerQty(it RunnerItem) string {
+	switch it.Unit {
+	case "g", "kg":
+		s := fmtWeightQty(it.QtyDec, it.Unit)
+		// Слитые одинаковые порции: «100г × 3».
+		if it.Count > 1 {
+			s += " × " + strconv.Itoa(it.Count)
+		}
+		return s
+	default:
+		if it.Count > 1 {
+			return "x" + strconv.Itoa(it.Qty*it.Count)
+		}
 		return "x" + strconv.Itoa(it.Qty)
 	}
 }

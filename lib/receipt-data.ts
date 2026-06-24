@@ -29,7 +29,7 @@ export interface ReceiptPrintData {
   zoneName?: string
   waiterName?: string
   cashierName?: string
-  items: { name: string; qty: number; price: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; modifiers?: { name: string; price: number }[] }[]
+  items: { name: string; qty: number; price: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; modifiers?: { name: string; price: number }[]; portions?: number }[]
   subtotal: number
   discountAmount?: number
   discountReason?: string
@@ -76,6 +76,32 @@ export interface BuildReceiptOpts {
   payments?: { method: PaymentMethod; amount: number; accountName?: string }[]
 }
 
+function modSignature(mods?: { name: string; price: number }[]): string {
+  if (!mods || mods.length === 0) return ''
+  return mods.map(m => `${m.name}:${m.price}`).sort().join('|')
+}
+
+/** Группирует одинаковые весовые порции (g/kg) в одну с portions=N.
+ *  Штучные не трогаются. Порядок сохраняется. */
+function groupWeightPortions<T extends {
+  name: string; qty: number; price: number
+  unit?: 'piece' | 'g' | 'kg'; unitSize?: number
+  modifiers?: { name: string; price: number }[]
+}>(items: T[]): (T & { portions: number })[] {
+  const out: (T & { portions: number })[] = []
+  const idx = new Map<string, number>()
+  for (const it of items) {
+    if (it.unit === 'g' || it.unit === 'kg') {
+      const key = `${it.name}|${it.price}|${it.unit}|${it.unitSize}|${it.qty}|${modSignature(it.modifiers)}`
+      const at = idx.get(key)
+      if (at !== undefined) { out[at].portions += 1; continue }
+      idx.set(key, out.length)
+    }
+    out.push({ ...it, portions: 1 })
+  }
+  return out
+}
+
 export function buildReceiptData(
   order: Order,
   ctx: BuildReceiptCtx,
@@ -83,6 +109,9 @@ export function buildReceiptData(
 ): ReceiptPrintData {
   const items = visibleReceiptItems(order.items, ctx.voids)
   const subtotal = dRound(dSum(items.map(i => calcLineTotal(i.price, i.qty, i.unit, i.unitSize))))
+  // Группируем одинаковые весовые порции для отображения: «Блюдо 100г × 3»
+  // одной строкой. Subtotal считается выше из исходных строк — не меняется.
+  const displayItems = groupWeightPortions(items)
 
   const discountAmount = opts.discountAmount && opts.discountAmount > 0 ? opts.discountAmount : 0
   const discountedSubtotal = dSub(subtotal, discountAmount)
@@ -108,13 +137,14 @@ export function buildReceiptData(
     zoneName: isHall ? (zone?.name ?? 'Зал') : undefined,
     waiterName: waiter?.name,
     cashierName: ctx.currentUser?.name,
-    items: items.map(i => ({
+    items: displayItems.map(i => ({
       name: i.name,
       qty: i.qty,
       price: i.price,
       unit: i.unit,
       unitSize: i.unitSize,
       modifiers: i.modifiers?.map(m => ({ name: m.name, price: m.price })),
+      portions: i.portions,
     })),
     subtotal,
     discountAmount: discountAmount > 0 ? discountAmount : undefined,
