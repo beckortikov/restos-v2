@@ -197,6 +197,9 @@ data class RawOrderItem(
     val cogs: String = "0",
     val unit: String? = null,
     @SerialName("unit_size") val unitSize: String = "1",
+    // Сумма позиции считается бэком (price × qty/unitSize для веса). Клиент
+    // отображает её напрямую. null — только для старых ответов без поля.
+    @SerialName("line_total") val lineTotal: String? = null,
     @SerialName("cancelled_at") val cancelledAt: String? = null,
     @SerialName("cancel_reason") val cancelReason: String? = null,
     @SerialName("printed_at") val printedAt: String? = null,
@@ -239,10 +242,10 @@ data class RawOrderVoid(
  * — наследие v3; сервер v4 отдаёт `name`/`price` напрямую.
  */
 internal fun RawOrderItem.toDto(): OrderItemDto {
-    // Сервер v4 не отдаёт per-item subtotal — считаем сами, КАК БЭКЕНД:
-    // весовые (g/kg) → price * (qty / unitSize); штучные → price * qty.
-    // Без деления на unitSize весовая позиция раздувалась (100г × 35 = 3500).
-    val sub = runCatching {
+    // Источник правды по сумме позиции — бэк (line_total). Клиент только
+    // отображает. Fallback-расчёт оставлен лишь на случай старых ответов без
+    // поля: весовые → price*(qty/unitSize), штучные → price*qty.
+    val sub = lineTotal ?: runCatching {
         val q = java.math.BigDecimal(qty)
         val p = java.math.BigDecimal(price)
         val isWeight = unit == "g" || unit == "kg"

@@ -69,6 +69,10 @@ type OrderItem struct {
 	COGS                 decimal.Decimal `gorm:"column:cogs;type:numeric(14,4);default:0" json:"cogs"`
 	Unit                 *string         `gorm:"default:'piece'" json:"unit"`
 	UnitSize             decimal.Decimal `gorm:"column:unit_size;type:numeric(14,4);default:1" json:"unit_size"`
+	// LineTotal — НЕ хранится в БД; вычисляется при чтении (price × effectivePortions).
+	// Источник правды по сумме позиции для клиентов, чтобы они не дублировали
+	// формулу веса (price × qty/unitSize) и не расходились с бэком.
+	LineTotal *decimal.Decimal `gorm:"-" json:"line_total,omitempty"`
 	CancelledAt          *time.Time      `gorm:"column:cancelled_at" json:"cancelled_at"`
 	CancelledBy          *string         `gorm:"column:cancelled_by" json:"cancelled_by"`
 	CancelReason         *string         `gorm:"column:cancel_reason" json:"cancel_reason"`

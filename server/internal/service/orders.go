@@ -365,6 +365,10 @@ func (s *OrdersService) Get(ctx context.Context, id string) (*OrderDetail, error
 
 	itemsOut := make([]orderItemWithModifiers, 0, len(items))
 	for _, it := range items {
+		// Сумма позиции считается на бэке (единый источник правды): для весовых
+		// price × (qty/unitSize), для штучных price × qty. Клиент только отображает.
+		lt := decimal.Normalize(decimal.Mul(it.Price, effectivePortions(it.Unit, it.Qty, it.UnitSize)))
+		it.LineTotal = &lt
 		itemsOut = append(itemsOut, orderItemWithModifiers{
 			OrderItem:     it,
 			Modifiers:     modsByItem[it.ID],
