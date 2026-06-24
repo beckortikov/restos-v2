@@ -99,10 +99,15 @@ jobs:
         working-directory: desktop
         run: npm install --no-save
 
+      # Релизы публикуются в ПУБЛИЧНЫЙ репо beckortikov/restos-desktop (см.
+      # desktop/package.json → build.publish), чтобы код оставался приватным в
+      # этом репо, а авто-апдейт касс работал анонимно. Кросс-репо публикация
+      # требует PAT с доступом на запись в restos-desktop — секрет RELEASES_TOKEN
+      # (classic: scope repo; fine-grained: restos-desktop → Contents: read/write).
       - name: Pack Windows NSIS installer + publish to release
         working-directory: desktop
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         run: npx electron-builder --win --x64 --publish=always
 
       # electron-builder создаёт release в draft-mode. Снимаем флаг чтобы
@@ -110,9 +115,9 @@ jobs:
       # вручную жать "Publish" на каждом релизе.
       - name: Promote draft → published
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
         shell: bash
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          echo "Publishing $TAG"
-          gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
+          echo "Publishing $TAG to restos-desktop"
+          gh release edit "$TAG" --draft=false --repo beckortikov/restos-desktop
