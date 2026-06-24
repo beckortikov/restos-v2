@@ -540,12 +540,17 @@ export function OrderActionsBody({
       )}
 
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
-        {!hideMeta && (
+        {/* Мета (стол/официант/время) показываем всегда, КРОМЕ активных заказов
+            в диалоге (там hideMeta, чтобы не дублировать). Для закрытого заказа
+            показываем всегда — чтобы в просмотре было видно стол и чей он. */}
+        {(!hideMeta || order.status === 'done') && (
           <div className="rounded-xl border border-border px-3 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-sm">
             <div className="flex items-center gap-1.5">
               <Clock className="size-4 text-muted-foreground shrink-0" />
               <span className="text-muted-foreground">Время:</span>
-              <span className="font-medium">{getTimeSince(order.createdAt)}</span>
+              {/* Для закрытого заказа таймер заморожен на closedAt — иначе минуты
+                  «идут» уже у завершённого заказа. */}
+              <span className="font-medium">{getTimeSince(order.createdAt, order.status === 'done' ? order.closedAt : null)}</span>
             </div>
             {table && (
               <div className="flex items-center gap-1.5">

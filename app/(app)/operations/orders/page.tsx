@@ -15,6 +15,7 @@ import { fetchActiveShift } from '@/lib/queries'
 import type { CashShift } from '@/lib/types'
 import { ActiveOrdersTab, type ActiveTypeFilter } from '@/components/orders/active-orders-tab'
 import { HistoryOrdersTab } from '@/components/orders/history-orders-tab'
+import { OwnerPinGate } from '@/components/owner-pin-gate'
 
 type Tab = 'active' | 'hall' | 'takeaway' | 'closed'
 
@@ -51,7 +52,11 @@ function formatHHMM(iso: string | undefined | null): string {
 export default function OrdersPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const tab = parseTab(searchParams.get('tab'))
-  const { user } = useAuth()
+  const { user, restaurantId } = useAuth()
+  // Раздел «Закрытые» — под ПИН владельца (как раздел «Смены»).
+  // owner/superadmin заходят без запроса.
+  const isOwnerRole = user?.role === 'owner' || user?.role === 'superadmin'
+  const [closedUnlocked, setClosedUnlocked] = useState(false)
 
   const setTab = useCallback((next: Tab) => {
     const sp = new URLSearchParams(searchParams)
@@ -165,7 +170,16 @@ export default function OrdersPage() {
           скрываем через CSS, чтобы фильтры/скролл сохранялись. */}
       {closedMounted && (
         <div className={tab === 'closed' ? '' : 'hidden'}>
-          <HistoryOrdersTab />
+          {(!isOwnerRole && !closedUnlocked) ? (
+            <OwnerPinGate
+              restaurantId={restaurantId ?? ''}
+              sectionLabel="Закрытые заказы"
+              onSuccess={() => setClosedUnlocked(true)}
+              onBack={() => setTab('active')}
+            />
+          ) : (
+            <HistoryOrdersTab />
+          )}
         </div>
       )}
     </div>

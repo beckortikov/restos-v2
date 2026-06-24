@@ -314,7 +314,7 @@ export async function payServiceCharge(args: {
   shiftId?: string
 }) {
   const { waiterId, waiterName, amount, accountId, accountName, periodFrom, periodTo, shiftId } = args
-  void accountName; void shiftId
+  void accountName
   const periodLabel = periodFrom.slice(0, 10) === periodTo.slice(0, 10)
     ? periodFrom.slice(0, 10)
     : `${periodFrom.slice(0, 10)}…${periodTo.slice(0, 10)}`
@@ -327,6 +327,8 @@ export async function payServiceCharge(args: {
       period_from: periodFrom,
       period_to: periodTo,
       description,
+      // Привязка к смене — иначе выплата не попадёт в отчёт по смене.
+      shift_id: shiftId,
     } as any,
   }))
   logAction('payroll.service_pay', 'payroll', waiterId, waiterName, { amount, periodFrom, periodTo, shiftId })

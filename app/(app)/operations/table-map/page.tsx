@@ -853,7 +853,13 @@ export default function TableMapPage() {
                 : (table.currentOrderId
                     ? ordersData.find(o => o.id === table.currentOrderId && o.status !== 'done' && o.status !== 'cancelled') ?? null
                     : null)
-              const waiter = table.waiterId ? usersById.get(table.waiterId) ?? null : null
+              // Официант: с самого стола, иначе — с активного заказа стола
+              // (часто waiter_id проставлен на заказе, а не на столе).
+              const waiterId = table.waiterId
+                ?? tableOrders[0]?.waiterId
+                ?? fallbackOrder?.waiterId
+                ?? null
+              const waiter = waiterId ? usersById.get(waiterId) ?? null : null
               return (
                 <TableCard key={table.id} table={table}
                   tableOrders={tableOrders}

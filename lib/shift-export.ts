@@ -118,7 +118,9 @@ export async function exportShiftToXlsx(shift: CashShift): Promise<void> {
   }
   const payoutsByWaiter = new Map<string, number>()
   for (const op of allOps) {
-    if (op.category !== 'Выплата обслуживания' || op.type !== 'out') continue
+    // Бэкенд пишет выплату обслуживания с категорией "Сервис" (не "Выплата
+    // обслуживания") — старый фильтр никогда не совпадал, «Выплачено» был 0.
+    if (op.type !== 'out' || (op.category ?? '') !== 'Сервис') continue
     if (op.shiftId !== shift.id) continue
     const wid = op.sourceRef ?? ''
     payoutsByWaiter.set(wid, (payoutsByWaiter.get(wid) ?? 0) + Number(op.amount))

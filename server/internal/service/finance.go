@@ -1036,6 +1036,9 @@ type ServiceChargePayInput struct {
 	PeriodFrom  *string `json:"period_from,omitempty"`
 	PeriodTo    *string `json:"period_to,omitempty"`
 	Description *string `json:"description,omitempty"`
+	// ShiftID — без него выплата не привязывается к смене и не видна в
+	// отчёте по смене (service-payout/by-shift).
+	ShiftID *string `json:"shift_id,omitempty"`
 }
 
 func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePayInput) (*models.FinancialOperation, error) {
@@ -1066,6 +1069,7 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 		Category:     "Сервис",
 		Period:       &period,
 		Description:  in.Description,
+		ShiftID:      in.ShiftID,
 	})
 }
 
@@ -1077,6 +1081,7 @@ type payoutInput struct {
 	Category     string
 	Period       *string
 	Description  *string
+	ShiftID      *string
 }
 
 func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.FinancialOperation, error) {
@@ -1145,6 +1150,7 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 			Counterparty: in.Counterparty,
 			IsAuto:       &isAuto,
 			SourceRef:    &srcRef,
+			ShiftID:      in.ShiftID,
 			RestaurantID: &ridStr,
 			CreatedAt:    now,
 			UpdatedAt:    now,
