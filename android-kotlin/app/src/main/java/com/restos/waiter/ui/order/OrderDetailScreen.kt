@@ -993,7 +993,9 @@ private fun OrderLineCard(
                 }
             }
             Text(
-                formatCurrency(item.subtotal.toBigDecimalSafe()),
+                // Строка может объединять N одинаковых порций (portions) — показываем
+                // сумму всей группы = subtotal одной позиции × portions.
+                formatCurrency(item.subtotal.toBigDecimalSafe() * portions.toBigDecimal()),
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,

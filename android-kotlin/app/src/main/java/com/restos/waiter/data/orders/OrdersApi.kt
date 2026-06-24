@@ -239,9 +239,22 @@ data class RawOrderVoid(
  * — наследие v3; сервер v4 отдаёт `name`/`price` напрямую.
  */
 internal fun RawOrderItem.toDto(): OrderItemDto {
-    // Сервер v4 не отдаёт per-item subtotal — считаем сами: qty * price.
+    // Сервер v4 не отдаёт per-item subtotal — считаем сами, КАК БЭКЕНД:
+    // весовые (g/kg) → price * (qty / unitSize); штучные → price * qty.
+    // Без деления на unitSize весовая позиция раздувалась (100г × 35 = 3500).
     val sub = runCatching {
-        java.math.BigDecimal(qty).multiply(java.math.BigDecimal(price)).toPlainString()
+        val q = java.math.BigDecimal(qty)
+        val p = java.math.BigDecimal(price)
+        val isWeight = unit == "g" || unit == "kg"
+        val total = if (isWeight) {
+            val size = java.math.BigDecimal(unitSize).let {
+                if (it <= java.math.BigDecimal.ZERO) java.math.BigDecimal.ONE else it
+            }
+            p.multiply(q.divide(size, 4, java.math.RoundingMode.HALF_EVEN))
+        } else {
+            p.multiply(q)
+        }
+        total.stripTrailingZeros().toPlainString()
     }.getOrDefault("0")
     return OrderItemDto(
         id = id,

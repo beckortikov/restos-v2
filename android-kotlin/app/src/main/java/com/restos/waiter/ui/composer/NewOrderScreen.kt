@@ -646,7 +646,9 @@ private fun CartLineRow(
             QtyButton(icon = Icons.Outlined.Add, onClick = { onInc(line.menuItemId) })
             Spacer(Modifier.weight(1f))
             Text(
-                formatCurrency(line.price.toBigDecimalSafe() * line.qty.toBigDecimal()),
+                // lineTotal() учитывает вес (price × qty/unitSize × порции), а не
+                // наивное price × qty (раздувало весовые позиции).
+                formatCurrency(line.lineTotal()),
                 fontSize = 13.sp,
                 fontWeight = FontWeight.SemiBold,
             )

@@ -108,10 +108,19 @@ func (s *ShiftsService) printReport(ctx context.Context, shiftID, jobType string
 	if zr.Shift.ClosedAt != nil {
 		in.ClosedAt = *zr.Shift.ClosedAt
 	}
+	// Ожидается в кассе: для закрытой смены берём зафиксированное значение; иначе
+	// (печать Z до закрытия / значение не проставлено) считаем на лету ТОЙ ЖЕ
+	// формулой, что и при закрытии: opening + cash_revenue + cash_in − изъятия −
+	// расходы. Без этого строка показывала 0.
 	if zr.Shift.ExpectedCash != nil {
 		in.ExpectedCash = *zr.Shift.ExpectedCash
 	} else {
-		in.ExpectedCash = decimal.Zero
+		expensesTotal := decimal.Zero
+		for _, e := range zr.ExpensesByCategory {
+			expensesTotal = decimal.Add(expensesTotal, e.Amount)
+		}
+		base := decimal.Add(decimal.Add(zr.Shift.OpeningBalance, zr.Shift.CashRevenue), zr.CashIn)
+		in.ExpectedCash = decimal.Normalize(decimal.Sub(decimal.Sub(base, zr.Withdrawals), expensesTotal))
 	}
 
 	var payload []byte
