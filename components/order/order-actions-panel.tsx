@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 
 import { useAuth } from '@/lib/auth-store'
 import { humanizeError } from '@/lib/errors'
-import { calcLineCogs, calcLineTotal, formatCurrency, getTimeSince, visibleReceiptItems, voidedItemFlags } from '@/lib/helpers'
+import { calcLineCogs, calcLineTotal, formatCurrency, formatQty, getTimeSince, visibleReceiptItems, voidedItemFlags } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub, dSum } from '@/lib/decimal'
 import {
   assignWaiter, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, closeOrderWithPayment, fetchActiveShift, fetchFinancialAccounts,
@@ -191,7 +191,8 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   const [pendingCancelIds, setPendingCancelIds] = useState<Set<string>>(new Set())
   // deltaQty задан → partial cancel (минус N штук, остальные позиции остаются).
   // Не задан → full cancel всей строки.
-  const [voidingItem, setVoidingItem] = useState<{ id: string; name: string; qty: number; price: number; deltaQty?: number } | null>(null)
+  // ids — для отмены всей весовой группы «100г × N» (отменяем все строки сразу).
+  const [voidingItem, setVoidingItem] = useState<{ id: string; name: string; qty: number; price: number; deltaQty?: number; ids?: string[] } | null>(null)
   const [voidReason, setVoidReason] = useState<VoidReason>('guest_changed_mind')
 
   // Note-edit state: { id, name, draftNote } или null.
@@ -264,6 +265,31 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
       base[idx] || (it.id ? pendingCancelIds.has(it.id) : false),
     )
   }, [order.items, voids, pendingCancelIds])
+  // Группировка одинаковых весовых порций для отображения: «Блюдо 100г × N».
+  // Отменённые строки не группируются. ids — все строки группы (для отмены всей
+  // группы). Действия (−/+/×) работают на группу.
+  const displayRows = useMemo(() => {
+    type Row = { rep: typeof order.items[number]; ids: string[]; portions: number; voided: boolean; served: boolean }
+    const rows: Row[] = []
+    const idx = new Map<string, number>()
+    order.items.forEach((item, i) => {
+      const voided = voidFlags[i]
+      const served = !voided && (item.servedAt != null || item.kitchenStatus === 'served')
+      const isWeight = item.unit === 'g' || item.unit === 'kg'
+      if (!voided && isWeight) {
+        const key = `${item.menuItemId}|${item.price}|${item.unit}|${item.unitSize}|${item.qty}|${item.note ?? ''}`
+        const at = idx.get(key)
+        if (at !== undefined) {
+          rows[at].portions += 1
+          if (item.id) rows[at].ids.push(item.id)
+          return
+        }
+        idx.set(key, rows.length)
+      }
+      rows.push({ rep: item, ids: item.id ? [item.id] : [], portions: 1, voided, served })
+    })
+    return rows
+  }, [order.items, voidFlags])
   const subtotal = useMemo(
     () => Number(dRound(dSum(visibleItems.map(i => calcLineTotal(i.price, i.qty, i.unit, i.unitSize))))),
     [visibleItems],
@@ -465,6 +491,23 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     const item = voidingItem
     const reasonLabel = VOID_REASON_LABELS[voidReason]
     setVoiding(true)
+    // Отмена всей весовой группы «100г × N» — отменяем каждую порцию-строку.
+    if (item.ids && item.ids.length > 0) {
+      const ids = item.ids
+      setPendingCancelIds(prev => { const n = new Set(prev); ids.forEach(id => n.add(id)); return n })
+      setVoidingItem(null)
+      setVoidReason('guest_changed_mind')
+      try {
+        for (const id of ids) await cancelOrderItem(id, reasonLabel, user?.id)
+        toast.success(`Отменено: ${item.name}`)
+        onItemsChanged?.()
+      } catch (e) {
+        toast.error(e instanceof Error ? `Ошибка отмены: ${e.message}` : 'Ошибка отмены')
+      }
+      setPendingCancelIds(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
+      setVoiding(false)
+      return
+    }
     // Optimistic: подсветим item как отменённый сразу (стрейк появляется без
     // ожидания API). cancelOrderItem ставит cancelled_at в БД → SSE →
     // AutoPrintRunner подхватит и напечатает кухонную «ОТМЕНА» для уже
@@ -542,6 +585,28 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
       onItemsChanged?.()
     } catch (e) {
       toast.error(e instanceof Error ? `Ошибка: ${e.message}` : '+1 не удалось')
+    }
+    setAdjustingItemId(null)
+  }
+  // Добавить ещё одну такую же весовую порцию (для группы «100г × N»).
+  const handleAddPortion = async (rep: any) => {
+    if (!rep.menuItemId || adjustingItemId) return
+    setAdjustingItemId(rep.id)
+    try {
+      await addItemsToOrder(order.id, [{
+        id: '',
+        menuItemId: rep.menuItemId,
+        name: rep.name,
+        price: rep.price,
+        cogs: rep.cogs ?? 0,
+        qty: rep.qty,
+        unit: rep.unit ?? 'g',
+        unitSize: rep.unitSize ?? 1,
+        modifiers: [],
+      } as any])
+      onItemsChanged?.()
+    } catch (e) {
+      toast.error(e instanceof Error ? `Ошибка: ${e.message}` : 'Не удалось добавить порцию')
     }
     setAdjustingItemId(null)
   }
@@ -767,12 +832,18 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         </div>
         {order.items.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-6">Нет позиций</p>
-        ) : order.items.map((item, idx) => {
-          const voided = voidFlags[idx]
-          // Официант отметил блюдо поданным в Kotlin-приложении (servedAt /
-          // kitchenStatus='served'). Подсвечиваем зелёным, чтобы кассир видел
-          // что гость уже получил.
-          const served = !voided && (item.servedAt != null || item.kitchenStatus === 'served')
+        ) : displayRows.map((row, idx) => {
+          const item = row.rep
+          const voided = row.voided
+          const served = row.served
+          const portions = row.portions
+          const isWeight = item.unit === 'g' || item.unit === 'kg'
+          const isGroup = portions > 1
+          // Мета-строка: вес как «100г × 3», штучное как «×3».
+          const qtyMeta = isWeight
+            ? `${formatQty(item.qty, item.unit)}${isGroup ? ` × ${portions}` : ''}`
+            : `×${item.qty}`
+          const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize) * portions
           return (
             <div
               key={`${item.id ?? idx}-${idx}`}
@@ -789,7 +860,7 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
                   {item.name}
                 </p>
                 <p className={`text-[10px] ${voided ? 'text-muted-foreground/70 line-through' : 'text-muted-foreground'} flex items-center gap-1.5 flex-wrap`}>
-                  <span>×{item.qty} · {formatCurrency(item.price)}</span>
+                  <span>{qtyMeta} · {formatCurrency(item.price)}</span>
                   {item.createdAt && (
                     <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">⏱ {getTimeSince(item.createdAt)}</span>
                   )}
@@ -803,29 +874,31 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               <span className={`text-xs font-bold min-w-[5rem] text-right tabular-nums whitespace-nowrap ${
                 voided ? 'text-muted-foreground line-through' : 'text-foreground'
               }`}>
-                {formatCurrency(calcLineTotal(item.price, item.qty, item.unit, item.unitSize))}
+                {formatCurrency(lineTotal)}
               </span>
               {!voided && item.id ? (
                 <>
                   <button
-                    onClick={() => handleDecrementItem(item)}
+                    onClick={() => isWeight
+                      ? setVoidingItem({ id: row.ids[row.ids.length - 1], name: item.name, qty: item.qty, price: item.price })
+                      : handleDecrementItem(item)}
                     disabled={adjustingItemId === item.id}
-                    title={item.qty > 1 ? 'Уменьшить (-1)' : 'Отменить позицию'}
+                    title={isWeight ? (isGroup ? 'Убрать одну порцию' : 'Отменить позицию') : (item.qty > 1 ? 'Уменьшить (-1)' : 'Отменить позицию')}
                     className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
                   >
                     <Minus className="size-3.5" />
                   </button>
                   <button
-                    onClick={() => handleIncrementItem(item)}
+                    onClick={() => isWeight ? handleAddPortion(item) : handleIncrementItem(item)}
                     disabled={adjustingItemId === item.id}
-                    title="Увеличить (+1)"
+                    title={isWeight ? 'Добавить порцию' : 'Увеличить (+1)'}
                     className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
                   >
                     <Plus className="size-3.5" />
                   </button>
                 </>
               ) : null}
-              {!voided && item.id ? (
+              {!voided && item.id && !isGroup ? (
                 <button
                   onClick={() => setEditingNote({ id: item.id!, name: item.name, draftNote: item.note ?? '' })}
                   title={item.note ? 'Редактировать комментарий' : 'Добавить комментарий'}
@@ -840,8 +913,10 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               ) : null}
               {!voided && item.id ? (
                 <button
-                  onClick={() => setVoidingItem({ id: item.id!, name: item.name, qty: item.qty, price: item.price })}
-                  title="Отменить позицию"
+                  onClick={() => setVoidingItem(isGroup
+                    ? { id: item.id!, ids: row.ids, name: item.name, qty: item.qty * portions, price: item.price }
+                    : { id: item.id!, name: item.name, qty: item.qty, price: item.price })}
+                  title={isGroup ? 'Отменить все порции' : 'Отменить позицию'}
                   className="size-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex items-center justify-center transition-colors shrink-0"
                 >
                   <X className="size-3.5" />
