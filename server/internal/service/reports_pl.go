@@ -131,7 +131,7 @@ func (s *ReportsService) computePnL(ctx context.Context, f PeriodFilter) (*PnL, 
 		Cogs decimal.Decimal `gorm:"column:cogs"`
 	}
 	q2 := scoped2.Table("orders AS o").
-		Select("to_char(o.closed_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(oi.cogs * oi.qty), 0) AS cogs").
+		Select("to_char(o.closed_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
 	if f.From != nil {

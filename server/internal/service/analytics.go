@@ -92,8 +92,8 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 		Select(`oi.menu_item_id AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
 		        COALESCE(SUM(oi.qty), 0) AS qty,
-		        COALESCE(SUM(oi.price * oi.qty), 0) AS revenue,
-		        COALESCE(SUM(oi.cogs  * oi.qty), 0) AS cogs`).
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS revenue,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
@@ -701,8 +701,8 @@ func (s *AnalyticsService) FoodCost(ctx context.Context, f PeriodFilter) (*FoodC
 		Select(`oi.menu_item_id AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
 		        COALESCE(SUM(oi.qty), 0) AS qty,
-		        COALESCE(SUM(oi.price * oi.qty), 0) AS revenue,
-		        COALESCE(SUM(oi.cogs  * oi.qty), 0) AS cogs`).
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS revenue,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").

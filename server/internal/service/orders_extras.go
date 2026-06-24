@@ -696,7 +696,7 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 		}
 		// Per-unit стоимость строки = price + сумма модификаторов.
 		perUnit := decimal.Add(item.Price, modSum)
-		lineDelta := decimal.Normalize(decimal.Mul(perUnit, qtyToCancel))
+		lineDelta := decimal.Normalize(decimal.Mul(perUnit, effectivePortions(item.Unit, qtyToCancel, item.UnitSize)))
 
 		if fullCancel {
 			item.CancelledAt = &now

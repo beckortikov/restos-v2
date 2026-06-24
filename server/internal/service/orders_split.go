@@ -184,7 +184,7 @@ func (s *OrdersService) Split(ctx context.Context, orderID string, in SplitInput
 							return apperrors.Wrap("VALIDATION", "split qty exceeds order item qty for "+line.OrderItemID, nil)
 						}
 						usedQty[line.OrderItemID] = sum
-						lineAmt := decimal.Normalize(decimal.Mul(it.Price, q))
+						lineAmt := decimal.Normalize(decimal.Mul(it.Price, effectivePortions(it.Unit, q, it.UnitSize)))
 						partTotal = decimal.Add(partTotal, lineAmt)
 						itName := ""
 						if it.Name != nil {
@@ -208,7 +208,7 @@ func (s *OrdersService) Split(ctx context.Context, orderID string, in SplitInput
 							return apperrors.Wrap("VALIDATION", "item appears in multiple split parts: "+iid, nil)
 						}
 						seen[iid] = true
-						line := decimal.Normalize(decimal.Mul(it.Price, it.Qty))
+						line := decimal.Normalize(decimal.Mul(it.Price, effectivePortions(it.Unit, it.Qty, it.UnitSize)))
 						partTotal = decimal.Add(partTotal, line)
 						itName := ""
 						if it.Name != nil {

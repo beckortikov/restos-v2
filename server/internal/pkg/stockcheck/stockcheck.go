@@ -43,6 +43,17 @@ type OrderItem struct {
 type MenuMeta struct {
 	IsBatchCooking bool
 	PreparedQty    int
+	Unit           *string         // piece|g|kg — для нормализации порций весовых блюд
+	UnitSize       decimal.Decimal // граммов в одной порции (g/kg)
+}
+
+// effPortions — число «порций» позиции: весовые (g/kg) делятся на unitSize,
+// штучные остаются как есть. Зеркалит service.effectivePortions.
+func effPortions(unit *string, qty, unitSize decimal.Decimal) decimal.Decimal {
+	if unit == nil || (*unit != "g" && *unit != "kg") {
+		return qty
+	}
+	return decimal.DivRoundOr(qty, unitSize, qty)
 }
 
 // IngredientInfo — состояние ингредиента (склад + waste + flags).
@@ -124,7 +135,7 @@ func ComputeShortages(items []OrderItem, opts Opts) []string {
 
 		// strict: ingredient-based — проверяем каждую строку техкарты.
 		for _, line := range techLines {
-			recipeQty := decimal.Mul(line.Qty, item.Qty)
+			recipeQty := decimal.Mul(line.Qty, effPortions(menuMeta.Unit, item.Qty, menuMeta.UnitSize))
 			ing := line.Ingredient
 			if ing == nil {
 				continue

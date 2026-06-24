@@ -589,7 +589,7 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 		}
 		tcl := linesByMenu[*it.MenuItemID]
 		for _, line := range tcl {
-			lineQty := decimal.Mul(line.Qty, it.Qty)
+			lineQty := decimal.Mul(line.Qty, effectivePortions(it.Unit, it.Qty, it.UnitSize))
 			switch {
 			case line.IngredientID != nil:
 				if err := writeIngredientDeduct(tx, restaurantID, *line.IngredientID, line.Name, line.Unit, lineQty, sourceRef, now); err != nil {

@@ -276,7 +276,7 @@ func (s *OrdersService) ReprintReceipt(ctx context.Context, orderID string) (*Pr
 			ri := escpos.ReceiptItem{
 				Qty:       it.Qty,
 				Price:     it.Price,
-				LineTotal: decimal.Normalize(decimal.Mul(it.Price, it.Qty)),
+				LineTotal: decimal.Normalize(decimal.Mul(it.Price, effectivePortions(it.Unit, it.Qty, it.UnitSize))),
 			}
 			if it.Name != nil {
 				ri.Name = *it.Name

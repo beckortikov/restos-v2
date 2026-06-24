@@ -288,14 +288,26 @@ func computeItemKitchenStatus(o *models.Order, it *models.OrderItem) string {
 	return "pending"
 }
 
-// computeSubtotal — сумма qty*price по неотменённым позициям.
+// effectivePortions — число «порций» позиции для денежных и складских расчётов.
+// Весовые блюда (unit "g"/"kg") хранят price/cogs за unitSize граммов, а qty —
+// в граммах, поэтому реальное число порций = qty / unitSize. Для штучных
+// (unit nil/"piece", unitSize=1) возвращает qty без изменений. Зеркалит
+// lib/helpers.ts calcLineTotal на фронте. Гард: unitSize=0 → qty (без скейла).
+func effectivePortions(unit *string, qty, unitSize decimal.Decimal) decimal.Decimal {
+	if unit == nil || (*unit != "g" && *unit != "kg") {
+		return qty
+	}
+	return decimal.DivRoundOr(qty, unitSize, qty)
+}
+
+// computeSubtotal — сумма price*porций по неотменённым позициям.
 func computeSubtotal(items []models.OrderItem) decimal.Decimal {
 	sum := decimal.Zero
 	for _, it := range items {
 		if it.CancelledAt != nil {
 			continue
 		}
-		sum = decimal.Add(sum, decimal.Mul(it.Qty, it.Price))
+		sum = decimal.Add(sum, decimal.Mul(it.Price, effectivePortions(it.Unit, it.Qty, it.UnitSize)))
 	}
 	return sum
 }

@@ -40,7 +40,7 @@ func groupPrintItems(items []models.OrderItem) []printGroup {
 		if it.Unit != nil && *it.Unit != "" {
 			unit = *it.Unit
 		}
-		lineTotal := decimal.Normalize(decimal.Mul(it.Price, it.Qty))
+		lineTotal := decimal.Normalize(decimal.Mul(it.Price, effectivePortions(it.Unit, it.Qty, it.UnitSize)))
 		isWeight := unit == "g" || unit == "kg"
 		if isWeight {
 			key := name + "|" + it.Price.String() + "|" + note + "|" + it.Qty.String() + "|" + unit

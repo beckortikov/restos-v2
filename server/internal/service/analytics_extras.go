@@ -170,7 +170,7 @@ func (s *AnalyticsService) FoodCostMonthly(ctx context.Context, f PeriodFilter) 
 	}
 	q2 := scoped2.Table("orders AS o").
 		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
-		        COALESCE(SUM(oi.cogs * oi.qty), 0) AS cogs`).
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
 	if f.From != nil {
@@ -287,7 +287,7 @@ func (s *AnalyticsService) Forecast(ctx context.Context, f PeriodFilter) (*Forec
 	}
 	q2 := scoped2.Table("orders AS o").
 		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
-		        COALESCE(SUM(oi.cogs * oi.qty), 0) AS cogs`).
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
 	if f.From != nil {

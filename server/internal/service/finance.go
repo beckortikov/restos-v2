@@ -603,7 +603,7 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 		Total decimal.Decimal `gorm:"column:total"`
 	}
 	q2 := scoped2.Table("orders AS o").
-		Select("COALESCE(SUM(oi.cogs * oi.qty), 0) AS total").
+		Select("COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS total").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
 	if f.From != nil {
@@ -1192,7 +1192,7 @@ func (s *SalaryService) AccrualByWaiter(ctx context.Context, from, to *time.Time
 		        COALESCE(u.name, '') AS waiter_name,
 		        COUNT(DISTINCT o.id) AS cnt,
 		        COALESCE(SUM(o.total_with_service), 0) AS revenue,
-		        COALESCE(SUM(oi.qty * oi.price * o.service_percent / 100.0), 0) AS accrued`).
+		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * o.service_percent / 100.0), 0) AS accrued`).
 		Joins("LEFT JOIN order_items oi ON oi.order_id = o.id AND oi.cancelled_at IS NULL").
 		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id::text").
 		Where("o.restaurant_id = ? AND o.status = ? AND o.closed_at IS NOT NULL", rid, "closed").

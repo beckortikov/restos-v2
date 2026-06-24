@@ -313,7 +313,7 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 		}
 
 		// 4. Recompute order.total: вычесть line_total.
-		lineTotal := decimal.Normalize(decimal.Mul(item.Price, item.Qty))
+		lineTotal := decimal.Normalize(decimal.Mul(item.Price, effectivePortions(item.Unit, item.Qty, item.UnitSize)))
 		order.Total = decimal.Normalize(decimal.Sub(order.Total, lineTotal))
 		order.TotalWithService = order.Total
 		order.UpdatedAt = now

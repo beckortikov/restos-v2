@@ -406,9 +406,10 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 					return err
 				}
 				// Пересчёт line-total: price * deltaQty + сумма модификаторов * deltaQty.
-				lineTotal := decimal.Mul(existing.Price, qty)
+				eff := effectivePortions(existing.Unit, qty, existing.UnitSize)
+				lineTotal := decimal.Mul(existing.Price, eff)
 				for _, m := range existingMods[existing.ID] {
-					lineTotal = decimal.Add(lineTotal, decimal.Mul(m.Price, qty))
+					lineTotal = decimal.Add(lineTotal, decimal.Mul(m.Price, eff))
 				}
 				extra = decimal.Add(extra, decimal.Normalize(lineTotal))
 				// Обновим in-memory представление, чтобы повторный input с тем же
@@ -758,7 +759,8 @@ func buildOrderItem(
 	if err := tx.Create(oi).Error; err != nil {
 		return nil, decimal.Zero, err
 	}
-	lineTotal := decimal.Normalize(decimal.Mul(oi.Price, qty))
+	eff := effectivePortions(oi.Unit, qty, oi.UnitSize)
+	lineTotal := decimal.Normalize(decimal.Mul(oi.Price, eff))
 
 	// Модификаторы: сначала из ModifierIDs (legacy), затем Modifiers[] (overrides).
 	for _, mid := range it.ModifierIDs {
@@ -778,7 +780,7 @@ func buildOrderItem(
 		if err := tx.Create(oim).Error; err != nil {
 			return nil, decimal.Zero, err
 		}
-		lineTotal = decimal.Add(lineTotal, decimal.Mul(modCopy.Price, qty))
+		lineTotal = decimal.Add(lineTotal, decimal.Mul(modCopy.Price, eff))
 	}
 	if it.Modifiers != nil {
 		for _, mi := range *it.Modifiers {
@@ -813,7 +815,7 @@ func buildOrderItem(
 			if err := tx.Create(oim).Error; err != nil {
 				return nil, decimal.Zero, err
 			}
-			lineTotal = decimal.Add(lineTotal, decimal.Mul(oim.Price, qty))
+			lineTotal = decimal.Add(lineTotal, decimal.Mul(oim.Price, eff))
 		}
 	}
 	return oi, lineTotal, nil
@@ -881,7 +883,7 @@ func validateStockForItems(
 	// 3. menu meta (batch / prepared_qty).
 	menuMeta := make(map[string]stockcheck.MenuMeta, len(menuByID))
 	for id, m := range menuByID {
-		mm := stockcheck.MenuMeta{}
+		mm := stockcheck.MenuMeta{Unit: m.Unit, UnitSize: m.UnitSize}
 		if m.IsBatchCooking != nil {
 			mm.IsBatchCooking = *m.IsBatchCooking
 		}
@@ -1159,7 +1161,7 @@ func computeReservations(tx *gorm.DB, rid string) (
 			if line.IngredientID == nil || *line.IngredientID == "" {
 				continue
 			}
-			add := decimal.Mul(line.Qty, r.Qty)
+			add := decimal.Mul(line.Qty, effectivePortions(mi.Unit, r.Qty, mi.UnitSize))
 			key := *line.IngredientID
 			cur := reservedIng[key]
 			reservedIng[key] = decimal.Add(cur, add)
