@@ -180,6 +180,9 @@ fun OrderDetailScreen(
                     onCancelItem = viewModel::openCancelItem,
                     onIncrementItem = viewModel::incrementItem,
                     onDecrementItem = viewModel::decrementItem,
+                    onAddPortion = viewModel::addPortion,
+                    onRemovePortion = viewModel::removePortion,
+                    onCancelGroup = viewModel::openCancelGroup,
                     onToggleServed = viewModel::toggleServed,
                     onEditNote = viewModel::openEditNote,
                     onSwitchGroup = onSwitchGroup,
@@ -198,7 +201,7 @@ fun OrderDetailScreen(
             reasons = state.itemReasons,
             busy = state.busy,
             onDismiss = viewModel::dismissDialog,
-            onPick = { reason -> viewModel.cancelItem(d.item, reason) },
+            onPick = { reason -> viewModel.cancelItem(d.item, reason, d.groupIds) },
         )
         OrderDetailDialog.CancelOrder -> CancelReasonDialog(
             title = "Отменить заказ?",
@@ -377,6 +380,40 @@ private fun OrderTitle(order: OrderDto?) {
     }
 }
 
+/** Строка отображения: одинаковые весовые порции слиты в одну с portions=N. */
+private data class DisplayLine(val rep: OrderItemDto, val ids: List<String>, val portions: Int)
+
+/** Группирует одинаковые весовые порции (g/kg) по блюду/весу/цене/комментарию. */
+private fun groupWeightLines(items: List<OrderItemDto>): List<DisplayLine> {
+    val out = ArrayList<DisplayLine>()
+    val idx = HashMap<String, Int>()
+    for (it in items) {
+        val isWeight = it.unit == "g" || it.unit == "kg"
+        if (isWeight) {
+            val key = "${it.menuItem}|${it.priceAtOrder}|${it.unit}|${it.unitSize}|${it.qtyDec}|${it.note}"
+            val at = idx[key]
+            if (at != null) {
+                val cur = out[at]
+                out[at] = cur.copy(ids = cur.ids + it.id, portions = cur.portions + 1)
+                continue
+            }
+            idx[key] = out.size
+        }
+        out.add(DisplayLine(rep = it, ids = listOf(it.id), portions = 1))
+    }
+    return out
+}
+
+/** «100г» / «1,5кг» из decimal-строки веса. */
+private fun formatOrderWeight(qtyDec: String, unit: String?): String {
+    val q = runCatching { java.math.BigDecimal(qtyDec) }.getOrDefault(java.math.BigDecimal.ZERO)
+    return when (unit) {
+        "g" -> q.setScale(0, java.math.RoundingMode.HALF_UP).toPlainString() + "г"
+        "kg" -> q.stripTrailingZeros().toPlainString().replace(".", ",") + "кг"
+        else -> q.stripTrailingZeros().toPlainString()
+    }
+}
+
 @Composable
 private fun OrderBody(
     state: OrderDetailUiState,
@@ -388,11 +425,16 @@ private fun OrderBody(
     onEditNote: (OrderItemDto) -> Unit,
     onIncrementItem: (OrderItemDto) -> Unit,
     onDecrementItem: (OrderItemDto) -> Unit,
+    onAddPortion: (OrderItemDto) -> Unit,
+    onRemovePortion: (String) -> Unit,
+    onCancelGroup: (OrderItemDto, List<String>) -> Unit,
     onSwitchGroup: (String) -> Unit,
     onNewGroup: () -> Unit,
 ) {
     val order = state.order!!
     val items = order.items.filter { it.cancelledAt == null }
+    // Группируем одинаковые весовые порции в строку «100г × N».
+    val displayLines = remember(items) { groupWeightLines(items) }
     // Категории дозаказ-поиска — по именам из меню (как на вебе/в композере).
     val categories = remember(state.menu) {
         state.menu.mapNotNull { it.category?.trim()?.takeIf { c -> c.isNotEmpty() } }
@@ -456,23 +498,32 @@ private fun OrderBody(
                 )
             }
         } else {
-            items(items, key = { it.id }) { it ->
+            items(displayLines, key = { it.rep.id }) { line ->
+                val rep = line.rep
+                val isWeight = rep.unit == "g" || rep.unit == "kg"
+                val isGroup = line.portions > 1
                 if (OrderStatus.isFresh(order.status)) {
                     SwipeableOrderLine(
-                        item = it,
-                        onCancel = { onCancelItem(it) },
-                        onEditNote = { onEditNote(it) },
-                        onToggleServed = { onToggleServed(it) },
-                        onIncrement = { onIncrementItem(it) },
-                        onDecrement = { onDecrementItem(it) },
+                        item = rep,
+                        portions = line.portions,
+                        onCancel = { if (isGroup) onCancelGroup(rep, line.ids) else onCancelItem(rep) },
+                        onEditNote = { onEditNote(rep) },
+                        onToggleServed = { onToggleServed(rep) },
+                        onIncrement = { if (isWeight) onAddPortion(rep) else onIncrementItem(rep) },
+                        onDecrement = {
+                            if (isGroup) onRemovePortion(line.ids.last())
+                            else if (isWeight) onCancelItem(rep)
+                            else onDecrementItem(rep)
+                        },
                     )
                 } else {
                     OrderLineCard(
-                        item = it,
+                        item = rep,
+                        portions = line.portions,
                         canCancel = false,
                         canToggleServed = order.status == OrderStatus.BILL_REQUESTED,
                         onCancel = {},
-                        onToggleServed = { onToggleServed(it) },
+                        onToggleServed = { onToggleServed(rep) },
                         onIncrement = {},
                         onDecrement = {},
                         showInlineQtyControls = false,
@@ -737,6 +788,7 @@ private fun CategoryChip(label: String, active: Boolean, onClick: () -> Unit) {
 @Composable
 private fun SwipeableOrderLine(
     item: OrderItemDto,
+    portions: Int = 1,
     onCancel: () -> Unit,
     onEditNote: () -> Unit,
     onToggleServed: () -> Unit,
@@ -819,6 +871,7 @@ private fun SwipeableOrderLine(
         content = {
             OrderLineCard(
                 item = item,
+                portions = portions,
                 canCancel = false,
                 canToggleServed = true,
                 onCancel = {},
@@ -834,6 +887,7 @@ private fun SwipeableOrderLine(
 @Composable
 private fun OrderLineCard(
     item: OrderItemDto,
+    portions: Int = 1,
     canCancel: Boolean,
     canToggleServed: Boolean,
     onCancel: () -> Unit,
@@ -888,7 +942,16 @@ private fun OrderLineCard(
                 // визуальный шум. Зачёркивание+ослабленный цвет на «served»
                 // через `served` уже даёт нужный сигнал.
                 Text(
-                    "${item.qty} × ${formatCurrency(item.priceAtOrder.toBigDecimalSafe())}",
+                    run {
+                        val isWeight = item.unit == "g" || item.unit == "kg"
+                        val priceStr = formatCurrency(item.priceAtOrder.toBigDecimalSafe())
+                        if (isWeight) {
+                            val w = formatOrderWeight(item.qtyDec, item.unit)
+                            if (portions > 1) "$w × $portions · $priceStr" else "$w · $priceStr"
+                        } else {
+                            "${item.qty} × $priceStr"
+                        }
+                    },
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (served) 0.45f else 0.6f),
                     textDecoration = if (served)

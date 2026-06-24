@@ -255,6 +255,9 @@ internal fun RawOrderItem.toDto(): OrderItemDto {
         servedAt = servedAt,
         kitchenStatus = kitchenStatus,
         subtotal = sub,
+        unit = unit,
+        unitSize = unitSize,
+        qtyDec = qty,
     )
 }
 
@@ -388,6 +391,11 @@ data class OrderItemDto(
     val servedAt: String? = null,
     val kitchenStatus: String? = null,
     val subtotal: String = "0",
+    // Весовые блюда: unit g/kg + точный вес (decimal-string) для отображения
+    // «100г × N» и группировки одинаковых порций. Для штучных unit=piece.
+    val unit: String? = null,
+    val unitSize: String = "1",
+    val qtyDec: String = "0",
 )
 
 /** Статусы заказа — формально совпадают с v3 (бэк-портировал). */

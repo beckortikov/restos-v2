@@ -42,7 +42,8 @@ data class OrderDetailUiState(
 
 sealed interface OrderDetailDialog {
     data object None : OrderDetailDialog
-    data class CancelItem(val item: OrderItemDto) : OrderDetailDialog
+    // groupIds непуст → отменяем всю весовую группу «100г × N» (все строки).
+    data class CancelItem(val item: OrderItemDto, val groupIds: List<String> = emptyList()) : OrderDetailDialog
     data class EditNote(val item: OrderItemDto) : OrderDetailDialog
     data object CancelOrder : OrderDetailDialog
     data object TransferTable : OrderDetailDialog
@@ -204,11 +205,40 @@ class OrderDetailViewModel @Inject constructor(
         }
     }
 
-    fun cancelItem(item: OrderItemDto, reason: String) {
+    fun cancelItem(item: OrderItemDto, reason: String, groupIds: List<String> = emptyList()) {
         runAction(busyToast = "Позиция отменена") {
-            val updated = repo.cancelItem(orderId, item.id, reason)
-            _state.update { it.copy(order = updated) }
+            val ids = if (groupIds.isNotEmpty()) groupIds else listOf(item.id)
+            var updated: OrderDto? = null
+            for (id in ids) updated = repo.cancelItem(orderId, id, reason)
+            if (updated != null) _state.update { it.copy(order = updated) }
             _dialog.value = OrderDetailDialog.None
+        }
+    }
+
+    /** Отмена всей весовой группы (открывает диалог причины со всеми ids). */
+    fun openCancelGroup(item: OrderItemDto, ids: List<String>) {
+        _dialog.value = OrderDetailDialog.CancelItem(item, ids)
+    }
+
+    /** «+ порция»: добавить ещё одну такую же весовую порцию. */
+    fun addPortion(rep: OrderItemDto) {
+        val menuId = rep.menuItem ?: return
+        if (_state.value.busy) return
+        runAction(busyToast = "+ ${rep.nameAtOrder}") {
+            val updated = repo.addItem(
+                orderId,
+                NewOrderItem(menuItemId = menuId, qty = rep.qtyDec, unit = rep.unit, unitSize = rep.unitSize),
+            )
+            _state.update { it.copy(order = updated) }
+        }
+    }
+
+    /** «− порция»: убрать одну порцию (полная отмена одной строки группы). */
+    fun removePortion(itemId: String) {
+        if (_state.value.busy) return
+        runAction(busyToast = "− порция") {
+            val updated = repo.cancelItem(orderId, itemId, "Уменьшение порций")
+            _state.update { it.copy(order = updated) }
         }
     }
 
