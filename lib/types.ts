@@ -273,6 +273,9 @@ export interface Order {
    *  zombie-заказы (status=active, но все позиции отменены). */
   aliveItemsCount?: number
   total: number
+  // subtotal — Σ price×effectivePortions с бэка (единый источник правды по сумме
+  // позиций; total у старых заказов мог считаться прежней формулой).
+  subtotal?: number
   servicePercent?: number
   serviceAmount?: number
   totalWithService?: number

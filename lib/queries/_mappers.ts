@@ -232,6 +232,8 @@ export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[
     paymentMethod: r.payment_method ?? undefined,
     comment: r.comment ?? undefined,
     total: Number(r.total ?? 0),
+    // subtotal — бэкендовый Σ price×effectivePortions (единый источник правды).
+    subtotal: r.subtotal != null ? Number(r.subtotal) : undefined,
     servicePercent: Number(r.service_percent ?? 0) || 0,
     serviceAmount: Number(r.service_amount ?? 0) || 0,
     totalWithService: r.total_with_service != null ? Number(r.total_with_service) : undefined,

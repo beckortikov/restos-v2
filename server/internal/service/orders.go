@@ -68,6 +68,10 @@ type OrderSlim struct {
 	WaiterID     *string         `json:"waiter_id,omitempty"`
 	GuestsCount  *int            `json:"guests_count,omitempty"`
 	Total        decimal.Decimal `json:"total"`
+	// Subtotal — пересчёт из позиций (Σ price × effectivePortions), единый
+	// источник правды. Клиент должен использовать его, а не зафиксированный
+	// total (он у старых заказов мог считаться прежней формулой и расходиться).
+	Subtotal     decimal.Decimal `json:"subtotal"`
 	TotalWithSvc decimal.Decimal `json:"total_with_service"`
 	// Money breakdown — нужны waiter-dashboard'у для суммирования сегодняшних
 	// service/tip/discount без второго запроса детальки.
@@ -235,7 +239,15 @@ func (s *OrdersService) attachItems(ctx context.Context, orders []OrderSlim) err
 		byOrder[*it.OrderID] = append(byOrder[*it.OrderID], it)
 	}
 	for i := range orders {
-		orders[i].Items = byOrder[orders[i].ID]
+		its := byOrder[orders[i].ID]
+		// line_total по каждой позиции + subtotal заказа — единый бэк-расчёт,
+		// чтобы карта/сайдбар на клиенте не пересчитывали и не расходились.
+		for j := range its {
+			lt := decimal.Normalize(decimal.Mul(its[j].Price, effectivePortions(its[j].Unit, its[j].Qty, its[j].UnitSize)))
+			its[j].LineTotal = &lt
+		}
+		orders[i].Items = its
+		orders[i].Subtotal = computeSubtotal(its)
 	}
 	return nil
 }

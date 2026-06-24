@@ -176,16 +176,20 @@ export function calcOrderDisplayTotal(order: Order, restaurantServicePercent?: n
   if (order.status === 'done' && typeof order.totalWithService === 'number' && order.totalWithService > 0) {
     return order.totalWithService
   }
-  if (!isHallOrderType(order.type)) return order.total
+  // Единый источник правды — backend `subtotal` (Σ price×effectivePortions).
+  // Зафиксированный `total` у старых заказов мог считаться прежней формулой и
+  // расходиться с сайдбаром. Fallback на total, если subtotal не пришёл.
+  const base = (typeof order.subtotal === 'number' && order.subtotal > 0) ? order.subtotal : order.total
+  if (!isHallOrderType(order.type)) return base
   // У старых заказов service_percent может быть 0 в БД (Number(null)||0), а
   // у новых — реальный процент, зафиксированный при создании. Если у заказа
   // 0 — берём актуальный процент ресторана (legacy fallback).
   const pct = (order.servicePercent && order.servicePercent > 0)
     ? order.servicePercent
     : (restaurantServicePercent ?? 0)
-  if (!pct) return order.total
-  const service = dRound(dDiv(dMul(order.total, pct), 100))
-  return dAdd(order.total, service)
+  if (!pct) return base
+  const service = dRound(dDiv(dMul(base, pct), 100))
+  return dAdd(base, service)
 }
 
 // Price label for menu (per unit)
