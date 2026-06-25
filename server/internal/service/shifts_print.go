@@ -86,7 +86,8 @@ func (s *ShiftsService) printReport(ctx context.Context, shiftID, jobType string
 	if len(shiftNumber) > 6 {
 		shiftNumber = shiftNumber[len(shiftNumber)-6:]
 	}
-	shiftNumber = fmt.Sprintf("%s (%s)", shiftNumber, zr.Shift.OpenedAt.Format("02.01.2006"))
+	// Дата в местном поясе кассы (как и остальные времена на чеке/отчёте).
+	shiftNumber = fmt.Sprintf("%s (%s)", shiftNumber, zr.Shift.OpenedAt.Local().Format("02.01.2006"))
 
 	in := escpos.ReportInput{
 		RestaurantName: rest.Name,

@@ -37,6 +37,12 @@ const (
 // golden-выводов.
 var nowFn = time.Now
 
+// displayLoc — часовой пояс для печати дат/времени на чеках. Времена в БД
+// хранятся в UTC; на чеке их нужно показывать в местном поясе кассы (сервер
+// крутится на машине ресторана, её time.Local = пояс ресторана). В golden-тестах
+// подменяется на UTC, чтобы вывод не зависел от TZ раннера.
+var displayLoc = time.Local
+
 // ReceiptInput — данные для печати чека клиенту.
 type ReceiptInput struct {
 	RestaurantName string
@@ -134,7 +140,7 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	b.TextLn(hrLight)
 
 	// Чек № / Дата / Стол / Официант / Кассир / Гостей
-	dateStr := in.ClosedAt.Format("02.01.06 15:04")
+	dateStr := in.ClosedAt.In(displayLoc).Format("02.01.06 15:04")
 	orderRef := "#" + strconv.Itoa(in.OrderNumber)
 
 	writeMeta := func(k, v string) {
@@ -324,7 +330,7 @@ func RunnerLayout(in RunnerInput) []byte {
 
 	// ── Order info — left align ──────────────────────────────────────────
 	b.AlignLeft()
-	timeStr := in.CreatedAt.Format("15:04")
+	timeStr := in.CreatedAt.In(displayLoc).Format("15:04")
 	dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
 	if in.WaiterName != "" {
 		dateLine += " " + in.WaiterName
@@ -407,7 +413,7 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 
 	// ── Section 2: order info (left, table bold) ────────────────────────
 	b.AlignLeft()
-	timeStr := in.CancelledAt.Format("15:04")
+	timeStr := in.CancelledAt.In(displayLoc).Format("15:04")
 	dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
 	if in.WaiterName != "" {
 		dateLine += " " + in.WaiterName
@@ -499,9 +505,9 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 
 	b.AlignLeft()
 	b.TextLnf("Смена:   %s", in.ShiftNumber)
-	b.TextLnf("Открыта: %s", in.OpenedAt.Format("02.01.2006 15:04"))
+	b.TextLnf("Открыта: %s", in.OpenedAt.In(displayLoc).Format("02.01.2006 15:04"))
 	if withClosing && !in.ClosedAt.IsZero() {
-		b.TextLnf("Закрыта: %s", in.ClosedAt.Format("02.01.2006 15:04"))
+		b.TextLnf("Закрыта: %s", in.ClosedAt.In(displayLoc).Format("02.01.2006 15:04"))
 	}
 	if in.CashierName != "" {
 		b.TextLnf("Кассир:  %s", in.CashierName)
@@ -549,7 +555,7 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 		b.TextLn(PadRow("Расхождение:", decToShort(diff), cols))
 	}
 
-	b.LF().AlignCenter().TextLnf("Отпечатан: %s", nowFn().Format("02.01.2006 15:04"))
+	b.LF().AlignCenter().TextLnf("Отпечатан: %s", nowFn().In(displayLoc).Format("02.01.2006 15:04"))
 	b.Bold(false).CutWithFeed(3)
 	return b.Bytes()
 }

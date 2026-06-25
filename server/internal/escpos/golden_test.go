@@ -26,6 +26,11 @@ const goldenDir = "testdata"
 // fixedTime — стабильная дата для эталонов.
 var fixedTime = time.Date(2026, 5, 25, 14, 30, 0, 0, time.UTC)
 
+// В проде чеки печатаются в местном поясе кассы (displayLoc = time.Local).
+// fixedTime — UTC, поэтому в тестах пиним displayLoc на UTC, иначе вывод
+// зависел бы от TZ раннера и golden-файлы ломались бы где попало.
+func init() { displayLoc = time.UTC }
+
 func TestGolden_Receipt(t *testing.T) {
 	in := ReceiptInput{
 		RestaurantName: "Ресторан Старая Душанбе",
