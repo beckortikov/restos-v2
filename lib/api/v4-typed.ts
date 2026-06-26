@@ -74,6 +74,11 @@ const authExpiredMiddleware: Middleware = {
     // откатывается на экран PIN. Critical-запросы (как раньше) логаутят.
     if (response.status === 401 && typeof window !== 'undefined'
         && request?.headers?.get('X-Skip-Auth-Expire') !== '1') {
+      const reqToken = request?.headers?.get('Authorization')?.replace('Bearer ', '')
+      const currentToken = localStorage.getItem('restos-v4-token')
+      if (reqToken && reqToken !== currentToken) {
+        return response
+      }
       try {
         window.dispatchEvent(new CustomEvent('restos:auth:expired'))
       } catch {}

@@ -655,3 +655,70 @@ func TestPhase18_WaiterTransferOnClose(t *testing.T) {
 	}
 }
 
+func TestPhase18_WaiterCanListUsers(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _, _, _ := seedForWrite(t, f)
+
+	// 1. Create two waiters.
+	waiterRole := "waiter"
+	w1Name := "Waiter 1"
+	w1PIN := "1111"
+	w1ID := uuid.NewString()
+	w1 := &models.User{
+		ID: w1ID, Name: &w1Name, Role: &waiterRole, PIN: &w1PIN, RestaurantID: &f.rid,
+	}
+	if err := gdb.Create(w1).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	w2Name := "Waiter 2"
+	w2PIN := "2222"
+	w2ID := uuid.NewString()
+	w2 := &models.User{
+		ID: w2ID, Name: &w2Name, Role: &waiterRole, PIN: &w2PIN, RestaurantID: &f.rid,
+	}
+	if err := gdb.Create(w2).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// 2. Log in as Waiter 1.
+	var loginResp struct {
+		Token string      `json:"token"`
+		User  models.User `json:"user"`
+	}
+	r, b := f.post(t, "/api/v1/auth/login", "", "", map[string]any{
+		"restaurant_id": f.rid,
+		"pin":           w1PIN,
+	})
+	if r.StatusCode != 200 {
+		t.Fatalf("login failed (%d): %s", r.StatusCode, b)
+	}
+	_ = json.Unmarshal(b, &loginResp)
+	waiter1Token := loginResp.Token
+
+	// 3. Waiter 1 requests the users list: GET /api/v1/users.
+	gr, gb := f.get(t, "/api/v1/users", waiter1Token)
+	if gr.StatusCode != 200 {
+		t.Fatalf("GET /api/v1/users failed for waiter (%d): %s", gr.StatusCode, gb)
+	}
+
+	// 4. Parse the users list.
+	var usersList struct {
+		Data []models.User `json:"data"`
+	}
+	_ = json.Unmarshal(gb, &usersList)
+
+	// 5. Verify that Waiter 2 is present in the list returned to Waiter 1.
+	foundW2 := false
+	for _, u := range usersList.Data {
+		if u.ID == w2ID {
+			foundW2 = true
+			break
+		}
+	}
+	if !foundW2 {
+		t.Errorf("waiter 2 not found in users list returned to waiter 1; total users: %d", len(usersList.Data))
+	}
+}
+
+
