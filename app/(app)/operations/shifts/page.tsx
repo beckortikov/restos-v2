@@ -14,6 +14,7 @@ import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useDataSync } from '@/hooks/use-data-sync'
+import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 
 const EXPENSE_CATEGORIES = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
 
@@ -532,6 +533,7 @@ export default function ShiftsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
+      <OnScreenKeyboard />
       <div className="p-4 md:p-6 space-y-5 max-w-7xl mx-auto pb-24">
       <div className="sticky top-0 z-10 -mx-4 -mt-4 px-4 pt-4 pb-3 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 md:pb-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b border-border mb-1">
         <h1 className="text-xl font-bold text-foreground">Кассовые смены</h1>

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, memo } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { usePersistedState } from '@/hooks/use-persisted-state'
+import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 
 import { formatCurrency, getTimeSince, calcLineCogs, calcOrderDisplayTotal, startOfToday } from '@/lib/helpers'
 import {
@@ -708,6 +709,7 @@ export default function TableMapPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+      <OnScreenKeyboard />
       {/* Sticky header bar (title + legend + zone tabs) — pinned on all viewports */}
       <div className="sticky top-0 z-20 -mx-4 -mt-4 px-4 pt-4 pb-3 md:-mx-6 md:-mt-6 md:px-6 md:pt-6 md:pb-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b border-border space-y-3 md:space-y-4 mb-2 md:mb-3">
       <div className="hidden sm:flex flex-col sm:flex-row sm:items-center justify-between gap-3">

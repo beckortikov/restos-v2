@@ -7,6 +7,7 @@ import { type User } from '@/lib/types'
 import { PinLockScreen } from '@/components/pin-lock-screen'
 import { useInactivityTimer } from '@/hooks/use-inactivity-timer'
 import { OrderComposer } from '@/components/order/order-composer'
+import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 
 export default function POSPage() {
   const { user, restaurant, canAccessRoles, logout } = useAuth()
@@ -64,6 +65,7 @@ export default function POSPage() {
     return (
       <div className="h-full min-h-0 flex flex-col">
         <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} forceNewOrder={forceNewOrder} initialExistingOrderId={initialOrderId} />
+        <OnScreenKeyboard />
       </div>
     )
   }
@@ -86,6 +88,7 @@ export default function POSPage() {
           <OrderComposer effectiveUser={effectiveUser} initialTableId={initialTableId} initialOrderType={initialOrderType} forceNewOrder={forceNewOrder} initialExistingOrderId={initialOrderId} />
         </div>
       </div>
+      <OnScreenKeyboard />
     </>
   )
 }
