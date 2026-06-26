@@ -9,6 +9,7 @@ import {
   fetchTimeEntries, fetchActiveClockIn, clockIn as apiClockIn, clockOut as apiClockOut,
   updateTimeEntry, deleteTimeEntry,
   fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, payServiceCharge,
+  fetchFinancialOperations,
 } from '@/lib/queries'
 import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
@@ -82,6 +83,10 @@ export default function PayrollPage() {
   const [serviceCustomTo, setServiceCustomTo] = useState<string>(getPresetRange('month').to)
   const [serviceAccrual, setServiceAccrual] = useState<Record<string, { accrued: number; ordersCount: number }>>({})
   const [servicePayout, setServicePayout] = useState<Record<string, number>>({})
+  // Выплаченная зарплата/аванс за период (из реальных операций «Зарплата» по
+  // кассе, сгруппированы по сотруднику). Раньше выплата минусовала счёт, но в
+  // разделе не отражалась — теперь читаем её и показываем.
+  const [salaryPaid, setSalaryPaid] = useState<Record<string, number>>({})
 
   // ─── Timesheet state ───────────────────────────────────────────────────────
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([])
@@ -94,12 +99,30 @@ export default function PayrollPage() {
   const [editBreak, setEditBreak] = useState(0)
   const elapsed = useElapsed(myActiveEntry?.clockIn, !!myActiveEntry)
 
+  // salaryPaidMap — Σ операций category='Зарплата' (выплаты ЗП и авансы) по
+  // sourceRef=сотрудник за выбранный период. Источник правды по выплаченному —
+  // те же операции, что минусуют кассу.
+  const loadSalaryPaid = useCallback(async () => {
+    const fromD = serviceFrom.slice(0, 10)
+    const toD = serviceTo.slice(0, 10)
+    const ops = await fetchFinancialOperations()
+    const sp: Record<string, number> = {}
+    for (const op of ops) {
+      if (op.category !== 'Зарплата' || !op.sourceRef) continue
+      const d = (op.date || '').slice(0, 10)
+      if (d && (d < fromD || d > toD)) continue
+      sp[op.sourceRef] = (sp[op.sourceRef] ?? 0) + op.amount
+    }
+    return sp
+  }, [serviceFrom, serviceTo])
+
   const reload = async () => {
-    const [users, accs, accrual, payout] = await Promise.all([
+    const [users, accs, accrual, payout, salPaid] = await Promise.all([
       fetchUsers(),
       fetchFinancialAccounts(),
       fetchServiceAccrualByWaiter(serviceFrom, serviceTo),
       fetchServicePayoutByWaiter(serviceFrom, serviceTo),
+      loadSalaryPaid(),
     ])
     setEmployees(users.filter(u => u.role !== 'owner' && u.role !== 'superadmin'))
     setAccounts(accs)
@@ -108,6 +131,7 @@ export default function PayrollPage() {
     for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
     setServiceAccrual(accrualMap)
     setServicePayout(payout)
+    setSalaryPaid(salPaid)
   }
 
   const loadTimeEntries = useCallback(async () => {
@@ -149,11 +173,13 @@ export default function PayrollPage() {
     Promise.all([
       fetchServiceAccrualByWaiter(serviceFrom, serviceTo),
       fetchServicePayoutByWaiter(serviceFrom, serviceTo),
-    ]).then(([accrual, payout]) => {
+      loadSalaryPaid(),
+    ]).then(([accrual, payout, salPaid]) => {
       const accrualMap: Record<string, { accrued: number; ordersCount: number }> = {}
       for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
       setServiceAccrual(accrualMap)
       setServicePayout(payout)
+      setSalaryPaid(salPaid)
     }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceFrom, serviceTo])
@@ -299,6 +325,7 @@ export default function PayrollPage() {
   const totalSalary = withSalary.reduce((s, e) => s + (e.salary ?? 0), 0)
   const totalAdvance = withSalary.reduce((s, e) => s + (e.advance ?? 0), 0)
   const totalDeductions = withSalary.reduce((s, e) => s + (e.deductions ?? 0), 0)
+  const totalSalaryPaid = Object.values(salaryPaid).reduce((s, v) => s + v, 0)
   const totalToPay = totalSalary - totalAdvance - totalDeductions
   const totalServiceAccrued = Object.values(serviceAccrual).reduce((s, r) => s + r.accrued, 0)
   const totalServicePaid = Object.values(servicePayout).reduce((s, v) => s + v, 0)
@@ -407,6 +434,7 @@ export default function PayrollPage() {
                       salary: e.salary ?? 0,
                       advance: e.advance ?? 0,
                       deductions: e.deductions ?? 0,
+                      salaryPaidPeriod: salaryPaid[e.id] ?? 0,
                       toPay: (e.salary ?? 0) - (e.advance ?? 0) - (e.deductions ?? 0),
                       serviceAccrued: accrued,
                       servicePaid: paidSv,
@@ -419,6 +447,7 @@ export default function PayrollPage() {
                     { key: 'salary', header: 'Оклад' },
                     { key: 'advance', header: 'Аванс' },
                     { key: 'deductions', header: 'Удержания' },
+                    { key: 'salaryPaidPeriod', header: 'Выплачено (ЗП)' },
                     { key: 'toPay', header: 'К выплате' },
                     { key: 'serviceAccrued', header: 'Обсл. начислено' },
                     { key: 'servicePaid', header: 'Обсл. выплачено' },
@@ -545,6 +574,7 @@ export default function PayrollPage() {
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Оклад</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Аванс</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Удержания</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 uppercase" title="Выплачено зарплаты/аванса из кассы за выбранный период">Выплачено (ЗП)</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">К выплате</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание начислено за выбранный период">Обсл. начисл.</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание выплачено за выбранный период">Обсл. выпл.</th>
@@ -557,6 +587,7 @@ export default function PayrollPage() {
                     const salary = emp.salary ?? 0
                     const advance = emp.advance ?? 0
                     const deductions = emp.deductions ?? 0
+                    const paidSalary = salaryPaid[emp.id] ?? 0
                     const toPay = salary - advance - deductions
                     const accrued = serviceAccrual[emp.id]?.accrued ?? 0
                     const paidService = servicePayout[emp.id] ?? 0
@@ -591,6 +622,9 @@ export default function PayrollPage() {
                         </td>
                         <td className="px-4 py-3 text-right">
                           {deductions > 0 ? <span className="text-destructive font-medium">{formatCurrency(deductions)}</span> : <span className="text-muted-foreground">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {paidSalary > 0 ? <span className="text-emerald-600 font-medium">{formatCurrency(paidSalary)}</span> : <span className="text-muted-foreground">—</span>}
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span className={`font-bold ${toPay > 0 ? 'text-foreground' : toPay < 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
@@ -647,6 +681,7 @@ export default function PayrollPage() {
                       <td className="px-4 py-3 text-right font-bold text-foreground">{formatCurrency(totalSalary)}</td>
                       <td className="px-4 py-3 text-right font-bold text-amber-600">{formatCurrency(totalAdvance)}</td>
                       <td className="px-4 py-3 text-right font-bold text-destructive">{formatCurrency(totalDeductions)}</td>
+                      <td className="px-4 py-3 text-right font-bold text-emerald-600">{formatCurrency(totalSalaryPaid)}</td>
                       <td className="px-4 py-3 text-right font-bold text-foreground">{formatCurrency(totalToPay)}</td>
                       <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totalServiceAccrued)}</td>
                       <td className="px-4 py-3 text-right font-bold text-blue-600">{formatCurrency(totalServicePaid)}</td>
