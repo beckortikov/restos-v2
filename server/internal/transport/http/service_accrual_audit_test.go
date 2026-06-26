@@ -408,15 +408,30 @@ func TestAccrual_VoidItem_ExcludedFromAccrual(t *testing.T) {
 	gdb, _, shiftID, accountID := seedForWrite(t, f)
 	aID := mkUser(t, gdb, f.rid, "Alice", "waiter", "")
 	tableID := mkTable(t, gdb, f.rid, 13, &aID)
+	// Заказ на 2 позиции по 100 (total 200). Одну отменяем ШТАТНО через API —
+	// CancelItem пересчитывает order.total до 100, и при закрытии обслуживание
+	// (10%) фиксируется только с живой позиции = 10. Отчёт берёт зафиксированное
+	// service_amount, поэтому отменённая позиция в обслуживание не попадает.
 	o := mkOrder(t, gdb, f.rid, shiftID, &tableID, &aID, "10", "1", "100", "")
-	// Отменяем единственную позицию (cancelled_at) напрямую.
 	now := time.Now().UTC()
-	if err := gdb.Model(&models.OrderItem{}).Where("order_id = ?", o).Update("cancelled_at", now).Error; err != nil {
+	dish, piece, item2 := "Dish2", "piece", uuid.NewString()
+	if err := gdb.Create(&models.OrderItem{
+		ID: item2, OrderID: &o, Name: &dish,
+		Qty: decimal.MustFromString("1"), Price: decimal.MustFromString("100"),
+		Unit: &piece, UnitSize: decimal.MustFromString("1"), CreatedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
-	closeOrder(t, f, f.login(t), o, shiftID, accountID, map[string]any{"service_percent": "10"})
-	if v := accrualMap(t, f, f.login(t))[aID]; v != "" && v != "0" {
-		t.Errorf("отменённая позиция не должна давать обслуживание, got %q", v)
+	if err := gdb.Model(&models.Order{}).Where("id = ?", o).Update("total", decimal.MustFromString("200")).Error; err != nil {
+		t.Fatal(err)
+	}
+	tok := f.login(t)
+	if r, b := f.post(t, fmt.Sprintf("/api/v1/orders/%s/items/%s/cancel", o, item2), tok, uuid.NewString(), map[string]any{"reason": "test"}); r.StatusCode != 200 {
+		t.Fatalf("cancel item: %d %s", r.StatusCode, b)
+	}
+	closeOrder(t, f, tok, o, shiftID, accountID, map[string]any{"service_percent": "10"})
+	if v := accrualMap(t, f, tok)[aID]; v != "10" {
+		t.Errorf("после отмены одной из двух позиций обслуживание = 10 (только с живой), got %q", v)
 	}
 }
 
@@ -504,7 +519,7 @@ func TestAccrual_MultiItemOrder_SumsItems(t *testing.T) {
 	}
 }
 
-func TestAccrual_DiscountIgnoredInBase(t *testing.T) {
+func TestAccrual_DiscountAppliedToServiceBase(t *testing.T) {
 	f := setupE2E(t)
 	gdb, _, shiftID, accountID := seedForWrite(t, f)
 	aID := mkUser(t, gdb, f.rid, "Alice", "waiter", "")
@@ -514,9 +529,11 @@ func TestAccrual_DiscountIgnoredInBase(t *testing.T) {
 		t.Fatalf("close с скидкой %d: %s", sc, b)
 	}
 	v := accrualMap(t, f, f.login(t))[aID]
-	t.Logf("DIAG accrual при скидке 5 от 100: %s (формула считает от пре-скидочной цены)", v)
-	if v != "10" {
-		t.Errorf("ожидали 10 (обслуживание от пре-скидочной базы), got %q", v)
+	// Источник правды — зафиксированное при закрытии service_amount, которое
+	// считается от ПОСТ-скидочной базы (95 × 10% = 9.5) и печатается на чеке /
+	// отражается в смене. Раздел «Обслуживание» обязан показывать то же число.
+	if v != "9.5" {
+		t.Errorf("ожидали 9.5 (зафиксированное service_amount от пост-скидочной базы), got %q", v)
 	}
 }
 

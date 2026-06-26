@@ -1193,13 +1193,18 @@ func (s *SalaryService) AccrualByWaiter(ctx context.Context, from, to *time.Time
 		Accrued    decimal.Decimal `gorm:"column:accrued"`
 	}
 	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
+	// Источник правды по обслуживанию — ЗАФИКСИРОВАННОЕ при закрытии
+	// o.service_amount (то, что реально начислено и отражено в смене), а НЕ
+	// пересчёт из order_items: для весовых позиций пересчёт price×qty/unitSize
+	// расходится с зафиксированным числом, и отчёты показывали разное.
+	// Без JOIN на order_items — иначе SUM(total_with_service)/COUNT раздувались
+	// на число позиций (заказ с 3 строками давал ×3 по выручке).
 	q := raw.Table("orders AS o").
 		Select(`COALESCE(o.waiter_id::text, '') AS waiter_id,
 		        COALESCE(u.name, '') AS waiter_name,
-		        COUNT(DISTINCT o.id) AS cnt,
+		        COUNT(*) AS cnt,
 		        COALESCE(SUM(o.total_with_service), 0) AS revenue,
-		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * o.service_percent / 100.0), 0) AS accrued`).
-		Joins("LEFT JOIN order_items oi ON oi.order_id = o.id AND oi.cancelled_at IS NULL").
+		        COALESCE(SUM(o.service_amount), 0) AS accrued`).
 		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id::text").
 		Where("o.restaurant_id = ? AND o.status = ? AND o.closed_at IS NOT NULL", rid, "closed").
 		Where("o.waiter_id IS NOT NULL")
