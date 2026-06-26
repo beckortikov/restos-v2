@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchUsers, fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter } from '@/lib/queries'
-import type { User } from '@/lib/types'
+import { fetchUsers, fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchShifts } from '@/lib/queries'
+import type { User, CashShift } from '@/lib/types'
 import { exportToExcel } from '@/lib/export-excel'
 import { HandCoins, Download } from 'lucide-react'
 import { toast } from 'sonner'
@@ -50,6 +50,22 @@ interface Row {
   remaining: number
 }
 
+// Метка смены для селекта: «25.06 10:00–18:00 · Анна».
+function shiftLabel(s: CashShift): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const o = new Date(s.openedAt)
+  const day = `${pad(o.getDate())}.${pad(o.getMonth() + 1)}`
+  const open = `${pad(o.getHours())}:${pad(o.getMinutes())}`
+  let span = open
+  if (s.status === 'open') {
+    span = `${open}–сейчас`
+  } else if (s.closedAt) {
+    const c = new Date(s.closedAt)
+    span = `${open}–${pad(c.getHours())}:${pad(c.getMinutes())}`
+  }
+  return `${day} ${span}${s.openedByName ? ` · ${s.openedByName}` : ''}`
+}
+
 export default function ServiceReportPage() {
   const { canDo } = useAuth()
   const [preset, setPreset] = useState<RangePreset>(() => readStoredPreset('service-report:preset', 'month'))
@@ -60,13 +76,19 @@ export default function ServiceReportPage() {
   const [customTo, setCustomTo] = useState(getPresetRange('month').to)
   const [rows, setRows] = useState<Row[]>([])
   const [loading, setLoading] = useState(true)
+  // Фильтр по смене: '' = весь период (по closed_at), иначе одна смена (по
+  // shift_id — ровно как в Z-отчёте, без «непришедших» из соседних смен).
+  const [shiftId, setShiftId] = useState('')
+  const [shifts, setShifts] = useState<CashShift[]>([])
+
+  useEffect(() => { fetchShifts(30).then(setShifts).catch(() => {}) }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const [accrual, payout, users] = await Promise.all([
-        fetchServiceAccrualByWaiter(from, to),
-        fetchServicePayoutByWaiter(from, to),
+        shiftId ? fetchServiceAccrualByShift(shiftId) : fetchServiceAccrualByWaiter(from, to),
+        shiftId ? fetchServicePayoutByShift(shiftId) : fetchServicePayoutByWaiter(from, to),
         fetchUsers(),
       ])
       const userMap = new Map<string, User>(users.map(u => [u.id, u]))
@@ -102,7 +124,7 @@ export default function ServiceReportPage() {
     } finally {
       setLoading(false)
     }
-  }, [from, to])
+  }, [from, to, shiftId])
 
   useEffect(() => { load() }, [load])
 
@@ -140,7 +162,7 @@ export default function ServiceReportPage() {
             <HandCoins className="size-5 text-blue-600" />
             Обслуживание официантов
           </h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Начисления из чеков и выплаты по периоду</p>
+          <p className="text-muted-foreground text-sm mt-0.5">{shiftId ? 'Начисления и выплаты по выбранной смене (как в Z-отчёте)' : 'Начисления из чеков и выплаты по периоду'}</p>
         </div>
         <button
           onClick={() => exportToExcel(
@@ -168,15 +190,30 @@ export default function ServiceReportPage() {
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-3 bg-card border border-border rounded-xl p-3">
-        <DateRangePresets
-          value={preset}
-          onChange={(p, r) => applyPreset(p, r)}
-          customFrom={customFrom}
-          customTo={customTo}
-          onCustomFromChange={(v) => { setPreset('custom'); setCustomFrom(v); if (v && customTo) { const iso = isoRangeFromYmd(v, customTo); setFrom(iso.from); setTo(iso.to) } }}
-          onCustomToChange={(v) => { setPreset('custom'); setCustomTo(v); if (customFrom && v) { const iso = isoRangeFromYmd(customFrom, v); setFrom(iso.from); setTo(iso.to) } }}
-          storageKey="service-report:preset"
-        />
+        <div className={shiftId ? 'opacity-40 pointer-events-none' : ''}>
+          <DateRangePresets
+            value={preset}
+            onChange={(p, r) => applyPreset(p, r)}
+            customFrom={customFrom}
+            customTo={customTo}
+            onCustomFromChange={(v) => { setPreset('custom'); setCustomFrom(v); if (v && customTo) { const iso = isoRangeFromYmd(v, customTo); setFrom(iso.from); setTo(iso.to) } }}
+            onCustomToChange={(v) => { setPreset('custom'); setCustomTo(v); if (customFrom && v) { const iso = isoRangeFromYmd(customFrom, v); setFrom(iso.from); setTo(iso.to) } }}
+            storageKey="service-report:preset"
+          />
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted-foreground">Смена:</span>
+          <select
+            value={shiftId}
+            onChange={(e) => setShiftId(e.target.value)}
+            className="px-3 py-2 text-sm border border-border rounded-lg bg-card max-w-[260px]"
+          >
+            <option value="">Весь период</option>
+            {shifts.map(s => (
+              <option key={s.id} value={s.id}>{shiftLabel(s)}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* KPI */}
