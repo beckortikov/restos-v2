@@ -361,8 +361,8 @@ func stopListNames(t *testing.T, f *e2eFixture, tok string) []string {
 }
 
 // seedBatchWithStock создаёт заготовочное блюдо с заданным prepared_qty и
-// ингредиентом (qty/min в кг), связанным техкартой 100 г.
-func seedBatchWithStock(t *testing.T, gdb *gorm.DB, rid, dish string, prepared int, ing, ingQty, ingMin string) {
+// ингредиентом (qty/min в кг), связанным техкартой 100 г. Возвращает menu_item_id.
+func seedBatchWithStock(t *testing.T, gdb *gorm.DB, rid, dish string, prepared int, ing, ingQty, ingMin string) string {
 	t.Helper()
 	ingID := uuid.NewString()
 	ingUnit := "кг"
@@ -388,6 +388,107 @@ func seedBatchWithStock(t *testing.T, gdb *gorm.DB, rid, dish string, prepared i
 		Name: &tcl, Qty: decimal.MustFromString("100"), Unit: &gram, RestaurantID: &rid,
 	}).Error; err != nil {
 		t.Fatal(err)
+	}
+	return miID
+}
+
+// ─── ПРОБЛЕМА 6: продажа заготовки → ложный ITEM_STOPPED ────────────────────
+//
+// «При продаже шашлыка — одна из позиций в стоп-листе, обратитесь к менеджеру».
+// validateStopListForItems (backend-gate на POST /orders) авто-стопил блюдо,
+// чья техкарта ссылается на low-stock ингредиент, не исключая заготовки →
+// заказ с заготовкой (40 готовых порций) при нулевом сырье падал с 409
+// ITEM_STOPPED. Доступность заготовки определяется prepared_qty.
+
+// TestBug_Problem6_BatchWithPortions_OrderNotStopped — заказ заготовки с
+// готовыми порциями и нулевым сырьём проходит (не ITEM_STOPPED).
+func TestBug_Problem6_BatchWithPortions_OrderNotStopped(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	miID := seedBatchWithStock(t, gdb, f.rid, "Шашлык", 40, "Гуш", "0", "0") // 40 порц., Гуш 0 кг
+
+	resp, body := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{{"menu_item_id": miID, "qty": "1"}},
+	})
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("Problem 6: заказ заготовки с 40 готовыми порциями должен пройти, получили %d: %s", resp.StatusCode, body)
+	}
+}
+
+// TestBug_Problem6_NonBatch_OrderStopped — регрессия: обычное блюдо при
+// нехватке сырья по-прежнему отклоняется (ITEM_STOPPED).
+func TestBug_Problem6_NonBatch_OrderStopped(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	ingID := uuid.NewString()
+	ingName, ingUnit := "Лук", "кг"
+	if err := gdb.Create(&models.Ingredient{
+		ID: ingID, Name: &ingName, Unit: &ingUnit, RestaurantID: &f.rid,
+		Qty: decimal.Zero, MinQty: decimal.Zero,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	miID := uuid.NewString()
+	miName := "Салат"
+	notBatch := false
+	if err := gdb.Create(&models.MenuItem{
+		ID: miID, Name: &miName, Price: decimal.MustFromString("15"),
+		IsBatchCooking: &notBatch, RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	tcl := ingName
+	if err := gdb.Create(&models.TechCardLine{
+		ID: uuid.NewString(), MenuItemID: &miID, IngredientID: &ingID,
+		Name: &tcl, Qty: decimal.MustFromString("100"), Unit: strPtr4("г"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{{"menu_item_id": miID, "qty": "1"}},
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("регрессия: обычное блюдо при нулевом сырье должно быть 409 ITEM_STOPPED, получили %d: %s", resp.StatusCode, body)
+	}
+}
+
+// TestBug_Problem6_BatchNoPortions_StillBlocked — дыры нет: заготовка без
+// готовых порций (prepared=0) при включённой проверке остатков всё равно
+// блокируется (через stockcheck по prepared_qty), даже с достатком сырья.
+func TestBug_Problem6_BatchNoPortions_StillBlocked(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	// Включаем техкарты + enforce, чтобы сработал stockcheck по prepared_qty.
+	if err := gdb.Model(&models.Restaurant{}).Where("id = ?", f.rid).
+		Updates(map[string]any{"tech_cards_enabled": true, "enforce_stock_check": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	miID := seedBatchWithStock(t, gdb, f.rid, "Плов", 0, "Рис", "100", "0") // 0 порц., сырья навалом
+
+	resp, body := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{{"menu_item_id": miID, "qty": "1"}},
+	})
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("заготовка без готовых порций должна блокироваться (409), получили %d: %s", resp.StatusCode, body)
 	}
 }
 

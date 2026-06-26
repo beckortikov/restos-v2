@@ -1044,6 +1044,13 @@ func validateStopListForItems(
 			if l.MenuItemID == nil || l.IngredientID == nil {
 				continue
 			}
+			// Заготовочные блюда НЕ стопятся по остатку сырья — их доступность
+			// определяется prepared_qty (проверяется отдельно в
+			// validateStockForItems). Иначе блюдо с готовыми порциями ложно
+			// отклонялось как ITEM_STOPPED при нулевом сырье.
+			if mi, ok := menuByID[*l.MenuItemID]; ok && mi.IsBatchCooking != nil && *mi.IsBatchCooking {
+				continue
+			}
 			if lowSet[*l.IngredientID] {
 				autoBlocked[*l.MenuItemID] = true
 			}
