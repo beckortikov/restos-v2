@@ -22,12 +22,14 @@ const CODE_MESSAGES: Record<string, string> = {
   ROLE_NOT_AVAILABLE_LOCALLY: 'Эта роль недоступна на кассе.',
   IDEMPOTENCY_CONFLICT: 'Повторный запрос с другими данными. Обновите страницу.',
   INTERNAL: 'Внутренняя ошибка сервера. Попробуйте ещё раз.',
+  MAINTENANCE: 'Идёт восстановление базы из резервной копии, подождите…',
 }
 
 // Технические подстроки в тексте ошибки → человеческое сообщение.
 // Срабатывают когда у ошибки нет известного кода, но текст узнаваем.
 const PATTERN_MESSAGES: Array<{ test: RegExp; msg: string }> = [
-  { test: /pg_dump|pg_restore/i, msg: 'Не удалось создать резервную копию. Проверьте, что установлен PostgreSQL.' },
+  { test: /pg_restore failed/i, msg: 'Не удалось восстановить базу из резервной копии. Файл повреждён или несовместим — проверьте, что это .dump этой кассы.' },
+  { test: /pg_restore|pg_dump/i, msg: 'Не удалось создать резервную копию. Проверьте, что установлен PostgreSQL.' },
   { test: /insufficient funds/i, msg: 'Недостаточно средств на счёте.' },
   { test: /failed to fetch|network|econnrefused|fetch failed/i, msg: 'Нет связи с сервером кассы. Проверьте, что касса запущена и вы в той же сети.' },
   { test: /timeout|deadline exceeded/i, msg: 'Сервер не ответил вовремя. Попробуйте ещё раз.' },

@@ -25,6 +25,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -115,6 +116,10 @@ type BackupService struct {
 	// OID'ами таблиц → «cached plan must not change result type»). Может быть
 	// nil в тестах/dev без БД — тогда шаги с пулом пропускаются.
 	db *gorm.DB
+	// maint — флаг maintenance-режима. Restore взводит его, пока идёт
+	// pg_restore, чтобы middleware блокировал прочие запросы к БД и DROP в
+	// --clean смог взять эксклюзивные блокировки. Может быть nil.
+	maint *atomic.Bool
 }
 
 func NewBackupService(cfg BackupServiceConfig) *BackupService {
@@ -125,6 +130,12 @@ func NewBackupService(cfg BackupServiceConfig) *BackupService {
 // чейнинга: service.NewBackupService(cfg).WithDB(gdb).
 func (s *BackupService) WithDB(db *gorm.DB) *BackupService {
 	s.db = db
+	return s
+}
+
+// WithMaintenance привязывает флаг maintenance-режима (см. поле maint).
+func (s *BackupService) WithMaintenance(flag *atomic.Bool) *BackupService {
+	s.maint = flag
 	return s
 }
 
@@ -486,6 +497,15 @@ func (s *BackupService) Restore(ctx context.Context, tmpPath string) error {
 	restoreBin, ok := s.pgBin("pg_restore")
 	if !ok {
 		return apperrors.Wrap("INTERNAL", pgToolNotFoundMsg("pg_restore"), nil)
+	}
+
+	// Maintenance-режим: пока взведён, middleware отдаёт 503 на все запросы
+	// кроме /backup — фронт перестаёт опрашивать API и открывать соединения,
+	// которые держат блокировки на таблицах. Без этого одного «обрыва сессий»
+	// мало: фронт мгновенно переподключается и DROP снова не берёт лок.
+	if s.maint != nil {
+		s.maint.Store(true)
+		defer s.maint.Store(false)
 	}
 
 	// Обрываем остальные сессии приложения к БД и закрываем idle-соединения

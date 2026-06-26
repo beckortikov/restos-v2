@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -189,7 +190,11 @@ func NewRouter(deps Deps) http.Handler {
 	auditReadsH := handlers.NewAuditReads(auditReadsSvc)
 	waiterStatsH := handlers.NewWaiterStats(timeEntriesSvc)
 	eventsH := handlers.NewEvents(hub)
-	backupSvc := service.NewBackupService(deps.BackupCfg).WithDB(deps.DB)
+	// maintFlag — взводится BackupService на время restore. Пока взведён,
+	// middleware.Maintenance отдаёт 503 на все запросы кроме /backup и /events,
+	// чтобы pg_restore --clean смог взять эксклюзивные блокировки на таблицы.
+	var maintFlag atomic.Bool
+	backupSvc := service.NewBackupService(deps.BackupCfg).WithDB(deps.DB).WithMaintenance(&maintFlag)
 	backupH := handlers.NewBackup(backupSvc)
 	// v3.9.1: авто-бэкап при закрытии смены. Только если BackupsDir
 	// сконфигурирован (прод с embedded PG) — в тестах nil-cfg → пропускаем.
@@ -198,6 +203,10 @@ func NewRouter(deps Deps) http.Handler {
 	}
 
 	r.Route("/api/v1", func(api chi.Router) {
+		// Maintenance-страж: во время restore все запросы кроме /backup и
+		// /events получают 503, чтобы не держать блокировки на таблицах.
+		api.Use(middleware.Maintenance(&maintFlag))
+
 		// Публичные endpoint'ы (login + bootstrap).
 		api.Group(func(g chi.Router) {
 			g.Use(chimw.Timeout(10 * time.Second))
