@@ -189,7 +189,7 @@ func NewRouter(deps Deps) http.Handler {
 	auditReadsH := handlers.NewAuditReads(auditReadsSvc)
 	waiterStatsH := handlers.NewWaiterStats(timeEntriesSvc)
 	eventsH := handlers.NewEvents(hub)
-	backupSvc := service.NewBackupService(deps.BackupCfg)
+	backupSvc := service.NewBackupService(deps.BackupCfg).WithDB(deps.DB)
 	backupH := handlers.NewBackup(backupSvc)
 	// v3.9.1: авто-бэкап при закрытии смены. Только если BackupsDir
 	// сконфигурирован (прод с embedded PG) — в тестах nil-cfg → пропускаем.

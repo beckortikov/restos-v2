@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 )
@@ -108,10 +109,23 @@ func (s *BackupService) copyToDesktop(srcPath, fname string) {
 
 type BackupService struct {
 	cfg BackupServiceConfig
+	// db — пул приложения. Нужен restore'у: чтобы оборвать остальные сессии
+	// (иначе DROP в --clean не получит эксклюзивную блокировку) и сбросить пул
+	// после восстановления (иначе pgx держит prepared statements со старыми
+	// OID'ами таблиц → «cached plan must not change result type»). Может быть
+	// nil в тестах/dev без БД — тогда шаги с пулом пропускаются.
+	db *gorm.DB
 }
 
 func NewBackupService(cfg BackupServiceConfig) *BackupService {
 	return &BackupService{cfg: cfg}
+}
+
+// WithDB привязывает пул приложения к сервису (для restore). Возвращает s для
+// чейнинга: service.NewBackupService(cfg).WithDB(gdb).
+func (s *BackupService) WithDB(db *gorm.DB) *BackupService {
+	s.db = db
+	return s
 }
 
 // BackupFile — метаданные одного файла бэкапа.
@@ -220,6 +234,51 @@ func (s *BackupService) pgBin(name string) (string, bool) {
 	return "", false
 }
 
+// prepareCmdEnv готовит окружение для выполнения команд pg_dump/pg_restore.
+// На Windows утилитам нужны DLL (например, libpq.dll), которые лежат в pg-runtime/bin
+// или в папке самого бинаря. Добавляем эти пути в PATH.
+func (s *BackupService) prepareCmdEnv(binPath string) []string {
+	env := os.Environ()
+	env = append(env, "PGPASSWORD="+s.cfg.PGPassword)
+
+	// Собираем пути для добавления в PATH
+	var extraPaths []string
+	if s.cfg.PGRuntimeDir != "" {
+		extraPaths = append(extraPaths, filepath.Join(s.cfg.PGRuntimeDir, "bin"))
+	}
+	if binPath != "" {
+		extraPaths = append(extraPaths, filepath.Dir(binPath))
+	}
+
+	if len(extraPaths) == 0 {
+		return env
+	}
+
+	pathKey := "PATH"
+	found := false
+	for i, kv := range env {
+		parts := strings.SplitN(kv, "=", 2)
+		if len(parts) == 2 && strings.ToUpper(parts[0]) == "PATH" {
+			pathKey = parts[0]
+			oldVal := parts[1]
+
+			// Объединяем новые пути и старый PATH
+			newVal := strings.Join(extraPaths, string(os.PathListSeparator))
+			if oldVal != "" {
+				newVal += string(os.PathListSeparator) + oldVal
+			}
+			env[i] = pathKey + "=" + newVal
+			found = true
+			break
+		}
+	}
+	if !found {
+		env = append(env, "PATH="+strings.Join(extraPaths, string(os.PathListSeparator)))
+	}
+
+	return env
+}
+
 // Create — ручной бэкап. Имя: manual-YYYYMMDD-HHMMSS.dump.
 func (s *BackupService) Create(ctx context.Context) (*BackupFile, error) {
 	if err := os.MkdirAll(s.cfg.BackupsDir, 0o755); err != nil {
@@ -239,7 +298,7 @@ func (s *BackupService) Create(ctx context.Context) (*BackupFile, error) {
 		"--file="+fpath,
 		"--dbname="+s.cfg.DSN,
 	)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.cfg.PGPassword)
+	cmd.Env = s.prepareCmdEnv(dumpBin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(fpath)
@@ -298,7 +357,7 @@ func (s *BackupService) CreateAuto(ctx context.Context) (*BackupFile, error) {
 		"--file="+fpath,
 		"--dbname="+s.cfg.DSN,
 	)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.cfg.PGPassword)
+	cmd.Env = s.prepareCmdEnv(dumpBin)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		_ = os.Remove(fpath)
@@ -406,7 +465,17 @@ func (s *BackupService) Delete(name string) error {
 // tmpPath — путь к временному .dump который handler сохранил из multipart.
 //
 // Используем pg_restore --clean --if-exists --no-owner --no-privileges
-// в ту же БД. --single-transaction чтобы при ошибке откатить целиком.
+// --single-transaction --exit-on-error в ту же БД:
+//   - --single-transaction + --exit-on-error → восстановление АТОМАРНО.
+//     Любая ошибка обрывает процесс с ненулевым кодом и откатывает всё.
+//     Поэтому ненулевой exit = реальный провал (раньше код «глотал» ошибки
+//     pg_restore как warnings и врал об успехе — данные не менялись, а UI
+//     писал «восстановление завершено»).
+//   - перед запуском обрываем остальные сессии к БД и сбрасываем пул, иначе
+//     DROP в --clean не получит эксклюзивную блокировку и зависнет.
+//   - после успеха пересоздаём соединения пула: pgx кэширует prepared
+//     statements со старыми OID'ами дропнутых таблиц → без сброса первые же
+//     запросы упадут «cached plan must not change result type».
 func (s *BackupService) Restore(ctx context.Context, tmpPath string) error {
 	if _, err := os.Stat(tmpPath); err != nil {
 		return apperrors.Wrap("VALIDATION", "uploaded file not found", err)
@@ -418,35 +487,87 @@ func (s *BackupService) Restore(ctx context.Context, tmpPath string) error {
 	if !ok {
 		return apperrors.Wrap("INTERNAL", pgToolNotFoundMsg("pg_restore"), nil)
 	}
+
+	// Обрываем остальные сессии приложения к БД и закрываем idle-соединения
+	// пула, чтобы DROP TABLE в --clean смог взять ACCESS EXCLUSIVE lock.
+	s.terminateOtherSessions(ctx)
+
 	cmd := exec.CommandContext(ctx, restoreBin,
 		"--clean",
 		"--if-exists",
 		"--no-owner",
 		"--no-privileges",
+		"--single-transaction",
+		"--exit-on-error",
 		"--dbname="+s.cfg.DSN,
 		tmpPath,
 	)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.cfg.PGPassword)
+	// lock_timeout: если живое соединение всё-таки держит таблицу — не виснем
+	// бесконечно, а падаем с понятной ошибкой. statement_timeout=0: сам restore
+	// большой БД может идти долго, его не ограничиваем.
+	cmd.Env = append(s.prepareCmdEnv(restoreBin),
+		"PGOPTIONS=-c lock_timeout=15000 -c statement_timeout=0")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		// pg_restore часто выдаёт warnings на --clean (DROP несуществующих
-		// объектов) и завершается с кодом 1 при наличии non-fatal errors.
-		// Различаем: если в выводе есть "FATAL" или "could not connect" —
-		// реальная ошибка. Иначе считаем успехом с warnings.
-		outStr := string(out)
-		if strings.Contains(outStr, "FATAL") ||
-			strings.Contains(outStr, "could not connect") ||
-			strings.Contains(outStr, "out of memory") ||
-			strings.Contains(outStr, "no such file") {
-			log.Error().Err(err).Str("out", outStr).Msg("restore: pg_restore fatal")
-			return apperrors.Wrap("INTERNAL",
-				"pg_restore failed: "+strings.TrimSpace(firstLines(outStr, 3)), err)
+		// --single-transaction + --exit-on-error: любой ненулевой код = провал,
+		// БД откачена к состоянию до restore. Никаких «успехов с warnings».
+		outStr := strings.TrimSpace(string(out))
+		log.Error().Err(err).Str("out", outStr).Msg("restore: pg_restore failed")
+		msg := firstLines(outStr, 5)
+		if msg == "" {
+			msg = err.Error()
 		}
-		// Non-fatal — логируем warnings, считаем успехом.
-		log.Warn().Str("out", outStr).Msg("restore: pg_restore completed with warnings")
+		// Соединения мы уже оборвали — восстанавливаем пул, чтобы приложение
+		// продолжило работать на старых (нетронутых) данных.
+		s.recyclePool()
+		return apperrors.Wrap("INTERNAL", "pg_restore failed: "+msg, err)
 	}
+
+	// Успех: данные заменены. Пересоздаём соединения пула, иначе кэш prepared
+	// statements pgx ссылается на дропнутые таблицы.
+	s.recyclePool()
 	log.Info().Str("file", filepath.Base(tmpPath)).Msg("restore completed")
 	return nil
+}
+
+// terminateOtherSessions обрывает все прочие подключения к целевой БД (кроме
+// текущего) и закрывает idle-соединения пула приложения. Нужно, чтобы DROP в
+// pg_restore --clean получил эксклюзивную блокировку. Best-effort: если db не
+// привязан (тесты/dev) или запрос не прошёл — просто логируем.
+func (s *BackupService) terminateOtherSessions(ctx context.Context) {
+	if s.db == nil {
+		return
+	}
+	// Закрываем idle-пул приложения, чтобы он сам не держал блокировки.
+	if sqlDB, err := s.db.DB(); err == nil {
+		sqlDB.SetMaxIdleConns(0)
+		sqlDB.SetMaxIdleConns(10)
+	}
+	// Обрываем все остальные backend'ы на этой БД.
+	err := s.db.WithContext(ctx).Exec(`
+		SELECT pg_terminate_backend(pid)
+		FROM pg_stat_activity
+		WHERE datname = current_database()
+		  AND pid <> pg_backend_pid()
+	`).Error
+	if err != nil {
+		log.Warn().Err(err).Msg("restore: terminate other sessions failed (continuing)")
+	}
+}
+
+// recyclePool закрывает все текущие соединения пула приложения, чтобы после
+// restore не остался кэш prepared statements/схемы со старыми OID'ами.
+// Set(0) закрывает idle-соединения немедленно; занятые закроются при возврате.
+func (s *BackupService) recyclePool() {
+	if s.db == nil {
+		return
+	}
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return
+	}
+	sqlDB.SetMaxIdleConns(0)
+	sqlDB.SetMaxIdleConns(10)
 }
 
 // RestoreFromExisting — восстановление из УЖЕ существующего файла в backups/
