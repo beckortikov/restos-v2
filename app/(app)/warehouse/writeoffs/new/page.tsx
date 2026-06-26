@@ -68,13 +68,20 @@ export default function NewWriteoffPage() {
           ...menuItems.filter(m => m.isBatchCooking && (m.preparedQty || 0) > 0).map(m => ({
             id: m.id, name: m.name, qty: m.preparedQty || 0, unit: 'порц.', pricePerUnit: m.cogs || 0, group: 'batch',
           })),
-          ...menuItems.filter(m => m.station === 'showcase' && m.isAvailable).map(m => {
-            const mi = ings.find(i => i.name.toLowerCase() === m.name.toLowerCase())
+          // Витрина + бар (покупные товары). Связь с ингредиентом — по
+          // ingredient_id из техкарты блюда (надёжно при переименовании),
+          // фолбэк — по имени для старых записей без техкарты.
+          ...menuItems.filter(m => (m.station === 'showcase' || m.station === 'bar') && m.isAvailable).map(m => {
+            const tcIngId = m.techCard?.find(l => l.ingredientId)?.ingredientId
+            const mi = (tcIngId ? ings.find(i => i.id === tcIngId) : undefined)
+              ?? ings.find(i => i.name.toLowerCase() === m.name.toLowerCase())
             return { id: mi?.id || m.id, name: m.name, qty: mi?.qty ?? 0, unit: mi?.unit || 'шт.', pricePerUnit: mi?.pricePerUnit || m.price, group: 'showcase' }
           }),
         ]
-        const showcaseNames = new Set(items.filter(i => i.group === 'showcase').map(i => i.name.toLowerCase()))
-        setAllItems(items.filter(i => !((i.group === 'ingredient' || i.group === 'drinks') && showcaseNames.has(i.name.toLowerCase()))))
+        // Дедуп по id ингредиента: не показываем сырьё, уже представленное
+        // витринным/барным товаром (раньше дедуп был по имени — рвался при переименовании).
+        const showcaseIds = new Set(items.filter(i => i.group === 'showcase').map(i => i.id))
+        setAllItems(items.filter(i => !((i.group === 'ingredient' || i.group === 'drinks') && showcaseIds.has(i.id))))
         setLoading(false)
       })
       .catch((err) => {
