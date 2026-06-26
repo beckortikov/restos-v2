@@ -81,8 +81,8 @@ export default function BatchCookingPage() {
     try {
       const calc = await calculateMaxPortions(itemId)
       setPortionCalc(calc)
-      // If no tech card or no ingredients — start with 1 (manual mode)
-      if (calc.ingredients.length === 0) {
+      // Без техкарты — ручной режим (qty=1). С техкартой — по доступному максимуму.
+      if (!calc.hasRecipe) {
         setQty(1)
       } else {
         setQty(calc.maxPortions > 0 ? 1 : 0)
@@ -597,7 +597,7 @@ export default function BatchCookingPage() {
             </div>
 
             {/* Status banner */}
-            {portionCalc.ingredients.length === 0 ? (
+            {!portionCalc.hasRecipe ? (
               <div className="rounded-xl p-3 bg-blue-50 border border-blue-200">
                 <p className="text-sm font-semibold text-blue-800 flex items-center gap-2">
                   <AlertTriangle className="size-4" />Нет техкарты
@@ -626,7 +626,7 @@ export default function BatchCookingPage() {
             )}
 
             {/* Manual mode (no tech card) — allow any qty */}
-            {portionCalc.ingredients.length === 0 ? (
+            {!portionCalc.hasRecipe ? (
               <>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Сколько порций добавить</label>

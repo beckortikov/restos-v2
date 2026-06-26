@@ -22,6 +22,7 @@ import (
 	sd "github.com/shopspring/decimal"
 
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 )
 
 // Mode — режим проверки.
@@ -62,6 +63,7 @@ type IngredientInfo struct {
 	WastePercent decimal.Decimal
 	Name         string
 	IsFood       bool
+	Unit         *string // единица склада (кг, г, л, мл, шт) — для конвертации с Unit тех-карты
 }
 
 // TechLine — строка тех. карты. Ingredient может быть nil — это случай
@@ -71,6 +73,7 @@ type TechLine struct {
 	IngredientID *string
 	Qty          decimal.Decimal
 	Name         string
+	Unit         *string // единица расхода в тех-карте (кг, г, л, мл) — может отличаться от единицы склада
 	Ingredient   *IngredientInfo
 }
 
@@ -143,6 +146,9 @@ func ComputeShortages(items []OrderItem, opts Opts) []string {
 			if !ing.IsFood {
 				continue
 			}
+			// Приводим расход из единицы тех-карты в единицу склада ингредиента
+			// (300 г при складе в кг → 0.3 кг). reserved/stock — в единице склада.
+			recipeQty = units.Convert(recipeQty, deref(line.Unit), deref(ing.Unit))
 			needed := applyWaste(recipeQty, ing.WastePercent)
 			stock := ing.Qty
 			reserved := opts.ReservedByIngredient[*line.IngredientID]
@@ -160,6 +166,13 @@ func ComputeShortages(items []OrderItem, opts Opts) []string {
 		}
 	}
 	return shortages
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // applyWaste возвращает recipeQty / (1 - waste/100). Если waste <= 0 — recipeQty без изменений.

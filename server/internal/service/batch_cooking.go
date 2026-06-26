@@ -16,6 +16,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -38,10 +39,28 @@ type BatchBlocker struct {
 	Need         decimal.Decimal `json:"need"`
 }
 
+// BatchIngredient — строка тех-карты с остатком (для превью «будет списано»).
+type BatchIngredient struct {
+	IngredientID        string          `json:"ingredient_id"`
+	Name                string          `json:"name"`
+	Unit                string          `json:"unit"`                   // единица склада (кг, л, шт)
+	RecipeUnit          string          `json:"recipe_unit"`            // единица расхода в тех-карте (г, мл)
+	StockQty            decimal.Decimal `json:"stock_qty"`              // остаток на складе (в единице склада)
+	RecipeQtyPerPortion decimal.Decimal `json:"recipe_qty_per_portion"` // расход на 1 порцию (в единице тех-карты)
+	PossiblePortions    int             `json:"possible_portions"`
+	IsBottleneck        bool            `json:"is_bottleneck"`
+}
+
 // MaxPortionsResult — что отдаём.
+//
+// HasRecipe — есть ли у блюда тех-карта (хотя бы одна строка). Экран опирается
+// на него, а не на список нехваток: блюдо с техкартой и достаточным остатком
+// раньше ложно считалось «без техкарты» (blockers пуст → ingredients пуст).
 type MaxPortionsResult struct {
-	Max      int            `json:"max"`
-	Blockers []BatchBlocker `json:"blockers"`
+	Max         int               `json:"max"`
+	HasRecipe   bool              `json:"has_recipe"`
+	Ingredients []BatchIngredient `json:"ingredients"`
+	Blockers    []BatchBlocker    `json:"blockers"`
 }
 
 // MaxPortions — GET /api/v1/menu/items/{id}/max-portions.
@@ -78,7 +97,7 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 	}
 	if len(lines) == 0 {
 		// Без рецепта max = бесконечность; вернём большой sentinel.
-		return &MaxPortionsResult{Max: math.MaxInt32}, nil
+		return &MaxPortionsResult{Max: math.MaxInt32, HasRecipe: false}, nil
 	}
 
 	ingIDs := make([]string, 0, len(lines))
@@ -99,7 +118,7 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 	}
 
 	maxPortions := math.MaxInt32
-	out := &MaxPortionsResult{}
+	out := &MaxPortionsResult{HasRecipe: true}
 	for _, l := range lines {
 		if l.IngredientID == nil || l.Qty.IsZero() {
 			continue
@@ -108,24 +127,36 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 		if !ok {
 			continue
 		}
+		name := ""
+		if ing.Name != nil {
+			name = *ing.Name
+		}
+		// Расход на 1 порцию приводим к единице склада ингредиента
+		// (300 г при складе в кг → 0.3 кг), иначе 3 / 300 = 0 порций.
+		needPerPortion := units.Convert(l.Qty, deref(l.Unit), deref(ing.Unit))
 		// have / need_per_portion → floor.
 		var possible int
-		ratio := decimal.DivRound(ing.Qty, l.Qty).IntPart()
+		ratio := decimal.DivRound(ing.Qty, needPerPortion).IntPart()
 		if ratio > math.MaxInt32 {
 			possible = math.MaxInt32
 		} else {
 			possible = int(ratio)
 		}
+		out.Ingredients = append(out.Ingredients, BatchIngredient{
+			IngredientID:        ing.ID,
+			Name:                name,
+			Unit:                deref(ing.Unit),
+			RecipeUnit:          deref(l.Unit),
+			StockQty:            ing.Qty,
+			RecipeQtyPerPortion: l.Qty,
+			PossiblePortions:    possible,
+		})
 		if possible < 1 {
-			name := ""
-			if ing.Name != nil {
-				name = *ing.Name
-			}
 			out.Blockers = append(out.Blockers, BatchBlocker{
 				IngredientID: ing.ID,
 				Name:         name,
 				Have:         ing.Qty,
-				Need:         l.Qty,
+				Need:         needPerPortion,
 			})
 		}
 		if possible < maxPortions {
@@ -134,6 +165,14 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 	}
 	if maxPortions < 0 {
 		maxPortions = 0
+	}
+	// Отмечаем «бутылочные горлышки» — ингредиенты, ограничивающие максимум.
+	if maxPortions != math.MaxInt32 {
+		for i := range out.Ingredients {
+			if out.Ingredients[i].PossiblePortions == maxPortions {
+				out.Ingredients[i].IsBottleneck = true
+			}
+		}
 	}
 	out.Max = maxPortions
 	return out, nil
@@ -179,6 +218,26 @@ func (s *BatchCookingService) Produce(ctx context.Context, menuItemID string, in
 			Find(&lines).Error; err != nil {
 			return err
 		}
+		// Единицы склада ингредиентов — списываем в единице склада, а не тех-карты
+		// (300 г при складе в кг → 0.3 кг), иначе остаток ушёл бы в минус.
+		ingUnitByID := make(map[string]string)
+		ingIDs := make([]string, 0, len(lines))
+		for _, l := range lines {
+			if l.IngredientID != nil && *l.IngredientID != "" {
+				ingIDs = append(ingIDs, *l.IngredientID)
+			}
+		}
+		if len(ingIDs) > 0 {
+			var ings []models.Ingredient
+			if err := tx.Where("restaurant_id = ? AND id IN ?", rid, ingIDs).Find(&ings).Error; err != nil {
+				return err
+			}
+			for _, i := range ings {
+				if i.Unit != nil {
+					ingUnitByID[i.ID] = *i.Unit
+				}
+			}
+		}
 		now := time.Now().UTC()
 		desc := "batch_produce:" + menuItemID
 		mvType := "batch_out"
@@ -187,9 +246,14 @@ func (s *BatchCookingService) Produce(ctx context.Context, menuItemID string, in
 			if l.IngredientID == nil {
 				continue
 			}
-			deduct := decimal.Normalize(decimal.Mul(l.Qty, qtyDec)).Neg()
 			ingID := *l.IngredientID
-			unit := l.Unit
+			stockUnit := ingUnitByID[ingID]
+			perPortion := units.Convert(l.Qty, deref(l.Unit), stockUnit)
+			deduct := decimal.Normalize(decimal.Mul(perPortion, qtyDec)).Neg()
+			unit := &stockUnit
+			if stockUnit == "" {
+				unit = l.Unit
+			}
 			mv := &models.StockMovement{
 				ID:             uuid.NewString(),
 				Type:           &mvType,

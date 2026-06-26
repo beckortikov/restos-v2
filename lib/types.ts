@@ -196,6 +196,7 @@ export interface BatchCookingLog {
 
 export interface BatchPortionCalc {
   maxPortions: number
+  hasRecipe: boolean
   ingredients: {
     ingredientId: string
     name: string

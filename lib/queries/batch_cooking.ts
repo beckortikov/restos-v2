@@ -4,14 +4,19 @@ import { checkAndUpdateStopList } from './stock'
 
 export async function calculateMaxPortions(menuItemId: string): Promise<import('../types').BatchPortionCalc> {
   const res = await unwrapRaw(api.GET('/api/v1/menu/items/{id}/max-portions', { params: { path: { id: menuItemId } } }))
-  if (res.response.status === 404) return { maxPortions: 0, ingredients: [] }
+  if (res.response.status === 404) return { maxPortions: 0, ingredients: [], hasRecipe: false }
   if (res.error) throw new V4Error(res.response.status, res.error)
   const r = (res.data as any) ?? {}
   const maxRaw = Number(r?.max ?? 0)
   const maxPortions = Number.isFinite(maxRaw) && maxRaw < 1_000_000 ? maxRaw : 0
-  const blockers = Array.isArray(r?.blockers) ? (r.blockers as Record<string, unknown>[]) : []
-  const ingredients = blockers.map(mapBatchBlocker)
-  return { maxPortions, ingredients }
+  const hasRecipe = Boolean(r?.has_recipe)
+  // Полный список ингредиентов тех-карты (для превью «будет списано»).
+  // Фолбэк на blockers — на случай старого бэкенда без поля ingredients.
+  const rawIngredients = Array.isArray(r?.ingredients) ? (r.ingredients as Record<string, unknown>[]) : []
+  const ingredients = rawIngredients.length > 0
+    ? rawIngredients.map(mapBatchIngredient)
+    : (Array.isArray(r?.blockers) ? (r.blockers as Record<string, unknown>[]).map(mapBatchBlocker) : [])
+  return { maxPortions, ingredients, hasRecipe }
 }
 
 export async function produceBatch(menuItemId: string, qty: number): Promise<void> {
@@ -53,6 +58,19 @@ export async function fetchBatchCookingLogs(menuItemId?: string): Promise<import
 }
 
 // ─── Mappers ──────────────────────────────────────────────────────────────
+
+function mapBatchIngredient(b: Record<string, unknown>) {
+  return {
+    ingredientId: (b.ingredient_id as string) ?? '',
+    name: (b.name as string) ?? '',
+    unit: (b.unit as string) ?? '',
+    recipeUnit: (b.recipe_unit as string) ?? '',
+    stockQty: Number(b.stock_qty ?? 0),
+    recipeQtyPerPortion: Number(b.recipe_qty_per_portion ?? 0),
+    possiblePortions: Number(b.possible_portions ?? 0),
+    isBottleneck: Boolean(b.is_bottleneck),
+  }
+}
 
 function mapBatchBlocker(b: Record<string, unknown>) {
   return {

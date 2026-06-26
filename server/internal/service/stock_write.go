@@ -5,12 +5,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -160,6 +162,36 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			return err
 		}
 
+		// Подгружаем (с блокировкой строк) ингредиенты позиций: нужны единица
+		// склада + текущие qty/price для конвертации прихода и средневзвешенной
+		// себестоимости. Lock защищает read-modify-write цены от потери при
+		// параллельных приёмках того же ингредиента.
+		ingByID := make(map[string]*models.Ingredient)
+		{
+			ids := make([]string, 0, len(parsedLines))
+			seen := make(map[string]struct{})
+			for _, pl := range parsedLines {
+				if pl.in.IngredientID == "" {
+					continue
+				}
+				if _, ok := seen[pl.in.IngredientID]; !ok {
+					seen[pl.in.IngredientID] = struct{}{}
+					ids = append(ids, pl.in.IngredientID)
+				}
+			}
+			if len(ids) > 0 {
+				var ings []models.Ingredient
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("restaurant_id = ? AND id IN ?", rid, ids).
+					Find(&ings).Error; err != nil {
+					return err
+				}
+				for i := range ings {
+					ingByID[ings[i].ID] = &ings[i]
+				}
+			}
+		}
+
 		for _, pl := range parsedLines {
 			lineID := uuid.NewString()
 			rl := &models.StockReceiptLine{
@@ -177,7 +209,21 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				return err
 			}
 
-			// stock_movement +qty
+			// Единица склада ингредиента + конвертация прихода в неё
+			// (приход в г при складе в кг → кг). qty движения = в единице склада,
+			// иначе ingredients.qty денормализуется неверно.
+			ing := ingByID[pl.in.IngredientID]
+			stockUnit := ""
+			if ing != nil && ing.Unit != nil {
+				stockUnit = *ing.Unit
+			}
+			stockQty := units.Convert(pl.qty, deref(pl.in.Unit), stockUnit)
+			mvUnit := pl.in.Unit
+			if stockUnit != "" {
+				mvUnit = &stockUnit
+			}
+
+			// stock_movement +qty (в единице склада)
 			mvType := "receipt"
 			desc := "receipt:" + receiptID
 			mv := &models.StockMovement{
@@ -186,13 +232,37 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				IngredientID:   &pl.in.IngredientID,
 				IngredientName: &pl.in.Name,
 				Description:    &desc,
-				Qty:            pl.qty,
-				Unit:           pl.in.Unit,
+				Qty:            stockQty,
+				Unit:           mvUnit,
 				RestaurantID:   &rid,
 				CreatedAt:      now,
 			}
 			if err := tx.Create(mv).Error; err != nil {
 				return err
+			}
+
+			// Средневзвешенная себестоимость:
+			//   new = (old_qty*old_price + line_cost) / (old_qty + recv_qty).
+			// line_cost (pl.line) = qty * price_per_unit в единицах накладной —
+			// инвариантно к конвертации единиц.
+			if ing != nil && decimal.IsPositive(stockQty) {
+				denom := decimal.Add(ing.Qty, stockQty)
+				var newPrice decimal.Decimal
+				if decimal.IsPositive(denom) {
+					newPrice = decimal.DivRound(decimal.Add(decimal.Mul(ing.Qty, ing.PricePerUnit), pl.line), denom)
+				} else {
+					// Остаток был отрицательным/нулевым — берём цену прихода.
+					newPrice = decimal.DivRound(pl.line, stockQty)
+				}
+				newPrice = decimal.Normalize(newPrice)
+				if err := tx.Model(&models.Ingredient{}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).
+					Update("price_per_unit", newPrice).Error; err != nil {
+					return err
+				}
+				// In-memory обновление для следующих строк того же ингредиента.
+				ing.Qty = denom
+				ing.PricePerUnit = newPrice
 			}
 		}
 		// Атомарный финоп (v2.0.87): если AccountID указан И paid=true (default),

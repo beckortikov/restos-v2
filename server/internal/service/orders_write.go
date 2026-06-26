@@ -18,6 +18,7 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/stockcheck"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -922,6 +923,7 @@ func validateStockForItems(
 				Qty:          i.Qty,
 				WastePercent: i.WastePercent,
 				IsFood:       i.IsFood == nil || *i.IsFood,
+				Unit:         i.Unit,
 			}
 			if i.Name != nil {
 				info.Name = *i.Name
@@ -943,6 +945,7 @@ func validateStockForItems(
 			IngredientID: l.IngredientID,
 			Qty:          l.Qty,
 			Name:         name,
+			Unit:         l.Unit,
 		}
 		if l.IngredientID != nil {
 			if info, ok := ingByID[*l.IngredientID]; ok {
@@ -1142,9 +1145,31 @@ func computeReservations(tx *gorm.DB, rid string) (
 		return nil, nil, err
 	}
 	tclByMenu := make(map[string][]models.TechCardLine)
+	ingIDset := make(map[string]struct{})
 	for _, l := range lines {
 		if l.MenuItemID != nil {
 			tclByMenu[*l.MenuItemID] = append(tclByMenu[*l.MenuItemID], l)
+		}
+		if l.IngredientID != nil && *l.IngredientID != "" {
+			ingIDset[*l.IngredientID] = struct{}{}
+		}
+	}
+
+	// Единицы склада ингредиентов — резерв копим в единице склада, как и stock.
+	ingUnitByID := make(map[string]string, len(ingIDset))
+	if len(ingIDset) > 0 {
+		ingIDs := make([]string, 0, len(ingIDset))
+		for k := range ingIDset {
+			ingIDs = append(ingIDs, k)
+		}
+		var ings []models.Ingredient
+		if err := tx.Where("id IN ?", ingIDs).Find(&ings).Error; err != nil {
+			return nil, nil, err
+		}
+		for _, i := range ings {
+			if i.Unit != nil {
+				ingUnitByID[i.ID] = *i.Unit
+			}
 		}
 	}
 
@@ -1161,8 +1186,10 @@ func computeReservations(tx *gorm.DB, rid string) (
 			if line.IngredientID == nil || *line.IngredientID == "" {
 				continue
 			}
-			add := decimal.Mul(line.Qty, effectivePortions(mi.Unit, r.Qty, mi.UnitSize))
 			key := *line.IngredientID
+			add := decimal.Mul(line.Qty, effectivePortions(mi.Unit, r.Qty, mi.UnitSize))
+			// Приводим резерв в единицу склада ингредиента (как stock в stockcheck).
+			add = units.Convert(add, deref(line.Unit), ingUnitByID[key])
 			cur := reservedIng[key]
 			reservedIng[key] = decimal.Add(cur, add)
 		}

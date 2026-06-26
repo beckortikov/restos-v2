@@ -2378,7 +2378,38 @@ paths:
       tags: [menu]
       summary: Сколько порций можно приготовить прямо сейчас
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
-      responses: { "200": { description: OK } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  max: { type: integer, description: "Макс. порций по остатку. Большой sentinel (MaxInt32) = рецепта нет." }
+                  has_recipe: { type: boolean, description: "Есть ли тех-карта (хотя бы одна строка)." }
+                  ingredients:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ingredient_id: { type: string, format: uuid }
+                        name: { type: string }
+                        unit: { type: string, description: "единица склада (кг, л, шт)" }
+                        recipe_unit: { type: string, description: "единица расхода в тех-карте (г, мл)" }
+                        stock_qty: { type: string, description: "остаток (в единице склада)" }
+                        recipe_qty_per_portion: { type: string, description: "расход на 1 порцию (в единице тех-карты)" }
+                        possible_portions: { type: integer }
+                        is_bottleneck: { type: boolean }
+                  blockers:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        ingredient_id: { type: string, format: uuid }
+                        name: { type: string }
+                        have: { type: string }
+                        need: { type: string }
 
   /api/v1/menu/items/{id}/batch/produce:
     post:
