@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -239,6 +240,154 @@ func TestBug_Problem3_Produce_DeductsConvertedUnits(t *testing.T) {
 	if !ing.Qty.Equal(decimal.MustFromString("2.7")) {
 		t.Fatalf("КРАСНЫЙ Problem 3b: после приготовления 1 порции (300 г) из 3 кг ожидали 2.7 кг, "+
 			"получили %s (Produce списывает граммы как килограммы)", decimal.Normalize(ing.Qty).String())
+	}
+}
+
+// ─── ПРОБЛЕМА 4: заготовка ложно в стоп-листе при нулевом сырье ─────────────
+//
+// «Блюдо есть в приготовленных (40 порц.) и включено, но в стоп-листе».
+// StopListService.List стопил любое блюдо, чья техкарта ссылается на low-stock
+// ингредиент, не делая исключения для заготовок. Заготовка должна стопиться по
+// prepared_qty, а не по остатку сырья.
+
+// TestBug_Problem4_BatchWithPortions_NotInStopList — есть 40 готовых порций при
+// нулевом сырье → НЕ в стоп-листе.
+func TestBug_Problem4_BatchWithPortions_NotInStopList(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	seedBatchWithStock(t, gdb, f.rid, "Шашлык", 40, "Гуш", "0", "0") // 40 порц., Гуш 0 кг (min 0)
+
+	if names := stopListNames(t, f, tok); hasName(names, "Шашлык") {
+		t.Fatalf("Problem 4: заготовка с 40 готовыми порциями НЕ должна быть в стопе, а она там: %v", names)
+	}
+}
+
+// TestBug_Problem4_BatchNoPortions_InStopList — нет готовых порций (0) →
+// в стоп-листе, независимо от сырья.
+func TestBug_Problem4_BatchNoPortions_InStopList(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	seedBatchWithStock(t, gdb, f.rid, "Шашлык", 0, "Гуш", "5", "0") // 0 порц., сырья даже хватает
+
+	if names := stopListNames(t, f, tok); !hasName(names, "Шашлык") {
+		t.Fatalf("Problem 4: заготовка без готовых порций ДОЛЖНА быть в стопе, а её нет: %v", names)
+	}
+}
+
+// TestBug_Problem4_NonBatch_StillStopsOnLowStock — регрессия: обычное блюдо
+// при нехватке сырья по-прежнему в стопе.
+func TestBug_Problem4_NonBatch_StillStopsOnLowStock(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	// Обычное блюдо (не заготовка), сырьё на нуле (min 0).
+	ingID := uuid.NewString()
+	ingName, ingUnit := "Лук", "кг"
+	if err := gdb.Create(&models.Ingredient{
+		ID: ingID, Name: &ingName, Unit: &ingUnit, RestaurantID: &f.rid,
+		Qty: decimal.Zero, MinQty: decimal.Zero,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	miID := uuid.NewString()
+	miName := "Салат"
+	notBatch := false
+	if err := gdb.Create(&models.MenuItem{
+		ID: miID, Name: &miName, Price: decimal.MustFromString("15"),
+		IsBatchCooking: &notBatch, RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	tcl := ingName
+	if err := gdb.Create(&models.TechCardLine{
+		ID: uuid.NewString(), MenuItemID: &miID, IngredientID: &ingID,
+		Name: &tcl, Qty: decimal.MustFromString("100"), Unit: strPtr4("г"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if names := stopListNames(t, f, tok); !hasName(names, "Салат") {
+		t.Fatalf("регрессия: обычное блюдо при нулевом сырье должно быть в стопе: %v", names)
+	}
+}
+
+func strPtr4(s string) *string { return &s }
+
+func hasName(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
+
+func stopListNames(t *testing.T, f *e2eFixture, tok string) []string {
+	t.Helper()
+	resp, body := f.get(t, "/api/v1/stop-list", tok)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop-list: %d %s", resp.StatusCode, body)
+	}
+	var env struct {
+		Data []struct {
+			MenuItemName string `json:"menu_item_name"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(env.Data))
+	for _, r := range env.Data {
+		names = append(names, r.MenuItemName)
+	}
+	return names
+}
+
+// seedBatchWithStock создаёт заготовочное блюдо с заданным prepared_qty и
+// ингредиентом (qty/min в кг), связанным техкартой 100 г.
+func seedBatchWithStock(t *testing.T, gdb *gorm.DB, rid, dish string, prepared int, ing, ingQty, ingMin string) {
+	t.Helper()
+	ingID := uuid.NewString()
+	ingUnit := "кг"
+	if err := gdb.Create(&models.Ingredient{
+		ID: ingID, Name: &ing, Unit: &ingUnit, RestaurantID: &rid,
+		Qty: decimal.MustFromString(ingQty), MinQty: decimal.MustFromString(ingMin),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	batch := true
+	miID := uuid.NewString()
+	prep := prepared
+	if err := gdb.Create(&models.MenuItem{
+		ID: miID, Name: &dish, Price: decimal.MustFromString("20"),
+		IsBatchCooking: &batch, PreparedQty: &prep, RestaurantID: &rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	tcl := ing
+	gram := "г"
+	if err := gdb.Create(&models.TechCardLine{
+		ID: uuid.NewString(), MenuItemID: &miID, IngredientID: &ingID,
+		Name: &tcl, Qty: decimal.MustFromString("100"), Unit: &gram, RestaurantID: &rid,
+	}).Error; err != nil {
+		t.Fatal(err)
 	}
 }
 

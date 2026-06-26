@@ -107,12 +107,29 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 		manualIDs[m.ID] = true
 	}
 
+	// 3b. Заготовочные блюда без готовых порций (prepared_qty <= 0). Их
+	// доступность определяется prepared_qty, а НЕ остатком сырья: блюдо с
+	// готовыми порциями продаётся даже при нулевом сырье и в стоп НЕ идёт.
+	var batchZero []models.MenuItem
+	if err := s.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ? AND is_batch_cooking = ? AND (prepared_qty <= 0 OR prepared_qty IS NULL)", rid, true).
+		Find(&batchZero).Error; err != nil {
+		return nil, err
+	}
+	batchZeroIDs := make(map[string]bool, len(batchZero))
+	for _, m := range batchZero {
+		batchZeroIDs[m.ID] = true
+	}
+
 	// 4. Объединяем set и грузим menu_items одним запросом.
 	allIDs := make(map[string]bool)
 	for id := range affected {
 		allIDs[id] = true
 	}
 	for id := range manualIDs {
+		allIDs[id] = true
+	}
+	for id := range batchZeroIDs {
 		allIDs[id] = true
 	}
 	if len(allIDs) == 0 {
@@ -143,13 +160,46 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 		if m.Category != nil {
 			category = *m.Category
 		}
+		manual := manualIDs[m.ID]
+		isBatch := m.IsBatchCooking != nil && *m.IsBatchCooking
+
+		var ings []StopListIngredient
+		inStop := manual
+		if isBatch {
+			// Заготовка: стоп только если нет готовых порций (или ручной override).
+			// Остаток сырья (affected) для заготовок НЕ учитываем.
+			if batchZeroIDs[m.ID] {
+				inStop = true
+				prep := 0
+				if m.PreparedQty != nil {
+					prep = *m.PreparedQty
+				}
+				ings = []StopListIngredient{{
+					Name:   "Готовые порции",
+					Qty:    decimal.FromInt(int64(prep)),
+					MinQty: decimal.Zero,
+					Unit:   "порц.",
+				}}
+			}
+		} else {
+			// Обычное блюдо: стоп по нехватке сырья из техкарты.
+			ings = affected[m.ID]
+			if len(ings) > 0 {
+				inStop = true
+			}
+		}
+		if !inStop {
+			// batch с готовыми порциями, попавший в allIDs только из-за low-сырья.
+			continue
+		}
+
 		out = append(out, StopListItem{
 			MenuItemID:   m.ID,
 			MenuItemName: name,
 			Emoji:        emoji,
 			Category:     category,
-			Ingredients:  affected[m.ID],
-			Manual:       manualIDs[m.ID],
+			Ingredients:  ings,
+			Manual:       manual,
 		})
 	}
 	return out, nil
