@@ -144,6 +144,9 @@ export type CashflowReport = {
 }
 
 export type BalanceReport = {
+  accounts: { id: string; name: string; amount: number }[]
+  cash_total: number
+  inventory_value: number
   assets: { id: string; name: string; amount: number }[]
   total_assets: number
   liabilities: { id: string; name: string; total: number; paid: number; remaining: number }[]
@@ -215,6 +218,9 @@ export async function fetchCashflowReport(opts: { from?: Date | string; to?: Dat
 export async function fetchBalanceReport(): Promise<BalanceReport> {
   const r: any = await unwrap(api.GET('/api/v1/finance/balance'))
   return {
+    accounts: (r?.accounts ?? []).map((x: any) => ({ id: String(x.id ?? ''), name: String(x.name ?? ''), amount: Number(x.amount ?? 0) })),
+    cash_total: Number(r?.cash_total ?? 0),
+    inventory_value: Number(r?.inventory_value ?? 0),
     assets: (r?.assets ?? []).map((x: any) => ({ id: String(x.id ?? ''), name: String(x.name ?? ''), amount: Number(x.amount ?? 0) })),
     total_assets: Number(r?.total_assets ?? 0),
     liabilities: (r?.liabilities ?? []).map((x: any) => ({

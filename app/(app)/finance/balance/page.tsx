@@ -267,10 +267,11 @@ export default function BalancePage() {
 
   // ─── Calculations ─────────────────────────────────────────────────────────
 
-  // Current assets (auto) — cash + inventory (computed locally; server report
-  // only covers manual assets table).
-  const totalCash = dSum(accounts.map(a => a.balance))
-  const inventoryValue = dSum(ingredients.map(i => dMul(i.qty, i.pricePerUnit)))
+  // Current assets (auto) — cash + inventory. Считаются на бэке (Balance):
+  // фронт только показывает. Fallback на локальный расчёт, если отчёт ещё не
+  // загрузился (первый рендер до ответа сервера).
+  const totalCash = report ? report.cash_total : dSum(accounts.map(a => a.balance))
+  const inventoryValue = report ? report.inventory_value : dSum(ingredients.map(i => dMul(i.qty, i.pricePerUnit)))
   const totalCurrentAssets = dAdd(totalCash, inventoryValue)
 
   // Non-current assets (manual) grouped by category — total comes from server

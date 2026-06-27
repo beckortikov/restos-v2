@@ -832,8 +832,13 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 }
 
 type BalanceJSON struct {
+	// Авто-оборотные активы (считаются на бэке, фронт только показывает):
+	Accounts       []BalanceLine   `json:"accounts"`        // счета, amount = баланс
+	CashTotal      decimal.Decimal `json:"cash_total"`      // Σ балансов счетов
+	InventoryValue decimal.Decimal `json:"inventory_value"` // Σ остаток × цена (склад)
+	// Внеоборотные (ручные) активы:
 	Assets           []BalanceLine   `json:"assets"`
-	TotalAssets      decimal.Decimal `json:"total_assets"`
+	TotalAssets      decimal.Decimal `json:"total_assets"` // только ручные активы
 	Liabilities      []LiabilityLine `json:"liabilities"`
 	TotalLiabilities decimal.Decimal `json:"total_liabilities"`
 	Equity           []BalanceLine   `json:"equity"`
@@ -861,8 +866,39 @@ func (s *FinanceReportsService) Balance(ctx context.Context) (*BalanceJSON, erro
 		return nil, err
 	}
 	out := &BalanceJSON{
-		Assets: []BalanceLine{}, Liabilities: []LiabilityLine{}, Equity: []BalanceLine{},
+		Accounts: []BalanceLine{}, Assets: []BalanceLine{}, Liabilities: []LiabilityLine{}, Equity: []BalanceLine{},
 	}
+
+	// Денежные средства — балансы счетов (авто-актив). Отдельный scoped, чтобы
+	// не загрязнять statement для последующих запросов (assets/liabilities).
+	scopedAcc, _ := s.r.ForTenant(ctx)
+	var accs []models.FinancialAccount
+	if err := scopedAcc.Order("name ASC").Find(&accs).Error; err != nil {
+		return nil, err
+	}
+	out.CashTotal = decimal.Zero
+	for _, a := range accs {
+		name := ""
+		if a.Name != nil {
+			name = *a.Name
+		}
+		out.Accounts = append(out.Accounts, BalanceLine{ID: a.ID, Name: name, Amount: a.Balance})
+		out.CashTotal = decimal.Add(out.CashTotal, a.Balance)
+	}
+	out.CashTotal = decimal.Normalize(out.CashTotal)
+
+	// Стоимость склада — Σ(остаток × цена за единицу) по ингредиентам (авто-актив).
+	var invRow struct {
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	scopedInv, _ := s.r.ForTenant(ctx)
+	if err := scopedInv.Model(&models.Ingredient{}).
+		Select("COALESCE(SUM(qty * price_per_unit), 0) AS total").
+		Scan(&invRow).Error; err != nil {
+		return nil, err
+	}
+	out.InventoryValue = decimal.Normalize(invRow.Total)
+
 	var assets []models.Asset
 	if err := scoped.Order("name ASC").Find(&assets).Error; err != nil {
 		return nil, err
