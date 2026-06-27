@@ -279,6 +279,7 @@ func TestBug_Problem4_BatchNoPortions_InStopList(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
+	enableTechCards(t, gdb, f.rid)
 	seedBatchWithStock(t, gdb, f.rid, "Шашлык", 0, "Гуш", "5", "0") // 0 порц., сырья даже хватает
 
 	if names := stopListNames(t, f, tok); !hasName(names, "Шашлык") {
@@ -297,6 +298,7 @@ func TestBug_Problem4_NonBatch_StillStopsOnLowStock(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
+	enableTechCards(t, gdb, f.rid)
 	// Обычное блюдо (не заготовка), сырьё на нуле (min 0).
 	ingID := uuid.NewString()
 	ingName, ingUnit := "Лук", "кг"
@@ -358,6 +360,16 @@ func stopListNames(t *testing.T, f *e2eFixture, tok string) []string {
 		names = append(names, r.MenuItemName)
 	}
 	return names
+}
+
+// enableTechCards включает техкарты у ресторана фикстуры (по умолчанию OFF) —
+// нужно для тестов авто-стопа, который работает только при включённых техкартах.
+func enableTechCards(t *testing.T, gdb *gorm.DB, rid string) {
+	t.Helper()
+	if err := gdb.Model(&models.Restaurant{}).Where("id = ?", rid).
+		Update("tech_cards_enabled", true).Error; err != nil {
+		t.Fatal(err)
+	}
 }
 
 // seedBatchWithStock создаёт заготовочное блюдо с заданным prepared_qty и
@@ -432,6 +444,7 @@ func TestBug_Problem6_NonBatch_OrderStopped(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
+	enableTechCards(t, gdb, f.rid)
 	ingID := uuid.NewString()
 	ingName, ingUnit := "Лук", "кг"
 	if err := gdb.Create(&models.Ingredient{

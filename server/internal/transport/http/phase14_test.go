@@ -165,6 +165,10 @@ func TestPhase14_StopList(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	gdb, menuItemID, _, _ := seedForWrite(t, f)
+	// Авто-стоп работает только при включённых техкартах (фикстура — OFF).
+	if err := gdb.Exec(`UPDATE restaurants SET tech_cards_enabled = true WHERE id = ?`, f.rid).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	// Force ingredient.qty = 0 (below min_qty=0 is not enough — we need <= min_qty).
 	// seedForWrite created ingredient with qty=10 min_qty=0. Bump min_qty to 100.

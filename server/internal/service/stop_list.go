@@ -47,51 +47,56 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 		return nil, err
 	}
 
-	// 1. Low-stock ingredients (qty <= min_qty).
-	var lowIngs []models.Ingredient
-	if err := s.r.Raw().WithContext(ctx).
-		Where("restaurant_id = ? AND qty <= min_qty", rid).
-		Find(&lowIngs).Error; err != nil {
+	// Авто-стоп (по остаткам сырья и по готовым порциям) применяется ТОЛЬКО при
+	// включённых техкартах. Если техкарты выключены — склад не учитывается, и в
+	// стопе остаются лишь ручные override'ы.
+	var rest models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Select("tech_cards_enabled").
+		Where("id = ?", rid).First(&rest).Error; err != nil {
 		return nil, err
 	}
-	lowByID := make(map[string]StopListIngredient, len(lowIngs))
-	lowIDs := make([]string, 0, len(lowIngs))
-	for _, i := range lowIngs {
-		name := ""
-		if i.Name != nil {
-			name = *i.Name
-		}
-		unit := ""
-		if i.Unit != nil {
-			unit = *i.Unit
-		}
-		lowByID[i.ID] = StopListIngredient{
-			Name:   name,
-			Qty:    i.Qty,
-			MinQty: i.MinQty,
-			Unit:   unit,
-		}
-		lowIDs = append(lowIDs, i.ID)
-	}
+	techEnabled := rest.TechCardsEnabled == nil || *rest.TechCardsEnabled
 
-	// 2. Menu items, чьи tech-card-lines ссылаются на low-stock ингредиенты.
+	// 1–2. Меню-позиции, чьи tech-card-lines ссылаются на low-stock ингредиенты.
 	affected := make(map[string][]StopListIngredient)
-	if len(lowIDs) > 0 {
-		var lines []models.TechCardLine
+	if techEnabled {
+		var lowIngs []models.Ingredient
 		if err := s.r.Raw().WithContext(ctx).
-			Where("restaurant_id = ? AND ingredient_id IN ?", rid, lowIDs).
-			Find(&lines).Error; err != nil {
+			Where("restaurant_id = ? AND qty <= min_qty", rid).
+			Find(&lowIngs).Error; err != nil {
 			return nil, err
 		}
-		for _, l := range lines {
-			if l.MenuItemID == nil || l.IngredientID == nil {
-				continue
+		lowByID := make(map[string]StopListIngredient, len(lowIngs))
+		lowIDs := make([]string, 0, len(lowIngs))
+		for _, i := range lowIngs {
+			name := ""
+			if i.Name != nil {
+				name = *i.Name
 			}
-			ing, ok := lowByID[*l.IngredientID]
-			if !ok {
-				continue
+			unit := ""
+			if i.Unit != nil {
+				unit = *i.Unit
 			}
-			affected[*l.MenuItemID] = append(affected[*l.MenuItemID], ing)
+			lowByID[i.ID] = StopListIngredient{Name: name, Qty: i.Qty, MinQty: i.MinQty, Unit: unit}
+			lowIDs = append(lowIDs, i.ID)
+		}
+		if len(lowIDs) > 0 {
+			var lines []models.TechCardLine
+			if err := s.r.Raw().WithContext(ctx).
+				Where("restaurant_id = ? AND ingredient_id IN ?", rid, lowIDs).
+				Find(&lines).Error; err != nil {
+				return nil, err
+			}
+			for _, l := range lines {
+				if l.MenuItemID == nil || l.IngredientID == nil {
+					continue
+				}
+				ing, ok := lowByID[*l.IngredientID]
+				if !ok {
+					continue
+				}
+				affected[*l.MenuItemID] = append(affected[*l.MenuItemID], ing)
+			}
 		}
 	}
 
@@ -110,15 +115,17 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 	// 3b. Заготовочные блюда без готовых порций (prepared_qty <= 0). Их
 	// доступность определяется prepared_qty, а НЕ остатком сырья: блюдо с
 	// готовыми порциями продаётся даже при нулевом сырье и в стоп НЕ идёт.
-	var batchZero []models.MenuItem
-	if err := s.r.Raw().WithContext(ctx).
-		Where("restaurant_id = ? AND is_batch_cooking = ? AND (prepared_qty <= 0 OR prepared_qty IS NULL)", rid, true).
-		Find(&batchZero).Error; err != nil {
-		return nil, err
-	}
-	batchZeroIDs := make(map[string]bool, len(batchZero))
-	for _, m := range batchZero {
-		batchZeroIDs[m.ID] = true
+	batchZeroIDs := make(map[string]bool)
+	if techEnabled {
+		var batchZero []models.MenuItem
+		if err := s.r.Raw().WithContext(ctx).
+			Where("restaurant_id = ? AND is_batch_cooking = ? AND (prepared_qty <= 0 OR prepared_qty IS NULL)", rid, true).
+			Find(&batchZero).Error; err != nil {
+			return nil, err
+		}
+		for _, m := range batchZero {
+			batchZeroIDs[m.ID] = true
+		}
 	}
 
 	// 4. Объединяем set и грузим menu_items одним запросом.
