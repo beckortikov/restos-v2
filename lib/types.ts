@@ -765,7 +765,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'orders.reprint': 'Повторная печать чека (копия)',
   'orders.view_others': 'Просмотр и дозаказ к чужим заказам',
   'orders.create_stopped': 'Пробивать стоп-блюда (отметка в чеке)',
-  'orders.service_charge': 'Обслуживание (сервисный сбор) в приложении',
+  'orders.service_charge': 'Обслуживание в профиле официанта (сумма сервиса)',
   'kitchen.cooking': 'Управление кухней',
   'tables.edit': 'Редактирование столов и зон',
   'tables.reserve': 'Бронирование столов',

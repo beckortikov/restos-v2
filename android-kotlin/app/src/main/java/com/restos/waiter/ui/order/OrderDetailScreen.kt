@@ -534,7 +534,7 @@ private fun OrderBody(
             }
         }
         item { Spacer(Modifier.height(4.dp)) }
-        item { TotalsBlock(order, showService = state.canService) }
+        item { TotalsBlock(order) }
         if (order.cancelledItems.isNotEmpty()) {
             item { Spacer(Modifier.height(8.dp)) }
             item { CancelledItemsSection(order.cancelledItems) }
@@ -1036,7 +1036,7 @@ private fun ServedCheckbox(checked: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun TotalsBlock(order: OrderDto, showService: Boolean) {
+private fun TotalsBlock(order: OrderDto) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
@@ -1050,16 +1050,13 @@ private fun TotalsBlock(order: OrderDto, showService: Boolean) {
             // считаем его из service_percent заказа (subtotal × %/100).
             val percentBd = order.servicePercent.toBigDecimalSafe()
             val storedSvc = order.serviceChargeAmount.toBigDecimalSafe()
-            val rawServiceBd = if (storedSvc > BigDecimal.ZERO) {
+            val serviceBd = if (storedSvc > BigDecimal.ZERO) {
                 storedSvc
             } else if (percentBd > BigDecimal.ZERO) {
                 (subtotalBd * percentBd).divide(BigDecimal(100), 2, java.math.RoundingMode.HALF_EVEN)
             } else {
                 BigDecimal.ZERO
             }
-            // Право orders.service_charge (матрица доступов): без него официант
-            // не видит строку обслуживания, и она не входит в «Итого».
-            val serviceBd = if (showService) rawServiceBd else BigDecimal.ZERO
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1102,10 +1099,7 @@ private fun TotalsBlock(order: OrderDto, showService: Boolean) {
             // берём order.total. Иначе считаем subtotal + обслуживание − скидка
             // (открытый заказ, где бэк ещё не зафиксировал service_amount).
             val displayTotal = if (storedSvc > BigDecimal.ZERO) {
-                // Закрытый заказ: order.total уже включает обслуживание. Если
-                // показ выключен — вычитаем его, чтобы «Итого» сходилось.
-                if (showService) order.total.toBigDecimalSafe()
-                else order.total.toBigDecimalSafe() - storedSvc
+                order.total.toBigDecimalSafe()
             } else {
                 subtotalBd + serviceBd - discountBd
             }

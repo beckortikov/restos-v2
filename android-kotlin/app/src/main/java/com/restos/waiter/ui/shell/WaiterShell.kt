@@ -139,6 +139,7 @@ fun WaiterShell(
                 restaurantName = state.me?.restaurant?.name,
                 todayOrders = state.todayStats?.ordersCount,
                 todayServiceCharge = state.todayStats?.serviceCharge,
+                showService = state.me?.user?.can("orders.service_charge") == true,
                 viewMode = viewMode,
                 homeScreen = homeScreen,
                 onSetViewMode = viewModel::setViewMode,
@@ -178,6 +179,7 @@ private fun ProfileSheetContent(
     restaurantName: String?,
     todayOrders: Int?,
     todayServiceCharge: String?,
+    showService: Boolean,
     viewMode: ViewMode,
     homeScreen: HomeScreen,
     onSetViewMode: (ViewMode) -> Unit,
@@ -247,12 +249,15 @@ private fun ProfileSheetContent(
                     accent = false,
                     modifier = Modifier.weight(1f),
                 )
-                StatCard(
-                    label = "Обслуживание",
-                    value = todayServiceCharge?.let { formatStatCurrency(it) } ?: "—",
-                    accent = true,
-                    modifier = Modifier.weight(1f),
-                )
+                // «Обслуживание» — только при праве orders.service_charge (матрица).
+                if (showService) {
+                    StatCard(
+                        label = "Обслуживание",
+                        value = todayServiceCharge?.let { formatStatCurrency(it) } ?: "—",
+                        accent = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
 

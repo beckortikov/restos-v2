@@ -39,9 +39,8 @@ data class OrderDetailUiState(
     val itemReasons: List<CancelReasons.Reason> = emptyList(),
     val orderReasons: List<CancelReasons.Reason> = emptyList(),
     // Права из матрицы доступов (по умолчанию запрещено, пока не загрузим профиль).
-    val canVoid: Boolean = false,    // orders.void — отмена позиции
-    val canCancel: Boolean = false,  // orders.cancel — отмена заказа целиком
-    val canService: Boolean = false, // orders.service_charge — показ обслуживания
+    val canVoid: Boolean = false,   // orders.void — отмена позиции
+    val canCancel: Boolean = false, // orders.cancel — отмена заказа целиком
 )
 
 sealed interface OrderDetailDialog {
@@ -104,7 +103,6 @@ class OrderDetailViewModel @Inject constructor(
                 it.copy(
                     canVoid = me?.can("orders.void") == true,
                     canCancel = me?.can("orders.cancel") == true,
-                    canService = me?.can("orders.service_charge") == true,
                 )
             }
         }
