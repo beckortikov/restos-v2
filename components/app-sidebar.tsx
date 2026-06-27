@@ -21,6 +21,7 @@ import {
   Wallet,
   DollarSign,
   BarChart3,
+  LineChart,
   Target,
   Clock,
   ChevronDown,
@@ -264,6 +265,7 @@ const NAV: NavItem[] = [
     label: 'Аналитика',
     icon: BarChart3,
     children: [
+      { label: 'Динамика', href: '/analytics/trends', icon: LineChart },
       { label: 'ABC — Меню', href: '/analytics/abc-menu', icon: BarChart3 },
       { label: 'ABC — Склад', href: '/analytics/abc-inventory', icon: BarChart3 },
       { label: 'Аналитика столов', href: '/analytics/tables', icon: MapPin },

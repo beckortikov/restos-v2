@@ -103,7 +103,12 @@ export interface paths {
                                 username?: string;
                                 full_name?: string;
                                 role?: string;
-                                permissions?: string[];
+                                /** @description Эффективные права (с учётом дефолтов роли и персональных override'ов). Клиент прячет недоступные действия. */
+                                permissions?: {
+                                    actions?: {
+                                        [key: string]: boolean;
+                                    };
+                                };
                             };
                             restaurant?: {
                                 /** Format: uuid */
@@ -7531,6 +7536,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/trends": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Динамика выручки/заказов/среднего чека/расходов по дню|неделе|месяцу */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                    granularity?: "day" | "week" | "month";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["TrendsReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/trends.xlsx": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Динамика — выгрузка в Excel */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                    granularity?: "day" | "week" | "month";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                200: components["responses"]["XLSX"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/forecast": {
         parameters: {
             query?: never;
@@ -7926,6 +8003,17 @@ export interface paths {
                             guests_count?: number;
                             operations?: components["schemas"]["CashShiftOperation"][];
                             discrepancy?: string;
+                            /** @description Внесения за смену */
+                            cash_in?: string;
+                            /** @description Изъятия (cash_out без категории) */
+                            withdrawals?: string;
+                            /** @description Сумма расходов (cash_out с категорией) */
+                            expenses_total?: string;
+                            expenses_by_category?: {
+                                category?: string;
+                                count?: number;
+                                amount?: string;
+                            }[];
                             previous?: {
                                 revenue?: string;
                                 orders_count?: number;
@@ -8146,6 +8234,8 @@ export interface paths {
                         type: "cash_in" | "cash_out" | "expense";
                         amount: string;
                         description?: string;
+                        /** @description Категория расхода (только для expense/cash_out). Структурное поле для свода/экспорта/X-Z. */
+                        category?: string;
                     };
                 };
             };
@@ -8507,7 +8597,84 @@ export interface paths {
                     headers: {
                         [name: string]: unknown;
                     };
-                    content?: never;
+                    content: {
+                        "application/json": {
+                            /** @description Макс. порций по остатку. Большой sentinel (MaxInt32) = рецепта нет. */
+                            max?: number;
+                            /** @description Есть ли тех-карта (хотя бы одна строка). */
+                            has_recipe?: boolean;
+                            ingredients?: {
+                                /** Format: uuid */
+                                ingredient_id?: string;
+                                name?: string;
+                                /** @description единица склада (кг, л, шт) */
+                                unit?: string;
+                                /** @description единица расхода в тех-карте (г, мл) */
+                                recipe_unit?: string;
+                                /** @description остаток (в единице склада) */
+                                stock_qty?: string;
+                                /** @description расход на 1 порцию (в единице тех-карты) */
+                                recipe_qty_per_portion?: string;
+                                possible_portions?: number;
+                                is_bottleneck?: boolean;
+                            }[];
+                            blockers?: {
+                                /** Format: uuid */
+                                ingredient_id?: string;
+                                name?: string;
+                                have?: string;
+                                need?: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/menu/batch/availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Живой остаток порций заготовок (prepared − незакрытые заказы) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: {
+                                /** Format: uuid */
+                                menu_item_id?: string;
+                                name?: string;
+                                /** @description prepared_qty (готово на складе) */
+                                prepared?: number;
+                                /** @description порции в незакрытых заказах */
+                                reserved?: number;
+                                /** @description max(0, prepared - reserved) */
+                                available?: number;
+                            }[];
+                        };
+                    };
                 };
             };
         };
@@ -9434,6 +9601,8 @@ export interface components {
             type?: "cash_in" | "cash_out";
             amount?: components["schemas"]["Decimal"];
             description?: string;
+            /** @description Категория расхода; NULL для внесения/изъятия */
+            category?: string | null;
         };
         ShiftsList: {
             data?: components["schemas"]["CashShift"][];
@@ -9560,6 +9729,8 @@ export interface components {
             status?: string;
             total?: components["schemas"]["Decimal"];
             total_with_service?: components["schemas"]["Decimal"];
+            service_percent?: components["schemas"]["Decimal"];
+            service_amount?: components["schemas"]["Decimal"];
             /** Format: date-time */
             created_at?: string;
             /** @description Заполняется только при ?include=items. Иначе отсутствует. */
@@ -9785,6 +9956,7 @@ export interface components {
             pin_lock_enabled?: boolean;
             pin_lock_timeout_min?: number;
             supply_allow_negative?: boolean;
+            on_screen_keyboard_enabled?: boolean;
             /** Format: date-time */
             license_expires_at?: string;
             is_blocked?: boolean;
@@ -9804,6 +9976,7 @@ export interface components {
             pin_lock_enabled?: boolean;
             pin_lock_timeout_min?: number;
             supply_allow_negative?: boolean;
+            on_screen_keyboard_enabled?: boolean;
         };
         BootstrapInput: {
             restaurant_name: string;
@@ -10317,6 +10490,31 @@ export interface components {
             total_orders?: number;
             total_revenue?: components["schemas"]["Decimal"];
             cells?: components["schemas"]["PeakHoursCell"][];
+        };
+        TrendBucket: {
+            /** @description Начало бакета, YYYY-MM-DD */
+            date?: string;
+            revenue?: components["schemas"]["Decimal"];
+            orders_count?: number;
+            avg_check?: components["schemas"]["Decimal"];
+            expenses?: components["schemas"]["Decimal"];
+        };
+        TrendTotals: {
+            revenue?: components["schemas"]["Decimal"];
+            orders_count?: number;
+            avg_check?: components["schemas"]["Decimal"];
+            expenses?: components["schemas"]["Decimal"];
+        };
+        TrendsReport: {
+            /** Format: date-time */
+            from?: string;
+            /** Format: date-time */
+            to?: string;
+            /** @enum {string} */
+            granularity?: "day" | "week" | "month";
+            buckets?: components["schemas"]["TrendBucket"][];
+            totals?: components["schemas"]["TrendTotals"];
+            previous?: components["schemas"]["TrendTotals"];
         };
         WaiterAnalyticsRow: {
             waiter_id?: string;

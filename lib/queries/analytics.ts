@@ -125,6 +125,56 @@ export async function fetchABCMenu(opts: { from?: Date | string; to?: Date | str
   return (await unwrap(api.GET('/api/v1/analytics/abc-menu', { params: { query: query as any } }))) as ABCMenuReport
 }
 
+// ─── Динамика (deep analytics) ──────────────────────────────────────────────
+
+export type TrendGranularity = 'day' | 'week' | 'month'
+
+export interface TrendBucket {
+  date: string
+  revenue: number
+  orders_count: number
+  avg_check: number
+  expenses: number
+}
+
+export interface TrendTotals {
+  revenue: number
+  orders_count: number
+  avg_check: number
+  expenses: number
+}
+
+export interface TrendsReport {
+  from?: string
+  to?: string
+  granularity: TrendGranularity
+  buckets: TrendBucket[]
+  totals: TrendTotals
+  previous: TrendTotals
+}
+
+export async function fetchTrends(
+  opts: { from?: Date | string; to?: Date | string; granularity?: TrendGranularity } = {},
+): Promise<TrendsReport> {
+  const query: Record<string, string> = buildQuery(opts)
+  if (opts.granularity) query.granularity = opts.granularity
+  const r: any = await unwrap(api.GET('/api/v1/analytics/trends', { params: { query: query as any } }))
+  const num = (v: any) => Number(v ?? 0)
+  const totals = (t: any): TrendTotals => ({
+    revenue: num(t?.revenue), orders_count: num(t?.orders_count),
+    avg_check: num(t?.avg_check), expenses: num(t?.expenses),
+  })
+  return {
+    from: r?.from, to: r?.to,
+    granularity: (r?.granularity ?? 'day') as TrendGranularity,
+    buckets: (r?.buckets ?? []).map((b: any) => ({
+      date: String(b.date ?? ''), revenue: num(b.revenue), orders_count: num(b.orders_count),
+      avg_check: num(b.avg_check), expenses: num(b.expenses),
+    })),
+    totals: totals(r?.totals), previous: totals(r?.previous),
+  }
+}
+
 export async function fetchPeakHours(opts: { from?: Date | string; to?: Date | string } = {}): Promise<PeakHoursReport> {
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/analytics/peak-hours', { params: { query: query as any } }))) as PeakHoursReport
