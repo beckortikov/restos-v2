@@ -8,6 +8,8 @@ import com.restos.waiter.data.cache.AppCache
 import com.restos.waiter.data.drafts.DraftLine
 import com.restos.waiter.data.drafts.WaiterDraft
 import com.restos.waiter.data.drafts.WaiterDraftStore
+import com.restos.waiter.data.events.EventBus
+import com.restos.waiter.data.events.ServerEvent
 import com.restos.waiter.data.menu.CategoryDto
 import com.restos.waiter.data.menu.MenuApi
 import com.restos.waiter.data.menu.MenuItemDto
@@ -111,6 +113,7 @@ class NewOrderViewModel @Inject constructor(
     private val draftStore: WaiterDraftStore,
     private val auth: AuthRepository,
     private val cache: AppCache,
+    private val eventBus: EventBus,
 ) : ViewModel() {
 
     /** UUID-строка либо null, если пришёл sentinel "" / отсутствует. */
@@ -155,6 +158,27 @@ class NewOrderViewModel @Inject constructor(
             loadInitial()
             if (!isAppendMode) tableId?.let { restoreDraft(it) }
         }
+        observeBatchAvailability()
+    }
+
+    /** Живой остаток заготовок с бэка (prepared − незакрытые заказы). */
+    private suspend fun fetchBatchAvail(): Map<String, Int> =
+        runCatching { menuApi.batchAvailability().data.associate { it.menuItemId to it.available } }
+            .getOrNull() ?: emptyMap()
+
+    /** SSE: при создании/изменении заказов остаток заготовок мог поменяться
+     *  (другой официант/касса). Перечитываем, чтобы бейдж был актуальным. */
+    private fun observeBatchAvailability() {
+        viewModelScope.launch {
+            eventBus.events.collect { evt ->
+                when (evt) {
+                    ServerEvent.Resync,
+                    is ServerEvent.OrderCreated,
+                    is ServerEvent.OrderUpdated -> _state.update { it.copy(batchAvail = fetchBatchAvail()) }
+                    else -> Unit
+                }
+            }
+        }
     }
 
     private suspend fun loadInitial() {
@@ -171,9 +195,7 @@ class NewOrderViewModel @Inject constructor(
                 ?.also { cache.setTables(it) }
                 ?: cache.tables.value
             val table = tableId?.let { id -> tables.firstOrNull { it.id == id } }
-            val batchAvail = runCatching {
-                menuApi.batchAvailability().data.associate { it.menuItemId to it.available }
-            }.getOrNull() ?: emptyMap()
+            val batchAvail = fetchBatchAvail()
             _state.update {
                 it.copy(
                     loading = false,
