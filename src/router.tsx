@@ -76,6 +76,7 @@ const Waiters = () => L(() => import('@/app/(app)/analytics/waiters/page'))
 const FoodCost = () => L(() => import('@/app/(app)/analytics/food-cost/page'))
 const PeakHours = () => L(() => import('@/app/(app)/analytics/peak-hours/page'))
 const Forecast = () => L(() => import('@/app/(app)/analytics/forecast/page'))
+const Trends = () => L(() => import('@/app/(app)/analytics/trends/page'))
 
 // Settings
 const Settings = () => L(() => import('@/app/(app)/settings/page'))
@@ -166,6 +167,7 @@ export function AppRouter() {
         <Route path="/analytics/food-cost" element={<FoodCost />} />
         <Route path="/analytics/peak-hours" element={<PeakHours />} />
         <Route path="/analytics/forecast" element={<Forecast />} />
+        <Route path="/analytics/trends" element={<Trends />} />
 
         {/* Settings */}
         <Route path="/settings" element={<Settings />} />
