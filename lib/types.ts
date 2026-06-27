@@ -735,6 +735,7 @@ export const ALL_PERMISSIONS = [
   'orders.reprint',
   'orders.view_others',
   'orders.create_stopped',
+  'orders.service_charge',
   'kitchen.cooking',
   'tables.edit', 'tables.reserve',
   'shifts.manage', 'pos.access',
@@ -764,6 +765,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'orders.reprint': 'Повторная печать чека (копия)',
   'orders.view_others': 'Просмотр и дозаказ к чужим заказам',
   'orders.create_stopped': 'Пробивать стоп-блюда (отметка в чеке)',
+  'orders.service_charge': 'Обслуживание (сервисный сбор) в приложении',
   'kitchen.cooking': 'Управление кухней',
   'tables.edit': 'Редактирование столов и зон',
   'tables.reserve': 'Бронирование столов',
@@ -790,7 +792,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 export const PERMISSION_GROUPS: { label: string; keys: PermissionKey[] }[] = [
-  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'pos.access', 'showcase.view'] },
+  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'pos.access', 'showcase.view'] },
   { label: 'Склад', keys: ['inventory.view', 'inventory.manage', 'suppliers.manage', 'menu.view', 'menu.edit', 'menu.view_cost', 'writeoffs.create'] },
   { label: 'Финансы', keys: ['finance.view', 'finance.manage', 'payroll.manage'] },
   { label: 'Аналитика и клиенты', keys: ['analytics.view', 'customers.manage'] },
@@ -837,6 +839,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
       'tables.reserve': true,
       'menu.view': true,
       'showcase.view': true,
+      'orders.service_charge': true,
     },
   },
   cashier: {
@@ -846,6 +849,7 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
       'orders.refund': true,
       'orders.reprint': true,
       'orders.view_others': true,
+      'orders.service_charge': true,
       'tables.reserve': true, 'shifts.manage': true, 'pos.access': true,
       'showcase.view': true,
       'customers.manage': true,

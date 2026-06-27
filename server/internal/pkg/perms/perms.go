@@ -14,10 +14,12 @@ import "encoding/json"
 var roleDefaults = map[string]map[string]bool{
 	"waiter": {
 		"orders.create": true, "tables.reserve": true, "menu.view": true, "showcase.view": true,
+		"orders.service_charge": true,
 	},
 	"cashier": {
 		"orders.create": true, "orders.close": true, "orders.void": true,
 		"orders.refund": true, "orders.reprint": true, "orders.view_others": true,
+		"orders.service_charge": true,
 		"tables.reserve": true, "shifts.manage": true, "pos.access": true,
 		"showcase.view": true, "customers.manage": true, "printers.manage": true,
 	},
@@ -39,6 +41,7 @@ var roleDefaults = map[string]map[string]bool{
 var AllPermissions = []string{
 	"orders.create", "orders.close", "orders.cancel", "orders.void",
 	"orders.refund", "orders.reprint", "orders.view_others", "orders.create_stopped",
+	"orders.service_charge",
 	"kitchen.cooking", "tables.edit", "tables.reserve", "shifts.manage", "pos.access", "showcase.view",
 	"inventory.view", "inventory.manage", "suppliers.manage",
 	"menu.view", "menu.edit", "menu.view_cost", "writeoffs.create", "batch_cooking.manage",
