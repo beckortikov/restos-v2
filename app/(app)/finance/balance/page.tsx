@@ -284,7 +284,8 @@ export default function BalancePage() {
   }
   const totalNonCurrentAssets = report?.total_assets ?? assets.reduce((s, a) => s + a.amount, 0)
 
-  const totalAssets = totalCurrentAssets + totalNonCurrentAssets
+  // Грандтотал активов — с сервера (деньги + склад + ручные). Fallback — локально.
+  const totalAssets = report ? report.grand_total_assets : (totalCurrentAssets + totalNonCurrentAssets)
 
   // Liabilities — supplier debts. Сумма считается на бэке (Balance.supplier_debt);
   // список поставщиков остаётся для построчного показа. Fallback — до загрузки отчёта.
@@ -299,7 +300,8 @@ export default function BalancePage() {
     liabilitiesByCategory.set(l.category, list)
   }
   const totalManualLiabilities = report?.total_liabilities ?? liabilities.reduce((s, l) => s + l.remainingAmount, 0)
-  const totalLiabilities = totalSupplierDebt + totalManualLiabilities
+  // Грандтотал обязательств — с сервера (долг поставщикам + ручные). Fallback — локально.
+  const totalLiabilities = report ? report.grand_total_liabilities : (totalSupplierDebt + totalManualLiabilities)
 
   // Equity (manual entries — total from server)
   const equityByCategory = new Map<EquityCategory, EquityEntry[]>()

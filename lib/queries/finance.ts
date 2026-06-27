@@ -155,6 +155,8 @@ export type BalanceReport = {
   equity: { id: string; name: string; amount: number }[]
   total_equity: number
   computed_equity: number
+  grand_total_assets: number
+  grand_total_liabilities: number
 }
 
 function isoOrDate(v: Date | string | undefined): string | undefined {
@@ -236,6 +238,8 @@ export async function fetchBalanceReport(): Promise<BalanceReport> {
     equity: (r?.equity ?? []).map((x: any) => ({ id: String(x.id ?? ''), name: String(x.name ?? ''), amount: Number(x.amount ?? 0) })),
     total_equity: Number(r?.total_equity ?? 0),
     computed_equity: Number(r?.computed_equity ?? 0),
+    grand_total_assets: Number(r?.grand_total_assets ?? 0),
+    grand_total_liabilities: Number(r?.grand_total_liabilities ?? 0),
   }
 }
 

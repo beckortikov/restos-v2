@@ -63,10 +63,13 @@ func TestBalance_AutoCashAndInventory(t *testing.T) {
 		t.Fatalf("balance: %d %s", resp.StatusCode, b)
 	}
 	var out struct {
-		CashTotal      decimal.Decimal `json:"cash_total"`
-		InventoryValue decimal.Decimal `json:"inventory_value"`
-		SupplierDebt   decimal.Decimal `json:"supplier_debt"`
-		Accounts       []struct {
+		CashTotal             decimal.Decimal `json:"cash_total"`
+		InventoryValue        decimal.Decimal `json:"inventory_value"`
+		SupplierDebt          decimal.Decimal `json:"supplier_debt"`
+		GrandTotalAssets      decimal.Decimal `json:"grand_total_assets"`
+		GrandTotalLiabilities decimal.Decimal `json:"grand_total_liabilities"`
+		ComputedEquity        decimal.Decimal `json:"computed_equity"`
+		Accounts              []struct {
 			Name string `json:"name"`
 		} `json:"accounts"`
 	}
@@ -85,5 +88,15 @@ func TestBalance_AutoCashAndInventory(t *testing.T) {
 	}
 	if len(out.Accounts) != 1 {
 		t.Fatalf("accounts: ожидали 1 счёт, получили %d", len(out.Accounts))
+	}
+	// Грандтоталы: активы 500+400=900, обязательства 200, капитал 900−200=700.
+	if !out.GrandTotalAssets.Equal(decimal.MustFromString("900")) {
+		t.Fatalf("grand_total_assets = %s, ожидали 900", decimal.Normalize(out.GrandTotalAssets).String())
+	}
+	if !out.GrandTotalLiabilities.Equal(decimal.MustFromString("200")) {
+		t.Fatalf("grand_total_liabilities = %s, ожидали 200", decimal.Normalize(out.GrandTotalLiabilities).String())
+	}
+	if !out.ComputedEquity.Equal(decimal.MustFromString("700")) {
+		t.Fatalf("computed_equity = %s, ожидали 700 (900−200)", decimal.Normalize(out.ComputedEquity).String())
 	}
 }

@@ -846,6 +846,9 @@ type BalanceJSON struct {
 	Equity           []BalanceLine   `json:"equity"`
 	TotalEquity      decimal.Decimal `json:"total_equity"`
 	ComputedEquity   decimal.Decimal `json:"computed_equity"`
+	// Грандтоталы (всё посчитано на сервере, для API/Excel без UI-математики):
+	GrandTotalAssets      decimal.Decimal `json:"grand_total_assets"`      // деньги + склад + ручные активы
+	GrandTotalLiabilities decimal.Decimal `json:"grand_total_liabilities"` // долг поставщикам + ручные обязательства
 }
 
 type BalanceLine struct {
@@ -972,7 +975,11 @@ func (s *FinanceReportsService) Balance(ctx context.Context) (*BalanceJSON, erro
 		out.TotalEquity = decimal.Add(out.TotalEquity, e.Amount)
 	}
 	out.TotalEquity = decimal.Normalize(out.TotalEquity)
-	out.ComputedEquity = decimal.Normalize(decimal.Sub(out.TotalAssets, out.TotalLiabilities))
+	// Грандтоталы: активы = деньги + склад + ручные; обязательства = долг
+	// поставщикам + ручные. ComputedEquity = чистые активы (assets − liabilities).
+	out.GrandTotalAssets = decimal.Normalize(decimal.Add(decimal.Add(out.CashTotal, out.InventoryValue), out.TotalAssets))
+	out.GrandTotalLiabilities = decimal.Normalize(decimal.Add(out.SupplierDebt, out.TotalLiabilities))
+	out.ComputedEquity = decimal.Normalize(decimal.Sub(out.GrandTotalAssets, out.GrandTotalLiabilities))
 	return out, nil
 }
 
