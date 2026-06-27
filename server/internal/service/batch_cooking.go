@@ -477,3 +477,83 @@ func (s *BatchCookingService) LogsFiltered(ctx context.Context, f BatchLogsFilte
 	})
 	return trimmed, next, nil
 }
+
+// ─── availability (живой остаток порций) ────────────────────────────────────
+
+// BatchAvailabilityRow — остаток порций заготовки с учётом незакрытых заказов.
+type BatchAvailabilityRow struct {
+	MenuItemID string `json:"menu_item_id"`
+	Name       string `json:"name"`
+	Prepared   int    `json:"prepared"`  // prepared_qty (готово на складе)
+	Reserved   int    `json:"reserved"`  // порции в НЕзакрытых заказах
+	Available  int    `json:"available"` // max(0, prepared - reserved)
+}
+
+// Availability — GET /api/v1/menu/batch/availability.
+//
+// «Доступно сейчас» = prepared_qty − порции этого блюда во ВСЕХ незакрытых
+// заказах (любой статус кроме closed/cancelled, неотменённые позиции).
+// prepared_qty списывается лишь при закрытии чека, поэтому без этого вычета
+// касса/официант видели бы завышенный остаток, пока гости не закрыли счёт.
+func (s *BatchCookingService) Availability(ctx context.Context) ([]BatchAvailabilityRow, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// Заготовочные блюда ресторана.
+	var dishes []models.MenuItem
+	if err := scoped.Where("is_batch_cooking = ?", true).Find(&dishes).Error; err != nil {
+		return nil, err
+	}
+	if len(dishes) == 0 {
+		return []BatchAvailabilityRow{}, nil
+	}
+
+	// Резерв: сумма порций по незакрытым заказам, сгруппировано по menu_item_id.
+	type resRow struct {
+		MenuItemID string          `gorm:"column:menu_item_id"`
+		Qty        decimal.Decimal `gorm:"column:qty"`
+	}
+	var reserved []resRow
+	if err := s.r.Raw().WithContext(ctx).
+		Table("order_items AS oi").
+		Select("oi.menu_item_id AS menu_item_id, COALESCE(SUM(oi.qty), 0) AS qty").
+		Joins("JOIN orders o ON o.id = oi.order_id").
+		Where("o.restaurant_id = ? AND o.status NOT IN ?", rid, []string{"closed", "cancelled"}).
+		Where("oi.cancelled_at IS NULL").
+		Group("oi.menu_item_id").
+		Scan(&reserved).Error; err != nil {
+		return nil, err
+	}
+	resByID := make(map[string]int, len(reserved))
+	for _, r := range reserved {
+		resByID[r.MenuItemID] = int(decimal.Normalize(r.Qty).IntPart())
+	}
+
+	out := make([]BatchAvailabilityRow, 0, len(dishes))
+	for _, d := range dishes {
+		prepared := 0
+		if d.PreparedQty != nil {
+			prepared = *d.PreparedQty
+		}
+		res := resByID[d.ID]
+		avail := prepared - res
+		if avail < 0 {
+			avail = 0
+		}
+		name := ""
+		if d.Name != nil {
+			name = *d.Name
+		}
+		out = append(out, BatchAvailabilityRow{
+			MenuItemID: d.ID, Name: name,
+			Prepared: prepared, Reserved: res, Available: avail,
+		})
+	}
+	return out, nil
+}

@@ -19,6 +19,19 @@ export async function calculateMaxPortions(menuItemId: string): Promise<import('
   return { maxPortions, ingredients, hasRecipe }
 }
 
+// Живой остаток заготовок: prepared − порции в незакрытых заказах.
+// Возвращает Map menu_item_id → available (порц.).
+// NB: путь ещё не в generated.ts (нужен `make api-gen`) — отсюда cast.
+export async function fetchBatchAvailability(): Promise<Map<string, number>> {
+  const res: any = await unwrap((api as any).GET('/api/v1/menu/batch/availability'))
+  const rows: Record<string, unknown>[] = res?.data ?? []
+  const m = new Map<string, number>()
+  for (const r of rows) {
+    m.set((r.menu_item_id as string) ?? '', Number(r.available ?? 0))
+  }
+  return m
+}
+
 export async function produceBatch(menuItemId: string, qty: number): Promise<void> {
   const mi: any = await unwrap(api.POST('/api/v1/menu/items/{id}/batch/produce', {
     params: { path: { id: menuItemId } },

@@ -2411,6 +2411,29 @@ paths:
                         have: { type: string }
                         need: { type: string }
 
+  /api/v1/menu/batch/availability:
+    get:
+      tags: [menu]
+      summary: Живой остаток порций заготовок (prepared − незакрытые заказы)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        menu_item_id: { type: string, format: uuid }
+                        name: { type: string }
+                        prepared: { type: integer, description: "prepared_qty (готово на складе)" }
+                        reserved: { type: integer, description: "порции в незакрытых заказах" }
+                        available: { type: integer, description: "max(0, prepared - reserved)" }
+
   /api/v1/menu/items/{id}/batch/produce:
     post:
       tags: [menu]

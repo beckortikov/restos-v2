@@ -220,6 +220,16 @@ func (h *BatchCookingHandler) MaxPortions(w http.ResponseWriter, r *http.Request
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// Availability — GET /api/v1/menu/batch/availability.
+func (h *BatchCookingHandler) Availability(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.Availability(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"data": rows})
+}
+
 // Produce — POST /api/v1/menu/items/{id}/batch/produce.
 func (h *BatchCookingHandler) Produce(w http.ResponseWriter, r *http.Request) {
 	var in service.BatchProduceInput

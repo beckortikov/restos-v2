@@ -311,6 +311,7 @@ func NewRouter(deps Deps) http.Handler {
 
 			// Batch cooking reads.
 			g.Get("/menu/items/{id}/max-portions", batchH.MaxPortions)
+			g.Get("/menu/batch/availability", batchH.Availability)
 			g.Get("/menu/items/{id}/batch/logs", batchH.Logs)
 			g.Get("/menu/batch/logs", batchH.LogsCross)
 

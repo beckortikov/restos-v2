@@ -31,6 +31,7 @@ import {
 // допишет новые строки в Dexie (см. cache.ts cachedQuery, stale-while-revalidate).
 import { fetchVoidsForOrder } from '@/lib/queries'
 import { fetchStopList } from '@/lib/queries'
+import { fetchBatchAvailability } from '@/lib/queries/batch_cooking'
 import { V4Error } from '@/lib/api'
 import { OrderActionsDialog } from '@/components/dialogs/order-actions-dialog'
 import { OrderActionsPanel } from '@/components/order/order-actions-panel'
@@ -101,6 +102,8 @@ interface DishTileProps {
   onClick?: () => void
   qtyInCart?: number
   isStopped?: boolean
+  /** Живой остаток порций заготовки (доступно сейчас). undefined — не заготовка. */
+  batchAvailable?: number
 }
 
 // Sentinel в drilledCategory: «избранное». Не пересекается с настоящими
@@ -110,7 +113,7 @@ const FAVORITES_KEY = '__favorites__'
 /** Плитка блюда: с emoji — имя сверху + emoji-герой по центру + цена внизу;
  *  без emoji — имя по центру (визуально балансирует пустое пространство),
  *  цена внизу. Размер плитки фиксированный (aspect-square). */
-export function DishTile({ name, price, unitLabel, emoji, onClick, qtyInCart, isStopped }: DishTileProps) {
+export function DishTile({ name, price, unitLabel, emoji, onClick, qtyInCart, isStopped, batchAvailable }: DishTileProps) {
   return (
     <button
       onClick={onClick}
@@ -151,6 +154,13 @@ export function DishTile({ name, price, unitLabel, emoji, onClick, qtyInCart, is
       {isStopped ? (
         <span className="absolute top-1 left-1 bg-rose-100 text-rose-700 rounded-md px-1.5 py-0.5 text-[10px] font-bold">
           Стоп
+        </span>
+      ) : batchAvailable !== undefined ? (
+        <span
+          title={`Доступно сейчас: ${batchAvailable} порц.`}
+          className="absolute top-1 left-1 min-w-[20px] h-5 px-1.5 rounded-full bg-muted/90 text-muted-foreground border border-border flex items-center justify-center text-[11px] font-semibold"
+        >
+          {batchAvailable}
         </span>
       ) : null}
     </button>
@@ -278,6 +288,31 @@ export function OrderComposer(props: OrderComposerProps) {
   // stock.movement) и закрытие заказа (deduct stock → возможно новая
   // нехватка) → перерасчёт stop-list на бэке + refetch здесь.
   useDataSync(['ingredients', 'stock_movements', 'orders', 'menu_items'], reloadStopList)
+
+  // ─── Живой остаток заготовок ────────────────────────────────────────────────
+  // «Доступно сейчас» = prepared_qty − порции в незакрытых заказах. prepared_qty
+  // списывается лишь при закрытии чека, поэтому без вычета открытых заказов касса
+  // видела бы завышенный остаток (гости ещё сидят, счёт не закрыт).
+  const [batchAvail, setBatchAvail] = useState<Map<string, number>>(new Map())
+  const reloadBatchAvail = useCallback(async () => {
+    try { setBatchAvail(await fetchBatchAvailability()) } catch { /* бэк недоступен — покажем preparedQty */ }
+  }, [])
+  useEffect(() => { void reloadBatchAvail() }, [reloadBatchAvail])
+  useDataSync(['orders', 'menu_items'], reloadBatchAvail)
+
+  // Серый бейдж «доступно сейчас» на плитке заготовочного блюда.
+  const renderBatchBadge = useCallback((item: MenuItem) => {
+    if (!item.isBatchCooking) return null
+    const n = batchAvail.get(item.id) ?? item.preparedQty ?? 0
+    return (
+      <span
+        title={`Доступно сейчас: ${n} порц.`}
+        className="absolute top-1 left-1 z-10 min-w-[20px] h-5 px-1.5 rounded-full bg-muted/90 text-muted-foreground text-[11px] font-semibold flex items-center justify-center border border-border"
+      >
+        {n}
+      </span>
+    )
+  }, [batchAvail])
 
   // POS favorites (per-device, per-restaurant). Long-press / right-click на
   // карточке добавляет/удаляет — см. DishTile.onContextAction ниже. Список
@@ -1056,6 +1091,7 @@ export function OrderComposer(props: OrderComposerProps) {
                         <p className="text-base font-bold text-primary mt-1">{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>
                       </div>
                     )}
+                    {!isStopped && renderBatchBadge(item)}
                     {inCart && (
                       <span className="absolute top-2 right-2 size-8 rounded-full bg-primary text-primary-foreground text-sm font-bold flex items-center justify-center shadow-lg">{inCart.qty}</span>
                     )}
@@ -1692,6 +1728,7 @@ export function OrderComposer(props: OrderComposerProps) {
                           emoji={item.emoji}
                           qtyInCart={inCart?.qty}
                           isStopped={!item.isAvailable || stoppedIds.has(item.id)}
+                          batchAvailable={item.isBatchCooking ? (batchAvail.get(item.id) ?? item.preparedQty ?? 0) : undefined}
                           onClick={() => addToCart(item)}
                         />
                       </div>
@@ -1787,6 +1824,7 @@ export function OrderComposer(props: OrderComposerProps) {
                       {item.price > 0 && <p className="text-sm font-bold text-primary mt-1">{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>}
                     </div>
                   )}
+                  {renderBatchBadge(item)}
                   {inCart && (
                     <span className="absolute top-1 right-1 size-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center shadow-lg">{inCart.qty}</span>
                   )}

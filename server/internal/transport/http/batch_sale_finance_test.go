@@ -173,6 +173,59 @@ func TestSale_RequiresOpenShift(t *testing.T) {
 	}
 }
 
+// TestBatchAvailability_LiveCount — живой остаток = prepared − незакрытые заказы.
+// prepared=10, в открытом заказе 3 порции → available=7 (хотя prepared ещё 10,
+// т.к. чек не закрыт). Решает кейс «покушали, но не закрыли».
+func TestBatchAvailability_LiveCount(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	menuID, _ := seedBatchDishWithStock(t, gdb, f.rid, "Шашлык", 10, "3")
+
+	// Открытый (незакрытый) заказ на 3 порции.
+	r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(),
+		map[string]any{"items": []map[string]any{{"menu_item_id": menuID, "qty": "3"}}})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create order %d: %s", r.StatusCode, b)
+	}
+
+	_, ab := f.get(t, "/api/v1/menu/batch/availability", tok)
+	var env struct {
+		Data []struct {
+			MenuItemID string `json:"menu_item_id"`
+			Prepared   int    `json:"prepared"`
+			Reserved   int    `json:"reserved"`
+			Available  int    `json:"available"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(ab, &env); err != nil {
+		t.Fatal(err)
+	}
+	var row *struct {
+		MenuItemID string `json:"menu_item_id"`
+		Prepared   int    `json:"prepared"`
+		Reserved   int    `json:"reserved"`
+		Available  int    `json:"available"`
+	}
+	for i := range env.Data {
+		if env.Data[i].MenuItemID == menuID {
+			row = &env.Data[i]
+		}
+	}
+	if row == nil {
+		t.Fatalf("availability: блюдо %s не найдено в ответе %s", menuID, ab)
+	}
+	if row.Prepared != 10 || row.Reserved != 3 || row.Available != 7 {
+		t.Fatalf("availability: получили prepared=%d reserved=%d available=%d, ожидали 10/3/7",
+			row.Prepared, row.Reserved, row.Available)
+	}
+}
+
 func seedSimpleDish(t *testing.T, gdb *gorm.DB, rid string) string {
 	t.Helper()
 	id := uuid.NewString()
