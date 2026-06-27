@@ -149,6 +149,7 @@ export type BalanceReport = {
   inventory_value: number
   assets: { id: string; name: string; amount: number }[]
   total_assets: number
+  supplier_debt: number
   liabilities: { id: string; name: string; total: number; paid: number; remaining: number }[]
   total_liabilities: number
   equity: { id: string; name: string; amount: number }[]
@@ -223,6 +224,7 @@ export async function fetchBalanceReport(): Promise<BalanceReport> {
     inventory_value: Number(r?.inventory_value ?? 0),
     assets: (r?.assets ?? []).map((x: any) => ({ id: String(x.id ?? ''), name: String(x.name ?? ''), amount: Number(x.amount ?? 0) })),
     total_assets: Number(r?.total_assets ?? 0),
+    supplier_debt: Number(r?.supplier_debt ?? 0),
     liabilities: (r?.liabilities ?? []).map((x: any) => ({
       id: String(x.id ?? ''),
       name: String(x.name ?? ''),

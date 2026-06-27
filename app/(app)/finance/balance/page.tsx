@@ -286,9 +286,10 @@ export default function BalancePage() {
 
   const totalAssets = totalCurrentAssets + totalNonCurrentAssets
 
-  // Liabilities — supplier debts (auto, computed locally)
+  // Liabilities — supplier debts. Сумма считается на бэке (Balance.supplier_debt);
+  // список поставщиков остаётся для построчного показа. Fallback — до загрузки отчёта.
   const supplierDebts = suppliers.filter((s) => s.currentDebt > 0)
-  const totalSupplierDebt = supplierDebts.reduce((s, sup) => s + sup.currentDebt, 0)
+  const totalSupplierDebt = report ? report.supplier_debt : supplierDebts.reduce((s, sup) => s + sup.currentDebt, 0)
 
   // Liabilities — manual (total from server, grouping local)
   const liabilitiesByCategory = new Map<LiabilityCategory, Liability[]>()

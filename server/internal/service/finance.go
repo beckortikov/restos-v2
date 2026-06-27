@@ -835,10 +835,12 @@ type BalanceJSON struct {
 	// Авто-оборотные активы (считаются на бэке, фронт только показывает):
 	Accounts       []BalanceLine   `json:"accounts"`        // счета, amount = баланс
 	CashTotal      decimal.Decimal `json:"cash_total"`      // Σ балансов счетов
-	InventoryValue decimal.Decimal `json:"inventory_value"` // Σ остаток × цена (склад)
+	InventoryValue decimal.Decimal `json:"inventory_value"` // Σ остаток × цена (ингредиенты + полуфабрикаты)
 	// Внеоборотные (ручные) активы:
-	Assets           []BalanceLine   `json:"assets"`
-	TotalAssets      decimal.Decimal `json:"total_assets"` // только ручные активы
+	Assets      []BalanceLine   `json:"assets"`
+	TotalAssets decimal.Decimal `json:"total_assets"` // только ручные активы
+	// Долг поставщикам (авто-обязательство, Σ suppliers.current_debt):
+	SupplierDebt     decimal.Decimal `json:"supplier_debt"`
 	Liabilities      []LiabilityLine `json:"liabilities"`
 	TotalLiabilities decimal.Decimal `json:"total_liabilities"`
 	Equity           []BalanceLine   `json:"equity"`
@@ -897,7 +899,30 @@ func (s *FinanceReportsService) Balance(ctx context.Context) (*BalanceJSON, erro
 		Scan(&invRow).Error; err != nil {
 		return nil, err
 	}
-	out.InventoryValue = decimal.Normalize(invRow.Total)
+	// + полуфабрикаты (semi_finished_stock).
+	var semiRow struct {
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	scopedSemi, _ := s.r.ForTenant(ctx)
+	if err := scopedSemi.Model(&models.SemiFinishedStock{}).
+		Select("COALESCE(SUM(qty * price_per_unit), 0) AS total").
+		Scan(&semiRow).Error; err != nil {
+		return nil, err
+	}
+	out.InventoryValue = decimal.Normalize(decimal.Add(invRow.Total, semiRow.Total))
+
+	// Долг поставщикам — авто-обязательство (Σ положительных current_debt).
+	var debtRow struct {
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	scopedDebt, _ := s.r.ForTenant(ctx)
+	if err := scopedDebt.Model(&models.Supplier{}).
+		Select("COALESCE(SUM(current_debt), 0) AS total").
+		Where("current_debt > 0").
+		Scan(&debtRow).Error; err != nil {
+		return nil, err
+	}
+	out.SupplierDebt = decimal.Normalize(debtRow.Total)
 
 	var assets []models.Asset
 	if err := scoped.Order("name ASC").Find(&assets).Error; err != nil {

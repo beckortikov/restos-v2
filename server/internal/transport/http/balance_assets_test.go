@@ -41,6 +41,22 @@ func TestBalance_AutoCashAndInventory(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
+	// Полуфабрикат: 2 × 50 = 100 → входит в стоимость склада.
+	semiName := "Бульон"
+	if err := gdb.Create(&models.SemiFinishedStock{
+		ID: uuid.NewString(), Name: &semiName, RestaurantID: &f.rid,
+		Qty: decimal.MustFromString("2"), PricePerUnit: decimal.MustFromString("50"),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Долг поставщику 200.
+	supName := "Поставщик"
+	if err := gdb.Create(&models.Supplier{
+		ID: uuid.NewString(), Name: &supName, RestaurantID: &f.rid,
+		CurrentDebt: decimal.MustFromString("200"),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	resp, b := f.get(t, "/api/v1/finance/balance", tok)
 	if resp.StatusCode != http.StatusOK {
@@ -49,6 +65,7 @@ func TestBalance_AutoCashAndInventory(t *testing.T) {
 	var out struct {
 		CashTotal      decimal.Decimal `json:"cash_total"`
 		InventoryValue decimal.Decimal `json:"inventory_value"`
+		SupplierDebt   decimal.Decimal `json:"supplier_debt"`
 		Accounts       []struct {
 			Name string `json:"name"`
 		} `json:"accounts"`
@@ -59,8 +76,12 @@ func TestBalance_AutoCashAndInventory(t *testing.T) {
 	if !out.CashTotal.Equal(decimal.MustFromString("500")) {
 		t.Fatalf("cash_total = %s, ожидали 500", decimal.Normalize(out.CashTotal).String())
 	}
-	if !out.InventoryValue.Equal(decimal.MustFromString("300")) {
-		t.Fatalf("inventory_value = %s, ожидали 300 (3 кг × 100)", decimal.Normalize(out.InventoryValue).String())
+	// Склад = ингредиенты (3×100=300) + полуфабрикаты (2×50=100) = 400.
+	if !out.InventoryValue.Equal(decimal.MustFromString("400")) {
+		t.Fatalf("inventory_value = %s, ожидали 400 (ингредиенты 300 + п/ф 100)", decimal.Normalize(out.InventoryValue).String())
+	}
+	if !out.SupplierDebt.Equal(decimal.MustFromString("200")) {
+		t.Fatalf("supplier_debt = %s, ожидали 200", decimal.Normalize(out.SupplierDebt).String())
 	}
 	if len(out.Accounts) != 1 {
 		t.Fatalf("accounts: ожидали 1 счёт, получили %d", len(out.Accounts))
