@@ -326,6 +326,7 @@ function mapMenuItem(
     isAvailable: r.is_available as boolean,
     stopListOverride: (r.stop_list_override as boolean) ?? false,
     cogs: effectiveCogs,
+    cogsManual: Number(r.cogs) || 0,
     cookTimeMin: (r.cook_time_min as number | null) ?? null,
     station: ((r.station as MenuItem['station']) || 'hot_kitchen'),
     isBatchCooking: (r.is_batch_cooking as boolean) ?? false,

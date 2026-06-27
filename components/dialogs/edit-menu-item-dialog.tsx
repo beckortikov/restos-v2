@@ -256,7 +256,7 @@ export function EditMenuItemDialog({ open, onOpenChange, menuItem, onSubmit, onD
         price: menuItem.price,
         emoji: menuItem.emoji,
         imageUrl: menuItem.imageUrl,
-        cogs: menuItem.cogs,
+        cogs: menuItem.cogsManual ?? 0, // поле «вручную» — сырое значение (очистка сохраняется)
         cookTimeMin: menuItem.cookTimeMin ?? null,
         station: menuItem.station || 'hot_kitchen',
         isAvailable: menuItem.isAvailable,

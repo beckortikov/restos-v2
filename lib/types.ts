@@ -145,7 +145,8 @@ export interface MenuItem {
   imageUrl?: string
   isAvailable: boolean
   stopListOverride: boolean
-  cogs: number
+  cogs: number          // эффективная (auto из техкарты, иначе ручная) — для маржи/списка
+  cogsManual?: number   // сырое сохранённое значение «себестоимость вручную» (для формы)
   cookTimeMin?: number | null
   station: MenuStation
   techCard: TechCardLine[]

@@ -757,6 +757,13 @@ func buildOrderItem(
 		}
 		oi.COGS = d
 	}
+	// Себестоимость из тех-карты, если вручную не задана (ни в меню, ни в заказе).
+	// Иначе COGS в ОПиУ = 0, хотя ингредиенты в тех-карте имеют цену.
+	if it.COGS == nil && oi.COGS.IsZero() {
+		if c := techCardCogs(tx, mi); c.IsPositive() {
+			oi.COGS = c
+		}
+	}
 	if err := tx.Create(oi).Error; err != nil {
 		return nil, decimal.Zero, err
 	}
@@ -1245,4 +1252,58 @@ func itoa(n int) string {
 		buf[i] = '-'
 	}
 	return string(buf[i:])
+}
+
+// techCardCogs — себестоимость блюда по тех-карте: Σ (расход × цена ингредиента)
+// с конвертацией единиц (units.Convert) и учётом waste (1/(1-waste/100)).
+// Зеркало фронтового calcCogsFromTechCard (lib/queries/_mappers.ts). Semi-строки
+// не учитываются (как и на фронте). 0 — если тех-карты/цен нет.
+func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
+	if mi.RestaurantID == nil {
+		return decimal.Zero
+	}
+	var lines []models.TechCardLine
+	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", *mi.RestaurantID, mi.ID).
+		Find(&lines).Error; err != nil {
+		return decimal.Zero
+	}
+	ids := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if l.IngredientID != nil && *l.IngredientID != "" {
+			ids = append(ids, *l.IngredientID)
+		}
+	}
+	if len(ids) == 0 {
+		return decimal.Zero
+	}
+	var ings []models.Ingredient
+	if err := tx.Where("id IN ?", ids).Find(&ings).Error; err != nil {
+		return decimal.Zero
+	}
+	byID := make(map[string]models.Ingredient, len(ings))
+	for _, i := range ings {
+		byID[i.ID] = i
+	}
+	hundred := decimal.FromInt(100)
+	one := decimal.FromInt(1)
+	total := decimal.Zero
+	for _, l := range lines {
+		if l.IngredientID == nil {
+			continue
+		}
+		ing, ok := byID[*l.IngredientID]
+		if !ok {
+			continue
+		}
+		qty := l.Qty
+		if ing.WastePercent.IsPositive() {
+			divisor := decimal.Sub(one, decimal.DivRound(ing.WastePercent, hundred))
+			if divisor.IsPositive() {
+				qty = decimal.DivRound(qty, divisor)
+			}
+		}
+		qtyStock := units.Convert(qty, deref(l.Unit), deref(ing.Unit))
+		total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
+	}
+	return decimal.Normalize(total)
 }

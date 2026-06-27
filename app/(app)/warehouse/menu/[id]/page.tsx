@@ -217,7 +217,7 @@ export default function EditMenuItemPage() {
             price: found.price,
             emoji: found.emoji,
             imageUrl: found.imageUrl,
-            cogs: found.cogs,
+            cogs: found.cogsManual ?? 0, // поле «вручную» — сырое значение, чтобы очистка сохранялась
             cookTimeMin: found.cookTimeMin ?? null,
             station: found.station || 'hot_kitchen',
             isAvailable: found.isAvailable,
