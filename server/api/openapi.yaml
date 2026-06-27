@@ -3269,6 +3269,7 @@ components:
         pin_lock_enabled: { type: boolean }
         pin_lock_timeout_min: { type: integer }
         supply_allow_negative: { type: boolean }
+        on_screen_keyboard_enabled: { type: boolean }
         license_expires_at: { type: string, format: date-time }
         is_blocked: { type: boolean }
     RestaurantInput:
@@ -3288,6 +3289,7 @@ components:
         pin_lock_enabled: { type: boolean }
         pin_lock_timeout_min: { type: integer }
         supply_allow_negative: { type: boolean }
+        on_screen_keyboard_enabled: { type: boolean }
 
     # ─── Bootstrap ──
     BootstrapInput:

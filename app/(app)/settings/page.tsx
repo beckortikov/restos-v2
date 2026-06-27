@@ -77,6 +77,7 @@ export default function SettingsPage() {
   const [pinLockEnabled, setPinLockEnabled] = useState(false)
   const [pinLockTimeoutMin, setPinLockTimeoutMin] = useState(5)
   const [supplyAllowNegative, setSupplyAllowNegative] = useState(true)
+  const [onScreenKeyboardEnabled, setOnScreenKeyboardEnabled] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -100,6 +101,7 @@ export default function SettingsPage() {
           setPinLockEnabled(r.pinLockEnabled ?? false)
           setPinLockTimeoutMin(r.pinLockTimeoutMin ?? 5)
           setSupplyAllowNegative(r.supplyAllowNegative ?? true)
+          setOnScreenKeyboardEnabled(r.onScreenKeyboardEnabled ?? false)
         }
       })
       .catch(e => console.error('Failed to load restaurant:', e))
@@ -134,9 +136,9 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative })
+      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative }
+      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -151,7 +153,7 @@ export default function SettingsPage() {
         tags: { component: 'settings.save' },
         extra: {
           restaurantId: rest.id,
-          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative },
+          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled },
         },
       })
     } finally {
@@ -172,6 +174,7 @@ export default function SettingsPage() {
     setPinLockEnabled(rest.pinLockEnabled ?? false)
     setPinLockTimeoutMin(rest.pinLockTimeoutMin ?? 5)
     setSupplyAllowNegative(rest.supplyAllowNegative ?? true)
+    setOnScreenKeyboardEnabled(rest.onScreenKeyboardEnabled ?? false)
   }
 
   return (
@@ -347,6 +350,16 @@ export default function SettingsPage() {
                 <p className="text-[11px] text-blue-800 flex-1">бездействия на терминале</p>
               </div>
             )}
+          </Card>
+
+          {/* Интерфейс */}
+          <Card title="Интерфейс">
+            <ToggleRow
+              title="⌨️ Экранная клавиатура"
+              hint="Виртуальная клавиатура (iiko-style) при вводе на POS, смене и карте зала. Нужна на тач-терминалах без физической клавиатуры."
+              checked={onScreenKeyboardEnabled}
+              onChange={() => setOnScreenKeyboardEnabled(!onScreenKeyboardEnabled)}
+            />
           </Card>
         </div>
 

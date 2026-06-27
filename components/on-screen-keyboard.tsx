@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Delete, ArrowBigUp, X, CornerDownLeft, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/lib/auth-store'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PosKeyboard — экранная клавиатура для POS (в стиле iiko: крупные кнопки,
@@ -58,6 +59,28 @@ function layoutFor(el: HTMLInputElement | HTMLTextAreaElement): Layout {
   return 'text'
 }
 
+// Ближайший прокручиваемый предок (для инпутов на странице/инлайн-формах,
+// которые не являются диалогами). Фоллбэк — сама страница.
+function nearestScrollable(el: Element): HTMLElement {
+  // Берём ближайшего предка со скроллом по стилю (даже если сейчас не
+  // переполнен — после добавления нижнего паддинга ему будет куда скроллить).
+  let node: HTMLElement | null = el.parentElement
+  while (node && node !== document.body) {
+    const oy = window.getComputedStyle(node).overflowY
+    if (oy === 'auto' || oy === 'scroll') return node
+    node = node.parentElement
+  }
+  return (document.scrollingElement as HTMLElement) || document.documentElement
+}
+
+function scrollPaneBy(sc: HTMLElement, delta: number) {
+  if (sc === document.scrollingElement || sc === document.documentElement || sc === document.body) {
+    window.scrollBy({ top: delta, behavior: 'smooth' })
+  } else {
+    sc.scrollBy({ top: delta, behavior: 'smooth' })
+  }
+}
+
 // Пишем значение так, чтобы React (controlled inputs) увидел изменение.
 function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: string) {
   const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
@@ -67,6 +90,12 @@ function setNativeValue(el: HTMLInputElement | HTMLTextAreaElement, value: strin
 }
 
 export function OnScreenKeyboard() {
+  // Включается в настройках владельца (Restaurant.onScreenKeyboardEnabled),
+  // по умолчанию выключена. Гейтим тут, чтобы не трогать места рендера
+  // (POS / смена / карта зала).
+  const { restaurant } = useAuth()
+  const enabled = restaurant?.onScreenKeyboardEnabled === true
+
   const [open, setOpen] = useState(false)
   const [layout, setLayout] = useState<Layout>('text')
   const [lang, setLang] = useState<Lang>('ru')
@@ -75,9 +104,78 @@ export function OnScreenKeyboard() {
   const activeRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const closeTimer = useRef<number | undefined>(undefined)
+  // Функция отмены текущего «подъёма» (диалога или инлайн-формы) — восстанавливает
+  // изменённые inline-стили. null, когда ничего не приподнято.
+  const liftUndoRef = useRef<(() => void) | null>(null)
+
+  const resetLift = useCallback(() => {
+    liftUndoRef.current?.()
+    liftUndoRef.current = null
+  }, [])
+
+  // Сделать так, чтобы клавиатура не перекрывала фокусный инпут и кнопки под ним.
+  //  • Центрированный диалог (Radix, role="dialog") — приподнимаем margin-top'ом.
+  //  • Инпут на странице / инлайн-форма (смена) — резервируем место снизу у
+  //    скролл-контейнера и подскролливаем инпут в верх видимой полосы.
+  const applyLift = useCallback((active: Element | null) => {
+    resetLift()
+    const kb = rootRef.current
+    if (!kb || !active) return
+    const gap = 12
+    const kbHeight = kb.offsetHeight
+    const kbTop = window.innerHeight - kbHeight
+
+    // 1) Центрированный диалог — поднимаем целиком.
+    const host = active.closest('[role="dialog"]') as HTMLElement | null
+    if (host && window.getComputedStyle(host).top !== 'auto') {
+      const rect = host.getBoundingClientRect()
+      if (rect.bottom <= kbTop - gap) return // уже не перекрыт
+      const prev = {
+        marginTop: host.style.marginTop, maxHeight: host.style.maxHeight,
+        overflowY: host.style.overflowY, transition: host.style.transition,
+      }
+      const lift = Math.min(rect.bottom - (kbTop - gap), Math.max(0, rect.top - gap))
+      host.style.transition = 'margin-top 160ms ease'
+      host.style.marginTop = `-${lift}px`
+      // Диалог всё равно выше доступной полосы → ограничиваем высоту + внутр. скролл.
+      const band = (kbTop - gap) - (rect.top - lift)
+      if (host.scrollHeight > band + 1) {
+        host.style.maxHeight = `${Math.max(160, band)}px`
+        host.style.overflowY = 'auto'
+        window.setTimeout(() => active.scrollIntoView?.({ block: 'center', behavior: 'smooth' }), 0)
+      }
+      liftUndoRef.current = () => {
+        host.style.marginTop = prev.marginTop
+        host.style.maxHeight = prev.maxHeight
+        host.style.overflowY = prev.overflowY
+        host.style.transition = prev.transition
+      }
+      return
+    }
+
+    // 2) Низовой drawer (vaul, мобайл) — не двигаем (там нативная клавиатура).
+    if (host) return
+
+    // 3) Инпут на странице/инлайн-форме: добавляем нижний паддинг скролл-контейнеру,
+    //    чтобы под клавиатурой было куда прокрутить, и поднимаем инпут в верхнюю
+    //    треть видимой полосы — тогда кнопки под ним тоже остаются видимыми.
+    const sc = nearestScrollable(active)
+    const prevPad = sc.style.paddingBottom
+    const basePad = parseFloat(window.getComputedStyle(sc).paddingBottom) || 0
+    sc.style.paddingBottom = `${basePad + kbHeight}px`
+    liftUndoRef.current = () => { sc.style.paddingBottom = prevPad }
+    window.setTimeout(() => {
+      const r = active.getBoundingClientRect()
+      const targetTop = (window.innerHeight - kbHeight) * 0.3
+      const delta = r.top - targetTop
+      if (Math.abs(delta) > 4) scrollPaneBy(sc, delta)
+    }, 0)
+  }, [resetLift])
 
   // ── focus tracking (POS-scoped: слушатели живут пока компонент смонтирован) ──
   useEffect(() => {
+    // Клавиатура выключена в настройках — не вешаем слушатели вовсе.
+    if (!enabled) { setOpen(false); return }
     const onFocusIn = (e: FocusEvent) => {
       const el = e.target as Element | null
       if (!isTypeable(el)) return
@@ -86,14 +184,17 @@ export function OnScreenKeyboard() {
       setLayout(layoutFor(el))
       setShift(false)
       setOpen(true)
-      // Подскроллим инпут в зону видимости над клавиатурой.
-      window.setTimeout(() => el.scrollIntoView?.({ block: 'center', behavior: 'smooth' }), 60)
+      // После рендера клавиатуры (знаем её высоту) убираем перекрытие: диалог
+      // приподнимаем, инпут на странице/инлайн-форме — подскролливаем над
+      // клавиатурой вместе с кнопками под ним.
+      window.setTimeout(() => applyLift(el), 70)
     }
     const onFocusOut = () => {
       // Закрываем, только если фокус ушёл не на другой инпут (с задержкой —
       // дать focusin перехватить переключение между полями).
       closeTimer.current = window.setTimeout(() => {
         if (!isTypeable(document.activeElement)) {
+          resetLift()
           setOpen(false)
           activeRef.current = null
         }
@@ -105,8 +206,9 @@ export function OnScreenKeyboard() {
       document.removeEventListener('focusin', onFocusIn)
       document.removeEventListener('focusout', onFocusOut)
       if (closeTimer.current) window.clearTimeout(closeTimer.current)
+      resetLift()
     }
-  }, [])
+  }, [enabled, applyLift, resetLift])
 
   // Не даём pointerdown по клавиатуре всплыть до document — иначе Radix-диалоги
   // закрылись бы по «клику снаружи».
@@ -148,8 +250,9 @@ export function OnScreenKeyboard() {
     el?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
     el?.blur()
     activeRef.current = null
+    resetLift()
     setOpen(false)
-  }, [])
+  }, [resetLift])
 
   const handleLetter = useCallback((ch: string) => {
     applyChar(shift ? ch.toUpperCase() : ch)
@@ -158,7 +261,7 @@ export function OnScreenKeyboard() {
 
   const rows = useMemo(() => (lang === 'ru' ? RU_ROWS : EN_ROWS), [lang])
 
-  if (!open) return null
+  if (!enabled || !open) return null
 
   return (
     <div

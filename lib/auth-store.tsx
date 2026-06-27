@@ -307,5 +307,8 @@ function mapResponseRestaurant(row: any): Restaurant {
     // Раньше тут был `!!row.tech_cards_enabled` → null/undefined давал false,
     // расходясь с настройками (react-query маппер) и бэком.
     techCardsEnabled: row.tech_cards_enabled ?? true,
+    // Экранная клавиатура — default false. Нужна в restaurant контексте, т.к.
+    // OnScreenKeyboard гейтится по useAuth().restaurant?.onScreenKeyboardEnabled.
+    onScreenKeyboardEnabled: row.on_screen_keyboard_enabled ?? false,
   } as Restaurant
 }

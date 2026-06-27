@@ -39,6 +39,7 @@ type RestaurantCreateInput struct {
 	PinLockEnabled     *bool   `json:"pin_lock_enabled,omitempty"`
 	PinLockTimeoutMin  *int    `json:"pin_lock_timeout_min,omitempty"`
 	SupplyAllowNeg     *bool   `json:"supply_allow_negative,omitempty"`
+	OnScreenKbdEnabled *bool   `json:"on_screen_keyboard_enabled,omitempty"`
 }
 
 func (s *RestaurantsService) List(ctx context.Context) ([]models.Restaurant, error) {
@@ -74,22 +75,23 @@ func (s *RestaurantsService) Create(ctx context.Context, in RestaurantCreateInpu
 		tz = *in.Timezone
 	}
 	r := &models.Restaurant{
-		ID:                 uuid.NewString(),
-		Name:               *in.Name,
-		Slug:               in.Slug,
-		LogoURL:            in.LogoURL,
-		Address:            in.Address,
-		Phone:              in.Phone,
-		Currency:           &currency,
-		Timezone:           &tz,
-		EnforceStockCheck:  in.EnforceStockCheck,
-		TechCardsEnabled:   in.TechCardsEnabled,
-		AutoReadyMode:      in.AutoReadyMode,
-		AutoReadyBufferMin: in.AutoReadyBufferMin,
-		PinLockEnabled:     in.PinLockEnabled,
-		PinLockTimeoutMin:  in.PinLockTimeoutMin,
-		CreatedAt:          now,
-		UpdatedAt:          now,
+		ID:                      uuid.NewString(),
+		Name:                    *in.Name,
+		Slug:                    in.Slug,
+		LogoURL:                 in.LogoURL,
+		Address:                 in.Address,
+		Phone:                   in.Phone,
+		Currency:                &currency,
+		Timezone:                &tz,
+		EnforceStockCheck:       in.EnforceStockCheck,
+		TechCardsEnabled:        in.TechCardsEnabled,
+		AutoReadyMode:           in.AutoReadyMode,
+		AutoReadyBufferMin:      in.AutoReadyBufferMin,
+		PinLockEnabled:          in.PinLockEnabled,
+		PinLockTimeoutMin:       in.PinLockTimeoutMin,
+		OnScreenKeyboardEnabled: in.OnScreenKbdEnabled,
+		CreatedAt:               now,
+		UpdatedAt:               now,
 	}
 	if in.SupplyAllowNeg != nil {
 		r.SupplyAllowNeg = *in.SupplyAllowNeg
@@ -166,6 +168,9 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 	}
 	if in.SupplyAllowNeg != nil {
 		updates["supply_allow_negative"] = *in.SupplyAllowNeg
+	}
+	if in.OnScreenKbdEnabled != nil {
+		updates["on_screen_keyboard_enabled"] = *in.OnScreenKbdEnabled
 	}
 	if err := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
 		Where("id = ?", id).Updates(updates).Error; err != nil {

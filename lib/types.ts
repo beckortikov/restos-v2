@@ -42,6 +42,9 @@ export interface Restaurant {
   autoReadyBufferMin?: number
   pinLockEnabled?: boolean
   pinLockTimeoutMin?: number
+  // Экранная клавиатура (iiko-style) на POS/смене/зале. Default false —
+  // включается в настройках владельца для тач-терминалов без физ. клавиатуры.
+  onScreenKeyboardEnabled?: boolean
   // Разрешает хозтоварам (is_food=false) уходить в реальный минус. Когда false —
   // createSupplyExpense блокирует выдачу если qty > остаток.
   supplyAllowNegative?: boolean

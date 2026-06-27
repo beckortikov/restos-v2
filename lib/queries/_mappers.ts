@@ -147,6 +147,7 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     autoReadyBufferMin: r.auto_ready_buffer_min ?? 5,
     pinLockEnabled: r.pin_lock_enabled ?? false,
     pinLockTimeoutMin: r.pin_lock_timeout_min ?? 5,
+    onScreenKeyboardEnabled: r.on_screen_keyboard_enabled ?? false,
     supplyAllowNegative: r.supply_allow_negative ?? true,
     localServerIp: r.local_server_ip ?? undefined,
     licenseKey: r.license_key ?? undefined,

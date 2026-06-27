@@ -50,6 +50,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   pinLockEnabled: boolean
   pinLockTimeoutMin: number
   supplyAllowNegative: boolean
+  onScreenKeyboardEnabled: boolean
   isBlocked: boolean
   blockReason: string
   licenseKey: string
@@ -68,6 +69,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   if (data.pinLockEnabled !== undefined) updates.pin_lock_enabled = data.pinLockEnabled
   if (data.pinLockTimeoutMin !== undefined) updates.pin_lock_timeout_min = data.pinLockTimeoutMin
   if (data.supplyAllowNegative !== undefined) updates.supply_allow_negative = data.supplyAllowNegative
+  if (data.onScreenKeyboardEnabled !== undefined) updates.on_screen_keyboard_enabled = data.onScreenKeyboardEnabled
   if (Object.keys(updates).length > 0) {
     await unwrap(api.PATCH('/api/v1/restaurants/{id}', { params: { path: { id } }, body: updates as any }))
   }

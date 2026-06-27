@@ -44,8 +44,11 @@ type Restaurant struct {
 	SupplyAllowNeg    bool       `gorm:"column:supply_allow_negative;not null;default:true" json:"supply_allow_negative"`
 	PinLockEnabled    *bool      `gorm:"column:pin_lock_enabled;default:false" json:"pin_lock_enabled"`
 	PinLockTimeoutMin *int       `gorm:"column:pin_lock_timeout_min;default:5" json:"pin_lock_timeout_min"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
+	// OnScreenKeyboardEnabled — экранная клавиатура (iiko-style) на POS/смене/зале.
+	// Default false: нужна только на тач-терминалах без физической клавиатуры.
+	OnScreenKeyboardEnabled *bool     `gorm:"column:on_screen_keyboard_enabled;default:false" json:"on_screen_keyboard_enabled"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }
 
 func (Restaurant) TableName() string { return "restaurants" }
