@@ -24,8 +24,8 @@ type Lang = 'ru' | 'en'
 
 const RU_ROWS: string[][] = [
   ['1', '2', '3', '4', '5', '6', '7', '8', '9', '0'],
-  ['й', 'ц', 'у', 'к', 'е', 'н', 'г', 'ш', 'щ', 'з', 'х'],
-  ['ф', 'ы', 'в', 'а', 'п', 'р', 'о', 'л', 'д', 'ж', 'э'],
+  ['й', 'ц', 'у', 'к', 'е', 'н', 'г', 'ш', 'щ', 'з', 'х', 'ъ'],
+  ['ё', 'ф', 'ы', 'в', 'а', 'п', 'р', 'о', 'л', 'д', 'ж', 'э'],
   ['я', 'ч', 'с', 'м', 'и', 'т', 'ь', 'б', 'ю'],
 ]
 
@@ -107,10 +107,14 @@ export function OnScreenKeyboard() {
   // Функция отмены текущего «подъёма» (диалога или инлайн-формы) — восстанавливает
   // изменённые inline-стили. null, когда ничего не приподнято.
   const liftUndoRef = useRef<(() => void) | null>(null)
+  // Инпут, под который уже сделан «подъём» — чтобы повторный focus (после нажатия
+  // клавиши) не пересчитывал лифт и экран не «прыгал».
+  const liftedForRef = useRef<Element | null>(null)
 
   const resetLift = useCallback(() => {
     liftUndoRef.current?.()
     liftUndoRef.current = null
+    liftedForRef.current = null
   }, [])
 
   // Сделать так, чтобы клавиатура не перекрывала фокусный инпут и кнопки под ним.
@@ -118,7 +122,9 @@ export function OnScreenKeyboard() {
   //  • Инпут на странице / инлайн-форма (смена) — резервируем место снизу у
   //    скролл-контейнера и подскролливаем инпут в верх видимой полосы.
   const applyLift = useCallback((active: Element | null) => {
+    if (active && active === liftedForRef.current) return // уже подняли под этот инпут
     resetLift()
+    liftedForRef.current = active
     const kb = rootRef.current
     if (!kb || !active) return
     const gap = 12
@@ -180,25 +186,36 @@ export function OnScreenKeyboard() {
       const el = e.target as Element | null
       if (!isTypeable(el)) return
       if (closeTimer.current) window.clearTimeout(closeTimer.current)
+      // Тот же инпут (повторный фокус после нажатия клавиши на тач-экране) —
+      // не сбрасываем раскладку/Shift и не дёргаем лифт (иначе экран прыгает).
+      const sameInput = activeRef.current === el
       activeRef.current = el
-      setLayout(layoutFor(el))
-      setShift(false)
-      setOpen(true)
+      if (!sameInput) {
+        setLayout(layoutFor(el))
+        setShift(false)
+        setOpen(true)
+      }
       // После рендера клавиатуры (знаем её высоту) убираем перекрытие: диалог
       // приподнимаем, инпут на странице/инлайн-форме — подскролливаем над
       // клавиатурой вместе с кнопками под ним.
-      window.setTimeout(() => applyLift(el), 70)
+      window.setTimeout(() => applyLift(el), sameInput ? 0 : 70)
     }
     const onFocusOut = () => {
-      // Закрываем, только если фокус ушёл не на другой инпут (с задержкой —
-      // дать focusin перехватить переключение между полями).
+      // Консервативное закрытие (с задержкой — дать focusin перехватить
+      // переключение между полями). НЕ закрываем, если фокус ушёл «в никуда»
+      // (промах мимо поля → body) или попал внутрь самой клавиатуры — иначе
+      // клавиатура исчезала при каждом тапе по клавише/мимо. Закрываем только
+      // когда поле удалено из DOM или фокус ушёл на реальный внешний контрол.
+      if (closeTimer.current) window.clearTimeout(closeTimer.current)
       closeTimer.current = window.setTimeout(() => {
-        if (!isTypeable(document.activeElement)) {
-          resetLift()
-          setOpen(false)
-          activeRef.current = null
-        }
-      }, 150)
+        const el = activeRef.current
+        if (!el || !el.isConnected) { resetLift(); setOpen(false); activeRef.current = null; return }
+        const ae = document.activeElement
+        if (!ae || ae === document.body || ae === document.documentElement) return // промах — оставляем
+        if (isTypeable(ae)) return                  // переключение на другой инпут — обработает focusin
+        if (rootRef.current?.contains(ae)) return   // фокус внутри клавиатуры — оставляем
+        resetLift(); setOpen(false); activeRef.current = null
+      }, 200)
     }
     document.addEventListener('focusin', onFocusIn)
     document.addEventListener('focusout', onFocusOut)
@@ -211,16 +228,20 @@ export function OnScreenKeyboard() {
   }, [enabled, applyLift, resetLift])
 
   // Не даём pointerdown по клавиатуре всплыть до document — иначе Radix-диалоги
-  // закрылись бы по «клику снаружи».
+  // закрылись бы по «клику снаружи». На mousedown ещё и preventDefault — чтобы
+  // тап по клавише не уводил фокус с инпута (на десктопе фокус меняется на
+  // mousedown). На pointerdown preventDefault не зовём — иначе на тач-экране
+  // подавился бы click клавиши.
   useEffect(() => {
     const root = rootRef.current
     if (!root) return
-    const stop = (e: Event) => e.stopPropagation()
-    root.addEventListener('pointerdown', stop)
-    root.addEventListener('mousedown', stop)
+    const onPointerDown = (e: Event) => e.stopPropagation()
+    const onMouseDown = (e: Event) => { e.preventDefault(); e.stopPropagation() }
+    root.addEventListener('pointerdown', onPointerDown)
+    root.addEventListener('mousedown', onMouseDown)
     return () => {
-      root.removeEventListener('pointerdown', stop)
-      root.removeEventListener('mousedown', stop)
+      root.removeEventListener('pointerdown', onPointerDown)
+      root.removeEventListener('mousedown', onMouseDown)
     }
   }, [open])
 
@@ -270,20 +291,20 @@ export function OnScreenKeyboard() {
       className={cn(
         'fixed inset-x-0 bottom-0 z-[90] select-none',
         'bg-card/95 backdrop-blur-md border-t border-border shadow-2xl',
-        'rounded-t-2xl px-2 pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]',
+        'px-1.5 pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom))]',
         'animate-in slide-in-from-bottom-4 duration-150',
       )}
     >
-      <div className="mx-auto w-full max-w-3xl">
+      <div className="w-full">
         {/* Хедер: ручка + закрыть */}
-        <div className="flex items-center justify-between px-1 pb-1.5">
-          <div className="mx-auto h-1 w-10 rounded-full bg-muted-foreground/30" />
+        <div className="relative flex items-center justify-center py-1">
+          <div className="h-1 w-10 rounded-full bg-muted-foreground/30" />
           <button
             type="button"
+            tabIndex={-1}
             aria-label="Скрыть клавиатуру"
-            onMouseDown={(e) => e.preventDefault()}
             onClick={applyDone}
-            className="absolute right-3 top-2 grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground hover:bg-muted/70 active:scale-95"
+            className="absolute right-1 top-1/2 -translate-y-1/2 grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground hover:bg-muted/70 active:scale-95 touch-manipulation"
           >
             <X className="size-4" />
           </button>
@@ -304,8 +325,9 @@ export function OnScreenKeyboard() {
             onLetter={handleLetter}
             onChar={applyChar}
             onBackspace={applyBackspace}
-            onShift={() => setShift((s) => !s)}
-            onLang={() => setLang((l) => (l === 'ru' ? 'en' : 'ru'))}
+            onClear={applyClear}
+            onShift={() => { setShift((s) => !s); activeRef.current?.focus() }}
+            onLang={() => { setLang((l) => (l === 'ru' ? 'en' : 'ru')); activeRef.current?.focus() }}
             onDone={applyDone}
           />
         )}
@@ -329,12 +351,13 @@ function Key({
   return (
     <button
       type="button"
-      // preventDefault на mousedown — не даём кнопке украсть фокус у инпута.
-      onMouseDown={(e) => e.preventDefault()}
+      tabIndex={-1}
+      // Фокус удерживаем глобально (preventDefault mousedown на корне клавиатуры),
+      // поэтому сама клавиша — просто onClick. touch-manipulation убирает задержку.
       onClick={onTap}
       className={cn(
-        'flex h-12 flex-1 items-center justify-center rounded-xl text-lg font-medium',
-        'border transition-transform active:scale-95 sm:h-14 sm:text-xl',
+        'flex h-12 flex-1 items-center justify-center rounded-lg text-xl font-medium touch-manipulation',
+        'border transition-transform active:scale-[0.97] sm:h-[54px]',
         variant === 'default' && 'border-border bg-background hover:bg-muted',
         variant === 'muted' && 'border-border bg-muted text-muted-foreground hover:bg-muted/70',
         variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
@@ -346,9 +369,9 @@ function Key({
   )
 }
 
-// ── Текстовая раскладка (ЙЦУКЕН / QWERTY) ───────────────────────────────────
+// ── Текстовая раскладка (ЙЦУКЕН / QWERTY, на всю ширину, iiko-style) ─────────
 function TextPad({
-  rows, shift, lang, onLetter, onChar, onBackspace, onShift, onLang, onDone,
+  rows, shift, lang, onLetter, onChar, onBackspace, onClear, onShift, onLang, onDone,
 }: {
   rows: string[][]
   shift: boolean
@@ -356,51 +379,56 @@ function TextPad({
   onLetter: (ch: string) => void
   onChar: (ch: string) => void
   onBackspace: () => void
+  onClear: () => void
   onShift: () => void
   onLang: () => void
   onDone: () => void
 }) {
+  const disp = (ch: string) => (shift ? ch.toUpperCase() : ch)
   return (
     <div className="flex flex-col gap-1.5">
-      {/* Цифровой ряд */}
+      {/* Цифровой ряд + Backspace */}
       <div className="flex gap-1.5">
         {rows[0].map((d) => (
           <Key key={d} onTap={() => onChar(d)}>{d}</Key>
         ))}
+        <Key onTap={onBackspace} variant="muted" className="flex-[1.5]">
+          <Delete className="size-5" />
+        </Key>
       </div>
-      {/* Буквенные ряды */}
-      {rows.slice(1).map((row, i) => (
-        <div key={i} className="flex gap-1.5">
-          {/* Shift в начале последнего ряда */}
-          {i === rows.length - 2 && (
-            <Key onTap={onShift} variant={shift ? 'primary' : 'muted'} className="max-w-[64px]">
-              <ArrowBigUp className="size-5" />
-            </Key>
-          )}
-          {row.map((ch) => (
-            <Key key={ch} onTap={() => onLetter(ch)}>
-              {shift ? ch.toUpperCase() : ch}
-            </Key>
-          ))}
-          {/* Backspace в конце последнего ряда */}
-          {i === rows.length - 2 && (
-            <Key onTap={onBackspace} variant="muted" className="max-w-[64px]">
-              <Delete className="size-5" />
-            </Key>
-          )}
-        </div>
-      ))}
-      {/* Нижний ряд: язык · запятая · пробел · точка · Готово */}
+      {/* Буквенный ряд 1 */}
       <div className="flex gap-1.5">
-        <Key onTap={onLang} variant="muted" className="max-w-[72px] gap-1 text-sm">
-          <Globe className="size-4" />{lang === 'ru' ? 'РУС' : 'ENG'}
+        {rows[1].map((ch) => (
+          <Key key={ch} onTap={() => onLetter(ch)}>{disp(ch)}</Key>
+        ))}
+      </div>
+      {/* Буквенный ряд 2 */}
+      <div className="flex gap-1.5">
+        {rows[2].map((ch) => (
+          <Key key={ch} onTap={() => onLetter(ch)}>{disp(ch)}</Key>
+        ))}
+      </div>
+      {/* Буквенный ряд 3: Регистр + буквы + Enter */}
+      <div className="flex gap-1.5">
+        <Key onTap={onShift} variant={shift ? 'primary' : 'muted'} className="flex-[1.7] gap-1 text-sm">
+          <ArrowBigUp className="size-5" />Регистр
         </Key>
-        <Key onTap={() => onChar(',')} variant="muted" className="max-w-[48px]">,</Key>
-        <Key onTap={() => onChar(' ')} className="flex-[4]">Пробел</Key>
-        <Key onTap={() => onChar('.')} variant="muted" className="max-w-[48px]">.</Key>
+        {rows[3].map((ch) => (
+          <Key key={ch} onTap={() => onLetter(ch)}>{disp(ch)}</Key>
+        ))}
+        <Key onTap={() => onChar('.')} variant="muted">.</Key>
         <Key onTap={onDone} variant="primary" className="flex-[2] gap-1.5 text-base">
-          <CornerDownLeft className="size-5" />Готово
+          <CornerDownLeft className="size-5" />Enter
         </Key>
+      </div>
+      {/* Нижний ряд: язык · запятая · пробел · «Стереть все» */}
+      <div className="flex gap-1.5">
+        <Key onTap={onLang} variant="muted" className="flex-[1.5] gap-1.5 text-base">
+          <Globe className="size-4" />{lang === 'ru' ? 'РУС' : 'EN'}
+        </Key>
+        <Key onTap={() => onChar(',')} variant="muted">,</Key>
+        <Key onTap={() => onChar(' ')} className="flex-[6]">Пробел</Key>
+        <Key onTap={onClear} variant="muted" className="flex-[1.8] text-base">Стереть все</Key>
       </div>
     </div>
   )
@@ -420,11 +448,11 @@ function NumericPad({
   }) => (
     <button
       type="button"
-      onMouseDown={(e) => e.preventDefault()}
+      tabIndex={-1}
       onClick={onTap}
       className={cn(
-        'flex h-16 items-center justify-center rounded-xl text-2xl font-semibold',
-        'border transition-transform active:scale-95',
+        'flex h-16 items-center justify-center rounded-lg text-2xl font-semibold touch-manipulation',
+        'border transition-transform active:scale-[0.97] sm:h-[68px]',
         variant === 'default' && 'border-border bg-background hover:bg-muted',
         variant === 'muted' && 'border-border bg-muted text-muted-foreground hover:bg-muted/70',
         variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
@@ -434,15 +462,25 @@ function NumericPad({
       {children}
     </button>
   )
+  // На всю ширину: 3 колонки цифр + колонка действий (как iiko-нумпад).
   return (
-    <div className="mx-auto grid max-w-sm grid-cols-3 gap-1.5">
-      {['7', '8', '9', '4', '5', '6', '1', '2', '3'].map((d) => (
-        <NumKey key={d} onTap={() => onChar(d)}>{d}</NumKey>
-      ))}
-      <NumKey onTap={() => onChar('.')} variant="muted">.</NumKey>
-      <NumKey onTap={() => onChar('0')}>0</NumKey>
+    <div className="grid grid-cols-4 gap-1.5">
+      <NumKey onTap={() => onChar('7')}>7</NumKey>
+      <NumKey onTap={() => onChar('8')}>8</NumKey>
+      <NumKey onTap={() => onChar('9')}>9</NumKey>
       <NumKey onTap={onBackspace} variant="muted"><Delete className="size-6" /></NumKey>
-      <NumKey onTap={onClear} variant="muted" className="text-lg">Очистить</NumKey>
+
+      <NumKey onTap={() => onChar('4')}>4</NumKey>
+      <NumKey onTap={() => onChar('5')}>5</NumKey>
+      <NumKey onTap={() => onChar('6')}>6</NumKey>
+      <NumKey onTap={onClear} variant="muted" className="text-base">Стереть</NumKey>
+
+      <NumKey onTap={() => onChar('1')}>1</NumKey>
+      <NumKey onTap={() => onChar('2')}>2</NumKey>
+      <NumKey onTap={() => onChar('3')}>3</NumKey>
+      <NumKey onTap={() => onChar('.')} variant="muted">.</NumKey>
+
+      <NumKey onTap={() => onChar('0')} className="col-span-2">0</NumKey>
       <NumKey onTap={onDone} variant="primary" className="col-span-2 gap-2 text-lg">
         <CornerDownLeft className="size-5" />Готово
       </NumKey>
