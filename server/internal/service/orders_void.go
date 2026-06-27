@@ -50,6 +50,9 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requirePerm(ctx, "orders.cancel"); err != nil {
+		return nil, err
+	}
 	if in.Reason == "" {
 		return nil, apperrors.Wrap("VALIDATION", "reason is required", nil)
 	}
@@ -180,6 +183,9 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in VoidItemInput) (*models.OrderItem, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.requirePerm(ctx, "orders.void"); err != nil {
 		return nil, err
 	}
 	if in.Reason == "" {

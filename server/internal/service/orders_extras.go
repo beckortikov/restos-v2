@@ -666,6 +666,9 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requirePerm(ctx, "orders.void"); err != nil {
+		return nil, err
+	}
 	actor, _ := audit.ActorFromContext(ctx)
 
 	var out *models.OrderItem

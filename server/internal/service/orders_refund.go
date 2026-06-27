@@ -51,6 +51,9 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 	if err != nil {
 		return nil, err
 	}
+	if err := s.requirePerm(ctx, "orders.refund"); err != nil {
+		return nil, err
+	}
 	reason := strings.TrimSpace(in.Reason)
 	if reason == "" {
 		return nil, apperrors.Wrap("VALIDATION", "reason is required", nil)
