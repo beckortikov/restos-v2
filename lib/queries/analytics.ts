@@ -125,6 +125,52 @@ export async function fetchABCMenu(opts: { from?: Date | string; to?: Date | str
   return (await unwrap(api.GET('/api/v1/analytics/abc-menu', { params: { query: query as any } }))) as ABCMenuReport
 }
 
+// ─── Инсайты (кросс-аналитика) ──────────────────────────────────────────────
+
+export type InsightCategory = 'menu' | 'leak' | 'stock' | 'staff'
+export type InsightSeverity = 'high' | 'medium' | 'low'
+
+export interface Insight {
+  id: string
+  category: InsightCategory
+  severity: InsightSeverity
+  title: string
+  detail: string
+  impact: number
+  impact_label: string
+  action: string
+  entity_type?: string
+  entity_id?: string
+}
+
+export interface InsightsReport {
+  from?: string
+  to?: string
+  insights: Insight[]
+}
+
+export async function fetchInsights(
+  opts: { from?: Date | string; to?: Date | string } = {},
+): Promise<InsightsReport> {
+  const query = buildQuery(opts)
+  const r: any = await unwrap(api.GET('/api/v1/analytics/insights', { params: { query: query as any } }))
+  return {
+    from: r?.from, to: r?.to,
+    insights: (r?.insights ?? []).map((x: any) => ({
+      id: String(x.id ?? ''),
+      category: (x.category ?? 'menu') as InsightCategory,
+      severity: (x.severity ?? 'low') as InsightSeverity,
+      title: String(x.title ?? ''),
+      detail: String(x.detail ?? ''),
+      impact: Number(x.impact ?? 0),
+      impact_label: String(x.impact_label ?? ''),
+      action: String(x.action ?? ''),
+      entity_type: x.entity_type || undefined,
+      entity_id: x.entity_id || undefined,
+    })),
+  }
+}
+
 // ─── Динамика (deep analytics) ──────────────────────────────────────────────
 
 export type TrendGranularity = 'day' | 'week' | 'month'

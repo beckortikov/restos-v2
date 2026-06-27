@@ -143,6 +143,7 @@ func NewRouter(deps Deps) http.Handler {
 	finReportsSvc := service.NewFinanceReportsService(rep)
 	analyticsSvc := service.NewAnalyticsService(rep)
 	trendsSvc := service.NewTrendsService(reportsSvc, finReportsSvc)
+	insightsSvc := service.NewInsightsService(rep, analyticsSvc)
 	waiterAppSvc := service.NewWaiterAppService(deps.WaiterAPKPath)
 	salarySvc := service.NewSalaryService(rep)
 	stopListSvc := service.NewStopListService(rep)
@@ -190,6 +191,7 @@ func NewRouter(deps Deps) http.Handler {
 	finReportsH := handlers.NewFinanceReports(finReportsSvc)
 	analyticsH := handlers.NewAnalytics(analyticsSvc)
 	trendsH := handlers.NewTrends(trendsSvc)
+	insightsH := handlers.NewInsights(insightsSvc)
 	waiterAppH := handlers.NewWaiterApp(waiterAppSvc)
 	salaryH := handlers.NewSalary(salarySvc)
 	stopListH := handlers.NewStopList(stopListSvc)
@@ -351,6 +353,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/ingredient-stock-value", analyticsH.IngredientStockValue)
 			g.Get("/analytics/trends", trendsH.Trends)
 			g.Get("/analytics/trends.xlsx", trendsH.Export)
+			g.Get("/analytics/insights", insightsH.Insights)
 
 			// APK официанта — состояние + загрузка нового (раздача по QR — публично).
 			g.Get("/waiter-app", waiterAppH.Info)

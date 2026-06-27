@@ -2122,6 +2122,12 @@ paths:
         - { $ref: "#/components/parameters/To" }
         - { in: query, name: granularity, schema: { type: string, enum: [day, week, month], default: day } }
       responses: { "200": { $ref: "#/components/responses/XLSX" } }
+  /api/v1/analytics/insights:
+    get:
+      tags: [analytics]
+      summary: Инсайты — ранжированные действия (кросс-аналитика меню/утечек/склада/персонала)
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/InsightsReport" } } } } }
   /api/v1/waiter-app:
     get:
       tags: [settings]
@@ -3830,6 +3836,26 @@ components:
         total_orders:  { type: integer }
         total_revenue: { $ref: "#/components/schemas/Decimal" }
         cells: { type: array, items: { $ref: "#/components/schemas/PeakHoursCell" } }
+
+    Insight:
+      type: object
+      properties:
+        id:           { type: string }
+        category:     { type: string, enum: [menu, leak, stock, staff] }
+        severity:     { type: string, enum: [high, medium, low] }
+        title:        { type: string }
+        detail:       { type: string }
+        impact:       { $ref: "#/components/schemas/Decimal" }
+        impact_label: { type: string }
+        action:       { type: string }
+        entity_type:  { type: string }
+        entity_id:    { type: string }
+    InsightsReport:
+      type: object
+      properties:
+        from:     { type: string, format: date-time }
+        to:       { type: string, format: date-time }
+        insights: { type: array, items: { $ref: "#/components/schemas/Insight" } }
 
     WaiterAppInfo:
       type: object

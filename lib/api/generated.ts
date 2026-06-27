@@ -7608,6 +7608,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/insights": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Инсайты — ранжированные действия (кросс-аналитика меню/утечек/склада/персонала) */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["InsightsReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/waiter-app": {
         parameters: {
             query?: never;
@@ -10597,6 +10636,27 @@ export interface components {
             total_orders?: number;
             total_revenue?: components["schemas"]["Decimal"];
             cells?: components["schemas"]["PeakHoursCell"][];
+        };
+        Insight: {
+            id?: string;
+            /** @enum {string} */
+            category?: "menu" | "leak" | "stock" | "staff";
+            /** @enum {string} */
+            severity?: "high" | "medium" | "low";
+            title?: string;
+            detail?: string;
+            impact?: components["schemas"]["Decimal"];
+            impact_label?: string;
+            action?: string;
+            entity_type?: string;
+            entity_id?: string;
+        };
+        InsightsReport: {
+            /** Format: date-time */
+            from?: string;
+            /** Format: date-time */
+            to?: string;
+            insights?: components["schemas"]["Insight"][];
         };
         WaiterAppInfo: {
             available?: boolean;
