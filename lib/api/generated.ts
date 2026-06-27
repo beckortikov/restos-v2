@@ -7608,6 +7608,113 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/waiter-app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Состояние APK официанта (есть ли, версия, размер, дата) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WaiterAppInfo"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Загрузить новый APK официанта (multipart "file", optional "version") */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /** Format: binary */
+                        file?: string;
+                        version?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WaiterAppInfo"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/download/waiter.apk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Публичное скачивание APK официанта (по QR в LAN, без авторизации) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description APK файл */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/vnd.android.package-archive": string;
+                    };
+                };
+                /** @description APK ещё не загружен */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/forecast": {
         parameters: {
             query?: never;
@@ -10490,6 +10597,16 @@ export interface components {
             total_orders?: number;
             total_revenue?: components["schemas"]["Decimal"];
             cells?: components["schemas"]["PeakHoursCell"][];
+        };
+        WaiterAppInfo: {
+            available?: boolean;
+            version?: string;
+            file_name?: string;
+            /** Format: int64 */
+            size_bytes?: number;
+            /** Format: date-time */
+            uploaded_at?: string | null;
+            download_path?: string;
         };
         TrendBucket: {
             /** @description Начало бакета, YYYY-MM-DD */

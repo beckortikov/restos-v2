@@ -2122,6 +2122,31 @@ paths:
         - { $ref: "#/components/parameters/To" }
         - { in: query, name: granularity, schema: { type: string, enum: [day, week, month], default: day } }
       responses: { "200": { $ref: "#/components/responses/XLSX" } }
+  /api/v1/waiter-app:
+    get:
+      tags: [settings]
+      summary: Состояние APK официанта (есть ли, версия, размер, дата)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaiterAppInfo" } } } } }
+    post:
+      tags: [settings]
+      summary: Загрузить новый APK официанта (multipart "file", optional "version")
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                version: { type: string }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaiterAppInfo" } } } } }
+  /download/waiter.apk:
+    get:
+      tags: [settings]
+      summary: Публичное скачивание APK официанта (по QR в LAN, без авторизации)
+      responses:
+        "200": { description: APK файл, content: { application/vnd.android.package-archive: { schema: { type: string, format: binary } } } }
+        "404": { description: APK ещё не загружен }
   /api/v1/analytics/forecast:
     get:
       tags: [analytics]
@@ -3805,6 +3830,16 @@ components:
         total_orders:  { type: integer }
         total_revenue: { $ref: "#/components/schemas/Decimal" }
         cells: { type: array, items: { $ref: "#/components/schemas/PeakHoursCell" } }
+
+    WaiterAppInfo:
+      type: object
+      properties:
+        available:     { type: boolean }
+        version:       { type: string }
+        file_name:     { type: string }
+        size_bytes:    { type: integer, format: int64 }
+        uploaded_at:   { type: string, format: date-time, nullable: true }
+        download_path: { type: string }
 
     TrendBucket:
       type: object

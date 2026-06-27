@@ -39,6 +39,9 @@ type Deps struct {
 	// BackupCfg — пути/DSN для ручного backup/restore через UI. Если
 	// BackupsDir пуст — endpoints вернут ошибку (dev без embedded PG).
 	BackupCfg service.BackupServiceConfig
+	// WaiterAPKPath — путь к загруженному APK официанта (раздаётся по QR/LAN).
+	// Пусто → раздача/загрузка APK недоступна (dev/тест без DataDir).
+	WaiterAPKPath string
 }
 
 // BuildInfo пробрасывается из main для GET /healthz.
@@ -140,6 +143,7 @@ func NewRouter(deps Deps) http.Handler {
 	finReportsSvc := service.NewFinanceReportsService(rep)
 	analyticsSvc := service.NewAnalyticsService(rep)
 	trendsSvc := service.NewTrendsService(reportsSvc, finReportsSvc)
+	waiterAppSvc := service.NewWaiterAppService(deps.WaiterAPKPath)
 	salarySvc := service.NewSalaryService(rep)
 	stopListSvc := service.NewStopListService(rep)
 	batchSvc := service.NewBatchCookingService(rep)
@@ -186,6 +190,7 @@ func NewRouter(deps Deps) http.Handler {
 	finReportsH := handlers.NewFinanceReports(finReportsSvc)
 	analyticsH := handlers.NewAnalytics(analyticsSvc)
 	trendsH := handlers.NewTrends(trendsSvc)
+	waiterAppH := handlers.NewWaiterApp(waiterAppSvc)
 	salaryH := handlers.NewSalary(salarySvc)
 	stopListH := handlers.NewStopList(stopListSvc)
 	batchH := handlers.NewBatchCooking(batchSvc)
@@ -346,6 +351,10 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/ingredient-stock-value", analyticsH.IngredientStockValue)
 			g.Get("/analytics/trends", trendsH.Trends)
 			g.Get("/analytics/trends.xlsx", trendsH.Export)
+
+			// APK официанта — состояние + загрузка нового (раздача по QR — публично).
+			g.Get("/waiter-app", waiterAppH.Info)
+			g.Post("/waiter-app", waiterAppH.Upload)
 			g.Get("/analytics/forecast", analyticsH.Forecast)
 			g.Get("/analytics/abc-inventory", analyticsH.ABCInventory)
 			g.Get("/finance/service-accrual/by-waiter", salaryH.AccrualByWaiter)
@@ -588,6 +597,10 @@ func NewRouter(deps Deps) http.Handler {
 	// чтобы скачивание шаблона никогда не отдавало SPA index.html под видом
 	// .xlsx (иначе Excel: «формат или расширение не являются допустимыми»).
 	r.Handle("/docs/*", DocsHandler())
+
+	// APK официанта — ПУБЛИЧНО (телефон качает по QR ещё до логина). Вне
+	// /api/v1 и до SPA-fallback, чтобы NotFound не перехватил.
+	r.Get(service.WaiterAppDownloadPath, waiterAppH.Download)
 
 	// SPA static — отдаёт embedded React build на всех не-API путях.
 	// Любой браузер в LAN, открывший http://<касса-ip>:3001, получает UI.

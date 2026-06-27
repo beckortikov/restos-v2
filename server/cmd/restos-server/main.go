@@ -165,6 +165,7 @@ func main() {
 			LicensePublicKey: licPub,
 			Hub:              hub,
 			NTPChecker:       ntpChecker,
+			WaiterAPKPath:    cfg.WaiterAppPath(),
 			BackupCfg: service.BackupServiceConfig{
 				BackupsDir:   cfg.BackupsDir(),
 				DesktopDir:   cfg.DesktopBackupsDir(),

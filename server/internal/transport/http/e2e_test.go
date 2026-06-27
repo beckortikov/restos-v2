@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -96,8 +97,9 @@ func setupE2E(t *testing.T) *e2eFixture {
 	}
 
 	router := httpx.NewRouter(httpx.Deps{
-		DB:    gdb,
-		Build: httpx.BuildInfo{Version: "test"},
+		DB:            gdb,
+		Build:         httpx.BuildInfo{Version: "test"},
+		WaiterAPKPath: filepath.Join(t.TempDir(), "waiter-app.apk"),
 	})
 	srv := httptest.NewServer(router)
 
