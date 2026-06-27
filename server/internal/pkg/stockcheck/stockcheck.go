@@ -92,7 +92,7 @@ type Opts struct {
 // Зеркало `computeShortages` из v1 (TypeScript). При портировании сохраняем:
 //   - тексты сообщений (точные русские строки),
 //   - порядок проверок,
-//   - rule "нет техкарты → блок" в обоих режимах,
+//   - rule "нет техкарты → блок" только в strict (lenient — продаётся свободно),
 //   - non-food ингредиенты (is_food=false) пропускаются,
 //   - waste_percent: needed = recipeQty / (1 - waste/100).
 func ComputeShortages(items []OrderItem, opts Opts) []string {
@@ -108,9 +108,15 @@ func ComputeShortages(items []OrderItem, opts Opts) []string {
 			}
 		}
 
-		// Rule (оба режима): блюдо без техкарты не продаётся когда tech-cards ON.
+		// Блюдо без техкарты:
+		//  - strict (enforce_stock_check ON) → блок «нет техкарты» (форсим техкарты);
+		//  - lenient (ModeTechCardOnly, enforce OFF) → продаётся свободно. Это
+		//    «частичное использование склада»: техкарты только у части блюд/напитков,
+		//    остальные позиции продаются без списания.
 		if len(techLines) == 0 {
-			shortages = append(shortages, fmt.Sprintf("%s: не настроена техкарта", item.Name))
+			if opts.Mode == ModeStrict {
+				shortages = append(shortages, fmt.Sprintf("%s: не настроена техкарта", item.Name))
+			}
 			continue
 		}
 

@@ -67,7 +67,8 @@ func strPtr(s string) *string { return &s }
 // ─── 'tech-card-only' (techCards ON, strict OFF) ──────────────────────────
 
 func TestComputeShortages_TechCardOnly(t *testing.T) {
-	t.Run("blocks dish without tech-card lines", func(t *testing.T) {
+	t.Run("ПРОДАЁТ блюдо без техкарты (частичное использование склада)", func(t *testing.T) {
+		// lenient (enforce OFF): позиция без техкарты продаётся свободно, без списания.
 		r := ComputeShortages(
 			[]OrderItem{{MenuItemID: "d1", Name: "Кока-кола", Qty: decimal.FromInt(1)}},
 			Opts{
@@ -76,11 +77,10 @@ func TestComputeShortages_TechCardOnly(t *testing.T) {
 				TclByMenu: map[string][]TechLine{},
 			},
 		)
-		R.Len(t, r, 1)
-		R.Regexp(t, "не настроена техкарта", r[0])
+		R.Empty(t, r)
 	})
 
-	t.Run("blocks dish whose tech-card lines all have ingredient_id=NULL", func(t *testing.T) {
+	t.Run("ПРОДАЁТ блюдо, где все строки техкарты с ingredient_id=NULL", func(t *testing.T) {
 		r := ComputeShortages(
 			[]OrderItem{{MenuItemID: "d1", Name: "Блюдо", Qty: decimal.FromInt(1)}},
 			Opts{
@@ -91,8 +91,7 @@ func TestComputeShortages_TechCardOnly(t *testing.T) {
 				},
 			},
 		)
-		R.Len(t, r, 1)
-		R.Regexp(t, "не настроена техкарта", r[0])
+		R.Empty(t, r)
 	})
 
 	t.Run("passes when tech card exists, EVEN at zero stock (negative allowed)", func(t *testing.T) {

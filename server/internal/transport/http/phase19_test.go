@@ -50,8 +50,10 @@ func TestPhase19_CreateOrder_MissingTechCard(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	gdb, _, _, _ := seedForWrite(t, f)
-	// Включаем tech_cards (без enforce → mode = tech-card-only).
-	setRestaurantFlags(t, gdb, f.rid, true, false)
+	// tech_cards + enforce (strict): «нет техкарты» блокируется. В lenient-режиме
+	// (enforce OFF) такая позиция, наоборот, продаётся свободно — см.
+	// TestOrder_PartialStock_NoTechCard.
+	setRestaurantFlags(t, gdb, f.rid, true, true)
 
 	// Создаём блюдо БЕЗ tech_card_lines.
 	naked := createMenuItem(t, gdb, f.rid, "Без техкарты", "10")
