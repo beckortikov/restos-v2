@@ -47,19 +47,23 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 		return nil, err
 	}
 
-	// Авто-стоп (по остаткам сырья и по готовым порциям) применяется ТОЛЬКО при
-	// включённых техкартах. Если техкарты выключены — склад не учитывается, и в
-	// стопе остаются лишь ручные override'ы.
+	// Авто-стоп (по остаткам сырья и по готовым порциям) применяется ТОЛЬКО в
+	// строгом режиме: учёт по техкартам + контроль остатков (enforce_stock_check).
+	// Если контроль выключен (lenient) — склад может уходить в минус и позиции
+	// продаются свободно, поэтому авто-стопа нет: в стопе остаются лишь ручные
+	// override'ы. Согласовано с проверкой заказа (stockcheck, v3.9.108).
 	var rest models.Restaurant
-	if err := s.r.Raw().WithContext(ctx).Select("tech_cards_enabled").
+	if err := s.r.Raw().WithContext(ctx).Select("tech_cards_enabled, enforce_stock_check").
 		Where("id = ?", rid).First(&rest).Error; err != nil {
 		return nil, err
 	}
 	techEnabled := rest.TechCardsEnabled == nil || *rest.TechCardsEnabled
+	enforce := rest.EnforceStockCheck != nil && *rest.EnforceStockCheck
+	autoStop := techEnabled && enforce
 
 	// 1–2. Меню-позиции, чьи tech-card-lines ссылаются на low-stock ингредиенты.
 	affected := make(map[string][]StopListIngredient)
-	if techEnabled {
+	if autoStop {
 		var lowIngs []models.Ingredient
 		if err := s.r.Raw().WithContext(ctx).
 			Where("restaurant_id = ? AND qty <= min_qty", rid).
@@ -100,10 +104,10 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 		}
 	}
 
-	// 3. Manual overrides — menu_items.stop_list_override = true.
+	// 3. Manual overrides — menu_items.stop_list_override = true (без удалённых).
 	var manualItems []models.MenuItem
 	if err := s.r.Raw().WithContext(ctx).
-		Where("restaurant_id = ? AND stop_list_override = ?", rid, true).
+		Where("restaurant_id = ? AND stop_list_override = ? AND is_deleted = ?", rid, true, false).
 		Find(&manualItems).Error; err != nil {
 		return nil, err
 	}
@@ -116,10 +120,10 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 	// доступность определяется prepared_qty, а НЕ остатком сырья: блюдо с
 	// готовыми порциями продаётся даже при нулевом сырье и в стоп НЕ идёт.
 	batchZeroIDs := make(map[string]bool)
-	if techEnabled {
+	if autoStop {
 		var batchZero []models.MenuItem
 		if err := s.r.Raw().WithContext(ctx).
-			Where("restaurant_id = ? AND is_batch_cooking = ? AND (prepared_qty <= 0 OR prepared_qty IS NULL)", rid, true).
+			Where("restaurant_id = ? AND is_deleted = ? AND is_batch_cooking = ? AND (prepared_qty <= 0 OR prepared_qty IS NULL)", rid, false, true).
 			Find(&batchZero).Error; err != nil {
 			return nil, err
 		}
@@ -148,7 +152,7 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 	}
 	var items []models.MenuItem
 	if err := s.r.Raw().WithContext(ctx).
-		Where("restaurant_id = ? AND id IN ?", rid, ids).
+		Where("restaurant_id = ? AND id IN ? AND is_deleted = ?", rid, ids, false).
 		Find(&items).Error; err != nil {
 		return nil, err
 	}

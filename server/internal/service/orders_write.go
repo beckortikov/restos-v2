@@ -1032,15 +1032,18 @@ func validateStopListForItems(
 	}
 
 	// 2. Auto-stop через low-stock ingredient → tech_card_line.
-	//    Только при включённых техкартах: иначе склад не учитывается и
-	//    авто-стоп не должен блокировать продажу (ручной override — отдельно).
+	//    Только в строгом режиме (учёт по техкартам + контроль остатков): иначе
+	//    склад не учитывается / может уходить в минус, и авто-стоп не должен
+	//    блокировать продажу (ручной override — отдельно, он блокирует всегда).
+	//    Согласовано со стоп-листом и stockcheck (v3.9.108).
 	var rest models.Restaurant
-	if err := tx.Select("tech_cards_enabled").Where("id = ?", rid).First(&rest).Error; err != nil {
+	if err := tx.Select("tech_cards_enabled, enforce_stock_check").Where("id = ?", rid).First(&rest).Error; err != nil {
 		return err
 	}
 	techEnabled := rest.TechCardsEnabled == nil || *rest.TechCardsEnabled
+	enforce := rest.EnforceStockCheck != nil && *rest.EnforceStockCheck
 	var lowIngs []models.Ingredient
-	if techEnabled {
+	if techEnabled && enforce {
 		if err := tx.Where("restaurant_id = ? AND qty <= min_qty", rid).
 			Find(&lowIngs).Error; err != nil {
 			return err

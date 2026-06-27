@@ -165,8 +165,8 @@ func TestPhase14_StopList(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	gdb, menuItemID, _, _ := seedForWrite(t, f)
-	// Авто-стоп работает только при включённых техкартах (фикстура — OFF).
-	if err := gdb.Exec(`UPDATE restaurants SET tech_cards_enabled = true WHERE id = ?`, f.rid).Error; err != nil {
+	// Авто-стоп работает только в строгом режиме: техкарты + контроль остатков.
+	if err := gdb.Exec(`UPDATE restaurants SET tech_cards_enabled = true, enforce_stock_check = true WHERE id = ?`, f.rid).Error; err != nil {
 		t.Fatal(err)
 	}
 
