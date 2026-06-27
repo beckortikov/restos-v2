@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -194,6 +195,13 @@ func parsePeriod(r *http.Request) (service.PeriodFilter, error) {
 		t, err := timeutil.ParseLooseRFC3339(v)
 		if err != nil {
 			return f, errBadMultipart("bad ?to (RFC3339 required)")
+		}
+		// Date-only `to` (без времени, напр. "2026-06-27") трактуем ВКЛЮЧИТЕЛЬНО
+		// весь день. Отчёты фильтруют created_at/closed_at < to, поэтому без
+		// сдвига на сутки операции самого дня `to` (сегодняшние) выпадали — ДДС
+		// и P&L показывали 0, пока за период есть только сегодняшние записи.
+		if !strings.Contains(v, "T") {
+			t = t.AddDate(0, 0, 1)
 		}
 		f.To = &t
 	}
