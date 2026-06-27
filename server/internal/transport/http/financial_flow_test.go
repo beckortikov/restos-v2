@@ -489,13 +489,15 @@ func TestFinancialFlow_Full(t *testing.T) {
 		if !pnl.GrossProfit.Equal(decimal.MustFromString("235")) {
 			t.Errorf("MISMATCH PnL gross_profit = %s, want 235", pnl.GrossProfit.String())
 		}
-		// Opex = stock_purchase 250 + salary 200 + bonus 50 = 500.
-		if !pnl.Opex.Total.Equal(decimal.MustFromString("500")) {
-			t.Errorf("MISMATCH PnL opex.total = %s, want 500", pnl.Opex.Total.String())
+		// Opex = salary 200 + bonus 50 = 250. Закупки (stock_purchase 250) в ОПиУ
+		// НЕ входят — это движение запасов, а не расход (учитываются как COGS при
+		// продаже; в ДДС закупка остаётся, см. Flow9).
+		if !pnl.Opex.Total.Equal(decimal.MustFromString("250")) {
+			t.Errorf("MISMATCH PnL opex.total = %s, want 250 (без stock_purchase)", pnl.Opex.Total.String())
 		}
-		// Net = 235 - 500 = -265.
-		if !pnl.NetProfit.Equal(decimal.MustFromString("-265")) {
-			t.Errorf("MISMATCH PnL net_profit = %s, want -265", pnl.NetProfit.String())
+		// Net = 235 - 250 = -15.
+		if !pnl.NetProfit.Equal(decimal.MustFromString("-15")) {
+			t.Errorf("MISMATCH PnL net_profit = %s, want -15", pnl.NetProfit.String())
 		}
 		// By category coverage.
 		cats := map[string]decimal.Decimal{}
@@ -508,8 +510,8 @@ func TestFinancialFlow_Full(t *testing.T) {
 		if v, ok := cats["bonus"]; !ok || !v.Equal(decimal.MustFromString("50")) {
 			t.Errorf("MISMATCH opex.bonus = %v, want 50", v)
 		}
-		if v, ok := cats["stock_purchase"]; !ok || !v.Equal(decimal.MustFromString("250")) {
-			t.Errorf("MISMATCH opex.stock_purchase = %v, want 250", v)
+		if _, ok := cats["stock_purchase"]; ok {
+			t.Errorf("stock_purchase не должен быть в расходах ОПиУ (закупка — не расход)")
 		}
 	})
 

@@ -644,6 +644,11 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	}
 
 	// Opex from financial_operations type='out' grouped by category.
+	//
+	// Закупки склада (category='stock_purchase' — приход по накладной) в ОПиУ
+	// НЕ включаем: это движение запасов (актив на складе), а не расход. Расходом
+	// они становятся как COGS при продаже. Иначе двойной счёт себестоимости.
+	// В ДДС (cashflow) закупка остаётся — это реальный отток денег.
 	scoped3, _ := s.r.ForTenant(ctx)
 	type opexRow struct {
 		Category string          `gorm:"column:category"`
@@ -651,7 +656,8 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	}
 	q3 := scoped3.Table("financial_operations").
 		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total").
-		Where("type = ?", "out")
+		Where("type = ?", "out").
+		Where("COALESCE(category, '') NOT IN ?", []string{"stock_purchase"})
 	if f.From != nil {
 		q3 = q3.Where("created_at >= ?", *f.From)
 	}
