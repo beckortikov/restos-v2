@@ -8,6 +8,7 @@ import { fetchOrders, fetchTables, fetchZones, fetchUsers, fetchMenuItems, addIt
 import type { Order, OrderItem, Table, Zone, User, MenuItem } from '@/lib/types'
 import { formatCurrency, formatQty, calcLineTotal, getTimeSince, visibleReceiptItems } from '@/lib/helpers'
 import { useDataSync } from '@/hooks/use-data-sync'
+import { fetchBatchAvailability } from '@/lib/queries/batch_cooking'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -137,6 +138,14 @@ export default function WaiterOrderDetailPage() {
   useEffect(() => {
     fetchMenuItems().then(setMenuItems).catch(() => {})
   }, [])
+
+  // Живой остаток заготовок (prepared − незакрытые заказы) для дозаказа.
+  const [batchAvail, setBatchAvail] = useState<Map<string, number>>(new Map())
+  const reloadBatchAvail = useCallback(() => {
+    fetchBatchAvailability().then(setBatchAvail).catch(() => {})
+  }, [])
+  useEffect(() => { reloadBatchAvail() }, [reloadBatchAvail])
+  useDataSync(['orders', 'order_items', 'menu_items'], reloadBatchAvail)
 
   // Service% по умолчанию заведения — нужно показывать «Итого с обслуживанием»
   // даже когда у заказа в БД ещё не записан servicePercent (старые / в ходе создания).
@@ -549,6 +558,14 @@ export default function WaiterOrderDetailPage() {
                       <div className="text-sm font-medium text-foreground truncate">{m.name}</div>
                       <div className="text-xs text-muted-foreground">{formatCurrency(m.price)}{m.category ? ` · ${m.category}` : ''}</div>
                     </div>
+                    {m.isBatchCooking && (
+                      <span
+                        title="Доступно сейчас (порц.)"
+                        className="shrink-0 min-w-[20px] h-5 px-1.5 rounded-full bg-muted text-muted-foreground border border-border flex items-center justify-center text-[11px] font-semibold"
+                      >
+                        {batchAvail.get(m.id) ?? m.preparedQty ?? 0}
+                      </span>
+                    )}
                     {isLoading ? <Loader2 className="size-4 animate-spin shrink-0" /> : <Plus className="size-4 text-primary shrink-0" />}
                   </button>
                 )
