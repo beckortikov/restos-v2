@@ -279,8 +279,10 @@ export default function SettingsPage() {
             />
             <div className="border-t border-border pt-3">
               <ToggleRow
-                title="Строгая проверка склада"
-                hint="Блокировать заказ если ингредиентов нет на складе"
+                title="Строгая проверка склада (контроль остатков)"
+                hint={techCardsEnabled
+                  ? 'ВКЛ — блокировать заказ при нехватке ингредиентов и требовать техкарту. ВЫКЛ — склад может уходить в минус, а блюда без техкарты продаются свободно (склад только для части позиций).'
+                  : 'Доступно при включённом «Учёте по техкартам».'}
                 checked={enforceStockCheck}
                 onChange={() => setEnforceStockCheck(!enforceStockCheck)}
                 disabled={!techCardsEnabled}
