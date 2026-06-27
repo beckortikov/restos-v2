@@ -169,6 +169,19 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 			return err
 		}
 
+		// 2b. Требуем открытую смену — как и /close. Продажа (в т.ч. через
+		// разделение счёта) без открытой смены не допускается.
+		var shift models.CashShift
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND status = ?", rid, "open").
+			Order("opened_at DESC").
+			First(&shift).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("CONFLICT", "shift is not open", nil)
+			}
+			return err
+		}
+
 		now := time.Now().UTC()
 		paid := "paid"
 		pm := in.PaymentMethod
@@ -219,6 +232,7 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 			IsAuto:       &opAuto,
 			SourceRef:    &opSourceRef,
 			RestaurantID: &rid,
+			ShiftID:      &shift.ID,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -227,6 +241,19 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 		}
 		result.Split = sp
 		result.Operation = op
+
+		// Агрегаты смены: выручка split'а попадает в кассовую смену (как /close),
+		// иначе экран смены не покажет продажи через разделение счёта.
+		switch in.PaymentMethod {
+		case "cash":
+			shift.CashRevenue = decimal.Add(shift.CashRevenue, sp.Total)
+		case "card":
+			shift.CardRevenue = decimal.Add(shift.CardRevenue, sp.Total)
+		}
+		shift.UpdatedAt = now
+		if err := tx.Save(&shift).Error; err != nil {
+			return err
+		}
 
 		// 5. Check if all splits paid → close order.
 		if sp.OrderID == nil {
@@ -263,6 +290,20 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 		order.TotalWithService = decimal.Normalize(decimal.Add(order.Total, order.TipAmount))
 		order.UpdatedAt = now
 		if err := tx.Save(&order).Error; err != nil {
+			return err
+		}
+
+		// Счётчик заказов смены +1 (на полное закрытие заказа, не на каждый split)
+		// и пересчёт среднего чека — как в /close.
+		oc := 1
+		if shift.OrdersCount != nil {
+			oc = *shift.OrdersCount + 1
+		}
+		shift.OrdersCount = &oc
+		shTotal := decimal.Add(shift.CashRevenue, shift.CardRevenue)
+		shift.AvgCheck = decimal.Normalize(decimal.DivRound(shTotal, decimal.FromInt(int64(oc))))
+		shift.UpdatedAt = now
+		if err := tx.Save(&shift).Error; err != nil {
 			return err
 		}
 

@@ -567,6 +567,20 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 	if len(menuIDs) == 0 {
 		return nil
 	}
+	// Заготовочные блюда (is_batch_cooking) списываются из ГОТОВОЙ партии
+	// (prepared_qty), а НЕ повторно по сырью — ингредиенты уже ушли на produce.
+	var menus []models.MenuItem
+	if err := tx.Where("restaurant_id = ? AND id IN ?", restaurantID, menuIDs).
+		Find(&menus).Error; err != nil {
+		return err
+	}
+	isBatch := make(map[string]bool, len(menus))
+	for _, m := range menus {
+		if m.IsBatchCooking != nil && *m.IsBatchCooking {
+			isBatch[m.ID] = true
+		}
+	}
+
 	var lines []models.TechCardLine
 	if err := tx.Where("restaurant_id = ? AND menu_item_id IN ?", restaurantID, menuIDs).
 		Find(&lines).Error; err != nil {
@@ -587,6 +601,26 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 		if it.MenuItemID == nil {
 			continue
 		}
+
+		// Заготовка: уменьшаем prepared_qty на число порций (cap на 0), сырьё
+		// НЕ списываем (иначе двойное списание). Идемпотентность обеспечена
+		// guard'ом «order already closed» в Close/CheckAndClose/PaySplit.
+		if isBatch[*it.MenuItemID] {
+			portions := decimal.Normalize(it.Qty).IntPart()
+			if portions <= 0 {
+				continue
+			}
+			if err := tx.Model(&models.MenuItem{}).
+				Where("restaurant_id = ? AND id = ?", restaurantID, *it.MenuItemID).
+				Updates(map[string]any{
+					"prepared_qty": gorm.Expr("GREATEST(COALESCE(prepared_qty, 0) - ?, 0)", portions),
+					"updated_at":   now,
+				}).Error; err != nil {
+				return err
+			}
+			continue
+		}
+
 		tcl := linesByMenu[*it.MenuItemID]
 		for _, line := range tcl {
 			lineQty := decimal.Mul(line.Qty, effectivePortions(it.Unit, it.Qty, it.UnitSize))
