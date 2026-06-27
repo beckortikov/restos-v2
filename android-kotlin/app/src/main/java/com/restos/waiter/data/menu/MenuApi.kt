@@ -16,7 +16,25 @@ interface MenuApi {
 
     @GET("api/v1/menu/categories")
     suspend fun listCategories(): PagedEnvelope<CategoryDto>
+
+    /**
+     * Живой остаток заготовок: available = prepared_qty − порции во всех
+     * незакрытых заказах. prepared_qty списывается лишь при закрытии чека,
+     * поэтому без вычета официант видел бы завышенный остаток, пока гости
+     * сидят и не закрыли счёт.
+     */
+    @GET("api/v1/menu/batch/availability")
+    suspend fun batchAvailability(): PagedEnvelope<BatchAvailabilityDto>
 }
+
+@Serializable
+data class BatchAvailabilityDto(
+    @SerialName("menu_item_id") val menuItemId: String,
+    val name: String = "",
+    val prepared: Int = 0,
+    val reserved: Int = 0,
+    val available: Int = 0,
+)
 
 /**
  * Контракт v4 — см. `server/internal/db/models/menu.go::MenuItem`.

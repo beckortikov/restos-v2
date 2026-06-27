@@ -182,6 +182,7 @@ private fun ComposerBody(
         MenuList(
             items = filterMenu(state),
             cart = state.cart,
+            batchAvail = state.batchAvail,
             onPick = onAdd,
             onInc = onInc,
             onDec = onDec,
@@ -284,6 +285,7 @@ private fun Chip(label: String, active: Boolean, onClick: () -> Unit) {
 private fun MenuList(
     items: List<MenuItemDto>,
     cart: List<CartLine>,
+    batchAvail: Map<String, Int>,
     onPick: (MenuItemDto) -> Unit,
     onInc: (String) -> Unit,
     onDec: (String) -> Unit,
@@ -309,6 +311,7 @@ private fun MenuList(
             MenuListRow(
                 item = item,
                 line = line,
+                batchAvailable = if (item.isBatchCooking) (batchAvail[item.id] ?: item.preparedQty) else null,
                 onPick = { onPick(item) },
                 onInc = { onInc(item.id) },
                 onDec = { onDec(item.id) },
@@ -322,6 +325,7 @@ private fun MenuList(
 private fun MenuListRow(
     item: MenuItemDto,
     line: CartLine?,
+    batchAvailable: Int?,
     onPick: () -> Unit,
     onInc: () -> Unit,
     onDec: () -> Unit,
@@ -369,6 +373,23 @@ private fun MenuListRow(
                     else MaterialTheme.colorScheme.primary,
                 )
             }
+            // Заготовка: серый бейдж «доступно сейчас» (с учётом незакрытых заказов).
+            if (batchAvailable != null) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text(
+                        "$batchAvailable порц.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+            }
+
             // Справа: стоп / весовая пилюля / [-] qty [+] / [+]
             if (disabled) {
                 Surface(

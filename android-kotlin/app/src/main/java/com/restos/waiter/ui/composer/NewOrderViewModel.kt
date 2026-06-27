@@ -97,6 +97,8 @@ data class NewOrderUiState(
     val createdOrderId: String? = null,
     // Когда != null — открыт диалог ввода веса для этого блюда.
     val weightItem: MenuItemDto? = null,
+    // Живой остаток заготовок: menu_item_id → доступно сейчас (порц.).
+    val batchAvail: Map<String, Int> = emptyMap(),
 )
 
 @HiltViewModel
@@ -169,6 +171,9 @@ class NewOrderViewModel @Inject constructor(
                 ?.also { cache.setTables(it) }
                 ?: cache.tables.value
             val table = tableId?.let { id -> tables.firstOrNull { it.id == id } }
+            val batchAvail = runCatching {
+                menuApi.batchAvailability().data.associate { it.menuItemId to it.available }
+            }.getOrNull() ?: emptyMap()
             _state.update {
                 it.copy(
                     loading = false,
@@ -176,6 +181,7 @@ class NewOrderViewModel @Inject constructor(
                     categories = buildCategories(cats, items),
                     items = items,
                     selectedCategoryId = null,
+                    batchAvail = batchAvail,
                 )
             }
         } catch (e: Throwable) {
