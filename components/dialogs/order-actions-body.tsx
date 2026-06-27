@@ -38,7 +38,7 @@ import { buildReceiptData } from '@/lib/receipt-data'
 import { useAuth } from '@/lib/auth-store'
 import { PrintReceipt, type ReceiptData } from '@/components/print-receipt'
 import { SplitBillDialog } from '@/components/dialogs/split-bill-dialog'
-import { fetchOrderSplits, paySplit, cancelSplits, fetchVoidsForOrder } from '@/lib/queries'
+import { fetchOrderSplits, paySplit, cancelSplits, fetchVoidsForOrder, fetchActiveShift } from '@/lib/queries'
 import { type OrderSplit, type OrderVoid } from '@/lib/types'
 import { OrderItemsList } from './order-actions/OrderItemsList'
 import { OrderTotalsBlock } from './order-actions/OrderTotalsBlock'
@@ -793,6 +793,19 @@ export function OrderActionsBody({
                     <button
                       onClick={async () => {
                         if (!selectedAccountId) return
+                        // Hard-block: оплата доли (split) требует открытой смены —
+                        // как и обычная оплата. Проверяем ДО paySplit, чтобы кассир
+                        // видел понятный тост вместо 409 с бэка.
+                        try {
+                          const shift = await fetchActiveShift()
+                          if (!shift) {
+                            toast.error('Откройте кассовую смену перед оплатой', {
+                              action: { label: 'Открыть смену', onClick: () => navigate('/operations/shifts') },
+                              duration: 6000,
+                            })
+                            return
+                          }
+                        } catch { /* пускаем — server-side gate в PaySplit поймает */ }
                         const acc = accounts.find(a => a.id === selectedAccountId)
                         const pm = paymentType === 'cash' ? 'cash' as const : 'card' as const
                         try {
@@ -803,8 +816,8 @@ export function OrderActionsBody({
                             onAction('refresh')
                             onClose()
                           }
-                        } catch {
-                          // error
+                        } catch (e) {
+                          toast.error(e instanceof Error ? e.message : 'Не удалось оплатить долю')
                         }
                       }}
                       disabled={!selectedAccountId}
