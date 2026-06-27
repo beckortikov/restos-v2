@@ -50,16 +50,24 @@ data class UserDto(
     val username: String,
     @SerialName("full_name") val fullName: String = "",
     val role: String,
-    // ВАЖНО: НЕ объявляем `permissions` — бэкенд отдаёт его ОБЪЕКТОМ
-    // ({actions:{…}}), а не списком. Объявленное поле List<String> ломало
-    // десериализацию всего ответа /users (→ пустой список официантов в
-    // «Передать другому официанту»). Ключ игнорируется (ignoreUnknownKeys=true).
+    // permissions — ОБЪЕКТ {actions:{…}}. И login, и /users отдают его объектом
+    // (login — эффективные права с учётом дефолтов роли). nullable: у /users
+    // бывает null. nav и прочие ключи игнорируются (ignoreUnknownKeys=true).
+    val permissions: PermissionsDto? = null,
 ) {
     val displayName: String get() = fullName.ifBlank { username }
 
     // Старое имя поля для обратной совместимости с UI-кодом (`u.full_name`).
     val full_name: String get() = fullName
+
+    /** Право из матрицы доступов (login отдаёт эффективные права). */
+    fun can(action: String): Boolean = permissions?.actions?.get(action) == true
 }
+
+@Serializable
+data class PermissionsDto(
+    val actions: Map<String, Boolean> = emptyMap(),
+)
 
 @Serializable
 data class RestaurantDto(

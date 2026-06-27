@@ -109,6 +109,50 @@ func voidItem(t *testing.T, f *e2eFixture, tok, orderID, itemID string) int {
 	return r.StatusCode
 }
 
+// loginPerms — POST /auth/login и парсит user.permissions.actions.
+func loginPerms(t *testing.T, f *e2eFixture, pin string) map[string]bool {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"restaurant_id": f.rid, "pin": pin})
+	resp, err := http.Post(f.srv.URL+"/api/v1/auth/login", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var out struct {
+		User struct {
+			Permissions struct {
+				Actions map[string]bool `json:"actions"`
+			} `json:"permissions"`
+		} `json:"user"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatal(err)
+	}
+	return out.User.Permissions.Actions
+}
+
+// TestPerms_LoginReturnsEffective — login отдаёт эффективные права, чтобы клиент
+// (Kotlin) мог прятать недоступные кнопки.
+func TestPerms_LoginReturnsEffective(t *testing.T) {
+	f := setupE2E(t)
+	_ = makeUserToken(t, f, "waiter", "5551", "")
+	wa := loginPerms(t, f, "5551")
+	if wa["orders.void"] || wa["orders.cancel"] {
+		t.Fatalf("официант: orders.void/cancel должны быть false, got %+v", wa)
+	}
+	if !wa["orders.create"] {
+		t.Fatalf("официант: orders.create должно быть true, got %+v", wa)
+	}
+	_ = makeUserToken(t, f, "cashier", "5552", "")
+	ca := loginPerms(t, f, "5552")
+	if !ca["orders.void"] {
+		t.Fatalf("кассир: orders.void должно быть true, got %+v", ca)
+	}
+	if ca["orders.cancel"] {
+		t.Fatalf("кассир: orders.cancel должно быть false, got %+v", ca)
+	}
+}
+
 func TestPerms_WaiterCannotVoid(t *testing.T) {
 	f := setupE2E(t)
 	fixTok := f.login(t) // cashier-фикстура с правами — создаёт заказ

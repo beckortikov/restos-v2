@@ -34,6 +34,55 @@ var roleDefaults = map[string]map[string]bool{
 	},
 }
 
+// AllPermissions — полный список ключей действий (зеркало ALL_PERMISSIONS,
+// lib/types.ts). Нужен для owner/manager (все права = true) в Effective.
+var AllPermissions = []string{
+	"orders.create", "orders.close", "orders.cancel", "orders.void",
+	"orders.refund", "orders.reprint", "orders.view_others", "orders.create_stopped",
+	"kitchen.cooking", "tables.edit", "tables.reserve", "shifts.manage", "pos.access", "showcase.view",
+	"inventory.view", "inventory.manage", "suppliers.manage",
+	"menu.view", "menu.edit", "menu.view_cost", "writeoffs.create", "batch_cooking.manage",
+	"finance.view", "finance.manage", "payroll.manage", "analytics.view",
+	"customers.manage", "printers.manage", "users.manage", "audit.view", "data.import",
+}
+
+// Effective — эффективная карта прав пользователя (для отдачи клиенту в login,
+// чтобы он мог прятать недоступные действия). Зеркалит логику Allow.
+func Effective(role string, permissionsJSON []byte) map[string]bool {
+	allTrue := func() map[string]bool {
+		m := make(map[string]bool, len(AllPermissions))
+		for _, k := range AllPermissions {
+			m[k] = true
+		}
+		return m
+	}
+	if role == "owner" {
+		return allTrue()
+	}
+	if len(permissionsJSON) > 0 {
+		var p struct {
+			Actions map[string]bool `json:"actions"`
+		}
+		if err := json.Unmarshal(permissionsJSON, &p); err == nil && len(p.Actions) > 0 {
+			out := make(map[string]bool, len(p.Actions))
+			for k, v := range p.Actions {
+				out[k] = v
+			}
+			return out
+		}
+	}
+	if role == "manager" {
+		return allTrue()
+	}
+	out := make(map[string]bool)
+	if d, ok := roleDefaults[role]; ok {
+		for k, v := range d {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 // Allow — может ли пользователь с ролью role (и опц. персональным permissionsJSON
 // формата {"actions": {...}}) выполнить action.
 //

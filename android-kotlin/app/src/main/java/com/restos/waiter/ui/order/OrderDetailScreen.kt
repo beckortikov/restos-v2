@@ -143,6 +143,7 @@ fun OrderDetailScreen(
                 OrderStatus.isFresh(o.status) -> BottomActions(
                     order = o,
                     busy = state.busy,
+                    canCancel = state.canCancel,
                     onPrintPreBill = viewModel::printPreBill,
                     onAddItems = {
                         state.order?.let { ord -> onAddItems(ord.id, ord.table) }
@@ -506,6 +507,7 @@ private fun OrderBody(
                     SwipeableOrderLine(
                         item = rep,
                         portions = line.portions,
+                        canVoid = state.canVoid,
                         onCancel = { if (isGroup) onCancelGroup(rep, line.ids) else onCancelItem(rep) },
                         onEditNote = { onEditNote(rep) },
                         onToggleServed = { onToggleServed(rep) },
@@ -789,6 +791,7 @@ private fun CategoryChip(label: String, active: Boolean, onClick: () -> Unit) {
 private fun SwipeableOrderLine(
     item: OrderItemDto,
     portions: Int = 1,
+    canVoid: Boolean = true,
     onCancel: () -> Unit,
     onEditNote: () -> Unit,
     onToggleServed: () -> Unit,
@@ -800,7 +803,7 @@ private fun SwipeableOrderLine(
         confirmValueChange = { value ->
             when (value) {
                 androidx.compose.material3.SwipeToDismissBoxValue.EndToStart -> {
-                    onCancel()
+                    if (canVoid) onCancel() // без права orders.void — свайп-отмена недоступна
                     false  // не уничтожаем — диалог сам решает
                 }
                 androidx.compose.material3.SwipeToDismissBoxValue.StartToEnd -> {
@@ -813,6 +816,7 @@ private fun SwipeableOrderLine(
     )
     androidx.compose.material3.SwipeToDismissBox(
         state = dismissState,
+        enableDismissFromEndToStart = canVoid, // свайп-отмена позиции — только при праве
         backgroundContent = {
             val dir = dismissState.dismissDirection
             val bg = when (dir) {
@@ -1118,6 +1122,7 @@ private fun TotalsBlock(order: OrderDto) {
 private fun BottomActions(
     order: OrderDto,
     busy: Boolean,
+    canCancel: Boolean,
     onPrintPreBill: () -> Unit,
     onAddItems: () -> Unit,
     onCancelOrder: () -> Unit,
@@ -1172,21 +1177,23 @@ private fun BottomActions(
                 Spacer(Modifier.width(6.dp))
                 Text("Передать другому официанту", fontWeight = FontWeight.SemiBold)
             }
-            // 4) Отменить заказ — красная outlined (вертикально внизу)
-            OutlinedButton(
-                onClick = onCancelOrder,
-                enabled = !busy && OrderStatus.isFresh(order.status),
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.error,
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f),
-                ),
-            ) {
-                Icon(Icons.Outlined.Block, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Отменить заказ", fontWeight = FontWeight.SemiBold)
+            // 4) Отменить заказ — только при праве orders.cancel (матрица доступов).
+            if (canCancel) {
+                OutlinedButton(
+                    onClick = onCancelOrder,
+                    enabled = !busy && OrderStatus.isFresh(order.status),
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error,
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(
+                        1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f),
+                    ),
+                ) {
+                    Icon(Icons.Outlined.Block, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Отменить заказ", fontWeight = FontWeight.SemiBold)
+                }
             }
         }
     }

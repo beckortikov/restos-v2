@@ -100,8 +100,12 @@ paths:
                       full_name: { type: string }
                       role: { type: string }
                       permissions:
-                        type: array
-                        items: { type: string }
+                        type: object
+                        description: "Эффективные права (с учётом дефолтов роли и персональных override'ов). Клиент прячет недоступные действия."
+                        properties:
+                          actions:
+                            type: object
+                            additionalProperties: { type: boolean }
                   restaurant:
                     type: object
                     properties:

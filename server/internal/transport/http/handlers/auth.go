@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/perms"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/middleware"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
@@ -34,14 +35,20 @@ type loginReq struct {
 	PIN          string `json:"pin"`
 }
 
+// loginPerms — эффективные права пользователя (с учётом дефолтов роли и
+// персональных override'ов), чтобы клиент мог прятать недоступные действия.
+type loginPerms struct {
+	Actions map[string]bool `json:"actions"`
+}
+
 // loginUser — публичная инфа о юзере для логин-ответа.
 // Зеркалит Kotlin-DTO PinLoginResponse.UserDto в android-kotlin/.
 type loginUser struct {
-	ID          string   `json:"id"`
-	Username    string   `json:"username"`
-	FullName    string   `json:"full_name"`
-	Role        string   `json:"role"`
-	Permissions []string `json:"permissions"`
+	ID          string     `json:"id"`
+	Username    string     `json:"username"`
+	FullName    string     `json:"full_name"`
+	Role        string     `json:"role"`
+	Permissions loginPerms `json:"permissions"`
 }
 
 // loginRestaurant — публичная инфа о ресторане для логин-ответа.
@@ -82,10 +89,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		info.Role = *user.Role
 	}
 
-	lu := loginUser{
-		ID:          user.ID,
-		Permissions: []string{},
-	}
+	lu := loginUser{ID: user.ID}
 	if user.Username != nil {
 		lu.Username = *user.Username
 	}
@@ -95,6 +99,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if user.Role != nil {
 		lu.Role = *user.Role
 	}
+	// Эффективные права — клиент (в т.ч. Kotlin) прячет недоступные действия.
+	lu.Permissions = loginPerms{Actions: perms.Effective(lu.Role, []byte(user.Permissions))}
 
 	// Restaurant lookup для name. Если не нашли — отдаём id с пустым name
 	// (Kotlin позволяет это; Electron-фронт это поле игнорирует).

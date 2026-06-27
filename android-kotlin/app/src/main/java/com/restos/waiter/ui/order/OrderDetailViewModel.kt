@@ -38,6 +38,9 @@ data class OrderDetailUiState(
     val toast: String? = null,
     val itemReasons: List<CancelReasons.Reason> = emptyList(),
     val orderReasons: List<CancelReasons.Reason> = emptyList(),
+    // Права из матрицы доступов (по умолчанию запрещено, пока не загрузим профиль).
+    val canVoid: Boolean = false,   // orders.void — отмена позиции
+    val canCancel: Boolean = false, // orders.cancel — отмена заказа целиком
 )
 
 sealed interface OrderDetailDialog {
@@ -55,6 +58,7 @@ class OrderDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repo: OrderDetailRepository,
     private val eventBus: EventBus,
+    private val auth: com.restos.waiter.data.auth.AuthRepository,
 ) : ViewModel() {
 
     val orderId: String = checkNotNull(savedStateHandle.get<String>("orderId")) {
@@ -91,6 +95,16 @@ class OrderDetailViewModel @Inject constructor(
                 itemReasons = repo.loadCancelReasons("item"),
                 orderReasons = repo.loadCancelReasons("order"),
             )
+        }
+        // Права матрицы доступов текущего пользователя (из кэша login).
+        viewModelScope.launch {
+            val me = auth.me().getOrNull()?.user
+            _state.update {
+                it.copy(
+                    canVoid = me?.can("orders.void") == true,
+                    canCancel = me?.can("orders.cancel") == true,
+                )
+            }
         }
         viewModelScope.launch {
             try {
@@ -140,10 +154,20 @@ class OrderDetailViewModel @Inject constructor(
     fun selectCategory(name: String?) { _state.update { it.copy(selectedCategoryId = name) } }
 
     fun openCancelItem(item: OrderItemDto) {
+        if (!_state.value.canVoid) {
+            _state.update { it.copy(toast = "Нет прав на отмену позиции") }
+            return
+        }
         _dialog.value = OrderDetailDialog.CancelItem(item)
     }
 
-    fun openCancelOrder() { _dialog.value = OrderDetailDialog.CancelOrder }
+    fun openCancelOrder() {
+        if (!_state.value.canCancel) {
+            _state.update { it.copy(toast = "Нет прав на отмену заказа") }
+            return
+        }
+        _dialog.value = OrderDetailDialog.CancelOrder
+    }
     fun openTransferTable() { _dialog.value = OrderDetailDialog.TransferTable }
     fun openAssignWaiter() { _dialog.value = OrderDetailDialog.AssignWaiter }
     fun openEditNote(item: OrderItemDto) { _dialog.value = OrderDetailDialog.EditNote(item) }
@@ -213,6 +237,10 @@ class OrderDetailViewModel @Inject constructor(
 
     /** Отмена всей весовой группы (открывает диалог причины со всеми ids). */
     fun openCancelGroup(item: OrderItemDto, ids: List<String>) {
+        if (!_state.value.canVoid) {
+            _state.update { it.copy(toast = "Нет прав на отмену позиции") }
+            return
+        }
         _dialog.value = OrderDetailDialog.CancelItem(item, ids)
     }
 
