@@ -35,6 +35,12 @@ android {
             isMinifyEnabled = false
         }
         release {
+            // Внутреннее LAN-приложение официанта раздаётся сайдлоадом, не через
+            // Play Store. Подписываем release тем же debug-ключом, что и прежние
+            // установленные сборки — иначе assembleRelease даёт неподписанный
+            // (app-release-unsigned.apk), который Android отказывается ставить,
+            // а смена ключа потребовала бы удалять старую версию перед апдейтом.
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
