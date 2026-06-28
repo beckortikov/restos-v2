@@ -2073,6 +2073,12 @@ paths:
       summary: Гистограмма weekday × hour (загрузка по часам)
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PeakHoursReport" } } } } }
+  /api/v1/analytics/weekday:
+    get:
+      tags: [analytics]
+      summary: Аналитика по дням недели — прибыль по дням, день×час (прибыль), день×категория
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WeekdayReport" } } } } }
   /api/v1/analytics/waiters:
     get:
       tags: [analytics]
@@ -3836,6 +3842,41 @@ components:
         total_orders:  { type: integer }
         total_revenue: { $ref: "#/components/schemas/Decimal" }
         cells: { type: array, items: { $ref: "#/components/schemas/PeakHoursCell" } }
+
+    WeekdayRow:
+      type: object
+      properties:
+        weekday:      { type: integer, description: "0=вс … 6=сб (Postgres DOW)" }
+        orders:       { type: integer }
+        revenue:      { $ref: "#/components/schemas/Decimal" }
+        cogs:         { $ref: "#/components/schemas/Decimal" }
+        labor:        { $ref: "#/components/schemas/Decimal" }
+        gross_profit: { $ref: "#/components/schemas/Decimal" }
+        net_profit:   { $ref: "#/components/schemas/Decimal" }
+        avg_check:    { $ref: "#/components/schemas/Decimal" }
+    WeekdayHourCell:
+      type: object
+      properties:
+        weekday: { type: integer }
+        hour:    { type: integer }
+        orders:  { type: integer }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+        profit:  { $ref: "#/components/schemas/Decimal" }
+    WeekdayCategoryRow:
+      type: object
+      properties:
+        weekday:  { type: integer }
+        category: { type: string }
+        qty:      { $ref: "#/components/schemas/Decimal" }
+        revenue:  { $ref: "#/components/schemas/Decimal" }
+        profit:   { $ref: "#/components/schemas/Decimal" }
+    WeekdayReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        by_weekday:  { type: array, items: { $ref: "#/components/schemas/WeekdayRow" } }
+        heatmap:     { type: array, items: { $ref: "#/components/schemas/WeekdayHourCell" } }
+        by_category: { type: array, items: { $ref: "#/components/schemas/WeekdayCategoryRow" } }
 
     Insight:
       type: object

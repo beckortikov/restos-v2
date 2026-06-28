@@ -7342,6 +7342,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/weekday": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Аналитика по дням недели — прибыль по дням, день×час (прибыль), день×категория */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WeekdayReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/waiters": {
         parameters: {
             query?: never;
@@ -10636,6 +10675,42 @@ export interface components {
             total_orders?: number;
             total_revenue?: components["schemas"]["Decimal"];
             cells?: components["schemas"]["PeakHoursCell"][];
+        };
+        WeekdayRow: {
+            /** @description 0=вс … 6=сб (Postgres DOW) */
+            weekday?: number;
+            orders?: number;
+            revenue?: components["schemas"]["Decimal"];
+            cogs?: components["schemas"]["Decimal"];
+            labor?: components["schemas"]["Decimal"];
+            gross_profit?: components["schemas"]["Decimal"];
+            net_profit?: components["schemas"]["Decimal"];
+            avg_check?: components["schemas"]["Decimal"];
+        };
+        WeekdayHourCell: {
+            weekday?: number;
+            hour?: number;
+            orders?: number;
+            revenue?: components["schemas"]["Decimal"];
+            profit?: components["schemas"]["Decimal"];
+        };
+        WeekdayCategoryRow: {
+            weekday?: number;
+            category?: string;
+            qty?: components["schemas"]["Decimal"];
+            revenue?: components["schemas"]["Decimal"];
+            profit?: components["schemas"]["Decimal"];
+        };
+        WeekdayReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            by_weekday?: components["schemas"]["WeekdayRow"][];
+            heatmap?: components["schemas"]["WeekdayHourCell"][];
+            by_category?: components["schemas"]["WeekdayCategoryRow"][];
         };
         Insight: {
             id?: string;

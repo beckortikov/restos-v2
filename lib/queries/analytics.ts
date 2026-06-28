@@ -125,6 +125,56 @@ export async function fetchABCMenu(opts: { from?: Date | string; to?: Date | str
   return (await unwrap(api.GET('/api/v1/analytics/abc-menu', { params: { query: query as any } }))) as ABCMenuReport
 }
 
+// ─── Аналитика по дням недели (A1–A3) ───────────────────────────────────────
+
+export interface WeekdayRow {
+  weekday: number // 0=вс … 6=сб
+  orders: number
+  revenue: number
+  cogs: number
+  labor: number
+  gross_profit: number
+  net_profit: number
+  avg_check: number
+}
+export interface WeekdayHourCell {
+  weekday: number
+  hour: number
+  orders: number
+  revenue: number
+  profit: number
+}
+export interface WeekdayCategoryRow {
+  weekday: number
+  category: string
+  qty: number
+  revenue: number
+  profit: number
+}
+export interface WeekdayReport {
+  by_weekday: WeekdayRow[]
+  heatmap: WeekdayHourCell[]
+  by_category: WeekdayCategoryRow[]
+}
+
+export async function fetchWeekday(opts: { from?: Date | string; to?: Date | string } = {}): Promise<WeekdayReport> {
+  const query = buildQuery(opts)
+  const r: any = await unwrap(api.GET('/api/v1/analytics/weekday', { params: { query: query as any } }))
+  const n = (v: any) => Number(v ?? 0)
+  return {
+    by_weekday: (r?.by_weekday ?? []).map((x: any) => ({
+      weekday: n(x.weekday), orders: n(x.orders), revenue: n(x.revenue), cogs: n(x.cogs),
+      labor: n(x.labor), gross_profit: n(x.gross_profit), net_profit: n(x.net_profit), avg_check: n(x.avg_check),
+    })),
+    heatmap: (r?.heatmap ?? []).map((x: any) => ({
+      weekday: n(x.weekday), hour: n(x.hour), orders: n(x.orders), revenue: n(x.revenue), profit: n(x.profit),
+    })),
+    by_category: (r?.by_category ?? []).map((x: any) => ({
+      weekday: n(x.weekday), category: String(x.category ?? '—'), qty: n(x.qty), revenue: n(x.revenue), profit: n(x.profit),
+    })),
+  }
+}
+
 // ─── Инсайты (кросс-аналитика) ──────────────────────────────────────────────
 
 export type InsightCategory = 'menu' | 'leak' | 'stock' | 'staff'

@@ -33,6 +33,20 @@ func (h *AnalyticsHandler) ABCMenu(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+func (h *AnalyticsHandler) Weekday(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.Weekday(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *AnalyticsHandler) PeakHours(w http.ResponseWriter, r *http.Request) {
 	f, err := parsePeriod(r)
 	if err != nil {

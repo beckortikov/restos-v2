@@ -22,6 +22,7 @@ import {
   DollarSign,
   BarChart3,
   LineChart,
+  CalendarDays,
   Smartphone,
   Target,
   Clock,
@@ -267,6 +268,7 @@ const NAV: NavItem[] = [
     icon: BarChart3,
     children: [
       { label: 'Динамика', href: '/analytics/trends', icon: LineChart },
+      { label: 'Дни недели', href: '/analytics/weekday', icon: CalendarDays },
       { label: 'ABC — Меню', href: '/analytics/abc-menu', icon: BarChart3 },
       { label: 'ABC — Склад', href: '/analytics/abc-inventory', icon: BarChart3 },
       { label: 'Аналитика столов', href: '/analytics/tables', icon: MapPin },

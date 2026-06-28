@@ -346,6 +346,7 @@ func NewRouter(deps Deps) http.Handler {
 			// Analytics aggregates — Phase 3.2, серверные отчёты для /analytics/*.
 			g.Get("/analytics/abc-menu", analyticsH.ABCMenu)
 			g.Get("/analytics/peak-hours", analyticsH.PeakHours)
+			g.Get("/analytics/weekday", analyticsH.Weekday)
 			g.Get("/analytics/waiters", analyticsH.Waiters)
 			g.Get("/analytics/tables", analyticsH.Tables)
 			g.Get("/analytics/food-cost", analyticsH.FoodCost)

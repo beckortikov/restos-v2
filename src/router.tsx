@@ -77,6 +77,7 @@ const FoodCost = () => L(() => import('@/app/(app)/analytics/food-cost/page'))
 const PeakHours = () => L(() => import('@/app/(app)/analytics/peak-hours/page'))
 const Forecast = () => L(() => import('@/app/(app)/analytics/forecast/page'))
 const Trends = () => L(() => import('@/app/(app)/analytics/trends/page'))
+const Weekday = () => L(() => import('@/app/(app)/analytics/weekday/page'))
 
 // Settings
 const Settings = () => L(() => import('@/app/(app)/settings/page'))
@@ -169,6 +170,7 @@ export function AppRouter() {
         <Route path="/analytics/peak-hours" element={<PeakHours />} />
         <Route path="/analytics/forecast" element={<Forecast />} />
         <Route path="/analytics/trends" element={<Trends />} />
+        <Route path="/analytics/weekday" element={<Weekday />} />
 
         {/* Settings */}
         <Route path="/settings" element={<Settings />} />
