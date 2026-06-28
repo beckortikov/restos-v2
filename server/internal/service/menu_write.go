@@ -12,6 +12,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/repo"
 )
 
 // MenuItemInput — body POST/PATCH /api/v1/menu/items.
@@ -36,6 +37,34 @@ type MenuItemInput struct {
 	UnitSize          *string `json:"unit_size,omitempty"`
 	SaleStep          *string `json:"sale_step,omitempty"`
 	LowStockThreshold *int    `json:"low_stock_threshold,omitempty"`
+	// Покупной товар: бэк сам создаёт складской ингредиент (0 остаток) + 1:1
+	// техкарту + станцию showcase. Поля закупки нужны только при is_purchased=true.
+	IsPurchased    *bool   `json:"is_purchased,omitempty"`
+	PurchasePrice  *string `json:"purchase_price,omitempty"`
+	PurchaseUnit   *string `json:"purchase_unit,omitempty"`
+	PurchaseMinQty *string `json:"purchase_min_qty,omitempty"`
+}
+
+// parsePurchase валидирует поля покупного товара.
+func parsePurchase(in MenuItemInput) (price decimal.Decimal, unit string, minQty decimal.Decimal, err error) {
+	if in.PurchasePrice == nil || in.PurchaseUnit == nil || *in.PurchaseUnit == "" {
+		return decimal.Zero, "", decimal.Zero, apperrors.Wrap("VALIDATION", "purchase_price и purchase_unit обязательны для покупного товара", nil)
+	}
+	price, e := decimal.FromString(*in.PurchasePrice)
+	if e != nil {
+		return decimal.Zero, "", decimal.Zero, apperrors.Wrap("VALIDATION", "bad purchase_price", e)
+	}
+	if decimal.IsNegative(price) {
+		return decimal.Zero, "", decimal.Zero, apperrors.Wrap("VALIDATION", "purchase_price must be >= 0", nil)
+	}
+	unit = *in.PurchaseUnit
+	minQty = decimal.Zero
+	if in.PurchaseMinQty != nil {
+		if m, e := decimal.FromString(*in.PurchaseMinQty); e == nil {
+			minQty = m
+		}
+	}
+	return price, unit, minQty, nil
 }
 
 // MenuCategoryInput — body POST/PATCH /api/v1/menu/categories.
@@ -111,6 +140,41 @@ func (s *MenuService) CreateItem(ctx context.Context, in MenuItemInput) (*models
 	}
 	if in.StopListOverride != nil {
 		mi.StopListOverride = in.StopListOverride
+	}
+	mi.IsPurchased = in.IsPurchased != nil && *in.IsPurchased
+
+	// Покупной товар: в одной транзакции создаём складской ингредиент с 0
+	// остатком + 1:1 техкарту + станцию showcase + cogs = цена закупки.
+	if mi.IsPurchased {
+		price, unit, minQty, perr := parsePurchase(in)
+		if perr != nil {
+			return nil, perr
+		}
+		showcase := "showcase"
+		mi.Station = &showcase
+		mi.COGS = price
+		txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx)
+			ing := &models.Ingredient{
+				ID: uuid.NewString(), Name: mi.Name, Category: mi.Category,
+				Qty: decimal.Zero, MinQty: minQty, Unit: &unit, PricePerUnit: price, RestaurantID: &rid,
+			}
+			if err := tx.Create(ing).Error; err != nil {
+				return err
+			}
+			if err := tx.Create(mi).Error; err != nil {
+				return err
+			}
+			line := &models.TechCardLine{
+				ID: uuid.NewString(), MenuItemID: &mi.ID, IngredientID: &ing.ID,
+				Name: mi.Name, Qty: decimal.MustFromString("1"), Unit: &unit, RestaurantID: &rid,
+			}
+			return tx.Create(line).Error
+		})
+		if txErr != nil {
+			return nil, txErr
+		}
+		return mi, nil
 	}
 
 	scoped, err := s.r.ForTenant(ctx)
@@ -206,6 +270,13 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 	}
 	updates["updated_at"] = time.Now().UTC()
 
+	if in.IsPurchased != nil {
+		updates["is_purchased"] = *in.IsPurchased
+		if *in.IsPurchased {
+			return s.patchPurchased(ctx, &mi, in, updates)
+		}
+	}
+
 	if len(updates) == 1 { // только updated_at — нечего обновлять
 		return &mi, nil
 	}
@@ -218,6 +289,81 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 	scoped3, _ := s.r.ForTenant(ctx)
 	var updated models.MenuItem
 	if err := scoped3.Where("id = ?", id).First(&updated).Error; err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+// patchPurchased делает блюдо покупным: гарантирует складской ингредиент
+// (реюз 1:1, если уже было покупным; иначе создаёт с 0 остатком), ставит
+// station=showcase, cogs=цена и заменяет техкарту на 1:1. Всё в одной транзакции.
+func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, in MenuItemInput, updates map[string]any) (*models.MenuItem, error) {
+	price, unit, minQty, err := parsePurchase(in)
+	if err != nil {
+		return nil, err
+	}
+	rid := ""
+	if mi.RestaurantID != nil {
+		rid = *mi.RestaurantID
+	}
+	name := ""
+	if mi.Name != nil {
+		name = *mi.Name
+	}
+	if in.Name != nil {
+		name = *in.Name
+	}
+	updates["is_purchased"] = true
+	updates["station"] = "showcase"
+	updates["cogs"] = price
+
+	txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var lines []models.TechCardLine
+		if err := tx.Where("menu_item_id = ?", mi.ID).Find(&lines).Error; err != nil {
+			return err
+		}
+		var ingID string
+		if mi.IsPurchased && len(lines) == 1 && lines[0].IngredientID != nil {
+			// Уже покупной — реюзаем выделенный ингредиент.
+			ingID = *lines[0].IngredientID
+			if err := tx.Model(&models.Ingredient{}).Where("id = ?", ingID).Updates(map[string]any{
+				"name": name, "price_per_unit": price, "min_qty": minQty, "unit": unit,
+			}).Error; err != nil {
+				return err
+			}
+		} else {
+			// Конвертация обычного блюда → новый ингредиент с 0 остатком (общий
+			// ингредиент рецепта не трогаем).
+			nm := name
+			ing := &models.Ingredient{
+				ID: uuid.NewString(), Name: &nm, Category: mi.Category,
+				Qty: decimal.Zero, MinQty: minQty, Unit: &unit, PricePerUnit: price, RestaurantID: &rid,
+			}
+			if err := tx.Create(ing).Error; err != nil {
+				return err
+			}
+			ingID = ing.ID
+		}
+		if err := tx.Model(&models.MenuItem{}).Where("id = ?", mi.ID).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("menu_item_id = ?", mi.ID).Delete(&models.TechCardLine{}).Error; err != nil {
+			return err
+		}
+		nm := name
+		line := &models.TechCardLine{
+			ID: uuid.NewString(), MenuItemID: &mi.ID, IngredientID: &ingID,
+			Name: &nm, Qty: decimal.MustFromString("1"), Unit: &unit, RestaurantID: &rid,
+		}
+		return tx.Create(line).Error
+	})
+	if txErr != nil {
+		return nil, txErr
+	}
+	scoped, _ := s.r.ForTenant(ctx)
+	var updated models.MenuItem
+	if err := scoped.Where("id = ?", mi.ID).First(&updated).Error; err != nil {
 		return nil, err
 	}
 	return &updated, nil

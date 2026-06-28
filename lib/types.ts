@@ -145,6 +145,7 @@ export interface MenuItem {
   imageUrl?: string
   isAvailable: boolean
   stopListOverride: boolean
+  isPurchased?: boolean  // покупной товар (бэк сам ведёт складской ингредиент + 1:1 техкарту)
   cogs: number          // эффективная (auto из техкарты, иначе ручная) — для маржи/списка
   cogsManual?: number   // сырое сохранённое значение «себестоимость вручную» (для формы)
   cookTimeMin?: number | null

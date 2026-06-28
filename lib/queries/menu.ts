@@ -41,7 +41,8 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
 }
 
 export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
-  const body = {
+  const purchased = (item as any).isPurchased === true
+  const body: any = {
     name: item.name,
     category: item.category,
     price: String(item.price),
@@ -58,9 +59,16 @@ export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
     sale_step: String(item.saleStep ?? 0),
     low_stock_threshold: item.lowStockThreshold != null ? Number(item.lowStockThreshold) : 5,
   }
+  // Покупной товар: бэк сам создаёт складской ингредиент + 1:1 техкарту.
+  if (purchased) {
+    body.is_purchased = true
+    body.purchase_price = String((item as any).purchasePrice ?? item.cogs ?? 0)
+    body.purchase_unit = (item as any).purchaseUnit || 'piece'
+    body.purchase_min_qty = String((item as any).purchaseMinQty ?? 0)
+  }
   const data: any = await unwrap(api.POST('/api/v1/menu/items', { body: body as any }))
   const newId: string | undefined = data?.id
-  const validTechLines = item.techCard.filter(l => l.ingredientId || l.semiId)
+  const validTechLines = purchased ? [] : item.techCard.filter(l => l.ingredientId || l.semiId)
   if (validTechLines.length > 0 && newId) {
     for (const l of validTechLines) {
       await unwrap(api.POST('/api/v1/menu/tech-cards', {
@@ -229,6 +237,7 @@ export async function updateMenuItem(id: string, data: Partial<{
   lowStockThreshold: number;
   unit: 'piece' | 'g' | 'kg'; unitSize: number; saleStep: number;
   techCard: { name: string; qty: number; unit: string; ingredientId?: string; semiId?: string }[];
+  isPurchased: boolean; purchasePrice: number; purchaseUnit: string; purchaseMinQty: number;
 }>) {
   const updates: Record<string, unknown> = {}
   if (data.name !== undefined) updates.name = data.name
@@ -244,10 +253,18 @@ export async function updateMenuItem(id: string, data: Partial<{
   if (data.unit !== undefined) updates.unit = data.unit
   if (data.unitSize !== undefined) updates.unit_size = String(data.unitSize)
   if (data.saleStep !== undefined) updates.sale_step = String(data.saleStep)
+  // Покупной товар: бэк сам пересоздаёт складской ингредиент + 1:1 техкарту.
+  if (data.isPurchased !== undefined) updates.is_purchased = data.isPurchased
+  if (data.isPurchased) {
+    updates.purchase_price = String(data.purchasePrice ?? data.cogs ?? 0)
+    updates.purchase_unit = data.purchaseUnit || 'piece'
+    updates.purchase_min_qty = String(data.purchaseMinQty ?? 0)
+  }
 
   await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: updates as any }))
 
-  if (data.techCard) {
+  // Для покупного техкарту строит бэк — фронт её не трогает.
+  if (data.techCard && !data.isPurchased) {
     try {
       const cur: any = await unwrap(api.GET('/api/v1/menu/tech-cards', { params: { query: { menu_item_id: id } } }))
       const existing: Record<string, unknown>[] = cur?.data ?? []
@@ -325,6 +342,7 @@ function mapMenuItem(
     imageUrl: (r.image_url as string) ?? undefined,
     isAvailable: r.is_available as boolean,
     stopListOverride: (r.stop_list_override as boolean) ?? false,
+    isPurchased: (r.is_purchased as boolean) ?? false,
     cogs: effectiveCogs,
     cogsManual: Number(r.cogs) || 0,
     cookTimeMin: (r.cook_time_min as number | null) ?? null,

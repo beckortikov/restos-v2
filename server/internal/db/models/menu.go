@@ -39,6 +39,7 @@ type MenuItem struct {
 	ImageURL          *string         `gorm:"column:image_url" json:"image_url"`
 	IsAvailable       *bool           `gorm:"column:is_available;default:true" json:"is_available"`
 	StopListOverride  *bool           `gorm:"column:stop_list_override;default:false" json:"stop_list_override"`
+	IsPurchased       bool            `gorm:"column:is_purchased;not null;default:false" json:"is_purchased"`
 	COGS              decimal.Decimal `gorm:"column:cogs;type:numeric(14,4);default:0" json:"cogs"`
 	CookTimeMin       *int            `gorm:"column:cook_time_min" json:"cook_time_min"`
 	Station           *string         `gorm:"default:'hot_kitchen'" json:"station"`

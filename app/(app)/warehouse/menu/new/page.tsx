@@ -275,34 +275,14 @@ export default function NewMenuItemPage() {
     if (submitting) return
     setSubmitting(true)
     try {
-      let finalData = { ...form }
-
-      // Purchased item: auto-create ingredient + set tech card
-      if (form.isPurchased && form.purchasePrice && form.purchaseUnit) {
-        const ing = await createIngredient({
-          name: form.name,
-          category: form.category,
-          qty: 0,
-          min_qty: form.purchaseMinQty ?? 0,
-          unit: form.purchaseUnit,
-          price_per_unit: form.purchasePrice,
-        })
-        if (ing) {
-          finalData = {
-            ...form,
-            station: 'showcase', // покупной товар — витрина (чтобы галочка сохранялась)
-            cogs: form.purchasePrice,
-            techCard: [{ name: form.name, qty: 1, unit: form.purchaseUnit, ingredientId: ing.id }],
-          }
-        }
-      }
-
+      // Покупной товар целиком ведёт бэк: по is_purchased + purchase_* он сам
+      // создаёт складской ингредиент (0 остаток) + 1:1 техкарту + станцию showcase.
       await createMenuItemDb({
-        ...finalData,
+        ...form,
         stopListOverride: false,
-        station: finalData.station,
+        station: form.station,
         preparedQty: 0,
-        isBatchCooking: finalData.isBatchCooking ?? false,
+        isBatchCooking: form.isBatchCooking ?? false,
       })
       toast.success(form.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
       navigate('/warehouse/menu')
