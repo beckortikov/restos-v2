@@ -54,7 +54,6 @@ import {
 } from 'lucide-react'
 
 const RevenueChart = lazy(() => import('@/components/charts/revenue-chart'))
-import { InsightsWidget } from '@/components/insights-widget'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const today = () => new Date().toISOString().slice(0, 10)
@@ -342,9 +341,6 @@ export default function DashboardPage() {
           Реальное время · обновление 30 сек
         </div>
       </div>
-
-      {/* ═══ Инсайты (топ-3) ═══ */}
-      <InsightsWidget />
 
       {/* ═══ KPI Row ═══ */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2.5 md:gap-3">

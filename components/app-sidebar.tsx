@@ -22,7 +22,6 @@ import {
   DollarSign,
   BarChart3,
   LineChart,
-  Lightbulb,
   Smartphone,
   Target,
   Clock,
@@ -267,7 +266,6 @@ const NAV: NavItem[] = [
     label: 'Аналитика',
     icon: BarChart3,
     children: [
-      { label: 'Инсайты', href: '/analytics/insights', icon: Lightbulb },
       { label: 'Динамика', href: '/analytics/trends', icon: LineChart },
       { label: 'ABC — Меню', href: '/analytics/abc-menu', icon: BarChart3 },
       { label: 'ABC — Склад', href: '/analytics/abc-inventory', icon: BarChart3 },

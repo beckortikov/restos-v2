@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import type { ABCClass } from '@/lib/types'
 import { fetchABCInventory, type ABCInventoryReport, type ABCInventoryRow } from '@/lib/queries/analytics'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { InsightsRecommendations } from '@/components/insights-recommendations'
 
 const AbcInventoryChart = lazy(() => import('@/components/charts/abc-inventory-chart'))
 
@@ -82,6 +83,8 @@ export default function AbcInventoryPage() {
       </div>
     )
   }
+
+  const recRange = getDateRange(period, customFrom, customTo)
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -202,6 +205,13 @@ export default function AbcInventoryPage() {
           </div>
         </>
       )}
+
+      <InsightsRecommendations
+        categories={['stock']}
+        title="Аналитические инсайты"
+        from={recRange.from ?? undefined}
+        to={recRange.to ?? undefined}
+      />
     </div>
   )
 }

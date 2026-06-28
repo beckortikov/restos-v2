@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth-store'
 import { Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { InsightsRecommendations } from '@/components/insights-recommendations'
 import { toast } from 'sonner'
 
 const AbcMenuScatter = lazy(() => import('@/components/charts/abc-menu-scatter'))
@@ -163,6 +164,7 @@ export default function AbcMenuPage() {
 
   const totalRevenueAll = report ? Number(report.total_revenue) : 0
   const hasNoSales = totalRevenueAll === 0
+  const recRange = getDateRange(period, customFrom, customTo)
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -367,6 +369,13 @@ export default function AbcMenuPage() {
           </div>
         </div>
       )}
+
+      <InsightsRecommendations
+        categories={['menu', 'leak', 'staff']}
+        title="Аналитические инсайты"
+        from={recRange.from ?? undefined}
+        to={recRange.to ?? undefined}
+      />
     </div>
   )
 }
