@@ -458,6 +458,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/stock/receipts", stockH.CreateReceipt)
 			g.Post("/stock/receipts/{id}/confirm", stockH.ConfirmReceipt)
 			g.Post("/stock/writeoffs", stockH.CreateWriteoff)
+			g.Post("/stock/opening-balance", stockH.OpeningBalance)
 			g.Post("/stock/inventory", inventoryH.Create)
 			g.Post("/stock/inventory/{id}/apply", inventoryH.Apply)
 			g.Post("/stock/ingredients", ingredientsWriteH.Create)

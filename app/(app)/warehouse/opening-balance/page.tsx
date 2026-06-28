@@ -1,0 +1,132 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
+import { toast } from 'sonner'
+import { PackagePlus, Search } from 'lucide-react'
+
+import { fetchIngredients, applyOpeningBalance } from '@/lib/queries'
+import type { Ingredient } from '@/lib/types'
+import { formatCurrency } from '@/lib/helpers'
+import { DecimalInput } from '@/components/ui/decimal-input'
+
+export default function OpeningBalancePage() {
+  const [ingredients, setIngredients] = useState<Ingredient[]>([])
+  const [qtyMap, setQtyMap] = useState<Map<string, number>>(new Map())
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [search, setSearch] = useState('')
+
+  const load = () => {
+    setLoading(true)
+    fetchIngredients()
+      .then(setIngredients)
+      .catch(() => toast.error('Ошибка загрузки ингредиентов'))
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase()
+    return ingredients.filter(i => i.name.toLowerCase().includes(q))
+  }, [ingredients, search])
+
+  const entered = useMemo(() => [...qtyMap.entries()].filter(([, v]) => v > 0), [qtyMap])
+  const totalValue = useMemo(
+    () => entered.reduce((s, [id, v]) => {
+      const ing = ingredients.find(i => i.id === id)
+      return s + v * (ing?.pricePerUnit ?? 0)
+    }, 0),
+    [entered, ingredients],
+  )
+
+  const setQty = (id: string, v: number) =>
+    setQtyMap(prev => { const n = new Map(prev); n.set(id, v); return n })
+
+  const handleApply = async () => {
+    if (entered.length === 0) { toast.error('Введите остаток хотя бы по одной позиции'); return }
+    if (!window.confirm(`Завести начальный остаток по ${entered.length} позициям на ${formatCurrency(totalValue)}?\nБудет создана автопроводка в капитал «Взнос собственника».`)) return
+    setSaving(true)
+    try {
+      const res = await applyOpeningBalance(entered.map(([ingredientId, qty]) => ({ ingredientId, qty })))
+      toast.success(`Начальный остаток заведён: ${res.applied} позиций на ${formatCurrency(res.inventoryValue)}`)
+      setQtyMap(new Map())
+      load()
+    } catch {
+      toast.error('Ошибка при заведении начального остатка')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="p-4 md:p-6 space-y-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold flex items-center gap-2"><PackagePlus className="size-5 text-primary" /> Начальный остаток</h1>
+          <p className="text-sm text-muted-foreground">Заведите стартовые остатки склада. Это НЕ инвентаризация — позиции не пойдут как «излишек».</p>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-blue-100 dark:border-blue-900/40 bg-blue-50/50 dark:bg-blue-950/20 p-3 text-sm text-blue-900 dark:text-blue-200">
+        Введённая стоимость отразится в Балансе: вырастет актив «Склад» и встречно — капитал «Взнос собственника». Баланс останется сведённым.
+      </div>
+
+      <div className="relative max-w-sm">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <input
+          value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск ингредиента…"
+          className="w-full pl-9 pr-3 py-2 text-sm bg-background border border-border rounded-lg"
+        />
+      </div>
+
+      {loading ? (
+        <div className="flex h-48 items-center justify-center"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
+      ) : (
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-muted-foreground text-xs border-b border-border bg-muted/30">
+                  <th className="text-left font-medium px-3 py-2">Ингредиент</th>
+                  <th className="text-right font-medium px-3">Текущий</th>
+                  <th className="text-right font-medium px-3">Цена</th>
+                  <th className="text-right font-medium px-3 w-40">Начальный остаток</th>
+                  <th className="text-right font-medium px-3">Стоимость</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(ing => {
+                  const v = qtyMap.get(ing.id) ?? 0
+                  return (
+                    <tr key={ing.id} className="border-b border-border/50">
+                      <td className="px-3 py-2 font-medium">{ing.name}<span className="text-muted-foreground ml-1 text-xs">({ing.unit})</span></td>
+                      <td className="px-3 text-right tabular-nums text-muted-foreground">{ing.qty}</td>
+                      <td className="px-3 text-right tabular-nums text-muted-foreground">{formatCurrency(ing.pricePerUnit)}</td>
+                      <td className="px-3 text-right">
+                        <DecimalInput value={v} onChange={(val: number) => setQty(ing.id, val)} min={0} placeholder="0"
+                          className="w-32 px-2 py-1 text-sm text-right bg-background border border-border rounded-lg" />
+                      </td>
+                      <td className="px-3 text-right tabular-nums">{v > 0 ? formatCurrency(v * ing.pricePerUnit) : '—'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 bg-background/95 backdrop-blur border-t border-border py-3">
+        <div className="text-sm">
+          Позиций: <b>{entered.length}</b> · Стоимость склада: <b className="tabular-nums">{formatCurrency(totalValue)}</b>
+        </div>
+        <button
+          onClick={handleApply} disabled={saving || entered.length === 0}
+          className="bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+        >
+          {saving ? 'Сохранение…' : 'Завести начальный остаток'}
+        </button>
+      </div>
+    </div>
+  )
+}

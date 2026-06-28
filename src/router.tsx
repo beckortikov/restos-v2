@@ -58,6 +58,7 @@ const WriteoffsNew = () => L(() => import('@/app/(app)/warehouse/writeoffs/new/p
 const SupplyExpenses = () => L(() => import('@/app/(app)/warehouse/supply-expenses/page'))
 const History = () => L(() => import('@/app/(app)/warehouse/history/page'))
 const InventoryCheck = () => L(() => import('@/app/(app)/warehouse/inventory-check/page'))
+const OpeningBalance = () => L(() => import('@/app/(app)/warehouse/opening-balance/page'))
 
 // Finance
 const Cashflow = () => L(() => import('@/app/(app)/finance/cashflow/page'))
@@ -151,6 +152,7 @@ export function AppRouter() {
         <Route path="/warehouse/supply-expenses" element={<SupplyExpenses />} />
         <Route path="/warehouse/history" element={<History />} />
         <Route path="/warehouse/inventory-check" element={<InventoryCheck />} />
+        <Route path="/warehouse/opening-balance" element={<OpeningBalance />} />
 
         {/* Finance */}
         <Route path="/finance/cashflow" element={<Cashflow />} />

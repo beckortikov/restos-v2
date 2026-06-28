@@ -448,6 +448,34 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/WriteoffInput" } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockWriteoff" } } } } }
 
+  /api/v1/stock/opening-balance:
+    post:
+      tags: [stock]
+      summary: Начальный остаток склада (movements + автопроводка в капитал «взнос собственника»)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                note: { type: string }
+                lines:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      ingredient_id: { type: string }
+                      qty:           { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: {
+          type: object,
+          properties: {
+            applied: { type: integer },
+            inventory_value: { $ref: "#/components/schemas/Decimal" },
+            equity_entry_id: { type: string } } } } } }
+
   /api/v1/stock/inventory:
     get:
       tags: [stock]
