@@ -290,6 +290,7 @@ export default function NewMenuItemPage() {
         if (ing) {
           finalData = {
             ...form,
+            station: 'showcase', // покупной товар — витрина (чтобы галочка сохранялась)
             cogs: form.purchasePrice,
             techCard: [{ name: form.name, qty: 1, unit: form.purchaseUnit, ingredientId: ing.id }],
           }
@@ -494,7 +495,7 @@ export default function NewMenuItemPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false }))}
+                    onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station }))}
                     className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                   >
                     <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />

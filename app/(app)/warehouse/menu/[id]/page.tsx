@@ -13,7 +13,7 @@ import {
   type MenuItem,
   type MenuStation,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient, updateIngredient } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
@@ -211,6 +211,7 @@ export default function EditMenuItemPage() {
         if (found) {
           setMenuItem(found)
           const isPurchased = found.station === 'showcase' && found.techCard.length === 1 && found.techCard[0].qty === 1
+          const backing = isPurchased ? i.find(x => x.id === found.techCard[0].ingredientId) : undefined
           setForm({
             name: found.name,
             category: found.category,
@@ -224,6 +225,9 @@ export default function EditMenuItemPage() {
             isBatchCooking: found.isBatchCooking ?? false,
             lowStockThreshold: found.lowStockThreshold ?? 5,
             isPurchased,
+            purchasePrice: backing?.pricePerUnit ?? (found.cogsManual ?? 0),
+            purchaseUnit: backing?.unit ?? found.techCard[0]?.unit ?? '',
+            purchaseMinQty: backing?.minQty ?? 0,
             unit: found.unit || 'piece',
             unitSize: found.unitSize ?? 1,
             saleStep: found.saleStep ?? 0,
@@ -307,7 +311,43 @@ export default function EditMenuItemPage() {
     if (!menuItem || submitting) return
     setSubmitting(true)
     try {
-      await updateMenuItem(menuItem.id, form)
+      let finalData = { ...form }
+
+      // Покупной товар: гарантируем складской ингредиент (создаём с 0 остатком,
+      // если ещё нет) + 1:1 техкарту + станцию «showcase», чтобы галочка
+      // «покупной» сохранялась и товар отражался на складе.
+      if (techCardsEnabled && form.isPurchased && (form.purchasePrice ?? 0) > 0 && form.purchaseUnit) {
+        // Реюзаем складской ингредиент ТОЛЬКО если товар уже был покупным при
+        // загрузке (его 1:1 ингредиент — выделенный). При конвертации обычного
+        // блюда в покупное создаём новый ингредиент, чтобы не испортить общий
+        // ингредиент рецепта.
+        const wasPurchased = menuItem.station === 'showcase' && menuItem.techCard.length === 1 &&
+          menuItem.techCard[0].qty === 1 && !!menuItem.techCard[0].ingredientId
+        const existingId = wasPurchased ? menuItem.techCard[0].ingredientId : undefined
+        let ingId = existingId
+        if (existingId) {
+          await updateIngredient(existingId, {
+            name: form.name, category: form.category,
+            price_per_unit: form.purchasePrice ?? 0, min_qty: form.purchaseMinQty ?? 0, unit: form.purchaseUnit,
+          })
+        } else {
+          const ing = await createIngredient({
+            name: form.name, category: form.category, qty: 0,
+            min_qty: form.purchaseMinQty ?? 0, unit: form.purchaseUnit, price_per_unit: form.purchasePrice ?? 0,
+          })
+          ingId = ing?.id
+        }
+        if (ingId) {
+          finalData = {
+            ...form,
+            station: 'showcase',
+            cogs: form.purchasePrice ?? 0,
+            techCard: [{ name: form.name, qty: 1, unit: form.purchaseUnit, ingredientId: ingId }],
+          }
+        }
+      }
+
+      await updateMenuItem(menuItem.id, finalData)
       toast.success('Блюдо обновлено')
       navigate('/warehouse/menu')
     } catch {
@@ -524,7 +564,7 @@ export default function EditMenuItemPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false }))}
+                    onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station }))}
                     className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                   >
                     <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
