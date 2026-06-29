@@ -43,6 +43,9 @@ function DeltaChip({ current, previous, hasPrevious }: { current: number; previo
 export default function ShiftsPage() {
   const { user, canDo, restaurantId, homeRoute } = useAuth()
   const navigate = useNavigate()
+  // Право shifts.history: история всех дней. Без него (кассир) — только
+  // сегодняшние смены (бэк тоже клампит список к сегодняшнему дню).
+  const canSeeHistory = canDo('shifts.history')
   // Раздел «Смены» под ПИН владельца. Кассир может открыть смену без ПИН (когда
   // активной смены нет — показываем только форму открытия). Любой другой доступ
   // к разделу (история, X/Z-отчёты, закрытие, пересчёт) — после ввода ПИН владельца.
@@ -173,12 +176,16 @@ export default function ShiftsPage() {
 
   const filteredHistory = useMemo(() => {
     const now = Date.now()
-    const cutoff = historyPeriod === '7d'
-      ? now - 7 * 24 * 60 * 60 * 1000
-      : historyPeriod === '30d'
-        ? now - 30 * 24 * 60 * 60 * 1000
-        : 0
-    const q = historySearch.trim().toLowerCase()
+    // Без права истории — только сегодняшние смены (по началу дня).
+    const startOfToday = new Date(); startOfToday.setHours(0, 0, 0, 0)
+    const cutoff = !canSeeHistory
+      ? startOfToday.getTime()
+      : historyPeriod === '7d'
+        ? now - 7 * 24 * 60 * 60 * 1000
+        : historyPeriod === '30d'
+          ? now - 30 * 24 * 60 * 60 * 1000
+          : 0
+    const q = canSeeHistory ? historySearch.trim().toLowerCase() : ''
     return history.filter(s => {
       if (cutoff > 0 && new Date(s.closedAt ?? s.openedAt).getTime() < cutoff) return false
       if (q) {
@@ -187,7 +194,7 @@ export default function ShiftsPage() {
       }
       return true
     })
-  }, [history, historyPeriod, historySearch])
+  }, [history, historyPeriod, historySearch, canSeeHistory])
 
   const expectedAtClose = useMemo(() => {
     if (!activeShift) return 0
@@ -1131,33 +1138,37 @@ export default function ShiftsPage() {
       {history.length > 0 && (
         <div>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
-            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">История смен</h2>
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={historySearch}
-                onChange={e => setHistorySearch(e.target.value)}
-                placeholder="Поиск по официанту/счёту"
-                className="px-3 py-1.5 text-xs bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 w-56"
-              />
-              <div className="flex items-center gap-1 bg-card border border-border rounded-lg p-1">
-                {([
-                  { value: '7d', label: '7 дней' },
-                  { value: '30d', label: '30 дней' },
-                  { value: 'all', label: 'Все' },
-                ] as const).map(p => (
-                  <button
-                    key={p.value}
-                    onClick={() => setHistoryPeriod(p.value)}
-                    className={`px-3 py-1 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
-                      historyPeriod === p.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
+            <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+              {canSeeHistory ? 'История смен' : 'Сегодняшние смены'}
+            </h2>
+            {canSeeHistory && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={historySearch}
+                  onChange={e => setHistorySearch(e.target.value)}
+                  placeholder="Поиск по официанту/счёту"
+                  className="px-3 py-1.5 text-xs bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 w-56"
+                />
+                <div className="flex items-center gap-1 bg-card border border-border rounded-lg p-1">
+                  {([
+                    { value: '7d', label: '7 дней' },
+                    { value: '30d', label: '30 дней' },
+                    { value: 'all', label: 'Все' },
+                  ] as const).map(p => (
+                    <button
+                      key={p.value}
+                      onClick={() => setHistoryPeriod(p.value)}
+                      className={`px-3 py-1 rounded-md text-xs font-medium transition-colors whitespace-nowrap ${
+                        historyPeriod === p.value ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
           {filteredHistory.length === 0 ? (
             <p className="text-sm text-muted-foreground text-center py-6">Смен в выбранном периоде не найдено</p>

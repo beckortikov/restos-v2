@@ -42,7 +42,7 @@ var AllPermissions = []string{
 	"orders.create", "orders.close", "orders.cancel", "orders.void",
 	"orders.refund", "orders.reprint", "orders.view_others", "orders.create_stopped",
 	"orders.service_charge",
-	"kitchen.cooking", "tables.edit", "tables.reserve", "shifts.manage", "pos.access", "showcase.view",
+	"kitchen.cooking", "tables.edit", "tables.reserve", "shifts.manage", "shifts.history", "pos.access", "showcase.view",
 	"inventory.view", "inventory.manage", "suppliers.manage",
 	"menu.view", "menu.edit", "menu.view_cost", "writeoffs.create", "batch_cooking.manage",
 	"finance.view", "finance.manage", "payroll.manage", "analytics.view",

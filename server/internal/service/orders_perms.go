@@ -20,30 +20,34 @@ func (s *OrdersService) requirePerm(ctx context.Context, action string) error {
 	return requirePermFor(ctx, s.r, action)
 }
 
-// requirePermFor — переиспользуемая серверная проверка матрицы доступов для
-// любого сервиса (orders, столы/зоны и т.д.). owner — всегда разрешён.
-func requirePermFor(ctx context.Context, r *repo.Repo, action string) error {
+// hasPermFor — bool-проверка права для любого сервиса. owner — всегда true.
+func hasPermFor(ctx context.Context, r *repo.Repo, action string) bool {
 	actor, _ := audit.ActorFromContext(ctx)
 	if actor.Role == "owner" {
-		return nil
+		return true
 	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
-		return err
+		return false
 	}
 	var u models.User
 	if err := r.Raw().WithContext(ctx).
 		Select("role", "permissions").
 		Where("restaurant_id = ? AND id = ?", rid, actor.UserID).
 		First(&u).Error; err != nil {
-		// Пользователь не найден / ошибка чтения — безопаснее запретить.
-		return apperrors.Wrap("FORBIDDEN", "недостаточно прав", nil)
+		return false // пользователь не найден / ошибка — безопаснее запретить
 	}
 	role := actor.Role
 	if u.Role != nil && *u.Role != "" {
 		role = *u.Role
 	}
-	if perms.Allow(role, []byte(u.Permissions), action) {
+	return perms.Allow(role, []byte(u.Permissions), action)
+}
+
+// requirePermFor — переиспользуемая серверная проверка матрицы доступов для
+// любого сервиса (orders, столы/зоны и т.д.). owner — всегда разрешён.
+func requirePermFor(ctx context.Context, r *repo.Repo, action string) error {
+	if hasPermFor(ctx, r, action) {
 		return nil
 	}
 	return apperrors.Wrap("FORBIDDEN", "недостаточно прав для действия: "+action, nil)

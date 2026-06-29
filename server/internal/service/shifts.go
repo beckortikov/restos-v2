@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"time"
 	"errors"
 
 	"gorm.io/gorm"
@@ -97,6 +98,13 @@ func (s *ShiftsService) List(ctx context.Context, f ShiftsFilter) ([]ShiftWithAc
 	q := scoped
 	if f.Status != "" {
 		q = q.Where("status = ?", f.Status)
+	}
+	// Без права shifts.history пользователь (кассир) видит только СЕГОДНЯШНИЕ
+	// смены — историю всех дней показываем только владельцу/менеджеру.
+	if !hasPermFor(ctx, s.r, "shifts.history") {
+		now := time.Now()
+		startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+		q = q.Where("opened_at >= ?", startOfToday)
 	}
 	// CashShift отсортирован по opened_at, а не created_at — это естественный
 	// порядок смен. Пагинируем по нему. Применяем keyset вручную (cursor.Apply
