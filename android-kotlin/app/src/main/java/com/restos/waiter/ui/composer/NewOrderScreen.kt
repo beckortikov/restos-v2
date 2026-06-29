@@ -194,8 +194,14 @@ private fun ComposerBody(
 
 private fun filterMenu(state: NewOrderUiState): List<MenuItemDto> {
     val q = state.search.trim().lowercase()
-    val byCat = if (state.selectedCategoryId == null || q.isNotBlank()) state.items
-    else state.items.filter { it.category == state.selectedCategoryId }
+    // Стоп-блюда уходят из меню официанта (он не пробивает стоп): недоступно,
+    // ручной стоп или заготовка без готовых порций. Видны только в стоп-листе.
+    val visible = state.items.filter { item ->
+        item.isAvailable && !item.stopListOverride &&
+            !(item.isBatchCooking && (state.batchAvail[item.id] ?: item.preparedQty) <= 0)
+    }
+    val byCat = if (state.selectedCategoryId == null || q.isNotBlank()) visible
+    else visible.filter { it.category == state.selectedCategoryId }
     val filtered = if (q.isBlank()) byCat
     else byCat.filter { it.name.lowercase().contains(q) }
 
