@@ -24,7 +24,10 @@ const STATION_ICONS: Record<string, string> = {
 type HistoryFilter = 'today' | 'week' | 'all'
 
 export default function BatchCookingPage() {
-  const { canDo } = useAuth()
+  const { canDo, restaurant } = useAuth()
+  // Контроль остатков выключен → склад может уходить в минус, значит и приготовить
+  // можно сверх доступного (с предупреждением). Включён → жёсткий лимит как раньше.
+  const allowNegative = restaurant?.enforceStockCheck !== true
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [logs, setLogs] = useState<BatchCookingLog[]>([])
   const [stationFilter, setStationFilter] = useState<MenuStation | 'all'>('all')
@@ -85,7 +88,7 @@ export default function BatchCookingPage() {
       if (!calc.hasRecipe) {
         setQty(1)
       } else {
-        setQty(calc.maxPortions > 0 ? 1 : 0)
+        setQty(calc.maxPortions > 0 || allowNegative ? 1 : 0)
       }
     } catch (e) {
       toast.error(humanizeError(e, 'Ошибка расчёта'))
@@ -613,10 +616,13 @@ export default function BatchCookingPage() {
                 </Link>
               </div>
             ) : (
-              <div className={`rounded-xl p-3 ${portionCalc.maxPortions > 0 ? 'bg-emerald-50 border border-emerald-200' : 'bg-red-50 border border-red-200'}`}>
-                <p className={`text-sm font-semibold ${portionCalc.maxPortions > 0 ? 'text-emerald-800' : 'text-red-800'}`}>
+              <div className={`rounded-xl p-3 border ${portionCalc.maxPortions > 0 ? 'bg-emerald-50 border-emerald-200' : allowNegative ? 'bg-amber-50 border-amber-200' : 'bg-red-50 border-red-200'}`}>
+                <p className={`text-sm font-semibold ${portionCalc.maxPortions > 0 ? 'text-emerald-800' : allowNegative ? 'text-amber-800' : 'text-red-800'}`}>
                   Максимум: {portionCalc.maxPortions} порций
                 </p>
+                {portionCalc.maxPortions === 0 && allowNegative && (
+                  <p className="text-xs text-amber-700 mt-0.5">Ингредиентов не хватает — можно приготовить, склад уйдёт в минус.</p>
+                )}
                 {portionCalc.ingredients.filter(i => i.isBottleneck).map(i => (
                   <p key={i.ingredientId} className="text-xs text-muted-foreground mt-0.5">
                     Ограничение: {i.name} — {i.stockQty.toFixed(1)} {i.unit} на складе
@@ -681,7 +687,7 @@ export default function BatchCookingPage() {
                   </button>
                 </div>
               </>
-            ) : portionCalc.maxPortions > 0 ? (
+            ) : (portionCalc.maxPortions > 0 || allowNegative) ? (
               <>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Количество порций</label>
@@ -695,13 +701,13 @@ export default function BatchCookingPage() {
                     <input
                       type="number"
                       min={1}
-                      max={portionCalc.maxPortions}
+                      max={allowNegative ? undefined : portionCalc.maxPortions}
                       value={qty}
-                      onChange={e => setQty(Math.min(portionCalc.maxPortions, Math.max(1, Number(e.target.value) || 1)))}
+                      onChange={e => { const v = Math.max(1, Number(e.target.value) || 1); setQty(allowNegative ? v : Math.min(portionCalc.maxPortions, v)) }}
                       className="flex-1 text-center text-xl font-bold py-2.5 rounded-lg border border-border bg-background"
                     />
                     <button
-                      onClick={() => setQty(Math.min(portionCalc.maxPortions, qty + 1))}
+                      onClick={() => setQty(allowNegative ? qty + 1 : Math.min(portionCalc.maxPortions, qty + 1))}
                       className="size-11 rounded-lg bg-muted text-foreground font-bold text-xl hover:bg-muted/80 active:scale-95 flex items-center justify-center"
                     >
                       +
@@ -714,6 +720,13 @@ export default function BatchCookingPage() {
                     </button>
                   </div>
                 </div>
+
+                {allowNegative && qty > portionCalc.maxPortions && (
+                  <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800 flex items-start gap-1.5">
+                    <AlertTriangle className="size-4 shrink-0 mt-0.5" />
+                    <span>Ингредиентов хватает на {portionCalc.maxPortions} порц. — остальное спишется со склада в минус.</span>
+                  </div>
+                )}
 
                 <div className="space-y-1.5">
                   <p className="text-xs font-medium text-muted-foreground">Будет списано:</p>
