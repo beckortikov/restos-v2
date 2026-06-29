@@ -579,12 +579,11 @@ export function OrderComposer(props: OrderComposerProps) {
     //    though «Жигар кабоб» lives under «Кабоб» — confusing.
     const cartIds = new Set(cart.map(l => l.menuItemId))
     const filtered = menuItems.filter(item => {
-      // Stop-list items: always visible (with a «Стоп» badge + dimmed
-      // styling) so the waiter knows what's out of stock instead of
-      // hunting for a dish that silently disappeared from the menu.
-      // addToCart() still blocks adding for users without
-      // `orders.create_stopped` permission, so this is display-only.
+      // Стоп-блюда уходят из меню ПОС для кассира/официанта (без права
+      // `orders.create_stopped`) — они видны только в разделе «Стоп-лист».
+      // Менеджер с правом override видит их (серым) и может пробить.
       if (item.isBatchCooking && (item.preparedQty ?? 0) <= 0) return false
+      if (!canOrderStopped && (!item.isAvailable || stoppedIds.has(item.id))) return false
       if (isHidden(item)) return false
       if (q && !item.name.toLowerCase().includes(q)) return false
       if (!q && !cartIds.has(item.id) && category !== 'Все' && item.category !== category) return false
@@ -610,7 +609,7 @@ export function OrderComposer(props: OrderComposerProps) {
       .sort((a, b) => (cartOrder.get(a.id)! - cartOrder.get(b.id)!))
     const rest = sorted.filter(i => !cartOrder.has(i.id))
     return [...inCart, ...rest]
-  }, [menuItems, category, deferredSearch, cart])
+  }, [menuItems, category, deferredSearch, cart, canOrderStopped, stoppedIds])
 
   const total = dSum(cart.map(lineTotal))
   const totalItems = cart.length
@@ -2106,7 +2105,7 @@ export function OrderComposer(props: OrderComposerProps) {
               <button
                 onClick={() => handleSubmit()}
                 disabled={submitDisabled}
-                className="w-full py-3.5 bg-card border-2 border-primary/50 text-foreground rounded-xl text-base font-bold hover:bg-primary/5 hover:border-primary disabled:opacity-50"
+                className="w-full py-3.5 bg-muted text-foreground border border-border rounded-xl text-base font-bold hover:bg-muted/70 disabled:opacity-50"
               >
                 Создать без оплаты
               </button>

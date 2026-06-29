@@ -50,9 +50,22 @@ function BottomSheet({ open, onOpenChange, children }: SheetProps) {
 function BottomSheetContent({
   className,
   children,
+  onInteractOutside,
   ...props
-}: React.HTMLAttributes<HTMLDivElement>) {
+}: React.HTMLAttributes<HTMLDivElement> & { onInteractOutside?: (e: any) => void }) {
   const isMobile = useIsMobile()
+
+  // Экранная клавиатура живёт ВНЕ листа (fixed, [data-no-vk]). Тап по клавише
+  // даёт focus/pointer «снаружи» → Radix/vaul закрывал бы лист (смешанная
+  // оплата исчезала). Гасим dismiss, если взаимодействие пришло из клавиатуры.
+  const guardInteractOutside = (e: any) => {
+    const target = (e?.detail?.originalEvent?.target ?? e?.target) as Element | null
+    if (target?.closest?.('[data-no-vk]')) {
+      e.preventDefault()
+      return
+    }
+    onInteractOutside?.(e)
+  }
 
   if (isMobile) {
     return (
@@ -63,6 +76,7 @@ function BottomSheetContent({
             'fixed inset-x-0 bottom-0 z-50 mt-24 flex h-auto max-h-[92vh] flex-col rounded-t-2xl border border-border bg-background',
             className,
           )}
+          onInteractOutside={guardInteractOutside}
           {...(props as any)}
         >
           <div className="mx-auto mt-2 mb-1 h-1.5 w-12 shrink-0 rounded-full bg-muted-foreground/30" />
@@ -80,6 +94,7 @@ function BottomSheetContent({
           'bg-background data-[state=open]:animate-in data-[state=closed]:animate-out fixed z-50 flex flex-col gap-4 shadow-lg transition ease-in-out data-[state=closed]:duration-300 data-[state=open]:duration-500 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right inset-y-0 right-0 h-full w-full border-l sm:max-w-md',
           className,
         )}
+        onInteractOutside={guardInteractOutside}
         {...(props as any)}
       >
         {children}

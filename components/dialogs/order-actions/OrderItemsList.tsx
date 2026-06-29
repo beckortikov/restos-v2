@@ -82,9 +82,9 @@ function OrderItemsListInner({
         const itemCreatedAt = item.createdAt || order.createdAt
         const itemTimeSince = itemCreatedAt ? getTimeSince(itemCreatedAt) : null
         return (
-          <div key={i} className={`px-4 py-2.5 ${visuallyMuted ? 'opacity-50 bg-muted/30' : ''}`}>
+          <div key={i} className={`px-3 py-1.5 ${visuallyMuted ? 'opacity-50 bg-muted/30' : ''}`}>
             <div className="flex items-center justify-between">
-              <div className="text-sm flex items-center gap-1 flex-wrap">
+              <div className="text-[13px] flex items-center gap-1 flex-wrap">
                 <span className={`font-medium ${visuallyMuted ? 'line-through' : ''}`}>{item.name}</span>
                 <span className="text-muted-foreground"> {qtyLabel}</span>
                 {itemTimeSince && (
@@ -107,7 +107,7 @@ function OrderItemsListInner({
                 )}
               </div>
               <div className="flex items-center gap-2">
-                <span className={`text-sm font-medium ${visuallyMuted ? 'line-through' : ''}`}>
+                <span className={`text-[13px] font-medium ${visuallyMuted ? 'line-through' : ''}`}>
                   {formatCurrency(lineTotal)}
                 </span>
                 {canVoidItem && (
