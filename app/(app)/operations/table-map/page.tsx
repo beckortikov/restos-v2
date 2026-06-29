@@ -251,7 +251,9 @@ export default function TableMapPage() {
   // Режим редактирования столов (только cashier/owner, только md+).
   // ON → клик по столу открывает ManageTableDialog вместо POS-редиректа/листа.
   const [editTablesMode, setEditTablesMode] = useState(false)
-  const canManageTables = canAccessRoles(['cashier', 'owner'])
+  // Редактирование столов/зон — по праву tables.edit (а не по роли). Раньше
+  // кассир редактировал всегда, игнорируя выключенную галочку в матрице.
+  const canManageTables = canDo('tables.edit') || canAccessRoles(['manager', 'owner'])
 
   // Default label suggestion fed to CreateOrderDialog when user opens a new tab
   // on an already-occupied table (e.g. "Группа 2"). Cleared once consumed.

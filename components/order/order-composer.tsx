@@ -2106,7 +2106,7 @@ export function OrderComposer(props: OrderComposerProps) {
               <button
                 onClick={() => handleSubmit()}
                 disabled={submitDisabled}
-                className="w-full py-2.5 bg-card border border-border text-muted-foreground rounded-xl text-xs font-medium hover:bg-muted hover:text-foreground disabled:opacity-50"
+                className="w-full py-3.5 bg-card border-2 border-primary/50 text-foreground rounded-xl text-base font-bold hover:bg-primary/5 hover:border-primary disabled:opacity-50"
               >
                 Создать без оплаты
               </button>

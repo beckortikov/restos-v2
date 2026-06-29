@@ -37,6 +37,9 @@ type ZoneInput struct {
 }
 
 func (s *ZonesWriteService) Create(ctx context.Context, in ZoneInput) (*models.Zone, error) {
+	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -62,6 +65,9 @@ func (s *ZonesWriteService) Create(ctx context.Context, in ZoneInput) (*models.Z
 }
 
 func (s *ZonesWriteService) Patch(ctx context.Context, id string, in ZoneInput) (*models.Zone, error) {
+	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return nil, err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return nil, err
@@ -96,6 +102,9 @@ func (s *ZonesWriteService) Patch(ctx context.Context, id string, in ZoneInput) 
 }
 
 func (s *ZonesWriteService) Delete(ctx context.Context, id string) error {
+	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return err
@@ -148,6 +157,9 @@ type TableInput struct {
 }
 
 func (s *TablesWriteService) Create(ctx context.Context, in TableInput) (*models.Table, error) {
+	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -175,6 +187,9 @@ func (s *TablesWriteService) Create(ctx context.Context, in TableInput) (*models
 }
 
 func (s *TablesWriteService) Patch(ctx context.Context, id string, in TableInput) (*models.Table, error) {
+	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return nil, err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return nil, err
@@ -215,6 +230,9 @@ func (s *TablesWriteService) Patch(ctx context.Context, id string, in TableInput
 }
 
 func (s *TablesWriteService) Delete(ctx context.Context, id string) error {
+	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return err

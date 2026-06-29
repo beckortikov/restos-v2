@@ -84,7 +84,7 @@ func setupE2E(t *testing.T) *e2eFixture {
 	// "cashier" — чтобы ролевые проверки (override stop-list и т.п.) не поплыли.
 	if err := gdb.Create(&models.User{
 		ID: uuid.NewString(), Name: &name, PIN: &pin, Role: &role, RestaurantID: &rid,
-		Permissions: datatypes.JSON([]byte(`{"actions":{"orders.cancel":true,"orders.void":true,"orders.refund":true}}`)),
+		Permissions: datatypes.JSON([]byte(`{"actions":{"orders.cancel":true,"orders.void":true,"orders.refund":true,"tables.edit":true}}`)),
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

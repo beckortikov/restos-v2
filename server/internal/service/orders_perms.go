@@ -8,6 +8,7 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/perms"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/repo"
 )
 
 // requirePerm — авторитетная серверная проверка матрицы доступов. Возвращает
@@ -16,6 +17,12 @@ import (
 // Раньше матрица была чисто клиентской: бэк её не проверял, поэтому официант
 // мог отменять блюда (void) вопреки выключенному праву. Теперь POST упрётся в 403.
 func (s *OrdersService) requirePerm(ctx context.Context, action string) error {
+	return requirePermFor(ctx, s.r, action)
+}
+
+// requirePermFor — переиспользуемая серверная проверка матрицы доступов для
+// любого сервиса (orders, столы/зоны и т.д.). owner — всегда разрешён.
+func requirePermFor(ctx context.Context, r *repo.Repo, action string) error {
 	actor, _ := audit.ActorFromContext(ctx)
 	if actor.Role == "owner" {
 		return nil
@@ -25,7 +32,7 @@ func (s *OrdersService) requirePerm(ctx context.Context, action string) error {
 		return err
 	}
 	var u models.User
-	if err := s.r.Raw().WithContext(ctx).
+	if err := r.Raw().WithContext(ctx).
 		Select("role", "permissions").
 		Where("restaurant_id = ? AND id = ?", rid, actor.UserID).
 		First(&u).Error; err != nil {
