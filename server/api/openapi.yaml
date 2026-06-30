@@ -459,6 +459,38 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockTransfer" } } } } }
 
+  /api/v1/network/branches:
+    get:
+      tags: [stock]
+      summary: Филиалы сети текущего ресторана (multi-branch, ADR-003).
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BranchesList" } } } } }
+
+  /api/v1/nomenclature:
+    get:
+      tags: [stock]
+      summary: Общий каталог номенклатуры сети.
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NomenclatureList" } } } } }
+    post:
+      tags: [stock]
+      summary: Завести продукт в каталог номенклатуры сети.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateNomenclatureInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Nomenclature" } } } } }
+
+  /api/v1/stock/ingredients/{id}/nomenclature:
+    post:
+      tags: [stock]
+      summary: Привязать ингредиент к номенклатуре сети.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [nomenclature_id], properties: { nomenclature_id: { type: string, format: uuid } } } } }
+      responses: { "200": { description: OK } }
+
   /api/v1/stock/writeoffs:
     get:
       tags: [stock]
@@ -3045,6 +3077,31 @@ components:
         debt_amount: { $ref: "#/components/schemas/Decimal" }
 
     StockTransfersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockTransfer" } }, next_cursor: { type: string } } }
+
+    BranchesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Branch" } }, next_cursor: { type: string } } }
+    Branch:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { type: string, enum: [outlet, central_warehouse] }
+
+    NomenclatureList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Nomenclature" } }, next_cursor: { type: string } } }
+    Nomenclature:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        unit: { type: string }
+        category: { type: string }
+    CreateNomenclatureInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        unit: { type: string }
+        category: { type: string }
 
     StockTransfer:
       type: object

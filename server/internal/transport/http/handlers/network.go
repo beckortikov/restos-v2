@@ -1,0 +1,73 @@
+package handlers
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
+
+	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/service"
+	"github.com/restos/restos-v4/server/internal/transport/http/respond"
+)
+
+// NetworkHandler — сетевые справочники multi-branch (ADR-003, Фаза 1):
+// филиалы, общий каталог номенклатуры, привязка ингредиентов.
+type NetworkHandler struct {
+	svc *service.NetworkService
+}
+
+func NewNetwork(svc *service.NetworkService) *NetworkHandler {
+	return &NetworkHandler{svc: svc}
+}
+
+// ListBranches — GET /api/v1/network/branches.
+func (h *NetworkHandler) ListBranches(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.ListBranches(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[service.Branch](rows, ""))
+}
+
+// ListNomenclature — GET /api/v1/nomenclature.
+func (h *NetworkHandler) ListNomenclature(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.ListNomenclature(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[models.Nomenclature](rows, ""))
+}
+
+// CreateNomenclature — POST /api/v1/nomenclature.
+func (h *NetworkHandler) CreateNomenclature(w http.ResponseWriter, r *http.Request) {
+	var in service.CreateNomenclatureInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	n, err := h.svc.CreateNomenclature(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, n)
+}
+
+// LinkIngredient — POST /api/v1/stock/ingredients/{id}/nomenclature.
+func (h *NetworkHandler) LinkIngredient(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		NomenclatureID string `json:"nomenclature_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	if err := h.svc.LinkIngredient(r.Context(), chi.URLParam(r, "id"), in.NomenclatureID); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]string{"status": "linked"})
+}
