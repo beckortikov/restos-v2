@@ -91,15 +91,16 @@ iiko решает задачу **централизацией**: термина�
 
 ### Слой данных (БД)
 
-Новые миграции в `server/internal/db/migrations/`:
+Новые миграции в `server/internal/db/migrations/` (актуальная последняя миграция в main — `025`, поэтому новые начинаются с `026`):
 
 | Миграция | Содержание |
 |---|---|
-| `024_company_accounts.sql` | Таблица `company_accounts` (сеть): `id`, `name`, владелец. `restaurants.account_id` → FK. |
-| `025_restaurants_kind.sql` | `restaurants.kind` ∈ {`outlet`, `central_warehouse`} (CHECK-constraint). |
-| `026_stock_transfers.sql` | `stock_transfers` (`account_id`, `from_restaurant_id`, `to_restaurant_id`, `status`, `transfer_number`, `note`) + `stock_transfer_lines` (`ingredient_id`, `qty`, `cost_per_unit`). |
-| `027_stock_movement_transfer_types.sql` | Расширить CHECK `stock_movements.type`: + `transfer_out`, `transfer_in`. |
-| `028_sync_log.sql` | `sync_log` (tracked-таблица, entity, op, payload, `synced_at`) — журнал дельт для пушей. |
+| `026_company_accounts.sql` | Таблица `company_accounts` (сеть): `id`, `name`, владелец. FK `restaurants.account_id → company_accounts.id` (колонка `account_id` уже есть с миграции 009). |
+| `027_restaurants_kind.sql` | `restaurants.kind` ∈ {`outlet`, `central_warehouse`} (CHECK-constraint, DEFAULT `outlet`). |
+| `028_stock_transfers.sql` | `stock_transfers` (`account_id`, `from_restaurant_id`, `to_restaurant_id`, `status`, `transfer_number`, `note`) + `stock_transfer_lines` (`ingredient_id`, `qty`, `cost_per_unit`). |
+| `029_sync_log.sql` (Фаза 2) | `sync_log` (tracked-таблица, entity, op, payload, `synced_at`) — журнал дельт для пушей. |
+
+> **Уточнение по факту кода (2026-06-30):** отдельная миграция для `stock_movements.type` **не нужна** — колонка `type` объявлена как свободный `TEXT` без CHECK-constraint (см. `001_init.sql`), поэтому значения `transfer_out`/`transfer_in` пишутся как есть. В ADR ранее планировалась лишняя миграция `*_stock_movement_transfer_types` — она удалена.
 
 Денормализация `ingredients.qty` остаётся **только через event-stream `stock_movements`** (правило проекта не нарушается).
 
@@ -169,8 +170,8 @@ iiko решает задачу **централизацией**: термина�
 
 ## Фазы реализации
 
-1. **Слой данных (локально):** миграции 024–027, модели, `ForAccount`, сервис перемещений, экраны перемещений. Работает в пределах одной БД (центральный склад и филиалы как разные `restaurant_id`) — ценно даже до sync.
-2. **Sync-слой:** `sync_log` (028), `internal/cloud/pusher.go`, приём на центральном узле, конфиг ролей.
+1. **Слой данных (локально):** миграции 026–028, модели, `ForAccount`, сервис перемещений, экраны перемещений. Работает в пределах одной БД (центральный склад и филиалы как разные `restaurant_id`) — ценно даже до sync.
+2. **Sync-слой:** `sync_log` (029), `internal/cloud/pusher.go`, приём на центральном узле, конфиг ролей.
 3. **Туннель + центральный узел на главной кассе:** Tailscale/WireGuard, запуск второго экземпляра в роли `central`.
 4. **Сводка владельцу:** `/api/v1/network/*`, `<BranchSelector>`, network-дашборд.
 
