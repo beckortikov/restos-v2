@@ -311,6 +311,7 @@ function mapIngredient(r: Record<string, unknown>): Ingredient {
     pricePerUnit: Number(r.price_per_unit ?? 0),
     wastePercent: Number(r.waste_percent ?? 0),
     isFood: r.is_food !== false,
+    nomenclatureId: (r.nomenclature_id as string) ?? null,
   } as Ingredient
 }
 

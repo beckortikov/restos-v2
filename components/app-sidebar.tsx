@@ -48,6 +48,8 @@ import {
   Plus,
   Minus,
   ShieldCheck,
+  ArrowLeftRight,
+  Boxes,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -248,6 +250,8 @@ const NAV: NavItem[] = [
       { label: 'Списания', href: '/warehouse/writeoffs', icon: Trash2 },
       { label: 'Расход хозтоваров', href: '/warehouse/supply-expenses', icon: PackageMinus },
       { label: 'Инвентаризация', href: '/warehouse/inventory-check', icon: ClipboardCheck },
+      { label: 'Перемещения', href: '/warehouse/transfers', icon: ArrowLeftRight },
+      { label: 'Номенклатура сети', href: '/warehouse/nomenclature', icon: Boxes },
       { label: 'Начальный остаток', href: '/warehouse/opening-balance', icon: PackagePlus },
       { label: 'История движений', href: '/warehouse/history', icon: History },
     ],

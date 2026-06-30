@@ -224,6 +224,7 @@ export interface Ingredient {
   pricePerUnit: number
   wastePercent: number // 15 = 15% отходов при очистке
   isFood: boolean // true = продукт, false = хозтовар
+  nomenclatureId?: string | null // multi-branch: привязка к сетевому каталогу (ADR-003)
 }
 
 export interface OrderItem {
@@ -813,7 +814,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'shifts.history': ['/operations/shifts'],
   'pos.access': ['/operations/pos', '/cashier', '/show-qr'],
   'inventory.view': ['/warehouse/inventory'],
-  'inventory.manage': ['/warehouse/inventory', '/warehouse/receipts', '/warehouse/inventory-check', '/warehouse/history', '/warehouse/supply-expenses'],
+  'inventory.manage': ['/warehouse/inventory', '/warehouse/receipts', '/warehouse/inventory-check', '/warehouse/history', '/warehouse/supply-expenses', '/warehouse/transfers', '/warehouse/nomenclature'],
   'menu.view': ['/warehouse/menu', '/operations/pos'],
   'menu.edit': ['/warehouse/menu', '/warehouse/semi'],
   'writeoffs.create': ['/warehouse/writeoffs'],
