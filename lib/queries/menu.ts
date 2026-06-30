@@ -10,13 +10,37 @@ export interface FetchMenuItemsOptions {
 
 export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<MenuItem[]> {
   const includeTC = opts?.withTechCards !== false
-  const query: { limit: number; include?: string } = { limit: 500 }
-  if (includeTC) query.include = 'tech_cards,ingredient_prices'
-  const itemsRes: any = await unwrap(api.GET('/api/v1/menu/items', { params: { query } }))
-  const items: Record<string, unknown>[] = itemsRes?.data ?? []
+
+  // Курсорная пагинация. Бэк зажимает limit до cursor.MaxLimit (200), поэтому
+  // при >200 блюдах одна страница теряла «хвост» — блюда молча пропадали из
+  // меню и из Склад→Меню. Идём по next_cursor, пока он не пуст.
+  const items: Record<string, unknown>[] = []
+  const ingredientPrices = new Map<string, { price: number; unit: string; wastePercent: number }>()
+  let cursor: string | undefined
+  for (let guard = 0; guard < 200; guard++) {
+    const query: { limit: number; include?: string; cursor?: string } = { limit: 200 }
+    if (includeTC) query.include = 'tech_cards,ingredient_prices'
+    if (cursor) query.cursor = cursor
+    const res: any = await unwrap(api.GET('/api/v1/menu/items', { params: { query: query as any } }))
+    const page: Record<string, unknown>[] = res?.data ?? []
+    items.push(...page)
+    if (includeTC) {
+      const ipMap = (res?.ingredient_prices ?? {}) as Record<string, {
+        price?: unknown; unit?: unknown; waste_percent?: unknown
+      }>
+      for (const [id, v] of Object.entries(ipMap)) {
+        ingredientPrices.set(id, {
+          price: Number(v?.price) || 0,
+          unit: (v?.unit as string) || '',
+          wastePercent: Number(v?.waste_percent) || 0,
+        })
+      }
+    }
+    cursor = (res?.next_cursor as string) || undefined
+    if (!cursor || page.length === 0) break
+  }
 
   const techByItem = new Map<string, Record<string, unknown>[]>()
-  const ingredientPrices = new Map<string, { price: number; unit: string; wastePercent: number }>()
   if (includeTC) {
     for (const r of items) {
       const id = r.id as string
@@ -24,16 +48,6 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
         ? (r.tech_card_lines as Record<string, unknown>[])
         : []
       if (lines.length > 0) techByItem.set(id, lines)
-    }
-    const ipMap = (itemsRes?.ingredient_prices ?? {}) as Record<string, {
-      price?: unknown; unit?: unknown; waste_percent?: unknown
-    }>
-    for (const [id, v] of Object.entries(ipMap)) {
-      ingredientPrices.set(id, {
-        price: Number(v?.price) || 0,
-        unit: (v?.unit as string) || '',
-        wastePercent: Number(v?.waste_percent) || 0,
-      })
     }
   }
 
