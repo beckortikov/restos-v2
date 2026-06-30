@@ -11,7 +11,8 @@ interface MenuApi {
     suspend fun listItems(
         @Query("category") categoryId: String? = null,
         @Query("is_available") isAvailable: Boolean? = null,
-        @Query("limit") limit: Int = 500,
+        @Query("limit") limit: Int = 200,
+        @Query("cursor") cursor: String? = null,
     ): PagedEnvelope<MenuItemDto>
 
     @GET("api/v1/menu/categories")
@@ -25,6 +26,25 @@ interface MenuApi {
      */
     @GET("api/v1/menu/batch/availability")
     suspend fun batchAvailability(): PagedEnvelope<BatchAvailabilityDto>
+}
+
+/**
+ * Полный список меню через курсор. Бэк зажимает limit до 200 (cursor.MaxLimit),
+ * поэтому без прохода по next_cursor при >200 блюдах терялся «хвост» — позиции
+ * молча пропадали из меню официанта.
+ */
+suspend fun MenuApi.listAllItems(isAvailable: Boolean? = null): List<MenuItemDto> {
+    val all = mutableListOf<MenuItemDto>()
+    var cursor: String? = null
+    var guard = 0
+    while (guard++ < 200) {
+        val page = listItems(isAvailable = isAvailable, limit = 200, cursor = cursor)
+        all.addAll(page.data)
+        val next = page.nextCursor
+        if (next.isNullOrEmpty() || page.data.isEmpty()) break
+        cursor = next
+    }
+    return all
 }
 
 @Serializable

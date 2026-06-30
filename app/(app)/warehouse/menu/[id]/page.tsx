@@ -166,6 +166,9 @@ export default function EditMenuItemPage() {
   const { restaurant, canDo } = useAuth()
   const canEdit = canDo('menu.edit')
   const techCardsEnabled = restaurant?.techCardsEnabled ?? true
+  // Техкарта обязательна только в строгом режиме (техкарты + контроль остатков).
+  const enforceStockCheck = restaurant?.enforceStockCheck ?? false
+  const requireTechCard = techCardsEnabled && enforceStockCheck
 
   const [menuItem, setMenuItem] = useState<MenuItem | null>(null)
   const [form, setForm] = useState<MenuItemForm>({
@@ -354,8 +357,8 @@ export default function EditMenuItemPage() {
   const canSubmit = !!form.name && !!form.category && form.price > 0 && (
     form.isPurchased
       ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
-      : !techCardsEnabled
-        ? true
+      : requireTechCard
+        ? form.techCard.length > 0 && form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
         : techCardValid
   )
 

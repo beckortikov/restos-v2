@@ -162,6 +162,11 @@ export default function NewMenuItemPage() {
   const navigate = useNavigate()
   const { restaurant } = useAuth()
   const techCardsEnabled = restaurant?.techCardsEnabled ?? true
+  // Техкарта ОБЯЗАТЕЛЬНА только в строгом режиме (техкарты + контроль остатков).
+  // В мягком режиме (контроль выключен) техкарта необязательна — блюдо можно
+  // создать и продавать без списания (бэк: stockcheck ModeTechCardOnly).
+  const enforceStockCheck = restaurant?.enforceStockCheck ?? false
+  const requireTechCard = techCardsEnabled && enforceStockCheck
 
   const [form, setForm] = useState<MenuItemForm>({
     name: '',
@@ -296,7 +301,7 @@ export default function NewMenuItemPage() {
   const canSubmit = !!form.name && !!form.category && form.price > 0 && (
     form.isPurchased
       ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
-      : !techCardsEnabled
+      : !requireTechCard
         ? true
         : form.techCard.length > 0 && form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
   )

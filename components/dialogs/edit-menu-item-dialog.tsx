@@ -174,6 +174,8 @@ function IngredientCombobox({
 export function EditMenuItemDialog({ open, onOpenChange, menuItem, onSubmit, onDelete, onArchive }: EditMenuItemDialogProps) {
   const { restaurant } = useAuth()
   const techCardsEnabled = restaurant?.techCardsEnabled ?? true
+  // Техкарта обязательна только в строгом режиме (техкарты + контроль остатков).
+  const requireTechCard = techCardsEnabled && (restaurant?.enforceStockCheck ?? false)
   const [form, setForm] = useState<MenuItemForm>({
     name: '',
     category: '',
@@ -324,11 +326,11 @@ export function EditMenuItemDialog({ open, onOpenChange, menuItem, onSubmit, onD
 
   const techCardValid = form.techCard.length === 0 || form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
   const canSubmit = !!form.name && !!form.category && form.price > 0 && (
-    !techCardsEnabled
-      ? true
-      : form.isPurchased
-        ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
-        : techCardValid
+    form.isPurchased
+      ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
+      : !requireTechCard
+        ? true
+        : form.techCard.length > 0 && form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
   )
 
   return (

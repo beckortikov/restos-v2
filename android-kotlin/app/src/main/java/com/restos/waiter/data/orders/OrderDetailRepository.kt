@@ -5,6 +5,7 @@ import com.restos.waiter.data.cache.AppCache
 import com.restos.waiter.data.kitchen.KitchenApi
 import com.restos.waiter.data.menu.MenuApi
 import com.restos.waiter.data.menu.MenuItemDto
+import com.restos.waiter.data.menu.listAllItems
 import com.restos.waiter.data.tables.AssignWaiterRequest
 import com.restos.waiter.data.tables.TableDto
 import com.restos.waiter.data.tables.TablesApi
@@ -41,7 +42,7 @@ class OrderDetailRepository @Inject constructor(
 
     suspend fun loadInitial(orderId: String): OrderDetailBundle = coroutineScope {
         val orderDef = async { retrieveFlat(orderId) }
-        val menuDef = async { runCatching { menuApi.listItems().data }.getOrNull() }
+        val menuDef = async { runCatching { menuApi.listAllItems() }.getOrNull() }
         val tablesDef = async { runCatching { tablesApi.listTables().data }.getOrNull() }
         val waitersDef = async {
             runCatching { usersApi.listUsers().data }.getOrNull()

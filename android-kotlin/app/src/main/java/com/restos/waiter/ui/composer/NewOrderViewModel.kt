@@ -13,6 +13,7 @@ import com.restos.waiter.data.events.ServerEvent
 import com.restos.waiter.data.menu.CategoryDto
 import com.restos.waiter.data.menu.MenuApi
 import com.restos.waiter.data.menu.MenuItemDto
+import com.restos.waiter.data.menu.listAllItems
 import com.restos.waiter.data.net.ApiException
 import com.restos.waiter.data.orders.AddItemsRequest
 import com.restos.waiter.data.orders.CreateOrderApi
@@ -187,7 +188,7 @@ class NewOrderViewModel @Inject constructor(
                 ?.also { cache.setCategories(it) }
                 ?: cache.categories.value
             val items = runCatching {
-                menuApi.listItems(isAvailable = null).data
+                menuApi.listAllItems(isAvailable = null)
             }.getOrNull()
                 ?.also { cache.setMenu(it) }
                 ?: cache.menuItems.value
