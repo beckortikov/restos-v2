@@ -8238,6 +8238,7 @@ export interface paths {
                             revenue_by_method?: Record<string, never>[];
                             sales_by_waiter?: Record<string, never>[];
                             sales_by_category?: Record<string, never>[];
+                            sales_by_item?: Record<string, never>[];
                             sales_by_order_type?: Record<string, never>[];
                             guests_count?: number;
                             operations?: components["schemas"]["CashShiftOperation"][];

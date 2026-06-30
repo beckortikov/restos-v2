@@ -726,6 +726,25 @@ export default function ShiftsPage() {
                 )}
               </div>
 
+              {/* Проданные блюда/товары */}
+              <div className="bg-muted/40 rounded-xl p-4 border border-border">
+                <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5"><ShoppingBag className="size-3.5 text-muted-foreground" />Проданные блюда</h3>
+                {!zReport || zReport.salesByItem.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">Закрытых заказов пока нет</p>
+                ) : (
+                  <div className="space-y-1.5 text-sm max-h-72 overflow-y-auto">
+                    {zReport.salesByItem.map(it => (
+                      <div key={it.name} className="flex items-center justify-between">
+                        <span className="text-muted-foreground truncate pr-2">
+                          {it.name} <span className="text-[11px]">×{it.qty % 1 === 0 ? it.qty : it.qty.toFixed(2)}</span>
+                        </span>
+                        <span className="font-medium text-foreground tabular-nums">{formatCurrency(it.total)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {/* По типу заказа */}
               <div className="bg-muted/40 rounded-xl p-4 border border-border">
                 <h3 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-1.5"><MapPin className="size-3.5 text-muted-foreground" />По типу заказа</h3>

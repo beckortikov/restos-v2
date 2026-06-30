@@ -294,10 +294,10 @@ export default function NewMenuItemPage() {
   }
 
   const canSubmit = !!form.name && !!form.category && form.price > 0 && (
-    !techCardsEnabled
-      ? true
-      : form.isPurchased
-        ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
+    form.isPurchased
+      ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
+      : !techCardsEnabled
+        ? true
         : form.techCard.length > 0 && form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
   )
 
@@ -467,21 +467,22 @@ export default function NewMenuItemPage() {
 
             {/* Switch Toggles */}
             <div className="space-y-2 pt-2 border-t border-border">
-              {techCardsEnabled && (
-                <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
-                  <div>
-                    <p className="text-xs font-semibold text-foreground">Покупной товар</p>
-                    <p className="text-[10px] text-muted-foreground">Продается как есть, без техкарты</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station }))}
-                    className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
-                  >
-                    <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
-                  </button>
+              {/* Покупной товар доступен всегда (не зависит от учёта по техкартам):
+                  бэк сам заводит складской ингредиент. Раньше галочка пропадала
+                  при выключенных техкартах. */}
+              <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Покупной товар</p>
+                  <p className="text-[10px] text-muted-foreground">Продается как есть, без техкарты</p>
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station }))}
+                  className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
+                </button>
+              </div>
 
               <div className="px-3 py-2.5 rounded-lg border border-border bg-muted/10">
                 <div className="flex items-center justify-between">
@@ -531,7 +532,7 @@ export default function NewMenuItemPage() {
 
         {/* Right Column - Tech Card or Purchase Fields */}
         <div className="lg:col-span-7 space-y-6">
-          {!techCardsEnabled ? null : form.isPurchased ? (
+          {form.isPurchased ? (
             /* Purchased fields */
             <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
               <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
@@ -574,7 +575,7 @@ export default function NewMenuItemPage() {
                 Система автоматически создаст ингредиент на складе с аналогичным названием и привяжет его к этому товару. Приход этого товара будет осуществляться через накладные.
               </p>
             </div>
-          ) : (
+          ) : techCardsEnabled ? (
             /* Tech Card */
             <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
@@ -646,7 +647,7 @@ export default function NewMenuItemPage() {
                 <Plus className="size-4" /> Добавить ингредиент
               </button>
             </div>
-          )}
+          ) : null}
         </div>
       </div>
 

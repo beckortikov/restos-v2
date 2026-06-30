@@ -132,6 +132,7 @@ export interface ShiftZReport {
   revenueByMethod: { paymentMethod: string; ordersCount: number; total: number }[]
   salesByWaiter: { waiterId: string; name: string; ordersCount: number; total: number; avgCheck: number }[]
   salesByCategory: { name: string; qty: number; total: number }[]
+  salesByItem: { name: string; qty: number; total: number }[]
   salesByOrderType: { type: string; ordersCount: number; total: number }[]
   // Движение денег по кассе (внесения/изъятия/расходы по категориям).
   cashIn: number
@@ -164,6 +165,11 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
       avgCheck: Number(w.avg_check ?? 0),
     })),
     salesByCategory: (r?.sales_by_category ?? []).map((c: any) => ({
+      name: String(c.name ?? '—'),
+      qty: Number(c.qty ?? 0),
+      total: Number(c.total ?? 0),
+    })),
+    salesByItem: (r?.sales_by_item ?? []).map((c: any) => ({
       name: String(c.name ?? '—'),
       qty: Number(c.qty ?? 0),
       total: Number(c.total ?? 0),

@@ -247,6 +247,13 @@ type ZReportSalesByCategory struct {
 	Total decimal.Decimal `json:"total"`
 }
 
+// ZReportSalesByItem — проданные блюда/товары за смену (что и сколько продано).
+type ZReportSalesByItem struct {
+	Name  string          `json:"name"`
+	Qty   decimal.Decimal `json:"qty"`
+	Total decimal.Decimal `json:"total"`
+}
+
 // ZReportSalesByOrderType — sales по типу заказа (hall/takeaway/delivery).
 type ZReportSalesByOrderType struct {
 	Type        string          `json:"type"`
@@ -267,6 +274,7 @@ type ZReport struct {
 	RevenueByMethod  []ZReportRevenueByMethod    `json:"revenue_by_method"`
 	SalesByWaiter    []ZReportSalesByWaiter      `json:"sales_by_waiter"`
 	SalesByCategory  []ZReportSalesByCategory    `json:"sales_by_category"`
+	SalesByItem      []ZReportSalesByItem        `json:"sales_by_item"`
 	SalesByOrderType []ZReportSalesByOrderType   `json:"sales_by_order_type"`
 	GuestsCount      int                         `json:"guests_count"`
 	Operations       []models.CashShiftOperation `json:"operations"`
@@ -491,6 +499,35 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 			out.SalesByCategory = append(out.SalesByCategory, ZReportSalesByCategory{
 				Name:  name,
 				Qty:   r.Qty,
+				Total: decimal.Normalize(r.Total),
+			})
+		}
+	}
+
+	// ─── Sales by item (проданные блюда/товары) ───────────────────────
+	type itemRow struct {
+		Name  *string         `gorm:"column:name"`
+		Qty   decimal.Decimal `gorm:"column:qty"`
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	var itemRows []itemRow
+	if err := s.r.Raw().WithContext(ctx).
+		Table("order_items AS oi").
+		Select("COALESCE(NULLIF(MAX(mi.name), ''), MAX(oi.name), 'Блюдо') AS name, COALESCE(SUM(oi.qty), 0) AS qty, COALESCE(SUM(oi.qty * oi.price), 0) AS total").
+		Joins("JOIN orders o ON o.id = oi.order_id").
+		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
+		Where("o.restaurant_id = ? AND o.shift_id = ? AND o.status = ? AND oi.cancelled_at IS NULL", rid, shiftID, "closed").
+		Group("oi.menu_item_id").
+		Order("total DESC").
+		Find(&itemRows).Error; err == nil {
+		for _, r := range itemRows {
+			name := "Блюдо"
+			if r.Name != nil && *r.Name != "" {
+				name = *r.Name
+			}
+			out.SalesByItem = append(out.SalesByItem, ZReportSalesByItem{
+				Name:  name,
+				Qty:   decimal.Normalize(r.Qty),
 				Total: decimal.Normalize(r.Total),
 			})
 		}

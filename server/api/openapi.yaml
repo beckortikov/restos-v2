@@ -2267,6 +2267,7 @@ paths:
                   revenue_by_method: { type: array, items: { type: object } }
                   sales_by_waiter: { type: array, items: { type: object } }
                   sales_by_category: { type: array, items: { type: object } }
+                  sales_by_item: { type: array, items: { type: object } }
                   sales_by_order_type: { type: array, items: { type: object } }
                   guests_count: { type: integer }
                   operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
