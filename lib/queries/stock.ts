@@ -61,6 +61,14 @@ export async function updateIngredient(id: string, data: Partial<{ name: string;
   logAction('ingredient.edit', 'ingredient', id)
 }
 
+// deleteIngredient — удаляет ингредиент. Если на нём положительный остаток,
+// бэк списывает его (stock_writeoff на qty×price) → Баланс сходится. Если
+// ингредиент используется в техкартах — бэк вернёт 409 CONFLICT.
+export async function deleteIngredient(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/stock/ingredients/{id}', { params: { path: { id } } }))
+  logAction('ingredient.delete', 'ingredient', id)
+}
+
 export async function fetchStockMovements(): Promise<StockMovement[]> {
   const res: any = await unwrap(api.GET('/api/v1/stock/movements', { params: { query: { limit: 1000 } } }))
   const rows: Record<string, unknown>[] = res?.data ?? []
@@ -279,7 +287,7 @@ export async function checkAndUpdateStopList(): Promise<{ disabled: string[]; re
   return { disabled: [], restored: [] }
 }
 
-export async function fetchStopList(): Promise<{ menuItemId: string; menuItemName: string; emoji: string; category: string; ingredients: { name: string; qty: number; minQty: number; unit: string }[]; manual: boolean }[]> {
+export async function fetchStopList(): Promise<{ menuItemId: string; menuItemName: string; emoji: string; category: string; ingredients: { name: string; qty: number; minQty: number; unit: string }[]; manual: boolean; unavailable: boolean }[]> {
   const res: any = await unwrap(api.GET('/api/v1/stop-list'))
   const rows: Record<string, unknown>[] = res?.data ?? []
   return rows.map(mapStopListRow)
@@ -451,5 +459,6 @@ function mapStopListRow(r: Record<string, unknown>) {
       ? (r.ingredients as Record<string, unknown>[]).map(mapStopListIngredient)
       : [],
     manual: !!r.manual,
+    unavailable: !!r.unavailable,
   }
 }

@@ -6,10 +6,11 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { type Ingredient } from '@/lib/types'
-import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient } from '@/lib/queries'
+import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient, deleteIngredient } from '@/lib/queries'
 import { queryKeys } from '@/lib/query-client'
+import { humanizeError } from '@/lib/errors'
 
-import { Search, AlertTriangle, TrendingDown, Package, Plus } from 'lucide-react'
+import { Search, AlertTriangle, TrendingDown, Package, Plus, Trash2, X, Check } from 'lucide-react'
 import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
 import { toast } from 'sonner'
 
@@ -31,7 +32,7 @@ function StockLevel({ qty, minQty }: { qty: number; minQty: number }) {
 // Virtualized table for ingredients lists > 50 rows. Uses a CSS grid layout to
 // mirror the columns of the original <table> while keeping rows as absolutely
 // positioned divs so @tanstack/react-virtual can place them.
-function VirtualIngredientsTable({ items, onEdit }: { items: Ingredient[]; onEdit: (ing: Ingredient) => void }) {
+function VirtualIngredientsTable({ items, onEdit, selectMode, selectedIds, onToggleSelect }: { items: Ingredient[]; onEdit: (ing: Ingredient) => void; selectMode: boolean; selectedIds: Set<string>; onToggleSelect: (id: string) => void }) {
   const parentRef = useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
     count: items.length,
@@ -51,15 +52,21 @@ function VirtualIngredientsTable({ items, onEdit }: { items: Ingredient[]; onEdi
         <div className="min-w-[700px]" style={{ height: rowVirtualizer.getTotalSize(), position: 'relative', width: '100%' }}>
           {rowVirtualizer.getVirtualItems().map(v => {
             const ing = items[v.index]
+            const sel = selectedIds.has(ing.id)
             return (
               <div
                 key={ing.id}
-                onClick={() => onEdit(ing)}
+                onClick={() => selectMode ? onToggleSelect(ing.id) : onEdit(ing)}
                 style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: `translateY(${v.start}px)` }}
-                className={`grid ${cols} border-b border-border hover:bg-muted/30 transition-colors cursor-pointer items-center ${ing.qty < ing.minQty ? 'bg-destructive/5' : ''}`}
+                className={`grid ${cols} border-b border-border hover:bg-muted/30 transition-colors cursor-pointer items-center ${selectMode && sel ? 'bg-primary/10' : ing.qty < ing.minQty ? 'bg-destructive/5' : ''}`}
               >
                 <div className="px-4 py-3">
                   <div className="flex items-center gap-2">
+                    {selectMode && (
+                      <span className={`shrink-0 size-4 rounded border flex items-center justify-center ${sel ? 'bg-primary border-primary text-primary-foreground' : 'border-border bg-background'}`}>
+                        {sel && <Check className="size-3" />}
+                      </span>
+                    )}
                     {ing.qty < ing.minQty && <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />}
                     <span className="font-medium text-foreground">{ing.name}</span>
                   </div>
@@ -94,6 +101,10 @@ export default function InventoryPage() {
   const [tab, setTab] = useState<'food' | 'supplies'>('food')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingIngredient, setEditingIngredient] = useState<Ingredient | undefined>(undefined)
+  // Мультивыбор для удаления.
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [deleting, setDeleting] = useState(false)
 
   // v3.9.22: data-слой на React Query. SSE (ingredients/stock_movements →
   // ['stock','ingredients']) инвалидирует через useQuerySseBridge. qty
@@ -169,6 +180,41 @@ export default function InventoryPage() {
     setDialogOpen(true)
   }
 
+  function toggleSelect(id: string) {
+    setSelectedIds(prev => {
+      const n = new Set(prev)
+      if (n.has(id)) n.delete(id); else n.add(id)
+      return n
+    })
+  }
+  function exitSelect() {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  async function handleBulkDelete() {
+    const ids = [...selectedIds]
+    if (ids.length === 0) return
+    if (!window.confirm(`Удалить ${ids.length} позиц.? У позиций с остатком он будет списан (отразится в Балансе как убыток).`)) return
+    setDeleting(true)
+    let ok = 0
+    const failed: string[] = []
+    for (const id of ids) {
+      try {
+        await deleteIngredient(id)
+        ok++
+      } catch (e) {
+        const name = ingredients.find(i => i.id === id)?.name ?? id
+        failed.push(`${name}: ${humanizeError(e, 'ошибка')}`)
+      }
+    }
+    setDeleting(false)
+    if (ok > 0) toast.success(`Удалено: ${ok}`)
+    if (failed.length > 0) toast.error(`Не удалось удалить ${failed.length} (используются в техкартах): ${failed.slice(0, 3).join('; ')}`)
+    reloadStock()
+    exitSelect()
+  }
+
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
   const tabItems = ingredients.filter(i => tab === 'food' ? i.isFood !== false : i.isFood === false)
@@ -196,13 +242,42 @@ export default function InventoryPage() {
           </p>
         </div>
         {canDo('inventory.manage') && (
-          <button
-            onClick={openCreateDialog}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
-          >
-            <Plus className="size-4" />
-            {tab === 'food' ? 'Добавить ингредиент' : 'Добавить хозтовар'}
-          </button>
+          selectMode ? (
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                onClick={handleBulkDelete}
+                disabled={deleting || selectedIds.size === 0}
+                className="flex items-center gap-2 bg-destructive text-destructive-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-destructive/90 transition-colors flex-1 sm:flex-none justify-center disabled:opacity-50"
+              >
+                <Trash2 className="size-4" />
+                {deleting ? 'Удаление…' : `Удалить${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
+              </button>
+              <button
+                onClick={exitSelect}
+                disabled={deleting}
+                className="flex items-center gap-2 bg-card border border-border px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition-colors justify-center disabled:opacity-50"
+              >
+                <X className="size-4" /> Отмена
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                onClick={() => setSelectMode(true)}
+                title="Выбрать и удалить несколько позиций"
+                className="flex items-center gap-2 bg-card border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition-colors justify-center"
+              >
+                <Trash2 className="size-4" /> Удалить
+              </button>
+              <button
+                onClick={openCreateDialog}
+                className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex-1 sm:flex-none justify-center"
+              >
+                <Plus className="size-4" />
+                {tab === 'food' ? 'Добавить ингредиент' : 'Добавить хозтовар'}
+              </button>
+            </div>
+          )
         )}
       </div>
 
@@ -286,7 +361,7 @@ export default function InventoryPage() {
 
       {/* Table */}
       {filtered.length > 50 ? (
-        <VirtualIngredientsTable items={filtered} onEdit={openEditDialog} />
+        <VirtualIngredientsTable items={filtered} onEdit={openEditDialog} selectMode={selectMode} selectedIds={selectedIds} onToggleSelect={toggleSelect} />
       ) : (
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
@@ -299,10 +374,17 @@ export default function InventoryPage() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((ing) => (
-              <tr key={ing.id} onClick={() => openEditDialog(ing)} className={`border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${ing.qty < ing.minQty ? 'bg-destructive/5' : ''}`}>
+            {filtered.map((ing) => {
+              const sel = selectedIds.has(ing.id)
+              return (
+              <tr key={ing.id} onClick={() => selectMode ? toggleSelect(ing.id) : openEditDialog(ing)} className={`border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer ${selectMode && sel ? 'bg-primary/10' : ing.qty < ing.minQty ? 'bg-destructive/5' : ''}`}>
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2">
+                    {selectMode && (
+                      <span className={`shrink-0 size-4 rounded border flex items-center justify-center ${sel ? 'bg-primary border-primary text-primary-foreground' : 'border-border bg-background'}`}>
+                        {sel && <Check className="size-3" />}
+                      </span>
+                    )}
                     {ing.qty < ing.minQty && <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />}
                     <span className="font-medium text-foreground">{ing.name}</span>
                   </div>
@@ -324,7 +406,8 @@ export default function InventoryPage() {
                 </td>
                 <td className="px-4 py-3 text-sm font-medium text-foreground">{formatCurrency(ing.qty * ing.pricePerUnit)}</td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
         </div>

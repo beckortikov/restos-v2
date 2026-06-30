@@ -38,6 +38,9 @@ type StopListItem struct {
 	Category     string               `json:"category"`
 	Ingredients  []StopListIngredient `json:"ingredients"`
 	Manual       bool                 `json:"manual"`
+	// Unavailable — блюдо помечено «СТОП» вручную в меню (is_available=false).
+	// Снять стоп = вернуть доступность (is_available=true).
+	Unavailable bool `json:"unavailable"`
 }
 
 // List — GET /api/v1/stop-list.
@@ -116,6 +119,20 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 		manualIDs[m.ID] = true
 	}
 
+	// 3a. Ручной СТОП через доступность — menu_items.is_available = false.
+	// Это и есть «галочка СТОП» в управлении меню: блюдо должно попасть в
+	// стоп-лист и уйти из ПОС. Применяется во ВСЕХ режимах (не только strict).
+	var unavailItems []models.MenuItem
+	if err := s.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ? AND is_available = ? AND is_deleted = ?", rid, false, false).
+		Find(&unavailItems).Error; err != nil {
+		return nil, err
+	}
+	unavailIDs := make(map[string]bool, len(unavailItems))
+	for _, m := range unavailItems {
+		unavailIDs[m.ID] = true
+	}
+
 	// 3b. Заготовочные блюда без готовых порций (prepared_qty <= 0). Их
 	// доступность определяется prepared_qty, а НЕ остатком сырья: блюдо с
 	// готовыми порциями продаётся даже при нулевом сырье и в стоп НЕ идёт.
@@ -138,6 +155,9 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 		allIDs[id] = true
 	}
 	for id := range manualIDs {
+		allIDs[id] = true
+	}
+	for id := range unavailIDs {
 		allIDs[id] = true
 	}
 	for id := range batchZeroIDs {
@@ -172,10 +192,11 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 			category = *m.Category
 		}
 		manual := manualIDs[m.ID]
+		unavailable := unavailIDs[m.ID]
 		isBatch := m.IsBatchCooking != nil && *m.IsBatchCooking
 
 		var ings []StopListIngredient
-		inStop := manual
+		inStop := manual || unavailable
 		if isBatch {
 			// Заготовка: стоп только если нет готовых порций (или ручной override).
 			// Остаток сырья (affected) для заготовок НЕ учитываем.
@@ -211,6 +232,7 @@ func (s *StopListService) List(ctx context.Context) ([]StopListItem, error) {
 			Category:     category,
 			Ingredients:  ings,
 			Manual:       manual,
+			Unavailable:  unavailable,
 		})
 	}
 	return out, nil

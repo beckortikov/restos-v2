@@ -30,7 +30,7 @@ export default function MenuPage() {
   const [newCatName, setNewCatName] = useState('')
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'menu' | 'stoplist'>('menu')
-  const [stopList, setStopList] = useState<{ menuItemId: string; menuItemName: string; emoji: string; category: string; ingredients: { name: string; qty: number; minQty: number; unit: string }[] }[]>([])
+  const [stopList, setStopList] = useState<{ menuItemId: string; menuItemName: string; emoji: string; category: string; ingredients: { name: string; qty: number; minQty: number; unit: string }[]; manual?: boolean; unavailable?: boolean }[]>([])
 
   const reloadAll = async () => {
     // Load independently — if one fails, others still work
@@ -131,18 +131,26 @@ export default function MenuPage() {
             stopList.map(item => {
               const menuItem = menuItems.find(m => m.id === item.menuItemId)
               const isOverridden = menuItem?.stopListOverride ?? false
+              // Блюдо вручную снято с меню галочкой СТОП (is_available=false).
+              const isUnavailable = item.unavailable ?? false
               return (
-                <div key={item.menuItemId} className={`bg-card rounded-xl border-2 p-4 ${isOverridden ? 'border-amber-300/50' : 'border-destructive/30'}`}>
+                <div key={item.menuItemId} className={`bg-card rounded-xl border-2 p-4 ${isUnavailable ? 'border-red-300/60' : isOverridden ? 'border-amber-300/50' : 'border-destructive/30'}`}>
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-semibold text-foreground">{item.menuItemName}</span>
                         <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{item.category}</span>
-                        {isOverridden && (
+                        {isUnavailable && (
+                          <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded font-medium">СТОП вручную</span>
+                        )}
+                        {!isUnavailable && isOverridden && (
                           <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded font-medium">Override</span>
                         )}
                       </div>
                       <div className="mt-2 space-y-1">
+                        {isUnavailable && item.ingredients.length === 0 && (
+                          <p className="text-sm text-muted-foreground">Снято с меню вручную — недоступно в ПОС.</p>
+                        )}
                         {item.ingredients.map((ing, idx) => (
                           <div key={idx} className="flex items-center gap-2 text-sm">
                             <OctagonX className="size-3 text-destructive shrink-0" />
@@ -154,20 +162,33 @@ export default function MenuPage() {
                       </div>
                     </div>
                     {canEdit && (
-                      <button
-                        onClick={async () => {
-                          await toggleStopListOverride(item.menuItemId, !isOverridden)
-                          await reloadAll()
-                          toast.success(isOverridden ? 'Override снят' : 'Блюдо принудительно включено')
-                        }}
-                        className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors shrink-0 ${
-                          isOverridden
-                            ? 'bg-destructive/10 text-destructive border-destructive/30 hover:bg-destructive/20'
-                            : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-                        }`}
-                      >
-                        {isOverridden ? 'Вернуть в стоп' : 'Включить'}
-                      </button>
+                      isUnavailable ? (
+                        <button
+                          onClick={async () => {
+                            await toggleMenuAvailability(item.menuItemId, true)
+                            await reloadAll()
+                            toast.success('Блюдо возвращено в меню')
+                          }}
+                          className="px-3 py-1.5 text-xs font-medium rounded-lg border bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 transition-colors shrink-0"
+                        >
+                          Вернуть в меню
+                        </button>
+                      ) : (
+                        <button
+                          onClick={async () => {
+                            await toggleStopListOverride(item.menuItemId, !isOverridden)
+                            await reloadAll()
+                            toast.success(isOverridden ? 'Override снят' : 'Блюдо принудительно включено')
+                          }}
+                          className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors shrink-0 ${
+                            isOverridden
+                              ? 'bg-destructive/10 text-destructive border-destructive/30 hover:bg-destructive/20'
+                              : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
+                          }`}
+                        >
+                          {isOverridden ? 'Вернуть в стоп' : 'Включить'}
+                        </button>
+                      )
                     )}
                   </div>
                 </div>

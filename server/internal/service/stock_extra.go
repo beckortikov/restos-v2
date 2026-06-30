@@ -197,6 +197,10 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 // Delete — DELETE /api/v1/stock/ingredients/{id}.
 // Soft-delete нет, FK-check вручную: если есть tech_card_lines → 409.
 func (s *IngredientsWriteService) Delete(ctx context.Context, id string) error {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return err
@@ -218,15 +222,59 @@ func (s *IngredientsWriteService) Delete(ctx context.Context, id string) error {
 	if refs > 0 {
 		return apperrors.Wrap("CONFLICT", "ingredient is in use by tech cards", nil)
 	}
-	scopedDel, _ := s.r.ForTenant(ctx)
-	res := scopedDel.Where("id = ?", id).Delete(&models.Ingredient{})
-	if res.Error != nil {
-		return res.Error
+
+	actor, _ := audit.ActorFromContext(ctx)
+	now := time.Now().UTC()
+	name := ""
+	if existing.Name != nil {
+		name = *existing.Name
 	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		// Если есть положительный остаток — списываем его перед удалением, чтобы
+		// Баланс сошёлся: склад −V (актив) и встречный убыток −V в ОПиУ (→ капитал).
+		// total_cost = qty × price_per_unit. Стоимость снимается в stock_writeoffs
+		// (snapshot), поэтому удаление ингредиента после списания безопасно.
+		if decimal.IsPositive(existing.Qty) {
+			cost := decimal.Normalize(decimal.Mul(existing.Qty, existing.PricePerUnit))
+			writeoffID := uuid.NewString()
+			creator := actor.UserID
+			reason := "Удаление ингредиента"
+			w := &models.StockWriteoff{
+				ID: writeoffID, Reason: &reason, TotalCost: cost,
+				CreatedBy: &creator, RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+			}
+			if err := tx.Create(w).Error; err != nil {
+				return err
+			}
+			wl := &models.StockWriteoffLine{
+				ID: uuid.NewString(), WriteoffID: &writeoffID, IngredientID: &id,
+				Name: &name, Qty: existing.Qty, Unit: existing.Unit, Cost: cost, UpdatedAt: now,
+			}
+			if err := tx.Create(wl).Error; err != nil {
+				return err
+			}
+			// stock_movement (writeoff, −qty) → хук обнулит ingredients.qty в этой же tx.
+			mvType := "writeoff"
+			desc := "writeoff:" + writeoffID
+			mv := &models.StockMovement{
+				ID: uuid.NewString(), Type: &mvType, IngredientID: &id,
+				IngredientName: &name, Description: &desc, Qty: existing.Qty.Neg(),
+				Unit: existing.Unit, RestaurantID: &rid, CreatedAt: now,
+			}
+			if err := tx.Create(mv).Error; err != nil {
+				return err
+			}
+		}
+		res := tx.Where("id = ? AND restaurant_id = ?", id, rid).Delete(&models.Ingredient{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		return nil
+	})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
