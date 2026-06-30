@@ -17,14 +17,17 @@ export default function OpeningBalancePage() {
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
 
-  const load = () => {
-    setLoading(true)
+  // showSpinner=false — тихое обновление БЕЗ скрытия таблицы. Иначе после
+  // «Завести» таблица (и инпуты) на миг размонтировалась, и повторный ввод
+  // ломался — инпуты становились недоступны.
+  const load = (showSpinner = true) => {
+    if (showSpinner) setLoading(true)
     fetchIngredients()
       .then(setIngredients)
       .catch(() => toast.error('Ошибка загрузки ингредиентов'))
-      .finally(() => setLoading(false))
+      .finally(() => { if (showSpinner) setLoading(false) })
   }
-  useEffect(load, [])
+  useEffect(() => { load() }, [])
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
@@ -56,7 +59,7 @@ export default function OpeningBalancePage() {
       toast.success(`Начальный остаток заведён: ${res.applied} позиций на ${formatCurrency(res.inventoryValue)}`)
       setQtyMap(new Map())
       setPriceMap(new Map())
-      load()
+      load(false) // тихое обновление, без размонтирования таблицы
     } catch {
       toast.error('Ошибка при заведении начального остатка')
     } finally {
