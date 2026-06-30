@@ -98,11 +98,25 @@ iiko решает задачу **централизацией**: термина�
 | `026_company_accounts.sql` | Таблица `company_accounts` (сеть): `id`, `name`, владелец. FK `restaurants.account_id → company_accounts.id` (колонка `account_id` уже есть с миграции 009). |
 | `027_restaurants_kind.sql` | `restaurants.kind` ∈ {`outlet`, `central_warehouse`} (CHECK-constraint, DEFAULT `outlet`). |
 | `028_stock_transfers.sql` | `stock_transfers` (`account_id`, `from_restaurant_id`, `to_restaurant_id`, `status`, `transfer_number`, `note`) + `stock_transfer_lines` (`ingredient_id`, `qty`, `cost_per_unit`). |
-| `029_sync_log.sql` (Фаза 2) | `sync_log` (tracked-таблица, entity, op, payload, `synced_at`) — журнал дельт для пушей. |
+| `029_nomenclature.sql` | Общий справочник номенклатуры сети (вариант 3B, см. ниже): таблица `nomenclature` (account-level) + `ingredients.nomenclature_id` + `stock_transfer_lines.nomenclature_id`. |
+| `030_sync_log.sql` (Фаза 2) | `sync_log` (tracked-таблица, entity, op, payload, `synced_at`) — журнал дельт для пушей. |
 
 > **Уточнение по факту кода (2026-06-30):** отдельная миграция для `stock_movements.type` **не нужна** — колонка `type` объявлена как свободный `TEXT` без CHECK-constraint (см. `001_init.sql`), поэтому значения `transfer_out`/`transfer_in` пишутся как есть. В ADR ранее планировалась лишняя миграция `*_stock_movement_transfer_types` — она удалена.
 
 Денормализация `ingredients.qty` остаётся **только через event-stream `stock_movements`** (правило проекта не нарушается).
+
+#### Сопоставление ингредиентов между филиалами — вариант «3B» (общий ключ)
+
+В текущей схеме `ingredients` привязаны к ресторану (`restaurant_id`), поэтому «Мясо» на центральном складе и «Мясо» в филиале — разные строки с разными `ingredient_id`. Перемещению нужно знать ингредиент **обеих** сторон.
+
+Рассмотренные варианты: (1) явные `from/to ingredient_id` в строке; (2) авто-матч по имени (хрупко); (3) общий каталог номенклатуры на уровне сети (как в iiko). Полный вариант 3 («3A») потребовал бы **вынести остаток `qty` из `ingredients` в пер-филиальную таблицу** — это ~27 файлов бэка и ~16 экранов фронта, читающих остаток, и риск задеть существующие одиночные рестораны.
+
+**Выбран вариант 3B — общий ключ без раскола остатка:**
+- `qty` **не трогаем**, `ingredients` остаются пер-ресторанными.
+- Добавляется таблица `nomenclature` (account-level: `id`, `account_id`, `name`, `unit`, `category`) — общий справочник продуктов сети.
+- `ingredients.nomenclature_id` (nullable) связывает ингредиент филиала с продуктом сети.
+- Перемещение хранит `nomenclature_id`; приём находит ингредиент получателя по `(to_restaurant_id, nomenclature_id)`, при отсутствии — создаёт с 0-остатком.
+- **Существующие рестораны:** `nomenclature_id = NULL` → ноль изменений, ни один из 27 read-site не трогается. Полный раскол (3A) с экраном остатков по всей сети откладываем до sync-фазы.
 
 ### Перемещение (бизнес-логика)
 

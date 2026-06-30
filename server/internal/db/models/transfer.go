@@ -33,9 +33,13 @@ func (StockTransfer) TableName() string { return "stock_transfers" }
 
 // StockTransferLine — позиция перемещения.
 type StockTransferLine struct {
-	ID             string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	TransferID     *string         `gorm:"column:transfer_id;type:uuid;index" json:"transfer_id"`
-	IngredientID   *string         `gorm:"column:ingredient_id" json:"ingredient_id"`
+	ID         string  `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	TransferID *string `gorm:"column:transfer_id;type:uuid;index" json:"transfer_id"`
+	// IngredientID — ингредиент СТОРОНЫ-ИСТОЧНИКА (для движения transfer_out).
+	IngredientID *string `gorm:"column:ingredient_id" json:"ingredient_id"`
+	// NomenclatureID — общий ключ сети (ADR-003, 3B): по нему получатель находит
+	// свой ингредиент (to_restaurant_id, nomenclature_id) для transfer_in.
+	NomenclatureID *string         `gorm:"column:nomenclature_id;type:uuid" json:"nomenclature_id"`
 	IngredientName *string         `gorm:"column:ingredient_name" json:"ingredient_name"`
 	Qty            decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"qty"`
 	Unit           *string         `json:"unit"`

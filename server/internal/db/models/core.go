@@ -69,6 +69,21 @@ type CompanyAccount struct {
 
 func (CompanyAccount) TableName() string { return "company_accounts" }
 
+// Nomenclature — общий справочник продуктов сети (ADR-003, вариант 3B).
+// Связывает «один и тот же продукт» между филиалами: ingredients.nomenclature_id
+// → nomenclature.id. Остаток qty при этом остаётся в ingredients (пер-филиал).
+type Nomenclature struct {
+	ID        string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	AccountID *string   `gorm:"column:account_id;type:uuid;index" json:"account_id"`
+	Name      string    `gorm:"not null" json:"name"`
+	Unit      *string   `json:"unit"`
+	Category  *string   `json:"category"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (Nomenclature) TableName() string { return "nomenclature" }
+
 // User — кассиры/повара/официанты/менеджеры.
 // Owner-роль в v4 не имеет смысла локально (см. CLAUDE.md), но запись возможна.
 type User struct {

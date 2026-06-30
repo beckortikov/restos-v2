@@ -22,8 +22,11 @@ type Ingredient struct {
 	WastePercent decimal.Decimal `gorm:"column:waste_percent;type:numeric(14,4);default:0" json:"waste_percent"`
 	IsFood       *bool           `gorm:"column:is_food;default:true" json:"is_food"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// NomenclatureID — связь с общим справочником сети (ADR-003, вариант 3B).
+	// NULL → одиночный ресторан / продукт не в сетевой номенклатуре.
+	NomenclatureID *string   `gorm:"column:nomenclature_id" json:"nomenclature_id,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (Ingredient) TableName() string { return "ingredients" }
