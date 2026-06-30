@@ -57,6 +57,11 @@ export default function ShiftsPage() {
   const [activeShift, setActiveShift] = useState<CashShift | null>(null)
   const [shiftOps, setShiftOps] = useState<CashShiftOperation[]>([])
   const [history, setHistory] = useState<CashShift[]>([])
+  // Нонс для перемонтирования формы открытия смены: бампается на каждом
+  // открытии/закрытии. Раньше форма перемонтировалась по history[0].id, но при
+  // пустой истории (новый ресторан / кассир с сегодняшним клампом) ключ всегда
+  // был 'fresh' → DecimalInput остатка «залипал» при повторном открытии.
+  const [openFormNonce, setOpenFormNonce] = useState(0)
   const [loading, setLoading] = useState(true)
   const [expandedShift, setExpandedShift] = useState<string | null>(null)
   const [expandedOps, setExpandedOps] = useState<CashShiftOperation[]>([])
@@ -305,6 +310,7 @@ export default function ShiftsPage() {
       toast.success('Смена открыта')
       setShowOpen(false)
       setOpenBalance(0)
+      setOpenFormNonce(n => n + 1)
       // Кассир открыл смену без ПИН — уводим на рабочий экран, чтобы он не
       // упёрся в гейт ПИН владельца (управление сменой защищено).
       if (!isOwnerRole && !unlocked) {
@@ -373,6 +379,7 @@ export default function ShiftsPage() {
       setShowExpense(false)
       setExpAmount(0)
       setExpDesc('')
+      setOpenFormNonce(n => n + 1) // гарантированный remount формы открытия
       // Восстанавливаем дефолтный счёт открытия (первый cash) — иначе после закрытия
       // openAccountId остаётся id уже закрытой смены и openShift падает.
       if (cashAccounts.length > 0) setOpenAccountId(cashAccounts[0].id)
@@ -440,7 +447,7 @@ export default function ShiftsPage() {
 
   // Форма открытия смены — единственное, что доступно кассиру без ПИН владельца.
   const openShiftCard = (
-    <div key={`open-form-${history[0]?.id ?? 'fresh'}`} className="bg-card rounded-xl border border-border p-8 text-center space-y-4">
+    <div key={`open-form-${openFormNonce}`} className="bg-card rounded-xl border border-border p-8 text-center space-y-4">
       <Receipt className="size-12 text-muted-foreground/30 mx-auto" />
       <div>
         <p className="font-medium text-foreground">Нет активной смены</p>
