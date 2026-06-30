@@ -91,10 +91,20 @@ export function AuthGuard({ children }: { children: ReactNode }) {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function getUserPermissions(user: User): UserPermissions {
-  if (user.permissions && Object.keys(user.permissions.actions || {}).length > 0) {
-    return user.permissions
+  const roleDefaults = ROLE_DEFAULT_PERMISSIONS[user.role] || { nav: [], actions: {} }
+  const custom = user.permissions
+  if (custom && Object.keys(custom.actions || {}).length > 0) {
+    // Merge: дефолты роли — подложкой, персональные оверрайды — сверху.
+    // Иначе права, добавленные в ALL_PERMISSIONS ПОСЛЕ сохранения сотрудника,
+    // молча выключались бы (старый кастом-набор их не содержит) — из-за чего
+    // «возврат / другая фича не работает» у кастомизированных пользователей.
+    // Явный false в кастоме по-прежнему перекрывает дефолтный true.
+    return {
+      nav: custom.nav && custom.nav.length > 0 ? custom.nav : roleDefaults.nav,
+      actions: { ...roleDefaults.actions, ...custom.actions },
+    }
   }
-  return ROLE_DEFAULT_PERMISSIONS[user.role] || { nav: [], actions: {} }
+  return roleDefaults
 }
 
 // ─── Provider ────────────────────────────────────────────────────────────────

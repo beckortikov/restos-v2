@@ -62,25 +62,27 @@ func Effective(role string, permissionsJSON []byte) map[string]bool {
 	if role == "owner" {
 		return allTrue()
 	}
+	// База — дефолты роли (manager: всё true). Персональные права кладём
+	// СВЕРХУ как оверрайды, а не заменяя базу целиком. Иначе права,
+	// добавленные в AllPermissions ПОСЛЕ сохранения пользователя, молча
+	// выключались бы (старый кастом-набор их не содержит) — отсюда «фича
+	// недоступна / кнопка пропала» у кастомизированных сотрудников.
+	out := make(map[string]bool, len(AllPermissions))
+	if role == "manager" {
+		out = allTrue()
+	} else if d, ok := roleDefaults[role]; ok {
+		for k, v := range d {
+			out[k] = v
+		}
+	}
 	if len(permissionsJSON) > 0 {
 		var p struct {
 			Actions map[string]bool `json:"actions"`
 		}
 		if err := json.Unmarshal(permissionsJSON, &p); err == nil && len(p.Actions) > 0 {
-			out := make(map[string]bool, len(p.Actions))
 			for k, v := range p.Actions {
 				out[k] = v
 			}
-			return out
-		}
-	}
-	if role == "manager" {
-		return allTrue()
-	}
-	out := make(map[string]bool)
-	if d, ok := roleDefaults[role]; ok {
-		for k, v := range d {
-			out[k] = v
 		}
 	}
 	return out
@@ -89,11 +91,13 @@ func Effective(role string, permissionsJSON []byte) map[string]bool {
 // Allow — может ли пользователь с ролью role (и опц. персональным permissionsJSON
 // формата {"actions": {...}}) выполнить action.
 //
-// Логика зеркалит фронт:
+// Логика зеркалит фронт (getUserPermissions) и Effective:
 //   - owner → всегда да;
-//   - если у пользователя есть персональные actions (хотя бы один ключ) — берём
-//     их ЦЕЛИКОМ (отсутствующий ключ = запрет), без слияния с дефолтами;
-//   - иначе manager → да, остальные роли → по дефолтам роли.
+//   - если ключ ЕСТЬ в персональных actions — берём его значение (true/false),
+//     персональный оверрайд приоритетнее дефолта;
+//   - если ключа НЕТ в персональных actions — падаем на дефолт роли. Иначе
+//     права, добавленные позже сохранения сотрудника, молча выключались бы.
+//   - manager → дефолт «всё да»; прочие роли → roleDefaults.
 func Allow(role string, permissionsJSON []byte, action string) bool {
 	if role == "owner" {
 		return true
@@ -103,7 +107,10 @@ func Allow(role string, permissionsJSON []byte, action string) bool {
 			Actions map[string]bool `json:"actions"`
 		}
 		if err := json.Unmarshal(permissionsJSON, &p); err == nil && len(p.Actions) > 0 {
-			return p.Actions[action]
+			if v, ok := p.Actions[action]; ok {
+				return v
+			}
+			// ключа нет в кастом-наборе → fallthrough на дефолт роли (merge).
 		}
 	}
 	if role == "manager" {

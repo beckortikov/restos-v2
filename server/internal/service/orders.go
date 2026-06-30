@@ -85,6 +85,10 @@ type OrderSlim struct {
 	ShiftID        *string         `json:"shift_id,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
 	ClosedAt       *time.Time      `json:"closed_at,omitempty"`
+	// RefundedTotal — сколько уже возвращено по заказу. Нужно фронту, чтобы
+	// корректно считать «остаток к возврату» и прятать кнопку у полностью
+	// возвращённых заказов (иначе показывался полный возврат повторно).
+	RefundedTotal decimal.Decimal `json:"refunded_total"`
 	// Enriched display-only fields (батч-загрузка в List, чтобы избежать N+1 на клиенте).
 	TableName  string `json:"table_name,omitempty"`
 	WaiterName string `json:"waiter_name,omitempty"`
@@ -116,11 +120,12 @@ type orderSlimRow struct {
 	ShiftID          *string         `gorm:"column:shift_id"`
 	CreatedAt        time.Time       `gorm:"column:created_at"`
 	ClosedAt         *time.Time      `gorm:"column:closed_at"`
+	RefundedTotal    decimal.Decimal `gorm:"column:refunded_total"`
 }
 
 const slimSelect = `id, order_number, status, "type", table_id, waiter_id, guests_count,
 total, total_with_service, service_percent, service_amount, discount_amount, tip_amount,
-shift_id, created_at, closed_at`
+shift_id, created_at, closed_at, refunded_total`
 
 // List — постраничный slim-список. Использует индекс
 // idx_orders_restaurant_created (PRD 05) → keyset быстрый.
@@ -183,6 +188,7 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 			ServiceAmount:  r.ServiceAmount,
 			DiscountAmount: r.DiscountAmount,
 			TipAmount:      r.TipAmount,
+			RefundedTotal:  r.RefundedTotal,
 			ShiftID:        r.ShiftID,
 			CreatedAt:      r.CreatedAt,
 			ClosedAt:       r.ClosedAt,

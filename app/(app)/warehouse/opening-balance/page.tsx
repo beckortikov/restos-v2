@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { PackagePlus, Search } from 'lucide-react'
 
@@ -33,6 +33,22 @@ export default function OpeningBalancePage() {
     const q = search.toLowerCase()
     return ingredients.filter(i => i.name.toLowerCase().includes(q))
   }, [ingredients, search])
+
+  // Группировка по цеху/категории ингредиента — «куда относится». У ингредиента
+  // нет станции (это поле блюда), поэтому цех = ingredient.category.
+  const grouped = useMemo(() => {
+    const m = new Map<string, Ingredient[]>()
+    for (const ing of filtered) {
+      const cat = ing.category?.trim() || 'Без категории'
+      const arr = m.get(cat)
+      if (arr) arr.push(ing); else m.set(cat, [ing])
+    }
+    return [...m.entries()].sort((a, b) => {
+      if (a[0] === 'Без категории') return 1
+      if (b[0] === 'Без категории') return -1
+      return a[0].localeCompare(b[0], 'ru')
+    })
+  }, [filtered])
 
   const entered = useMemo(() => [...qtyMap.entries()].filter(([, v]) => v > 0), [qtyMap])
   // Себестоимость единицы: введённая (закуп мог быть по другой цене) или текущая
@@ -104,25 +120,34 @@ export default function OpeningBalancePage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map(ing => {
-                  const v = qtyMap.get(ing.id) ?? 0
-                  const cost = priceMap.get(ing.id) ?? ing.pricePerUnit
-                  return (
-                    <tr key={ing.id} className="border-b border-border/50">
-                      <td className="px-3 py-2 font-medium">{ing.name}<span className="text-muted-foreground ml-1 text-xs">({ing.unit})</span></td>
-                      <td className="px-3 text-right tabular-nums text-muted-foreground">{ing.qty}</td>
-                      <td className="px-3 text-right">
-                        <DecimalInput value={cost} onChange={(val: number) => setPrice(ing.id, val)} min={0} placeholder="0"
-                          className="w-28 px-2 py-1 text-sm text-right bg-background border border-border rounded-lg" />
+                {grouped.map(([cat, items]) => (
+                  <Fragment key={cat}>
+                    <tr className="bg-muted/50 border-b border-border">
+                      <td colSpan={5} className="px-3 py-1.5 text-xs font-semibold text-foreground/80 uppercase tracking-wide">
+                        {cat} <span className="text-muted-foreground font-normal normal-case">· {items.length}</span>
                       </td>
-                      <td className="px-3 text-right">
-                        <DecimalInput value={v} onChange={(val: number) => setQty(ing.id, val)} min={0} placeholder="0"
-                          className="w-32 px-2 py-1 text-sm text-right bg-background border border-border rounded-lg" />
-                      </td>
-                      <td className="px-3 text-right tabular-nums">{v > 0 ? formatCurrency(v * cost) : '—'}</td>
                     </tr>
-                  )
-                })}
+                    {items.map(ing => {
+                      const v = qtyMap.get(ing.id) ?? 0
+                      const cost = priceMap.get(ing.id) ?? ing.pricePerUnit
+                      return (
+                        <tr key={ing.id} className="border-b border-border/50">
+                          <td className="px-3 py-2 font-medium">{ing.name}<span className="text-muted-foreground ml-1 text-xs">({ing.unit})</span></td>
+                          <td className="px-3 text-right tabular-nums text-muted-foreground">{ing.qty}</td>
+                          <td className="px-3 text-right">
+                            <DecimalInput value={cost} onChange={(val: number) => setPrice(ing.id, val)} min={0} placeholder="0"
+                              className="w-28 px-2 py-1 text-sm text-right bg-background border border-border rounded-lg" />
+                          </td>
+                          <td className="px-3 text-right">
+                            <DecimalInput value={v} onChange={(val: number) => setQty(ing.id, val)} min={0} placeholder="0"
+                              className="w-32 px-2 py-1 text-sm text-right bg-background border border-border rounded-lg" />
+                          </td>
+                          <td className="px-3 text-right tabular-nums">{v > 0 ? formatCurrency(v * cost) : '—'}</td>
+                        </tr>
+                      )
+                    })}
+                  </Fragment>
+                ))}
               </tbody>
             </table>
           </div>

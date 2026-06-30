@@ -21,10 +21,17 @@ func TestAllow(t *testing.T) {
 		{"cook не может void", "cook", "", "orders.void", false},
 		{"неизвестная роль — запрет", "other", "", "orders.void", false},
 
-		// Персональные права перекрывают дефолты ЦЕЛИКОМ.
+		// Персональные права — оверрайды поверх дефолтов роли (merge):
+		// присутствующий ключ берёт своё значение, отсутствующий → дефолт роли.
 		{"waiter с явным разрешением void", "waiter", `{"actions":{"orders.void":true}}`, "orders.void", true},
-		{"cashier с явным запретом void", "cashier", `{"actions":{"orders.create":true}}`, "orders.void", false},
+		{"cashier с явным запретом void (false)", "cashier", `{"actions":{"orders.void":false}}`, "orders.void", false},
 		{"owner игнорирует кастомный запрет", "owner", `{"actions":{"orders.void":false}}`, "orders.void", true},
+		// Регрессия: кастом-набор без ключа refund НЕ должен отключать refund —
+		// он наследует дефолт роли cashier (иначе «возврат не работает» у
+		// кастомизированных кассиров после добавления новых прав).
+		{"cashier кастом без refund → дефолт роли", "cashier", `{"actions":{"orders.void":false}}`, "orders.refund", true},
+		{"waiter кастом без void-ключа → дефолт (deny)", "waiter", `{"actions":{"orders.create":true}}`, "orders.void", false},
+		{"cashier кастом без void-ключа → дефолт (allow)", "cashier", `{"actions":{"orders.create":true}}`, "orders.void", true},
 
 		// Пустой/битый JSON → дефолты роли.
 		{"битый json → дефолты", "cashier", `{bad`, "orders.void", true},
