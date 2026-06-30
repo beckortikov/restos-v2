@@ -102,6 +102,28 @@ func (r *Repo) ForTenantQualified(ctx context.Context, tableAlias string) (*gorm
 		Where(col+" = ?", rid), nil
 }
 
+// ForAccount возвращает *gorm.DB, отскоупленный по account_id из контекста
+// (WHERE account_id = ?) — для сетевых (owner) эндпоинтов, которым нужны ВСЕ
+// филиалы сети сразу. Обычные роли работают через ForTenant (один ресторан).
+//
+// Возвращает ErrAccountMissing, если ресторан не в сети (account_id=NULL).
+//
+// ВНИМАНИЕ: применять только к моделям с колонкой account_id (company_accounts,
+// stock_transfers). Для per-restaurant таблиц (orders, stock_movements) сетевая
+// выборка идёт через restaurant_id IN (<филиалы сети>) — отдельный хелпер
+// добавим по мере надобности.
+//
+// Про свежий Session(NewDB:true) — см. комментарий к ForTenant.
+func (r *Repo) ForAccount(ctx context.Context) (*gorm.DB, error) {
+	aid, err := tenant.MustAccountID(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("repo.ForAccount: %w", err)
+	}
+	return r.db.Session(&gorm.Session{NewDB: true}).
+		WithContext(ctx).
+		Where("account_id = ?", aid), nil
+}
+
 // Raw возвращает «голый» gorm.DB без скоупа.
 // Используется ТОЛЬКО для:
 //   - login/auth (читаем по PIN/username до того, как знаем restaurant_id);

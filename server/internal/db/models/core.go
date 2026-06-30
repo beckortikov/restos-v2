@@ -36,7 +36,10 @@ type Restaurant struct {
 	LicenseWarningDays int `gorm:"column:license_warning_days;not null;default:7" json:"license_warning_days"`
 	// AccountID — владелец сети (Phase 1 multi-branch). Заполняется при
 	// activate из payload.aid. Empty/NULL → одиночный ресторан.
-	AccountID         *string    `gorm:"column:account_id" json:"account_id,omitempty"`
+	AccountID *string `gorm:"column:account_id" json:"account_id,omitempty"`
+	// Kind — тип точки в сети (ADR-003): 'outlet' (обычный филиал) |
+	// 'central_warehouse' (центральный склад). DEFAULT 'outlet'.
+	Kind              *string    `gorm:"column:kind;default:'outlet'" json:"kind,omitempty"`
 	IsBlocked         *bool      `gorm:"column:is_blocked;default:false" json:"is_blocked"`
 	BlockReason       *string    `gorm:"column:block_reason" json:"block_reason"`
 	LastSeenAt        *time.Time `gorm:"column:last_seen_at" json:"last_seen_at"`
@@ -52,6 +55,19 @@ type Restaurant struct {
 }
 
 func (Restaurant) TableName() string { return "restaurants" }
+
+// CompanyAccount — сеть филиалов (ADR-003). Группирует N ресторанов одного
+// владельца под общим account_id (restaurants.account_id → company_accounts.id).
+type CompanyAccount struct {
+	ID        string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name      string    `gorm:"not null" json:"name"`
+	OwnerName *string   `gorm:"column:owner_name" json:"owner_name"`
+	Phone     *string   `json:"phone"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (CompanyAccount) TableName() string { return "company_accounts" }
 
 // User — кассиры/повара/официанты/менеджеры.
 // Owner-роль в v4 не имеет смысла локально (см. CLAUDE.md), но запись возможна.
