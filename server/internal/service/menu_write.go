@@ -46,6 +46,16 @@ type MenuItemInput struct {
 }
 
 // parsePurchase валидирует поля покупного товара.
+// purchasedStation нормализует станцию покупного товара. Разрешены «бар» и
+// «витрина» (showcase); пустое/прочее → showcase по умолчанию. Раньше станция
+// жёстко форсилась в showcase — из-за чего «Бар» сохранялся как «Витрина».
+func purchasedStation(s *string) string {
+	if s != nil && (*s == "bar" || *s == "showcase") {
+		return *s
+	}
+	return "showcase"
+}
+
 func parsePurchase(in MenuItemInput) (price decimal.Decimal, unit string, minQty decimal.Decimal, err error) {
 	if in.PurchasePrice == nil || in.PurchaseUnit == nil || *in.PurchaseUnit == "" {
 		return decimal.Zero, "", decimal.Zero, apperrors.Wrap("VALIDATION", "purchase_price и purchase_unit обязательны для покупного товара", nil)
@@ -144,14 +154,16 @@ func (s *MenuService) CreateItem(ctx context.Context, in MenuItemInput) (*models
 	mi.IsPurchased = in.IsPurchased != nil && *in.IsPurchased
 
 	// Покупной товар: в одной транзакции создаём складской ингредиент с 0
-	// остатком + 1:1 техкарту + станцию showcase + cogs = цена закупки.
+	// остатком + 1:1 техкарту + станцию + cogs = цена закупки.
 	if mi.IsPurchased {
 		price, unit, minQty, perr := parsePurchase(in)
 		if perr != nil {
 			return nil, perr
 		}
-		showcase := "showcase"
-		mi.Station = &showcase
+		// Станция покупного товара — витрина (по умолчанию) ИЛИ бар (напитки/
+		// штучный товар). Уважаем выбор пользователя, не форсим showcase.
+		station := purchasedStation(mi.Station)
+		mi.Station = &station
 		mi.COGS = price
 		txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {
 			tx := tr.Raw().WithContext(ctx)
@@ -314,7 +326,12 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 		name = *in.Name
 	}
 	updates["is_purchased"] = true
-	updates["station"] = "showcase"
+	// Станция покупного товара: уважаем выбор (бар/витрина), не форсим showcase.
+	stationPref := mi.Station
+	if in.Station != nil {
+		stationPref = in.Station
+	}
+	updates["station"] = purchasedStation(stationPref)
 	updates["cogs"] = price
 
 	txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {

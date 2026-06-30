@@ -108,3 +108,51 @@ func TestMenu_PurchasedBackend_PatchConvert(t *testing.T) {
 		t.Fatalf("backing-ингредиент: qty=%s price=%s", decimal.Normalize(ing.Qty), decimal.Normalize(ing.PricePerUnit))
 	}
 }
+
+// Покупной товар со станцией «Бар» должен сохраняться как bar, а не форситься
+// в showcase (баг: «Бар» сохранялся как «Витрина»).
+func TestMenuPurchased_RespectsBarStation(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	// 1) Создание покупного с station=bar → bar.
+	r, b := f.post(t, "/api/v1/menu/items", tok, uuid.NewString(), map[string]any{
+		"name": "Кола 0.5", "category": "Напитки", "price": "15", "station": "bar",
+		"is_purchased": true, "purchase_price": "10", "purchase_unit": "шт",
+	})
+	if r.StatusCode != http.StatusOK && r.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %s", r.StatusCode, b)
+	}
+	var created struct {
+		ID          string `json:"id"`
+		Station     string `json:"station"`
+		IsPurchased bool   `json:"is_purchased"`
+	}
+	_ = json.Unmarshal(b, &created)
+	if !created.IsPurchased || created.Station != "bar" {
+		t.Fatalf("ожидали purchased + station=bar, получили is_purchased=%v station=%q", created.IsPurchased, created.Station)
+	}
+
+	// 2) Конвертация обычного блюда в покупное с station=bar → bar.
+	miID, name := uuid.NewString(), "Сок"
+	if err := gdb.Create(&models.MenuItem{ID: miID, Name: &name, Price: decimal.MustFromString("12"), RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	r2, b2 := f.patch(t, "/api/v1/menu/items/"+miID, tok, uuid.NewString(), map[string]any{
+		"is_purchased": true, "purchase_price": "8", "purchase_unit": "шт", "station": "bar",
+	})
+	if r2.StatusCode != http.StatusOK {
+		t.Fatalf("patch: %d %s", r2.StatusCode, b2)
+	}
+	var mi models.MenuItem
+	gdb.Where("id = ?", miID).First(&mi)
+	if mi.Station == nil || *mi.Station != "bar" {
+		t.Fatalf("после конвертации с bar ожидали station=bar, получили %v", mi.Station)
+	}
+}
