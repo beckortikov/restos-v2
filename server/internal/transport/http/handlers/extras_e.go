@@ -112,6 +112,17 @@ func (h *ShiftsHandler) PrintX(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, res)
 }
 
+// PrintService — POST /api/v1/shifts/{id}/print-service. Чек «Обслуживание
+// официантов» за смену (PrintJob type='service_report').
+func (h *ShiftsHandler) PrintService(w http.ResponseWriter, r *http.Request) {
+	res, err := h.svc.PrintService(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, res)
+}
+
 // DeleteOperationByID — DELETE /api/v1/cash-shift-operations/{id}.
 // Удаляет операцию без shift_id в пути — сервер сам резолвит её родителя
 // и применяет tenant-чек.

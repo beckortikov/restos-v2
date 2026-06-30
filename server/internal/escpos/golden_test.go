@@ -123,6 +123,23 @@ func TestGolden_ZReport(t *testing.T) {
 	})
 }
 
+// Чек «Обслуживание официантов» за смену.
+func TestGolden_ServiceReport(t *testing.T) {
+	in := ServiceReportInput{
+		RestaurantName: "Ресторан Старая Душанбе",
+		ShiftNumber:    "2026-05-25 / shift-1",
+		OpenedAt:       fixedTime,
+		ClosedAt:       fixedTime.Add(8 * time.Hour),
+		Waiters: []ServiceWaiterLine{
+			{Name: "Иван", Accrued: decimal.MustFromString("320"), Paid: decimal.MustFromString("200"), ToPay: decimal.MustFromString("120")},
+			{Name: "Мария", Accrued: decimal.MustFromString("150"), Paid: decimal.MustFromString("0"), ToPay: decimal.MustFromString("150")},
+		},
+	}
+	withFixedNow(t, fixedTime.Add(8*time.Hour), func() {
+		assertGolden(t, "service_report.hex", ServiceReportLayout(in))
+	})
+}
+
 // Z-отчёт с блоком «Движение по кассе»: внесения, изъятия, расходы по категориям.
 func TestGolden_ZReportWithMovement(t *testing.T) {
 	in := ReportInput{

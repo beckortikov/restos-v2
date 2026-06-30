@@ -215,6 +215,14 @@ export async function printShiftX(shiftId: string): Promise<{ jobId: string; sta
   return { jobId: String(res?.job_id ?? ''), status: String(res?.status ?? 'pending') }
 }
 
+// printShiftService — чек «Обслуживание официантов» за смену (рядом с X/Z).
+export async function printShiftService(shiftId: string): Promise<{ jobId: string; status: string }> {
+  const res: any = await unwrap(
+    api.POST('/api/v1/shifts/{id}/print-service' as any, { params: { path: { id: shiftId } } as any }),
+  )
+  return { jobId: String(res?.job_id ?? ''), status: String(res?.status ?? 'pending') }
+}
+
 export async function fetchShiftOperations(shiftId: string): Promise<CashShiftOperation[]> {
   const env: any = await unwrap(api.GET('/api/v1/shifts/{id}/operations', { params: { path: { id: shiftId } } }))
   const arr: any[] = Array.isArray(env?.data) ? env.data : Array.isArray(env) ? env : []

@@ -2337,6 +2337,29 @@ paths:
                   job_id: { type: string, format: uuid }
                   status: { type: string }
 
+  /api/v1/shifts/{id}/print-service:
+    post:
+      tags: [shifts]
+      summary: Печать чека «Обслуживание официантов» за смену
+      description: |
+        Создаёт PrintJob type='service_report' с ESC/POS payload: по каждому
+        официанту начислено (service_amount), выплачено, к выплате + итоги.
+        Кнопка рядом с X/Z-отчётом. Работает при открытой и закрытой смене.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [job_id, status]
+                properties:
+                  job_id: { type: string, format: uuid }
+                  status: { type: string }
+
   /api/v1/shifts/{id}/revenue:
     get:
       tags: [shifts]

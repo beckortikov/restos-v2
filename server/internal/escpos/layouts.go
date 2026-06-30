@@ -491,6 +491,68 @@ func XReportLayout(in ReportInput) []byte { return reportLayout(in, "X-ОТЧЁ�
 // ZReportLayout — финальный отчёт при закрытии смены.
 func ZReportLayout(in ReportInput) []byte { return reportLayout(in, "Z-ОТЧЁТ", true) }
 
+// ServiceWaiterLine — строка обслуживания по официанту.
+type ServiceWaiterLine struct {
+	Name    string
+	Accrued decimal.Decimal // начислено (service_amount)
+	Paid    decimal.Decimal // выплачено
+	ToPay   decimal.Decimal // к выплате (max(0, accrued − paid))
+}
+
+// ServiceReportInput — данные чека «Обслуживание официантов» за смену.
+type ServiceReportInput struct {
+	RestaurantName string
+	ShiftNumber    string
+	OpenedAt       time.Time
+	ClosedAt       time.Time
+	Waiters        []ServiceWaiterLine
+	Cols           int
+}
+
+// ServiceReportLayout — чек по сервисному сбору за смену (рядом с X/Z).
+func ServiceReportLayout(in ServiceReportInput) []byte {
+	cols := in.Cols
+	if cols == 0 {
+		cols = Cols80
+	}
+	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b.Bold(true)
+	b.AlignCenter().FontTall().TextLn("ОБСЛУЖИВАНИЕ").FontNormal()
+	b.TextLn(in.RestaurantName)
+	b.LF()
+
+	b.AlignLeft()
+	b.TextLnf("Смена:   %s", in.ShiftNumber)
+	b.TextLnf("Открыта: %s", in.OpenedAt.In(displayLoc).Format("02.01.2006 15:04"))
+	if !in.ClosedAt.IsZero() {
+		b.TextLnf("Закрыта: %s", in.ClosedAt.In(displayLoc).Format("02.01.2006 15:04"))
+	}
+	b.TextLn(strings.Repeat("-", cols))
+
+	totalAccrued, totalPaid, totalToPay := decimal.Zero, decimal.Zero, decimal.Zero
+	if len(in.Waiters) == 0 {
+		b.AlignCenter().TextLn("Нет начислений").AlignLeft()
+	}
+	for _, w := range in.Waiters {
+		b.Bold(true).TextLn(stripEmoji(w.Name)).Bold(false)
+		b.TextLn(PadRow("  Начислено:", decToShort(w.Accrued), cols))
+		b.TextLn(PadRow("  Выплачено:", decToShort(w.Paid), cols))
+		b.TextLn(PadRow("  К выплате:", decToShort(w.ToPay), cols))
+		totalAccrued = decimal.Add(totalAccrued, w.Accrued)
+		totalPaid = decimal.Add(totalPaid, w.Paid)
+		totalToPay = decimal.Add(totalToPay, w.ToPay)
+	}
+
+	b.TextLn(strings.Repeat("-", cols))
+	b.TextLn(PadRow("Начислено ИТОГО:", decToShort(totalAccrued), cols))
+	b.TextLn(PadRow("Выплачено ИТОГО:", decToShort(totalPaid), cols))
+	b.Bold(true).TextLn(PadRow("К ВЫПЛАТЕ ИТОГО:", decToShort(totalToPay), cols)).Bold(false)
+
+	b.LF().AlignCenter().TextLnf("Отпечатан: %s", nowFn().In(displayLoc).Format("02.01.2006 15:04"))
+	b.Bold(false).CutWithFeed(3)
+	return b.Bytes()
+}
+
 func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	cols := in.Cols
 	if cols == 0 {

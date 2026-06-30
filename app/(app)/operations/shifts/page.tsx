@@ -7,7 +7,7 @@ import { OwnerPinGate } from '@/components/owner-pin-gate'
 import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
 import { type CashShift, type CashShiftOperation, type FinancialAccount } from '@/lib/types'
-import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, patchShiftAccount, printShiftZ, printShiftX, type ShiftZReport } from '@/lib/queries'
+import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, patchShiftAccount, printShiftZ, printShiftX, printShiftService, type ShiftZReport } from '@/lib/queries'
 import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
@@ -408,6 +408,15 @@ export default function ShiftsPage() {
     }
   }
 
+  const handlePrintService = async (shiftId: string) => {
+    try {
+      await printShiftService(shiftId)
+      toast.success('Отчёт «Обслуживание» отправлен на принтер')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка печати отчёта обслуживания'))
+    }
+  }
+
   const handleOp = async () => {
     if (!activeShift || !showOp || opAmount <= 0) return
     try {
@@ -584,6 +593,13 @@ export default function ShiftsPage() {
                 <Printer className="size-3.5" />X-отчёт
               </button>
               <button
+                onClick={() => handlePrintService(activeShift.id)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 bg-card border border-border text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap"
+                title="Печать чека «Обслуживание официантов»"
+              >
+                <Printer className="size-3.5" />Обслуживание
+              </button>
+              <button
                 onClick={() => handlePrintZ(activeShift.id)}
                 className="inline-flex items-center gap-1.5 px-3 py-2 bg-card border border-border text-foreground rounded-lg text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap"
                 title="Печать Z-отчёта на принтер"
@@ -698,10 +714,28 @@ export default function ShiftsPage() {
                         </div>
                       )
                     })}
-                    <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
-                      <span>Итого</span>
-                      <span className="tabular-nums">{formatCurrency(zReport.revenueByMethod.reduce((s, m) => s + m.total, 0))}</span>
-                    </div>
+                    {(() => {
+                      const revenueTotal = zReport.revenueByMethod.reduce((s, m) => s + m.total, 0)
+                      const expenses = cashMovement.expensesTotal
+                      return (
+                        <>
+                          <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between">
+                            <span className="text-muted-foreground">Выручка</span>
+                            <span className="font-medium tabular-nums">{formatCurrency(revenueTotal)}</span>
+                          </div>
+                          {expenses > 0 && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Расход</span>
+                              <span className="font-medium tabular-nums text-destructive">−{formatCurrency(expenses)}</span>
+                            </div>
+                          )}
+                          <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
+                            <span>Итог</span>
+                            <span className="tabular-nums">{formatCurrency(revenueTotal - expenses)}</span>
+                          </div>
+                        </>
+                      )
+                    })()}
                   </div>
                 )}
               </div>

@@ -159,6 +159,126 @@ func (s *ShiftsService) printReport(ctx context.Context, shiftID, jobType string
 	return &res, nil
 }
 
+// PrintService — POST /api/v1/shifts/{id}/print-service.
+//
+// Чек «Обслуживание официантов» за смену: по каждому официанту начислено
+// (зафиксированный service_amount закрытых заказов), выплачено и к выплате.
+// Кнопка стоит рядом с X/Z-отчётом. Работает и для открытой, и для закрытой смены.
+func (s *ShiftsService) PrintService(ctx context.Context, shiftID string) (*PrintZResult, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var shift models.CashShift
+	if err := s.r.Raw().WithContext(ctx).Where("id = ? AND restaurant_id = ?", shiftID, rid).First(&shift).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	var rest models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Where("id = ?", rid).First(&rest).Error; err != nil {
+		return nil, err
+	}
+
+	// Начислено по официантам — зафиксированный o.service_amount закрытых заказов смены.
+	type accRow struct {
+		WaiterID string          `gorm:"column:waiter_id"`
+		Name     string          `gorm:"column:name"`
+		Accrued  decimal.Decimal `gorm:"column:accrued"`
+	}
+	var accRows []accRow
+	if err := s.r.Raw().WithContext(ctx).
+		Table("orders AS o").
+		Select("COALESCE(o.waiter_id::text,'') AS waiter_id, COALESCE(u.name,'') AS name, COALESCE(SUM(o.service_amount),0) AS accrued").
+		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id::text").
+		Where("o.restaurant_id = ? AND o.status = ? AND o.closed_at IS NOT NULL AND o.waiter_id IS NOT NULL AND o.shift_id = ?", rid, "closed", shiftID).
+		Group("o.waiter_id, u.name").
+		Order("u.name ASC").
+		Scan(&accRows).Error; err != nil {
+		return nil, err
+	}
+
+	// Выплачено по официантам — financial_operations type=out, категория «Сервис%».
+	type payRow struct {
+		WaiterID string          `gorm:"column:waiter_id"`
+		Paid     decimal.Decimal `gorm:"column:paid"`
+	}
+	var payRows []payRow
+	if err := s.r.Raw().WithContext(ctx).
+		Table("financial_operations AS fo").
+		Select("COALESCE(fo.source_ref,'') AS waiter_id, COALESCE(SUM(fo.amount),0) AS paid").
+		Where("fo.restaurant_id = ? AND fo.type = ? AND fo.category ILIKE ? AND fo.shift_id = ?", rid, "out", "Сервис%", shiftID).
+		Group("fo.source_ref").
+		Scan(&payRows).Error; err != nil {
+		return nil, err
+	}
+	paidByWaiter := make(map[string]decimal.Decimal, len(payRows))
+	for _, p := range payRows {
+		paidByWaiter[p.WaiterID] = decimal.Normalize(p.Paid)
+	}
+
+	waiters := make([]escpos.ServiceWaiterLine, 0, len(accRows))
+	for _, a := range accRows {
+		accrued := decimal.Normalize(a.Accrued)
+		paid := paidByWaiter[a.WaiterID]
+		toPay := decimal.Sub(accrued, paid)
+		if decimal.IsNegative(toPay) {
+			toPay = decimal.Zero
+		}
+		name := a.Name
+		if name == "" {
+			name = "Без официанта"
+		}
+		waiters = append(waiters, escpos.ServiceWaiterLine{
+			Name: name, Accrued: accrued, Paid: paid, ToPay: decimal.Normalize(toPay),
+		})
+	}
+
+	shiftNumber := shift.ID
+	if len(shiftNumber) > 6 {
+		shiftNumber = shiftNumber[len(shiftNumber)-6:]
+	}
+	shiftNumber = fmt.Sprintf("%s (%s)", shiftNumber, shift.OpenedAt.Local().Format("02.01.2006"))
+
+	in := escpos.ServiceReportInput{
+		RestaurantName: rest.Name,
+		ShiftNumber:    shiftNumber,
+		OpenedAt:       shift.OpenedAt,
+		Waiters:        waiters,
+	}
+	if shift.ClosedAt != nil {
+		in.ClosedAt = *shift.ClosedAt
+	}
+	payload := escpos.ServiceReportLayout(in)
+
+	now := time.Now().UTC()
+	pj := &models.PrintJob{
+		ID:           uuid.NewString(),
+		Type:         "service_report",
+		Payload:      payload,
+		Status:       "pending",
+		RestaurantID: &rid,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	var res PrintZResult
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Session(&gorm.Session{SkipHooks: true}).Create(pj).Error; err != nil {
+			return err
+		}
+		res.JobID = pj.ID
+		res.Status = pj.Status
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
 // ─── Previous-shift summary (delta-chip) ───────────────────────────────────
 
 // PreviousSummary — выжимка предыдущей закрытой смены того же ресторана.
