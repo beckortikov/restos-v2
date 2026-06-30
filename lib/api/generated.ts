@@ -1123,6 +1123,293 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stock/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Перемещения, где текущий ресторан — источник или получатель (multi-branch, ADR-003). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockTransfersList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Создать и отправить перемещение в филиал (transfer_out у источника). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateTransferInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockTransfer"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/transfers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Одно перемещение со строками. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockTransfer"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/transfers/{id}/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Приём перемещения получателем (transfer_in). Идемпотентно. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockTransfer"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/branches": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Филиалы сети текущего ресторана (multi-branch, ADR-003). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BranchesList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/nomenclature": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Общий каталог номенклатуры сети. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NomenclatureList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Завести продукт в каталог номенклатуры сети. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateNomenclatureInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Nomenclature"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/ingredients/{id}/nomenclature": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Привязать ингредиент к номенклатуре сети. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        nomenclature_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/writeoffs": {
         parameters: {
             query?: never;
@@ -9773,6 +10060,92 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+        };
+        StockTransfersList: {
+            data?: components["schemas"]["StockTransfer"][];
+            next_cursor?: string;
+        };
+        BranchesList: {
+            data?: components["schemas"]["Branch"][];
+            next_cursor?: string;
+        };
+        Branch: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            kind?: "outlet" | "central_warehouse";
+        };
+        NomenclatureList: {
+            data?: components["schemas"]["Nomenclature"][];
+            next_cursor?: string;
+        };
+        Nomenclature: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            account_id?: string;
+            name?: string;
+            unit?: string;
+            category?: string;
+        };
+        CreateNomenclatureInput: {
+            name: string;
+            unit?: string;
+            category?: string;
+        };
+        /** @description Перемещение товара между филиалами сети (ADR-003). */
+        StockTransfer: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            account_id?: string;
+            /** Format: uuid */
+            from_restaurant_id?: string;
+            /** Format: uuid */
+            to_restaurant_id?: string;
+            transfer_number?: number;
+            /** @enum {string} */
+            status?: "draft" | "sent" | "received" | "cancelled";
+            note?: string;
+            /** Format: date-time */
+            sent_at?: string;
+            /** Format: date-time */
+            received_at?: string;
+            /** Format: date-time */
+            created_at?: string;
+            lines?: components["schemas"]["StockTransferLine"][];
+        };
+        StockTransferLine: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            transfer_id?: string;
+            /** Format: uuid */
+            ingredient_id?: string;
+            /** Format: uuid */
+            nomenclature_id?: string;
+            ingredient_name?: string;
+            qty?: components["schemas"]["Decimal"];
+            unit?: string;
+            cost_per_unit?: components["schemas"]["Decimal"];
+        };
+        CreateTransferInput: {
+            /**
+             * Format: uuid
+             * @description Филиал-получатель (источник — ресторан из токена).
+             */
+            to_restaurant_id: string;
+            note?: string;
+            lines: {
+                /**
+                 * Format: uuid
+                 * @description Ингредиент стороны-источника (должен быть привязан к nomenclature_id).
+                 */
+                ingredient_id: string;
+                qty: components["schemas"]["Decimal"];
+                cost_per_unit?: components["schemas"]["Decimal"];
+            }[];
         };
         WriteoffInput: {
             reason: string;
