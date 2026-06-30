@@ -21,8 +21,9 @@ import (
 )
 
 type OpeningBalanceLine struct {
-	IngredientID string `json:"ingredient_id"`
-	Qty          string `json:"qty"` // decimal as string (в единице склада)
+	IngredientID string  `json:"ingredient_id"`
+	Qty          string  `json:"qty"`             // decimal as string (в единице склада)
+	Price        *string `json:"price,omitempty"` // себестоимость за единицу; если задана — обновит ingredient.price_per_unit и пойдёт в стоимость
 }
 
 type OpeningBalanceInput struct {
@@ -60,6 +61,20 @@ func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInpu
 			if err := tx.Where("id = ? AND restaurant_id = ?", l.IngredientID, rid).First(&ing).Error; err != nil {
 				return apperrors.Wrap("VALIDATION", "ingredient not found: "+l.IngredientID, err)
 			}
+			// Себестоимость: берём введённую (закуп мог быть по другой цене) и
+			// обновляем ingredient.price_per_unit, иначе — текущую цену ингредиента.
+			price := ing.PricePerUnit
+			if l.Price != nil && *l.Price != "" {
+				if p, e := decimal.FromString(*l.Price); e == nil && !decimal.IsNegative(p) {
+					price = p
+					if !p.Equal(ing.PricePerUnit) {
+						if err := tx.Model(&models.Ingredient{}).Where("id = ?", l.IngredientID).
+							Update("price_per_unit", p).Error; err != nil {
+							return err
+						}
+					}
+				}
+			}
 			mvType := "opening_balance"
 			desc := "Начальный остаток"
 			mv := &models.StockMovement{
@@ -70,7 +85,7 @@ func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInpu
 			if err := tx.Create(mv).Error; err != nil {
 				return err
 			}
-			total = decimal.Add(total, decimal.Mul(qty, ing.PricePerUnit))
+			total = decimal.Add(total, decimal.Mul(qty, price))
 			applied++
 		}
 		if applied == 0 {

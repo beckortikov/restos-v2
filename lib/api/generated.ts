@@ -1220,6 +1220,7 @@ export interface paths {
                         lines?: {
                             ingredient_id?: string;
                             qty?: string;
+                            price?: string;
                         }[];
                     };
                 };

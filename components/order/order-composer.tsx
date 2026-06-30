@@ -569,6 +569,17 @@ export function OrderComposer(props: OrderComposerProps) {
   // пересчитывается только когда React успевает между нажатиями. На 200+ блюдах
   // это убирает лаг 300–800мс при наборе поискового запроса на мобильном.
   const deferredSearch = useDeferredValue(search)
+
+  // Единый предикат «прятать из меню ПОС»: заготовка без готовых порций ИЛИ
+  // (нет права create_stopped и блюдо в стопе/недоступно). Применяется во ВСЕХ
+  // представлениях меню (сетка drill-down, поиск, избранное, частые), иначе
+  // стоп-блюда «вылезали» в одном из них.
+  const isPosHidden = useCallback((item: MenuItem) => {
+    if (item.isBatchCooking && (item.preparedQty ?? 0) <= 0) return true
+    if (!canOrderStopped && (!item.isAvailable || stoppedIds.has(item.id))) return true
+    return false
+  }, [canOrderStopped, stoppedIds])
+
   const availableMenu = useMemo(() => {
     const q = deferredSearch.trim().toLowerCase()
     // Category filter is bypassed when:
@@ -579,11 +590,8 @@ export function OrderComposer(props: OrderComposerProps) {
     //    though «Жигар кабоб» lives under «Кабоб» — confusing.
     const cartIds = new Set(cart.map(l => l.menuItemId))
     const filtered = menuItems.filter(item => {
-      // Стоп-блюда уходят из меню ПОС для кассира/официанта (без права
-      // `orders.create_stopped`) — они видны только в разделе «Стоп-лист».
-      // Менеджер с правом override видит их (серым) и может пробить.
-      if (item.isBatchCooking && (item.preparedQty ?? 0) <= 0) return false
-      if (!canOrderStopped && (!item.isAvailable || stoppedIds.has(item.id))) return false
+      // Стоп-блюда уходят из меню ПОС (см. isPosHidden) — видны только в стоп-листе.
+      if (isPosHidden(item)) return false
       if (isHidden(item)) return false
       if (q && !item.name.toLowerCase().includes(q)) return false
       if (!q && !cartIds.has(item.id) && category !== 'Все' && item.category !== category) return false
@@ -609,7 +617,7 @@ export function OrderComposer(props: OrderComposerProps) {
       .sort((a, b) => (cartOrder.get(a.id)! - cartOrder.get(b.id)!))
     const rest = sorted.filter(i => !cartOrder.has(i.id))
     return [...inCart, ...rest]
-  }, [menuItems, category, deferredSearch, cart, canOrderStopped, stoppedIds])
+  }, [menuItems, category, deferredSearch, cart, isPosHidden])
 
   const total = dSum(cart.map(lineTotal))
   const totalItems = cart.length
@@ -956,7 +964,7 @@ export function OrderComposer(props: OrderComposerProps) {
   const dishesByCategory = useMemo(() => {
     const m = new Map<string, MenuItem[]>()
     for (const item of menuItems) {
-      if (isHidden(item)) continue
+      if (isHidden(item) || isPosHidden(item)) continue
       const cat = item.category || 'Без категории'
       const arr = m.get(cat)
       if (arr) arr.push(item)
@@ -967,7 +975,7 @@ export function OrderComposer(props: OrderComposerProps) {
       arr.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
     }
     return m
-  }, [menuItems])
+  }, [menuItems, isPosHidden])
 
   // Категории + количество блюд (для главного экрана drill-down).
   const categoriesWithCounts = useMemo(
@@ -995,7 +1003,7 @@ export function OrderComposer(props: OrderComposerProps) {
       : activeCategory === FAVORITES_KEY
         ? favoriteIds
             .map(id => menuItems.find(m => m.id === id))
-            .filter((m): m is MenuItem => !!m && !isHidden(m))
+            .filter((m): m is MenuItem => !!m && !isHidden(m) && !isPosHidden(m))
             .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
         : activeCategory
           ? (dishesByCategory.get(activeCategory) ?? [])
@@ -1854,7 +1862,7 @@ export function OrderComposer(props: OrderComposerProps) {
         {useNewLayout ? (() => {
           const items = frequentIds
             .map(id => menuItems.find(m => m.id === id))
-            .filter((m): m is MenuItem => !!m && !isHidden(m))
+            .filter((m): m is MenuItem => !!m && !isHidden(m) && !isPosHidden(m))
             .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
           if (items.length === 0) return null
           return (

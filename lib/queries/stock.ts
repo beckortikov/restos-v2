@@ -8,13 +8,17 @@ import { logAction } from './audit'
 // applyOpeningBalance — начальный остаток склада: movements + автопроводка в
 // капитал «взнос собственника». Возвращает кол-во позиций и стоимость склада.
 export async function applyOpeningBalance(
-  lines: { ingredientId: string; qty: number }[],
+  lines: { ingredientId: string; qty: number; price?: number }[],
   note?: string,
 ): Promise<{ applied: number; inventoryValue: number }> {
   const r: any = await unwrap(api.POST('/api/v1/stock/opening-balance', {
     body: {
       note,
-      lines: lines.filter(l => l.qty > 0).map(l => ({ ingredient_id: l.ingredientId, qty: String(l.qty) })),
+      lines: lines.filter(l => l.qty > 0).map(l => ({
+        ingredient_id: l.ingredientId,
+        qty: String(l.qty),
+        ...(l.price != null ? { price: String(l.price) } : {}),
+      })),
     } as any,
   }))
   logAction('stock.opening_balance', 'stock_movements', 'opening', `Начальный остаток: ${Number(r?.applied ?? 0)} позиций`, {})

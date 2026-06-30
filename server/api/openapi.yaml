@@ -468,6 +468,7 @@ paths:
                     properties:
                       ingredient_id: { type: string }
                       qty:           { type: string }
+                      price:         { type: string }
       responses:
         "200": { description: OK, content: { application/json: { schema: {
           type: object,
