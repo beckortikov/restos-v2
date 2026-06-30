@@ -428,6 +428,37 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmReceiptInput" } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
 
+  /api/v1/stock/transfers:
+    get:
+      tags: [stock]
+      summary: Перемещения, где текущий ресторан — источник или получатель (multi-branch, ADR-003).
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockTransfersList" } } } } }
+    post:
+      tags: [stock]
+      summary: Создать и отправить перемещение в филиал (transfer_out у источника).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateTransferInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockTransfer" } } } } }
+
+  /api/v1/stock/transfers/{id}:
+    get:
+      tags: [stock]
+      summary: Одно перемещение со строками.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockTransfer" } } } } }
+
+  /api/v1/stock/transfers/{id}/receive:
+    post:
+      tags: [stock]
+      summary: Приём перемещения получателем (transfer_in). Идемпотентно.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockTransfer" } } } } }
+
   /api/v1/stock/writeoffs:
     get:
       tags: [stock]
@@ -3012,6 +3043,54 @@ components:
         total_amount: { $ref: "#/components/schemas/Decimal" }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         debt_amount: { $ref: "#/components/schemas/Decimal" }
+
+    StockTransfersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockTransfer" } }, next_cursor: { type: string } } }
+
+    StockTransfer:
+      type: object
+      description: Перемещение товара между филиалами сети (ADR-003).
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        from_restaurant_id: { type: string, format: uuid }
+        to_restaurant_id: { type: string, format: uuid }
+        transfer_number: { type: integer }
+        status: { type: string, enum: [draft, sent, received, cancelled] }
+        note: { type: string }
+        sent_at: { type: string, format: date-time }
+        received_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+        lines:
+          type: array
+          items: { $ref: "#/components/schemas/StockTransferLine" }
+
+    StockTransferLine:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        transfer_id: { type: string, format: uuid }
+        ingredient_id: { type: string, format: uuid }
+        nomenclature_id: { type: string, format: uuid }
+        ingredient_name: { type: string }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
+        cost_per_unit: { $ref: "#/components/schemas/Decimal" }
+
+    CreateTransferInput:
+      type: object
+      required: [to_restaurant_id, lines]
+      properties:
+        to_restaurant_id: { type: string, format: uuid, description: Филиал-получатель (источник — ресторан из токена). }
+        note: { type: string }
+        lines:
+          type: array
+          items:
+            type: object
+            required: [ingredient_id, qty]
+            properties:
+              ingredient_id: { type: string, format: uuid, description: Ингредиент стороны-источника (должен быть привязан к nomenclature_id). }
+              qty: { $ref: "#/components/schemas/Decimal" }
+              cost_per_unit: { $ref: "#/components/schemas/Decimal" }
 
     WriteoffInput:
       type: object
