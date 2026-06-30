@@ -60,20 +60,13 @@ export function TransferTableDialog({
   // Сбрасываем выбор при открытии.
   useEffect(() => { if (open) setTargetTableId('') }, [open])
 
-  // Доступные столы: свободные (status='free') + столы где уже есть этот заказ
-  // не включаем (это бессмысленно). Не показываем текущий стол.
+  // Только СВОБОДНЫЕ столы (как в официанте). Перенос на занятый стол бэк
+  // отклоняет (две заказа на столе = потеря) — поэтому занятые не показываем,
+  // чтобы кассир не наткнулся на ошибку. Текущий стол исключаем.
   const eligibleTables = useMemo(() => {
     return tables
-      .filter(t => t.id !== order.tableId)
-      .filter(t => t.status === 'free' || t.status === 'occupied')
-      .sort((a, b) => {
-        // Свободные сверху, занятые внизу.
-        if (a.status !== b.status) return a.status === 'free' ? -1 : 1
-        // Внутри group — по номеру.
-        const an = Number(a.number ?? 0)
-        const bn = Number(b.number ?? 0)
-        return an - bn
-      })
+      .filter(t => t.id !== order.tableId && t.status === 'free')
+      .sort((a, b) => Number(a.number ?? 0) - Number(b.number ?? 0))
   }, [tables, order.tableId])
 
   const currentTable = order.tableId ? tables.find(t => t.id === order.tableId) : null

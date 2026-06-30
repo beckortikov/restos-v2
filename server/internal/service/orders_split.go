@@ -332,6 +332,26 @@ func (s *OrdersService) Transfer(ctx context.Context, orderID string, in Transfe
 			if cnt == 0 {
 				return apperrors.Wrap("VALIDATION", "table not found in this restaurant", nil)
 			}
+			// Закрываем дыру: целевой стол не должен быть занят другим активным
+			// заказом. Иначе перенос перезаписал бы current_order_id целевого
+			// стола и на нём оказалось бы два заказа (второй «терялся» из карты).
+			curTable := ""
+			if order.TableID != nil {
+				curTable = *order.TableID
+			}
+			if *in.TableID != curTable {
+				var occ int64
+				if err := tx.Model(&models.Order{}).
+					Where("restaurant_id = ? AND table_id = ?", rid, *in.TableID).
+					Where("status IN ?", []string{"new", "open", "cooking", "ready", "served", "bill_requested"}).
+					Where("id <> ?", order.ID).
+					Count(&occ).Error; err != nil {
+					return err
+				}
+				if occ > 0 {
+					return apperrors.Wrap("CONFLICT", "target table is occupied by another active order", nil)
+				}
+			}
 			updates["table_id"] = *in.TableID
 			// v2.2.1: запоминаем оба ID для пост-update sync.
 			if order.TableID != nil {

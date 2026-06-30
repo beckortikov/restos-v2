@@ -53,8 +53,8 @@ func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInpu
 		total := decimal.Zero
 		applied := 0
 		for _, l := range in.Lines {
-			qty, e := decimal.FromString(l.Qty)
-			if e != nil || qty.IsZero() {
+			target, e := decimal.FromString(l.Qty)
+			if e != nil || decimal.IsNegative(target) {
 				continue
 			}
 			var ing models.Ingredient
@@ -75,27 +75,33 @@ func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInpu
 					}
 				}
 			}
+			// Начальный остаток — это УСТАНОВКА остатка в target, а не добавление
+			// сверху. Движение на дельту (target − current); повторный ввод тех же
+			// значений → дельта 0 → ничего не меняется (идемпотентно).
+			delta := decimal.Sub(target, ing.Qty)
+			if delta.IsZero() {
+				continue
+			}
 			mvType := "opening_balance"
-			desc := "Начальный остаток"
+			desc := "Начальный остаток (установка)"
 			mv := &models.StockMovement{
 				ID: uuid.NewString(), Type: &mvType, IngredientID: &l.IngredientID,
-				IngredientName: ing.Name, Description: &desc, Qty: qty, Unit: ing.Unit,
+				IngredientName: ing.Name, Description: &desc, Qty: delta, Unit: ing.Unit,
 				RestaurantID: &rid, CreatedAt: now,
 			}
 			if err := tx.Create(mv).Error; err != nil {
 				return err
 			}
-			total = decimal.Add(total, decimal.Mul(qty, price))
+			total = decimal.Add(total, decimal.Mul(delta, price))
 			applied++
-		}
-		if applied == 0 {
-			return apperrors.Wrap("VALIDATION", "нет позиций с ненулевым остатком", nil)
 		}
 		res.Applied = applied
 		res.InventoryValue = decimal.Normalize(total)
 
-		// Автопроводка: взнос собственника на стоимость заведённого склада.
-		if total.IsPositive() {
+		// Автопроводка: взнос собственника на стоимость ДЕЛЬТЫ остатка. При
+		// повторном вводе тех же значений дельта (и проводка) = 0 — Баланс не
+		// раздувается. При корректировке вниз дельта (и проводка) отрицательна.
+		if !total.IsZero() {
 			name := "Взнос собственника — начальный остаток склада"
 			cat := "opening_inventory"
 			eq := &models.EquityEntry{

@@ -46,11 +46,16 @@ func TestPhase11_IngredientsCRUD(t *testing.T) {
 		t.Errorf("initial qty = %s, want 5.5", salt.Qty.String())
 	}
 
-	// Patch — qty запрещён.
-	pr, _ := f.patch(t, fmt.Sprintf("/api/v1/stock/ingredients/%s", ing.ID), tok, uuid.NewString(),
+	// Patch — qty теперь СТАВИТСЯ через корректирующее движение (раньше 400).
+	pr, prb := f.patch(t, fmt.Sprintf("/api/v1/stock/ingredients/%s", ing.ID), tok, uuid.NewString(),
 		map[string]any{"qty": "10"})
-	if pr.StatusCode != 400 {
-		t.Errorf("patch qty: %d, want 400", pr.StatusCode)
+	if pr.StatusCode != 200 {
+		t.Fatalf("patch qty: %d, want 200: %s", pr.StatusCode, prb)
+	}
+	var qPatched models.Ingredient
+	_ = json.Unmarshal(prb, &qPatched)
+	if !qPatched.Qty.Equal(decimal.MustFromString("10")) {
+		t.Errorf("после patch qty = %s, want 10", qPatched.Qty.String())
 	}
 
 	// Patch — обычные поля OK.

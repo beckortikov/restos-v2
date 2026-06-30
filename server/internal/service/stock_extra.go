@@ -145,10 +145,12 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 		}
 		return nil, err
 	}
-	if in.Qty != nil {
-		return nil, apperrors.Wrap("VALIDATION", "qty cannot be updated directly; use stock movements (receipt/writeoff/inventory)", nil)
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
 	}
-	updates := map[string]any{"updated_at": time.Now().UTC()}
+	now := time.Now().UTC()
+	updates := map[string]any{"updated_at": now}
 	if in.Name != nil {
 		updates["name"] = *in.Name
 	}
@@ -168,12 +170,15 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 		}
 		updates["min_qty"] = d
 	}
+	// Эффективная цена для оценки стоимости дельты остатка (новая, если задана).
+	effPrice := existing.PricePerUnit
 	if in.PricePerUnit != nil {
 		d, err := decimal.FromString(*in.PricePerUnit)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad price_per_unit", err)
 		}
 		updates["price_per_unit"] = d
+		effPrice = d
 	}
 	if in.WastePercent != nil {
 		d, err := decimal.FromString(*in.WastePercent)
@@ -182,10 +187,57 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 		}
 		updates["waste_percent"] = d
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+
+	// Остаток правится НЕ прямым UPDATE (CLAUDE.md правило #5), а корректирующим
+	// движением на дельту (target − current) → хук денормализует qty. Встречная
+	// проводка в капитал «Корректировка остатка» на стоимость дельты держит
+	// Баланс сведённым. Повторная правка на то же значение — дельта 0, no-op.
+	var qtyDelta *decimal.Decimal
+	if in.Qty != nil {
+		target, perr := decimal.FromString(*in.Qty)
+		if perr != nil || decimal.IsNegative(target) {
+			return nil, apperrors.Wrap("VALIDATION", "bad qty", perr)
+		}
+		d := decimal.Sub(target, existing.Qty)
+		qtyDelta = &d
+	}
+
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Model(&models.Ingredient{}).Where("id = ? AND restaurant_id = ?", id, rid).
+			Updates(updates).Error; err != nil {
+			return err
+		}
+		if qtyDelta != nil && !qtyDelta.IsZero() {
+			mvType := "adjustment"
+			desc := "Корректировка остатка (ручная правка)"
+			mv := &models.StockMovement{
+				ID: uuid.NewString(), Type: &mvType, IngredientID: &id,
+				IngredientName: existing.Name, Description: &desc, Qty: *qtyDelta,
+				Unit: existing.Unit, RestaurantID: &rid, CreatedAt: now,
+			}
+			if err := tx.Create(mv).Error; err != nil {
+				return err
+			}
+			val := decimal.Normalize(decimal.Mul(*qtyDelta, effPrice))
+			if !val.IsZero() {
+				name := "Корректировка остатка склада"
+				cat := "stock_adjustment"
+				eq := &models.EquityEntry{
+					ID: uuid.NewString(), Name: &name, Category: &cat, Amount: val,
+					RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+				}
+				if err := tx.Create(eq).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
+
 	scoped3, _ := s.r.ForTenant(ctx)
 	var out models.Ingredient
 	if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {

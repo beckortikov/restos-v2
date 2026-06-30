@@ -16,6 +16,7 @@ export default function OpeningBalancePage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [search, setSearch] = useState('')
+  const [category, setCategory] = useState('all')
 
   // showSpinner=false — тихое обновление БЕЗ скрытия таблицы. Иначе после
   // «Завести» таблица (и инпуты) на миг размонтировалась, и повторный ввод
@@ -29,10 +30,25 @@ export default function OpeningBalancePage() {
   }
   useEffect(() => { load() }, [])
 
+  // Категории-чипы для быстрого фильтра «куда относится» (нажал «Напитки» —
+  // только напитки). 'all' — показать все.
+  const categories = useMemo(() => {
+    const set = new Set<string>()
+    for (const i of ingredients) set.add(i.category?.trim() || 'Без категории')
+    return [...set].sort((a, b) => {
+      if (a === 'Без категории') return 1
+      if (b === 'Без категории') return -1
+      return a.localeCompare(b, 'ru')
+    })
+  }, [ingredients])
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase()
-    return ingredients.filter(i => i.name.toLowerCase().includes(q))
-  }, [ingredients, search])
+    return ingredients.filter(i => {
+      const cat = i.category?.trim() || 'Без категории'
+      return i.name.toLowerCase().includes(q) && (category === 'all' || cat === category)
+    })
+  }, [ingredients, search, category])
 
   // Группировка по цеху/категории ингредиента — «куда относится». У ингредиента
   // нет станции (это поле блюда), поэтому цех = ingredient.category.
@@ -66,13 +82,17 @@ export default function OpeningBalancePage() {
 
   const handleApply = async () => {
     if (entered.length === 0) { toast.error('Введите остаток хотя бы по одной позиции'); return }
-    if (!window.confirm(`Завести начальный остаток по ${entered.length} позициям на ${formatCurrency(totalValue)}?\nБудет создана автопроводка в капитал «Взнос собственника».`)) return
+    if (!window.confirm(`Установить начальный остаток по ${entered.length} позициям?\nОстаток станет равным введённому (не добавится сверху). На разницу — автопроводка в капитал «Взнос собственника».`)) return
     setSaving(true)
     try {
       const res = await applyOpeningBalance(entered.map(([ingredientId, qty]) => ({
         ingredientId, qty, price: costOf(ingredients.find(i => i.id === ingredientId)),
       })))
-      toast.success(`Начальный остаток заведён: ${res.applied} позиций на ${formatCurrency(res.inventoryValue)}`)
+      if (res.applied === 0) {
+        toast.info('Изменений нет — остатки уже равны введённым')
+      } else {
+        toast.success(`Остаток установлен по ${res.applied} позиц. · изменение склада ${formatCurrency(res.inventoryValue)}`)
+      }
       setQtyMap(new Map())
       setPriceMap(new Map())
       load(false) // тихое обновление, без размонтирования таблицы
@@ -103,6 +123,27 @@ export default function OpeningBalancePage() {
           className="w-full pl-9 pr-3 py-2 text-sm bg-background border border-border rounded-lg"
         />
       </div>
+
+      {/* Категории-фильтры: нажми «Напитки» — только напитки. */}
+      {categories.length > 1 && (
+        <div className="flex flex-wrap gap-1.5">
+          <button
+            onClick={() => setCategory('all')}
+            className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${category === 'all' ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border text-muted-foreground hover:bg-muted'}`}
+          >
+            Все
+          </button>
+          {categories.map(c => (
+            <button
+              key={c}
+              onClick={() => setCategory(prev => prev === c ? 'all' : c)}
+              className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${category === c ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border text-muted-foreground hover:bg-muted'}`}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div className="flex h-48 items-center justify-center"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
