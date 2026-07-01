@@ -1,6 +1,6 @@
 # ADR-004 — Сетевое меню: общая база + переопределения по филиалу
 
-**Status:** Proposed
+**Status:** Accepted — реализовано (2026-07-01): мастер CRUD + распространение (down-sync merge) + пометки «из сети»
 **Date:** 2026-07-01
 **Deciders:** owner
 **Ветка:** `feat/multi-branch-network`
