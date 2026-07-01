@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -53,17 +55,20 @@ type IngestResult struct {
 // Ingest применяет батч UP-пушей на центральном узле — upsert по PK (центр
 // зеркалит авторитетные данные филиала). Идемпотентно.
 func (s *SyncService) Ingest(ctx context.Context, in IngestInput) (*IngestResult, error) {
-	return s.apply(ctx, in, true)
+	return s.apply(ctx, in, true, "")
 }
 
 // ApplyPulled применяет DOWN-pull на филиале — insert-if-absent (НЕ перезаписывает).
 // Критично: получатель — авторитет по статусу received своих входящих перемещений;
 // pull не должен откатить локальный received обратно в sent (гонка до up-sync).
-func (s *SyncService) ApplyPulled(ctx context.Context, in IngestInput) (*IngestResult, error) {
-	return s.apply(ctx, in, false)
+//
+// branchRestaurantID — id этого филиала (для сетевого меню: мастер → menu_items
+// с merge, наследуемое из мастера, локальные цена/стоп сохраняются).
+func (s *SyncService) ApplyPulled(ctx context.Context, in IngestInput, branchRestaurantID string) (*IngestResult, error) {
+	return s.apply(ctx, in, false, branchRestaurantID)
 }
 
-func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool) (*IngestResult, error) {
+func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool, branchID string) (*IngestResult, error) {
 	res := &IngestResult{}
 	for _, e := range in.Entries {
 		switch e.Entity {
@@ -77,11 +82,57 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool)
 				return nil, err
 			}
 			res.Applied++
+		case "network_menu_items":
+			if branchID == "" {
+				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
+				continue
+			}
+			if err := s.applyNetworkMenu(ctx, e, branchID); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		default:
 			res.Skipped++ // неизвестная сущность — не роняем весь батч
 		}
 	}
 	return res, nil
+}
+
+// applyNetworkMenu — распространение мастер-блюда сети в меню филиала (ADR-004).
+// Наследуемые поля (name/category/station/unit) берём из мастера; локальные
+// (price/is_available/emoji) НЕ трогаем. Нет локального блюда с этим master_id →
+// создаём (цена = base_price, доступно). Есть → обновляем только наследуемое.
+func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchID string) error {
+	var m models.NetworkMenuItem
+	if err := json.Unmarshal(e.Payload, &m); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid network_menu_items payload", err)
+	}
+	if m.ID == "" {
+		return apperrors.Wrap("VALIDATION", "network_menu_items payload missing id", nil)
+	}
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		var existing models.MenuItem
+		err := tx.Where("restaurant_id = ? AND master_id = ?", branchID, m.ID).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			avail := true
+			item := &models.MenuItem{
+				ID: uuid.NewString(), MasterID: &m.ID, RestaurantID: &branchID,
+				Name: &m.Name, Category: m.Category, Price: m.BasePrice,
+				Station: m.Station, Unit: m.Unit, Emoji: m.Emoji, IsAvailable: &avail,
+			}
+			return tx.Create(item).Error
+		}
+		if err != nil {
+			return err
+		}
+		// Обновляем ТОЛЬКО наследуемые поля — цену/доступность/оформление филиала
+		// не трогаем.
+		return tx.Model(&models.MenuItem{}).Where("id = ?", existing.ID).
+			Updates(map[string]any{
+				"name": m.Name, "category": m.Category, "station": m.Station, "unit": m.Unit,
+			}).Error
+	})
 }
 
 // onConflict — UpdateAll (upsert) или DoNothing (insert-if-absent) по id.
@@ -152,6 +203,25 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*Ingest
 		out.Entries = append(out.Entries, SyncEntry{
 			Entity: "stock_transfers", RowID: transfers[i].ID, Op: "insert", Payload: payload,
 		})
+	}
+
+	// Мастер-меню сети (ADR-004) — филиал наследует его целиком.
+	var rest models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Select("account_id").Where("id = ?", restaurantID).First(&rest).Error; err == nil &&
+		rest.AccountID != nil && *rest.AccountID != "" {
+		var master []models.NetworkMenuItem
+		if err := s.r.Raw().WithContext(ctx).Where("account_id = ?", *rest.AccountID).Find(&master).Error; err != nil {
+			return nil, err
+		}
+		for i := range master {
+			payload, err := json.Marshal(master[i])
+			if err != nil {
+				return nil, err
+			}
+			out.Entries = append(out.Entries, SyncEntry{
+				Entity: "network_menu_items", RowID: master[i].ID, Op: "upsert", Payload: payload,
+			})
+		}
 	}
 	return out, nil
 }

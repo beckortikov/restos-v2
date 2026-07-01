@@ -63,7 +63,8 @@ func (p *Puller) PullOnce(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	// insert-if-absent: не перезатираем локальный статус (received).
-	res, err := p.svc.ApplyPulled(ctx, in)
+	// p.restaurantID — для merge сетевого меню в menu_items этого филиала.
+	res, err := p.svc.ApplyPulled(ctx, in, p.restaurantID)
 	if err != nil {
 		return 0, err
 	}

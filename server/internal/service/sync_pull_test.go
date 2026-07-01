@@ -44,7 +44,7 @@ func TestSyncDownSync(t *testing.T) {
 	p1, _ := json.Marshal(models.StockTransfer{ID: id1, ToRestaurantID: &to, Status: "sent"})
 	if _, err := svc.ApplyPulled(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_transfers", RowID: id1, Op: "insert", Payload: p1},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("ApplyPulled insert: %v", err)
 	}
 	var got1 models.StockTransfer
@@ -65,7 +65,7 @@ func TestSyncDownSync(t *testing.T) {
 	pSent, _ := json.Marshal(models.StockTransfer{ID: id2, ToRestaurantID: &to, Status: "sent"})
 	if _, err := svc.ApplyPulled(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_transfers", RowID: id2, Op: "insert", Payload: pSent},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("ApplyPulled existing: %v", err)
 	}
 	var got2 models.StockTransfer
