@@ -127,6 +127,10 @@ func main() {
 	// мутации (т.е. до запуска HTTP-сервера). Останавливается при shutdown.
 	audit.StartWorker(gdb)
 
+	// Запись дельт в sync_log включаем только если этот узел синхронизируется
+	// (роль branch с настроенным пушером). Иначе автономный режим не копит журнал.
+	synclog.SetEnabled(cfg.SyncEnabled)
+
 	// 3. HTTP. License pubkey декодируем (если задан).
 	var licPub []byte
 	if cfg.LicensePublicKey != "" {

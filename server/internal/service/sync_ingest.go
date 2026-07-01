@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -59,6 +60,11 @@ func (s *SyncService) Ingest(ctx context.Context, in IngestInput) (*IngestResult
 				return nil, err
 			}
 			res.Applied++
+		case "financial_operations":
+			if err := s.applyFinancialOp(ctx, e); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		default:
 			res.Skipped++ // неизвестная сущность — не роняем весь батч
 		}
@@ -79,7 +85,8 @@ func (s *SyncService) applyTransfer(ctx context.Context, e SyncEntry) error {
 	}
 	lines := t.Lines
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
-		tx := tr.Raw().WithContext(ctx)
+		// SkipHooks: реплицированные данные не аудируем и не рекордим повторно.
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		// upsert самого перемещения (без ассоциаций).
 		if err := tx.Omit("Lines").Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
@@ -98,5 +105,25 @@ func (s *SyncService) applyTransfer(ctx context.Context, e SyncEntry) error {
 			}
 		}
 		return nil
+	})
+}
+
+// applyFinancialOp — upsert денежной операции из payload (для сводки владельцу).
+// Только запись строки; балансы счетов на центральном узле НЕ трогаем (они —
+// производные операций филиала, сводку считаем из financial_operations).
+func (s *SyncService) applyFinancialOp(ctx context.Context, e SyncEntry) error {
+	var op models.FinancialOperation
+	if err := json.Unmarshal(e.Payload, &op); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid financial_operations payload", err)
+	}
+	if op.ID == "" {
+		return apperrors.Wrap("VALIDATION", "financial_operations payload missing id", nil)
+	}
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			UpdateAll: true,
+		}).Create(&op).Error
 	})
 }

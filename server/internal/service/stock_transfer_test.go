@@ -15,6 +15,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
 	"github.com/restos/restos-v4/server/internal/service"
+	"github.com/restos/restos-v4/server/internal/synclog"
 )
 
 func transferTestDSN() string {
@@ -79,6 +80,9 @@ func TestStockTransfer_Flow(t *testing.T) {
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
+
+	synclog.SetEnabled(true) // проверяем запись дельт
+	t.Cleanup(func() { synclog.SetEnabled(false) })
 
 	svc := service.NewTransferService(repo.New(gdb))
 	ctxCentral := tenant.WithRestaurant(context.Background(), centralID)

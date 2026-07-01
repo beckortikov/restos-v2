@@ -9,6 +9,7 @@ package synclog
 
 import (
 	"encoding/json"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,19 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 )
+
+// enabled — глобальный флаг записи в sync_log. Выключен по умолчанию:
+// автономный ресторан (и центральный узел) НЕ копит дельты. Включается из
+// конфига (SyncEnabled) на филиале, у которого есть пушер. Иначе sync_log рос
+// бы бесконечно у тех, кто ничего не синхронизирует.
+var enabled atomic.Bool
+
+// SetEnabled включает/выключает запись дельт. Вызывается из main по конфигу
+// (и из тестов, проверяющих запись).
+func SetEnabled(b bool) { enabled.Store(b) }
+
+// Enabled — текущее состояние записи.
+func Enabled() bool { return enabled.Load() }
 
 // Entry — одна дельта для журнала.
 type Entry struct {
@@ -31,6 +45,9 @@ type Entry struct {
 // Record пишет дельту в sync_log в ПЕРЕДАННОЙ транзакции tx — атомарно с самой
 // мутацией (откатится вместе с ней). synced_at остаётся NULL до отправки пушером.
 func Record(tx *gorm.DB, e Entry) error {
+	if !enabled.Load() {
+		return nil // автономный режим — не копим дельты
+	}
 	var pl datatypes.JSON
 	if e.Payload != nil {
 		b, err := json.Marshal(e.Payload)

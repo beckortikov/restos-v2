@@ -31,7 +31,7 @@ func TestSyncIngest(t *testing.T) {
 			_ = sqlDB.Close()
 		}
 	})
-	for _, tbl := range []string{"stock_transfer_lines", "stock_transfers"} {
+	for _, tbl := range []string{"stock_transfer_lines", "stock_transfers", "financial_operations"} {
 		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
 			t.Fatalf("clean %s: %v", tbl, err)
 		}
@@ -94,6 +94,30 @@ func TestSyncIngest(t *testing.T) {
 	gdb.First(&got, "id = ?", transferID)
 	if got.Status != "received" {
 		t.Errorf("status after upsert = %s, want received", got.Status)
+	}
+
+	// ─── financial_operations: upsert для сводки владельцу ───────────────
+	rid := uuid.NewString()
+	typ, cat := "in", "revenue"
+	finID := uuid.NewString()
+	finPayload, _ := json.Marshal(models.FinancialOperation{
+		ID: finID, Type: &typ, Category: &cat, Amount: decimal.MustFromString("275"), RestaurantID: &rid,
+	})
+	fr, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_operations", RowID: finID, Op: "insert", Payload: finPayload},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest finop: %v", err)
+	}
+	if fr.Applied != 1 {
+		t.Errorf("finop applied = %d, want 1", fr.Applied)
+	}
+	var fin models.FinancialOperation
+	if err := gdb.First(&fin, "id = ?", finID).Error; err != nil {
+		t.Fatalf("finop not upserted: %v", err)
+	}
+	if !fin.Amount.Equal(decimal.MustFromString("275")) {
+		t.Errorf("finop amount = %s, want 275", fin.Amount.String())
 	}
 	// Не задвоилось.
 	var transferCount, lineCount2 int64

@@ -14,6 +14,7 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/restos/restos-v4/server/internal/audit"
+	"github.com/restos/restos-v4/server/internal/synclog"
 )
 
 //go:embed migrations/*.sql
@@ -48,6 +49,9 @@ func Open(dsn string) (*gorm.DB, error) {
 	}
 	if err := audit.RegisterStockDenorm(gdb); err != nil {
 		return nil, fmt.Errorf("audit.RegisterStockDenorm: %w", err)
+	}
+	if err := synclog.RegisterRecorder(gdb); err != nil {
+		return nil, fmt.Errorf("synclog.RegisterRecorder: %w", err)
 	}
 
 	return gdb, nil
