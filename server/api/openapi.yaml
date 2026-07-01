@@ -491,6 +491,38 @@ paths:
         content: { application/json: { schema: { type: object, required: [nomenclature_id], properties: { nomenclature_id: { type: string, format: uuid } } } } }
       responses: { "200": { description: OK } }
 
+  /api/v1/sync/ingest:
+    post:
+      tags: [stock]
+      summary: Приём дельт на центральном узле сети (multi-branch sync, ADR-003).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                entries:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      entity: { type: string }
+                      row_id: { type: string }
+                      op: { type: string, enum: [insert, update, delete] }
+                      payload: { type: object }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  applied: { type: integer }
+                  skipped: { type: integer }
+
   /api/v1/stock/writeoffs:
     get:
       tags: [stock]
