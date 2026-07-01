@@ -152,6 +152,13 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 		if shift.Status == nil || *shift.Status != "open" {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
+		// Реверс связанной financial_operation (если это был расход с
+		// категорией — см. AddOperation), иначе удалённый расход остался бы
+		// висеть в ОПиУ/ДДС.
+		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
+			Delete(&models.FinancialOperation{}).Error; err != nil {
+			return err
+		}
 		res := tx.Where("id = ? AND shift_id = ?", opID, shiftID).
 			Delete(&models.CashShiftOperation{})
 		if res.Error != nil {
@@ -193,6 +200,11 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		}
 		if shift.Status == nil || *shift.Status != "open" {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
+		}
+		// Реверс связанной financial_operation (см. DeleteExpense).
+		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
+			Delete(&models.FinancialOperation{}).Error; err != nil {
+			return err
 		}
 		res := tx.Where("id = ?", opID).Delete(&models.CashShiftOperation{})
 		if res.Error != nil {

@@ -399,6 +399,49 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 			return err
 		}
 		op = newOp
+
+		// Расход из смены (cash_out С категорией) — это операционный расход
+		// бизнеса, а не просто движение налички в ящике (в отличие от
+		// внесения/изъятия без категории). ОПиУ и ДДС читают ТОЛЬКО
+		// financial_operations, поэтому без этой записи расход был виден
+		// лишь в самой смене (Сводка/X-Z) и пропадал из P&L и cashflow.
+		// account_id — best-effort (для трассировки); баланс счёта НЕ трогаем:
+		// opening_balance смены никогда не постился на счёт, поэтому списание
+		// с баланса создало бы ложное «недостаточно средств» на свежих сменах.
+		if typ == "cash_out" && category != nil {
+			var accountName *string
+			if shift.AccountID != nil && *shift.AccountID != "" {
+				var acc models.FinancialAccount
+				if err := tx.Where("id = ?", *shift.AccountID).First(&acc).Error; err == nil {
+					accountName = acc.Name
+				}
+			}
+			opType := "out"
+			activity := "operational"
+			date := now.Format("2006-01-02")
+			isAuto := true
+			srcRef := "shift_expense:" + newOp.ID
+			fo := &models.FinancialOperation{
+				ID:           uuid.NewString(),
+				Type:         &opType,
+				Amount:       amt,
+				Category:     category,
+				AccountID:    shift.AccountID,
+				AccountName:  accountName,
+				Activity:     &activity,
+				Date:         &date,
+				Description:  &desc,
+				IsAuto:       &isAuto,
+				SourceRef:    &srcRef,
+				ShiftID:      &sid,
+				RestaurantID: &rid,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}
+			if err := tx.Create(fo).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
