@@ -239,6 +239,8 @@ func NewRouter(deps Deps) http.Handler {
 		api.Group(func(g chi.Router) {
 			g.Use(chimw.Timeout(30 * time.Second))
 			g.Use(middleware.Auth(authSvc))
+			// Владелец сети может смотреть GET-отчёты «как филиал X» (X-Branch-Id).
+			g.Use(middleware.BranchOverride(deps.DB))
 
 			g.Post("/auth/logout", authH.Logout)
 
