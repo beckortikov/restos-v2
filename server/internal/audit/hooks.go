@@ -18,6 +18,7 @@ var skipTables = map[string]bool{
 	"audit_log":        true, // петля
 	"idempotency_keys": true, // cache, не доменные данные
 	"print_jobs":       true, // служебная очередь
+	"sync_log":         true, // служебный журнал синхронизации (Фаза 2 multi-branch)
 }
 
 // Register цепляет хуки на gorm.DB. Вызывается ОДИН раз при инициализации БД

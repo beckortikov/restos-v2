@@ -14,6 +14,7 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
+	"github.com/restos/restos-v4/server/internal/synclog"
 )
 
 // TransferService — перемещения товара между филиалами одной сети (ADR-003,
@@ -186,6 +187,7 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 			if err := tx.Create(line).Error; err != nil {
 				return err
 			}
+			t.Lines = append(t.Lines, *line)
 
 			// transfer_out: -qty на источнике. Хук уменьшит ingredients.qty
 			// и (если enforce_stock_check) не даст уйти в минус.
@@ -205,6 +207,15 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 			if err := tx.Create(mv).Error; err != nil {
 				return err
 			}
+		}
+
+		// sync-дельта: перемещение с полными строками (для upsert на
+		// центральном узле и доставки получателю). Режим «только нужное».
+		if err := synclog.Record(tx, synclog.Entry{
+			Entity: "stock_transfers", RowID: transferID, Op: "insert",
+			RestaurantID: &from, AccountID: &accountID, Payload: t,
+		}); err != nil {
+			return err
 		}
 
 		created = t
@@ -299,6 +310,18 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 		if err := tx.Model(&models.StockTransfer{}).
 			Where("id = ?", transferID).
 			Updates(map[string]any{"status": "received", "received_at": now, "updated_at": now}).Error; err != nil {
+			return err
+		}
+
+		// sync-дельта: приём (смена статуса) — чтобы центральный узел знал,
+		// что перемещение завершено.
+		t.Status = "received"
+		t.ReceivedAt = &now
+		t.Lines = lines
+		if err := synclog.Record(tx, synclog.Entry{
+			Entity: "stock_transfers", RowID: transferID, Op: "update",
+			RestaurantID: &me, AccountID: t.AccountID, Payload: &t,
+		}); err != nil {
 			return err
 		}
 		return nil

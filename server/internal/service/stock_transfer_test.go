@@ -44,7 +44,7 @@ func TestStockTransfer_Flow(t *testing.T) {
 		}
 	})
 	for _, tbl := range []string{
-		"stock_transfer_lines", "stock_transfers", "stock_movements",
+		"sync_log", "stock_transfer_lines", "stock_transfers", "stock_movements",
 		"ingredients", "nomenclature", "restaurants", "company_accounts",
 	} {
 		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
@@ -152,5 +152,26 @@ func TestStockTransfer_Flow(t *testing.T) {
 	gdb.First(&dest, "id = ?", dest.ID)
 	if !dest.Qty.Equal(decimal.MustFromString("30")) {
 		t.Errorf("dest qty after repeat receive = %s, want 30 (no double)", dest.Qty.String())
+	}
+
+	// ─── sync_log: дельты записаны (insert при отправке + update при приёме) ──
+	var syncRows []models.SyncLog
+	if err := gdb.Where("table_name = ? AND row_id = ?", "stock_transfers", tr.ID).
+		Order("created_at ASC").Find(&syncRows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(syncRows) != 2 {
+		t.Fatalf("sync_log rows = %d, want 2 (insert+update)", len(syncRows))
+	}
+	if syncRows[0].Op != "insert" || syncRows[1].Op != "update" {
+		t.Errorf("sync_log ops = %s,%s, want insert,update", syncRows[0].Op, syncRows[1].Op)
+	}
+	for _, r := range syncRows {
+		if r.SyncedAt != nil {
+			t.Errorf("sync_log row should be unsynced (synced_at NULL)")
+		}
+		if len(r.Payload) == 0 {
+			t.Errorf("sync_log payload is empty")
+		}
 	}
 }
