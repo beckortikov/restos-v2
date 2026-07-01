@@ -50,6 +50,7 @@ import {
   ShieldCheck,
   ArrowLeftRight,
   Boxes,
+  Network,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -267,6 +268,7 @@ const NAV: NavItem[] = [
       { label: 'Зарплата', href: '/finance/payroll', icon: Users },
       { label: 'Обслуживание', href: '/finance/service-report', icon: HandCoins },
       { label: 'Бюджет', href: '/finance/budget', icon: Target },
+      { label: 'Сводка по сети', href: '/network/summary', icon: Network },
     ],
   },
   {

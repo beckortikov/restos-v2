@@ -61,6 +61,7 @@ const InventoryCheck = () => L(() => import('@/app/(app)/warehouse/inventory-che
 const Transfers = () => L(() => import('@/app/(app)/warehouse/transfers/page'))
 const TransfersNew = () => L(() => import('@/app/(app)/warehouse/transfers/new/page'))
 const Nomenclature = () => L(() => import('@/app/(app)/warehouse/nomenclature/page'))
+const NetworkSummary = () => L(() => import('@/app/(app)/network/summary/page'))
 const OpeningBalance = () => L(() => import('@/app/(app)/warehouse/opening-balance/page'))
 
 // Finance
@@ -158,6 +159,7 @@ export function AppRouter() {
         <Route path="/warehouse/transfers" element={<Transfers />} />
         <Route path="/warehouse/transfers/new" element={<TransfersNew />} />
         <Route path="/warehouse/nomenclature" element={<Nomenclature />} />
+        <Route path="/network/summary" element={<NetworkSummary />} />
         <Route path="/warehouse/opening-balance" element={<OpeningBalance />} />
 
         {/* Finance */}

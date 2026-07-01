@@ -819,7 +819,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'menu.edit': ['/warehouse/menu', '/warehouse/semi'],
   'writeoffs.create': ['/warehouse/writeoffs'],
   'batch_cooking.manage': ['/operations/batch-cooking'],
-  'finance.view': ['/finance/cashflow', '/finance/pnl', '/finance/balance'],
+  'finance.view': ['/finance/cashflow', '/finance/pnl', '/finance/balance', '/network/summary'],
   'finance.manage': ['/finance/cashflow', '/finance/accounts', '/finance/budget'],
   'payroll.manage': ['/finance/payroll'],
   'analytics.view': ['/analytics/abc-menu', '/analytics/abc-inventory', '/analytics/tables', '/analytics/waiters', '/analytics/peak-hours', '/analytics/food-cost', '/analytics/forecast'],

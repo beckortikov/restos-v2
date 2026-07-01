@@ -1301,6 +1301,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Сводка выручки владельцу по сети и по филиалам (multi-branch, ADR-003 Фаза 4). */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            total_revenue?: components["schemas"]["Decimal"];
+                            branches?: {
+                                /** Format: uuid */
+                                id?: string;
+                                name?: string;
+                                kind?: string;
+                                revenue?: components["schemas"]["Decimal"];
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nomenclature": {
         parameters: {
             query?: never;
@@ -1401,6 +1449,105 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sync/pull": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Дельты, адресованные филиалу (down-sync, ADR-003) — входящие sent-перемещения. */
+        get: {
+            parameters: {
+                query: {
+                    restaurant_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            entries?: {
+                                entity?: string;
+                                row_id?: string;
+                                op?: string;
+                                payload?: Record<string, never>;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sync/ingest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Приём дельт на центральном узле сети (multi-branch sync, ADR-003). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        entries?: {
+                            entity?: string;
+                            row_id?: string;
+                            /** @enum {string} */
+                            op?: "insert" | "update" | "delete";
+                            payload?: Record<string, never>;
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            applied?: number;
+                            skipped?: number;
+                        };
+                    };
                 };
             };
         };
@@ -8624,6 +8771,56 @@ export interface paths {
          * Печать промежуточного X-отчёта (без обнуления)
          * @description Аналог print-z, но layout — X-отчёт (без секции «Расхождение»).
          *     Может вызываться при открытой смене.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            job_id: string;
+                            status: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shifts/{id}/print-service": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Печать чека «Обслуживание официантов» за смену
+         * @description Создаёт PrintJob type='service_report' с ESC/POS payload: по каждому
+         *     официанту начислено (service_amount), выплачено, к выплате + итоги.
+         *     Кнопка рядом с X/Z-отчётом. Работает при открытой и закрытой смене.
          */
         post: {
             parameters: {

@@ -73,6 +73,31 @@ export async function fetchBranches(): Promise<Branch[]> {
   return rows.map(r => ({ id: r.id, name: r.name, kind: r.kind }))
 }
 
+// ─── Сводка владельцу по сети (Фаза 4) ─────────────────────────────────────────
+export interface BranchSummary {
+  id: string
+  name: string
+  kind?: 'outlet' | 'central_warehouse' | null
+  revenue: number
+}
+export interface NetworkSummary {
+  totalRevenue: number
+  branches: BranchSummary[]
+}
+
+export async function fetchNetworkSummary(opts?: { from?: string; to?: string }): Promise<NetworkSummary> {
+  const query: Record<string, string> = {}
+  if (opts?.from) query.from = opts.from
+  if (opts?.to) query.to = opts.to
+  const r: any = await unwrap(api.GET('/api/v1/network/summary', { params: { query: query as any } }))
+  return {
+    totalRevenue: Number(r?.total_revenue ?? 0),
+    branches: Array.isArray(r?.branches)
+      ? r.branches.map((b: any) => ({ id: b.id, name: b.name, kind: b.kind, revenue: Number(b.revenue ?? 0) }))
+      : [],
+  }
+}
+
 // ─── Номенклатура сети ─────────────────────────────────────────────────────────
 export async function fetchNomenclature(): Promise<Nomenclature[]> {
   const env: any = await unwrap(api.GET('/api/v1/nomenclature'))
