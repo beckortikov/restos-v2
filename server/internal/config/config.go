@@ -46,6 +46,17 @@ type Config struct {
 	// Если задан — бэкапы дополнительно копируются в <DesktopDir>/RestOS-Backups/
 	// чтобы владелец легко находил файлы. Пусто → копия на десктоп выключена.
 	DesktopDir string
+
+	// ── Sync (multi-branch, Фаза 2 ADR-003) ─────────────────────────────
+	// SyncEnabled — включает фоновый пушер дельг на центральный узел.
+	// Только для роли branch. Пусто/false → автономный режим (как сейчас).
+	SyncEnabled bool
+	// SyncCentralURL — базовый URL центрального узла (напр. http://host:3002).
+	SyncCentralURL string
+	// SyncToken — Bearer для аутентификации на центральном узле.
+	SyncToken string
+	// SyncIntervalSec — период пуша, сек (default 30).
+	SyncIntervalSec int
 }
 
 // DesktopBackupsDir — папка на рабочем столе для копий бэкапов. Пусто если
@@ -83,6 +94,15 @@ func LoadFromFlags() (*Config, error) {
 		"Base64-encoded Ed25519 public key for license verification (empty = dev mode)")
 	flag.StringVar(&c.DesktopDir, "desktop-dir", envOr("RESTOS_DESKTOP_DIR", ""),
 		"Desktop path for backup copies (from Electron). Empty = no desktop copy")
+
+	flag.BoolVar(&c.SyncEnabled, "sync-enabled", envOr("RESTOS_SYNC_ENABLED", "") == "true",
+		"Enable multi-branch sync pusher (branch role)")
+	flag.StringVar(&c.SyncCentralURL, "sync-central-url", envOr("RESTOS_SYNC_CENTRAL_URL", ""),
+		"Central node base URL for sync push (e.g. http://host:3002)")
+	flag.StringVar(&c.SyncToken, "sync-token", envOr("RESTOS_SYNC_TOKEN", ""),
+		"Bearer token for authenticating to the central node")
+	flag.IntVar(&c.SyncIntervalSec, "sync-interval-sec", int(envOrUint("RESTOS_SYNC_INTERVAL_SEC", 30)),
+		"Sync push interval in seconds")
 
 	var pgPort uint
 	// v3.8.0: было 54329 (как у v1), сдвинуто на 54330 чтобы embedded-PG

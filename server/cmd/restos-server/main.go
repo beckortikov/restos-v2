@@ -28,7 +28,9 @@ import (
 	"github.com/restos/restos-v4/server/internal/pgsupervisor"
 	"github.com/restos/restos-v4/server/internal/pkg/license"
 	"github.com/restos/restos-v4/server/internal/printer"
+	"github.com/restos/restos-v4/server/internal/repo"
 	"github.com/restos/restos-v4/server/internal/service"
+	"github.com/restos/restos-v4/server/internal/synclog"
 	httpx "github.com/restos/restos-v4/server/internal/transport/http"
 	"github.com/restos/restos-v4/server/internal/transport/sse"
 )
@@ -212,6 +214,17 @@ func main() {
 	// (status=active, 0 живых items) и освобождает столы. Подстраховка к
 	// invariant из orders_void.go.
 	go jobs.OrdersCleanupScheduler(ctx, gdb, jobs.OrdersCleanupConfig{})
+
+	// Multi-branch sync pusher (Фаза 2, ADR-003). Только роль branch и только
+	// если задан центральный узел. Автономный режим (по умолчанию) — не стартует.
+	if cfg.SyncEnabled && cfg.SyncCentralURL != "" {
+		interval := time.Duration(cfg.SyncIntervalSec) * time.Second
+		if interval <= 0 {
+			interval = 30 * time.Second
+		}
+		pusher := synclog.NewPusher(repo.New(gdb), cfg.SyncCentralURL, cfg.SyncToken)
+		go pusher.Run(ctx, interval)
+	}
 
 	// 4. Ждём сигнал или ошибку HTTP.
 	select {
