@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -136,6 +137,20 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
 
+		// Guard: нельзя закрыть смену, пока есть незакрытые заказы (открытые
+		// столы или «с собой»). Иначе выручка/остатки этих заказов не попадут
+		// в смену. Сообщаем кассиру, что именно закрыть.
+		var openOrders []models.Order
+		if err := tx.
+			Where("restaurant_id = ? AND status NOT IN ?", rid, []string{"closed", "cancelled"}).
+			Order("order_number ASC").
+			Find(&openOrders).Error; err != nil {
+			return err
+		}
+		if len(openOrders) > 0 {
+			return apperrors.Wrap("CONFLICT", openOrdersMessage(tx, rid, openOrders), nil)
+		}
+
 		// Сумма shift-операций (внос/изъятие) — для expected_cash.
 		var opSum decimal.Decimal
 		var ops []models.CashShiftOperation
@@ -199,6 +214,65 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 		}()
 	}
 	return closed, nil
+}
+
+// openOrdersMessage строит сообщение кассиру о незакрытых заказах, мешающих
+// закрыть смену: перечисляет столы и заказы «с собой»/доставку.
+func openOrdersMessage(tx *gorm.DB, rid string, orders []models.Order) string {
+	// Имена столов для hall-заказов.
+	tableIDs := make([]string, 0, len(orders))
+	for _, o := range orders {
+		if o.TableID != nil && *o.TableID != "" {
+			tableIDs = append(tableIDs, *o.TableID)
+		}
+	}
+	tableLabel := make(map[string]string)
+	if len(tableIDs) > 0 {
+		var tables []models.Table
+		tx.Where("restaurant_id = ? AND id IN ?", rid, tableIDs).Find(&tables)
+		for _, t := range tables {
+			switch {
+			case t.Number != nil:
+				tableLabel[t.ID] = fmt.Sprintf("Стол %d", *t.Number)
+			case t.Name != nil && *t.Name != "":
+				tableLabel[t.ID] = *t.Name
+			default:
+				tableLabel[t.ID] = "Стол"
+			}
+		}
+	}
+
+	labels := make([]string, 0, len(orders))
+	seen := make(map[string]bool)
+	for _, o := range orders {
+		var label string
+		switch {
+		case o.Type != nil && *o.Type == "delivery":
+			label = fmt.Sprintf("Доставка №%d", o.OrderNumber)
+		case o.Type != nil && *o.Type == "takeaway":
+			label = fmt.Sprintf("«С собой» №%d", o.OrderNumber)
+		case o.TableID != nil && tableLabel[*o.TableID] != "":
+			label = tableLabel[*o.TableID]
+		default:
+			label = fmt.Sprintf("Заказ №%d", o.OrderNumber)
+		}
+		if !seen[label] {
+			seen[label] = true
+			labels = append(labels, label)
+		}
+	}
+
+	const maxShown = 10
+	extra := 0
+	if len(labels) > maxShown {
+		extra = len(labels) - maxShown
+		labels = labels[:maxShown]
+	}
+	msg := "Сначала закройте: " + strings.Join(labels, ", ")
+	if extra > 0 {
+		msg += fmt.Sprintf(" и ещё %d", extra)
+	}
+	return msg
 }
 
 // UpdateAccountInput — body PATCH /api/v1/shifts/{id}.
