@@ -90,6 +90,51 @@ export async function createNetwork(name?: string): Promise<{ id: string; name: 
   return { id: r.id, name: r.name }
 }
 
+// ─── Мастер-меню сети (ADR-004) ────────────────────────────────────────────────
+export interface NetworkMenuItem {
+  id: string
+  name: string
+  category?: string | null
+  basePrice: number
+  station?: string | null
+  unit?: string | null
+  emoji?: string | null
+}
+export interface NetworkMenuInput {
+  name: string
+  category?: string
+  basePrice?: number
+  station?: string
+  unit?: string
+  emoji?: string
+}
+function mapNetMenu(r: any): NetworkMenuItem {
+  return { id: r.id, name: r.name, category: r.category, basePrice: Number(r.base_price ?? 0), station: r.station, unit: r.unit, emoji: r.emoji }
+}
+function netMenuBody(i: NetworkMenuInput) {
+  return {
+    name: i.name,
+    category: i.category,
+    base_price: i.basePrice != null ? String(i.basePrice) : undefined,
+    station: i.station,
+    unit: i.unit,
+    emoji: i.emoji,
+  }
+}
+export async function fetchNetworkMenu(): Promise<NetworkMenuItem[]> {
+  const env: any = await unwrap(api.GET('/api/v1/network/menu'))
+  const rows: any[] = Array.isArray(env?.data) ? env.data : []
+  return rows.map(mapNetMenu)
+}
+export async function createNetworkMenuItem(input: NetworkMenuInput): Promise<NetworkMenuItem> {
+  const r: any = await unwrap(api.POST('/api/v1/network/menu', { body: netMenuBody(input) as any }))
+  return mapNetMenu(r)
+}
+export async function updateNetworkMenuItem(id: string, input: NetworkMenuInput): Promise<NetworkMenuItem> {
+  const r: any = await unwrap(api.PATCH('/api/v1/network/menu/{id}', { params: { path: { id } }, body: netMenuBody(input) as any }))
+  return mapNetMenu(r)
+}
+
 export async function setBranchKind(restaurantId: string, kind: 'outlet' | 'central_warehouse'): Promise<void> {
   await unwrap(api.POST('/api/v1/network/branches/{id}/kind', {
     params: { path: { id: restaurantId } },

@@ -218,6 +218,92 @@ func (s *NetworkService) SetBranchKind(ctx context.Context, restaurantID, kind s
 	return nil
 }
 
+// ── Мастер-меню сети (ADR-004) ──────────────────────────────────────────────
+
+// ListNetworkMenu — мастер-меню сети текущего ресторана.
+func (s *NetworkService) ListNetworkMenu(ctx context.Context) ([]models.NetworkMenuItem, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var rows []models.NetworkMenuItem
+	if err := s.r.Raw().WithContext(ctx).
+		Where("account_id = ?", account).Order("category ASC, name ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+// NetworkMenuInput — body для create/update мастер-блюда.
+type NetworkMenuInput struct {
+	Name      string `json:"name"`
+	Category  string `json:"category,omitempty"`
+	BasePrice string `json:"base_price,omitempty"`
+	Station   string `json:"station,omitempty"`
+	Unit      string `json:"unit,omitempty"`
+	Emoji     string `json:"emoji,omitempty"`
+}
+
+// CreateNetworkMenuItem заводит блюдо в мастер-меню сети.
+func (s *NetworkService) CreateNetworkMenuItem(ctx context.Context, in NetworkMenuInput) (*models.NetworkMenuItem, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if in.Name == "" {
+		return nil, apperrors.Wrap("VALIDATION", "name is required", nil)
+	}
+	price := decimal.Zero
+	if in.BasePrice != "" {
+		if p, err := decimal.FromString(in.BasePrice); err == nil {
+			price = decimal.Normalize(p)
+		}
+	}
+	now := time.Now().UTC()
+	m := &models.NetworkMenuItem{
+		ID: uuid.NewString(), AccountID: &account, Name: in.Name,
+		Category: strPtrOrNil(in.Category), BasePrice: price,
+		Station: strPtrOrNil(in.Station), Unit: strPtrOrNil(in.Unit), Emoji: strPtrOrNil(in.Emoji),
+		CreatedAt: now, UpdatedAt: now,
+	}
+	if err := s.r.Raw().WithContext(ctx).Create(m).Error; err != nil {
+		return nil, err
+	}
+	return m, nil
+}
+
+// UpdateNetworkMenuItem правит мастер-блюдо (в рамках своей сети).
+func (s *NetworkService) UpdateNetworkMenuItem(ctx context.Context, id string, in NetworkMenuInput) (*models.NetworkMenuItem, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	patch := map[string]any{"updated_at": time.Now().UTC()}
+	if in.Name != "" {
+		patch["name"] = in.Name
+	}
+	patch["category"] = strPtrOrNil(in.Category)
+	patch["station"] = strPtrOrNil(in.Station)
+	patch["unit"] = strPtrOrNil(in.Unit)
+	patch["emoji"] = strPtrOrNil(in.Emoji)
+	if in.BasePrice != "" {
+		if p, err := decimal.FromString(in.BasePrice); err == nil {
+			patch["base_price"] = decimal.Normalize(p)
+		}
+	}
+	res := s.r.Raw().WithContext(ctx).Model(&models.NetworkMenuItem{}).
+		Where("id = ? AND account_id = ?", id, account).Updates(patch)
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, apperrors.ErrNotFound
+	}
+	var out models.NetworkMenuItem
+	s.r.Raw().WithContext(ctx).Where("id = ?", id).First(&out)
+	return &out, nil
+}
+
 // BranchSummary — строка сводки по филиалу.
 type BranchSummary struct {
 	ID      string          `json:"id"`

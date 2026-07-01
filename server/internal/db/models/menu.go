@@ -51,11 +51,32 @@ type MenuItem struct {
 	IsDeleted         bool            `gorm:"column:is_deleted;not null;default:false" json:"is_deleted"`
 	LowStockThreshold int             `gorm:"column:low_stock_threshold;not null;default:5" json:"low_stock_threshold"`
 	RestaurantID      *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	// MasterID — связь с мастер-меню сети (ADR-004). NULL → локальное блюдо
+	// филиала. Наследуемые поля тянутся из мастера, локальные (price/is_available/
+	// оформление) остаются у филиала.
+	MasterID  *string   `gorm:"column:master_id;type:uuid" json:"master_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (MenuItem) TableName() string { return "menu_items" }
+
+// NetworkMenuItem — мастер-меню сети (ADR-004). Общая база блюд на account_id;
+// филиалы наследуют, переопределяют цену/доступность локально.
+type NetworkMenuItem struct {
+	ID        string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	AccountID *string         `gorm:"column:account_id;type:uuid;index" json:"account_id"`
+	Name      string          `gorm:"not null" json:"name"`
+	Category  *string         `json:"category"`
+	BasePrice decimal.Decimal `gorm:"column:base_price;type:numeric(14,4);default:0" json:"base_price"`
+	Station   *string         `gorm:"default:'hot_kitchen'" json:"station"`
+	Unit      *string         `gorm:"default:'piece'" json:"unit"`
+	Emoji     *string         `json:"emoji"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+func (NetworkMenuItem) TableName() string { return "network_menu_items" }
 
 // ModifierGroup — группа модификаторов («Прожарка», «Размер», ...).
 type ModifierGroup struct {

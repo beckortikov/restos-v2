@@ -41,6 +41,46 @@ func (h *NetworkHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// ListNetworkMenu — GET /api/v1/network/menu.
+func (h *NetworkHandler) ListNetworkMenu(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.ListNetworkMenu(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[models.NetworkMenuItem](rows, ""))
+}
+
+// CreateNetworkMenuItem — POST /api/v1/network/menu.
+func (h *NetworkHandler) CreateNetworkMenuItem(w http.ResponseWriter, r *http.Request) {
+	var in service.NetworkMenuInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	m, err := h.svc.CreateNetworkMenuItem(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, m)
+}
+
+// UpdateNetworkMenuItem — PATCH /api/v1/network/menu/{id}.
+func (h *NetworkHandler) UpdateNetworkMenuItem(w http.ResponseWriter, r *http.Request) {
+	var in service.NetworkMenuInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	m, err := h.svc.UpdateNetworkMenuItem(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, m)
+}
+
 // CreateNetwork — POST /api/v1/network. Заводит сеть, текущий ресторан —
 // центральный склад.
 func (h *NetworkHandler) CreateNetwork(w http.ResponseWriter, r *http.Request) {

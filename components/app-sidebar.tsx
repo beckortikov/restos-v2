@@ -254,6 +254,7 @@ const NAV: NavItem[] = [
       { label: 'Инвентаризация', href: '/warehouse/inventory-check', icon: ClipboardCheck },
       { label: 'Перемещения', href: '/warehouse/transfers', icon: ArrowLeftRight },
       { label: 'Номенклатура сети', href: '/warehouse/nomenclature', icon: Boxes },
+      { label: 'Меню сети', href: '/network/menu', icon: BookOpen },
       { label: 'Начальный остаток', href: '/warehouse/opening-balance', icon: PackagePlus },
       { label: 'История движений', href: '/warehouse/history', icon: History },
     ],

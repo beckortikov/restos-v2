@@ -500,6 +500,32 @@ paths:
         content: { application/json: { schema: { type: object, required: [kind], properties: { kind: { type: string, enum: [outlet, central_warehouse] } } } } }
       responses: { "200": { description: OK } }
 
+  /api/v1/network/menu:
+    get:
+      tags: [stock]
+      summary: Мастер-меню сети (ADR-004).
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkMenuList" } } } } }
+    post:
+      tags: [stock]
+      summary: Завести блюдо в мастер-меню сети.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NetworkMenuInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkMenuItem" } } } } }
+
+  /api/v1/network/menu/{id}:
+    patch:
+      tags: [stock]
+      summary: Править блюдо мастер-меню сети.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/NetworkMenuInput" } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkMenuItem" } } } } }
+
   /api/v1/network/summary:
     get:
       tags: [stock]
@@ -3219,6 +3245,29 @@ components:
         name: { type: string }
         owner_name: { type: string }
         phone: { type: string }
+
+    NetworkMenuList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/NetworkMenuItem" } }, next_cursor: { type: string } } }
+    NetworkMenuItem:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        base_price: { $ref: "#/components/schemas/Decimal" }
+        station: { type: string }
+        unit: { type: string }
+        emoji: { type: string }
+    NetworkMenuInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        category: { type: string }
+        base_price: { $ref: "#/components/schemas/Decimal" }
+        station: { type: string }
+        unit: { type: string }
+        emoji: { type: string }
 
     NomenclatureList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Nomenclature" } }, next_cursor: { type: string } } }
     Nomenclature:

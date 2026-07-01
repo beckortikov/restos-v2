@@ -1455,6 +1455,114 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/menu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Мастер-меню сети (ADR-004). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkMenuList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Завести блюдо в мастер-меню сети. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NetworkMenuInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkMenuItem"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/menu/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Править блюдо мастер-меню сети. */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["NetworkMenuInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkMenuItem"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/v1/network/summary": {
         parameters: {
             query?: never;
@@ -10441,6 +10549,30 @@ export interface components {
             name?: string;
             owner_name?: string;
             phone?: string;
+        };
+        NetworkMenuList: {
+            data?: components["schemas"]["NetworkMenuItem"][];
+            next_cursor?: string;
+        };
+        NetworkMenuItem: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            account_id?: string;
+            name?: string;
+            category?: string;
+            base_price?: components["schemas"]["Decimal"];
+            station?: string;
+            unit?: string;
+            emoji?: string;
+        };
+        NetworkMenuInput: {
+            name: string;
+            category?: string;
+            base_price?: components["schemas"]["Decimal"];
+            station?: string;
+            unit?: string;
+            emoji?: string;
         };
         NomenclatureList: {
             data?: components["schemas"]["Nomenclature"][];
