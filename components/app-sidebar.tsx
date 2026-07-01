@@ -292,6 +292,7 @@ const NAV: NavItem[] = [
     children: [
       { label: 'Ресторан', href: '/settings', icon: Building2 },
       { label: 'Права доступа', href: '/settings/users', icon: Shield },
+      { label: 'Филиалы сети', href: '/settings/branches', icon: Network },
       { label: 'Клиенты', href: '/settings/customers', icon: Users },
       { label: 'Импорт', href: '/settings/import', icon: Upload },
       { label: 'Приложение официанта', href: '/settings/waiter-app', icon: Smartphone },

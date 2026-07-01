@@ -85,6 +85,18 @@ export interface NetworkSummary {
   branches: BranchSummary[]
 }
 
+export async function createNetwork(name?: string): Promise<{ id: string; name: string }> {
+  const r: any = await unwrap(api.POST('/api/v1/network', { body: { name } as any }))
+  return { id: r.id, name: r.name }
+}
+
+export async function setBranchKind(restaurantId: string, kind: 'outlet' | 'central_warehouse'): Promise<void> {
+  await unwrap(api.POST('/api/v1/network/branches/{id}/kind', {
+    params: { path: { id: restaurantId } },
+    body: { kind } as any,
+  }))
+}
+
 export async function fetchNetworkSummary(opts?: { from?: string; to?: string }): Promise<NetworkSummary> {
   const query: Record<string, string> = {}
   if (opts?.from) query.from = opts.from

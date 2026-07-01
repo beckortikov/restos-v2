@@ -62,6 +62,7 @@ const Transfers = () => L(() => import('@/app/(app)/warehouse/transfers/page'))
 const TransfersNew = () => L(() => import('@/app/(app)/warehouse/transfers/new/page'))
 const Nomenclature = () => L(() => import('@/app/(app)/warehouse/nomenclature/page'))
 const NetworkSummary = () => L(() => import('@/app/(app)/network/summary/page'))
+const BranchesSettings = () => L(() => import('@/app/(app)/settings/branches/page'))
 const OpeningBalance = () => L(() => import('@/app/(app)/warehouse/opening-balance/page'))
 
 // Finance
@@ -185,6 +186,7 @@ export function AppRouter() {
         {/* Settings */}
         <Route path="/settings" element={<Settings />} />
         <Route path="/settings/users" element={<Users />} />
+        <Route path="/settings/branches" element={<BranchesSettings />} />
         <Route path="/settings/printers" element={<Printers />} />
         <Route path="/settings/printers/queue" element={<PrintersQueue />} />
         <Route path="/settings/import" element={<Import />} />

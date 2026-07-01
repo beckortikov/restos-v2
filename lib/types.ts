@@ -827,7 +827,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'suppliers.manage': ['/warehouse/suppliers'],
   'customers.manage': ['/settings/customers'],
   'printers.manage': ['/settings/printers'],
-  'users.manage': ['/settings/users'],
+  'users.manage': ['/settings/users', '/settings/branches'],
   'audit.view': ['/settings/audit'],
   'data.import': ['/settings/import', '/settings/backup'],
 }
