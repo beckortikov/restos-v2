@@ -1265,6 +1265,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/sync": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Конфиг multi-branch sync (редактируется из UI, ADR-003/004). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SyncSettings"];
+                    };
+                };
+            };
+        };
+        /** Сохранить конфиг sync (применяется после перезапуска сервера). */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SyncSettings"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SyncSettings"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/branches": {
         parameters: {
             query?: never;
@@ -10352,6 +10415,14 @@ export interface components {
         StockTransfersList: {
             data?: components["schemas"]["StockTransfer"][];
             next_cursor?: string;
+        };
+        SyncSettings: {
+            enabled?: boolean;
+            central_url?: string;
+            token?: string;
+            /** Format: uuid */
+            restaurant_id?: string;
+            interval_sec?: number;
         };
         BranchesList: {
             data?: components["schemas"]["Branch"][];

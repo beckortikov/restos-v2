@@ -51,6 +51,7 @@ import {
   ArrowLeftRight,
   Boxes,
   Network,
+  RefreshCw,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -293,6 +294,7 @@ const NAV: NavItem[] = [
       { label: 'Ресторан', href: '/settings', icon: Building2 },
       { label: 'Права доступа', href: '/settings/users', icon: Shield },
       { label: 'Филиалы сети', href: '/settings/branches', icon: Network },
+      { label: 'Синхронизация', href: '/settings/sync', icon: RefreshCw },
       { label: 'Клиенты', href: '/settings/customers', icon: Users },
       { label: 'Импорт', href: '/settings/import', icon: Upload },
       { label: 'Приложение официанта', href: '/settings/waiter-app', icon: Smartphone },

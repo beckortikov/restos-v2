@@ -24,6 +24,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/config"
 	"github.com/restos/restos-v4/server/internal/db"
+	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/jobs"
 	"github.com/restos/restos-v4/server/internal/pgsupervisor"
 	"github.com/restos/restos-v4/server/internal/pkg/license"
@@ -126,6 +127,28 @@ func main() {
 	// Audit worker — async writer для audit_log. Должен стартовать ДО первой
 	// мутации (т.е. до запуска HTTP-сервера). Останавливается при shutdown.
 	audit.StartWorker(gdb)
+
+	// Конфиг sync из БД (UI-настройки) перекрывает env — чтобы настроить sync из
+	// приложения, а не только флагами. Читаем ДО сборки роутера (deps.SyncToken)
+	// и запуска пушера. Меняется в UI → применяется после перезапуска.
+	{
+		var ss models.SyncSettings
+		if err := gdb.Where("id = 1").First(&ss).Error; err == nil {
+			cfg.SyncEnabled = ss.Enabled
+			if ss.CentralURL != nil {
+				cfg.SyncCentralURL = *ss.CentralURL
+			}
+			if ss.Token != nil {
+				cfg.SyncToken = *ss.Token
+			}
+			if ss.RestaurantID != nil {
+				cfg.SyncRestaurantID = *ss.RestaurantID
+			}
+			if ss.IntervalSec > 0 {
+				cfg.SyncIntervalSec = ss.IntervalSec
+			}
+		}
+	}
 
 	// Запись дельт в sync_log включаем только если этот узел синхронизируется
 	// (роль branch с настроенным пушером). Иначе автономный режим не копит журнал.

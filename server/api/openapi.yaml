@@ -459,6 +459,20 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockTransfer" } } } } }
 
+  /api/v1/settings/sync:
+    get:
+      tags: [stock]
+      summary: Конфиг multi-branch sync (редактируется из UI, ADR-003/004).
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SyncSettings" } } } } }
+    put:
+      tags: [stock]
+      summary: Сохранить конфиг sync (применяется после перезапуска сервера).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SyncSettings" } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SyncSettings" } } } } }
+
   /api/v1/network/branches:
     get:
       tags: [stock]
@@ -3180,6 +3194,15 @@ components:
         debt_amount: { $ref: "#/components/schemas/Decimal" }
 
     StockTransfersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockTransfer" } }, next_cursor: { type: string } } }
+
+    SyncSettings:
+      type: object
+      properties:
+        enabled: { type: boolean }
+        central_url: { type: string }
+        token: { type: string }
+        restaurant_id: { type: string, format: uuid }
+        interval_sec: { type: integer }
 
     BranchesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Branch" } }, next_cursor: { type: string } } }
     Branch:
