@@ -336,6 +336,7 @@ export default function MenuPage() {
                 <DishImage imageUrl={item.imageUrl} emoji={item.emoji} name={item.name} size="fill" />
               </div>
 
+              {item.masterId && <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 bg-primary/90 text-primary-foreground rounded text-[10px] font-medium">из сети</span>}
               {/* Info */}
               <div className="p-3">
                 <p className="font-semibold text-foreground text-sm truncate">{item.name}</p>
@@ -368,7 +369,10 @@ export default function MenuPage() {
                 <div className="flex items-center gap-3">
                   <DishImage imageUrl={item.imageUrl} emoji={item.emoji} name={item.name} size="sm" />
                   <div>
-                    <p className="font-medium text-foreground text-sm">{item.name}</p>
+                    <p className="font-medium text-foreground text-sm flex items-center gap-1.5">
+                      {item.name}
+                      {item.masterId && <span className="px-1.5 py-0.5 bg-primary/10 text-primary rounded text-[10px] font-medium">из сети</span>}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       {item.category} · {item.techCard.length} ингр.{item.cookTimeMin ? ` · ⏱ ${item.cookTimeMin} мин` : ''}
                       {item.isBatchCooking && <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">Заготовка · {item.preparedQty} порц.</span>}

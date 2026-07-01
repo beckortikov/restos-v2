@@ -160,6 +160,7 @@ export interface MenuItem {
   unit?: 'piece' | 'g' | 'kg'
   unitSize?: number // price is per N units (1шт | 100г | 1кг)
   saleStep?: number // minimum increment (50г for scales); 0 = any
+  masterId?: string | null // сетевое меню (ADR-004): !=null → блюдо из мастера сети
 }
 
 export interface SemiRecipeLine {

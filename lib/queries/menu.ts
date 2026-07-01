@@ -367,6 +367,7 @@ function mapMenuItem(
     unit: ((r.unit as 'piece' | 'g' | 'kg') || 'piece'),
     unitSize: Number(r.unit_size) || 1,
     saleStep: Number(r.sale_step) || 0,
+    masterId: (r.master_id as string) ?? null,
     techCard: techLines.map(mapTechCardLine),
   } as MenuItem
 }
