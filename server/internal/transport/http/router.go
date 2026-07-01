@@ -42,6 +42,9 @@ type Deps struct {
 	// WaiterAPKPath — путь к загруженному APK официанта (раздаётся по QR/LAN).
 	// Пусто → раздача/загрузка APK недоступна (dev/тест без DataDir).
 	WaiterAPKPath string
+	// SyncToken — общий секрет сети для межузлового auth /sync/* (Фаза 3).
+	// Пусто → /sync/* закрыт (узел не участвует в multi-branch sync).
+	SyncToken string
 }
 
 // BuildInfo пробрасывается из main для GET /healthz.
@@ -260,7 +263,6 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/network/branches", networkH.ListBranches)
 			g.Get("/network/summary", networkH.Summary)
 			g.Get("/nomenclature", networkH.ListNomenclature)
-			g.Get("/sync/pull", syncH.Pull)
 			g.Get("/stock/inventory", inventoryReadsH.List)
 			g.Get("/stock/inventory/{id}", inventoryReadsH.Get)
 			g.Get("/stock/inventory/{id}/lines", inventoryReadsH.ListLines)
@@ -409,6 +411,15 @@ func NewRouter(deps Deps) http.Handler {
 		})
 
 		// Write-эндпоинты — Auth + License + Idempotency.
+		// Межузловой sync (multi-branch, ADR-003 Фаза 3) — свой auth по общему
+		// секрету сети, НЕ user-сессия. Пушер/пуллер филиала ходят сюда.
+		api.Group(func(g chi.Router) {
+			g.Use(chimw.Timeout(60 * time.Second))
+			g.Use(middleware.SyncAuth(deps.SyncToken))
+			g.Post("/sync/ingest", syncH.Ingest)
+			g.Get("/sync/pull", syncH.Pull)
+		})
+
 		api.Group(func(g chi.Router) {
 			g.Use(chimw.Timeout(30 * time.Second))
 			g.Use(middleware.Auth(authSvc))
@@ -476,7 +487,6 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/network/branches/{id}/kind", networkH.SetBranchKind)
 			g.Post("/nomenclature", networkH.CreateNomenclature)
 			g.Post("/stock/ingredients/{id}/nomenclature", networkH.LinkIngredient)
-			g.Post("/sync/ingest", syncH.Ingest)
 			g.Post("/stock/opening-balance", stockH.OpeningBalance)
 			g.Post("/stock/inventory", inventoryH.Create)
 			g.Post("/stock/inventory/{id}/apply", inventoryH.Apply)
