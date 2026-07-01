@@ -66,6 +66,20 @@ const idemMiddleware: Middleware = {
   },
 }
 
+// branchMiddleware — multi-branch (ADR-003 Ф4): владелец может смотреть GET-отчёты
+// «как филиал X». Выбранный филиал хранится в localStorage; бэк валидирует
+// (owner + своя сеть) и подменяет tenant. На write не ставим (только GET).
+const branchMiddleware: Middleware = {
+  async onRequest({ request }) {
+    if (request.method.toUpperCase() !== 'GET') return request
+    if (typeof localStorage !== 'undefined') {
+      const b = localStorage.getItem('restos-branch-view')
+      if (b) request.headers.set('X-Branch-Id', b)
+    }
+    return request
+  },
+}
+
 const authExpiredMiddleware: Middleware = {
   async onResponse({ request, response }) {
     // Фоновые/некритичные дозагрузки (профиль, ресторан сразу после логина)
@@ -98,6 +112,7 @@ function cryptoRandomUUID(): string {
 export const api = createClient<paths>({ baseUrl: getBaseURL() })
 api.use(authMiddleware)
 api.use(idemMiddleware)
+api.use(branchMiddleware)
 api.use(authExpiredMiddleware)
 
 // Re-export типов, которые чаще всего нужны компонентам.

@@ -8,6 +8,7 @@ import { Toaster } from '@/components/ui/sonner'
 import { PwaUpdater } from '@/components/pwa-updater'
 import { InstallPwaPrompt } from '@/components/install-pwa-prompt'
 import { LocalServerGuard } from '@/components/local-server-guard'
+import { BranchSelector } from '@/components/branch-selector'
 import { startLocalServerHealthProbe, stopLocalServerHealthProbe } from '@/lib/local-server-health'
 
 function LocalServerHealth() {
@@ -36,6 +37,10 @@ function RoleAwareChrome({ children }: { children: React.ReactNode }) {
         <div className="flex-1 flex flex-col overflow-hidden">
           <MobileHeader />
           <MobileSidebar />
+          {/* Селектор филиала для владельца сети (self-hides → empty:hidden). */}
+          <div className="shrink-0 flex justify-end px-4 py-1.5 border-b border-border empty:hidden">
+            <BranchSelector />
+          </div>
           <main className="flex-1 overflow-y-auto">
             {children}
           </main>
