@@ -31,6 +31,16 @@ func (h *NetworkHandler) ListBranches(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, makeList[service.Branch](rows, ""))
 }
 
+// Summary — GET /api/v1/network/summary?from=&to=. Сводка выручки владельцу.
+func (h *NetworkHandler) Summary(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.Summary(r.Context(), r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // ListNomenclature — GET /api/v1/nomenclature.
 func (h *NetworkHandler) ListNomenclature(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListNomenclature(r.Context())

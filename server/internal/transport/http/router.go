@@ -256,6 +256,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/stock/transfers", transfersH.List)
 			g.Get("/stock/transfers/{id}", transfersH.Get)
 			g.Get("/network/branches", networkH.ListBranches)
+			g.Get("/network/summary", networkH.Summary)
 			g.Get("/nomenclature", networkH.ListNomenclature)
 			g.Get("/sync/pull", syncH.Pull)
 			g.Get("/stock/inventory", inventoryReadsH.List)

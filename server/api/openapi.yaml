@@ -465,6 +465,32 @@ paths:
       summary: Филиалы сети текущего ресторана (multi-branch, ADR-003).
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BranchesList" } } } } }
 
+  /api/v1/network/summary:
+    get:
+      tags: [stock]
+      summary: Сводка выручки владельцу по сети и по филиалам (multi-branch, ADR-003 Фаза 4).
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_revenue: { $ref: "#/components/schemas/Decimal" }
+                  branches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        kind: { type: string }
+                        revenue: { $ref: "#/components/schemas/Decimal" }
+
   /api/v1/nomenclature:
     get:
       tags: [stock]

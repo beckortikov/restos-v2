@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
@@ -158,4 +159,80 @@ func (s *NetworkService) LinkIngredient(ctx context.Context, ingredientID, nomen
 		return apperrors.ErrNotFound
 	}
 	return nil
+}
+
+// BranchSummary — строка сводки по филиалу.
+type BranchSummary struct {
+	ID      string          `json:"id"`
+	Name    string          `json:"name"`
+	Kind    *string         `json:"kind"`
+	Revenue decimal.Decimal `json:"revenue"`
+}
+
+// NetworkSummary — сводка владельцу по сети (ADR-003, Фаза 4).
+type NetworkSummary struct {
+	From         string          `json:"from,omitempty"`
+	To           string          `json:"to,omitempty"`
+	TotalRevenue decimal.Decimal `json:"total_revenue"`
+	Branches     []BranchSummary `json:"branches"`
+}
+
+// Summary — выручка по сети и по каждому филиалу за период (ADR-003, Фаза 4).
+// Источник — financial_operations(type=in, category=revenue). На центральном
+// узле они собраны со всех филиалов через sync; в однобазовом режиме — там же.
+//
+// financial_operations не имеет account_id, поэтому фильтруем по restaurant_id
+// IN (<филиалы сети>) — сетевой доступ к per-restaurant таблице (Raw, легитимно).
+func (s *NetworkService) Summary(ctx context.Context, from, to string) (*NetworkSummary, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Филиалы сети.
+	var branches []models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).
+		Where("account_id = ?", account).
+		Order("kind DESC, name ASC").
+		Find(&branches).Error; err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(branches))
+	for i, b := range branches {
+		ids[i] = b.ID
+	}
+
+	// Выручка по филиалам за период.
+	revByRest := make(map[string]decimal.Decimal, len(ids))
+	if len(ids) > 0 {
+		type revRow struct {
+			RestaurantID string
+			Revenue      decimal.Decimal
+		}
+		q := s.r.Raw().WithContext(ctx).
+			Model(&models.FinancialOperation{}).
+			Select("restaurant_id, COALESCE(SUM(amount), 0) AS revenue").
+			Where("restaurant_id IN ? AND type = ? AND category = ?", ids, "in", "revenue")
+		if from != "" {
+			q = q.Where("created_at >= ?", from)
+		}
+		if to != "" {
+			q = q.Where("created_at <= ?", to)
+		}
+		var rows []revRow
+		if err := q.Group("restaurant_id").Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			revByRest[r.RestaurantID] = decimal.Normalize(r.Revenue)
+		}
+	}
+
+	out := &NetworkSummary{From: from, To: to, TotalRevenue: decimal.Zero}
+	for _, b := range branches {
+		rev := revByRest[b.ID]
+		out.Branches = append(out.Branches, BranchSummary{ID: b.ID, Name: b.Name, Kind: b.Kind, Revenue: rev})
+		out.TotalRevenue = decimal.Add(out.TotalRevenue, rev)
+	}
+	out.TotalRevenue = decimal.Normalize(out.TotalRevenue)
+	return out, nil
 }
