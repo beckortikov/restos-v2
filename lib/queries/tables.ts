@@ -1,4 +1,5 @@
 import { api, unwrap, V4Error } from './_client'
+import { fetchAllPages } from './_paginate'
 import type { Zone, Table, TableStatus } from '../types'
 import { logAction } from './audit'
 import { ACTIVE_ORDER_STATUSES } from './_mappers'
@@ -13,12 +14,13 @@ export async function fetchZones(): Promise<Zone[]> {
 }
 
 export async function fetchTables(): Promise<Table[]> {
-  const [tablesRes, ordersRes] = await Promise.all([
+  // Заказы — курсор: одностраничный limit:1000 капился до 200, «активные»
+  // столы за 200-й строкой пропадали. Берём последние ~2000 через курсор.
+  const [tablesRes, orderRows] = await Promise.all([
     unwrap(api.GET('/api/v1/tables')),
-    unwrap(api.GET('/api/v1/orders', { params: { query: { limit: 1000 } } })),
-  ]) as [any, any]
+    fetchAllPages('/api/v1/orders', {}, 2000),
+  ]) as [any, any[]]
   const tableRows: any[] = Array.isArray(tablesRes?.data) ? tablesRes.data : (Array.isArray(tablesRes) ? tablesRes : [])
-  const orderRows: any[] = Array.isArray(ordersRes?.data) ? ordersRes.data : (Array.isArray(ordersRes) ? ordersRes : [])
 
   const idsByTable = new Map<string, string[]>()
   const activeSet = new Set(ACTIVE_ORDER_STATUSES)

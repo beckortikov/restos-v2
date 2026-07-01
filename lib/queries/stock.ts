@@ -173,12 +173,12 @@ export async function fetchSupplyExpenses(opts?: {
   limit?: number
   ingredientId?: string
 }): Promise<import('../types').SupplyExpense[]> {
-  const query: { limit: number; from?: string; to?: string; ingredient_id?: string } = { limit: opts?.limit ?? 1000 }
-  if (opts?.from) query.from = opts.from
-  if (opts?.to) query.to = opts.to
-  if (opts?.ingredientId) query.ingredient_id = opts.ingredientId
-  const res: any = await unwrap(api.GET('/api/v1/supply-expenses', { params: { query } }))
-  const rows: Record<string, unknown>[] = res?.data ?? []
+  // Курсор: бэк капит limit до 200 — расходы хозтоваров >200 терялись.
+  const base: Record<string, unknown> = {}
+  if (opts?.from) base.from = opts.from
+  if (opts?.to) base.to = opts.to
+  if (opts?.ingredientId) base.ingredient_id = opts.ingredientId
+  const rows = await fetchAllPages('/api/v1/supply-expenses', base, 2000)
   return rows.map(mapSupplyExpense)
 }
 

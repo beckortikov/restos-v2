@@ -1,4 +1,5 @@
 import { api, unwrap } from './_client'
+import { fetchAllPages } from './_paginate'
 import { base64ToHex } from '@/lib/cp866'
 
 export async function logAction(action: string, entityType: string, entityId?: string, entityName?: string, details?: Record<string, unknown>): Promise<void> {
@@ -50,10 +51,10 @@ export async function fetchPrintJobs(opts?: { limit?: number; sinceMs?: number }
   // Источник: таблица print_jobs (бэк), а не audit_log. См. server/internal/printer/*.
   // sinceMs пока фильтруется на клиенте — серверный from-query в /print/jobs
   // отсутствует в Phase 4; OK для журнала в 200-500 записей.
+  // Курсор: бэк капит limit до 200 — при limit>200 «хвост» терялся.
   let rows: any[] = []
   try {
-    const res: any = await unwrap(api.GET('/api/v1/print/jobs', { params: { query: { limit } as any } }))
-    rows = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+    rows = await fetchAllPages('/api/v1/print/jobs', {}, limit)
   } catch {
     return []
   }

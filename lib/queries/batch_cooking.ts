@@ -1,4 +1,5 @@
 import { api, unwrap, unwrapRaw, V4Error } from './_client'
+import { fetchAllPages } from './_paginate'
 import { logAction } from './audit'
 import { checkAndUpdateStopList } from './stock'
 
@@ -63,10 +64,11 @@ export async function writeoffPreparedBatch(menuItemId: string, qty: number, rea
 }
 
 export async function fetchBatchCookingLogs(menuItemId?: string): Promise<import('../types').BatchCookingLog[]> {
-  const res: any = menuItemId
-    ? await unwrap(api.GET('/api/v1/menu/items/{id}/batch/logs', { params: { path: { id: menuItemId }, query: { limit: 500 } } }))
-    : await unwrap(api.GET('/api/v1/menu/batch/logs', { params: { query: { limit: 500 } } }))
-  const rows: Record<string, unknown>[] = res?.data ?? []
+  // Курсор: бэк капит limit до 200 — логи заготовок >200 терялись.
+  const path = menuItemId
+    ? `/api/v1/menu/items/${menuItemId}/batch/logs`
+    : '/api/v1/menu/batch/logs'
+  const rows = await fetchAllPages(path, {}, 2000)
   return rows.map(mapBatchCookingLog)
 }
 
