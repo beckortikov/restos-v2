@@ -87,8 +87,8 @@ func (r *DBRouter) resolveFromDB(job *models.PrintJob) Printer {
 				*job.RestaurantID, "receipt").First(&p).Error; err != nil {
 				return nil
 			}
-		case "z_report", "x_report":
-			// Отчёт смены печатается на receipt-принтере (как пре-чек).
+		case "z_report", "x_report", "service_report":
+			// Отчёты смены (Z/X/Обслуживание) печатаются на receipt-принтере.
 			if err := q.Where("restaurant_id = ? AND kind = ? AND is_default = true",
 				*job.RestaurantID, "receipt").First(&p).Error; err != nil {
 				return nil
