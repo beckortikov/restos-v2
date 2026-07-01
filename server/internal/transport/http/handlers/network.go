@@ -41,6 +41,37 @@ func (h *NetworkHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// CreateNetwork — POST /api/v1/network. Заводит сеть, текущий ресторан —
+// центральный склад.
+func (h *NetworkHandler) CreateNetwork(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	acc, err := h.svc.CreateNetwork(r.Context(), in.Name)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, acc)
+}
+
+// SetBranchKind — POST /api/v1/network/branches/{id}/kind.
+func (h *NetworkHandler) SetBranchKind(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Kind string `json:"kind"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	if err := h.svc.SetBranchKind(r.Context(), chi.URLParam(r, "id"), in.Kind); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // ListNomenclature — GET /api/v1/nomenclature.
 func (h *NetworkHandler) ListNomenclature(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListNomenclature(r.Context())

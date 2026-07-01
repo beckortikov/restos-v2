@@ -465,6 +465,27 @@ paths:
       summary: Филиалы сети текущего ресторана (multi-branch, ADR-003).
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BranchesList" } } } } }
 
+  /api/v1/network:
+    post:
+      tags: [stock]
+      summary: Завести сеть; текущий ресторан становится центральным складом (ADR-003 Фаза 4).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { name: { type: string } } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CompanyAccount" } } } } }
+
+  /api/v1/network/branches/{id}/kind:
+    post:
+      tags: [stock]
+      summary: Задать тип филиала (outlet | central_warehouse).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [kind], properties: { kind: { type: string, enum: [outlet, central_warehouse] } } } } }
+      responses: { "200": { description: OK } }
+
   /api/v1/network/summary:
     get:
       tags: [stock]
@@ -3167,6 +3188,14 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         kind: { type: string, enum: [outlet, central_warehouse] }
+
+    CompanyAccount:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        owner_name: { type: string }
+        phone: { type: string }
 
     NomenclatureList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Nomenclature" } }, next_cursor: { type: string } } }
     Nomenclature:

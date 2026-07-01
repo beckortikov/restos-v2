@@ -161,6 +161,63 @@ func (s *NetworkService) LinkIngredient(ctx context.Context, ingredientID, nomen
 	return nil
 }
 
+// CreateNetwork заводит сеть (company_account) и делает ТЕКУЩИЙ ресторан её
+// центральным складом. Ошибка, если ресторан уже в сети. Другие филиалы
+// присоединяются к сети своим account_id (из лицензии на своей установке).
+func (s *NetworkService) CreateNetwork(ctx context.Context, name string) (*models.CompanyAccount, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var rest models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Where("id = ?", rid).First(&rest).Error; err != nil {
+		return nil, err
+	}
+	if rest.AccountID != nil && *rest.AccountID != "" {
+		return nil, apperrors.Wrap("CONFLICT", "restaurant is already part of a network", nil)
+	}
+	if name == "" {
+		name = rest.Name
+	}
+	now := time.Now().UTC()
+	accountID := uuid.NewString()
+	cw := "central_warehouse"
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Create(&models.CompanyAccount{ID: accountID, Name: name, CreatedAt: now, UpdatedAt: now}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.Restaurant{}).Where("id = ?", rid).
+			Updates(map[string]any{"account_id": accountID, "kind": cw}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &models.CompanyAccount{ID: accountID, Name: name, CreatedAt: now, UpdatedAt: now}, nil
+}
+
+// SetBranchKind меняет тип филиала (outlet | central_warehouse) в рамках сети
+// текущего ресторана.
+func (s *NetworkService) SetBranchKind(ctx context.Context, restaurantID, kind string) error {
+	if kind != "outlet" && kind != "central_warehouse" {
+		return apperrors.Wrap("VALIDATION", "kind must be outlet or central_warehouse", nil)
+	}
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return err
+	}
+	res := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
+		Where("id = ? AND account_id = ?", restaurantID, account).
+		Update("kind", kind)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
 // BranchSummary — строка сводки по филиалу.
 type BranchSummary struct {
 	ID      string          `json:"id"`

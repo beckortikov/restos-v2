@@ -470,6 +470,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/stock/writeoffs", stockH.CreateWriteoff)
 			g.Post("/stock/transfers", transfersH.Create)
 			g.Post("/stock/transfers/{id}/receive", transfersH.Receive)
+			g.Post("/network", networkH.CreateNetwork)
+			g.Post("/network/branches/{id}/kind", networkH.SetBranchKind)
 			g.Post("/nomenclature", networkH.CreateNomenclature)
 			g.Post("/stock/ingredients/{id}/nomenclature", networkH.LinkIngredient)
 			g.Post("/sync/ingest", syncH.Ingest)
