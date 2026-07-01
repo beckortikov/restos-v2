@@ -491,6 +491,30 @@ paths:
         content: { application/json: { schema: { type: object, required: [nomenclature_id], properties: { nomenclature_id: { type: string, format: uuid } } } } }
       responses: { "200": { description: OK } }
 
+  /api/v1/sync/pull:
+    get:
+      tags: [stock]
+      summary: Дельты, адресованные филиалу (down-sync, ADR-003) — входящие sent-перемещения.
+      parameters:
+        - { in: query, name: restaurant_id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entries:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        entity: { type: string }
+                        row_id: { type: string }
+                        op: { type: string }
+                        payload: { type: object }
+
   /api/v1/sync/ingest:
     post:
       tags: [stock]

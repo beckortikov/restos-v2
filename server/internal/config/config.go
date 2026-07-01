@@ -55,8 +55,11 @@ type Config struct {
 	SyncCentralURL string
 	// SyncToken — Bearer для аутентификации на центральном узле.
 	SyncToken string
-	// SyncIntervalSec — период пуша, сек (default 30).
+	// SyncIntervalSec — период пуша/тяги, сек (default 30).
 	SyncIntervalSec int
+	// SyncRestaurantID — id этого филиала: за чьими входящими перемещениями
+	// тянуть с центрального узла (down-sync). Пусто → down-sync выключен.
+	SyncRestaurantID string
 }
 
 // DesktopBackupsDir — папка на рабочем столе для копий бэкапов. Пусто если
@@ -102,7 +105,9 @@ func LoadFromFlags() (*Config, error) {
 	flag.StringVar(&c.SyncToken, "sync-token", envOr("RESTOS_SYNC_TOKEN", ""),
 		"Bearer token for authenticating to the central node")
 	flag.IntVar(&c.SyncIntervalSec, "sync-interval-sec", int(envOrUint("RESTOS_SYNC_INTERVAL_SEC", 30)),
-		"Sync push interval in seconds")
+		"Sync push/pull interval in seconds")
+	flag.StringVar(&c.SyncRestaurantID, "sync-restaurant-id", envOr("RESTOS_SYNC_RESTAURANT_ID", ""),
+		"This branch restaurant id for down-sync (pull incoming transfers). Empty = down-sync off")
 
 	var pgPort uint
 	// v3.8.0: было 54329 (как у v1), сдвинуто на 54330 чтобы embedded-PG

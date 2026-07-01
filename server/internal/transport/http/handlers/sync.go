@@ -17,7 +17,7 @@ func NewSync(svc *service.SyncService) *SyncHandler {
 	return &SyncHandler{svc: svc}
 }
 
-// Ingest — POST /api/v1/sync/ingest. Филиал пушит батч дельг sync_log.
+// Ingest — POST /api/v1/sync/ingest. Филиал пушит батч дельг sync_log (up-sync).
 func (h *SyncHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 	var in service.IngestInput
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -25,6 +25,17 @@ func (h *SyncHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.Ingest(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// Pull — GET /api/v1/sync/pull?restaurant_id=X. Центральный узел отдаёт дельты,
+// адресованные филиалу (down-sync): входящие sent-перемещения.
+func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.PullFor(r.Context(), r.URL.Query().Get("restaurant_id"))
 	if err != nil {
 		respond.Error(w, err)
 		return

@@ -228,6 +228,12 @@ func main() {
 		}
 		pusher := synclog.NewPusher(repo.New(gdb), cfg.SyncCentralURL, cfg.SyncToken)
 		go pusher.Run(ctx, interval)
+
+		// Down-sync: тянем входящие перемещения, адресованные этому филиалу.
+		if cfg.SyncRestaurantID != "" {
+			puller := service.NewPuller(service.NewSyncService(repo.New(gdb)), cfg.SyncCentralURL, cfg.SyncToken, cfg.SyncRestaurantID)
+			go puller.Run(ctx, interval)
+		}
 	}
 
 	// 4. Ждём сигнал или ошибку HTTP.
