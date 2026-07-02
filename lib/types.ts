@@ -209,6 +209,7 @@ export interface BatchPortionCalc {
     recipeUnit: string
     stockQty: number
     recipeQtyPerPortion: number
+    stockQtyPerPortion: number // расход на порцию в единице склада (после конвертации)
     possiblePortions: number
     isBottleneck: boolean
   }[]

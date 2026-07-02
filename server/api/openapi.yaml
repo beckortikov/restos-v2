@@ -2519,6 +2519,7 @@ paths:
                         recipe_unit: { type: string, description: "единица расхода в тех-карте (г, мл)" }
                         stock_qty: { type: string, description: "остаток (в единице склада)" }
                         recipe_qty_per_portion: { type: string, description: "расход на 1 порцию (в единице тех-карты)" }
+                        stock_qty_per_portion: { type: string, description: "расход на 1 порцию, приведённый к единице склада" }
                         possible_portions: { type: integer }
                         is_bottleneck: { type: boolean }
                   blockers:

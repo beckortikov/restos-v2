@@ -47,8 +47,12 @@ type BatchIngredient struct {
 	RecipeUnit          string          `json:"recipe_unit"`            // единица расхода в тех-карте (г, мл)
 	StockQty            decimal.Decimal `json:"stock_qty"`              // остаток на складе (в единице склада)
 	RecipeQtyPerPortion decimal.Decimal `json:"recipe_qty_per_portion"` // расход на 1 порцию (в единице тех-карты)
-	PossiblePortions    int             `json:"possible_portions"`
-	IsBottleneck        bool            `json:"is_bottleneck"`
+	// StockQtyPerPortion — расход на 1 порцию, приведённый к единице склада
+	// (units.ConvertToStock): 35 г при «1 шт = 340 г» → 0.1029 шт. Именно эта
+	// величина списывается; фронт использует её для «будет списано» и процента.
+	StockQtyPerPortion decimal.Decimal `json:"stock_qty_per_portion"`
+	PossiblePortions   int             `json:"possible_portions"`
+	IsBottleneck       bool            `json:"is_bottleneck"`
 }
 
 // MaxPortionsResult — что отдаём.
@@ -150,6 +154,7 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 			RecipeUnit:          deref(l.Unit),
 			StockQty:            ing.Qty,
 			RecipeQtyPerPortion: l.Qty,
+			StockQtyPerPortion:  needPerPortion,
 			PossiblePortions:    possible,
 		})
 		if possible < 1 {

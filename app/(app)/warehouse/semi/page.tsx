@@ -537,9 +537,16 @@ export default function SemiPage() {
                         <div className="space-y-0.5">
                           {type.recipe.map((line) => {
                             const totalRecipeQty = dMul(line.qtyPerUnit, qty)
+                            // Показываем в единице склада (то, что реально спишется):
+                            // метрика + per-unit фактор для штучных ингредиентов.
+                            const ing = ingredients.find(i => i.id === line.ingredientId)
+                            const stockQty = ing
+                              ? convertToStock(totalRecipeQty, ing.unit, line.unit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
+                              : totalRecipeQty
+                            const displayUnit = ing?.unit || line.unit
                             return (
                               <p key={line.ingredientId} className="text-xs text-foreground">
-                                <span className="text-destructive">−</span> {formatNum(totalRecipeQty)} {line.unit} {line.name}
+                                <span className="text-destructive">−</span> {formatNum(stockQty)} {displayUnit} {line.name}
                               </p>
                             )
                           })}
