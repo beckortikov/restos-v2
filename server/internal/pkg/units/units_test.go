@@ -9,9 +9,9 @@ import (
 func TestConvert(t *testing.T) {
 	d := decimal.MustFromString
 	cases := []struct {
-		name           string
-		qty, from, to  string
-		want           string
+		name          string
+		qty, from, to string
+		want          string
 	}{
 		{"г→кг", "300", "г", "кг", "0.3"},
 		{"кг→г", "3", "кг", "г", "3000"},
@@ -57,10 +57,10 @@ func TestConvertible(t *testing.T) {
 func TestConvertToStock(t *testing.T) {
 	d := decimal.MustFromString
 	cases := []struct {
-		name                          string
-		qty, recipeUnit, stockUnit    string
-		perUnit, perUnitUnit          string
-		want                          string
+		name                       string
+		qty, recipeUnit, stockUnit string
+		perUnit, perUnitUnit       string
+		want                       string
 	}{
 		// Ветка 1: одна размерность → метрическая конвертация, фактор игнорируется.
 		{"г→кг игнор фактор", "300", "г", "кг", "340", "г", "0.3"},

@@ -27,11 +27,11 @@ type Ingredient struct {
 	UnitWeight decimal.Decimal `gorm:"column:unit_weight;type:numeric(14,4);default:0" json:"unit_weight"`
 	// UnitWeightUnit — единица, в которой задан UnitWeight (г/мл), т.е. единица
 	// той же размерности, что и рецепт.
-	UnitWeightUnit *string `gorm:"column:unit_weight_unit" json:"unit_weight_unit"`
-	IsFood         *bool   `gorm:"column:is_food;default:true" json:"is_food"`
-	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	UnitWeightUnit *string   `gorm:"column:unit_weight_unit" json:"unit_weight_unit"`
+	IsFood         *bool     `gorm:"column:is_food;default:true" json:"is_food"`
+	RestaurantID   *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (Ingredient) TableName() string { return "ingredients" }

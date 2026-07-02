@@ -19,29 +19,29 @@ func TestIngStockConvToStock(t *testing.T) {
 		want       string
 	}{
 		{
-			name:       "штучный склад + фактор 340 г/шт",
-			conv:       ingStockConv{unit: "шт", unitWeight: d("340"), weightUnit: "г"},
-			qty:        "10", recipeUnit: "г", want: "0.0294",
+			name: "штучный склад + фактор 340 г/шт",
+			conv: ingStockConv{unit: "шт", unitWeight: d("340"), weightUnit: "г"},
+			qty:  "10", recipeUnit: "г", want: "0.0294",
 		},
 		{
-			name:       "штучный склад, рецепт в кг → per-unit г",
-			conv:       ingStockConv{unit: "шт", unitWeight: d("340"), weightUnit: "г"},
-			qty:        "1", recipeUnit: "кг", want: "2.9412",
+			name: "штучный склад, рецепт в кг → per-unit г",
+			conv: ingStockConv{unit: "шт", unitWeight: d("340"), weightUnit: "г"},
+			qty:  "1", recipeUnit: "кг", want: "2.9412",
 		},
 		{
-			name:       "метрический склад кг, рецепт г — фактор игнорируется",
-			conv:       ingStockConv{unit: "кг", unitWeight: d("340"), weightUnit: "г"},
-			qty:        "300", recipeUnit: "г", want: "0.3",
+			name: "метрический склад кг, рецепт г — фактор игнорируется",
+			conv: ingStockConv{unit: "кг", unitWeight: d("340"), weightUnit: "г"},
+			qty:  "300", recipeUnit: "г", want: "0.3",
 		},
 		{
-			name:       "штучный склад без фактора → фолбэк без изменений",
-			conv:       ingStockConv{unit: "шт"},
-			qty:        "10", recipeUnit: "г", want: "10",
+			name: "штучный склад без фактора → фолбэк без изменений",
+			conv: ingStockConv{unit: "шт"},
+			qty:  "10", recipeUnit: "г", want: "10",
 		},
 		{
-			name:       "неизвестный ингредиент (zero-value) → qty без изменений",
-			conv:       ingStockConv{},
-			qty:        "5", recipeUnit: "г", want: "5",
+			name: "неизвестный ингредиент (zero-value) → qty без изменений",
+			conv: ingStockConv{},
+			qty:  "5", recipeUnit: "г", want: "5",
 		},
 	}
 	for _, c := range cases {

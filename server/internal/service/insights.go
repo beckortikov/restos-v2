@@ -331,10 +331,10 @@ func (s *InsightsService) deadStockInsights(ctx context.Context, f PeriodFilter)
 	}
 	return []Insight{{
 		ID: "stock_dead", Category: "stock", Severity: sev,
-		Title:       fmt.Sprintf("Неликвид на складе: %s ₽ (%d позиций)", rub(total), len(deads)),
-		Detail:      "Нет расхода за период: " + joinTop(names, 6) + ".",
-		Impact:      decimal.Normalize(total), ImpactLabel: "Заморожено в неликвиде",
-		Action:      "Распродать/списать, убрать из закупок или ввести в блюда дня.",
+		Title:  fmt.Sprintf("Неликвид на складе: %s ₽ (%d позиций)", rub(total), len(deads)),
+		Detail: "Нет расхода за период: " + joinTop(names, 6) + ".",
+		Impact: decimal.Normalize(total), ImpactLabel: "Заморожено в неликвиде",
+		Action: "Распродать/списать, убрать из закупок или ввести в блюда дня.",
 	}}, nil
 }
 
@@ -457,7 +457,7 @@ func (s *InsightsService) cogsDriftInsights(ctx context.Context, f PeriodFilter)
 		}
 	}
 	type drift struct {
-		id, name           string
+		id, name                 string
 		pct, impact, first, last decimal.Decimal
 	}
 	var drifts []drift

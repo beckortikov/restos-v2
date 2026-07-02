@@ -518,7 +518,7 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 							"waiter_id":        nextActive.WaiterID,
 							"updated_at":       now,
 						}).Error; err != nil {
-							return err
+						return err
 					}
 					buf.Add(EventTableUpdated, map[string]any{"id": *order.TableID})
 				}

@@ -20,7 +20,7 @@ var roleDefaults = map[string]map[string]bool{
 		"orders.create": true, "orders.close": true, "orders.void": true,
 		"orders.refund": true, "orders.reprint": true, "orders.view_others": true,
 		"orders.service_charge": true,
-		"tables.reserve": true, "shifts.manage": true, "pos.access": true,
+		"tables.reserve":        true, "shifts.manage": true, "pos.access": true,
 		"showcase.view": true, "customers.manage": true, "printers.manage": true,
 	},
 	"cook": {
