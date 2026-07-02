@@ -8910,6 +8910,8 @@ export interface paths {
                                 stock_qty?: string;
                                 /** @description расход на 1 порцию (в единице тех-карты) */
                                 recipe_qty_per_portion?: string;
+                                /** @description расход на 1 порцию, приведённый к единице склада */
+                                stock_qty_per_portion?: string;
                                 possible_portions?: number;
                                 is_bottleneck?: boolean;
                             }[];
@@ -9621,6 +9623,8 @@ export interface components {
             price?: components["schemas"]["Decimal"];
             unit?: string;
             waste_percent?: components["schemas"]["Decimal"];
+            unit_weight?: components["schemas"]["Decimal"];
+            unit_weight_unit?: string;
         };
         /**
          * @description Универсальный envelope для /menu/items. Поля `tech_card_lines`
@@ -9697,6 +9701,8 @@ export interface components {
             unit?: string;
             min_qty?: components["schemas"]["Decimal"];
             price_per_unit?: components["schemas"]["Decimal"];
+            unit_weight?: components["schemas"]["Decimal"];
+            unit_weight_unit?: string;
         };
         IngredientsList: {
             data?: components["schemas"]["Ingredient"][];
@@ -9710,6 +9716,8 @@ export interface components {
             unit?: string;
             price_per_unit?: components["schemas"]["Decimal"];
             waste_percent?: components["schemas"]["Decimal"];
+            unit_weight?: components["schemas"]["Decimal"];
+            unit_weight_unit?: string;
             is_food?: boolean;
         };
         StringList: {
