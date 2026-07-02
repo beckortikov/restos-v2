@@ -1742,6 +1742,14 @@ paths:
                 type: object
                 properties:
                   initialized: { type: boolean }
+                  restaurants:
+                    type: array
+                    description: id+name ресторанов (для выбора при входе по LAN без сохранённого restaurant_id)
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
 
   /api/v1/bootstrap:
     post:

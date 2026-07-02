@@ -63,6 +63,10 @@ func NewRouter(deps Deps) http.Handler {
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
+	// gzip: SPA-бандл (charts/xlsx/react ~1.5 МБ) и JSON-ответы едут по LAN/WiFi
+	// сжатыми (~70% для JS). chimw.Compress по умолчанию НЕ трогает
+	// text/event-stream, поэтому SSE (/events) не буферизуется — стриминг цел.
+	r.Use(chimw.Compress(5))
 	r.Use(middleware.CORS(corsOriginsFromEnv()))
 	// 30-секундный таймаут НЕ применяем к SSE-эндпоинту — он long-lived.
 	// Применяем только к /api/v1/auth и /api/v1/<resource>, оставляя /events

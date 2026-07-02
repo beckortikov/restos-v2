@@ -5,7 +5,7 @@ import { humanizeError } from '@/lib/errors'
 import { useNavigate } from 'react-router-dom'
 import { UtensilsCrossed, Delete, LogIn, AlertCircle, Settings2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
-import { api, unwrap, getV4RestaurantId } from '@/lib/api'
+import { api, unwrap, getV4RestaurantId, setV4RestaurantId } from '@/lib/api'
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
@@ -27,10 +27,17 @@ export default function LoginPage() {
           return
         }
         if (!getV4RestaurantId()) {
-          // Бэк инициализирован, но клиент не знает restaurant_id.
-          // Это типично при первом подключении ноут-кассы к существующему бэку.
-          navigate('/bootstrap', { replace: true })
-          return
+          // Бэк инициализирован, но клиент не знает restaurant_id — типично при
+          // входе через LAN-браузер с чистым localStorage (ноутбук владельца).
+          const list: { id: string; name: string }[] = status.restaurants ?? []
+          if (list.length === 1) {
+            // Один ресторан — подставляем сами, владелец сразу видит PIN-экран.
+            setV4RestaurantId(list[0].id)
+          } else {
+            // Несколько (сеть) или список недоступен — выбор на /bootstrap.
+            navigate('/bootstrap', { replace: true })
+            return
+          }
         }
       } catch (e) {
         // backend недоступен — оставим форму, но не блокируем.

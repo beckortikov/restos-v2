@@ -121,10 +121,23 @@ func TestBootstrap_RunAndLogin(t *testing.T) {
 	}
 	defer respS.Body.Close()
 	bodyS, _ := io.ReadAll(respS.Body)
-	var st struct{ Initialized bool }
+	var st struct {
+		Initialized bool `json:"initialized"`
+		Restaurants []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"restaurants"`
+	}
 	_ = json.Unmarshal(bodyS, &st)
 	if !st.Initialized {
 		t.Errorf("after bootstrap should be initialized")
+	}
+	// Публичный список ресторанов для выбора при входе по LAN (без auth).
+	if len(st.Restaurants) != 1 || st.Restaurants[0].ID != bres.Restaurant.ID {
+		t.Errorf("status.restaurants = %+v, want single id=%s", st.Restaurants, bres.Restaurant.ID)
+	}
+	if st.Restaurants[0].Name == "" {
+		t.Errorf("status.restaurants[0].name is empty")
 	}
 
 	// Повторный bootstrap → 409 CONFLICT.
