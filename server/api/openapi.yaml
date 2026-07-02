@@ -2832,6 +2832,8 @@ components:
         price: { $ref: "#/components/schemas/Decimal" }
         unit: { type: string }
         waste_percent: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
     MenuItemsList:
       type: object
       description: |
@@ -2898,6 +2900,8 @@ components:
         unit: { type: string }
         min_qty: { $ref: "#/components/schemas/Decimal" }
         price_per_unit: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
     IngredientsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Ingredient" } }, next_cursor: { type: string } } }
     IngredientInput:
       type: object
@@ -2909,6 +2913,8 @@ components:
         unit: { type: string }
         price_per_unit: { $ref: "#/components/schemas/Decimal" }
         waste_percent: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
         is_food: { type: boolean }
     StringList: { type: object, properties: { data: { type: array, items: { type: string } } } }
     StockMovement:

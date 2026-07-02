@@ -33,14 +33,16 @@ func NewIngredientsWriteService(r *repo.Repo) *IngredientsWriteService {
 }
 
 type IngredientInput struct {
-	Name         *string `json:"name,omitempty"`
-	Category     *string `json:"category,omitempty"`
-	Qty          *string `json:"qty,omitempty"`
-	MinQty       *string `json:"min_qty,omitempty"`
-	Unit         *string `json:"unit,omitempty"`
-	PricePerUnit *string `json:"price_per_unit,omitempty"`
-	WastePercent *string `json:"waste_percent,omitempty"`
-	IsFood       *bool   `json:"is_food,omitempty"`
+	Name           *string `json:"name,omitempty"`
+	Category       *string `json:"category,omitempty"`
+	Qty            *string `json:"qty,omitempty"`
+	MinQty         *string `json:"min_qty,omitempty"`
+	Unit           *string `json:"unit,omitempty"`
+	PricePerUnit   *string `json:"price_per_unit,omitempty"`
+	WastePercent   *string `json:"waste_percent,omitempty"`
+	UnitWeight     *string `json:"unit_weight,omitempty"`      // вес/объём одной складской единицы (per-unit фактор)
+	UnitWeightUnit *string `json:"unit_weight_unit,omitempty"` // единица фактора (г/мл)
+	IsFood         *bool   `json:"is_food,omitempty"`
 }
 
 // Create — POST /api/v1/stock/ingredients.
@@ -79,6 +81,16 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 			return nil, apperrors.Wrap("VALIDATION", "bad waste_percent", err)
 		}
 		ing.WastePercent = d
+	}
+	if in.UnitWeight != nil {
+		d, err := decimal.FromString(*in.UnitWeight)
+		if err != nil {
+			return nil, apperrors.Wrap("VALIDATION", "bad unit_weight", err)
+		}
+		ing.UnitWeight = d
+	}
+	if in.UnitWeightUnit != nil {
+		ing.UnitWeightUnit = in.UnitWeightUnit
 	}
 
 	// Парсим initial qty заранее.
@@ -186,6 +198,16 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 			return nil, apperrors.Wrap("VALIDATION", "bad waste_percent", err)
 		}
 		updates["waste_percent"] = d
+	}
+	if in.UnitWeight != nil {
+		d, err := decimal.FromString(*in.UnitWeight)
+		if err != nil {
+			return nil, apperrors.Wrap("VALIDATION", "bad unit_weight", err)
+		}
+		updates["unit_weight"] = d
+	}
+	if in.UnitWeightUnit != nil {
+		updates["unit_weight_unit"] = *in.UnitWeightUnit
 	}
 
 	// Остаток правится НЕ прямым UPDATE (CLAUDE.md правило #5), а корректирующим

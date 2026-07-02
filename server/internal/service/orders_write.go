@@ -927,10 +927,12 @@ func validateStockForItems(
 		}
 		for _, i := range ings {
 			info := &stockcheck.IngredientInfo{
-				Qty:          i.Qty,
-				WastePercent: i.WastePercent,
-				IsFood:       i.IsFood == nil || *i.IsFood,
-				Unit:         i.Unit,
+				Qty:            i.Qty,
+				WastePercent:   i.WastePercent,
+				IsFood:         i.IsFood == nil || *i.IsFood,
+				Unit:           i.Unit,
+				UnitWeight:     i.UnitWeight,
+				UnitWeightUnit: i.UnitWeightUnit,
 			}
 			if i.Name != nil {
 				info.Name = *i.Name
@@ -1181,22 +1183,15 @@ func computeReservations(tx *gorm.DB, rid string) (
 		}
 	}
 
-	// Единицы склада ингредиентов — резерв копим в единице склада, как и stock.
-	ingUnitByID := make(map[string]string, len(ingIDset))
-	if len(ingIDset) > 0 {
-		ingIDs := make([]string, 0, len(ingIDset))
-		for k := range ingIDset {
-			ingIDs = append(ingIDs, k)
-		}
-		var ings []models.Ingredient
-		if err := tx.Where("id IN ?", ingIDs).Find(&ings).Error; err != nil {
-			return nil, nil, err
-		}
-		for _, i := range ings {
-			if i.Unit != nil {
-				ingUnitByID[i.ID] = *i.Unit
-			}
-		}
+	// Единицы склада ингредиентов (+ per-unit фактор) — резерв копим в единице
+	// склада, как и stock.
+	ingIDs := make([]string, 0, len(ingIDset))
+	for k := range ingIDset {
+		ingIDs = append(ingIDs, k)
+	}
+	ingConvByID, err := loadIngStockConv(tx, ingIDs)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	reservedIng := make(map[string]decimal.Decimal)
@@ -1214,8 +1209,9 @@ func computeReservations(tx *gorm.DB, rid string) (
 			}
 			key := *line.IngredientID
 			add := decimal.Mul(line.Qty, effectivePortions(mi.Unit, r.Qty, mi.UnitSize))
-			// Приводим резерв в единицу склада ингредиента (как stock в stockcheck).
-			add = units.Convert(add, deref(line.Unit), ingUnitByID[key])
+			// Приводим резерв в единицу склада ингредиента (как stock в stockcheck),
+			// с учётом per-unit фактора (штучный склад vs весовой рецепт).
+			add = ingConvByID[key].toStock(add, deref(line.Unit))
 			cur := reservedIng[key]
 			reservedIng[key] = decimal.Add(cur, add)
 		}
@@ -1314,7 +1310,7 @@ func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
 				qty = decimal.DivRound(qty, divisor)
 			}
 		}
-		qtyStock := units.Convert(qty, deref(l.Unit), deref(ing.Unit))
+		qtyStock := units.ConvertToStock(qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
 		total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
 	}
 	return decimal.Normalize(total)

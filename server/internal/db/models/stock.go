@@ -20,7 +20,15 @@ type Ingredient struct {
 	Unit         *string         `json:"unit"`
 	PricePerUnit decimal.Decimal `gorm:"column:price_per_unit;type:numeric(14,4);default:0" json:"price_per_unit"`
 	WastePercent decimal.Decimal `gorm:"column:waste_percent;type:numeric(14,4);default:0" json:"waste_percent"`
-	IsFood       *bool           `gorm:"column:is_food;default:true" json:"is_food"`
+	// UnitWeight — вес/объём ОДНОЙ складской единицы, если основная единица
+	// штучная (шт/уп/бут), а тех-карта пишется в весе/объёме. Напр. «1 банка = 340 г».
+	// 0 = фактор не задан → конвертация из рецептурной единицы работает как раньше
+	// (только в пределах одной размерности массы/объёма). См. units.ConvertToStock.
+	UnitWeight decimal.Decimal `gorm:"column:unit_weight;type:numeric(14,4);default:0" json:"unit_weight"`
+	// UnitWeightUnit — единица, в которой задан UnitWeight (г/мл), т.е. единица
+	// той же размерности, что и рецепт.
+	UnitWeightUnit *string `gorm:"column:unit_weight_unit" json:"unit_weight_unit"`
+	IsFood         *bool   `gorm:"column:is_food;default:true" json:"is_food"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	CreatedAt    time.Time       `json:"created_at"`
 	UpdatedAt    time.Time       `json:"updated_at"`

@@ -31,7 +31,7 @@ export async function fetchIngredients(): Promise<Ingredient[]> {
   return rows.map(mapIngredient) as Ingredient[]
 }
 
-export async function createIngredient(data: { name: string; category: string; qty: number; min_qty: number; unit: string; price_per_unit: number; waste_percent?: number; is_food?: boolean }) {
+export async function createIngredient(data: { name: string; category: string; qty: number; min_qty: number; unit: string; price_per_unit: number; waste_percent?: number; unit_weight?: number; unit_weight_unit?: string; is_food?: boolean }) {
   const row: any = await unwrap(api.POST('/api/v1/stock/ingredients', {
     body: {
       name: data.name,
@@ -41,6 +41,8 @@ export async function createIngredient(data: { name: string; category: string; q
       unit: data.unit,
       price_per_unit: String(data.price_per_unit),
       waste_percent: String(data.waste_percent ?? 0),
+      unit_weight: String(data.unit_weight ?? 0),
+      unit_weight_unit: data.unit_weight_unit ?? '',
       is_food: data.is_food ?? true,
     } as any,
   }))
@@ -48,7 +50,7 @@ export async function createIngredient(data: { name: string; category: string; q
   return row ? mapIngredient(row) : null
 }
 
-export async function updateIngredient(id: string, data: Partial<{ name: string; category: string; min_qty: number; unit: string; price_per_unit: number; waste_percent: number; is_food: boolean }>) {
+export async function updateIngredient(id: string, data: Partial<{ name: string; category: string; min_qty: number; unit: string; price_per_unit: number; waste_percent: number; unit_weight: number; unit_weight_unit: string; is_food: boolean }>) {
   const body: Record<string, unknown> = {}
   if (data.name !== undefined) body.name = data.name
   if (data.category !== undefined) body.category = data.category
@@ -57,6 +59,8 @@ export async function updateIngredient(id: string, data: Partial<{ name: string;
   if (data.min_qty !== undefined) body.min_qty = String(data.min_qty)
   if (data.price_per_unit !== undefined) body.price_per_unit = String(data.price_per_unit)
   if (data.waste_percent !== undefined) body.waste_percent = String(data.waste_percent)
+  if (data.unit_weight !== undefined) body.unit_weight = String(data.unit_weight)
+  if (data.unit_weight_unit !== undefined) body.unit_weight_unit = data.unit_weight_unit
   await unwrap(api.PATCH('/api/v1/stock/ingredients/{id}', { params: { path: { id } }, body: body as any }))
   logAction('ingredient.edit', 'ingredient', id)
 }
@@ -312,6 +316,8 @@ function mapIngredient(r: Record<string, unknown>): Ingredient {
     unit: (r.unit as string) ?? '',
     pricePerUnit: Number(r.price_per_unit ?? 0),
     wastePercent: Number(r.waste_percent ?? 0),
+    unitWeight: Number(r.unit_weight ?? 0),
+    unitWeightUnit: (r.unit_weight_unit as string) ?? '',
     isFood: r.is_food !== false,
   } as Ingredient
 }
