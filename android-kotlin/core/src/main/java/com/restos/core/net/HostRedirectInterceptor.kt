@@ -1,6 +1,6 @@
-package com.restos.waiter.data.net
+package com.restos.core.net
 
-import com.restos.waiter.data.config.ServerConfigStore
+import com.restos.core.config.ServerConfigStore
 import kotlinx.coroutines.runBlocking
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor

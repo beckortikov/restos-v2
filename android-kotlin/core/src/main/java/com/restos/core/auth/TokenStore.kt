@@ -1,4 +1,4 @@
-package com.restos.waiter.data.auth
+package com.restos.core.auth
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit

@@ -1,4 +1,4 @@
-package com.restos.waiter.data.common
+package com.restos.core.common
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable

@@ -1,8 +1,8 @@
-package com.restos.waiter.data.auth
+package com.restos.core.auth
 
-import com.restos.waiter.data.config.ServerConfigStore
-import com.restos.waiter.data.net.ApiError
-import com.restos.waiter.data.net.ApiException
+import com.restos.core.config.ServerConfigStore
+import com.restos.core.net.ApiError
+import com.restos.core.net.ApiException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json

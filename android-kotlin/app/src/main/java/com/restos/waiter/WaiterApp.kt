@@ -1,9 +1,9 @@
 package com.restos.waiter
 
 import android.app.Application
-import com.restos.waiter.data.auth.TokenStore
-import com.restos.waiter.data.events.EventStreamClient
-import com.restos.waiter.data.net.NetworkProbe
+import com.restos.core.auth.TokenStore
+import com.restos.core.events.EventStreamClient
+import com.restos.core.net.NetworkProbe
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers

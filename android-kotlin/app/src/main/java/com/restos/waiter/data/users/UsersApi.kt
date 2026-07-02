@@ -1,7 +1,7 @@
 package com.restos.waiter.data.users
 
-import com.restos.waiter.data.auth.UserDto
-import com.restos.waiter.data.common.PagedEnvelope
+import com.restos.core.auth.UserDto
+import com.restos.core.common.PagedEnvelope
 import retrofit2.http.GET
 
 interface UsersApi {

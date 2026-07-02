@@ -1,4 +1,4 @@
-package com.restos.waiter.data.net
+package com.restos.core.net
 
 /**
  * Placeholder base URL для Retrofit. Реальный host:port подменяется на

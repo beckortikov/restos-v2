@@ -1,7 +1,7 @@
-package com.restos.waiter.data.net
+package com.restos.core.net
 
-import com.restos.waiter.data.auth.TokenStore
-import com.restos.waiter.data.config.ServerConfigStore
+import com.restos.core.auth.TokenStore
+import com.restos.core.config.ServerConfigStore
 // TokenStore остаётся в сигнатуре конструктора чтобы Hilt-граф не ломался у
 // мест, где Probe инжектится напрямую; полю не нужен — поэтому @Suppress.
 import kotlinx.coroutines.CoroutineScope

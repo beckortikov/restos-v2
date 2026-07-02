@@ -1,4 +1,4 @@
-package com.restos.waiter.data.events
+package com.restos.core.events
 
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow

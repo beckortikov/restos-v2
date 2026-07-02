@@ -1,6 +1,6 @@
-package com.restos.waiter.data.net
+package com.restos.core.net
 
-import com.restos.waiter.data.auth.TokenStore
+import com.restos.core.auth.TokenStore
 import kotlinx.coroutines.runBlocking
 import okhttp3.Interceptor
 import okhttp3.Response

@@ -1,4 +1,4 @@
-package com.restos.waiter.data.net
+package com.restos.core.net
 
 import kotlinx.serialization.Serializable
 

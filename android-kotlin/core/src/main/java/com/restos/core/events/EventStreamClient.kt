@@ -1,8 +1,8 @@
-package com.restos.waiter.data.events
+package com.restos.core.events
 
-import com.restos.waiter.data.auth.TokenStore
-import com.restos.waiter.data.config.ServerConfigStore
-import com.restos.waiter.data.net.NetworkConfig
+import com.restos.core.auth.TokenStore
+import com.restos.core.config.ServerConfigStore
+import com.restos.core.net.NetworkConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job

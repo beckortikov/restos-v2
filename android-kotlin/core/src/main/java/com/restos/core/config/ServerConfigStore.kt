@@ -1,4 +1,4 @@
-package com.restos.waiter.data.config
+package com.restos.core.config
 
 import android.content.Context
 import androidx.datastore.preferences.core.edit
