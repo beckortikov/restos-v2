@@ -1,4 +1,4 @@
-package com.restos.waiter.ui.onboarding
+package com.restos.core.onboarding
 
 import android.annotation.SuppressLint
 import android.content.Context
