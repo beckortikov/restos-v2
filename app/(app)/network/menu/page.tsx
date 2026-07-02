@@ -9,6 +9,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { BookOpen, Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
 
 const STATIONS = ['hot_kitchen', 'cold_kitchen', 'grill', 'bar', 'showcase']
 
@@ -16,6 +17,7 @@ export default function NetworkMenuPage() {
   const [items, setItems] = useState<NetworkMenuItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [notInNetwork, setNotInNetwork] = useState(false)
   const [name, setName] = useState('')
   const [category, setCategory] = useState('')
   const [price, setPrice] = useState(0)
@@ -26,8 +28,10 @@ export default function NetworkMenuPage() {
     try {
       setItems(await fetchNetworkMenu())
       setError(null)
+      setNotInNetwork(false)
     } catch (e: any) {
-      setError(e?.message ?? 'Не удалось загрузить')
+      if (isNotInNetwork(e)) { setNotInNetwork(true); setError(null) }
+      else setError(e?.message ?? 'Не удалось загрузить')
     }
   }
   useEffect(() => { reload().finally(() => setLoading(false)) }, [])
@@ -61,8 +65,19 @@ export default function NetworkMenuPage() {
   if (loading) {
     return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
   }
+  if (notInNetwork) {
+    return (
+      <div className="p-4 md:p-6 space-y-5 max-w-3xl">
+        <div className="flex items-center gap-2">
+          <BookOpen className="size-5 text-primary" />
+          <h1 className="text-xl font-bold text-foreground">Меню сети</h1>
+        </div>
+        <NotInNetwork what="меню сети" />
+      </div>
+    )
+  }
   if (error) {
-    return <div className="p-6"><div className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700">{error} — вероятно, ресторан не в сети.</div></div>
+    return <div className="p-6"><div className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700">{error}</div></div>
   }
 
   return (

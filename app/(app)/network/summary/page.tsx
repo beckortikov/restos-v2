@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { fetchNetworkSummary, type NetworkSummary } from '@/lib/queries/transfers'
 import { formatCurrency } from '@/lib/helpers'
 import { Network, Store, Warehouse, TrendingUp } from 'lucide-react'
+import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
 
 type Period = 'today' | 'week' | 'month' | 'all'
 
@@ -29,13 +30,18 @@ export default function NetworkSummaryPage() {
   const [summary, setSummary] = useState<NetworkSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [notInNetwork, setNotInNetwork] = useState(false)
 
   useEffect(() => {
     setLoading(true)
     setError(null)
+    setNotInNetwork(false)
     fetchNetworkSummary(periodRange(period))
       .then(s => setSummary(s))
-      .catch(e => setError(e?.message ?? 'Не удалось загрузить сводку'))
+      .catch(e => {
+        if (isNotInNetwork(e)) setNotInNetwork(true)
+        else setError(e?.message ?? 'Не удалось загрузить сводку')
+      })
       .finally(() => setLoading(false))
   }, [period])
 
@@ -69,6 +75,8 @@ export default function NetworkSummaryPage() {
         <div className="flex h-40 items-center justify-center">
           <div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
         </div>
+      ) : notInNetwork ? (
+        <NotInNetwork what="сводку по сети" />
       ) : error ? (
         <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700">{error}</div>
       ) : (

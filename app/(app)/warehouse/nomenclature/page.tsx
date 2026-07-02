@@ -9,22 +9,30 @@ import {
 import { type Ingredient } from '@/lib/types'
 import { Boxes, Plus, Link2 } from 'lucide-react'
 import { toast } from 'sonner'
+import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
 
 export default function NomenclaturePage() {
   const [items, setItems] = useState<Nomenclature[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [loading, setLoading] = useState(true)
+  const [notInNetwork, setNotInNetwork] = useState(false)
   const [name, setName] = useState('')
   const [unit, setUnit] = useState('')
   const [creating, setCreating] = useState(false)
 
   const reload = async () => {
-    const [n, ing] = await Promise.all([fetchNomenclature(), fetchIngredients()])
-    setItems(n)
-    setIngredients(ing)
+    try {
+      const [n, ing] = await Promise.all([fetchNomenclature(), fetchIngredients()])
+      setItems(n)
+      setIngredients(ing)
+      setNotInNetwork(false)
+    } catch (e) {
+      if (isNotInNetwork(e)) setNotInNetwork(true)
+      else throw e
+    }
   }
   useEffect(() => {
-    reload().finally(() => setLoading(false))
+    reload().catch(() => {}).finally(() => setLoading(false))
   }, [])
 
   const onCreate = async () => {
@@ -56,6 +64,18 @@ export default function NomenclaturePage() {
     return (
       <div className="p-6 flex items-center justify-center h-64">
         <div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (notInNetwork) {
+    return (
+      <div className="p-4 md:p-6 space-y-5 max-w-3xl">
+        <div className="flex items-center gap-2">
+          <Boxes className="size-5 text-primary" />
+          <h1 className="text-xl font-bold text-foreground">Номенклатура сети</h1>
+        </div>
+        <NotInNetwork what="номенклатуру сети" />
       </div>
     )
   }
