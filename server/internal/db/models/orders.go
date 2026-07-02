@@ -73,6 +73,10 @@ type OrderItem struct {
 	// Источник правды по сумме позиции для клиентов, чтобы они не дублировали
 	// формулу веса (price × qty/unitSize) и не расходились с бэком.
 	LineTotal *decimal.Decimal `gorm:"-" json:"line_total,omitempty"`
+	// StationStatus — per-dish статус на кухне (KDS): pending/cooking/ready/served.
+	// Отдельно от orders.status — каждое блюдо двигается независимо (миграция 033).
+	StationStatus        *string         `gorm:"column:station_status;default:'pending';index" json:"station_status"`
+	StationStatusAt      *time.Time      `gorm:"column:station_status_at" json:"station_status_at"`
 	CancelledAt          *time.Time      `gorm:"column:cancelled_at" json:"cancelled_at"`
 	CancelledBy          *string         `gorm:"column:cancelled_by" json:"cancelled_by"`
 	CancelReason         *string         `gorm:"column:cancel_reason" json:"cancel_reason"`

@@ -110,6 +110,7 @@ func NewRouter(deps Deps) http.Handler {
 	// Stations resolver — DBRouter ищет принтер по station.
 	stations := printer.NewDBRouter(deps.DB, nil)
 	ordersSvc := service.NewOrdersService(rep).WithPublisher(pub).WithStationResolver(stations)
+	kdsSvc := service.NewKDSService(rep).WithPublisher(pub)
 	shiftsSvc = shiftsSvc.WithPublisher(pub)
 	stockSvc = stockSvc.WithPublisher(pub)
 	inventorySvc := service.NewInventoryService(rep)
@@ -160,6 +161,7 @@ func NewRouter(deps Deps) http.Handler {
 	stockH := handlers.NewStock(stockSvc)
 	shiftsH := handlers.NewShifts(shiftsSvc)
 	ordersH := handlers.NewOrders(ordersSvc)
+	kdsH := handlers.NewKDS(kdsSvc)
 	inventoryH := handlers.NewInventory(inventorySvc)
 	printersH := handlers.NewPrinters(printersSvc)
 	printJobsH := handlers.NewPrintJobs(printJobsSvc)
@@ -266,6 +268,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/shifts/{id}/revenue", shiftsH.Revenue)
 			g.Get("/shifts/{id}/operations", shiftsH.Operations)
 
+			g.Get("/kds/items", kdsH.List)
 			g.Get("/orders", ordersH.List)
 			g.Get("/orders/{id}", ordersH.Get)
 			g.Get("/order-items/{id}", ordersH.GetItem)
@@ -410,6 +413,7 @@ func NewRouter(deps Deps) http.Handler {
 			}
 			g.Use(middleware.Idempotency(idemSvc))
 
+			g.Post("/kds/items/{id}/status", kdsH.SetStatus)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)
