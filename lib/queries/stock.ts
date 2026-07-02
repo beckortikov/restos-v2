@@ -1,4 +1,5 @@
 import { api, unwrap } from './_client'
+import { fetchAllPages } from './_paginate'
 import { dMul, dSub, dSum } from '../decimal'
 import type {
   Ingredient, StockReceipt, StockMovement, StockWriteoff, WriteoffReason, ReceiptPaymentType,
@@ -26,8 +27,8 @@ export async function applyOpeningBalance(
 }
 
 export async function fetchIngredients(): Promise<Ingredient[]> {
-  const res: any = await unwrap(api.GET('/api/v1/stock/ingredients', { params: { query: { limit: 2000 } } }))
-  const rows: Record<string, unknown>[] = res?.data ?? []
+  // Курсор: бэк капит limit до 200, одностраничный запрос терял ингредиенты >200.
+  const rows = await fetchAllPages('/api/v1/stock/ingredients')
   return rows.map(mapIngredient) as Ingredient[]
 }
 
@@ -74,14 +75,13 @@ export async function deleteIngredient(id: string): Promise<void> {
 }
 
 export async function fetchStockMovements(): Promise<StockMovement[]> {
-  const res: any = await unwrap(api.GET('/api/v1/stock/movements', { params: { query: { limit: 1000 } } }))
-  const rows: Record<string, unknown>[] = res?.data ?? []
+  // Append-only поток — ограничиваем «последними» 2000, но через курсор (не 200).
+  const rows = await fetchAllPages('/api/v1/stock/movements', {}, 2000)
   return rows.map(mapStockMovement) as StockMovement[]
 }
 
 export async function fetchReceipts(): Promise<StockReceipt[]> {
-  const res: any = await unwrap(api.GET('/api/v1/stock/receipts', { params: { query: { limit: 1000, include: 'lines' } } }))
-  const rows: Record<string, unknown>[] = res?.data ?? []
+  const rows = await fetchAllPages('/api/v1/stock/receipts', { include: 'lines' }, 2000)
   return rows.map(mapStockReceipt) as StockReceipt[]
 }
 
@@ -140,8 +140,7 @@ export async function confirmReceiptFull(receiptId: string, confirmedBy: string,
 }
 
 export async function fetchWriteoffs(): Promise<StockWriteoff[]> {
-  const res: any = await unwrap(api.GET('/api/v1/stock/writeoffs', { params: { query: { limit: 1000, include: 'lines' } } }))
-  const rows: Record<string, unknown>[] = res?.data ?? []
+  const rows = await fetchAllPages('/api/v1/stock/writeoffs', { include: 'lines' }, 2000)
   return rows.map(mapStockWriteoff)
 }
 
@@ -178,12 +177,12 @@ export async function fetchSupplyExpenses(opts?: {
   limit?: number
   ingredientId?: string
 }): Promise<import('../types').SupplyExpense[]> {
-  const query: { limit: number; from?: string; to?: string; ingredient_id?: string } = { limit: opts?.limit ?? 1000 }
-  if (opts?.from) query.from = opts.from
-  if (opts?.to) query.to = opts.to
-  if (opts?.ingredientId) query.ingredient_id = opts.ingredientId
-  const res: any = await unwrap(api.GET('/api/v1/supply-expenses', { params: { query } }))
-  const rows: Record<string, unknown>[] = res?.data ?? []
+  // Курсор: бэк капит limit до 200 — расходы хозтоваров >200 терялись.
+  const base: Record<string, unknown> = {}
+  if (opts?.from) base.from = opts.from
+  if (opts?.to) base.to = opts.to
+  if (opts?.ingredientId) base.ingredient_id = opts.ingredientId
+  const rows = await fetchAllPages('/api/v1/supply-expenses', base, 2000)
   return rows.map(mapSupplyExpense)
 }
 
@@ -235,8 +234,7 @@ export interface InventoryCheck {
 
 export async function fetchInventoryChecks(): Promise<InventoryCheck[]> {
   try {
-    const res: any = await unwrap(api.GET('/api/v1/stock/inventory', { params: { query: { limit: 500 } } }))
-    const rows: Record<string, unknown>[] = res?.data ?? []
+    const rows = await fetchAllPages('/api/v1/stock/inventory', {}, 2000)
     return rows.map(mapInventoryCheck)
   } catch {
     return []

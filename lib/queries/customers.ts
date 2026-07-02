@@ -1,11 +1,12 @@
 import { api, unwrap } from './_client'
+import { fetchAllPages } from './_paginate'
 import type { Customer } from '../types'
 import { logAction } from './audit'
 import { mapCustomer } from './_mappers'
 
 export async function fetchCustomers(): Promise<Customer[]> {
-  const res: any = await unwrap(api.GET('/api/v1/customers', { params: { query: { limit: 1000 } } }))
-  const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+  // Курсор: бэк капит limit до 200 — одностраничный запрос терял клиентов >200.
+  const rows = await fetchAllPages('/api/v1/customers')
   return rows.map(mapCustomer)
 }
 

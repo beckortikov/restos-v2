@@ -1,4 +1,5 @@
 import { api, unwrap, V4Error } from './_client'
+import { fetchAllPages } from './_paginate'
 import type {
   FinancialAccount, FinancialOperation, BudgetLine,
   Asset, Liability, EquityEntry,
@@ -63,8 +64,8 @@ export async function createCustomCategory(name: string, type: 'in' | 'out'): Pr
 }
 
 export async function fetchFinancialOperations(): Promise<FinancialOperation[]> {
-  const res: any = await unwrap(api.GET('/api/v1/finance/operations', { params: { query: { limit: 1000 } } }))
-  const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+  // Курсор: бэк капит limit до 200 — в ДДС/отчётах терялись операции >200.
+  const rows = await fetchAllPages('/api/v1/finance/operations', {}, 5000)
   return rows.map(mapFinancialOperation) as FinancialOperation[]
 }
 

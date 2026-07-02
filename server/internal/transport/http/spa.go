@@ -66,8 +66,14 @@ func SPAHandler() http.Handler {
 		if err == nil {
 			_ = f.Close()
 			// index.html — no-cache (для атомарных деплоев новой версии).
+			// Хешированные ассеты Vite (/assets/*-<hash>.js|css) — immutable на год:
+			// имя меняется при каждой сборке, поэтому браузер по LAN не перекачивает
+			// бандл на каждый заход (embed.FS отдаёт нулевой modtime → без явного
+			// заголовка условные запросы/304 не работают).
 			if clean == "index.html" || strings.HasSuffix(clean, "/index.html") {
 				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			} else if strings.HasPrefix(clean, "assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
 			fileServer.ServeHTTP(w, r)
 			return

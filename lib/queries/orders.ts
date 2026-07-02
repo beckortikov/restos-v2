@@ -31,8 +31,19 @@ export interface FetchOrdersResult {
 }
 
 export async function fetchOrders(opts?: FetchOrdersOptions): Promise<Order[]> {
-  const r = await fetchOrdersWithCursor(opts)
-  return r.orders
+  // Бэк капит limit до 200 (cursor.MaxLimit) — раньше одностраничный fetchOrders
+  // терял заказы >200 за период (дашборд/аналитика). Идём по next_cursor до
+  // конца, но не больше opts.limit (по умолчанию 5000 — потолок безопасности).
+  const cap = opts?.limit ?? 5000
+  const all: Order[] = []
+  let cursor = opts?.cursor
+  for (let guard = 0; guard < 200; guard++) {
+    const r = await fetchOrdersWithCursor({ ...opts, cursor })
+    all.push(...r.orders)
+    cursor = r.nextCursor ?? undefined
+    if (!cursor || r.orders.length === 0 || all.length >= cap) break
+  }
+  return all
 }
 
 export async function fetchOrdersWithCursor(opts?: FetchOrdersOptions): Promise<FetchOrdersResult> {

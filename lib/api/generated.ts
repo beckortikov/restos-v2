@@ -5568,6 +5568,11 @@ export interface paths {
                     content: {
                         "application/json": {
                             initialized?: boolean;
+                            /** @description id+name ресторанов (для выбора при входе по LAN без сохранённого restaurant_id) */
+                            restaurants?: {
+                                id?: string;
+                                name?: string;
+                            }[];
                         };
                     };
                 };
@@ -8337,6 +8342,56 @@ export interface paths {
          * Печать промежуточного X-отчёта (без обнуления)
          * @description Аналог print-z, но layout — X-отчёт (без секции «Расхождение»).
          *     Может вызываться при открытой смене.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** Format: uuid */
+                            job_id: string;
+                            status: string;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/shifts/{id}/print-service": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Печать чека «Обслуживание официантов» за смену
+         * @description Создаёт PrintJob type='service_report' с ESC/POS payload: по каждому
+         *     официанту начислено (service_amount), выплачено, к выплате + итоги.
+         *     Кнопка рядом с X/Z-отчётом. Работает при открытой и закрытой смене.
          */
         post: {
             parameters: {

@@ -200,8 +200,12 @@ private fun filterMenu(state: NewOrderUiState): List<MenuItemDto> {
         item.isAvailable && !item.stopListOverride &&
             !(item.isBatchCooking && (state.batchAvail[item.id] ?: item.preparedQty) <= 0)
     }
+    // .trim() обязателен: чипы категорий строятся по обрезанным именам
+    // (buildCategories), а menu_items.category может прийти с лишними пробелами.
+    // Без trim блюдо с пробелом в категории пропадало при выборе своей вкладки
+    // (в POS видно, у официанта — нет). OrderDetailScreen уже сравнивает с trim.
     val byCat = if (state.selectedCategoryId == null || q.isNotBlank()) visible
-    else visible.filter { it.category == state.selectedCategoryId }
+    else visible.filter { it.category?.trim() == state.selectedCategoryId }
     val filtered = if (q.isBlank()) byCat
     else byCat.filter { it.name.lowercase().contains(q) }
 
