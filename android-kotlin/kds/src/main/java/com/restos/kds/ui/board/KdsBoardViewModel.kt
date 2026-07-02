@@ -4,8 +4,11 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.restos.core.events.EventBus
 import com.restos.core.events.EventStreamClient
+import com.restos.core.events.ServerEvent
 import com.restos.kds.data.KdsItemDto
 import com.restos.kds.data.KdsRepository
+import com.restos.kds.data.KdsSettingsStore
+import com.restos.kds.data.KdsSounds
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,18 +21,21 @@ class KdsBoardViewModel @Inject constructor(
     private val repo: KdsRepository,
     private val eventStream: EventStreamClient,
     private val eventBus: EventBus,
+    private val sounds: KdsSounds,
+    private val settings: KdsSettingsStore,
 ) : ViewModel() {
 
     data class UiState(
         val loading: Boolean = true,
         val error: String? = null,
         val items: List<KdsItemDto> = emptyList(),
+        val soundEnabled: Boolean = true,
+        val cancelAlert: String? = null,
     )
 
     private val _state = MutableStateFlow(UiState())
     val state = _state.asStateFlow()
 
-    // Следующий статус по кнопке на карточке.
     private fun next(status: String): String? = when (status) {
         "pending" -> "cooking"
         "cooking" -> "ready"
@@ -40,10 +46,28 @@ class KdsBoardViewModel @Inject constructor(
     init {
         eventStream.start()
         refresh()
-        // Мгновенные обновления: любое SSE-событие → перезагрузка доски.
         viewModelScope.launch {
-            eventBus.events.collect { refresh() }
+            settings.soundEnabledFlow.collect { on -> _state.update { it.copy(soundEnabled = on) } }
         }
+        viewModelScope.launch {
+            eventBus.events.collect { evt -> onEvent(evt) }
+        }
+    }
+
+    private suspend fun onEvent(evt: ServerEvent) {
+        val soundOn = _state.value.soundEnabled
+        when (evt) {
+            is ServerEvent.OrderCreated -> if (soundOn) sounds.playNew()
+            is ServerEvent.Other -> when (evt.type) {
+                "order.item.added" -> if (soundOn) sounds.playNew()
+                "order.item.voided" -> {
+                    if (soundOn) sounds.playCancel()
+                    _state.update { it.copy(cancelAlert = "Блюдо отменено") }
+                }
+            }
+            else -> {}
+        }
+        refresh()
     }
 
     fun refresh() {
@@ -54,10 +78,8 @@ class KdsBoardViewModel @Inject constructor(
         }
     }
 
-    /** Кнопка на карточке — перевести блюдо в следующий статус. */
     fun advance(item: KdsItemDto) {
         val target = next(item.stationStatus) ?: return
-        // Оптимистично: убираем/сдвигаем сразу, затем подтверждаем сервером.
         _state.update { s ->
             s.copy(items = s.items.map { if (it.id == item.id) it.copy(stationStatus = target) else it })
         }
@@ -66,6 +88,14 @@ class KdsBoardViewModel @Inject constructor(
                 .onSuccess { refresh() }
                 .onFailure { refresh() }
         }
+    }
+
+    fun toggleSound() {
+        viewModelScope.launch { settings.setSoundEnabled(!_state.value.soundEnabled) }
+    }
+
+    fun dismissCancelAlert() {
+        _state.update { it.copy(cancelAlert = null) }
     }
 
     override fun onCleared() {

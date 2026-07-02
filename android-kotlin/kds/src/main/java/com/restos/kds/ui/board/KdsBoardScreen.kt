@@ -69,8 +69,24 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
         while (true) { now = System.currentTimeMillis(); delay(15_000) }
     }
 
+    // Баннер отмены — авто-скрытие через 4с.
+    LaunchedEffect(state.cancelAlert) {
+        if (state.cancelAlert != null) { delay(4000); vm.dismissCancelAlert() }
+    }
+
     Column(Modifier.fillMaxSize().background(KdsColors.Bg)) {
-        TopBar(count = state.items.size, nowMs = now)
+        TopBar(
+            count = state.items.size, nowMs = now,
+            soundOn = state.soundEnabled, onToggleSound = vm::toggleSound,
+        )
+        if (state.cancelAlert != null) {
+            Row(
+                Modifier.fillMaxWidth().background(KdsColors.Urgent).padding(horizontal = 20.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("⚠ ${state.cancelAlert}", color = KdsColors.OnSolid, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            }
+        }
         when {
             state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
                 CircularProgressIndicator(color = KdsColors.New)
@@ -92,7 +108,7 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun TopBar(count: Int, nowMs: Long) {
+private fun TopBar(count: Int, nowMs: Long, soundOn: Boolean, onToggleSound: () -> Unit) {
     val clock = remember(nowMs / 60000) {
         DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(nowMs))
     }
@@ -113,6 +129,13 @@ private fun TopBar(count: Int, nowMs: Long) {
         }
         Spacer(Modifier.weight(1f))
         Text("$count блюд", color = KdsColors.TextMid, fontSize = 14.sp)
+        Spacer(Modifier.width(16.dp))
+        // Тумблер звука (системный сигнал на новое/отменённое блюдо).
+        Text(
+            if (soundOn) "🔊" else "🔇",
+            fontSize = 22.sp,
+            modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onToggleSound() }.padding(4.dp),
+        )
         Spacer(Modifier.width(16.dp))
         Text(clock, color = KdsColors.TextHi, fontSize = 22.sp, fontWeight = FontWeight.Bold)
     }
