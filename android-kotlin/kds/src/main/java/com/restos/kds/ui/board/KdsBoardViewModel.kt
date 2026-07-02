@@ -31,6 +31,7 @@ class KdsBoardViewModel @Inject constructor(
         val items: List<KdsItemDto> = emptyList(),
         val soundEnabled: Boolean = true,
         val cancelAlert: String? = null,
+        val stations: List<String> = emptyList(), // выбранные; пусто = все
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -48,6 +49,12 @@ class KdsBoardViewModel @Inject constructor(
         refresh()
         viewModelScope.launch {
             settings.soundEnabledFlow.collect { on -> _state.update { it.copy(soundEnabled = on) } }
+        }
+        viewModelScope.launch {
+            settings.stationsFlow.collect { st ->
+                _state.update { it.copy(stations = st) }
+                refresh()
+            }
         }
         viewModelScope.launch {
             eventBus.events.collect { evt -> onEvent(evt) }
@@ -71,8 +78,9 @@ class KdsBoardViewModel @Inject constructor(
     }
 
     fun refresh() {
+        val stations = _state.value.stations
         viewModelScope.launch {
-            runCatching { repo.list(emptyList(), emptyList()) }
+            runCatching { repo.list(stations, emptyList()) }
                 .onSuccess { list -> _state.update { it.copy(loading = false, error = null, items = list) } }
                 .onFailure { e -> _state.update { it.copy(loading = false, error = e.message ?: "Ошибка загрузки") } }
         }
@@ -92,6 +100,10 @@ class KdsBoardViewModel @Inject constructor(
 
     fun toggleSound() {
         viewModelScope.launch { settings.setSoundEnabled(!_state.value.soundEnabled) }
+    }
+
+    fun setStations(stations: List<String>) {
+        viewModelScope.launch { settings.setStations(stations) }
     }
 
     fun dismissCancelAlert() {

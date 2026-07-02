@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.setValue
@@ -74,10 +75,20 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
         if (state.cancelAlert != null) { delay(4000); vm.dismissCancelAlert() }
     }
 
+    var showConfig by remember { mutableStateOf(false) }
+    if (showConfig) {
+        StationConfigDialog(
+            current = state.stations,
+            onDismiss = { showConfig = false },
+            onApply = { vm.setStations(it); showConfig = false },
+        )
+    }
+
     Column(Modifier.fillMaxSize().background(KdsColors.Bg)) {
         TopBar(
             count = state.items.size, nowMs = now,
             soundOn = state.soundEnabled, onToggleSound = vm::toggleSound,
+            onConfig = { showConfig = true },
         )
         if (state.cancelAlert != null) {
             Row(
@@ -108,7 +119,7 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun TopBar(count: Int, nowMs: Long, soundOn: Boolean, onToggleSound: () -> Unit) {
+private fun TopBar(count: Int, nowMs: Long, soundOn: Boolean, onToggleSound: () -> Unit, onConfig: () -> Unit) {
     val clock = remember(nowMs / 60000) {
         DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(nowMs))
     }
@@ -136,9 +147,65 @@ private fun TopBar(count: Int, nowMs: Long, soundOn: Boolean, onToggleSound: () 
             fontSize = 22.sp,
             modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onToggleSound() }.padding(4.dp),
         )
+        Spacer(Modifier.width(12.dp))
+        Text(
+            "⚙",
+            fontSize = 22.sp,
+            modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onConfig() }.padding(4.dp),
+        )
         Spacer(Modifier.width(16.dp))
         Text(clock, color = KdsColors.TextHi, fontSize = 22.sp, fontWeight = FontWeight.Bold)
     }
+}
+
+private val ALL_STATIONS = listOf(
+    "hot_kitchen" to "Горячий цех",
+    "cold_kitchen" to "Холодный цех",
+    "grill" to "Гриль",
+    "bar" to "Бар",
+    "showcase" to "Витрина",
+)
+
+@Composable
+private fun StationConfigDialog(current: List<String>, onDismiss: () -> Unit, onApply: (List<String>) -> Unit) {
+    // Пусто = все выбраны.
+    val selected = remember {
+        androidx.compose.runtime.mutableStateListOf<String>().apply {
+            addAll(if (current.isEmpty()) ALL_STATIONS.map { it.first } else current)
+        }
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = KdsColors.Card,
+        title = { Text("Станции на этом экране", color = KdsColors.TextHi, fontWeight = FontWeight.Bold) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                for ((key, label) in ALL_STATIONS) {
+                    val on = key in selected
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .clickable { if (on) selected.remove(key) else selected.add(key) }
+                            .padding(vertical = 12.dp, horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(if (on) "☑" else "☐", fontSize = 20.sp, color = if (on) KdsColors.New else KdsColors.TextDim)
+                        Spacer(Modifier.width(12.dp))
+                        Text(label, color = KdsColors.TextHi, fontSize = 16.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            androidx.compose.material3.TextButton(onClick = {
+                // Все выбраны → сохраняем пусто (= все).
+                val all = selected.size == ALL_STATIONS.size
+                onApply(if (all) emptyList() else selected.toList())
+            }) { Text("Применить", color = KdsColors.New, fontWeight = FontWeight.Bold) }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Отмена", color = KdsColors.TextMid) }
+        },
+    )
 }
 
 @Composable
