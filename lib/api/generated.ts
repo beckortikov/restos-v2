@@ -1768,6 +1768,102 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/kds/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Блюда на кухонной доске (per-dish, KDS)
+         * @description Позиции заказов «в работе» для кухонного дисплея. Каждое блюдо — отдельная карточка со своим статусом станции. Отсортировано по времени создания (FIFO). Отменённые позиции исключены (доставляются событием order.item.voided).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description CSV станций (hot_kitchen,grill); пусто = все */
+                    stations?: string;
+                    /** @description CSV статусов (pending,cooking,ready); пусто = в работе */
+                    status?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: components["schemas"]["KDSItem"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kds/items/{id}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Сменить статус блюда (кнопка на карточке)
+         * @description Переводит одну позицию в статус pending/cooking/ready/served. Идемпотентно. Не трогает orders.status и склад — отдельная плоскость KDS.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "pending" | "cooking" | "ready" | "served";
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["KDSItem"];
+                    };
+                };
+                404: components["responses"]["Error"];
+                422: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orders": {
         parameters: {
             query?: never;
@@ -9550,6 +9646,29 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Блюдо на кухонной доске (одна карточка KDS). */
+        KDSItem: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            order_id?: string;
+            order_number?: number;
+            /** @description hall/takeaway/delivery */
+            order_type?: string;
+            table_number?: number | null;
+            table_name?: string | null;
+            name?: string;
+            /** @description decimal */
+            qty?: string;
+            comment?: string | null;
+            station?: string;
+            /** @enum {string} */
+            station_status?: "pending" | "cooking" | "ready" | "served";
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            status_at?: string | null;
+        };
         ErrorEnvelope: {
             /** @description Стабильный машинно-читаемый код */
             code: string;
