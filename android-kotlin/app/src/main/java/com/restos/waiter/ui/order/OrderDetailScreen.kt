@@ -942,9 +942,12 @@ private fun OrderLineCard(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // Kitchen-status бейджи убраны по запросу — официанту лишний
-                // визуальный шум. Зачёркивание+ослабленный цвет на «served»
-                // через `served` уже даёт нужный сигнал.
+                // Статус готовки от повара (KDS): «Готовится» / «Готово».
+                // served уже показан зачёркиванием, pending — не показываем.
+                when (item.kitchenStatus) {
+                    "cooking" -> KitchenBadge("Готовится", Color(0xFFF59E0B))
+                    "ready" -> KitchenBadge("Готово", Color(0xFF22C55E))
+                }
                 Text(
                     run {
                         val isWeight = item.unit == "g" || item.unit == "kg"
@@ -1414,3 +1417,16 @@ private fun TransferTableDialog(
 
 private fun String.toBigDecimalSafe(): BigDecimal =
     runCatching { BigDecimal(this) }.getOrDefault(BigDecimal.ZERO)
+
+@Composable
+private fun KitchenBadge(text: String, color: Color) {
+    Box(
+        Modifier
+            .padding(top = 2.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(color.copy(alpha = 0.15f))
+            .padding(horizontal = 6.dp, vertical = 1.dp),
+    ) {
+        Text(text, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = color)
+    }
+}

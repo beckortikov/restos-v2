@@ -86,6 +86,12 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 		statuses = KDSStatuses
 	}
 
+	// KDS — «сегодняшняя смена»: только заказы, открытые сегодня (как экран кухни
+	// на кассе, from=startOfToday). Иначе после миграции 033 (все старые позиции
+	// получили station_status='pending') на доску вываливается вся история.
+	now := time.Now()
+	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+
 	q := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
 		Select(`oi.id, oi.order_id, oi.name, oi.qty, oi.note AS comment,
@@ -98,7 +104,8 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
 		Where("o.restaurant_id = ?", rid).
 		Where("oi.cancelled_at IS NULL").
-		Where("o.status NOT IN ?", []string{"done", "cancelled"}).
+		Where("o.status NOT IN ?", []string{"done", "served", "cancelled"}).
+		Where("o.created_at >= ?", startOfToday).
 		Where("oi.station_status IN ?", statuses)
 	if len(stations) > 0 {
 		q = q.Where("COALESCE(mi.station, 'hot_kitchen') IN ?", stations)
@@ -136,6 +143,26 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 		})
 	}
 	return out, nil
+}
+
+// ListStations — станции ресторана (уникальные menu_items.station) для настройки
+// KDS-дисплея. Клиент показывает их в выборе станций вместо хардкода.
+func (s *KDSService) ListStations(ctx context.Context) ([]string, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var stations []string
+	err = s.r.Raw().WithContext(ctx).
+		Model(&models.MenuItem{}).
+		Where("restaurant_id = ? AND station IS NOT NULL AND station <> ''", rid).
+		Distinct().
+		Order("station").
+		Pluck("station", &stations).Error
+	if err != nil {
+		return nil, err
+	}
+	return stations, nil
 }
 
 // SetItemStatus переводит одну позицию в указанный статус (кнопка на карточке:

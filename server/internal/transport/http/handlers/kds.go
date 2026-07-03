@@ -32,6 +32,16 @@ func (h *KDSHandler) List(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]any{"data": items})
 }
 
+// Stations — GET /api/v1/kds/stations. Станции ресторана для настройки дисплея.
+func (h *KDSHandler) Stations(w http.ResponseWriter, r *http.Request) {
+	stations, err := h.svc.ListStations(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"data": stations})
+}
+
 // SetStatus — POST /api/v1/kds/items/{id}/status.
 // Body: {"status":"cooking"}. Переводит блюдо в статус (кнопка на карточке).
 func (h *KDSHandler) SetStatus(w http.ResponseWriter, r *http.Request) {

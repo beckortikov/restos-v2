@@ -269,6 +269,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/shifts/{id}/operations", shiftsH.Operations)
 
 			g.Get("/kds/items", kdsH.List)
+			g.Get("/kds/stations", kdsH.Stations)
 			g.Get("/orders", ordersH.List)
 			g.Get("/orders/{id}", ordersH.Get)
 			g.Get("/order-items/{id}", ordersH.GetItem)
