@@ -496,7 +496,7 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	var catRows []catRow
 	if err := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
-		Select("COALESCE(NULLIF(mi.category, ''), 'Без категории') AS name, COUNT(oi.id) AS qty, COALESCE(SUM(oi.qty * oi.price), 0) AS total").
+		Select("COALESCE(NULLIF(mi.category, ''), 'Без категории') AS name, COUNT(oi.id) AS qty, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS total").
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Where("o.restaurant_id = ? AND o.shift_id = ? AND o.status = ? AND oi.cancelled_at IS NULL", rid, shiftID, "closed").
@@ -525,7 +525,7 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	var itemRows []itemRow
 	if err := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
-		Select("COALESCE(NULLIF(MAX(mi.name), ''), MAX(oi.name), 'Блюдо') AS name, COALESCE(SUM(oi.qty), 0) AS qty, COALESCE(SUM(oi.qty * oi.price), 0) AS total").
+		Select("COALESCE(NULLIF(MAX(mi.name), ''), MAX(oi.name), 'Блюдо') AS name, COALESCE(SUM(oi.qty), 0) AS qty, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS total").
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Where("o.restaurant_id = ? AND o.shift_id = ? AND o.status = ? AND oi.cancelled_at IS NULL", rid, shiftID, "closed").
