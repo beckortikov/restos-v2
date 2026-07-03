@@ -26,6 +26,15 @@ sealed interface ServerEvent {
     data class OrderUpdated(val orderId: String, val waiterId: String?, val status: String?) : ServerEvent
     data class TableUpdated(val tableId: String) : ServerEvent
 
+    /** Повар сменил статус блюда (KDS). Несёт контекст для адресного алерта официанту. */
+    data class KdsItemUpdated(
+        val orderId: String,
+        val waiterId: String?,
+        val status: String?,
+        val name: String?,
+        val orderNumber: Int?,
+    ) : ServerEvent
+
     /** Любое другое событие — для логирования / будущих фич. */
     data class Other(val type: String) : ServerEvent
 }

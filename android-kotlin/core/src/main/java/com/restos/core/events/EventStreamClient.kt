@@ -147,6 +147,16 @@ private class Listener(
                 if (tableId == null) ServerEvent.Other(t)
                 else ServerEvent.TableUpdated(tableId)
             }
+            "kds.item.updated" -> {
+                val p = parseJson(data)
+                ServerEvent.KdsItemUpdated(
+                    orderId = p.string("order_id") ?: "",
+                    waiterId = p.string("waiter_id")?.takeIf { it.isNotBlank() },
+                    status = p.string("station_status"),
+                    name = p.string("name"),
+                    orderNumber = p.string("order_number")?.toIntOrNull(),
+                )
+            }
             else -> ServerEvent.Other(t)
         }
     }

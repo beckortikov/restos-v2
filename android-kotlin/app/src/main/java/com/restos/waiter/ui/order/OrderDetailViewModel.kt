@@ -133,7 +133,7 @@ class OrderDetailViewModel @Inject constructor(
                     ServerEvent.Resync -> refreshOrderQuiet()
                     // Повар сменил статус блюда (KDS) — обновляем и звеним,
                     // если у ЭТОГО заказа появилось готовое блюдо.
-                    is ServerEvent.Other -> if (evt.type == "kds.item.updated") onKdsUpdate()
+                    is ServerEvent.KdsItemUpdated -> if (evt.orderId == orderId) onKdsUpdate()
                     else -> Unit
                 }
             }

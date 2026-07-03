@@ -10,6 +10,7 @@ import com.restos.kds.data.KdsRepository
 import com.restos.kds.data.KdsSettingsStore
 import com.restos.kds.data.KdsSounds
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
@@ -64,6 +65,16 @@ class KdsBoardViewModel @Inject constructor(
         }
         viewModelScope.launch {
             eventBus.events.collect { evt -> onEvent(evt) }
+        }
+        // Fallback-поллинг: SSE иногда теряет/задерживает события (реконнект,
+        // сетевая задержка заказа официанта по WiFi). Периодический refresh
+        // гарантирует, что доска не отстаёт больше чем на ~7с (диф всё равно
+        // не даст задвоить звук/карточки).
+        viewModelScope.launch {
+            while (true) {
+                delay(7_000)
+                refresh()
+            }
         }
     }
 

@@ -184,20 +184,25 @@ func (s *KDSService) SetItemStatus(ctx context.Context, itemID, status string) (
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 
-		// Позиция + tenant-проверка через JOIN на orders (у order_items нет restaurant_id).
-		var oi models.OrderItem
+		// Позиция + контекст заказа (waiter_id/order_number для адресного
+		// уведомления официанту). tenant-проверка через JOIN на orders.
+		var row struct {
+			models.OrderItem
+			WaiterID    *string `gorm:"column:waiter_id"`
+			OrderNumber int     `gorm:"column:order_number"`
+		}
 		err := tx.Table("order_items AS oi").
-			Select("oi.*").
+			Select("oi.*, o.waiter_id AS waiter_id, o.order_number AS order_number").
 			Joins("JOIN orders o ON o.id = oi.order_id").
 			Where("oi.id = ? AND o.restaurant_id = ?", itemID, rid).
-			First(&oi).Error
+			First(&row).Error
 		if err != nil {
 			if err == gorm.ErrRecordNotFound {
 				return apperrors.Wrap("NOT_FOUND", "order item not found", nil)
 			}
 			return err
 		}
-		if oi.CancelledAt != nil {
+		if row.CancelledAt != nil {
 			return apperrors.Wrap("VALIDATION", "item is cancelled", nil)
 		}
 
@@ -207,10 +212,17 @@ func (s *KDSService) SetItemStatus(ctx context.Context, itemID, status string) (
 			Updates(map[string]any{"station_status": status, "station_status_at": now}).Error; err != nil {
 			return err
 		}
+		name := ""
+		if row.Name != nil {
+			name = *row.Name
+		}
 		buf.Add(EventKDSItemUpdated, map[string]any{
 			"id":             itemID,
-			"order_id":       deref(oi.OrderID),
+			"order_id":       deref(row.OrderID),
 			"station_status": status,
+			"waiter_id":      deref(row.WaiterID),
+			"order_number":   row.OrderNumber,
+			"name":           name,
 		})
 		return nil
 	})

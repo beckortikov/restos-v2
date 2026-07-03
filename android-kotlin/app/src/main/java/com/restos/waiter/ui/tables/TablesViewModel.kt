@@ -70,6 +70,7 @@ class TablesViewModel @Inject constructor(
                     is ServerEvent.OrderCreated,
                     is ServerEvent.OrderUpdated,
                     is ServerEvent.TableUpdated -> refresh()
+                    is ServerEvent.KdsItemUpdated -> refresh()
                     is ServerEvent.Other -> Unit
                 }
             }
