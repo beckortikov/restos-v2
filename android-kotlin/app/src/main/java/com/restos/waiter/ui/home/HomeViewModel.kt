@@ -2,8 +2,8 @@ package com.restos.waiter.ui.home
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.restos.waiter.data.auth.AuthRepository
-import com.restos.waiter.data.net.ApiException
+import com.restos.core.auth.AuthRepository
+import com.restos.core.net.ApiException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow

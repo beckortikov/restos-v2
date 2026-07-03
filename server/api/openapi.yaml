@@ -637,6 +637,54 @@ paths:
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
 
   # ─── Orders ─────────────────────────────────────────────────────────────
+  /api/v1/kds/items:
+    get:
+      tags: [kds]
+      summary: Блюда на кухонной доске (per-dish, KDS)
+      description: >
+        Позиции заказов «в работе» для кухонного дисплея. Каждое блюдо — отдельная
+        карточка со своим статусом станции. Отсортировано по времени создания (FIFO).
+        Отменённые позиции исключены (доставляются событием order.item.voided).
+      parameters:
+        - { in: query, name: stations, schema: { type: string }, description: "CSV станций (hot_kitchen,grill); пусто = все" }
+        - { in: query, name: status, schema: { type: string }, description: "CSV статусов (pending,cooking,ready); пусто = в работе" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/KDSItem" }
+
+  /api/v1/kds/items/{id}/status:
+    post:
+      tags: [kds]
+      summary: Сменить статус блюда (кнопка на карточке)
+      description: >
+        Переводит одну позицию в статус pending/cooking/ready/served. Идемпотентно.
+        Не трогает orders.status и склад — отдельная плоскость KDS.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, cooking, ready, served] }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/KDSItem" } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
   /api/v1/orders:
     get:
       tags: [orders]
@@ -2764,6 +2812,24 @@ components:
 
   # ───── schemas ─────
   schemas:
+    KDSItem:
+      type: object
+      description: Блюдо на кухонной доске (одна карточка KDS).
+      properties:
+        id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        order_number: { type: integer }
+        order_type: { type: string, description: "hall/takeaway/delivery" }
+        table_number: { type: integer, nullable: true }
+        table_name: { type: string, nullable: true }
+        name: { type: string }
+        qty: { type: string, description: "decimal" }
+        comment: { type: string, nullable: true }
+        station: { type: string }
+        station_status: { type: string, enum: [pending, cooking, ready, served] }
+        created_at: { type: string, format: date-time }
+        status_at: { type: string, format: date-time, nullable: true }
+
     ErrorEnvelope:
       type: object
       required: [code, message]

@@ -2,7 +2,7 @@ package com.restos.waiter.ui.onboarding
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.restos.waiter.data.config.ServerConfigStore
+import com.restos.core.config.ServerConfigStore
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow

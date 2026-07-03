@@ -1,6 +1,6 @@
 package com.restos.waiter.data.onboarding
 
-import com.restos.waiter.data.net.AuthInterceptor
+import com.restos.core.net.AuthInterceptor
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import retrofit2.http.GET

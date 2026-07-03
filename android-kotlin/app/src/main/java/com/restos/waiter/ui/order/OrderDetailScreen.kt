@@ -307,11 +307,11 @@ private fun EditNoteDialog(
 
 @Composable
 private fun AssignWaiterDialog(
-    waiters: List<com.restos.waiter.data.auth.UserDto>,
+    waiters: List<com.restos.core.auth.UserDto>,
     currentWaiterId: String?,
     busy: Boolean,
     onDismiss: () -> Unit,
-    onPick: (com.restos.waiter.data.auth.UserDto) -> Unit,
+    onPick: (com.restos.core.auth.UserDto) -> Unit,
 ) {
     val others = remember(waiters, currentWaiterId) {
         waiters.filter { it.id != currentWaiterId }

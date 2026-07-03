@@ -1,6 +1,6 @@
 package com.restos.waiter.data.orders
 
-import com.restos.waiter.data.common.PagedEnvelope
+import com.restos.core.common.PagedEnvelope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import retrofit2.http.Body

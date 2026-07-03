@@ -15,3 +15,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "RestOS Waiter"
 include(":app")
+include(":core")
+include(":kds")

@@ -1,6 +1,6 @@
 package com.restos.waiter.data.cache
 
-import com.restos.waiter.data.auth.UserDto
+import com.restos.core.auth.UserDto
 import com.restos.waiter.data.menu.CategoryDto
 import com.restos.waiter.data.menu.MenuItemDto
 import com.restos.waiter.data.orders.OrderDto

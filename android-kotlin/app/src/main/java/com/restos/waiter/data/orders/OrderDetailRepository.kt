@@ -1,6 +1,6 @@
 package com.restos.waiter.data.orders
 
-import com.restos.waiter.data.auth.UserDto
+import com.restos.core.auth.UserDto
 import com.restos.waiter.data.cache.AppCache
 import com.restos.waiter.data.kitchen.KitchenApi
 import com.restos.waiter.data.menu.MenuApi

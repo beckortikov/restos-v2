@@ -3,11 +3,11 @@ package com.restos.waiter.ui.order
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.restos.waiter.data.auth.UserDto
-import com.restos.waiter.data.events.EventBus
-import com.restos.waiter.data.events.ServerEvent
+import com.restos.core.auth.UserDto
+import com.restos.core.events.EventBus
+import com.restos.core.events.ServerEvent
 import com.restos.waiter.data.menu.MenuItemDto
-import com.restos.waiter.data.net.ApiException
+import com.restos.core.net.ApiException
 import com.restos.waiter.data.orders.CancelReasons
 import com.restos.waiter.data.orders.NewOrderItem
 import com.restos.waiter.data.orders.OrderDetailRepository
@@ -58,7 +58,7 @@ class OrderDetailViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val repo: OrderDetailRepository,
     private val eventBus: EventBus,
-    private val auth: com.restos.waiter.data.auth.AuthRepository,
+    private val auth: com.restos.core.auth.AuthRepository,
 ) : ViewModel() {
 
     val orderId: String = checkNotNull(savedStateHandle.get<String>("orderId")) {

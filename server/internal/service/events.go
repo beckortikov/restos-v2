@@ -40,6 +40,7 @@ const (
 	EventOrderCancelled  = "order.cancelled"
 	EventOrderItemAdded  = "order.item.added"
 	EventOrderItemVoided = "order.item.voided"
+	EventKDSItemUpdated  = "kds.item.updated" // per-dish статус на кухне сменился (KDS)
 	EventTableUpdated    = "table.updated"
 	EventStockMovement   = "stock.movement"
 	EventShiftOpened     = "shift.opened"
