@@ -141,6 +141,10 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 		switch f.Status {
 		case "new", "open":
 			q = q.Where("status IN ?", []string{"new", "open"})
+		case "closed":
+			// Раздел «Закрытые»: только финализированные заказы (оплачен/отменён),
+			// НЕ активные «Новый». Оба под-фильтра (Оплаченные/Отменённые) — их подмножества.
+			q = q.Where("status IN ?", []string{"done", "cancelled"})
 		default:
 			q = q.Where("status = ?", f.Status)
 		}

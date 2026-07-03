@@ -105,7 +105,9 @@ export function HistoryOrdersTab() {
   const load = useCallback(async (opts?: { append?: boolean; cursor?: string }) => {
     const from = parseYmdToDate(range.from)
     const to = parseYmdToDate(range.to, true)
-    const status = statusFilter === 'all' ? undefined : statusFilter
+    // «Закрытые» = только финализированные. «Все» под-фильтр → closed (done+cancelled),
+    // иначе активные «Новый» протекали в историю. Оплаченные/Отменённые — как есть.
+    const status = statusFilter === 'all' ? 'closed' : statusFilter
     const type = typeFilter === 'all' ? undefined : typeFilter
 
     if (!opts?.append) setLoading(true); else setLoadingMore(true)
