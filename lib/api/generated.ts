@@ -1814,6 +1814,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/kds/stations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Станции ресторана (для настройки KDS-дисплея)
+         * @description Уникальные menu_items.station ресторана — экран кухни выбирает из них.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: string[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/kds/items/{id}/status": {
         parameters: {
             query?: never;
