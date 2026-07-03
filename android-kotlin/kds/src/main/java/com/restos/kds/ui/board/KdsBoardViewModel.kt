@@ -67,19 +67,16 @@ class KdsBoardViewModel @Inject constructor(
         }
     }
 
+    private var loaded = false
+    private var knownIds: Set<String> = emptySet()
+
     private suspend fun onEvent(evt: ServerEvent) {
-        val soundOn = _state.value.soundEnabled
-        when (evt) {
-            is ServerEvent.OrderCreated -> if (soundOn) sounds.playNew()
-            is ServerEvent.Other -> when (evt.type) {
-                "order.item.added" -> if (soundOn) sounds.playNew()
-                "order.item.voided" -> {
-                    if (soundOn) sounds.playCancel()
-                    _state.update { it.copy(cancelAlert = "Блюдо отменено") }
-                }
-            }
-            else -> {}
+        // Отмена — по событию (блюдо уже уходит с доски, дифом не поймать).
+        if (evt is ServerEvent.Other && evt.type == "order.item.voided") {
+            if (_state.value.soundEnabled) sounds.playCancel()
+            _state.update { it.copy(cancelAlert = "Блюдо отменено") }
         }
+        // Новое блюдо — по дифу в refresh (надёжнее, чем гадать по типу события).
         refresh()
     }
 
@@ -87,7 +84,16 @@ class KdsBoardViewModel @Inject constructor(
         val stations = _state.value.stations
         viewModelScope.launch {
             runCatching { repo.list(stations, emptyList()) }
-                .onSuccess { list -> _state.update { it.copy(loading = false, error = null, items = list) } }
+                .onSuccess { list ->
+                    val newIds = list.mapTo(HashSet()) { it.id }
+                    val added = newIds - knownIds
+                    val ring = loaded && added.isNotEmpty()
+                    knownIds = newIds
+                    loaded = true
+                    _state.update { it.copy(loading = false, error = null, items = list) }
+                    // Пришло новое блюдо на доску → сигнал (если звук вкл).
+                    if (ring && _state.value.soundEnabled) sounds.playNew()
+                }
                 .onFailure { e -> _state.update { it.copy(loading = false, error = e.message ?: "Ошибка загрузки") } }
         }
     }

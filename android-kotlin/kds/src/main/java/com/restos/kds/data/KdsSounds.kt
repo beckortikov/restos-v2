@@ -24,7 +24,10 @@ class KdsSounds @Inject constructor(
     private var alarm: Ringtone? = null
 
     fun playNew() {
-        play(RingtoneManager.TYPE_NOTIFICATION, AudioAttributes.USAGE_NOTIFICATION_EVENT)
+        // USAGE_ALARM → играет даже в «беззвучном»/DND режиме (кухонный планшет
+        // часто замьючен). Звук — notification-рингтон (короткий), но на alarm-потоке.
+        val r = play(RingtoneManager.TYPE_NOTIFICATION, AudioAttributes.USAGE_ALARM) ?: return
+        main.postDelayed({ runCatching { r.stop() } }, 3000)
     }
 
     fun playCancel() {
