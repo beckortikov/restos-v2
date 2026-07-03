@@ -90,7 +90,7 @@ function OrderCardInner({ order, tablesData, usersData, voids, servicePercent, o
   const waiter = order.waiterId ? usersData.find((u) => u.id === order.waiterId) : null
   const [expanded, setExpanded] = useState(false)
   const voidedFlags = voidedItemFlags(order.items, voids)
-  const liveCount = order.items.reduce((s, it, idx) => s + (!it.cancelledAt && !voidedFlags[idx] ? 1 : 0), 0)
+  const liveCount = (order.items.length > 0 ? order.items.reduce((s, it, idx) => s + (!it.cancelledAt && !voidedFlags[idx] ? 1 : 0), 0) : (order.aliveItemsCount ?? 0))
   const cancelledCount = order.items.reduce((s, it) => s + (it.cancelledAt ? 1 : 0), 0)
   const voidedCount = voidedFlags.reduce((s, f, idx) => s + (f && !order.items[idx].cancelledAt ? 1 : 0), 0)
 
@@ -184,7 +184,7 @@ function OrderRowInner({ order, tablesData, usersData, voids, servicePercent, on
   const table = order.tableId ? tablesData.find((t) => t.id === order.tableId) : null
   const waiter = order.waiterId ? usersData.find((u) => u.id === order.waiterId) : null
   const voidedFlags = voidedItemFlags(order.items, voids)
-  const liveCount = order.items.reduce((s, it, idx) => s + (!it.cancelledAt && !voidedFlags[idx] ? 1 : 0), 0)
+  const liveCount = (order.items.length > 0 ? order.items.reduce((s, it, idx) => s + (!it.cancelledAt && !voidedFlags[idx] ? 1 : 0), 0) : (order.aliveItemsCount ?? 0))
   const cancelledCount = order.items.reduce((s, it) => s + (it.cancelledAt ? 1 : 0), 0)
   const voidedCount = voidedFlags.reduce((s, f, idx) => s + (f && !order.items[idx].cancelledAt ? 1 : 0), 0)
 
@@ -321,7 +321,7 @@ export function VirtualOrderRows({ orders, tablesData, usersData, voidsByOrderId
             const waiter = order.waiterId ? usersData.find((u) => u.id === order.waiterId) : null
             const voids = voidsByOrderId.get(order.id)
             const voidedFlags = voidedItemFlags(order.items, voids)
-            const liveCount = order.items.reduce((s, it, idx) => s + (!it.cancelledAt && !voidedFlags[idx] ? 1 : 0), 0)
+            const liveCount = (order.items.length > 0 ? order.items.reduce((s, it, idx) => s + (!it.cancelledAt && !voidedFlags[idx] ? 1 : 0), 0) : (order.aliveItemsCount ?? 0))
             const cancelledCount = order.items.reduce((s, it) => s + (it.cancelledAt ? 1 : 0), 0)
             const voidedCount = voidedFlags.reduce((s, f, idx) => s + (f && !order.items[idx].cancelledAt ? 1 : 0), 0)
             return (
