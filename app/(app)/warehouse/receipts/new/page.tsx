@@ -80,7 +80,6 @@ function SupplierCombobox({
   const selected = suppliers.find((s) => s.id === selectedId)
   const filtered = suppliers
     .filter((s) => s.name.toLowerCase().includes(query.toLowerCase()))
-    .slice(0, 8)
 
   const handleCreate = async () => {
     if (creating || !query.trim()) return
