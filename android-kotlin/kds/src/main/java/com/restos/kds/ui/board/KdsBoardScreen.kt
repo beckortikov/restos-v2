@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +82,9 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
         StationConfigDialog(
             current = state.stations,
             available = state.availableStations,
+            soundId = state.soundId,
+            soundNames = vm.soundNames,
+            onPickSound = { vm.setSoundId(it); vm.previewSound(it) },
             onDismiss = { showConfig = false },
             onApply = { vm.setStations(it); showConfig = false },
         )
@@ -174,6 +179,9 @@ private fun stationLabel(key: String) = STATION_LABELS[key] ?: key
 private fun StationConfigDialog(
     current: List<String>,
     available: List<String>,
+    soundId: Int,
+    soundNames: List<String>,
+    onPickSound: (Int) -> Unit,
     onDismiss: () -> Unit,
     onApply: (List<String>) -> Unit,
 ) {
@@ -186,12 +194,34 @@ private fun StationConfigDialog(
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = KdsColors.Card,
-        title = { Text("Станции на этом экране", color = KdsColors.TextHi, fontWeight = FontWeight.Bold) },
+        title = { Text("Настройки дисплея", color = KdsColors.TextHi, fontWeight = FontWeight.Bold) },
         text = {
-            if (available.isEmpty()) {
-                Text("Станции не загружены (нет связи с кассой).", color = KdsColors.TextMid, fontSize = 14.sp)
-            } else {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+            ) {
+                // ─── Звук сигнала (громкий, на выбор) ───
+                Text("Звук нового блюда", color = KdsColors.TextMid, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                soundNames.forEachIndexed { idx, name ->
+                    val on = idx == soundId
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                            .clickable { onPickSound(idx) }
+                            .padding(vertical = 10.dp, horizontal = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(if (on) "◉" else "○", fontSize = 20.sp, color = if (on) KdsColors.New else KdsColors.TextDim)
+                        Spacer(Modifier.width(12.dp))
+                        Text(name, color = KdsColors.TextHi, fontSize = 16.sp, modifier = Modifier.weight(1f))
+                        Text("▶", fontSize = 16.sp, color = KdsColors.TextMid)
+                    }
+                }
+
+                Spacer(Modifier.height(8.dp))
+                Text("Станции на этом экране", color = KdsColors.TextMid, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                if (available.isEmpty()) {
+                    Text("Станции не загружены (нет связи с кассой).", color = KdsColors.TextMid, fontSize = 14.sp)
+                } else {
                     for (key in available) {
                         val on = key in selected
                         Row(

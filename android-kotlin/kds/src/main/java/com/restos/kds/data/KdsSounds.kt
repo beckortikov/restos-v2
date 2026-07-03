@@ -1,51 +1,50 @@
 package com.restos.kds.data
 
-import android.content.Context
-import android.media.AudioAttributes
-import android.media.Ringtone
-import android.media.RingtoneManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import android.os.Handler
 import android.os.Looper
-import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * KdsSounds — системные звуковые сигналы кухни.
- *  - новое блюдо: короткий notification-сигнал;
- *  - отмена: тревожный alarm-сигнал (громче, отдельный поток), гасится через 2с.
- * Использует системные рингтоны (настройка громкости — системная, «системный + настройка»).
+ * KdsSounds — громкие сигналы кухни на потоке ALARM (слышно даже в беззвучном/DND
+ * режиме и на замьюченном планшете). Несколько пресетов на выбор — синтез через
+ * ToneGenerator, без бинарных ассетов. Громкость — максимальная для alarm-потока.
  */
 @Singleton
-class KdsSounds @Inject constructor(
-    @ApplicationContext private val context: Context,
-) {
+class KdsSounds @Inject constructor() {
+
+    data class Preset(val name: String, private val tone: Int, val durationMs: Int) {
+        val toneType get() = tone
+    }
+
+    // Порядок = id пресета (хранится в настройках).
+    val presets = listOf(
+        Preset("Двойной бип", ToneGenerator.TONE_PROP_BEEP2, 700),
+        Preset("Длинный сигнал", ToneGenerator.TONE_CDMA_HIGH_L, 1300),
+        Preset("Тревога", ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 1500),
+        Preset("Звонок", ToneGenerator.TONE_CDMA_ABBR_ALERT, 1000),
+        Preset("Сирена", ToneGenerator.TONE_CDMA_ABBR_REORDER, 1500),
+    )
+
     private val main = Handler(Looper.getMainLooper())
-    private var alarm: Ringtone? = null
 
-    fun playNew() {
-        // USAGE_ALARM → играет даже в «беззвучном»/DND режиме (кухонный планшет
-        // часто замьючен). Звук — notification-рингтон (короткий), но на alarm-потоке.
-        val r = play(RingtoneManager.TYPE_NOTIFICATION, AudioAttributes.USAGE_ALARM) ?: return
-        main.postDelayed({ runCatching { r.stop() } }, 3000)
+    /** Сигнал «новое блюдо» выбранным пресетом. */
+    fun playNew(soundId: Int) = playTone(soundId)
+
+    /** Превью пресета (кнопка ▶ в настройках). */
+    fun preview(soundId: Int) = playTone(soundId)
+
+    /** Отмена — всегда тревожный пресет, отдельно от выбранного. */
+    fun playCancel() = playTone(2)
+
+    private fun playTone(soundId: Int) {
+        val p = presets.getOrElse(soundId) { presets.first() }
+        runCatching {
+            val tg = ToneGenerator(AudioManager.STREAM_ALARM, ToneGenerator.MAX_VOLUME)
+            tg.startTone(p.toneType, p.durationMs)
+            main.postDelayed({ runCatching { tg.release() } }, (p.durationMs + 400).toLong())
+        }
     }
-
-    fun playCancel() {
-        val r = play(RingtoneManager.TYPE_ALARM, AudioAttributes.USAGE_ALARM) ?: return
-        alarm = r
-        // Не даём alarm-рингтону звучать бесконечно — гасим через 2 секунды.
-        main.postDelayed({ runCatching { r.stop() } }, 2000)
-    }
-
-    private fun play(type: Int, usage: Int): Ringtone? = runCatching {
-        val uri = RingtoneManager.getActualDefaultRingtoneUri(context, type)
-            ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-        val r = RingtoneManager.getRingtone(context, uri) ?: return null
-        r.audioAttributes = AudioAttributes.Builder()
-            .setUsage(usage)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        r.play()
-        r
-    }.getOrNull()
 }

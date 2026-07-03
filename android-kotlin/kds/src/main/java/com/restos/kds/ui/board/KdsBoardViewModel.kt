@@ -31,6 +31,7 @@ class KdsBoardViewModel @Inject constructor(
         val error: String? = null,
         val items: List<KdsItemDto> = emptyList(),
         val soundEnabled: Boolean = true,
+        val soundId: Int = 0,
         val cancelAlert: String? = null,
         val stations: List<String> = emptyList(),          // выбранные; пусто = все
         val availableStations: List<String> = emptyList(), // все станции ресторана (из API)
@@ -56,6 +57,9 @@ class KdsBoardViewModel @Inject constructor(
         }
         viewModelScope.launch {
             settings.soundEnabledFlow.collect { on -> _state.update { it.copy(soundEnabled = on) } }
+        }
+        viewModelScope.launch {
+            settings.soundIdFlow.collect { id -> _state.update { it.copy(soundId = id) } }
         }
         viewModelScope.launch {
             settings.stationsFlow.collect { st ->
@@ -103,7 +107,7 @@ class KdsBoardViewModel @Inject constructor(
                     loaded = true
                     _state.update { it.copy(loading = false, error = null, items = list) }
                     // Пришло новое блюдо на доску → сигнал (если звук вкл).
-                    if (ring && _state.value.soundEnabled) sounds.playNew()
+                    if (ring && _state.value.soundEnabled) sounds.playNew(_state.value.soundId)
                 }
                 .onFailure { e -> _state.update { it.copy(loading = false, error = e.message ?: "Ошибка загрузки") } }
         }
@@ -124,6 +128,16 @@ class KdsBoardViewModel @Inject constructor(
     fun toggleSound() {
         viewModelScope.launch { settings.setSoundEnabled(!_state.value.soundEnabled) }
     }
+
+    /** Названия пресетов звука для настроек. */
+    val soundNames: List<String> get() = sounds.presets.map { it.name }
+
+    fun setSoundId(id: Int) {
+        viewModelScope.launch { settings.setSoundId(id) }
+    }
+
+    /** Проиграть превью пресета (кнопка в настройках). */
+    fun previewSound(id: Int) = sounds.preview(id)
 
     fun setStations(stations: List<String>) {
         viewModelScope.launch { settings.setStations(stations) }
