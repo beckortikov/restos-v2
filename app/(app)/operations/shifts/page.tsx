@@ -703,12 +703,17 @@ export default function ShiftsPage() {
                 ) : (
                   <div className="space-y-1.5 text-sm">
                     {zReport.revenueByMethod.map(m => {
-                      const label = m.paymentMethod === 'cash' ? 'Наличные'
+                      // Для безнала показываем имя конкретного счёта/терминала
+                      // («какая карта»); для наличных — обобщённое «Наличные».
+                      const genericLabel = m.paymentMethod === 'cash' ? 'Наличные'
                         : m.paymentMethod === 'card' ? 'Банк. карта'
                         : m.paymentMethod === 'transfer' ? 'Перевод'
                         : m.paymentMethod || '—'
+                      const label = m.accountType === 'cash'
+                        ? genericLabel
+                        : (m.accountName || genericLabel)
                       return (
-                        <div key={m.paymentMethod || 'unknown'} className="flex items-center justify-between">
+                        <div key={m.accountId || m.paymentMethod || 'unknown'} className="flex items-center justify-between">
                           <span className="text-muted-foreground">{label} <span className="text-[11px]">({m.ordersCount})</span></span>
                           <span className="font-medium text-foreground tabular-nums">{formatCurrency(m.total)}</span>
                         </div>

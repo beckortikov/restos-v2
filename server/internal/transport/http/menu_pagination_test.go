@@ -48,8 +48,10 @@ func TestMenuList_CursorReturnsAll(t *testing.T) {
 			t.Fatalf("list page %d: %d %s", page, resp.StatusCode, b)
 		}
 		var env struct {
-			Data       []struct{ ID string `json:"id"` } `json:"data"`
-			NextCursor string                             `json:"next_cursor"`
+			Data []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+			NextCursor string `json:"next_cursor"`
 		}
 		if err := json.Unmarshal(b, &env); err != nil {
 			t.Fatal(err)

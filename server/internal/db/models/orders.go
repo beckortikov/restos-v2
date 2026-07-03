@@ -58,37 +58,37 @@ func (Order) TableName() string { return "orders" }
 
 // OrderItem — позиция в заказе.
 type OrderItem struct {
-	ID                   string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	OrderID              *string         `gorm:"column:order_id;type:uuid;index" json:"order_id"`
-	MenuItemID           *string         `gorm:"column:menu_item_id;type:uuid" json:"menu_item_id"`
-	Name                 *string         `json:"name"`
-	Note                 *string         `gorm:"column:note" json:"note"`
-	Qty                  decimal.Decimal `gorm:"type:numeric(14,4);default:1" json:"qty"`
-	QtyPrinted           decimal.Decimal `gorm:"column:qty_printed;type:numeric(14,4);default:0" json:"qty_printed"`
-	Price                decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"price"`
-	COGS                 decimal.Decimal `gorm:"column:cogs;type:numeric(14,4);default:0" json:"cogs"`
-	Unit                 *string         `gorm:"default:'piece'" json:"unit"`
-	UnitSize             decimal.Decimal `gorm:"column:unit_size;type:numeric(14,4);default:1" json:"unit_size"`
+	ID         string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	OrderID    *string         `gorm:"column:order_id;type:uuid;index" json:"order_id"`
+	MenuItemID *string         `gorm:"column:menu_item_id;type:uuid" json:"menu_item_id"`
+	Name       *string         `json:"name"`
+	Note       *string         `gorm:"column:note" json:"note"`
+	Qty        decimal.Decimal `gorm:"type:numeric(14,4);default:1" json:"qty"`
+	QtyPrinted decimal.Decimal `gorm:"column:qty_printed;type:numeric(14,4);default:0" json:"qty_printed"`
+	Price      decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"price"`
+	COGS       decimal.Decimal `gorm:"column:cogs;type:numeric(14,4);default:0" json:"cogs"`
+	Unit       *string         `gorm:"default:'piece'" json:"unit"`
+	UnitSize   decimal.Decimal `gorm:"column:unit_size;type:numeric(14,4);default:1" json:"unit_size"`
 	// LineTotal — НЕ хранится в БД; вычисляется при чтении (price × effectivePortions).
 	// Источник правды по сумме позиции для клиентов, чтобы они не дублировали
 	// формулу веса (price × qty/unitSize) и не расходились с бэком.
 	LineTotal *decimal.Decimal `gorm:"-" json:"line_total,omitempty"`
 	// StationStatus — per-dish статус на кухне (KDS): pending/cooking/ready/served.
 	// Отдельно от orders.status — каждое блюдо двигается независимо (миграция 033).
-	StationStatus        *string         `gorm:"column:station_status;default:'pending';index" json:"station_status"`
-	StationStatusAt      *time.Time      `gorm:"column:station_status_at" json:"station_status_at"`
-	CancelledAt          *time.Time      `gorm:"column:cancelled_at" json:"cancelled_at"`
-	CancelledBy          *string         `gorm:"column:cancelled_by" json:"cancelled_by"`
-	CancelReason         *string         `gorm:"column:cancel_reason" json:"cancel_reason"`
-	PrintedAt            *time.Time      `gorm:"column:printed_at" json:"printed_at"`
-	CancelPrintedAt      *time.Time      `gorm:"column:cancel_printed_at" json:"cancel_printed_at"`
-	ServedAt             *time.Time      `gorm:"column:served_at" json:"served_at"`
-	PrintClaimedAt       *time.Time      `gorm:"column:print_claimed_at" json:"print_claimed_at"`
-	PrintClaimedBy       *string         `gorm:"column:print_claimed_by" json:"print_claimed_by"`
-	CancelPrintClaimedAt *time.Time      `gorm:"column:cancel_print_claimed_at" json:"cancel_print_claimed_at"`
-	CancelPrintClaimedBy *string         `gorm:"column:cancel_print_claimed_by" json:"cancel_print_claimed_by"`
-	CreatedAt            time.Time       `json:"created_at"`
-	UpdatedAt            time.Time       `json:"updated_at"`
+	StationStatus        *string    `gorm:"column:station_status;default:'pending';index" json:"station_status"`
+	StationStatusAt      *time.Time `gorm:"column:station_status_at" json:"station_status_at"`
+	CancelledAt          *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`
+	CancelledBy          *string    `gorm:"column:cancelled_by" json:"cancelled_by"`
+	CancelReason         *string    `gorm:"column:cancel_reason" json:"cancel_reason"`
+	PrintedAt            *time.Time `gorm:"column:printed_at" json:"printed_at"`
+	CancelPrintedAt      *time.Time `gorm:"column:cancel_printed_at" json:"cancel_printed_at"`
+	ServedAt             *time.Time `gorm:"column:served_at" json:"served_at"`
+	PrintClaimedAt       *time.Time `gorm:"column:print_claimed_at" json:"print_claimed_at"`
+	PrintClaimedBy       *string    `gorm:"column:print_claimed_by" json:"print_claimed_by"`
+	CancelPrintClaimedAt *time.Time `gorm:"column:cancel_print_claimed_at" json:"cancel_print_claimed_at"`
+	CancelPrintClaimedBy *string    `gorm:"column:cancel_print_claimed_by" json:"cancel_print_claimed_by"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 func (OrderItem) TableName() string { return "order_items" }

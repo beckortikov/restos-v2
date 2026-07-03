@@ -159,6 +159,78 @@ func TestPhase14_ShiftZReport(t *testing.T) {
 	}
 }
 
+// Split-payment заказ должен раскладываться в revenue_by_method по конкретным
+// счетам (наличные + именованный банк-счёт), а не попадать целиком в «split».
+func TestPhase14_ShiftZReport_SplitPayment(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, menuItemID, shiftID, cashAccountID := seedForWrite(t, f)
+
+	// Отдельный банк-счёт («конкретная карта») для карточной части оплаты.
+	bankAccountID := uuid.NewString()
+	bankName := "Kaspi терминал"
+	bankType := "bank"
+	if err := gdb.Create(&models.FinancialAccount{
+		ID: bankAccountID, Name: &bankName, Type: &bankType, RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	orderID, _ := phase13_createOrder(t, f, tok, menuItemID, 2) // total = 50
+	closePath := fmt.Sprintf("/api/v1/orders/%s/close", orderID)
+	r, b := f.post(t, closePath, tok, uuid.NewString(), map[string]any{
+		"shift_id": shiftID,
+		"payments": []map[string]any{
+			{"method": "cash", "amount": "20", "account_id": cashAccountID},
+			{"method": "card", "amount": "30", "account_id": bankAccountID},
+		},
+	})
+	if r.StatusCode != 200 {
+		t.Fatalf("close split order: %d %s", r.StatusCode, b)
+	}
+
+	rz, bz := f.get(t, fmt.Sprintf("/api/v1/shifts/%s/zreport", shiftID), tok)
+	if rz.StatusCode != 200 {
+		t.Fatalf("zreport: %d %s", rz.StatusCode, bz)
+	}
+	var z struct {
+		RevenueByMethod []struct {
+			PaymentMethod string          `json:"payment_method"`
+			AccountID     string          `json:"account_id"`
+			AccountName   string          `json:"account_name"`
+			AccountType   string          `json:"account_type"`
+			OrdersCount   int             `json:"orders_count"`
+			Total         decimal.Decimal `json:"total"`
+		} `json:"revenue_by_method"`
+	}
+	if err := json.Unmarshal(bz, &z); err != nil {
+		t.Fatalf("decode zreport: %v", err)
+	}
+	byAccount := map[string]struct {
+		name  string
+		pm    string
+		total decimal.Decimal
+	}{}
+	for _, m := range z.RevenueByMethod {
+		if m.PaymentMethod == "split" {
+			t.Errorf("revenue_by_method still contains raw 'split' bucket: %+v", m)
+		}
+		byAccount[m.AccountID] = struct {
+			name  string
+			pm    string
+			total decimal.Decimal
+		}{m.AccountName, m.PaymentMethod, m.Total}
+	}
+	cash := byAccount[cashAccountID]
+	if !cash.total.Equal(decimal.MustFromString("20")) || cash.pm != "cash" {
+		t.Errorf("cash account bucket = %+v, want total 20 / cash", cash)
+	}
+	bank := byAccount[bankAccountID]
+	if !bank.total.Equal(decimal.MustFromString("30")) || bank.pm != "card" || bank.name != bankName {
+		t.Errorf("bank account bucket = %+v, want total 30 / card / %q", bank, bankName)
+	}
+}
+
 // ─── Stop list: low-stock ingredient + manual override ────────────────────
 
 func TestPhase14_StopList(t *testing.T) {
