@@ -660,6 +660,21 @@ paths:
                     type: array
                     items: { $ref: "#/components/schemas/KDSItem" }
 
+  /api/v1/kds/stations:
+    get:
+      tags: [kds]
+      summary: Станции ресторана (для настройки KDS-дисплея)
+      description: Уникальные menu_items.station ресторана — экран кухни выбирает из них.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: string } }
+
   /api/v1/kds/items/{id}/status:
     post:
       tags: [kds]
