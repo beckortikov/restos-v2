@@ -27,6 +27,9 @@ data class KdsListResponse(val data: List<KdsItemDto> = emptyList())
 @Serializable
 data class SetStatusRequest(val status: String)
 
+@Serializable
+data class StationsResponse(val data: List<String> = emptyList())
+
 /** GET /bootstrap/status — для онбординга KDS (выбор ресторана). */
 @Serializable
 data class BootstrapStatusDto(

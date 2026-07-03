@@ -59,6 +59,7 @@ class OrderDetailViewModel @Inject constructor(
     private val repo: OrderDetailRepository,
     private val eventBus: EventBus,
     private val auth: com.restos.core.auth.AuthRepository,
+    private val chime: com.restos.core.sound.Chime,
 ) : ViewModel() {
 
     val orderId: String = checkNotNull(savedStateHandle.get<String>("orderId")) {
@@ -130,8 +131,24 @@ class OrderDetailViewModel @Inject constructor(
                 when (evt) {
                     is ServerEvent.OrderUpdated -> if (evt.orderId == orderId) refreshOrderQuiet()
                     ServerEvent.Resync -> refreshOrderQuiet()
+                    // Повар сменил статус блюда (KDS) — обновляем и звеним,
+                    // если у ЭТОГО заказа появилось готовое блюдо.
+                    is ServerEvent.Other -> if (evt.type == "kds.item.updated") onKdsUpdate()
                     else -> Unit
                 }
+            }
+        }
+    }
+
+    /** kds.item.updated: обновить заказ и звякнуть при новом готовом блюде. */
+    private fun onKdsUpdate() {
+        viewModelScope.launch {
+            val before = _state.value.order?.items
+                ?.filter { it.kitchenStatus == "ready" }?.map { it.id }?.toSet() ?: emptySet()
+            runCatching { repo.refreshOrder(orderId) }.onSuccess { fresh ->
+                _state.update { it.copy(order = fresh) }
+                val nowReady = fresh.items.filter { it.kitchenStatus == "ready" }.map { it.id }.toSet()
+                if ((nowReady - before).isNotEmpty()) chime.playReady()
             }
         }
     }

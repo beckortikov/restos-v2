@@ -31,7 +31,8 @@ class KdsBoardViewModel @Inject constructor(
         val items: List<KdsItemDto> = emptyList(),
         val soundEnabled: Boolean = true,
         val cancelAlert: String? = null,
-        val stations: List<String> = emptyList(), // выбранные; пусто = все
+        val stations: List<String> = emptyList(),          // выбранные; пусто = все
+        val availableStations: List<String> = emptyList(), // все станции ресторана (из API)
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -47,6 +48,11 @@ class KdsBoardViewModel @Inject constructor(
     init {
         eventStream.start()
         refresh()
+        viewModelScope.launch {
+            runCatching { repo.stations() }.onSuccess { st ->
+                _state.update { it.copy(availableStations = st) }
+            }
+        }
         viewModelScope.launch {
             settings.soundEnabledFlow.collect { on -> _state.update { it.copy(soundEnabled = on) } }
         }

@@ -15,4 +15,6 @@ class KdsRepository @Inject constructor(
 
     suspend fun setStatus(id: String, status: String): KdsItemDto =
         api.setStatus(id, SetStatusRequest(status))
+
+    suspend fun stations(): List<String> = api.stations().data
 }
