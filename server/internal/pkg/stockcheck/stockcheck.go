@@ -64,6 +64,10 @@ type IngredientInfo struct {
 	Name         string
 	IsFood       bool
 	Unit         *string // единица склада (кг, г, л, мл, шт) — для конвертации с Unit тех-карты
+	// UnitWeight/UnitWeightUnit — per-unit фактор веса/объёма для штучных
+	// ингредиентов (1 банка = 340 г). См. units.ConvertToStock.
+	UnitWeight     decimal.Decimal
+	UnitWeightUnit *string
 }
 
 // TechLine — строка тех. карты. Ingredient может быть nil — это случай
@@ -153,8 +157,9 @@ func ComputeShortages(items []OrderItem, opts Opts) []string {
 				continue
 			}
 			// Приводим расход из единицы тех-карты в единицу склада ингредиента
-			// (300 г при складе в кг → 0.3 кг). reserved/stock — в единице склада.
-			recipeQty = units.Convert(recipeQty, deref(line.Unit), deref(ing.Unit))
+			// (300 г при складе в кг → 0.3 кг; 10 г при складе в шт с фактором
+			// 340 г/шт → 0.0294 шт). reserved/stock — в единице склада.
+			recipeQty = units.ConvertToStock(recipeQty, deref(line.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
 			needed := applyWaste(recipeQty, ing.WastePercent)
 			stock := ing.Qty
 			reserved := opts.ReservedByIngredient[*line.IngredientID]

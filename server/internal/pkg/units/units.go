@@ -77,6 +77,31 @@ func Convert(qty decimal.Decimal, from, to string) decimal.Decimal {
 	return decimal.DivRound(base, st.factor)
 }
 
+// ConvertToStock переводит расход из рецептурной единицы recipeUnit в единицу
+// склада ингредиента stockUnit, используя per-unit фактор веса/объёма, когда
+// единицы относятся к разным размерностям (штучный склад vs весовой рецепт).
+//
+// perUnit — вес/объём ОДНОЙ складской единицы (например 340 — нетто банки),
+// perUnitUnit — единица, в которой задан perUnit (г/мл).
+//
+// Логика:
+//  1. recipeUnit и stockUnit одной размерности (или совпадают) → обычная
+//     метрическая конвертация Convert (10 г → 0.01 кг), фактор не нужен.
+//  2. Иначе, если фактор задан (perUnit>0) и recipeUnit сводится к perUnitUnit
+//     (одна размерность): приводим qty к perUnitUnit и делим на perUnit —
+//     получаем дробное число складских единиц (10 г ÷ 340 г/банку = 0.0294 банки).
+//  3. Иначе — безопасный фолбэк: Convert (qty без изменений для несводимых пар),
+//     как было до введения фактора.
+func ConvertToStock(qty decimal.Decimal, recipeUnit, stockUnit string, perUnit decimal.Decimal, perUnitUnit string) decimal.Decimal {
+	if Convertible(recipeUnit, stockUnit) {
+		return Convert(qty, recipeUnit, stockUnit)
+	}
+	if perUnit.IsPositive() && Convertible(recipeUnit, perUnitUnit) {
+		return decimal.DivRound(Convert(qty, recipeUnit, perUnitUnit), perUnit)
+	}
+	return Convert(qty, recipeUnit, stockUnit)
+}
+
 // Convertible сообщает, можно ли привести from к to (одна размерность, обе
 // единицы известны). Полезно, чтобы не «молча» сравнивать несравнимое.
 func Convertible(from, to string) bool {

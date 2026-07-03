@@ -80,15 +80,28 @@ function IngredientCombobox({
 }
 
 // ─── Unit conversion ───────────────────────────────────────────────
-// Returns deduction in ingredient's stock unit given recipe unit
-function convertToStock(qty: number, ingredientUnit: string, recipeUnit: string): number {
-  const s = ingredientUnit.toLowerCase().trim()
-  const r = recipeUnit.toLowerCase().trim()
-  if (s === r) return qty
-  if ((s === 'кг' || s === 'kg') && (r === 'г' || r === 'g' || r === 'гр')) return dDiv(qty, 1000)
-  if ((s === 'г' || s === 'g' || s === 'гр') && (r === 'кг' || r === 'kg')) return dMul(qty, 1000)
-  if ((s === 'л' || s === 'l') && (r === 'мл' || r === 'ml')) return dDiv(qty, 1000)
-  if ((s === 'мл' || s === 'ml') && (r === 'л' || r === 'l')) return dMul(qty, 1000)
+// metricConvert — конвертация внутри одной размерности; null если несводимо.
+function metricConvert(qty: number, from: string, to: string): number | null {
+  const f = from.toLowerCase().trim()
+  const t = to.toLowerCase().trim()
+  if (f === t) return qty
+  if ((t === 'кг' || t === 'kg') && (f === 'г' || f === 'g' || f === 'гр')) return dDiv(qty, 1000)
+  if ((t === 'г' || t === 'g' || t === 'гр') && (f === 'кг' || f === 'kg')) return dMul(qty, 1000)
+  if ((t === 'л' || t === 'l') && (f === 'мл' || f === 'ml')) return dDiv(qty, 1000)
+  if ((t === 'мл' || t === 'ml') && (f === 'л' || f === 'l')) return dMul(qty, 1000)
+  return null
+}
+
+// Returns deduction in ingredient's stock unit given recipe unit.
+// Зеркалит server units.ConvertToStock: 1) метрика; 2) штучный склад + per-unit
+// фактор (1 банка = 340 г → 10 г = 0.0294 банки); 3) фолбэк без изменений.
+function convertToStock(qty: number, ingredientUnit: string, recipeUnit: string, unitWeight = 0, unitWeightUnit = ''): number {
+  const inStock = metricConvert(qty, recipeUnit, ingredientUnit)
+  if (inStock !== null) return inStock
+  if (unitWeight > 0 && unitWeightUnit) {
+    const inFactor = metricConvert(qty, recipeUnit, unitWeightUnit)
+    if (inFactor !== null) return dDiv(inFactor, unitWeight)
+  }
   return qty
 }
 
@@ -129,7 +142,7 @@ export default function SemiPage() {
     const ing = ingredients.find(i => i.id === ingredientId)
     if (!ing) return 0
     // convert recipe qty to ingredient's stock unit, then multiply by price
-    const inStockUnit = convertToStock(qtyPerUnit, ing.unit, recipeUnit)
+    const inStockUnit = convertToStock(qtyPerUnit, ing.unit, recipeUnit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
     return dMul(inStockUnit, ing.pricePerUnit)
   }
 
@@ -524,9 +537,16 @@ export default function SemiPage() {
                         <div className="space-y-0.5">
                           {type.recipe.map((line) => {
                             const totalRecipeQty = dMul(line.qtyPerUnit, qty)
+                            // Показываем в единице склада (то, что реально спишется):
+                            // метрика + per-unit фактор для штучных ингредиентов.
+                            const ing = ingredients.find(i => i.id === line.ingredientId)
+                            const stockQty = ing
+                              ? convertToStock(totalRecipeQty, ing.unit, line.unit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
+                              : totalRecipeQty
+                            const displayUnit = ing?.unit || line.unit
                             return (
                               <p key={line.ingredientId} className="text-xs text-foreground">
-                                <span className="text-destructive">−</span> {formatNum(totalRecipeQty)} {line.unit} {line.name}
+                                <span className="text-destructive">−</span> {formatNum(stockQty)} {displayUnit} {line.name}
                               </p>
                             )
                           })}

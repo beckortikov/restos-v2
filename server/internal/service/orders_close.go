@@ -587,11 +587,22 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 		return err
 	}
 	linesByMenu := make(map[string][]models.TechCardLine)
+	baseIngIDs := make([]string, 0, len(lines))
 	for _, l := range lines {
 		if l.MenuItemID == nil {
 			continue
 		}
 		linesByMenu[*l.MenuItemID] = append(linesByMenu[*l.MenuItemID], l)
+		if l.IngredientID != nil && *l.IngredientID != "" {
+			baseIngIDs = append(baseIngIDs, *l.IngredientID)
+		}
+	}
+	// Складские единицы + per-unit факторы базовых ингредиентов — списание пишем
+	// в единице склада (тех-карта в г/мл → шт/кг). Semi-ингредиенты грузятся в
+	// cascadeSemiDeduct отдельно.
+	convByID, err := loadIngStockConv(tx, baseIngIDs)
+	if err != nil {
+		return err
 	}
 
 	// 3. Для каждой позиции × tech_card_line — создаём StockMovement (qty<0 = списание).
@@ -626,7 +637,7 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 			lineQty := decimal.Mul(line.Qty, effectivePortions(it.Unit, it.Qty, it.UnitSize))
 			switch {
 			case line.IngredientID != nil:
-				if err := writeIngredientDeduct(tx, restaurantID, *line.IngredientID, line.Name, line.Unit, lineQty, sourceRef, now); err != nil {
+				if err := writeIngredientDeduct(tx, restaurantID, *line.IngredientID, line.Name, convByID[*line.IngredientID], deref(line.Unit), lineQty, sourceRef, now); err != nil {
 					return err
 				}
 			case line.SemiTypeID != nil:
@@ -640,19 +651,34 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 	return nil
 }
 
-// writeIngredientDeduct — append-only stock_movement type=out на базовый ингредиент.
+// writeIngredientDeduct — append-only stock_movement type=out на базовый
+// ингредиент. qty задаётся в РЕЦЕПТУРНОЙ единице recipeUnit; здесь она приводится
+// к складской единице ингредиента (conv) перед записью — движение и денорм
+// ingredients.qty (хук) должны быть в единице склада. Штучный склад с per-unit
+// фактором (10 г ÷ 340 г/шт = 0.0294 шт) обрабатывается тем же путём.
 func writeIngredientDeduct(
 	tx *gorm.DB,
 	restaurantID, ingredientID string,
-	name, unit *string,
+	name *string,
+	conv ingStockConv,
+	recipeUnit string,
 	qty decimal.Decimal,
 	sourceRef string,
 	now time.Time,
 ) error {
-	deduct := decimal.Normalize(qty).Neg()
+	stockQty := conv.toStock(qty, recipeUnit)
+	deduct := decimal.Normalize(stockQty).Neg()
 	desc := sourceRef
 	opType := "out"
 	ingID := ingredientID
+	// Единица движения — складская; если у ингредиента она не задана, оставляем
+	// рецептурную (фолбэк, поведение как раньше).
+	unit := conv.unit
+	unitPtr := &unit
+	if unit == "" {
+		ru := recipeUnit
+		unitPtr = &ru
+	}
 	mv := &models.StockMovement{
 		ID:             uuid.NewString(),
 		Type:           &opType,
@@ -660,7 +686,7 @@ func writeIngredientDeduct(
 		IngredientName: name,
 		Description:    &desc,
 		Qty:            deduct,
-		Unit:           unit,
+		Unit:           unitPtr,
 		RestaurantID:   &restaurantID,
 		CreatedAt:      now,
 	}
@@ -709,11 +735,21 @@ func (s *OrdersService) cascadeSemiDeduct(
 	if err := tx.Where("semi_type_id = ?", semiTypeID).Find(&lines).Error; err != nil {
 		return err
 	}
+	semiIngIDs := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if l.IngredientID != nil && *l.IngredientID != "" {
+			semiIngIDs = append(semiIngIDs, *l.IngredientID)
+		}
+	}
+	convByID, err := loadIngStockConv(tx, semiIngIDs)
+	if err != nil {
+		return err
+	}
 	for _, l := range lines {
 		needed := decimal.Mul(l.QtyPerUnit, rawQty)
 		switch {
 		case l.IngredientID != nil:
-			if err := writeIngredientDeduct(tx, restaurantID, *l.IngredientID, l.Name, l.Unit, needed, sourceRef, now); err != nil {
+			if err := writeIngredientDeduct(tx, restaurantID, *l.IngredientID, l.Name, convByID[*l.IngredientID], deref(l.Unit), needed, sourceRef, now); err != nil {
 				return err
 			}
 		default:

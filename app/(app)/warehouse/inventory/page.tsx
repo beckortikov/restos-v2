@@ -127,7 +127,7 @@ export default function InventoryPage() {
     qc.invalidateQueries({ queryKey: CATS_KEY })
   }
 
-  async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; isFood?: boolean }) {
+  async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; unitWeight?: number; unitWeightUnit?: string; isFood?: boolean }) {
     try {
       if (editingIngredient) {
         await updateIngredient(editingIngredient.id, {
@@ -137,6 +137,8 @@ export default function InventoryPage() {
           unit: data.unit,
           price_per_unit: data.pricePerUnit,
           waste_percent: data.wastePercent ?? 0,
+          unit_weight: data.unitWeight ?? 0,
+          unit_weight_unit: data.unitWeightUnit ?? '',
           is_food: data.isFood ?? true,
         })
         // Update qty if changed — PATCH /api/v1/stock/ingredients/{id} on v4
@@ -159,6 +161,8 @@ export default function InventoryPage() {
           unit: data.unit,
           price_per_unit: data.pricePerUnit,
           waste_percent: data.wastePercent ?? 0,
+          unit_weight: data.unitWeight ?? 0,
+          unit_weight_unit: data.unitWeightUnit ?? '',
           is_food: data.isFood ?? true,
         })
         toast.success('Ингредиент добавлен')

@@ -47,8 +47,12 @@ type BatchIngredient struct {
 	RecipeUnit          string          `json:"recipe_unit"`            // единица расхода в тех-карте (г, мл)
 	StockQty            decimal.Decimal `json:"stock_qty"`              // остаток на складе (в единице склада)
 	RecipeQtyPerPortion decimal.Decimal `json:"recipe_qty_per_portion"` // расход на 1 порцию (в единице тех-карты)
-	PossiblePortions    int             `json:"possible_portions"`
-	IsBottleneck        bool            `json:"is_bottleneck"`
+	// StockQtyPerPortion — расход на 1 порцию, приведённый к единице склада
+	// (units.ConvertToStock): 35 г при «1 шт = 340 г» → 0.1029 шт. Именно эта
+	// величина списывается; фронт использует её для «будет списано» и процента.
+	StockQtyPerPortion decimal.Decimal `json:"stock_qty_per_portion"`
+	PossiblePortions   int             `json:"possible_portions"`
+	IsBottleneck       bool            `json:"is_bottleneck"`
 }
 
 // MaxPortionsResult — что отдаём.
@@ -132,8 +136,9 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 			name = *ing.Name
 		}
 		// Расход на 1 порцию приводим к единице склада ингредиента
-		// (300 г при складе в кг → 0.3 кг), иначе 3 / 300 = 0 порций.
-		needPerPortion := units.Convert(l.Qty, deref(l.Unit), deref(ing.Unit))
+		// (300 г при складе в кг → 0.3 кг; штучный склад — через per-unit фактор),
+		// иначе 3 / 300 = 0 порций.
+		needPerPortion := units.ConvertToStock(l.Qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
 		// have / need_per_portion → floor.
 		var possible int
 		ratio := decimal.DivRound(ing.Qty, needPerPortion).IntPart()
@@ -149,6 +154,7 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 			RecipeUnit:          deref(l.Unit),
 			StockQty:            ing.Qty,
 			RecipeQtyPerPortion: l.Qty,
+			StockQtyPerPortion:  needPerPortion,
 			PossiblePortions:    possible,
 		})
 		if possible < 1 {
@@ -218,25 +224,18 @@ func (s *BatchCookingService) Produce(ctx context.Context, menuItemID string, in
 			Find(&lines).Error; err != nil {
 			return err
 		}
-		// Единицы склада ингредиентов — списываем в единице склада, а не тех-карты
-		// (300 г при складе в кг → 0.3 кг), иначе остаток ушёл бы в минус.
-		ingUnitByID := make(map[string]string)
+		// Единицы склада ингредиентов (+ per-unit фактор) — списываем в единице
+		// склада, а не тех-карты (300 г при складе в кг → 0.3 кг; штучный склад —
+		// через фактор), иначе остаток ушёл бы в минус.
 		ingIDs := make([]string, 0, len(lines))
 		for _, l := range lines {
 			if l.IngredientID != nil && *l.IngredientID != "" {
 				ingIDs = append(ingIDs, *l.IngredientID)
 			}
 		}
-		if len(ingIDs) > 0 {
-			var ings []models.Ingredient
-			if err := tx.Where("restaurant_id = ? AND id IN ?", rid, ingIDs).Find(&ings).Error; err != nil {
-				return err
-			}
-			for _, i := range ings {
-				if i.Unit != nil {
-					ingUnitByID[i.ID] = *i.Unit
-				}
-			}
+		ingConvByID, err := loadIngStockConv(tx, ingIDs)
+		if err != nil {
+			return err
 		}
 		now := time.Now().UTC()
 		desc := "batch_produce:" + menuItemID
@@ -247,8 +246,9 @@ func (s *BatchCookingService) Produce(ctx context.Context, menuItemID string, in
 				continue
 			}
 			ingID := *l.IngredientID
-			stockUnit := ingUnitByID[ingID]
-			perPortion := units.Convert(l.Qty, deref(l.Unit), stockUnit)
+			conv := ingConvByID[ingID]
+			stockUnit := conv.unit
+			perPortion := conv.toStock(l.Qty, deref(l.Unit))
 			deduct := decimal.Normalize(decimal.Mul(perPortion, qtyDec)).Neg()
 			unit := &stockUnit
 			if stockUnit == "" {

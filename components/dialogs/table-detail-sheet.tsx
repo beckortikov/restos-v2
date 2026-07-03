@@ -122,7 +122,19 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
   }, [open, dataLoaded, table?.currentOrderId])
 
   useEffect(() => {
-    if (externalOrders) setOrders(externalOrders)
+    if (!externalOrders) return
+    // externalOrders приходит с карты зала slim (items: []) — этого хватает для
+    // карточек стола (total/status), но НЕ для панели заказа, которой нужны
+    // позиции. Если у нас уже есть полная версия заказа с позициями — сохраняем
+    // их, обновляя только денормализованные поля. Свежие позиции после отмены
+    // подтягивает handleItemsChanged (fetch по id с include=items).
+    setOrders(prev => externalOrders.map(eo => {
+      if (eo.items && eo.items.length > 0) return eo
+      const existing = prev.find(p => p.id === eo.id)
+      return existing && existing.items && existing.items.length > 0
+        ? { ...eo, items: existing.items }
+        : eo
+    }))
   }, [externalOrders])
 
   useEffect(() => {
@@ -422,7 +434,16 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
                 onOpenChange(false)
                 onAction('refresh', table.id)
               }}
-              onItemsChanged={() => onAction('refresh', table.id)}
+              onItemsChanged={async () => {
+                // Подтягиваем ПОЛНЫЙ заказ (с позициями) по id — родительский
+                // refetch на карте slim и позиции бы обнулил. Затем 'refresh'
+                // обновляет карточки карты (sheet остаётся открытым).
+                try {
+                  const [full] = await fetchOrders({ ids: [order.id] })
+                  if (full) setOrders(prev => prev.map(o => (o.id === full.id ? full : o)))
+                } catch { /* панель покажет предыдущее состояние до след. обновления */ }
+                onAction('refresh', table.id)
+              }}
               // v2.8.0: убран onOpenAdvanced overlay — теперь «Дополнительно»
               // открывает inline dropdown внутри Panel'а, а split-bill/reopen
               // вызывают свои мини-диалоги без второго sidebar'а.
@@ -552,6 +573,10 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
           tableCapacity={table.capacity}
           onSuccess={() => {
             setShowReservation(false)
+            // Бронь создана — закрываем sheet и обновляем карту. ('refresh'
+            // сам по себе больше не закрывает — он используется и для отмены
+            // одной позиции, где sheet должен остаться открытым.)
+            onOpenChange(false)
             onAction('refresh', table.id)
           }}
         />

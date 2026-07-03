@@ -77,15 +77,35 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 		now := time.Now().UTC()
 		desc := "semi_prepare:" + in.SemiTypeID
 
+		// Складские единицы + per-unit факторы ингредиентов рецепта — списание
+		// пишем в единице склада (рецепт в г/мл → шт/кг), а не в единице тех-карты,
+		// иначе денорм ingredients.qty (хук) исказит остаток.
+		recipeIngIDs := make([]string, 0, len(lines))
+		for _, l := range lines {
+			if l.IngredientID != nil && *l.IngredientID != "" {
+				recipeIngIDs = append(recipeIngIDs, *l.IngredientID)
+			}
+		}
+		convByID, err := loadIngStockConv(tx, recipeIngIDs)
+		if err != nil {
+			return err
+		}
+
 		// 3. Списываем ингредиенты по рецепту: каждая строка × qty.
 		mvType := "semi_out"
 		for _, l := range lines {
 			if l.IngredientID == nil {
 				continue
 			}
-			deduct := decimal.Normalize(decimal.Mul(l.QtyPerUnit, qty)).Neg()
 			ingID := *l.IngredientID
+			conv := convByID[ingID]
+			stockQty := conv.toStock(decimal.Mul(l.QtyPerUnit, qty), deref(l.Unit))
+			deduct := decimal.Normalize(stockQty).Neg()
 			unit := l.Unit
+			if conv.unit != "" {
+				u := conv.unit
+				unit = &u
+			}
 			mv := &models.StockMovement{
 				ID:             uuid.NewString(),
 				Type:           &mvType,
@@ -104,7 +124,7 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 
 		// 4. Инкремент SemiFinishedStock — берём с lock или создаём.
 		var stock models.SemiFinishedStock
-		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("restaurant_id = ? AND semi_type_id = ?", rid, in.SemiTypeID).
 			First(&stock).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {

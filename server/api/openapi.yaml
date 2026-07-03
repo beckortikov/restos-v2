@@ -2582,6 +2582,7 @@ paths:
                         recipe_unit: { type: string, description: "единица расхода в тех-карте (г, мл)" }
                         stock_qty: { type: string, description: "остаток (в единице склада)" }
                         recipe_qty_per_portion: { type: string, description: "расход на 1 порцию (в единице тех-карты)" }
+                        stock_qty_per_portion: { type: string, description: "расход на 1 порцию, приведённый к единице склада" }
                         possible_portions: { type: integer }
                         is_bottleneck: { type: boolean }
                   blockers:
@@ -2921,6 +2922,8 @@ components:
         price: { $ref: "#/components/schemas/Decimal" }
         unit: { type: string }
         waste_percent: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
     MenuItemsList:
       type: object
       description: |
@@ -2987,6 +2990,8 @@ components:
         unit: { type: string }
         min_qty: { $ref: "#/components/schemas/Decimal" }
         price_per_unit: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
     IngredientsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Ingredient" } }, next_cursor: { type: string } } }
     IngredientInput:
       type: object
@@ -2998,6 +3003,8 @@ components:
         unit: { type: string }
         price_per_unit: { $ref: "#/components/schemas/Decimal" }
         waste_percent: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
         is_food: { type: boolean }
     StringList: { type: object, properties: { data: { type: array, items: { type: string } } } }
     StockMovement:

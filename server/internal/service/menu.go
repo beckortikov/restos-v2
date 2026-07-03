@@ -38,9 +38,11 @@ type MenuItemWithExtras struct {
 
 // IngredientPrice — компактный DTO для top-level карты ingredient_prices.
 type IngredientPrice struct {
-	Price        decimal.Decimal `json:"price"`
-	Unit         string          `json:"unit"`
-	WastePercent decimal.Decimal `json:"waste_percent"`
+	Price          decimal.Decimal `json:"price"`
+	Unit           string          `json:"unit"`
+	WastePercent   decimal.Decimal `json:"waste_percent"`
+	UnitWeight     decimal.Decimal `json:"unit_weight"`
+	UnitWeightUnit string          `json:"unit_weight_unit"`
 }
 
 // MenuItemsResult — результат ListItems. Всегда включает Items и пустые
@@ -137,10 +139,16 @@ func (s *MenuService) ListItems(ctx context.Context, f MenuItemsFilter) (MenuIte
 					if i.Unit != nil {
 						unit = *i.Unit
 					}
+					weightUnit := ""
+					if i.UnitWeightUnit != nil {
+						weightUnit = *i.UnitWeightUnit
+					}
 					out.IngredientPrices[i.ID] = IngredientPrice{
-						Price:        i.PricePerUnit,
-						Unit:         unit,
-						WastePercent: i.WastePercent,
+						Price:          i.PricePerUnit,
+						Unit:           unit,
+						WastePercent:   i.WastePercent,
+						UnitWeight:     i.UnitWeight,
+						UnitWeightUnit: weightUnit,
 					}
 				}
 			}

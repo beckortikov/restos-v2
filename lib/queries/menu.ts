@@ -15,7 +15,7 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
   // при >200 блюдах одна страница теряла «хвост» — блюда молча пропадали из
   // меню и из Склад→Меню. Идём по next_cursor, пока он не пуст.
   const items: Record<string, unknown>[] = []
-  const ingredientPrices = new Map<string, { price: number; unit: string; wastePercent: number }>()
+  const ingredientPrices = new Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>()
   let cursor: string | undefined
   for (let guard = 0; guard < 200; guard++) {
     const query: { limit: number; include?: string; cursor?: string } = { limit: 200 }
@@ -26,13 +26,15 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
     items.push(...page)
     if (includeTC) {
       const ipMap = (res?.ingredient_prices ?? {}) as Record<string, {
-        price?: unknown; unit?: unknown; waste_percent?: unknown
+        price?: unknown; unit?: unknown; waste_percent?: unknown; unit_weight?: unknown; unit_weight_unit?: unknown
       }>
       for (const [id, v] of Object.entries(ipMap)) {
         ingredientPrices.set(id, {
           price: Number(v?.price) || 0,
           unit: (v?.unit as string) || '',
           wastePercent: Number(v?.waste_percent) || 0,
+          unitWeight: Number(v?.unit_weight) || 0,
+          unitWeightUnit: (v?.unit_weight_unit as string) || '',
         })
       }
     }
@@ -343,7 +345,7 @@ function mapTechCardLine(l: Record<string, unknown>) {
 function mapMenuItem(
   r: Record<string, unknown>,
   techLines: Record<string, unknown>[],
-  ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number }>,
+  ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>,
 ): MenuItem {
   const autoCogs = techLines.length > 0 ? calcCogsFromTechCard(techLines, ingredientPrices) : 0
   const effectiveCogs = autoCogs > 0 ? autoCogs : (Number(r.cogs) || 0)
