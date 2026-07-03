@@ -720,5 +720,3 @@ func TestPhase18_WaiterCanListUsers(t *testing.T) {
 		t.Errorf("waiter 2 not found in users list returned to waiter 1; total users: %d", len(usersList.Data))
 	}
 }
-
-

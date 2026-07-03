@@ -28,8 +28,8 @@ func TestShifts_HistoryPermissionClampsToToday(t *testing.T) {
 	})
 
 	closed := "closed"
-	today := time.Now().Add(-2 * time.Hour)        // сегодня
-	old := time.Now().AddDate(0, 0, -5)            // 5 дней назад
+	today := time.Now().Add(-2 * time.Hour) // сегодня
+	old := time.Now().AddDate(0, 0, -5)     // 5 дней назад
 	for _, when := range []time.Time{today, old} {
 		if err := gdb.Create(&models.CashShift{
 			ID: uuid.NewString(), Status: &closed, OpenedAt: when, RestaurantID: &f.rid,

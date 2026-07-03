@@ -9,9 +9,9 @@ import (
 func TestConvert(t *testing.T) {
 	d := decimal.MustFromString
 	cases := []struct {
-		name           string
-		qty, from, to  string
-		want           string
+		name          string
+		qty, from, to string
+		want          string
 	}{
 		{"г→кг", "300", "г", "кг", "0.3"},
 		{"кг→г", "3", "кг", "г", "3000"},
