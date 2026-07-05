@@ -781,16 +781,18 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
                 {order.tableId ? <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" /> : null}
               </button>
             </PopoverTrigger>
-            <PopoverContent align="start" className="w-64 p-1">
+            {/* Тач-таргеты ≥44px: выбор официанта делается пальцем на планшете,
+                мелкие text-xs строки приводили к промахам. */}
+            <PopoverContent align="start" className="w-80 p-1.5">
               {waiters.length === 0 ? (
-                <p className="text-xs text-muted-foreground p-2 text-center">Нет официантов</p>
+                <p className="text-sm text-muted-foreground p-3 text-center">Нет официантов</p>
               ) : (
-                <div className="max-h-72 overflow-y-auto">
+                <div className="max-h-[min(24rem,60vh)] overflow-y-auto space-y-0.5">
                   {currentWaiter ? (
                     <button
                       onClick={() => handleChangeWaiter(null)}
                       disabled={changingWaiter}
-                      className="w-full text-left px-2.5 py-2 rounded-md text-xs text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                      className="w-full text-left px-3 min-h-[44px] rounded-md text-sm font-medium text-destructive hover:bg-destructive/10 active:bg-destructive/15 disabled:opacity-50 touch-manipulation"
                     >
                       Снять официанта
                     </button>
@@ -802,14 +804,19 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
                         key={w.id}
                         onClick={() => handleChangeWaiter(w.id)}
                         disabled={changingWaiter || active}
-                        className={`w-full text-left px-2.5 py-2 rounded-md text-xs ${
+                        className={`w-full text-left px-3 min-h-[48px] rounded-md text-sm inline-flex items-center gap-2.5 touch-manipulation ${
                           active
                             ? 'bg-primary/10 text-primary font-semibold cursor-default'
-                            : 'text-foreground hover:bg-muted disabled:opacity-50'
+                            : 'text-foreground hover:bg-muted active:bg-muted disabled:opacity-50'
                         }`}
                       >
-                        {w.name}
-                        {active ? <span className="ml-1.5 text-[10px] uppercase tracking-wider text-muted-foreground">текущий</span> : null}
+                        <span className={`grid size-8 shrink-0 place-items-center rounded-full text-xs font-bold uppercase ${
+                          active ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'
+                        }`}>
+                          {(w.name || '?').trim().charAt(0)}
+                        </span>
+                        <span className="truncate">{w.name}</span>
+                        {active ? <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground shrink-0">текущий</span> : null}
                       </button>
                     )
                   })}
@@ -1525,6 +1532,50 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
                 : ''}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {/* Штучная позиция с qty>1 — выбор, сколько штук отменить за раз
+              (вместо N кликов по «минусу»). deltaQty === qty → полная отмена
+              строки (handleVoidConfirm разруливает по deltaQty < qty). */}
+          {voidingItem && !voidingItem.ids && voidingItem.qty > 1 && (!voidingItem.unit || voidingItem.unit === 'piece') && (() => {
+            const cur = voidingItem.deltaQty ?? voidingItem.qty
+            const setDelta = (v: number) => setVoidingItem(prev => prev
+              ? { ...prev, deltaQty: Math.min(prev.qty, Math.max(1, v)) }
+              : prev)
+            return (
+              <div className="flex items-center justify-center gap-2">
+                <span className="text-xs text-muted-foreground">Количество:</span>
+                <button
+                  onClick={() => setDelta(cur - 1)}
+                  disabled={cur <= 1}
+                  className="size-9 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center disabled:opacity-40"
+                >
+                  <Minus className="size-4" />
+                </button>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={cur}
+                  onChange={e => {
+                    const digits = e.target.value.replace(/\D/g, '')
+                    setDelta(digits === '' ? 1 : parseInt(digits, 10))
+                  }}
+                  className="w-14 h-9 text-center text-sm font-semibold border border-border rounded-md bg-background tabular-nums"
+                />
+                <button
+                  onClick={() => setDelta(cur + 1)}
+                  disabled={cur >= voidingItem.qty}
+                  className="size-9 rounded-md border border-border text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center disabled:opacity-40"
+                >
+                  <Plus className="size-4" />
+                </button>
+                <button
+                  onClick={() => setDelta(voidingItem.qty)}
+                  className={`px-3 h-9 text-xs font-medium rounded-md border ${
+                    cur >= voidingItem.qty ? 'border-primary bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:bg-muted'
+                  }`}
+                >Все ({voidingItem.qty})</button>
+              </div>
+            )
+          })()}
           <div className="grid grid-cols-2 gap-1.5">
             {VOID_REASONS.map(r => (
               <button
@@ -1543,7 +1594,11 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
               disabled={voiding}
               className="bg-destructive text-white hover:bg-destructive/90"
             >
-              {voiding ? '...' : 'Отменить позицию'}
+              {voiding
+                ? '...'
+                : voidingItem?.deltaQty != null && voidingItem.deltaQty < voidingItem.qty
+                  ? `Отменить ${voidingItem.deltaQty} шт.`
+                  : 'Отменить позицию'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
