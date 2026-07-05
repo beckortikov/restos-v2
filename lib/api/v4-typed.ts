@@ -76,8 +76,6 @@ const authExpiredMiddleware: Middleware = {
         && request?.headers?.get('X-Skip-Auth-Expire') !== '1') {
       const reqToken = request?.headers?.get('Authorization')?.replace('Bearer ', '')
       const currentToken = localStorage.getItem('restos-v4-token')
-      // Без токена в запросе 401 не означает «сессия истекла» — глобальный
-      // logout от такого 401 зацикливается (logout → 401 → logout → …).
       if (!reqToken || reqToken !== currentToken) {
         return response
       }

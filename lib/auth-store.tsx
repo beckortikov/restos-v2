@@ -223,8 +223,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
-    // Токен снимаем ДО clearV4Token, чтобы серверный logout реально отозвал
-    // сессию (иначе запрос уходит без Authorization и возвращает 401).
     const token = getV4Token()
     setUser(null)
     setRestaurant(null)
@@ -236,9 +234,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       queryClient.cancelQueries()
       queryClient.clear()
     } catch {}
-    // Намеренно не удаляем restaurant_id — он остаётся для следующего login.
-    // X-Skip-Auth-Expire: 401 от уже истёкшего токена не должен снова
-    // триггерить restos:auth:expired → logout → … (бесконечный цикл).
     if (token) {
       void api.POST('/api/v1/auth/logout', {
         body: undefined as any,
