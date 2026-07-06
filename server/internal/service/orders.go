@@ -142,9 +142,14 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 		case "new", "open":
 			q = q.Where("status IN ?", []string{"new", "open"})
 		case "closed":
-			// Раздел «Закрытые»: только финализированные заказы (оплачен/отменён),
+			// Раздел «Закрытые»: только финализированные заказы (оплачен/возврат/отменён),
 			// НЕ активные «Новый». Оба под-фильтра (Оплаченные/Отменённые) — их подмножества.
-			q = q.Where("status IN ?", []string{"done", "cancelled"})
+			// 'closed'/'refunded' — канонические v4-статусы, 'done' — legacy v1.
+			q = q.Where("status IN ?", []string{"closed", "done", "refunded", "cancelled"})
+		case "done":
+			// Под-фильтр «Оплаченные»: v4 пишет 'closed' (полный возврат — 'refunded'),
+			// legacy v1 — 'done'. Фронт маппит все три в UI-статус 'done'.
+			q = q.Where("status IN ?", []string{"closed", "done", "refunded"})
 		default:
 			q = q.Where("status = ?", f.Status)
 		}
