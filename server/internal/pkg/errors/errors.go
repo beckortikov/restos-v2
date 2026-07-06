@@ -19,6 +19,9 @@ type AppError struct {
 	Code    string // стабильный машинно-читаемый код (см. PRD 04)
 	Message string // human-readable
 	Cause   error  // оригинальная ошибка (опционально)
+	// Details — опциональные машинно-читаемые данные для клиента (например,
+	// id заблокировавших операцию сущностей), маппится в ErrorEnvelope.details.
+	Details map[string]any
 }
 
 func (e *AppError) Error() string {
@@ -42,4 +45,11 @@ var (
 // Wrap — обёртывание stdlib-ошибки в AppError с кодом.
 func Wrap(code, message string, cause error) *AppError {
 	return &AppError{Code: code, Message: message, Cause: cause}
+}
+
+// WrapDetails — как Wrap, но с machine-readable details (например, id
+// сущностей, заблокировавших операцию), чтобы клиент мог предложить
+// целевое действие вместо парсинга человекочитаемого текста сообщения.
+func WrapDetails(code, message string, details map[string]any, cause error) *AppError {
+	return &AppError{Code: code, Message: message, Details: details, Cause: cause}
 }
