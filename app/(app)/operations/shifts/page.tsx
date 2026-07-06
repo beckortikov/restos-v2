@@ -6,12 +6,13 @@ import { useAuth } from '@/lib/auth-store'
 import { OwnerPinGate } from '@/components/owner-pin-gate'
 import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
-import { type CashShift, type CashShiftOperation, type FinancialAccount } from '@/lib/types'
-import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, patchShiftAccount, printShiftZ, printShiftX, printShiftService, type ShiftZReport } from '@/lib/queries'
-import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown } from 'lucide-react'
+import { type CashShift, type CashShiftOperation, type FinancialAccount, type Order } from '@/lib/types'
+import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, patchShiftAccount, printShiftZ, printShiftX, printShiftService, fetchOrders, cancelOrder, type ShiftZReport } from '@/lib/queries'
+import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown, AlertTriangle, Ban } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
+import { V4Error } from '@/lib/api'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
@@ -91,6 +92,14 @@ export default function ShiftsPage() {
   // Close shift form
   const [showClose, setShowClose] = useState(false)
   const [closeBalance, setCloseBalance] = useState(0)
+
+  // Заказы, блокирующие закрытие смены (могут принадлежать УЖЕ ЗАКРЫТОЙ
+  // прошлой смене — тогда их не видно ни в «Активные заказы» (скоуп по
+  // текущей смене), ни в «Закрытые» (скоуп по статусу done/cancelled).
+  // Бэк называет их в details.order_ids/order_numbers ошибки закрытия —
+  // подгружаем их отдельно и даём отменить прямо здесь.
+  const [stuckOrders, setStuckOrders] = useState<Order[] | null>(null)
+  const [cancellingStuckId, setCancellingStuckId] = useState<string | null>(null)
 
   // Cash operation form
   const [showOp, setShowOp] = useState<'cash_in' | 'cash_out' | null>(null)
@@ -363,6 +372,7 @@ export default function ShiftsPage() {
       )
       if (!ok) return
     }
+    setStuckOrders(null)
     try {
       await closeShift(activeShift.id, user.id, closeBalance)
       toast.success('Смена закрыта')
@@ -387,6 +397,30 @@ export default function ShiftsPage() {
       await reload()
     } catch (e) {
       toast.error(e instanceof Error ? `Ошибка закрытия смены: ${e.message}` : 'Ошибка закрытия смены')
+      // Бэк называет конкретные блокирующие заказы в details.order_ids —
+      // подгружаем их напрямую по id (без scope по текущей смене/дате), иначе
+      // заказ-«хвост» из прошлой смены невозможно найти нигде в интерфейсе.
+      const orderIds = e instanceof V4Error ? (e.envelope()?.details?.order_ids as unknown) : undefined
+      if (Array.isArray(orderIds) && orderIds.length > 0) {
+        try {
+          const found = await fetchOrders({ ids: orderIds as string[], slim: true })
+          setStuckOrders(found)
+        } catch { /* покажем только текст ошибки — не критично */ }
+      }
+    }
+  }
+
+  const handleCancelStuckOrder = async (orderId: string) => {
+    if (!window.confirm('Отменить этот заказ? Он мешает закрыть смену — отмена нужна, чтобы освободить смену.')) return
+    setCancellingStuckId(orderId)
+    try {
+      await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены')
+      setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId))
+      toast.success('Заказ отменён')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось отменить заказ'))
+    } finally {
+      setCancellingStuckId(null)
     }
   }
 
@@ -1152,6 +1186,48 @@ export default function ShiftsPage() {
               </div>
             )
           })()}
+
+          {/* Заказы, блокирующие закрытие смены — могут быть «хвостом» из
+              прошлой (уже закрытой) смены и потому НЕ видны ни в «Активные
+              заказы», ни в «Закрытые». Даём отменить их прямо здесь. */}
+          {stuckOrders && stuckOrders.length > 0 && (
+            <div className="bg-amber-50 dark:bg-amber-950/20 rounded-xl p-4 space-y-3 border border-amber-300 dark:border-amber-900">
+              <p className="text-sm font-semibold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                <AlertTriangle className="size-4" />
+                Смена не закрывается — есть незакрытые заказы
+              </p>
+              <p className="text-xs text-amber-800 dark:text-amber-300">
+                Эти заказы могли остаться от прошлой смены и поэтому не видны в
+                «Активные заказы». Отмените их (или закройте с оплатой из
+                карточки заказа), затем повторите закрытие смены.
+              </p>
+              <div className="space-y-1.5">
+                {stuckOrders.map(o => {
+                  const label = o.type === 'takeaway' ? '«С собой»' : o.type === 'delivery' ? 'Доставка' : 'Зал'
+                  return (
+                    <div key={o.id} className="flex items-center justify-between px-3 py-2 bg-card rounded-lg text-sm border border-amber-200 dark:border-amber-900">
+                      <span className="text-foreground">
+                        {label} №{o.orderNumber ?? '—'}
+                        <span className="text-muted-foreground ml-2">{formatCurrency(o.total ?? 0)}</span>
+                      </span>
+                      <button
+                        onClick={() => handleCancelStuckOrder(o.id)}
+                        disabled={cancellingStuckId === o.id}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-destructive/10 text-destructive rounded-md text-xs font-medium hover:bg-destructive/20 disabled:opacity-50"
+                      >
+                        <Ban className="size-3.5" />
+                        {cancellingStuckId === o.id ? 'Отмена…' : 'Отменить заказ'}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+              <button onClick={handleClose}
+                className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
+                Повторить закрытие смены
+              </button>
+            </div>
+          )}
 
           {/* Recent operations */}
           {shiftOps.length > 0 && (
