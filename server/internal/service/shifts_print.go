@@ -106,6 +106,18 @@ func (s *ShiftsService) printReport(ctx context.Context, shiftID, jobType string
 	for _, e := range zr.ExpensesByCategory {
 		in.Expenses = append(in.Expenses, escpos.ReportExpenseLine{Category: e.Category, Amount: e.Amount})
 	}
+	// Безнал в разрезе счетов: под строкой «Безнал. выручка» печатаем каждую
+	// карту/терминал отдельно (Банк А: 10, Банк Б: 20), а не одну общую сумму.
+	for _, rm := range zr.RevenueByMethod {
+		if rm.PaymentMethod == "cash" {
+			continue
+		}
+		name := rm.AccountName
+		if name == "" {
+			name = "Безнал. счёт"
+		}
+		in.CardByBank = append(in.CardByBank, escpos.ReportBankLine{Name: name, Amount: rm.Total})
+	}
 	if zr.Shift.ClosedAt != nil {
 		in.ClosedAt = *zr.Shift.ClosedAt
 	}

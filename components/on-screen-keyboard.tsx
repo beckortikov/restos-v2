@@ -131,8 +131,9 @@ export function OnScreenKeyboard() {
     const kbHeight = kb.offsetHeight
     const kbTop = window.innerHeight - kbHeight
 
-    // 1) Центрированный диалог — поднимаем целиком.
-    const host = active.closest('[role="dialog"]') as HTMLElement | null
+    // 1) Центрированный диалог — поднимаем целиком. AlertDialog рендерится
+    //    с role="alertdialog", обычный Dialog — role="dialog".
+    const host = active.closest('[role="dialog"], [role="alertdialog"]') as HTMLElement | null
     if (host && window.getComputedStyle(host).top !== 'auto') {
       const rect = host.getBoundingClientRect()
       if (rect.bottom <= kbTop - gap) return // уже не перекрыт
@@ -293,7 +294,10 @@ export function OnScreenKeyboard() {
       ref={rootRef}
       data-no-vk
       className={cn(
-        'fixed inset-x-0 bottom-0 z-[90] select-none',
+        // pointer-events-auto: модальные Radix-диалоги (Dialog/AlertDialog)
+        // ставят pointer-events:none на <body> — без явного auto клавиатура
+        // видна (z-90), но не кликабельна.
+        'fixed inset-x-0 bottom-0 z-[90] select-none pointer-events-auto',
         'bg-card/95 backdrop-blur-md border-t border-border shadow-2xl',
         'px-1.5 pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom))]',
         'animate-in slide-in-from-bottom-4 duration-150',

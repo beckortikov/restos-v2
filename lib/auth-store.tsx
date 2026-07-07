@@ -223,6 +223,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   function logout() {
+    const token = getV4Token()
     setUser(null)
     setRestaurant(null)
     localStorage.removeItem(STORAGE_KEY)
@@ -233,8 +234,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       queryClient.cancelQueries()
       queryClient.clear()
     } catch {}
-    // Намеренно не удаляем restaurant_id — он остаётся для следующего login.
-    void api.POST('/api/v1/auth/logout', { body: undefined as any }).catch(() => {})
+    if (token) {
+      void api.POST('/api/v1/auth/logout', {
+        body: undefined as any,
+        headers: { Authorization: `Bearer ${token}`, 'X-Skip-Auth-Expire': '1' },
+      }).catch(() => {})
+    }
   }
 
   function updateRestaurant(r: Restaurant) {

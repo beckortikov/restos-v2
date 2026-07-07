@@ -76,7 +76,7 @@ const authExpiredMiddleware: Middleware = {
         && request?.headers?.get('X-Skip-Auth-Expire') !== '1') {
       const reqToken = request?.headers?.get('Authorization')?.replace('Bearer ', '')
       const currentToken = localStorage.getItem('restos-v4-token')
-      if (reqToken && reqToken !== currentToken) {
+      if (!reqToken || reqToken !== currentToken) {
         return response
       }
       try {

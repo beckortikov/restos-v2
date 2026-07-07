@@ -464,6 +464,12 @@ type ReportExpenseLine struct {
 	Amount   decimal.Decimal
 }
 
+// ReportBankLine — безнал. выручка в разрезе конкретного счёта (банка/терминала).
+type ReportBankLine struct {
+	Name   string
+	Amount decimal.Decimal
+}
+
 // ReportInput — общие поля для X/Z-отчёта.
 type ReportInput struct {
 	RestaurantName string
@@ -482,7 +488,9 @@ type ReportInput struct {
 	CashIn      decimal.Decimal
 	Withdrawals decimal.Decimal
 	Expenses    []ReportExpenseLine
-	Cols        int
+	// Безнал в разрезе счетов (Банк А / Банк Б). Сумма строк = CardRevenue.
+	CardByBank []ReportBankLine
+	Cols       int
 }
 
 // XReportLayout — промежуточный отчёт.
@@ -582,6 +590,9 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	b.LF()
 	b.TextLn(PadRow("Наличная выручка:", decToShort(in.CashRevenue), cols))
 	b.TextLn(PadRow("Безнал. выручка:", decToShort(in.CardRevenue), cols))
+	for _, bank := range in.CardByBank {
+		b.TextLn(PadRow("  "+stripEmoji(bank.Name), decToShort(bank.Amount), cols))
+	}
 	total := decimal.Add(in.CashRevenue, in.CardRevenue)
 	b.TextLn(PadRow("Выручка ИТОГО:", decToShort(total), cols))
 	b.LF()
