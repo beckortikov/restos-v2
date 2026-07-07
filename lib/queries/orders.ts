@@ -31,6 +31,27 @@ export interface FetchOrdersResult {
 }
 
 export async function fetchOrders(opts?: FetchOrdersOptions): Promise<Order[]> {
+  // Точечная выборка по id — берём каждый заказ напрямую через detail-эндпоинт
+  // GET /orders/{id}, минуя пагинацию и любой скоуп (смена/дата/статус). Раньше
+  // ids фильтровались НА КЛИЕНТЕ из пагинированной выборки, а цикл прерывался на
+  // первой странице без совпадений (`r.orders.length === 0`) — из-за чего старый
+  // заказ-«хвост» из прошлой смены (вне первых страниц) не находился, и панель
+  // «Смена не закрывается» оставалась пустой (баг: №29/№30 не показывались).
+  if (opts?.ids && opts.ids.length > 0) {
+    const wantItems = !opts.slim
+    const results = await Promise.all(opts.ids.map(async (id) => {
+      try {
+        const detail: any = await unwrap(api.GET('/api/v1/orders/{id}', { params: { path: { id } } }))
+        const orderRow = detail?.order ?? detail
+        if (!orderRow?.id) return null
+        return _mapV4Order(orderRow, wantItems ? (detail?.items ?? []) : [])
+      } catch {
+        return null
+      }
+    }))
+    return results.filter((o): o is Order => o !== null)
+  }
+
   // Бэк капит limit до 200 (cursor.MaxLimit) — раньше одностраничный fetchOrders
   // терял заказы >200 за период (дашборд/аналитика). Идём по next_cursor до
   // конца, но не больше opts.limit (по умолчанию 5000 — потолок безопасности).

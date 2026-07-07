@@ -43,38 +43,53 @@ describe('fetchOrders — slim vs full', () => {
     expect(out[0].items).toEqual([])
   })
 
-  it('slim:false (default) → list + per-row detail GET; items приходят', async () => {
-    mockGET
-      .mockResolvedValueOnce({ data: { data: [{ id: 'o1', status: 'open', total: '50', created_at: '2026-01-01' }] } })
-      .mockResolvedValueOnce({ data: { order: { id: 'o1', status: 'open', total: '50', created_at: '2026-01-01' }, items: [{ id: 'i1', menu_item_id: 'mi1', name: 'Plov', qty: '2', price: '25' }] } })
+  it('slim:false (default) → один GET к /orders?include=items, items приходят инлайн', async () => {
+    // v3.1.0: full-заказы грузятся батчем — список с ?include=items возвращает
+    // items[] прямо в каждой строке. Раньше был 1+N (список + detail на строку).
+    mockGET.mockResolvedValueOnce({
+      data: { data: [{
+        id: 'o1', status: 'open', total: '50', created_at: '2026-01-01',
+        items: [{ id: 'i1', menu_item_id: 'mi1', name: 'Plov', qty: '2', price: '25' }],
+      }] },
+    })
 
     const out = await fetchOrders({ slim: false })
 
-    expect(mockGET).toHaveBeenCalledTimes(2)
+    expect(mockGET).toHaveBeenCalledTimes(1)
     expect(mockGET.mock.calls[0][0]).toBe('/api/v1/orders')
-    expect(mockGET.mock.calls[1][0]).toBe('/api/v1/orders/{id}')
+    expect(mockGET.mock.calls[0][1]?.params?.query?.include).toBe('items')
     expect(out[0].items).toHaveLength(1)
     expect(out[0].items[0].name).toBe('Plov')
   })
 
-  it('slim:false по ids=[X] делает targeted detail-fetch только для X', async () => {
-    mockGET
-      .mockResolvedValueOnce({
-        data: { data: [
-          { id: 'o1', status: 'open', total: '10', created_at: '2026-01-01' },
-          { id: 'o2', status: 'open', total: '20', created_at: '2026-01-01' },
-        ] },
-      })
-      .mockResolvedValueOnce({ data: { order: { id: 'o2' }, items: [{ id: 'i', menu_item_id: 'm', name: 'X', qty: '1', price: '20' }] } })
+  it('ids=[X] → targeted detail-fetch по X напрямую, БЕЗ обращения к списку', async () => {
+    // Ключевой фикс: заказ берётся по id через detail-эндпоинт, минуя пагинацию
+    // списка. Иначе старый заказ-«хвост» (вне первых страниц) не находился —
+    // клиентский фильтр по ids ломался на первой пустой странице (баг №29/№30).
+    mockGET.mockResolvedValueOnce({ data: { order: { id: 'o2', status: 'open', total: '20', created_at: '2026-01-01' }, items: [{ id: 'i', menu_item_id: 'm', name: 'X', qty: '1', price: '20' }] } })
 
     const out = await fetchOrders({ ids: ['o2'], slim: false })
 
     expect(out).toHaveLength(1)
     expect(out[0].id).toBe('o2')
     expect(out[0].items[0].name).toBe('X')
-    // detail-fetch только по o2 (после filter по ids).
+    // Ровно 1 вызов — detail по o2, списка /orders НЕ трогаем.
+    expect(mockGET).toHaveBeenCalledTimes(1)
+    expect(mockGET.mock.calls[0][0]).toBe('/api/v1/orders/{id}')
+    expect(mockGET.mock.calls[0][1]?.params?.path?.id).toBe('o2')
+  })
+
+  it('ids + slim:true (панель «Смена не закрывается») — detail по каждому id, items пустые', async () => {
+    mockGET
+      .mockResolvedValueOnce({ data: { order: { id: 'o29', status: 'open', total: '5', created_at: '2026-01-01' } } })
+      .mockResolvedValueOnce({ data: { order: { id: 'o30', status: 'open', total: '7', created_at: '2026-01-01' } } })
+
+    const out = await fetchOrders({ ids: ['o29', 'o30'], slim: true })
+
+    expect(out.map(o => o.id).sort()).toEqual(['o29', 'o30'])
+    expect(out.every(o => o.items.length === 0)).toBe(true)
     expect(mockGET).toHaveBeenCalledTimes(2)
-    expect(mockGET.mock.calls[1][1]?.params?.path?.id).toBe('o2')
+    expect(mockGET.mock.calls.every(c => c[0] === '/api/v1/orders/{id}')).toBe(true)
   })
 
   it('detail-fetch падение НЕ убивает весь запрос — возвращаем slim-ряд без items', async () => {
