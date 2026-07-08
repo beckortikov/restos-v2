@@ -1,22 +1,22 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
+import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock, Printer, MoreHorizontal,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
 import { useFrequent, toggleFrequent } from '@/lib/pos-frequent'
 import { useOrderData } from '@/components/order/use-order-data'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
-import type { MenuItem, TableStatus } from '@/lib/types'
+import type { MenuItem, TableStatus, Order } from '@/lib/types'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -47,32 +47,49 @@ export default function PosV2Order() {
   const [selectedTableId, setSelectedTableId] = useState<string>('')
   const [tablesOpen, setTablesOpen] = useState(false)
   const [guests, setGuests] = useState(1)
-  // Дозаказ: приход с ?order=<id> — добавляем позиции в существующий заказ.
-  const [addOrderId, setAddOrderId] = useState('')
-  const [addCount, setAddCount] = useState(0)
+  // Единый сайдбар: занятый стол раскрывается на месте — вкладки групп + содержимое.
+  const [tableOrders, setTableOrders] = useState<Order[]>([])
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
+  const [tableLoading, setTableLoading] = useState(false)
   const [adding, setAdding] = useState(false)
   const addingRef = useRef(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
+  const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
   const canOverrideStop = canDo('orders.create_stopped')
 
-  useEffect(() => {
-    const t = searchParams.get('table')
-    if (t) { setOrderType('hall'); setSelectedTableId(t) }
-  }, [searchParams])
+  // Грузит открытые заказы (группы) стола. extraIds — только что созданный заказ,
+  // которого ещё нет в tables.currentOrderIds (SSE догонит позже).
+  const loadTableOrders = useCallback(async (tableId: string, selectId?: string, extraIds: string[] = []) => {
+    const t = tables.find(x => x.id === tableId)
+    const ids = Array.from(new Set([...(t?.currentOrderIds ?? []), ...extraIds])).filter(Boolean)
+    if (ids.length === 0) { setTableOrders([]); setActiveGroupId(null); return }
+    setTableLoading(true)
+    try {
+      const os = await fetchOrders({ ids, slim: false })
+      const live = os.filter(o => o.status !== 'done' && o.status !== 'cancelled')
+      setTableOrders(live)
+      setActiveGroupId(selectId && live.some(o => o.id === selectId) ? selectId : (live[0]?.id ?? null))
+    } catch { /* ignore */ } finally { setTableLoading(false) }
+  }, [tables])
 
-  // Дозаказ: подгружаем существующий заказ (тип/стол/кол-во позиций) для контекста.
+  // Приход с ?table= / ?order= — раскрываем контекст стола/группы (после загрузки данных).
+  const initedRef = useRef(false)
   useEffect(() => {
-    const oid = searchParams.get('order')
-    if (!oid) return
-    setAddOrderId(oid)
-    fetchOrders({ ids: [oid], slim: false }).then(os => {
-      const o = os[0]; if (!o) return
-      setOrderType(o.type === 'takeaway' ? 'takeaway' : 'hall')
-      if (o.tableId) setSelectedTableId(o.tableId)
-      setAddCount((o.items ?? []).filter(i => !i.cancelledAt).length)
-    }).catch(() => {})
-  }, [searchParams])
+    if (initedRef.current || loading) return
+    initedRef.current = true
+    const orderParam = searchParams.get('order')
+    const tableParam = searchParams.get('table')
+    if (orderParam) {
+      fetchOrders({ ids: [orderParam], slim: false }).then(os => {
+        const o = os[0]; if (!o) return
+        if (o.tableId) { setOrderType('hall'); setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+        else { setOrderType('takeaway'); setTableOrders([o]); setActiveGroupId(o.id) }
+      }).catch(() => {})
+    } else if (tableParam) {
+      setOrderType('hall'); setSelectedTableId(tableParam); loadTableOrders(tableParam)
+    }
+  }, [loading, searchParams, loadTableOrders])
 
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
   const currentCat = activeCat ?? visibleCats[0] ?? null
@@ -162,7 +179,15 @@ export default function PosV2Order() {
     finally { payingRef.current = false; setPaying(false) }
   }
 
-  // ── Отправка заказа зала на кухню ─────────────────────────────
+  // Выбор стола из пикера — раскрываем его контекст (группы + содержимое) в сайдбаре.
+  function selectTable(tableId: string) {
+    setSelectedTableId(tableId); setCart([]); setGuests(1); setTablesOpen(false)
+    loadTableOrders(tableId)
+  }
+  // Переключение вкладки группы. null = новая группа на том же столе.
+  function selectGroup(id: string | null) { setActiveGroupId(id); setCart([]) }
+
+  // ── Отправка заказа зала на кухню (новая группа / первый заказ стола) ──
   const [sending, setSending] = useState(false)
   const sendingRef = useRef(false)
 
@@ -172,27 +197,47 @@ export default function PosV2Order() {
     try {
       const shift = await fetchActiveShift()
       const total = subtotal
-      const order = await createOrder({ type: 'hall', tableId: selectedTableId, items: cartToItems(cart), total, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: guests, overrideStopList: overrideStopList() })
+      const groupsBefore = tableOrders.length
+      const order = await createOrder({ type: 'hall', tableId: selectedTableId, items: cartToItems(cart), total, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: guests, tabLabel: groupsBefore > 0 ? `Группа ${groupsBefore + 1}` : undefined, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
-      openTableForOrder(selectedTableId, order.id, user?.id).catch(() => {})
-      toast.success(`Заказ отправлен · Стол ${selectedTable?.number ?? ''} · ${formatCurrency(total)}`, { description: 'Кухня уже видит заказ. Оплата — позже.' })
-      setCart([]); setSelectedTableId(''); setGuests(1)
+      await openTableForOrder(selectedTableId, order.id, user?.id).catch(() => {})
+      toast.success(`Заказ отправлен · Стол ${selectedTable?.number ?? ''} · ${formatCurrency(total)}`, { description: 'Кухня уже видит заказ' })
+      setCart([]); setGuests(1)
+      await loadTableOrders(selectedTableId, order.id, [order.id]) // новая группа сразу в сайдбаре
     } catch (e) { toast.error(`Не удалось отправить: ${humanizeError(e)}`) }
     finally { sendingRef.current = false; setSending(false) }
   }
 
-  async function addToOrder() {
-    if (addingRef.current || cart.length === 0 || !addOrderId) return
+  // Дозаказ в активную группу — список обновляется на месте, без ухода со страницы.
+  async function addToActiveGroup() {
+    if (addingRef.current || cart.length === 0 || !activeGroupId) return
     addingRef.current = true; setAdding(true)
     try {
-      await addItemsToOrder(addOrderId, cartToItems(cart), { overrideStopList: overrideStopList() })
-      toast.success(`Добавлено ${count} поз. в заказ`)
-      navigate(`/pos2/ticket?order=${encodeURIComponent(addOrderId)}`)
+      await addItemsToOrder(activeGroupId, cartToItems(cart), { overrideStopList: overrideStopList() })
+      toast.success(`Добавлено ${count} поз.`)
+      setCart([])
+      await loadTableOrders(selectedTableId, activeGroupId, [activeGroupId])
     } catch (e) { toast.error(`Не удалось добавить: ${humanizeError(e)}`) }
     finally { addingRef.current = false; setAdding(false) }
   }
 
-  const busy = paying || sending || adding
+  async function groupGuests(delta: number) {
+    if (!activeGroup) return
+    const cur = activeGroup.guestsCount ?? 1
+    const next = Math.max(1, cur + delta)
+    if (next === cur) return
+    const gid = activeGroup.id
+    setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: next } : o))
+    try { await patchOrder(gid, { guestsCount: next }) }
+    catch (e) { toast.error(humanizeError(e)); setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: cur } : o)) }
+  }
+
+  async function doPreBill(id: string) {
+    try { await printPreBill(id); toast.success('Пре-чек отправлен на печать') }
+    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+  }
+
+  const busy = paying || sending || adding || tableLoading
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -203,25 +248,17 @@ export default function PosV2Order() {
             <LayoutGrid style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
             <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
           </button>
-          {!addOrderId && (
-            <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-              {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
-                const on = orderType === val
-                return (
-                  <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                    <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-          {addOrderId && (
-            <div className="flex items-center gap-2 rounded-xl shrink-0" style={{ background: 'var(--pv-brand-soft)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
-              <Plus style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-brand)' }} />
-              <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Добор{selectedTable ? ` · Стол ${selectedTable.number}` : ''}{addCount ? ` · было ${addCount}` : ''}</span>
-            </div>
-          )}
-          {orderType === 'hall' && !addOrderId && (
+          <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
+            {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
+              const on = orderType === val
+              return (
+                <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                  <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{label}
+                </button>
+              )
+            })}
+          </div>
+          {orderType === 'hall' && (
             <button onClick={() => setTablesOpen(true)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
               <MapPin style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
               <span className="font-semibold whitespace-nowrap" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}</span>
@@ -288,18 +325,31 @@ export default function PosV2Order() {
 
       {/* ── Right: cart ────────────────────────────────────────── */}
       <aside className="shrink-0 flex flex-col border-l" style={{ width: 'clamp(20rem, 26vw, 30rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }}>
+        {/* Header */}
         <div className="flex items-center justify-between shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>Заказ{orderType === 'hall' && selectedTable ? ` · Стол ${selectedTable.number}` : ''}</span>
-          <span className="rounded-full font-semibold" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{count} поз.</span>
+          <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>
+            {orderType === 'hall' && selectedTable ? `Стол ${selectedTable.number}` : 'Заказ'}{activeGroup && tableOrders.length > 1 ? ` · Группа ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}
+          </span>
+          <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
         </div>
 
+        {/* Вкладки групп занятого стола */}
+        {orderType === 'hall' && selectedTable && (tableOrders.length >= 1 || tableLoading) && (
+          <div className="flex items-center gap-2 flex-wrap shrink-0 border-b" style={{ padding: '0.6rem clamp(0.7rem,1vw,1rem)', borderColor: 'var(--pv-border)' }}>
+            {tableOrders.map((o, i) => { const on = o.id === activeGroupId; return (
+              <button key={o.id} onClick={() => selectGroup(o.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Группа {i + 1}</button>
+            ) })}
+            <button onClick={() => selectGroup(null)} className="rounded-xl font-semibold border border-dashed flex items-center gap-1" style={{ background: activeGroupId === null ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: 'var(--pv-brand)', color: 'var(--pv-brand)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+              <Plus style={{ width: '0.95rem', height: '0.95rem' }} />Группа
+            </button>
+          </div>
+        )}
+
+        {/* Контент: корзина / уже заказано / пусто */}
         <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.7rem,1vw,1rem)' }}>
-          {cart.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: 'var(--pv-text-3)' }}>
-              <ShoppingBag style={{ width: '2.5rem', height: '2.5rem', opacity: 0.5 }} /><span style={{ fontSize: 'var(--pv-ctl)' }}>Корзина пуста</span>
-            </div>
-          ) : (
+          {cart.length > 0 ? (
             <div className="flex flex-col" style={{ gap: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
+              {activeGroup && <div className="rounded-lg text-center font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Дозаказ в Группу {tableOrders.findIndex(o => o.id === activeGroupId) + 1}</div>}
               {cart.map(l => {
                 const weight = l.unit !== 'piece'
                 return (
@@ -318,35 +368,69 @@ export default function PosV2Order() {
                 )
               })}
             </div>
+          ) : activeGroup ? (
+            <div className="flex flex-col" style={{ gap: 'clamp(0.4rem,0.7vw,0.6rem)' }}>
+              <div className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Уже заказано</div>
+              {(activeGroup.items ?? []).map((i, idx) => { const c = !!i.cancelledAt; return (
+                <div key={i.id ?? idx} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.7rem)', opacity: c ? 0.5 : 1 }}>
+                  <span style={{ fontSize: '1.2rem' }}>{i.emoji || '🍽️'}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', textDecoration: c ? 'line-through' : 'none' }}>{i.name}</div>
+                    <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{c ? ' · отменено' : ''}{i.note ? ` · 💬 ${i.note}` : ''}</div>
+                  </div>
+                  <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
+                </div>
+              ) })}
+              <div className="text-center shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)', marginTop: '0.3rem' }}>Тапайте блюда слева — дозаказ в эту группу</div>
+            </div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: 'var(--pv-text-3)' }}>
+              <ShoppingBag style={{ width: '2.5rem', height: '2.5rem', opacity: 0.5 }} /><span style={{ fontSize: 'var(--pv-ctl)' }}>{tableLoading ? 'Загрузка…' : 'Корзина пуста'}</span>
+            </div>
           )}
         </div>
 
+        {/* Footer */}
         <div className="shrink-0 border-t" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          {orderType === 'hall' && !addOrderId && (
+          {orderType === 'hall' && (activeGroup || cart.length > 0 || !selectedTableId) && (
             <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.5rem,0.9vw,0.85rem)' }}>
               <span className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><Users style={{ width: '1.1rem', height: '1.1rem' }} />Гостей</span>
               <div className="flex items-center gap-2">
-                <button onClick={() => setGuests(g => Math.max(1, g - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
-                <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{guests}</span>
-                <button onClick={() => setGuests(g => Math.min(20, g + 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                <button onClick={() => activeGroup ? groupGuests(-1) : setGuests(g => Math.max(1, g - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{activeGroup ? (activeGroup.guestsCount ?? 1) : guests}</span>
+                <button onClick={() => activeGroup ? groupGuests(1) : setGuests(g => Math.min(20, g + 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
               </div>
             </div>
           )}
           <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.6rem,1vw,1rem)' }}>
             <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
-            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(subtotal)}</span>
+            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(cart.length > 0 ? subtotal : activeGroup?.total ?? 0)}</span>
           </div>
-          {addOrderId ? (
-            <button disabled={cart.length === 0 || busy} onClick={addToOrder} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: cart.length ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
-              <Plus style={{ width: '1.3em', height: '1.3em' }} />{adding ? 'Добавляем…' : 'Добавить в заказ'}
-            </button>
-          ) : orderType === 'hall' ? (
-            <button disabled={cart.length === 0 || !selectedTableId || busy} onClick={sendToKitchen} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: (cart.length && selectedTableId) ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
-              <Send style={{ width: '1.3em', height: '1.3em' }} />{sending ? 'Отправка…' : selectedTableId ? 'Отправить на кухню' : 'Выберите стол'}
-            </button>
-          ) : (
+          {orderType !== 'hall' ? (
             <button disabled={cart.length === 0 || busy} onClick={() => setPayOpen(true)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: cart.length ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
               <CreditCard style={{ width: '1.35em', height: '1.35em' }} />К оплате
+            </button>
+          ) : cart.length > 0 ? (
+            activeGroup ? (
+              <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                <Plus style={{ width: '1.3em', height: '1.3em' }} />{adding ? 'Добавляем…' : `Добавить в Группу ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}`}
+              </button>
+            ) : (
+              <button disabled={!selectedTableId || busy} onClick={sendToKitchen} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: selectedTableId ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
+                <Send style={{ width: '1.3em', height: '1.3em' }} />{sending ? 'Отправка…' : selectedTableId ? (tableOrders.length > 0 ? 'Отправить (новая группа)' : 'Отправить на кухню') : 'Выберите стол'}
+              </button>
+            )
+          ) : activeGroup ? (
+            <div className="flex items-center gap-2">
+              <button onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center gap-1.5 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><Printer style={{ width: '1.2em', height: '1.2em' }} /></button>
+              <button onClick={() => navigate(`/pos2/ticket?order=${encodeURIComponent(activeGroup.id)}`)} className="flex items-center justify-center gap-1.5 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.2em', height: '1.2em' }} /></button>
+              <button onClick={() => navigate(`/pos2/pay?order=${encodeURIComponent(activeGroup.id)}`)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
+              </button>
+            </div>
+          ) : (
+            <button disabled className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold disabled:opacity-40" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-3)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              {selectedTableId ? 'Добавьте блюда' : 'Выберите стол'}
             </button>
           )}
         </div>
@@ -429,8 +513,10 @@ export default function PosV2Order() {
                     {group.tables.map(t => {
                       const st = STATUS[t.status] ?? STATUS.free
                       const sel = t.id === selectedTableId
+                      const groupsN = t.currentOrderIds?.length ?? 0
                       return (
-                        <button key={t.id} onClick={() => { setSelectedTableId(t.id); setTablesOpen(false) }} className="flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
+                        <button key={t.id} onClick={() => selectTable(t.id)} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
+                          {groupsN >= 2 && <span className="absolute rounded-full font-bold flex items-center justify-center" style={{ top: '0.35rem', right: '0.35rem', background: sel ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: sel ? 'var(--pv-brand)' : '#fff', minWidth: '1.3rem', height: '1.3rem', fontSize: '0.7rem' }}>{groupsN}</span>}
                           <span className="font-bold" style={{ color: sel ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.6vw,1.5rem)' }}>№{t.number}</span>
                           <div className="flex items-center gap-1.5">
                             <span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: sel ? 'rgba(255,255,255,0.9)' : st.dot }} />
