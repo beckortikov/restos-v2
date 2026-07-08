@@ -26,6 +26,8 @@ export default defineConfig({
       'lib/**/*.test.{ts,tsx}',
       'components/**/*.test.{ts,tsx}',
       'hooks/**/*.test.{ts,tsx}',
+      // /pos2 smoke-тесты рендера экранов колокейтятся под app/pos2/.
+      'app/**/*.test.{ts,tsx}',
     ],
     // Существующие Playwright e2e специ (tests/*.spec.ts) запускаются через
     // `playwright test`, не vitest. node_modules — обязательно (там тоже
