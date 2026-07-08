@@ -2,14 +2,13 @@
 
 import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, Users, Plus, Minus, CalendarPlus, Combine, X, Clock, Check, Ban, Pencil, Trash2, CreditCard, Printer, ExternalLink } from 'lucide-react'
+import { LayoutGrid, Users, Plus, CalendarPlus, Combine, X, Clock, Check, Ban, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
-import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone, fetchOrders, patchOrder, printPreBill } from '@/lib/queries'
-import { formatCurrency } from '@/lib/helpers'
+import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone } from '@/lib/queries'
 import { humanizeError } from '@/lib/errors'
-import type { Table, TableStatus, Reservation, Order } from '@/lib/types'
+import type { Table, TableStatus, Reservation } from '@/lib/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
   free: { soft: 'var(--pv-free-soft)', dot: 'var(--pv-free-dot)', text: 'var(--pv-free-text)', label: 'Свободен' },
@@ -48,46 +47,12 @@ export default function PosV2Tables() {
   const [viewTable, setViewTable] = useState<Table | null>(null)
   const [resInfo, setResInfo] = useState<Reservation | null>(null)
 
-  // Table detail sheet — тап по занятому столу: содержимое + действия на карте
-  const [sheetTable, setSheetTable] = useState<Table | null>(null)
-  const [sheetOrders, setSheetOrders] = useState<Order[]>([])
-  const [sheetSel, setSheetSel] = useState('')
-  const [sheetLoading, setSheetLoading] = useState(false)
-  const sheetOrder = useMemo(() => sheetOrders.find(o => o.id === sheetSel) ?? sheetOrders[0] ?? null, [sheetOrders, sheetSel])
-
   const byZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
     const map = new Map<string, Table[]>()
     for (const t of tables) { const k = zoneName(t.zone); (map.get(k) ?? map.set(k, []).get(k)!).push(t) }
     return Array.from(map.entries()).map(([zone, ts]) => ({ zone, tables: [...ts].sort((a, b) => a.number - b.number) }))
   }, [tables, zones])
-
-  async function openTableSheet(t: Table) {
-    const ids = (t.currentOrderIds ?? []).filter(Boolean)
-    if (ids.length === 0) { navigate(`/pos2/order?table=${encodeURIComponent(t.id)}`); return }
-    setSheetTable(t); setSheetOrders([]); setSheetSel(ids[0]); setSheetLoading(true)
-    try {
-      const os = await fetchOrders({ ids, slim: false })
-      const live = os.filter(o => o.status !== 'done' && o.status !== 'cancelled')
-      if (live.length === 0) { setSheetTable(null); navigate(`/pos2/order?table=${encodeURIComponent(t.id)}`); return }
-      setSheetOrders(live); setSheetSel(live[0].id)
-    } catch (e) { toast.error(humanizeError(e)); setSheetTable(null) }
-    finally { setSheetLoading(false) }
-  }
-
-  async function sheetGuests(o: Order, delta: number) {
-    const cur = o.guestsCount ?? 1
-    const next = Math.max(1, cur + delta)
-    if (next === cur) return
-    setSheetOrders(prev => prev.map(x => x.id === o.id ? { ...x, guestsCount: next } : x))
-    try { await patchOrder(o.id, { guestsCount: next }) }
-    catch (e) { toast.error(humanizeError(e)); setSheetOrders(prev => prev.map(x => x.id === o.id ? { ...x, guestsCount: cur } : x)) }
-  }
-
-  async function sheetPreBill(id: string) {
-    try { await printPreBill(id); toast.success('Пре-чек отправлен на печать') }
-    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
-  }
 
   function openReserveForm(t: Table) {
     const d = new Date(Date.now() + 3600_000)
@@ -164,10 +129,9 @@ export default function PosV2Tables() {
       return
     }
     if (mode === 'reserve') { if (t.status === 'free') openReserveForm(t); else toast.error('Бронь — только на свободный стол'); return }
-    // order mode
-    const open = t.currentOrderIds?.[0]
-    if (open) { openTableSheet(t); return }
-    if (t.status === 'reserved') { setViewTable(t); setResInfo(null); fetchReservationForTable(t.id).then(setResInfo).catch(() => {}); return }
+    // order mode → единый экран заказа (одно окно): свободный = новый заказ,
+    // занятый = стол раскрывается в сайдбаре (группы + содержимое + оплата).
+    if (t.status === 'reserved' && !(t.currentOrderIds?.length)) { setViewTable(t); setResInfo(null); fetchReservationForTable(t.id).then(setResInfo).catch(() => {}); return }
     navigate(`/pos2/order?table=${encodeURIComponent(t.id)}`)
   }
 
@@ -342,89 +306,6 @@ export default function PosV2Tables() {
                 <button disabled={busy || !resInfo} onClick={() => resAction('cancelled')} className="flex items-center justify-center gap-2 rounded-2xl font-semibold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: 'clamp(0.8rem,1.2vw,1.1rem) clamp(0.9rem,1.3vw,1.2rem)', fontSize: 'var(--pv-ctl)' }}><Ban style={{ width: '1.2em', height: '1.2em' }} /></button>
               </div>
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Table detail sheet — содержимое стола + действия прямо на карте */}
-      {sheetTable && (
-        <div className="fixed inset-0 z-50 flex items-end justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setSheetTable(null)}>
-          <div className="w-full rounded-t-3xl flex flex-col overflow-hidden" style={{ background: 'var(--pv-card)', maxWidth: '46rem', maxHeight: '88vh', boxShadow: '0 -10px 40px rgba(0,0,0,0.25)' }} onClick={e => e.stopPropagation()}>
-            {/* Header */}
-            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <div className="flex items-center gap-3 min-w-0">
-                <span className="font-bold" style={{ fontSize: 'clamp(1.15rem,1.7vw,1.5rem)', color: 'var(--pv-text)' }}>Стол {sheetTable.number}</span>
-                {sheetOrder && <span className="rounded-full font-semibold" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.2rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Занят</span>}
-              </div>
-              <button onClick={() => setSheetTable(null)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
-
-            {/* Group tabs + new group */}
-            <div className="flex items-center gap-2 flex-wrap border-b shrink-0" style={{ padding: '0.7rem clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              {sheetOrders.map((o, i) => { const on = o.id === sheetSel; return (
-                <button key={o.id} onClick={() => setSheetSel(o.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Группа {i + 1} · {formatCurrency(o.total)}</button>
-              ) })}
-              <button onClick={() => navigate(`/pos2/order?table=${encodeURIComponent(sheetTable.id)}`)} className="rounded-xl font-semibold border border-dashed flex items-center gap-1" style={{ borderColor: 'var(--pv-brand)', color: 'var(--pv-brand)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
-                <Plus style={{ width: '1rem', height: '1rem' }} />Группа
-              </button>
-            </div>
-
-            {/* Body — содержимое выбранной группы */}
-            <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.8rem,1.3vw,1.2rem)' }}>
-              {sheetLoading ? (
-                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
-              ) : !sheetOrder ? (
-                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Нет заказа</div>
-              ) : (
-                <div className="flex flex-col" style={{ gap: '0.5rem' }}>
-                  {/* Гости */}
-                  <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.5rem 0.9rem' }}>
-                    <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><Users style={{ width: '1.05rem', height: '1.05rem' }} />Гостей</span>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => sheetGuests(sheetOrder, -1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem', color: 'var(--pv-text-2)' }}><Minus style={{ width: '1rem', height: '1rem' }} /></button>
-                      <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '2rem', fontSize: 'var(--pv-ctl)' }}>{sheetOrder.guestsCount ?? 1}</span>
-                      <button onClick={() => sheetGuests(sheetOrder, +1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem', color: 'var(--pv-text-2)' }}><Plus style={{ width: '1rem', height: '1rem' }} /></button>
-                    </div>
-                  </div>
-                  {/* Позиции */}
-                  {(sheetOrder.items ?? []).filter(i => !i.cancelledAt).map((i, idx) => (
-                    <div key={i.id ?? idx} className="flex items-center gap-3 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.55rem 0.8rem' }}>
-                      <span style={{ fontSize: 'clamp(1.1rem,1.6vw,1.5rem)' }}>{i.emoji || '🍽️'}</span>
-                      <div className="flex-1 min-w-0">
-                        <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{i.name}</div>
-                        <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{i.note ? ` · 💬 ${i.note}` : ''}</div>
-                      </div>
-                      <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
-                    </div>
-                  ))}
-                  {(sheetOrder.items ?? []).filter(i => !i.cancelledAt).length === 0 && <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '1.5rem', fontSize: 'var(--pv-ctl)' }}>Нет позиций</div>}
-                </div>
-              )}
-            </div>
-
-            {/* Footer — итог + действия */}
-            {sheetOrder && (
-              <div className="shrink-0 border-t" style={{ padding: 'clamp(0.8rem,1.3vw,1.2rem)', borderColor: 'var(--pv-border)' }}>
-                <div className="flex items-center justify-between" style={{ marginBottom: '0.7rem' }}>
-                  <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
-                  <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.8rem)' }}>{formatCurrency(sheetOrder.total)}</span>
-                </div>
-                <div style={{ display: 'grid', gap: '0.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(7rem,20vw,10rem), 1fr))' }}>
-                  <button onClick={() => navigate(`/pos2/order?order=${encodeURIComponent(sheetOrder.id)}`)} className="flex items-center justify-center gap-2 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
-                    <Plus style={{ width: '1.2em', height: '1.2em' }} />Добавить
-                  </button>
-                  <button onClick={() => sheetPreBill(sheetOrder.id)} className="flex items-center justify-center gap-2 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
-                    <Printer style={{ width: '1.2em', height: '1.2em' }} />Пре-чек
-                  </button>
-                  <button onClick={() => navigate(`/pos2/ticket?order=${encodeURIComponent(sheetOrder.id)}`)} className="flex items-center justify-center gap-2 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
-                    <ExternalLink style={{ width: '1.2em', height: '1.2em' }} />Все действия
-                  </button>
-                  <button onClick={() => navigate(`/pos2/pay?order=${encodeURIComponent(sheetOrder.id)}`)} className="flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
-                    <CreditCard style={{ width: '1.2em', height: '1.2em' }} />К оплате
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       )}
