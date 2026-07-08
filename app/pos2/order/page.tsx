@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock, Bike,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
@@ -39,7 +39,7 @@ export default function PosV2Order() {
   const frequent = useFrequent(restaurantId ?? '')
   const freqSet = useMemo(() => new Set(frequent), [frequent])
 
-  const [orderType, setOrderType] = useState<'hall' | 'takeaway' | 'delivery'>('hall')
+  const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
   const [search, setSearch] = useState('')
   const deferred = useDeferredValue(search)
   const [activeCat, setActiveCat] = useState<string | null>(null)
@@ -150,7 +150,7 @@ export default function PosV2Order() {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
       const total = subtotal
-      const order = await createOrder({ type: orderType === 'delivery' ? 'delivery' : 'takeaway', items: cartToItems(cart), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
       let accId = (shift as { accountId?: string }).accountId
       let accName = (shift as { accountName?: string }).accountName
@@ -205,7 +205,7 @@ export default function PosV2Order() {
           </button>
           {!addOrderId && (
             <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-              {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag], ['delivery', 'ДОСТАВКА', Bike]] as const).map(([val, label, Icon]) => {
+              {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
                 const on = orderType === val
                 return (
                   <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
