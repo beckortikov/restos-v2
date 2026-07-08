@@ -13,6 +13,7 @@ import {
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
 import { deltaPct } from '@/lib/pos-v2/report'
+import { PosModal } from '@/components/pos-v2/pos-modal'
 import { dSum, dAdd, dSub } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
 import type { CashShift, CashShiftOperation, FinancialAccount } from '@/lib/types'
@@ -281,14 +282,8 @@ export default function PosV2Shift() {
 
       {/* Action modal */}
       {action && shift && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setAction(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(22rem, 44vw, 34rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem) clamp(1.2rem,1.8vw,1.6rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>
-                {action === 'cash_in' ? 'Внесение' : action === 'cash_out' ? 'Изъятие' : action === 'expense' ? 'Расход из кассы' : 'Закрытие смены'}
-              </span>
-              <button onClick={() => { if (!busy) setAction(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
+        <PosModal open onClose={() => { if (!busy) setAction(null) }} dismissable={!busy} width="clamp(22rem, 44vw, 34rem)"
+          title={action === 'cash_in' ? 'Внесение' : action === 'cash_out' ? 'Изъятие' : action === 'expense' ? 'Расход из кассы' : 'Закрытие смены'}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
               {action === 'close' && (
                 <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.7rem 1rem' }}>
@@ -327,8 +322,7 @@ export default function PosV2Shift() {
                 {busy ? 'Проводим…' : action === 'close' ? 'Закрыть смену' : 'Подтвердить'}
               </button>
             </div>
-          </div>
-        </div>
+        </PosModal>
       )}
 
       {/* Shift history modal */}
