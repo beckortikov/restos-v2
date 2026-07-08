@@ -2,13 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Clock, Printer, FileSpreadsheet, HandCoins } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Clock, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
   fetchActiveShift, fetchShiftRevenue, fetchShiftOperations, fetchFinancialAccounts,
   openShift, closeShift, addShiftOperation, createShiftExpense,
-  printShiftX, printShiftZ, printShiftService, fetchShiftZReport, type ShiftZReport,
+  printShiftX, printShiftZ, printShiftService, fetchShiftZReport, type ShiftZReport, fetchShifts,
 } from '@/lib/queries'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
@@ -35,6 +35,8 @@ export default function PosV2Shift() {
   const [desc, setDesc] = useState('')
   const [busy, setBusy] = useState(false)
   const [zr, setZr] = useState<ShiftZReport | null>(null)
+  const [histOpen, setHistOpen] = useState(false)
+  const [hist, setHist] = useState<CashShift[] | null>(null)
   const busyRef = useRef(false)
 
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
@@ -76,6 +78,19 @@ export default function PosV2Shift() {
     const h = Math.floor(ms / 3_600_000), m = Math.floor((ms % 3_600_000) / 60_000)
     return `${h}ч ${m}м`
   }, [shift])
+
+  const curRevenue = dAdd(rev.cashRevenue, rev.cardRevenue)
+  const prev = zr?.previous ?? null
+  const deltaPct = (cur: number, was: number): number | null => {
+    if (!prev || !(was > 0)) return null
+    return ((cur - was) / was) * 100
+  }
+
+  async function openHistory() {
+    setHistOpen(true)
+    if (hist) return
+    try { setHist(await fetchShifts(30)) } catch (e) { toast.error(humanizeError(e)); setHist([]) }
+  }
 
   async function report(kind: 'x' | 'z' | 'service') {
     if (!shift) return
@@ -187,18 +202,37 @@ export default function PosV2Shift() {
           <div className="flex flex-col" style={{ gap: 'var(--pv-gap)' }}>
             {/* KPIs */}
             <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(11rem,16vw,15rem), 1fr))' }}>
-              {([['Выручка', formatCurrency(dAdd(rev.cashRevenue, rev.cardRevenue)), `Нал ${formatCurrency(rev.cashRevenue)} · Безнал ${formatCurrency(rev.cardRevenue)}`], ['Заказов', String(rev.ordersCount), 'закрыто'], ['Средний чек', formatCurrency(rev.avgCheck), 'на заказ']] as const).map(([l, v, s]) => (
+              {([
+                ['Выручка', formatCurrency(curRevenue), `Нал ${formatCurrency(rev.cashRevenue)} · Безнал ${formatCurrency(rev.cardRevenue)}`, deltaPct(curRevenue, prev?.revenue ?? 0)],
+                ['Заказов', String(rev.ordersCount), 'закрыто', deltaPct(rev.ordersCount, prev?.ordersCount ?? 0)],
+                ['Средний чек', formatCurrency(rev.avgCheck), 'на заказ', deltaPct(rev.avgCheck, prev?.avgCheck ?? 0)],
+              ] as [string, string, string, number | null][]).map(([l, v, s, d]) => (
                 <div key={l} className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.4rem)' }}>
                   <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{l}</div>
                   <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)', margin: '0.15rem 0' }}>{v}</div>
-                  <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{s}</div>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{s}</span>
+                    {d != null && (
+                      <span className="flex items-center gap-0.5 rounded-full shrink-0 font-semibold" style={{ background: d >= 0 ? 'var(--pv-free-soft)' : 'var(--pv-occ-soft)', color: d >= 0 ? 'var(--pv-free-text)' : 'var(--pv-occ-text)', padding: '0.1rem 0.45rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>
+                        {d >= 0 ? <TrendingUp style={{ width: '0.75rem', height: '0.75rem' }} /> : <TrendingDown style={{ width: '0.75rem', height: '0.75rem' }} />}{Math.abs(d).toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
+            {prev && (
+              <div className="rounded-xl flex items-center flex-wrap" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: '0.6rem 1rem', gap: '0.3rem 1.2rem', color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+                <span>Прошлая смена{prev.closedAt ? ` (${new Date(prev.closedAt).toLocaleDateString('ru', { day: '2-digit', month: 'short' })})` : ''}:</span>
+                <span>Выручка <b style={{ color: 'var(--pv-text-2)' }}>{formatCurrency(prev.revenue)}</b></span>
+                <span>Заказов <b style={{ color: 'var(--pv-text-2)' }}>{prev.ordersCount}</b></span>
+                <span>Ср. чек <b style={{ color: 'var(--pv-text-2)' }}>{formatCurrency(prev.avgCheck)}</b></span>
+              </div>
+            )}
 
             {/* Reports toolbar */}
             <div className="flex items-center flex-wrap" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)' }}>
-              {([['X-отчёт', () => report('x'), Printer], ['Печать Z', () => report('z'), Printer], ['Обслуживание', () => report('service'), HandCoins], ['Excel', exportXlsx, FileSpreadsheet]] as const).map(([l, fn, Icon]) => (
+              {([['X-отчёт', () => report('x'), Printer], ['Печать Z', () => report('z'), Printer], ['Обслуживание', () => report('service'), HandCoins], ['Excel', exportXlsx, FileSpreadsheet], ['История смен', openHistory, History]] as const).map(([l, fn, Icon]) => (
                 <button key={l} onClick={fn} className="flex items-center gap-2 rounded-xl border active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.55rem,0.9vw,0.8rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
                   <Icon style={{ width: 'clamp(1rem,1.3vw,1.25rem)', height: 'clamp(1rem,1.3vw,1.25rem)', color: 'var(--pv-text-2)' }} />
                   <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l}</span>
@@ -238,6 +272,7 @@ export default function PosV2Shift() {
             {zr && (
               <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(15rem,24vw,22rem), 1fr))', marginTop: '0.3rem' }}>
                 {breakdownCard('Выручка по способам', zr.revenueByMethod.map(r => [r.accountName || (r.paymentMethod === 'cash' ? 'Наличные' : 'Безнал'), formatCurrency(r.total)] as [string, string]))}
+                {breakdownCard('Официанты', zr.salesByWaiter.map(w => [`${w.name} (${w.ordersCount})`, formatCurrency(w.total)] as [string, string]))}
                 {breakdownCard('По типу заказа', zr.salesByOrderType.map(r => [r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type, formatCurrency(r.total)] as [string, string]))}
                 {breakdownCard('Продажи по категориям', zr.salesByCategory.slice(0, 8).map(r => [`${r.name} (${r.qty})`, formatCurrency(r.total)] as [string, string]))}
                 {breakdownCard('Проданные блюда', zr.salesByItem.slice(0, 10).map(r => [`${r.name} ×${r.qty}`, formatCurrency(r.total)] as [string, string]))}
@@ -294,6 +329,50 @@ export default function PosV2Shift() {
               <button disabled={busy} onClick={submitAction} className="w-full flex items-center justify-center rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: action === 'close' ? 'var(--pv-occ-dot)' : 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 {busy ? 'Проводим…' : action === 'close' ? 'Закрыть смену' : 'Подтвердить'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Shift history modal */}
+      {histOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setHistOpen(false)}>
+          <div className="rounded-3xl overflow-hidden flex flex-col" style={{ background: 'var(--pv-card)', width: 'clamp(24rem,60vw,48rem)', maxHeight: '86vh', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>История смен</span>
+              <button onClick={() => setHistOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.8rem,1.4vw,1.2rem)' }}>
+              {hist === null ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
+              ) : hist.length === 0 ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Смен пока нет</div>
+              ) : (
+                <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+                  {hist.map(s => {
+                    const revenue = dAdd(s.cashRevenue, s.cardRevenue)
+                    const disc = (s.closingBalance != null && s.expectedCash != null) ? dSub(s.closingBalance, s.expectedCash) : null
+                    const isOpen = s.status !== 'closed'
+                    return (
+                      <div key={s.id} className="rounded-2xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }}>
+                        <div className="flex items-center justify-between" style={{ gap: '0.5rem' }}>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{new Date(s.openedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{s.closedAt ? ` — ${new Date(s.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
+                            {isOpen && <span className="rounded-full shrink-0 font-semibold" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.1rem 0.5rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>Открыта</span>}
+                          </div>
+                          <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(revenue)}</span>
+                        </div>
+                        <div className="flex items-center flex-wrap" style={{ gap: '0.2rem 1rem', marginTop: '0.35rem', color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
+                          <span>{s.openedByName ?? '—'}</span>
+                          <span>Заказов {s.ordersCount}</span>
+                          <span>Ср. чек {formatCurrency(s.avgCheck)}</span>
+                          {disc != null && <span style={{ color: disc === 0 ? 'var(--pv-text-3)' : 'var(--pv-occ-text)' }}>Расхождение {disc > 0 ? '+' : ''}{formatCurrency(disc)}</span>}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           </div>
         </div>
