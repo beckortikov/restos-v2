@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Search, Plus, Minus, Trash2, ShoppingCart, UtensilsCrossed, Truck, ShoppingBag,
@@ -349,6 +349,10 @@ export function OrderComposer(props: OrderComposerProps) {
     'list',
   )
   const [submitting, setSubmitting] = useState(false)
+  // Синхронный латч от двойного тапа (см. handleSubmit): ставится ДО первого
+  // await, поэтому надёжнее, чем `submitting` state, который обновляется
+  // асинхронно и не успевает задизейблить кнопку до повторного тапа.
+  const submitLatchRef = useRef(false)
   // Controlled state for the «Очистить корзину» confirmation dialog. Replaces
   // the previous bare-icon button that cleared the cart with no warning —
   // accidental taps wiped the whole order.
@@ -735,6 +739,13 @@ export function OrderComposer(props: OrderComposerProps) {
       toast.error('Выберите стол')
       return
     }
+    // Guard от двойного тапа: латч ставится СИНХРОННО, до любого await ниже
+    // (fetchActiveShift / createOrder / closeOrderWithPayment). Второй быстрый
+    // тап «Нал/Карта» тут же выходит. Раньше защита была только через
+    // setSubmitting(true), который вызывался уже ПОСЛЕ await fetchActiveShift —
+    // и двойной тап успевал создать заказ + оплату дважды (двойное списание).
+    if (submitLatchRef.current) return
+    submitLatchRef.current = true
     // Hard-block: takeaway inline-оплата требует открытой смены. Проверяем
     // ДО createOrder, чтобы не оставить «осиротевший» неоплаченный заказ
     // если closeOrderWithPayment упадёт на server-side gate.
@@ -746,6 +757,7 @@ export function OrderComposer(props: OrderComposerProps) {
             action: { label: 'Открыть смену', onClick: () => navigate('/operations/shifts') },
             duration: 6000,
           })
+          submitLatchRef.current = false
           return
         }
       } catch { /* пускаем — server-side gate в closeOrderWithPayment ловит */ }
@@ -948,6 +960,7 @@ export function OrderComposer(props: OrderComposerProps) {
         toast.error(msg || 'Не удалось создать заказ')
       }
     } finally {
+      submitLatchRef.current = false
       setSubmitting(false)
     }
   }
