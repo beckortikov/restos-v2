@@ -5,7 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { LayoutGrid, RefreshCw, Plus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users, SquareSplitHorizontal, Banknote, Check, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder, splitOrderEqual, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote } from '@/lib/queries'
+import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import type { Order, OrderItem, Table, OrderSplit, FinancialAccount } from '@/lib/types'
@@ -27,6 +27,8 @@ export default function PosV2Ticket() {
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [splitOpen, setSplitOpen] = useState(false)
   const [splitN, setSplitN] = useState(2)
+  const [splitMode, setSplitMode] = useState<'equal' | 'items'>('equal')
+  const [itemPart, setItemPart] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
@@ -125,6 +127,24 @@ export default function PosV2Ticket() {
     try {
       await splitOrderEqual(order.id, splitN, order.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
       toast.success(`Счёт разделён на ${splitN}`)
+      setSplitOpen(false); await load()
+    } catch (e) { toast.error(`Не удалось разделить: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
+  async function doSplitItems() {
+    if (busyRef.current || !order) return
+    const live = (order.items ?? []).filter(i => !i.cancelledAt && i.id)
+    const assignments: { splitNumber: number; items: { orderItemId: string }[] }[] = []
+    for (let p = 1; p <= splitN; p++) {
+      const its = live.filter(i => (itemPart[i.id!] ?? 1) === p).map(i => ({ orderItemId: i.id! }))
+      if (its.length) assignments.push({ splitNumber: p, items: its })
+    }
+    if (assignments.length < 2) { toast.error('Разнесите позиции минимум на 2 части'); return }
+    busyRef.current = true; setBusy(true)
+    try {
+      await splitOrderByItems(order.id, assignments, order.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
+      toast.success('Счёт разделён по позициям')
       setSplitOpen(false); await load()
     } catch (e) { toast.error(`Не удалось разделить: ${humanizeError(e)}`) }
     finally { busyRef.current = false; setBusy(false) }
@@ -265,7 +285,7 @@ export default function PosV2Ticket() {
               )
             ) : (
               <>
-                <button onClick={() => { setSplitN(2); setSplitOpen(true) }} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                <button onClick={() => { setSplitN(2); setSplitMode('equal'); setItemPart({}); setSplitOpen(true) }} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
                   <SquareSplitHorizontal style={{ width: '1.2em', height: '1.2em' }} />Разделить
                 </button>
                 {order.type === 'hall' && (
@@ -356,10 +376,15 @@ export default function PosV2Ticket() {
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setSplitOpen(false) }}>
           <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,40vw,30rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>Разделить счёт поровну</span>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>Разделить счёт</span>
               <button onClick={() => { if (!busy) setSplitOpen(false) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
             </div>
-            <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '1rem' }}>
+            <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem', maxHeight: '72vh', overflowY: 'auto' }}>
+              <div className="flex items-center rounded-xl" style={{ background: 'var(--pv-bg)', padding: '3px', gap: '3px' }}>
+                {(['equal', 'items'] as const).map(md => { const on = splitMode === md; return (
+                  <button key={md} onClick={() => setSplitMode(md)} className="flex-1 rounded-lg font-semibold" style={{ background: on ? 'var(--pv-card)' : 'transparent', color: on ? 'var(--pv-brand)' : 'var(--pv-text-2)', padding: '0.5rem', fontSize: 'var(--pv-ctl)', boxShadow: on ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>{md === 'equal' ? 'Поровну' : 'По позициям'}</button>
+                ) })}
+              </div>
               <div className="flex items-center justify-between">
                 <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Количество частей</span>
                 <div className="flex items-center gap-2">
@@ -368,13 +393,35 @@ export default function PosV2Ticket() {
                   <button onClick={() => setSplitN(n => Math.min(10, n + 1))} className="rounded-lg flex items-center justify-center font-bold" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem', color: 'var(--pv-text-2)' }}>+</button>
                 </div>
               </div>
-              <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.7rem 1rem' }}>
-                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Примерно на часть</span>
-                <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>{formatCurrency(order.total / splitN)}</span>
-              </div>
-              <button disabled={busy} onClick={doSplit} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
-                <SquareSplitHorizontal style={{ width: '1.3em', height: '1.3em' }} />Разделить на {splitN}
-              </button>
+              {splitMode === 'equal' ? (
+                <>
+                  <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.7rem 1rem' }}>
+                    <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Примерно на часть</span>
+                    <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>{formatCurrency(order.total / splitN)}</span>
+                  </div>
+                  <button disabled={busy} onClick={doSplit} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+                    <SquareSplitHorizontal style={{ width: '1.3em', height: '1.3em' }} />Разделить на {splitN}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <div className="flex flex-col" style={{ gap: '0.4rem' }}>
+                    {(order.items ?? []).filter(i => !i.cancelledAt && i.id).map(i => (
+                      <div key={i.id} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.5rem 0.7rem' }}>
+                        <span className="flex-1 min-w-0 truncate" style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{i.name} · {formatCurrency(i.price * i.qty)}</span>
+                        <div className="flex items-center gap-1 shrink-0">
+                          {Array.from({ length: splitN }, (_, k) => k + 1).map(p => { const on = (itemPart[i.id!] ?? 1) === p; return (
+                            <button key={p} onClick={() => setItemPart(m => ({ ...m, [i.id!]: p }))} className="rounded-md font-bold" style={{ width: '1.9rem', height: '1.9rem', background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', border: '1px solid var(--pv-border)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{p}</button>
+                          ) })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <button disabled={busy} onClick={doSplitItems} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+                    <SquareSplitHorizontal style={{ width: '1.3em', height: '1.3em' }} />Разделить по позициям
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
