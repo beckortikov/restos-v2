@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft } from 'lucide-react'
 import { toast } from 'sonner'
-import { closeOrderWithPayment, printPreBill } from '@/lib/queries'
+import { closeOrderWithPayment, printPreBill, fetchActiveShift } from '@/lib/queries'
 import { V4Error } from '@/lib/api'
 import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
@@ -64,14 +64,22 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
     toast.error(`Оплата не прошла: ${humanizeError(e)}`)
   }
 
+  // Наличные зачисляем на cash-счёт смены (если задан), иначе первый cash-счёт.
+  function cashAccount(shift: unknown): { id?: string; name?: string } {
+    const s = shift as { accountId?: string; accountName?: string }
+    return s.accountId ? { id: s.accountId, name: s.accountName } : { id: cashAcc?.id, name: cashAcc?.name }
+  }
+
   async function payFull(method: 'cash' | 'card') {
     if (payingRef.current) return
     if (method === 'card' && !cardAcc) { toast.error('Нет безналичного счёта — заведите его в настройках'); return }
     payingRef.current = true; setPaying(true)
     try {
-      const acc = method === 'cash' ? cashAcc : cardAcc
+      const shift = await fetchActiveShift()
+      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      const acc = method === 'cash' ? cashAccount(shift) : { id: cardAcc?.id, name: cardAcc?.name }
       const [dA, dT, dV] = discArgs()
-      await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc?.id, acc?.name, sp, 0, payable, 0, dA, dT, dV)
+      await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc.id, acc.name, sp, 0, payable, 0, dA, dT, dV)
       toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
       onPaid()
     } catch (e) { handleErr(e) }
@@ -80,12 +88,15 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
 
   async function payMixed() {
     if (payingRef.current) return
-    const parts: OrderPayment[] = []
-    if (cashNum > 0) parts.push({ method: 'cash', amount: cashNum, accountId: cashAcc?.id ?? '', accountName: cashAcc?.name })
-    if (cardNum > 0) parts.push({ method: 'card', amount: cardNum, accountId: cardAcc?.id ?? '', accountName: cardAcc?.name })
-    if (parts.length === 0 || parts.some(p => !p.accountId)) { toast.error('Нет счетов для смешанной оплаты'); return }
     payingRef.current = true; setPaying(true)
     try {
+      const shift = await fetchActiveShift()
+      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      const cash = cashAccount(shift)
+      const parts: OrderPayment[] = []
+      if (cashNum > 0) parts.push({ method: 'cash', amount: cashNum, accountId: cash.id ?? '', accountName: cash.name })
+      if (cardNum > 0) parts.push({ method: 'card', amount: cardNum, accountId: cardAcc?.id ?? '', accountName: cardAcc?.name })
+      if (parts.length === 0 || parts.some(p => !p.accountId)) { toast.error('Нет счетов для смешанной оплаты'); return }
       const [dA, dT, dV] = discArgs()
       await closeOrderWithPayment(order.id, parts[0].method, order.tableId || null, base, cogsOf(order), userId, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts)
       toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: `Наличные ${formatCurrency(cashNum)} + Безнал ${formatCurrency(cardNum)}` })

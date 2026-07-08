@@ -12,7 +12,7 @@ import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
 import { useFrequent, toggleFrequent } from '@/lib/pos-frequent'
 import { useOrderData } from '@/components/order/use-order-data'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill } from '@/lib/queries'
-import { formatCurrency, calcLineCogs } from '@/lib/helpers'
+import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -135,11 +135,12 @@ export default function PosV2Order() {
 
   useEffect(() => { fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [])
 
-  // После оплаты зального заказа из сайдбара — перечитываем группы стола.
-  async function onHallPaid() {
-    const paidTable = payTarget?.tableId
+  // После оплаты из сайдбара — перечитываем контекст (стол или список «С собой»).
+  async function onPaidDone() {
+    const t = payTarget
     setPayTarget(null); setActiveGroupId(null)
-    if (paidTable) await loadTableOrders(paidTable)
+    if (t?.tableId) await loadTableOrders(t.tableId)
+    else await loadTakeaway()
   }
 
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
@@ -259,21 +260,6 @@ export default function PosV2Order() {
   }
 
   // Оплата существующего открытого «С собой» заказа.
-  async function payExistingTakeaway(o: Order, method: 'cash' | 'card') {
-    if (payingRef.current) return
-    payingRef.current = true; setPaying(true)
-    try {
-      const shift = await fetchActiveShift()
-      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
-      const acc = await resolvePayAccount(method, shift)
-      if (!acc) return
-      const total = o.total
-      await closeOrderWithPayment(o.id, method, null, o.subtotal ?? o.total, cogsOfOrder(o), user?.id, acc.id, acc.name, 0, 0, total)
-      toast.success(`Оплачено · ${formatCurrency(total)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
-      setActiveGroupId(null); await loadTakeaway()
-    } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
-    finally { payingRef.current = false; setPaying(false) }
-  }
 
   // Выбор стола из пикера — раскрываем его контекст (группы + содержимое) в сайдбаре.
   function selectTable(tableId: string) {
@@ -329,10 +315,6 @@ export default function PosV2Order() {
     catch (e) { toast.error(humanizeError(e)); setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: cur } : o)) }
   }
 
-  function cogsOfOrder(o: Order): number {
-    return (o.items ?? []).reduce((s, i) => s + calcLineCogs(i.cogs || 0, i.qty, i.unit, i.unitSize), 0)
-  }
-
   async function doPreBill(id: string) {
     try { await printPreBill(id); toast.success('Пре-чек отправлен на печать') }
     catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
@@ -367,7 +349,7 @@ export default function PosV2Order() {
           )}
           <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1vw,1rem)' }}>
             <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" aria-label="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
           </div>
         </div>
 
@@ -400,23 +382,30 @@ export default function PosV2Order() {
               {dishes.map(m => {
                 const stopped = m.isAvailable === false
                 const weight = (m.unit ?? 'piece') !== 'piece'
+                const fav = favSet.has(m.id), freq = freqSet.has(m.id)
                 return (
-                  <button key={m.id} onClick={() => add(m)} disabled={stopped && !canOverrideStop} className="relative flex flex-col rounded-2xl text-left transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', padding: 'clamp(0.7rem,1.1vw,1.1rem)', gap: 'clamp(0.4rem,0.8vw,0.7rem)', minHeight: 'clamp(6rem,9vw,8rem)', opacity: stopped ? 0.6 : 1 }}>
-                    {stopped && <span className="absolute rounded-full font-bold" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
+                  // Обёртка: карточка-«добавить» и угловые тумблеры теперь СОСЕДИ, а не
+                  // вложенные интерактивы внутри <button> (был невалидный HTML + тумблеры
+                  // ловились только мышью). Теперь все три — настоящие кнопки, доступные
+                  // с клавиатуры (WCAG 2.1.1 / 4.1.2).
+                  <div key={m.id} className="relative">
+                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrency(m.price)}`} className="w-full flex flex-col rounded-2xl text-left transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', padding: 'clamp(0.7rem,1.1vw,1.1rem)', gap: 'clamp(0.4rem,0.8vw,0.7rem)', minHeight: 'clamp(6rem,9vw,8rem)', opacity: stopped ? 0.6 : 1 }}>
+                      <span style={{ fontSize: 'clamp(1.4rem,2.4vw,2rem)' }}>{m.emoji || '🍽️'}</span>
+                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.82rem,1.1vw,1rem)' }}>{m.name}</span>
+                      <span className="font-bold mt-auto" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(0.85rem,1.15vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? `/${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                    </button>
+                    {stopped && <span className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
                     {restaurantId && (
                       <div className="absolute flex items-center gap-1" style={{ top: '0.4rem', left: '0.4rem' }}>
-                        <span onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ cursor: 'pointer', padding: '0.1rem' }}>
-                          <Star style={{ width: '1.05rem', height: '1.05rem', color: favSet.has(m.id) ? '#e8a33a' : 'var(--pv-text-3)', fill: favSet.has(m.id) ? '#e8a33a' : 'transparent' }} />
-                        </span>
-                        <span onClick={(e) => { e.stopPropagation(); toggleFrequent(restaurantId, m.id) }} style={{ cursor: 'pointer', padding: '0.1rem' }}>
-                          <Clock style={{ width: '1rem', height: '1rem', color: freqSet.has(m.id) ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />
-                        </span>
+                        <button type="button" className="pv-mini rounded-lg" aria-label={fav ? `Убрать «${m.name}» из избранного` : `Добавить «${m.name}» в избранное`} aria-pressed={fav} onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
+                          <Star style={{ width: '1.05rem', height: '1.05rem', color: fav ? '#e8a33a' : 'var(--pv-text-3)', fill: fav ? '#e8a33a' : 'transparent' }} />
+                        </button>
+                        <button type="button" className="pv-mini rounded-lg" aria-label={freq ? `Убрать «${m.name}» из частых` : `Добавить «${m.name}» в часто заказываемые`} aria-pressed={freq} onClick={(e) => { e.stopPropagation(); toggleFrequent(restaurantId, m.id) }} style={{ background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
+                          <Clock style={{ width: '1rem', height: '1rem', color: freq ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />
+                        </button>
                       </div>
                     )}
-                    <span style={{ fontSize: 'clamp(1.4rem,2.4vw,2rem)' }}>{m.emoji || '🍽️'}</span>
-                    <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.82rem,1.1vw,1rem)' }}>{m.name}</span>
-                    <span className="font-bold mt-auto" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(0.85rem,1.15vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? `/${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
-                  </button>
+                  </div>
                 )
               })}
             </div>
@@ -516,8 +505,7 @@ export default function PosV2Order() {
               ) : (
                 <div className="flex items-center gap-2">
                   <button disabled={busy} onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center shrink-0 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)' }}><Printer style={{ width: '1.3em', height: '1.3em' }} /></button>
-                  <button disabled={paying} onClick={() => payExistingTakeaway(activeGroup, 'cash')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><Banknote style={{ width: '1.25em', height: '1.25em' }} />Нал</button>
-                  <button disabled={paying} onClick={() => payExistingTakeaway(activeGroup, 'card')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><CreditCard style={{ width: '1.25em', height: '1.25em' }} />Карта</button>
+                  <button onClick={() => setPayTarget(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}><CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате</button>
                 </div>
               )
             ) : cart.length > 0 ? (
@@ -571,7 +559,7 @@ export default function PosV2Order() {
               <div>
                 <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>Вес порции ({wUnit})</div>
                 <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-brand)', borderWidth: '2px', padding: '0.7rem 1rem' }}>
-                  <input autoFocus inputMode="decimal" value={wAmt} onChange={e => setWAmt(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)' }} />
+                  <input autoFocus inputMode="decimal" value={wAmt} onChange={e => setWAmt(e.target.value)} aria-label={`Вес порции, ${wUnit}`} className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)' }} />
                   <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>{wUnit}</span>
                 </div>
               </div>
@@ -598,8 +586,8 @@ export default function PosV2Order() {
       {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}
       {payTarget && (
         <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,42vw,34rem)"
-          title={`Оплата · Стол ${selectedTable?.number ?? ''} · ${formatCurrency(payTarget.total)}`}>
-          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onHallPaid} />
+          title={`Оплата · ${payTarget.type === 'hall' ? `Стол ${selectedTable?.number ?? ''}` : `С собой #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
+          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} />
         </PosModal>
       )}
 
