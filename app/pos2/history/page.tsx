@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, X, RotateCcw, UtensilsCrossed, ShoppingBag, Banknote, CreditCard, Printer, Undo2 } from 'lucide-react'
+import { LayoutGrid, RefreshCw, RotateCcw, UtensilsCrossed, ShoppingBag, Banknote, CreditCard, Printer, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { fetchTables, fetchOrders, refundOrder, reprintOrderReceipt, reopenOrder } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
+import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { Order, Table } from '@/lib/types'
 
 const REASONS = ['Ошибка кассира', 'Просьба гостя', 'Некачественное блюдо', 'Отмена заказа', 'Другое']
@@ -155,16 +156,7 @@ export default function PosV2History() {
 
       {/* Refund overlay */}
       {target && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!refunding) setTarget(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(22rem, 44vw, 34rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem) clamp(1.2rem,1.8vw,1.6rem)', borderColor: 'var(--pv-border)' }}>
-              <div className="flex items-center gap-2">
-                <RotateCcw style={{ width: '1.4rem', height: '1.4rem', color: 'var(--pv-occ-text)' }} />
-                <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Возврат · {labelOf(target)}</span>
-              </div>
-              <button onClick={() => { if (!refunding) setTarget(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
-
+        <PosModal open onClose={() => { if (!refunding) setTarget(null) }} dismissable={!refunding} width="clamp(22rem, 44vw, 34rem)" title={`Возврат · ${labelOf(target)}`}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '1rem' }}>
               <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-occ-soft)', padding: '0.8rem 1.1rem' }}>
                 <span className="font-medium" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>Оплачено</span>
@@ -186,7 +178,7 @@ export default function PosV2History() {
               <div>
                 <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Сумма возврата</div>
                 <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-brand)', borderWidth: '2px', padding: '0.7rem 1rem' }}>
-                  <input inputMode="decimal" value={amountStr} onChange={e => setAmountStr(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)' }} />
+                  <input aria-label="Сумма возврата" inputMode="decimal" value={amountStr} onChange={e => setAmountStr(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)' }} />
                   <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>TJS</span>
                 </div>
               </div>
@@ -204,8 +196,7 @@ export default function PosV2History() {
                 {refunding ? 'Оформляем…' : 'Подтвердить возврат'}
               </button>
             </div>
-          </div>
-        </div>
+        </PosModal>
       )}
     </div>
   )

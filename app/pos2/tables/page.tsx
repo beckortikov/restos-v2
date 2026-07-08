@@ -2,12 +2,13 @@
 
 import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, Users, Plus, CalendarPlus, Combine, X, Clock, Check, Ban, Pencil, Trash2 } from 'lucide-react'
+import { LayoutGrid, Users, Plus, CalendarPlus, Combine, Clock, Check, Ban, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
 import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone } from '@/lib/queries'
 import { humanizeError } from '@/lib/errors'
+import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { Table, TableStatus, Reservation } from '@/lib/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -248,15 +249,10 @@ export default function PosV2Tables() {
 
       {/* Reservation form */}
       {resTable && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setResTable(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(22rem,44vw,34rem)', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Бронь · Стол {resTable.number}</span>
-              <button onClick={() => { if (!busy) setResTable(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
+        <PosModal open onClose={() => { if (!busy) setResTable(null) }} dismissable={!busy} width="clamp(22rem,44vw,34rem)" title={`Бронь · Стол ${resTable.number}`}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.85rem' }}>
-              <input autoFocus value={rName} onChange={e => setRName(e.target.value)} placeholder="Имя гостя *" className="rounded-xl border bg-transparent outline-none font-semibold" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
-              <input value={rPhone} onChange={e => setRPhone(e.target.value.replace(/[^\d+]/g, ''))} inputMode="tel" placeholder="Телефон" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+              <input aria-label="Имя гостя *" autoFocus value={rName} onChange={e => setRName(e.target.value)} placeholder="Имя гостя *" className="rounded-xl border bg-transparent outline-none font-semibold" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+              <input aria-label="Телефон" value={rPhone} onChange={e => setRPhone(e.target.value.replace(/[^\d+]/g, ''))} inputMode="tel" placeholder="Телефон" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
               <div className="flex items-center justify-between">
                 <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Гостей</span>
                 <div className="flex items-center gap-2">
@@ -266,29 +262,23 @@ export default function PosV2Tables() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <input type="date" value={rDate} onChange={e => setRDate(e.target.value)} className="flex-1 min-w-0 rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
-                <input type="time" value={rTime} onChange={e => setRTime(e.target.value)} className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+                <input aria-label="Дата брони" type="date" value={rDate} onChange={e => setRDate(e.target.value)} className="flex-1 min-w-0 rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+                <input aria-label="Время брони" type="time" value={rTime} onChange={e => setRTime(e.target.value)} className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
               </div>
               <div className="flex items-center gap-2">
                 {[60, 90, 120, 180].map(d => { const on = rDur === d; return <button key={d} onClick={() => setRDur(d)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{d} мин</button> })}
               </div>
-              <input value={rNote} onChange={e => setRNote(e.target.value)} placeholder="Комментарий" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+              <input aria-label="Комментарий" value={rNote} onChange={e => setRNote(e.target.value)} placeholder="Комментарий" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
               <button disabled={busy} onClick={submitReservation} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <CalendarPlus style={{ width: '1.3em', height: '1.3em' }} />Забронировать
               </button>
             </div>
-          </div>
-        </div>
+        </PosModal>
       )}
 
       {/* Reservation view */}
       {viewTable && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setViewTable(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,42vw,32rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Бронь · Стол {viewTable.number}</span>
-              <button onClick={() => { if (!busy) setViewTable(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
+        <PosModal open onClose={() => { if (!busy) setViewTable(null) }} dismissable={!busy} width="clamp(20rem,42vw,32rem)" title={`Бронь · Стол ${viewTable.number}`}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.8rem' }}>
               {!resInfo ? (
                 <div style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Загрузка брони…</div>
@@ -306,20 +296,14 @@ export default function PosV2Tables() {
                 <button disabled={busy || !resInfo} onClick={() => resAction('cancelled')} className="flex items-center justify-center gap-2 rounded-2xl font-semibold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: 'clamp(0.8rem,1.2vw,1.1rem) clamp(0.9rem,1.3vw,1.2rem)', fontSize: 'var(--pv-ctl)' }}><Ban style={{ width: '1.2em', height: '1.2em' }} /></button>
               </div>
             </div>
-          </div>
-        </div>
+        </PosModal>
       )}
 
       {/* Table create/edit form */}
       {tf && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setTf(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,42vw,32rem)', maxHeight: '88vh', overflowY: 'auto', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>{tf.id ? `Стол ${tf.number}` : 'Новый стол'}</span>
-              <button onClick={() => { if (!busy) setTf(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
+        <PosModal open onClose={() => { if (!busy) setTf(null) }} dismissable={!busy} width="clamp(20rem,42vw,32rem)" title={tf.id ? `Стол ${tf.number}` : 'Новый стол'}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.85rem' }}>
-              <input autoFocus value={tf.name} onChange={e => setTf(v => v && { ...v, name: e.target.value })} placeholder={`Название (по умолч. «Стол ${tf.number}»)`} className="rounded-xl border bg-transparent outline-none font-semibold" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+              <input aria-label="Название стола" autoFocus value={tf.name} onChange={e => setTf(v => v && { ...v, name: e.target.value })} placeholder={`Название (по умолч. «Стол ${tf.number}»)`} className="rounded-xl border bg-transparent outline-none font-semibold" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
               {!tf.id && (
                 <div className="flex items-center justify-between">
                   <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Номер стола</span>
@@ -355,26 +339,19 @@ export default function PosV2Tables() {
                 </button>
               )}
             </div>
-          </div>
-        </div>
+        </PosModal>
       )}
 
       {/* Zone create/edit form */}
       {zf && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setZf(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(18rem,36vw,26rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>{zf.id ? 'Изменить зону' : 'Новая зона'}</span>
-              <button onClick={() => { if (!busy) setZf(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
+        <PosModal open onClose={() => { if (!busy) setZf(null) }} dismissable={!busy} width="clamp(18rem,36vw,26rem)" title={zf.id ? 'Изменить зону' : 'Новая зона'}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.85rem' }}>
-              <input autoFocus value={zf.name} onChange={e => setZf(v => v && { ...v, name: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') saveZone() }} placeholder="Название зоны *" className="rounded-xl border bg-transparent outline-none font-semibold" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+              <input aria-label="Название зоны *" autoFocus value={zf.name} onChange={e => setZf(v => v && { ...v, name: e.target.value })} onKeyDown={e => { if (e.key === 'Enter') saveZone() }} placeholder="Название зоны *" className="rounded-xl border bg-transparent outline-none font-semibold" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
               <button disabled={busy} onClick={saveZone} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <Check style={{ width: '1.3em', height: '1.3em' }} />{zf.id ? 'Сохранить' : 'Создать зону'}
               </button>
             </div>
-          </div>
-        </div>
+        </PosModal>
       )}
     </div>
   )

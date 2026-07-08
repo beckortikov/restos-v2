@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Trash2, Minus, Plus, X, UtensilsCrossed, FlaskConical } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Trash2, Minus, Plus, UtensilsCrossed, FlaskConical } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { fetchSemiStock, fetchMenuItems, fetchIngredients, fetchWriteoffs, createWriteoff } from '@/lib/queries'
 import { api, unwrap } from '@/lib/api'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
+import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { SemiFinishedStock, MenuItem, Ingredient, StockWriteoff, WriteoffReason } from '@/lib/types'
 
 const REASONS: { value: WriteoffReason; label: string }[] = [
@@ -180,12 +181,7 @@ export default function PosV2Showcase() {
 
       {/* Writeoff modal */}
       {target && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setTarget(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,42vw,32rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold truncate" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>Списать · {target.name}</span>
-              <button onClick={() => { if (!busy) setTarget(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
+        <PosModal open onClose={() => { if (!busy) setTarget(null) }} dismissable={!busy} width="clamp(20rem,42vw,32rem)" title={`Списать · ${target.name}`}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
               <div className="flex items-center justify-between">
                 <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Количество ({target.unit})</span>
@@ -203,13 +199,12 @@ export default function PosV2Showcase() {
                   ) })}
                 </div>
               </div>
-              <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Комментарий (необязательно)" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.6rem 1rem' }} />
+              <input aria-label="Комментарий (необязательно)" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Комментарий (необязательно)" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.6rem 1rem' }} />
               <button disabled={busy} onClick={submit} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <Trash2 style={{ width: '1.3em', height: '1.3em' }} />{busy ? 'Списываем…' : 'Списать'}
               </button>
             </div>
-          </div>
-        </div>
+        </PosModal>
       )}
     </div>
   )

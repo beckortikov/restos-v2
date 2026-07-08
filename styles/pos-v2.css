@@ -93,7 +93,9 @@
   min-width: var(--pv-hit);
   min-height: var(--pv-hit);
   touch-action: manipulation;
+  cursor: pointer;
 }
+.pos-v2 button:disabled { cursor: not-allowed; }
 /* Вторичные иконки-тумблеры в углу карточки (избранное/часто) остаются
    компактными — им 44px не нужен, важна лишь клавиатурная доступность. */
 .pos-v2 button.pv-mini {
