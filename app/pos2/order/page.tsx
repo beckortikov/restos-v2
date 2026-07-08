@@ -16,7 +16,9 @@ import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
-import type { MenuItem, TableStatus, Order } from '@/lib/types'
+import { PosModal } from '@/components/pos-v2/pos-modal'
+import { PaymentPanel } from '@/components/pos-v2/payment-panel'
+import type { MenuItem, TableStatus, Order, FinancialAccount } from '@/lib/types'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -32,7 +34,7 @@ const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\
 export default function PosV2Order() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { user, canDo, restaurantId } = useAuth()
+  const { user, canDo, restaurantId, restaurant } = useAuth()
   const { menuItems, categories, tables, zones, loading } = useOrderData(true)
   const favorites = useFavorites(restaurantId ?? '')
   const favSet = useMemo(() => new Set(favorites), [favorites])
@@ -56,6 +58,9 @@ export default function PosV2Order() {
   // Оптимистичная занятость: стол помечается занятым сразу после «Отправить»,
   // пока SSE не обновит tables.currentOrderIds (иначе плитка ~1с оставалась «Свободен»).
   const [justOccupied, setJustOccupied] = useState<Set<string>>(() => new Set())
+  // Инлайн-оплата зального заказа прямо в сайдбаре (без ухода на /pos2/pay).
+  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  const [payTarget, setPayTarget] = useState<Order | null>(null)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -127,6 +132,15 @@ export default function PosV2Order() {
     if (orderType === 'takeaway') { setSelectedTableId(''); loadTakeaway() }
     else { setSelectedTableId(''); setTableOrders([]) }
   }, [orderType, loadTakeaway])
+
+  useEffect(() => { fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [])
+
+  // После оплаты зального заказа из сайдбара — перечитываем группы стола.
+  async function onHallPaid() {
+    const paidTable = payTarget?.tableId
+    setPayTarget(null); setActiveGroupId(null)
+    if (paidTable) await loadTableOrders(paidTable)
+  }
 
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
   const currentCat = activeCat ?? visibleCats[0] ?? null
@@ -533,7 +547,7 @@ export default function PosV2Order() {
             <div className="flex items-center gap-2">
               <button onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center gap-1.5 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><Printer style={{ width: '1.2em', height: '1.2em' }} /></button>
               <button onClick={() => navigate(`/pos2/ticket?order=${encodeURIComponent(activeGroup.id)}`)} className="flex items-center justify-center gap-1.5 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.2em', height: '1.2em' }} /></button>
-              <button onClick={() => navigate(`/pos2/pay?order=${encodeURIComponent(activeGroup.id)}`)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+              <button onClick={() => setPayTarget(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
                 <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
               </button>
             </div>
@@ -579,6 +593,14 @@ export default function PosV2Order() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}
+      {payTarget && (
+        <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,42vw,34rem)"
+          title={`Оплата · Стол ${selectedTable?.number ?? ''} · ${formatCurrency(payTarget.total)}`}>
+          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onHallPaid} />
+        </PosModal>
       )}
 
       {/* ── Table picker overlay (hall) ────────────────────────── */}
