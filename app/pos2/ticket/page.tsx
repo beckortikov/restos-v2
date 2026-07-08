@@ -2,12 +2,13 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Plus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Plus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users, SquareSplitHorizontal, Banknote, Check } from 'lucide-react'
 import { toast } from 'sonner'
-import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder } from '@/lib/queries'
+import { useAuth } from '@/lib/auth-store'
+import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder, splitOrderEqual, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
-import type { Order, OrderItem, Table } from '@/lib/types'
+import type { Order, OrderItem, Table, OrderSplit, FinancialAccount } from '@/lib/types'
 
 const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни', 'Некачественно', 'Другое']
 const ORDER_REASONS = ['Ошибка официанта', 'Нет ингредиента', 'Отменено клиентом', 'Другое']
@@ -17,10 +18,15 @@ export default function PosV2Ticket() {
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const orderId = params.get('order') ?? ''
+  const { user, restaurant } = useAuth()
 
   const [order, setOrder] = useState<Order | null>(null)
   const [tables, setTables] = useState<Table[]>([])
   const [groups, setGroups] = useState<Order[]>([])
+  const [splits, setSplits] = useState<OrderSplit[]>([])
+  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  const [splitOpen, setSplitOpen] = useState(false)
+  const [splitN, setSplitN] = useState(2)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
@@ -43,6 +49,8 @@ export default function PosV2Ticket() {
       setTables(ts)
       const o = os[0] ?? null
       setOrder(o)
+      if (o?.isSplit) setSplits(await fetchOrderSplits(o.id).catch(() => [] as OrderSplit[]))
+      else setSplits([])
       // Мультитаб: другие открытые заказы (группы) на том же столе.
       const t = o?.tableId ? ts.find(x => x.id === o.tableId) : undefined
       const gids = (t?.currentOrderIds ?? []).filter(Boolean)
@@ -53,7 +61,7 @@ export default function PosV2Ticket() {
     } finally { setLoading(false) }
   }, [orderId])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(); fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [load])
 
   const label = order ? (order.type === 'hall' ? `Стол ${order.tableId ? (tableNo.get(order.tableId) ?? '—') : '—'}` : 'С собой') : ''
   const items = order?.items ?? []
@@ -95,6 +103,42 @@ export default function PosV2Ticket() {
   }
 
   const freeTables = tables.filter(t => t.status === 'free' && t.id !== order?.tableId)
+  const cashAcc = accounts.find(a => a.type === 'cash') ?? accounts[0]
+  const cardAcc = accounts.find(a => a.type !== 'cash') ?? accounts[0]
+
+  async function doSplit() {
+    if (busyRef.current || !order) return
+    busyRef.current = true; setBusy(true)
+    try {
+      await splitOrderEqual(order.id, splitN, order.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
+      toast.success(`Счёт разделён на ${splitN}`)
+      setSplitOpen(false); await load()
+    } catch (e) { toast.error(`Не удалось разделить: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
+  async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
+    if (busyRef.current) return
+    const acc = method === 'cash' ? cashAcc : cardAcc
+    if (!acc) { toast.error('Нет счёта для оплаты'); return }
+    busyRef.current = true; setBusy(true)
+    try {
+      await paySplit(s.id, method, acc.id, acc.name ?? '', user?.id)
+      toast.success(`Часть ${s.splitNumber} оплачена · ${formatCurrency(s.total)}`)
+      const remaining = splits.filter(x => x.id !== s.id && x.status !== 'paid')
+      if (remaining.length === 0) { toast.success('Все части оплачены — заказ закрыт'); navigate('/pos2/tables'); return }
+      await load()
+    } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
+  async function doCancelSplits() {
+    if (busyRef.current || !order) return
+    busyRef.current = true; setBusy(true)
+    try { await cancelSplits(order.id); toast.success('Разделение отменено'); await load() }
+    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
@@ -125,6 +169,31 @@ export default function PosV2Ticket() {
           <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Заказ не найден или закрыт</div>
         ) : (
           <div className="mx-auto flex flex-col" style={{ maxWidth: '44rem', gap: 'clamp(0.5rem,0.9vw,0.8rem)' }}>
+            {order.isSplit && (
+              <div className="flex flex-col" style={{ gap: 'clamp(0.5rem,0.9vw,0.8rem)', marginBottom: '0.5rem' }}>
+                {splits.map(s => {
+                  const paid = s.status === 'paid'
+                  return (
+                    <div key={s.id} className="flex items-center gap-3 rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.7rem,1.1vw,1.1rem)' }}>
+                      <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: paid ? 'var(--pv-free-soft)' : 'var(--pv-brand-soft)', color: paid ? 'var(--pv-free-text)' : 'var(--pv-brand)', width: '2.5rem', height: '2.5rem' }}>{s.splitNumber}</div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Часть {s.splitNumber}</div>
+                        <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{formatCurrency(s.total)}</div>
+                      </div>
+                      {paid ? (
+                        <div className="flex items-center gap-1.5 rounded-xl shrink-0" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.5rem 0.9rem' }}><Check style={{ width: '1.1rem', height: '1.1rem' }} /><span className="font-semibold" style={{ fontSize: 'var(--pv-ctl)' }}>Оплачено</span></div>
+                      ) : (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button disabled={busy} onClick={() => paySplitNow(s, 'cash')} className="rounded-xl flex items-center gap-1.5 font-semibold disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.5rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><Banknote style={{ width: '1rem', height: '1rem' }} />Нал</button>
+                          <button disabled={busy} onClick={() => paySplitNow(s, 'card')} className="rounded-xl flex items-center gap-1.5 font-semibold disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.5rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><CreditCard style={{ width: '1rem', height: '1rem' }} />Карта</button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+                <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)', textAlign: 'center', marginTop: '0.2rem' }}>Позиции заказа (справочно):</div>
+              </div>
+            )}
             {groups.length > 1 && (
               <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: '0.3rem' }}>
                 {groups.map((g, i) => {
@@ -167,17 +236,32 @@ export default function PosV2Ticket() {
             <button onClick={() => setCancelOrderOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1rem,1.5vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
               <Trash2 style={{ width: '1.2em', height: '1.2em' }} />Отменить
             </button>
-            {order.type === 'hall' && (
-              <button onClick={() => setTransferOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                <ArrowRightLeft style={{ width: '1.2em', height: '1.2em' }} />Перенести
-              </button>
+            {order.isSplit ? (
+              splits.some(s => s.status === 'paid') ? (
+                <span className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Оплата по частям…</span>
+              ) : (
+                <button disabled={busy} onClick={doCancelSplits} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1rem,1.5vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
+                  <X style={{ width: '1.2em', height: '1.2em' }} />Отменить разделение
+                </button>
+              )
+            ) : (
+              <>
+                <button onClick={() => { setSplitN(2); setSplitOpen(true) }} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                  <SquareSplitHorizontal style={{ width: '1.2em', height: '1.2em' }} />Разделить
+                </button>
+                {order.type === 'hall' && (
+                  <button onClick={() => setTransferOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <ArrowRightLeft style={{ width: '1.2em', height: '1.2em' }} />Перенести
+                  </button>
+                )}
+                <button onClick={() => navigate(`/pos2/order?order=${encodeURIComponent(order.id)}`)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                  <Plus style={{ width: '1.2em', height: '1.2em' }} />Добавить
+                </button>
+                <button onClick={() => navigate(`/pos2/pay?order=${encodeURIComponent(order.id)}`)} className="flex items-center gap-2 rounded-2xl font-bold text-white shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1.2rem,1.8vw,1.6rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                  <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
+                </button>
+              </>
             )}
-            <button onClick={() => navigate(`/pos2/order?order=${encodeURIComponent(order.id)}`)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-              <Plus style={{ width: '1.2em', height: '1.2em' }} />Добавить
-            </button>
-            <button onClick={() => navigate(`/pos2/pay?order=${encodeURIComponent(order.id)}`)} className="flex items-center gap-2 rounded-2xl font-bold text-white shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1.2rem,1.8vw,1.6rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
-              <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
-            </button>
           </div>
         </div>
       )}
@@ -243,6 +327,35 @@ export default function PosV2Ticket() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Split modal */}
+      {splitOpen && order && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setSplitOpen(false) }}>
+          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,40vw,30rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>Разделить счёт поровну</span>
+              <button onClick={() => { if (!busy) setSplitOpen(false) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '1rem' }}>
+              <div className="flex items-center justify-between">
+                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Количество частей</span>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setSplitN(n => Math.max(2, n - 1))} className="rounded-lg flex items-center justify-center font-bold" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem', color: 'var(--pv-text-2)' }}>−</button>
+                  <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '2rem', fontSize: 'clamp(1.1rem,1.5vw,1.4rem)' }}>{splitN}</span>
+                  <button onClick={() => setSplitN(n => Math.min(10, n + 1))} className="rounded-lg flex items-center justify-center font-bold" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem', color: 'var(--pv-text-2)' }}>+</button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.7rem 1rem' }}>
+                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Примерно на часть</span>
+                <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>{formatCurrency(order.total / splitN)}</span>
+              </div>
+              <button disabled={busy} onClick={doSplit} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+                <SquareSplitHorizontal style={{ width: '1.3em', height: '1.3em' }} />Разделить на {splitN}
+              </button>
             </div>
           </div>
         </div>
