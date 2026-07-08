@@ -53,6 +53,7 @@ type KDSItem struct {
 	Comment       *string    `json:"comment"`
 	Station       string     `json:"station"`
 	StationStatus string     `json:"station_status"`
+	WaiterName    *string    `json:"waiter_name"`
 	CreatedAt     time.Time  `json:"created_at"`
 	StatusAt      *time.Time `json:"status_at"`
 }
@@ -71,6 +72,7 @@ type kdsRow struct {
 	OrderType     *string
 	TableNumber   *int
 	TableName     *string
+	WaiterName    *string
 }
 
 // ListItems возвращает блюда «в работе» для указанных станций и статусов,
@@ -98,10 +100,12 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 			oi.station_status, oi.station_status_at AS status_at, oi.created_at,
 			COALESCE(mi.station, 'hot_kitchen') AS station,
 			o.order_number, o.type AS order_type,
-			t.number AS table_number, t.name AS table_name`).
+			t.number AS table_number, t.name AS table_name,
+			u.name AS waiter_name`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
+		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id").
 		Where("o.restaurant_id = ?", rid).
 		Where("oi.cancelled_at IS NULL").
 		Where("o.status NOT IN ?", []string{"done", "served", "cancelled"}).
@@ -138,6 +142,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 			Comment:       r.Comment,
 			Station:       r.Station,
 			StationStatus: r.StationStatus,
+			WaiterName:    r.WaiterName,
 			CreatedAt:     r.CreatedAt,
 			StatusAt:      r.StatusAt,
 		})

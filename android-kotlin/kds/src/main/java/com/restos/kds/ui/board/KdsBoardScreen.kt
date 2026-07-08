@@ -411,6 +411,18 @@ private fun DishCard(
                     )
                 }
             }
+            // Официант заказа.
+            if (!item.waiterName.isNullOrBlank()) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("👤", fontSize = 13.sp)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        item.waiterName!!,
+                        color = KdsColors.TextDim, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    )
+                }
+            }
             // Крупная кнопка-бамп: обычная двигает статус, отменённая — «ЗАКРЫТЬ».
             Box(
                 Modifier.fillMaxWidth().height(60.dp).clip(RoundedCornerShape(14.dp))

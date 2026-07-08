@@ -17,6 +17,7 @@ data class KdsItemDto(
     val comment: String? = null,
     val station: String = "hot_kitchen",
     @SerialName("station_status") val stationStatus: String = "pending",
+    @SerialName("waiter_name") val waiterName: String? = null,
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("status_at") val statusAt: String? = null,
     /**
