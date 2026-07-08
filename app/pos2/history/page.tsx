@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, X, RotateCcw, UtensilsCrossed, ShoppingBag, Banknote, CreditCard } from 'lucide-react'
+import { LayoutGrid, RefreshCw, X, RotateCcw, UtensilsCrossed, ShoppingBag, Banknote, CreditCard, Printer } from 'lucide-react'
 import { toast } from 'sonner'
-import { fetchTables, fetchOrders, refundOrder } from '@/lib/queries'
+import { fetchTables, fetchOrders, refundOrder, reprintOrderReceipt } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import type { Order, Table } from '@/lib/types'
@@ -76,6 +76,15 @@ export default function PosV2History() {
     } finally {
       refundRef.current = false; setRefunding(false)
     }
+  }
+
+  const [reprinting, setReprinting] = useState(false)
+  async function reprint(o: Order) {
+    if (reprinting) return
+    setReprinting(true)
+    try { await reprintOrderReceipt(o.id); toast.success('Чек отправлен на печать') }
+    catch (e) { toast.error(`Не удалось напечатать: ${humanizeError(e)}`) }
+    finally { setReprinting(false) }
   }
 
   return (
@@ -173,6 +182,9 @@ export default function PosV2History() {
                 </div>
               </div>
 
+              <button disabled={reprinting} onClick={() => reprint(target)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)' }}>
+                <Printer style={{ width: '1.15rem', height: '1.15rem' }} />{reprinting ? 'Печать…' : 'Печать чека (копия)'}
+              </button>
               <button disabled={refunding} onClick={doRefund} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <RotateCcw style={{ width: '1.3em', height: '1.3em' }} />
                 {refunding ? 'Оформляем…' : 'Подтвердить возврат'}
