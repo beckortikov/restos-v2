@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { LicenseGate } from '@/components/license-gate'
+import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 import { useInactivityTimer } from '@/hooks/use-inactivity-timer'
 import { PinLockScreen } from '@/components/pin-lock-screen'
 // Скоуп-токены нового интерфейса (только под `.pos-v2`).
@@ -57,6 +58,10 @@ export function PosV2Layout() {
         <LockGate>
           <div className="pos-v2 h-[100dvh] w-full overflow-hidden">
             <Outlet />
+            {/* Экранная клавиатура — самоподключается к инпутам /pos2 (focusin),
+                гейт по настройке владельца onScreenKeyboardEnabled. Один инстанс
+                на весь новый POS. */}
+            <OnScreenKeyboard />
           </div>
         </LockGate>
       </LicenseGate>
