@@ -65,6 +65,23 @@ vi.mock('@/lib/queries', () => {
     fetchOrders: () => Promise.resolve([ORDER]),
     fetchOrderSplits: list,
     fetchFinancialAccounts: list,
+    // stop-list / showcase / batch / prints
+    fetchStopList: list,
+    fetchMenuItems: list,
+    fetchIngredients: list,
+    fetchSemiStock: list,
+    fetchWriteoffs: list,
+    fetchBatchAvailability: () => Promise.resolve(new Map()),
+    fetchBatchCookingLogs: list,
+    fetchPrintJobs: list,
+    toggleStopListOverride: ok,
+    toggleMenuAvailability: ok,
+    createWriteoff: ok,
+    calculateMaxPortions: () => Promise.resolve({ maxPortions: 0, hasRecipe: false, ingredients: [] }),
+    produceBatch: ok,
+    writeoffPreparedBatch: ok,
+    cancelOrderItemPartial: () => Promise.resolve({ orderId: 'o1', allCancelled: false, newTotal: 0 }),
+    assignWaiter: ok,
     // mutations / actions
     createOrder: () => Promise.resolve(ORDER),
     closeOrderWithPayment: ok, openTableForOrder: ok, addItemsToOrder: ok, printPreBill: ok,
@@ -88,6 +105,10 @@ import TablesPage from './tables/page'
 import ServicePage from './service/page'
 import ShiftPage from './shift/page'
 import SettingsPage from './settings/page'
+import StopPage from './stop/page'
+import OrdersPage from './orders/page'
+import ShowcasePage from './showcase/page'
+import BatchPage from './batch/page'
 
 const PAGES: [string, React.ComponentType, string][] = [
   ['лаунчер', Launcher, '/pos2'],
@@ -99,6 +120,10 @@ const PAGES: [string, React.ComponentType, string][] = [
   ['обслуживание', ServicePage, '/pos2/service'],
   ['смена', ShiftPage, '/pos2/shift'],
   ['настройки', SettingsPage, '/pos2/settings'],
+  ['стоп-лист', StopPage, '/pos2/stop'],
+  ['активные заказы', OrdersPage, '/pos2/orders'],
+  ['витрина', ShowcasePage, '/pos2/showcase'],
+  ['заготовки', BatchPage, '/pos2/batch'],
 ]
 
 afterEach(cleanup)
