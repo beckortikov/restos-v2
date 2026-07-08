@@ -8,15 +8,17 @@ import { useAuth } from '@/lib/auth-store'
 import {
   fetchTables, fetchOrders, fetchActiveShift, fetchFinancialAccounts, closeOrderWithPayment, printPreBill,
 } from '@/lib/queries'
+import { V4Error } from '@/lib/api'
 import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv, dAdd, dSub, dRound } from '@/lib/decimal'
 import type { Order, Table, FinancialAccount, OrderPayment } from '@/lib/types'
 
-// Phase 2.4/2.5: оплата открытого заказа (замыкает dine-in цикл) + смешанная
-// оплата (нал+безнал). Бэк строго проверяет sum(payments)==total_with_service
-// (допуск 0.01), поэтому payable считаем как subtotal + сервис (для зала),
-// а части бьём точной decimal-разницей (card = payable − cash).
+// Phase 2.4–2.7: оплата открытого заказа — нал/безнал/смешанная + скидка + пре-чек.
+// Бэк строго валидирует sum(payments)==total_with_service (допуск 0.01) и сам
+// считает суммы/сервис/discountAmount (они void в мутации) — передаём метод,
+// account_id, servicePercent, discountType/Value. payable считаем как бэк:
+// (subtotal − discount) + сервис (для зала).
 export default function PosV2Pay() {
   const navigate = useNavigate()
   const { user, restaurant } = useAuth()
@@ -28,7 +30,10 @@ export default function PosV2Pay() {
   const [target, setTarget] = useState<Order | null>(null)
   const [mode, setMode] = useState<'pick' | 'mixed'>('pick')
   const [cashStr, setCashStr] = useState('')
+  const [discType, setDiscType] = useState<'none' | 'percent' | 'fixed'>('none')
+  const [discVal, setDiscVal] = useState('')
   const [paying, setPaying] = useState(false)
+  const [printing, setPrinting] = useState(false)
   const payingRef = useRef(false)
 
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
@@ -41,9 +46,9 @@ export default function PosV2Pay() {
     return m
   }, [tables])
 
-  // Сумма к оплате = subtotal + сервис (только зал; бэк считает так же).
-  const payableOf = useCallback((o: Order): number => {
-    const base = o.subtotal ?? o.total
+  // payable = (subtotal − скидка) + сервис (только зал; бэк считает так же).
+  const payableOf = useCallback((o: Order, discAmt = 0): number => {
+    const base = dSub(o.subtotal ?? o.total, discAmt)
     const sp = o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
     return sp > 0 ? dRound(dAdd(base, dMul(base, dDiv(sp, 100)))) : base
   }, [restaurant])
@@ -68,9 +73,7 @@ export default function PosV2Pay() {
   }, [load])
 
   function open(o: Order) {
-    setTarget(o)
-    setMode('pick')
-    setCashStr('')
+    setTarget(o); setMode('pick'); setCashStr(''); setDiscType('none'); setDiscVal('')
   }
 
   function labelOf(o: Order): string {
@@ -80,7 +83,37 @@ export default function PosV2Pay() {
     return (o.items ?? []).reduce((s, i) => s + calcLineCogs(i.cogs || 0, i.qty, i.unit, i.unitSize), 0)
   }
 
-  // Полная оплата одним методом (бэк сам пересчитывает суммы).
+  const discValNum = Math.max(0, parseFloat(discVal.replace(',', '.').replace(/\s/g, '')) || 0)
+  const discAmt = useMemo(() => {
+    if (!target || discType === 'none' || discValNum <= 0) return 0
+    const base = target.subtotal ?? target.total
+    return discType === 'percent'
+      ? dRound(dMul(base, dDiv(Math.min(discValNum, 100), 100)))
+      : Math.min(discValNum, base)
+  }, [target, discType, discValNum])
+  const payable = target ? payableOf(target, discAmt) : 0
+  const cashNum = Math.max(0, Math.min(payable, parseFloat(cashStr.replace(',', '.').replace(/\s/g, '')) || 0))
+  const cardNum = dSub(payable, cashNum)
+
+  // Общие discount-аргументы closeOrderWithPayment (13–15 позиции).
+  const discArgs = () => [
+    discType !== 'none' && discAmt > 0 ? discAmt : undefined,
+    discType !== 'none' && discAmt > 0 ? discType : undefined,
+    discType !== 'none' && discAmt > 0 ? discValNum : undefined,
+  ] as const
+
+  function handlePayError(e: unknown) {
+    const code = e instanceof V4Error ? (e.envelope() as { code?: string } | null)?.code : undefined
+    if (code === 'DISCOUNT_REQUIRES_APPROVAL') {
+      toast.error('Скидка ≥10% требует одобрения менеджера', {
+        description: 'В новом POS одобрение пока не реализовано — примените скидку меньше 10% или используйте классический POS.',
+        duration: 7000,
+      })
+      return
+    }
+    toast.error(`Оплата не прошла: ${humanizeError(e)}`)
+  }
+
   async function payFull(o: Order, method: 'cash' | 'card') {
     if (payingRef.current) return
     payingRef.current = true; setPaying(true)
@@ -91,17 +124,17 @@ export default function PosV2Pay() {
       const accId = (method === 'cash' && (shift as { accountId?: string }).accountId)
         ? (shift as { accountId?: string }).accountId : acc?.id
       const sp = o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
-      await closeOrderWithPayment(o.id, method, o.tableId || null, o.subtotal ?? o.total, cogsOf(o), user?.id, accId, acc?.name, sp, 0, payableOf(o))
-      toast.success(`Оплачено · ${formatCurrency(payableOf(o))} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
+      const [dA, dT, dV] = discArgs()
+      await closeOrderWithPayment(o.id, method, o.tableId || null, o.subtotal ?? o.total, cogsOf(o), user?.id, accId, acc?.name, sp, 0, payable, 0, dA, dT, dV)
+      toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
       setTarget(null); await load()
     } catch (e) {
-      toast.error(`Оплата не прошла: ${humanizeError(e)}`)
+      handlePayError(e)
     } finally {
       payingRef.current = false; setPaying(false)
     }
   }
 
-  // Смешанная: нал + безнал. sum обязан == total_with_service (допуск бэка 0.01).
   async function payMixed(o: Order, cash: number, card: number) {
     if (payingRef.current) return
     const parts: OrderPayment[] = []
@@ -113,20 +146,17 @@ export default function PosV2Pay() {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
       const sp = o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
-      await closeOrderWithPayment(
-        o.id, parts[0].method, o.tableId || null, o.subtotal ?? o.total, cogsOf(o), user?.id,
-        undefined, undefined, sp, 0, payableOf(o), 0, undefined, undefined, undefined, undefined, parts,
-      )
-      toast.success(`Оплачено · ${formatCurrency(payableOf(o))}`, { description: `Наличные ${formatCurrency(cash)} + Безнал ${formatCurrency(card)} · чек на печать` })
+      const [dA, dT, dV] = discArgs()
+      await closeOrderWithPayment(o.id, parts[0].method, o.tableId || null, o.subtotal ?? o.total, cogsOf(o), user?.id, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts)
+      toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: `Наличные ${formatCurrency(cash)} + Безнал ${formatCurrency(card)} · чек на печать` })
       setTarget(null); await load()
     } catch (e) {
-      toast.error(`Оплата не прошла: ${humanizeError(e)}`)
+      handlePayError(e)
     } finally {
       payingRef.current = false; setPaying(false)
     }
   }
 
-  const [printing, setPrinting] = useState(false)
   async function printPre(o: Order) {
     if (printing) return
     setPrinting(true)
@@ -139,10 +169,6 @@ export default function PosV2Pay() {
       setPrinting(false)
     }
   }
-
-  const payable = target ? payableOf(target) : 0
-  const cashNum = Math.max(0, Math.min(payable, parseFloat(cashStr.replace(',', '.').replace(/\s/g, '')) || 0))
-  const cardNum = dSub(payable, cashNum)
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
@@ -199,20 +225,45 @@ export default function PosV2Pay() {
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!paying) setTarget(null) }}>
           <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(22rem, 44vw, 36rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem) clamp(1.2rem,1.8vw,1.6rem)', borderColor: 'var(--pv-border)' }}>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 min-w-0">
                 {mode === 'mixed' && (
-                  <button onClick={() => setMode('pick')} className="rounded-lg" style={{ padding: '0.3rem' }}><ArrowLeft style={{ color: 'var(--pv-text-2)' }} /></button>
+                  <button onClick={() => setMode('pick')} className="rounded-lg shrink-0" style={{ padding: '0.3rem' }}><ArrowLeft style={{ color: 'var(--pv-text-2)' }} /></button>
                 )}
-                <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>
+                <span className="font-bold truncate" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>
                   {mode === 'mixed' ? 'Смешанная' : 'Оплата'} · {labelOf(target)} · {formatCurrency(payable)}
                 </span>
               </div>
-              <button onClick={() => { if (!paying) setTarget(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+              <button onClick={() => { if (!paying) setTarget(null) }} className="rounded-lg shrink-0" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
             </div>
 
             <div style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
               {mode === 'pick' ? (
                 <>
+                  {/* Скидка */}
+                  <div style={{ marginBottom: '0.9rem' }}>
+                    <div className="flex items-center gap-2" style={{ marginBottom: discType !== 'none' ? '0.5rem' : 0 }}>
+                      <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Скидка</span>
+                      <div className="flex rounded-lg border" style={{ borderColor: 'var(--pv-border)', padding: '2px', gap: '2px', marginLeft: 'auto' }}>
+                        {(['none', 'percent', 'fixed'] as const).map(v => {
+                          const on = discType === v
+                          const l = v === 'none' ? 'Нет' : v === 'percent' ? '%' : 'TJS'
+                          return (
+                            <button key={v} onClick={() => { setDiscType(v); if (v === 'none') setDiscVal('') }} className="rounded-md font-semibold" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: '0.35rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{l}</button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                    {discType !== 'none' && (
+                      <div className="flex items-center gap-2">
+                        <div className="flex items-center rounded-xl border flex-1 min-w-0" style={{ borderColor: 'var(--pv-border)', padding: '0.5rem 0.8rem' }}>
+                          <input inputMode="decimal" value={discVal} onChange={e => setDiscVal(e.target.value)} placeholder="0" className="flex-1 min-w-0 bg-transparent outline-none font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+                          <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{discType === 'percent' ? '%' : 'TJS'}</span>
+                        </div>
+                        {discAmt > 0 && <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(discAmt)}</span>}
+                      </div>
+                    )}
+                  </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <button disabled={paying} onClick={() => payFull(target, 'cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1.1rem,1.8vw,1.6rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
                       <Banknote style={{ width: '2rem', height: '2rem' }} />
