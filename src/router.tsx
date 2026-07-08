@@ -45,6 +45,7 @@ const PosV2Shift = () => L(() => import('@/app/pos2/shift/page'))
 const PosV2Settings = () => L(() => import('@/app/pos2/settings/page'))
 const PosV2Ticket = () => L(() => import('@/app/pos2/ticket/page'))
 const PosV2Stop = () => L(() => import('@/app/pos2/stop/page'))
+const PosV2Orders = () => L(() => import('@/app/pos2/orders/page'))
 
 // Operations
 const POS = () => L(() => import('@/app/(app)/operations/pos/page'))
@@ -213,6 +214,7 @@ export function AppRouter() {
         <Route path="/pos2/settings" element={<PosV2Settings />} />
         <Route path="/pos2/ticket" element={<PosV2Ticket />} />
         <Route path="/pos2/stop" element={<PosV2Stop />} />
+        <Route path="/pos2/orders" element={<PosV2Orders />} />
       </Route>
 
       {/* Admin — superadmin only */}

@@ -3,7 +3,7 @@
 import { useNavigate } from 'react-router-dom'
 import {
   Utensils, LayoutGrid, ReceiptText, Wallet, ChefHat,
-  HandCoins, History, Settings, LogOut, OctagonX,
+  HandCoins, History, Settings, LogOut, OctagonX, ClipboardList,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 
@@ -18,6 +18,7 @@ const TILES: Array<{
 }> = [
   { icon: Utensils, label: 'Новый заказ', sub: 'Меню и оплата', to: '/pos2/order', primary: true },
   { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/pos2/tables' },
+  { icon: ClipboardList, label: 'Активные заказы', sub: 'Все / зал / с собой / закрытые', to: '/pos2/orders' },
   { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay' },
   { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение кассы', to: '/pos2/shift' },
   { icon: ChefHat, label: 'Кухня (KDS)', sub: 'Бегунки по станциям', to: '/operations/kitchen' },
