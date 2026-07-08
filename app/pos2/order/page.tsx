@@ -9,7 +9,7 @@ import {
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv, dSum } from '@/lib/decimal'
@@ -41,6 +41,11 @@ export default function PosV2Order() {
   const [selectedTableId, setSelectedTableId] = useState<string>('')
   const [tablesOpen, setTablesOpen] = useState(false)
   const [guests, setGuests] = useState(1)
+  // Дозаказ: приход с ?order=<id> — добавляем позиции в существующий заказ.
+  const [addOrderId, setAddOrderId] = useState('')
+  const [addCount, setAddCount] = useState(0)
+  const [adding, setAdding] = useState(false)
+  const addingRef = useRef(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const canOverrideStop = canDo('orders.create_stopped')
@@ -48,6 +53,19 @@ export default function PosV2Order() {
   useEffect(() => {
     const t = searchParams.get('table')
     if (t) { setOrderType('hall'); setSelectedTableId(t) }
+  }, [searchParams])
+
+  // Дозаказ: подгружаем существующий заказ (тип/стол/кол-во позиций) для контекста.
+  useEffect(() => {
+    const oid = searchParams.get('order')
+    if (!oid) return
+    setAddOrderId(oid)
+    fetchOrders({ ids: [oid], slim: false }).then(os => {
+      const o = os[0]; if (!o) return
+      setOrderType(o.type === 'takeaway' ? 'takeaway' : 'hall')
+      if (o.tableId) setSelectedTableId(o.tableId)
+      setAddCount((o.items ?? []).filter(i => !i.cancelledAt).length)
+    }).catch(() => {})
   }, [searchParams])
 
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
@@ -170,7 +188,18 @@ export default function PosV2Order() {
     finally { sendingRef.current = false; setSending(false) }
   }
 
-  const busy = paying || sending
+  async function addToOrder() {
+    if (addingRef.current || cart.length === 0 || !addOrderId) return
+    addingRef.current = true; setAdding(true)
+    try {
+      await addItemsToOrder(addOrderId, cartToItems(), { overrideStopList: overrideStopList() })
+      toast.success(`Добавлено ${count} поз. в заказ`)
+      navigate(`/pos2/ticket?order=${encodeURIComponent(addOrderId)}`)
+    } catch (e) { toast.error(`Не удалось добавить: ${humanizeError(e)}`) }
+    finally { addingRef.current = false; setAdding(false) }
+  }
+
+  const busy = paying || sending || adding
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -181,17 +210,25 @@ export default function PosV2Order() {
             <LayoutGrid style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
             <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
           </button>
-          <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-            {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
-              const on = orderType === val
-              return (
-                <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                  <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{label}
-                </button>
-              )
-            })}
-          </div>
-          {orderType === 'hall' && (
+          {!addOrderId && (
+            <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
+              {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
+                const on = orderType === val
+                return (
+                  <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+          {addOrderId && (
+            <div className="flex items-center gap-2 rounded-xl shrink-0" style={{ background: 'var(--pv-brand-soft)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+              <Plus style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-brand)' }} />
+              <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Добор{selectedTable ? ` · Стол ${selectedTable.number}` : ''}{addCount ? ` · было ${addCount}` : ''}</span>
+            </div>
+          )}
+          {orderType === 'hall' && !addOrderId && (
             <button onClick={() => setTablesOpen(true)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
               <MapPin style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
               <span className="font-semibold whitespace-nowrap" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}</span>
@@ -273,7 +310,7 @@ export default function PosV2Order() {
         </div>
 
         <div className="shrink-0 border-t" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          {orderType === 'hall' && (
+          {orderType === 'hall' && !addOrderId && (
             <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.5rem,0.9vw,0.85rem)' }}>
               <span className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><Users style={{ width: '1.1rem', height: '1.1rem' }} />Гостей</span>
               <div className="flex items-center gap-2">
@@ -287,7 +324,11 @@ export default function PosV2Order() {
             <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
             <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(subtotal)}</span>
           </div>
-          {orderType === 'hall' ? (
+          {addOrderId ? (
+            <button disabled={cart.length === 0 || busy} onClick={addToOrder} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: cart.length ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
+              <Plus style={{ width: '1.3em', height: '1.3em' }} />{adding ? 'Добавляем…' : 'Добавить в заказ'}
+            </button>
+          ) : orderType === 'hall' ? (
             <button disabled={cart.length === 0 || !selectedTableId || busy} onClick={sendToKitchen} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: (cart.length && selectedTableId) ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
               <Send style={{ width: '1.3em', height: '1.3em' }} />{sending ? 'Отправка…' : selectedTableId ? 'Отправить на кухню' : 'Выберите стол'}
             </button>

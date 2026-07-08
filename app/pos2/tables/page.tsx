@@ -33,7 +33,7 @@ export default function PosV2Tables() {
 
   function tap(t: Table) {
     const open = t.currentOrderIds?.[0]
-    if (open) navigate(`/pos2/pay?order=${encodeURIComponent(open)}`)
+    if (open) navigate(`/pos2/ticket?order=${encodeURIComponent(open)}`)
     else navigate(`/pos2/order?table=${encodeURIComponent(t.id)}`)
   }
 
