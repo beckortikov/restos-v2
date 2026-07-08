@@ -4,11 +4,12 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock, Bike,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
+import { useFrequent, toggleFrequent } from '@/lib/pos-frequent'
 import { useOrderData } from '@/components/order/use-order-data'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
@@ -35,8 +36,10 @@ export default function PosV2Order() {
   const { menuItems, categories, tables, zones, loading } = useOrderData(true)
   const favorites = useFavorites(restaurantId ?? '')
   const favSet = useMemo(() => new Set(favorites), [favorites])
+  const frequent = useFrequent(restaurantId ?? '')
+  const freqSet = useMemo(() => new Set(frequent), [frequent])
 
-  const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
+  const [orderType, setOrderType] = useState<'hall' | 'takeaway' | 'delivery'>('hall')
   const [search, setSearch] = useState('')
   const deferred = useDeferredValue(search)
   const [activeCat, setActiveCat] = useState<string | null>(null)
@@ -78,8 +81,9 @@ export default function PosV2Order() {
     const q = deferred.trim().toLowerCase()
     if (q) return menuItems.filter(m => m.name.toLowerCase().includes(q))
     if (currentCat === '__fav__') return menuItems.filter(m => favSet.has(m.id))
+    if (currentCat === '__freq__') return menuItems.filter(m => freqSet.has(m.id))
     return menuItems.filter(m => m.category === currentCat)
-  }, [menuItems, currentCat, deferred, favSet])
+  }, [menuItems, currentCat, deferred, favSet, freqSet])
 
   const tablesByZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
@@ -162,7 +166,7 @@ export default function PosV2Order() {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
       const total = subtotal
-      const order = await createOrder({ type: 'takeaway', items: cartToItems(), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      const order = await createOrder({ type: orderType === 'delivery' ? 'delivery' : 'takeaway', items: cartToItems(), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
       let accId = (shift as { accountId?: string }).accountId
       let accName = (shift as { accountName?: string }).accountName
@@ -217,7 +221,7 @@ export default function PosV2Order() {
           </button>
           {!addOrderId && (
             <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-              {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
+              {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag], ['delivery', 'ДОСТАВКА', Bike]] as const).map(([val, label, Icon]) => {
                 const on = orderType === val
                 return (
                   <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
@@ -252,6 +256,11 @@ export default function PosV2Order() {
                 <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
               </button>
             )}
+            {frequent.length > 0 && (
+              <button onClick={() => setActiveCat('__freq__')} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__freq__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__freq__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__freq__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
+                <Clock style={{ width: '0.95rem', height: '0.95rem' }} />Часто
+              </button>
+            )}
             {visibleCats.map(c => {
               const on = c === currentCat
               return <button key={c} onClick={() => setActiveCat(c)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
@@ -273,9 +282,14 @@ export default function PosV2Order() {
                   <button key={m.id} onClick={() => add(m)} disabled={stopped && !canOverrideStop} className="relative flex flex-col rounded-2xl text-left transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', padding: 'clamp(0.7rem,1.1vw,1.1rem)', gap: 'clamp(0.4rem,0.8vw,0.7rem)', minHeight: 'clamp(6rem,9vw,8rem)', opacity: stopped ? 0.6 : 1 }}>
                     {stopped && <span className="absolute rounded-full font-bold" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
                     {restaurantId && (
-                      <span onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} className="absolute" style={{ top: '0.4rem', left: '0.4rem', cursor: 'pointer', padding: '0.15rem' }}>
-                        <Star style={{ width: '1.05rem', height: '1.05rem', color: favSet.has(m.id) ? '#e8a33a' : 'var(--pv-text-3)', fill: favSet.has(m.id) ? '#e8a33a' : 'transparent' }} />
-                      </span>
+                      <div className="absolute flex items-center gap-1" style={{ top: '0.4rem', left: '0.4rem' }}>
+                        <span onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ cursor: 'pointer', padding: '0.1rem' }}>
+                          <Star style={{ width: '1.05rem', height: '1.05rem', color: favSet.has(m.id) ? '#e8a33a' : 'var(--pv-text-3)', fill: favSet.has(m.id) ? '#e8a33a' : 'transparent' }} />
+                        </span>
+                        <span onClick={(e) => { e.stopPropagation(); toggleFrequent(restaurantId, m.id) }} style={{ cursor: 'pointer', padding: '0.1rem' }}>
+                          <Clock style={{ width: '1rem', height: '1rem', color: freqSet.has(m.id) ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />
+                        </span>
+                      </div>
                     )}
                     <span style={{ fontSize: 'clamp(1.4rem,2.4vw,2rem)' }}>{m.emoji || '🍽️'}</span>
                     <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.82rem,1.1vw,1rem)' }}>{m.name}</span>
