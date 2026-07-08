@@ -53,6 +53,9 @@ export default function PosV2Order() {
   const [tableLoading, setTableLoading] = useState(false)
   const [adding, setAdding] = useState(false)
   const addingRef = useRef(false)
+  // Оптимистичная занятость: стол помечается занятым сразу после «Отправить»,
+  // пока SSE не обновит tables.currentOrderIds (иначе плитка ~1с оставалась «Свободен»).
+  const [justOccupied, setJustOccupied] = useState<Set<string>>(() => new Set())
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -90,6 +93,17 @@ export default function PosV2Order() {
       setOrderType('hall'); setSelectedTableId(tableParam); loadTableOrders(tableParam)
     }
   }, [loading, searchParams, loadTableOrders])
+
+  // Как только SSE обновил tables (стол реально занят) — снимаем оптимистичную метку.
+  useEffect(() => {
+    if (justOccupied.size === 0) return
+    const keep = new Set<string>()
+    for (const id of justOccupied) {
+      const t = tables.find(x => x.id === id)
+      if (!t || (t.currentOrderIds?.length ?? 0) === 0) keep.add(id)
+    }
+    if (keep.size !== justOccupied.size) setJustOccupied(keep)
+  }, [tables, justOccupied])
 
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
   const currentCat = activeCat ?? visibleCats[0] ?? null
@@ -201,6 +215,7 @@ export default function PosV2Order() {
       const order = await createOrder({ type: 'hall', tableId: selectedTableId, items: cartToItems(cart), total, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: guests, tabLabel: groupsBefore > 0 ? `Группа ${groupsBefore + 1}` : undefined, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
       await openTableForOrder(selectedTableId, order.id, user?.id).catch(() => {})
+      setJustOccupied(prev => { const n = new Set(prev); n.add(selectedTableId); return n }) // стол занят сразу
       toast.success(`Заказ отправлен · Стол ${selectedTable?.number ?? ''} · ${formatCurrency(total)}`, { description: 'Кухня уже видит заказ' })
       setCart([]); setGuests(1)
       await loadTableOrders(selectedTableId, order.id, [order.id]) // новая группа сразу в сайдбаре
@@ -511,9 +526,10 @@ export default function PosV2Order() {
                   <div className="font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', marginBottom: '0.6rem' }}>{group.zone}</div>
                   <div style={{ display: 'grid', gap: 'clamp(0.6rem,1vw,0.9rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(6.5rem,10vw,8.5rem), 1fr))' }}>
                     {group.tables.map(t => {
-                      const st = STATUS[t.status] ?? STATUS.free
+                      const optOcc = justOccupied.has(t.id) && (t.currentOrderIds?.length ?? 0) === 0
+                      const st = optOcc ? STATUS.occupied : (STATUS[t.status] ?? STATUS.free)
                       const sel = t.id === selectedTableId
-                      const groupsN = t.currentOrderIds?.length ?? 0
+                      const groupsN = Math.max(t.currentOrderIds?.length ?? 0, optOcc ? 1 : 0)
                       return (
                         <button key={t.id} onClick={() => selectTable(t.id)} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
                           {groupsN >= 2 && <span className="absolute rounded-full font-bold flex items-center justify-center" style={{ top: '0.35rem', right: '0.35rem', background: sel ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: sel ? 'var(--pv-brand)' : '#fff', minWidth: '1.3rem', height: '1.3rem', fontSize: '0.7rem' }}>{groupsN}</span>}
