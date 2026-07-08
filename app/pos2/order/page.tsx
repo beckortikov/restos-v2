@@ -12,7 +12,7 @@ import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
 import { useFrequent, toggleFrequent } from '@/lib/pos-frequent'
 import { useOrderData } from '@/components/order/use-order-data'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill } from '@/lib/queries'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -76,6 +76,19 @@ export default function PosV2Order() {
     } catch { /* ignore */ } finally { setTableLoading(false) }
   }, [tables])
 
+  // Загрузка открытых заказов «С собой» — тот же модельный слой (tableOrders),
+  // чтобы созданный «без оплаты» заказ оставался виден в сайдбаре до оплаты.
+  const loadTakeaway = useCallback(async (selectId?: string) => {
+    setTableLoading(true)
+    try {
+      const os = await fetchOrders({ type: 'takeaway', slim: false }).catch(() => [] as Order[])
+      const live = os.filter(o => o.status !== 'done' && o.status !== 'cancelled')
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      setTableOrders(live)
+      if (selectId) setActiveGroupId(selectId)
+    } finally { setTableLoading(false) }
+  }, [])
+
   // Приход с ?table= / ?order= — раскрываем контекст стола/группы (после загрузки данных).
   const initedRef = useRef(false)
   useEffect(() => {
@@ -104,6 +117,16 @@ export default function PosV2Order() {
     }
     if (keep.size !== justOccupied.size) setJustOccupied(keep)
   }, [tables, justOccupied])
+
+  // Переключение типа заказа (после mount): такаут → грузим открытые «С собой»,
+  // зал → сбрасываем контекст (стол выбирается заново).
+  const typeInitRef = useRef(true)
+  useEffect(() => {
+    if (typeInitRef.current) { typeInitRef.current = false; return }
+    setCart([]); setActiveGroupId(null)
+    if (orderType === 'takeaway') { setSelectedTableId(''); loadTakeaway() }
+    else { setSelectedTableId(''); setTableOrders([]) }
+  }, [orderType, loadTakeaway])
 
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
   const currentCat = activeCat ?? visibleCats[0] ?? null
@@ -170,25 +193,70 @@ export default function PosV2Order() {
   const overrideStopList = () => cart.some(l => l.overrideStopList)
 
   // ── Оплата «С собой» ──────────────────────────────────────────
-  const [payOpen, setPayOpen] = useState(false)
   const [paying, setPaying] = useState(false)
   const payingRef = useRef(false)
 
+  // Правильный счёт: нал → cash-счёт смены/первый cash; безнал → первый НЕ-cash.
+  async function resolvePayAccount(method: 'cash' | 'card', shift: unknown): Promise<{ id?: string; name?: string } | null> {
+    const s = shift as { accountId?: string; accountName?: string }
+    const accs = await fetchFinancialAccounts().catch(() => [])
+    if (method === 'cash') {
+      if (s.accountId) return { id: s.accountId, name: s.accountName }
+      const cash = accs.find(a => a.type === 'cash'); return { id: cash?.id, name: cash?.name }
+    }
+    const nc = accs.find(a => a.type !== 'cash')
+    if (!nc) { toast.error('Нет безналичного счёта — заведите его в настройках'); return null }
+    return { id: nc.id, name: nc.name }
+  }
+
+  // «С собой»: создать заказ без оплаты (остаётся открытым до оплаты).
+  async function createTakeawayNoPay() {
+    if (payingRef.current || cart.length === 0) return
+    payingRef.current = true; setPaying(true)
+    try {
+      const shift = await fetchActiveShift()
+      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total: subtotal, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      if (!order) throw new Error('Заказ не создан')
+      toast.success(`Заказ создан · ${formatCurrency(subtotal)}`, { description: 'Без оплаты — оплатите позже' })
+      setCart([])
+      await loadTakeaway(order.id) // остаётся в списке открытых «С собой»
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
+  }
+
+  // «С собой»: создать новый и сразу оплатить (нал/безнал).
   async function payTakeaway(method: 'cash' | 'card') {
     if (payingRef.current || cart.length === 0) return
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      const acc = await resolvePayAccount(method, shift)
+      if (!acc) return
       const total = subtotal
       const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
-      let accId = (shift as { accountId?: string }).accountId
-      let accName = (shift as { accountName?: string }).accountName
-      if (!accId) { const accs = await fetchFinancialAccounts().catch(() => []); const cash = accs.find(a => a.type === 'cash'); accId = cash?.id; accName = cash?.name }
-      await closeOrderWithPayment(order.id, method, null, total, cartCogs(cart), user?.id, accId, accName, 0, 0, total)
+      await closeOrderWithPayment(order.id, method, null, total, cartCogs(cart), user?.id, acc.id, acc.name, 0, 0, total)
       toast.success(`Оплачено · ${formatCurrency(total)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
-      setCart([]); setPayOpen(false)
+      setCart([])
+      await loadTakeaway()
+    } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
+  }
+
+  // Оплата существующего открытого «С собой» заказа.
+  async function payExistingTakeaway(o: Order, method: 'cash' | 'card') {
+    if (payingRef.current) return
+    payingRef.current = true; setPaying(true)
+    try {
+      const shift = await fetchActiveShift()
+      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      const acc = await resolvePayAccount(method, shift)
+      if (!acc) return
+      const total = o.total
+      await closeOrderWithPayment(o.id, method, null, o.subtotal ?? o.total, cogsOfOrder(o), user?.id, acc.id, acc.name, 0, 0, total)
+      toast.success(`Оплачено · ${formatCurrency(total)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
+      setActiveGroupId(null); await loadTakeaway()
     } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
     finally { payingRef.current = false; setPaying(false) }
   }
@@ -245,6 +313,10 @@ export default function PosV2Order() {
     setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: next } : o))
     try { await patchOrder(gid, { guestsCount: next }) }
     catch (e) { toast.error(humanizeError(e)); setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: cur } : o)) }
+  }
+
+  function cogsOfOrder(o: Order): number {
+    return (o.items ?? []).reduce((s, i) => s + calcLineCogs(i.cogs || 0, i.qty, i.unit, i.unitSize), 0)
   }
 
   async function doPreBill(id: string) {
@@ -348,14 +420,14 @@ export default function PosV2Order() {
           <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
         </div>
 
-        {/* Вкладки групп занятого стола */}
-        {orderType === 'hall' && selectedTable && (tableOrders.length >= 1 || tableLoading) && (
+        {/* Вкладки: группы занятого стола / открытые «С собой» */}
+        {((orderType === 'hall' && selectedTable) || orderType === 'takeaway') && (tableOrders.length >= 1 || tableLoading) && (
           <div className="flex items-center gap-2 flex-wrap shrink-0 border-b" style={{ padding: '0.6rem clamp(0.7rem,1vw,1rem)', borderColor: 'var(--pv-border)' }}>
             {tableOrders.map((o, i) => { const on = o.id === activeGroupId; return (
-              <button key={o.id} onClick={() => selectGroup(o.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Группа {i + 1}</button>
+              <button key={o.id} onClick={() => selectGroup(o.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{orderType === 'hall' ? `Группа ${i + 1}` : `#${o.orderNumber ?? i + 1} · ${formatCurrency(o.total)}`}</button>
             ) })}
             <button onClick={() => selectGroup(null)} className="rounded-xl font-semibold border border-dashed flex items-center gap-1" style={{ background: activeGroupId === null ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: 'var(--pv-brand)', color: 'var(--pv-brand)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
-              <Plus style={{ width: '0.95rem', height: '0.95rem' }} />Группа
+              <Plus style={{ width: '0.95rem', height: '0.95rem' }} />{orderType === 'hall' ? 'Группа' : 'Новый'}
             </button>
           </div>
         )}
@@ -364,7 +436,7 @@ export default function PosV2Order() {
         <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.7rem,1vw,1rem)' }}>
           {cart.length > 0 ? (
             <div className="flex flex-col" style={{ gap: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
-              {activeGroup && <div className="rounded-lg text-center font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Дозаказ в Группу {tableOrders.findIndex(o => o.id === activeGroupId) + 1}</div>}
+              {activeGroup && <div className="rounded-lg text-center font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Дозаказ в {orderType === 'hall' ? `Группу ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : `заказ #${activeGroup.orderNumber ?? ''}`}</div>}
               {cart.map(l => {
                 const weight = l.unit !== 'piece'
                 return (
@@ -422,9 +494,31 @@ export default function PosV2Order() {
             <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(cart.length > 0 ? subtotal : activeGroup?.total ?? 0)}</span>
           </div>
           {orderType !== 'hall' ? (
-            <button disabled={cart.length === 0 || busy} onClick={() => setPayOpen(true)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: cart.length ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
-              <CreditCard style={{ width: '1.35em', height: '1.35em' }} />К оплате
-            </button>
+            activeGroup ? (
+              cart.length > 0 ? (
+                <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                  <Plus style={{ width: '1.3em', height: '1.3em' }} />{adding ? 'Добавляем…' : `Добавить в заказ #${activeGroup.orderNumber ?? ''}`}
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button disabled={busy} onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center shrink-0 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)' }}><Printer style={{ width: '1.3em', height: '1.3em' }} /></button>
+                  <button disabled={paying} onClick={() => payExistingTakeaway(activeGroup, 'cash')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><Banknote style={{ width: '1.25em', height: '1.25em' }} />Нал</button>
+                  <button disabled={paying} onClick={() => payExistingTakeaway(activeGroup, 'card')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><CreditCard style={{ width: '1.25em', height: '1.25em' }} />Карта</button>
+                </div>
+              )
+            ) : cart.length > 0 ? (
+              <div className="flex flex-col" style={{ gap: '0.6rem' }}>
+                <button disabled={paying} onClick={createTakeawayNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
+                <div className="flex items-center gap-2">
+                  <button disabled={paying} onClick={() => payTakeaway('cash')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><Banknote style={{ width: '1.2em', height: '1.2em' }} />Нал · {formatCurrency(subtotal)}</button>
+                  <button disabled={paying} onClick={() => payTakeaway('card')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><CreditCard style={{ width: '1.2em', height: '1.2em' }} />Карта · {formatCurrency(subtotal)}</button>
+                </div>
+              </div>
+            ) : (
+              <button disabled className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold disabled:opacity-40" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-3)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+                Добавьте блюда
+              </button>
+            )
           ) : cart.length > 0 ? (
             activeGroup ? (
               <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
@@ -482,29 +576,6 @@ export default function PosV2Order() {
               <button onClick={addWeight} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <Plus style={{ width: '1.3em', height: '1.3em' }} />Добавить
               </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Payment overlay (takeaway) ─────────────────────────── */}
-      {payOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!paying) setPayOpen(false) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(22rem, 42vw, 34rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem) clamp(1.2rem,1.8vw,1.6rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>Оплата · {formatCurrency(subtotal)}</span>
-              <button onClick={() => { if (!paying) setPayOpen(false) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
-            </div>
-            <div style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
-              <div className="grid grid-cols-2 gap-3">
-                <button disabled={paying} onClick={() => payTakeaway('cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1.1rem,1.8vw,1.6rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
-                  <Banknote style={{ width: '2rem', height: '2rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
-                </button>
-                <button disabled={paying} onClick={() => payTakeaway('card')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1.1rem,1.8vw,1.6rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}>
-                  <CreditCard style={{ width: '2rem', height: '2rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Безналичные</span>
-                </button>
-              </div>
-              {paying && <div className="text-center" style={{ marginTop: '1rem', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Проводим оплату…</div>}
             </div>
           </div>
         </div>

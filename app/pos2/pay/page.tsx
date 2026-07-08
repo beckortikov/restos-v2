@@ -40,7 +40,10 @@ export default function PosV2Pay() {
   const payingRef = useRef(false)
 
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
-  const cardAcc = useMemo(() => accounts.find(a => a.type !== 'cash') ?? accounts[0], [accounts])
+  const nonCashAccts = useMemo(() => accounts.filter(a => a.type !== 'cash'), [accounts])
+  const [cardAccId, setCardAccId] = useState('')
+  useEffect(() => { if (!cardAccId && nonCashAccts.length) setCardAccId(nonCashAccts[0].id) }, [nonCashAccts, cardAccId])
+  const cardAcc = useMemo(() => nonCashAccts.find(a => a.id === cardAccId) ?? nonCashAccts[0], [nonCashAccts, cardAccId])
   const canMix = !!cashAcc && !!cardAcc && cashAcc.id !== cardAcc.id
 
   const tableNo = useMemo(() => {
@@ -130,6 +133,7 @@ export default function PosV2Pay() {
     try {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      if (method === 'card' && !cardAcc) { toast.error('Нет безналичного счёта — заведите его в настройках'); return }
       const acc = method === 'cash' ? cashAcc : cardAcc
       const accId = (method === 'cash' && (shift as { accountId?: string }).accountId)
         ? (shift as { accountId?: string }).accountId : acc?.id
@@ -282,6 +286,18 @@ export default function PosV2Pay() {
                       </div>
                     )}
                   </div>
+
+                  {/* Выбор безналичного счёта/кошелька (когда их несколько) */}
+                  {nonCashAccts.length > 1 && (
+                    <div style={{ marginBottom: '0.9rem' }}>
+                      <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Счёт для безнала</div>
+                      <div className="flex flex-wrap gap-2">
+                        {nonCashAccts.map(a => { const on = a.id === cardAccId; return (
+                          <button key={a.id} onClick={() => setCardAccId(a.id)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.85rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{a.name}</button>
+                        ) })}
+                      </div>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 gap-3">
                     <button disabled={paying} onClick={() => payFull(target, 'cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1.1rem,1.8vw,1.6rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
