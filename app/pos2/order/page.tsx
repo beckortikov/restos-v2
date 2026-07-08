@@ -4,21 +4,22 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock, Printer, MoreHorizontal,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock, Printer, MoreHorizontal, Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
 import { useFrequent, toggleFrequent } from '@/lib/pos-frequent'
 import { useOrderData } from '@/components/order/use-order-data'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
-import type { MenuItem, TableStatus, Order, FinancialAccount } from '@/lib/types'
+import { OrderExtras } from '@/components/pos-v2/order-extras'
+import type { MenuItem, TableStatus, Order, FinancialAccount, OrderSplit } from '@/lib/types'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -61,6 +62,8 @@ export default function PosV2Order() {
   // Инлайн-оплата зального заказа прямо в сайдбаре (без ухода на /pos2/pay).
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [payTarget, setPayTarget] = useState<Order | null>(null)
+  const [extrasOpen, setExtrasOpen] = useState(false)
+  const [splits, setSplits] = useState<OrderSplit[]>([])
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -135,12 +138,46 @@ export default function PosV2Order() {
 
   useEffect(() => { fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [])
 
+  // Разделённый заказ — грузим части (оплачиваются прямо в сайдбаре).
+  useEffect(() => {
+    if (activeGroup?.isSplit) fetchOrderSplits(activeGroup.id).then(setSplits).catch(() => setSplits([]))
+    else setSplits([])
+  }, [activeGroupId, activeGroup?.isSplit, activeGroup])
+
   // После оплаты из сайдбара — перечитываем контекст (стол или список «С собой»).
   async function onPaidDone() {
     const t = payTarget
     setPayTarget(null); setActiveGroupId(null)
     if (t?.tableId) await loadTableOrders(t.tableId)
     else await loadTakeaway()
+  }
+
+  async function reloadContext() {
+    if (selectedTableId) await loadTableOrders(selectedTableId)
+    else await loadTakeaway()
+  }
+
+  async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
+    if (payingRef.current || !activeGroup) return
+    const acc = method === 'cash' ? (accounts.find(a => a.type === 'cash') ?? accounts[0]) : (accounts.find(a => a.type !== 'cash') ?? accounts[0])
+    if (!acc) { toast.error('Нет счёта для оплаты'); return }
+    payingRef.current = true; setPaying(true)
+    try {
+      await paySplit(s.id, method, acc.id, acc.name ?? '', user?.id)
+      toast.success(`Часть ${s.splitNumber} оплачена · ${formatCurrency(s.total)}`)
+      const remaining = splits.filter(x => x.id !== s.id && x.status !== 'paid')
+      if (remaining.length === 0) { toast.success('Все части оплачены — заказ закрыт'); setActiveGroupId(null); await reloadContext() }
+      else setSplits(await fetchOrderSplits(activeGroup.id).catch(() => splits))
+    } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
+  }
+
+  async function doCancelSplits() {
+    if (payingRef.current || !activeGroup) return
+    payingRef.current = true; setPaying(true)
+    try { await cancelSplits(activeGroup.id); toast.success('Разделение отменено'); await reloadContext() }
+    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
   }
 
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
@@ -259,8 +296,6 @@ export default function PosV2Order() {
     finally { payingRef.current = false; setPaying(false) }
   }
 
-  // Оплата существующего открытого «С собой» заказа.
-
   // Выбор стола из пикера — раскрываем его контекст (группы + содержимое) в сайдбаре.
   function selectTable(tableId: string) {
     setSelectedTableId(tableId); setCart([]); setGuests(1); setTablesOpen(false)
@@ -322,14 +357,26 @@ export default function PosV2Order() {
 
   const busy = paying || sending || adding || tableLoading
 
+  // Esc закрывает открытый инлайн-оверлей (вес / выбор стола) — WCAG 2.1.2.
+  // PaymentPanel-модалка (payTarget) закрывается через свой PosModal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (weightItem) setWeightItem(null)
+      else if (tablesOpen) setTablesOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [weightItem, tablesOpen])
+
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* ── Left: menu ─────────────────────────────────────────── */}
       <div className="flex-1 min-w-0 flex flex-col" style={{ padding: 'var(--pv-gap) 0 0 var(--pv-pad-x)' }}>
         <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', paddingRight: 'var(--pv-gap)' }}>
-          <button onClick={() => navigate('/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+          <button onClick={() => navigate(orderType === 'hall' ? '/pos2/tables' : '/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
             <LayoutGrid style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
-            <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
+            <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{orderType === 'hall' ? 'Столы' : 'Меню'}</span>
           </button>
           <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
             {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
@@ -458,6 +505,27 @@ export default function PosV2Order() {
                 )
               })}
             </div>
+          ) : activeGroup?.isSplit ? (
+            <div className="flex flex-col" style={{ gap: 'clamp(0.5rem,0.9vw,0.8rem)' }}>
+              <div className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Счёт разделён — оплата по частям</div>
+              {splits.map(s => { const paid = s.status === 'paid'; return (
+                <div key={s.id} className="flex items-center gap-3 rounded-2xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.6rem,1vw,0.9rem)' }}>
+                  <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: paid ? 'var(--pv-free-soft)' : 'var(--pv-brand-soft)', color: paid ? 'var(--pv-free-text)' : 'var(--pv-brand)', width: '2.2rem', height: '2.2rem' }}>{s.splitNumber}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Часть {s.splitNumber}</div>
+                    <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(s.total)}</div>
+                  </div>
+                  {paid ? (
+                    <div className="flex items-center gap-1 rounded-xl shrink-0" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.4rem 0.7rem' }}><Check style={{ width: '1rem', height: '1rem' }} /><span className="font-semibold" style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Оплачено</span></div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button disabled={paying} onClick={() => paySplitNow(s, 'cash')} className="rounded-lg flex items-center gap-1 font-semibold disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}><Banknote style={{ width: '0.95rem', height: '0.95rem' }} />Нал</button>
+                      <button disabled={paying} onClick={() => paySplitNow(s, 'card')} className="rounded-lg flex items-center gap-1 font-semibold disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}><CreditCard style={{ width: '0.95rem', height: '0.95rem' }} />Карта</button>
+                    </div>
+                  )}
+                </div>
+              ) })}
+            </div>
           ) : activeGroup ? (
             <div className="flex flex-col" style={{ gap: 'clamp(0.4rem,0.7vw,0.6rem)' }}>
               <div className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Уже заказано</div>
@@ -531,11 +599,21 @@ export default function PosV2Order() {
                 <Send style={{ width: '1.3em', height: '1.3em' }} />{sending ? 'Отправка…' : selectedTableId ? (tableOrders.length > 0 ? 'Отправить (новая группа)' : 'Отправить на кухню') : 'Выберите стол'}
               </button>
             )
+          ) : activeGroup?.isSplit ? (
+            splits.some(s => s.status === 'paid') ? (
+              <div className="text-center font-semibold" style={{ color: 'var(--pv-text-3)', padding: '0.6rem', fontSize: 'var(--pv-ctl)' }}>Оплата по частям — см. выше</div>
+            ) : (
+              <button disabled={paying} onClick={doCancelSplits} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-occ-dot)', borderWidth: '2px', color: 'var(--pv-occ-text)', padding: 'clamp(0.8rem,1.2vw,1.1rem)', fontSize: 'var(--pv-ctl)' }}>
+                <X style={{ width: '1.2em', height: '1.2em' }} />Отменить разделение
+              </button>
+            )
           ) : activeGroup ? (
-            <div className="flex items-center gap-2">
-              <button onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center gap-1.5 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><Printer style={{ width: '1.2em', height: '1.2em' }} /></button>
-              <button onClick={() => navigate(`/pos2/ticket?order=${encodeURIComponent(activeGroup.id)}`)} className="flex items-center justify-center gap-1.5 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.2em', height: '1.2em' }} /></button>
-              <button onClick={() => setPayTarget(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+            <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+              <div className="flex items-center gap-2">
+                <button onClick={() => doPreBill(activeGroup.id)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><Printer style={{ width: '1.15em', height: '1.15em' }} />Пре-чек</button>
+                <button onClick={() => setExtrasOpen(true)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.15em', height: '1.15em' }} />Ещё</button>
+              </div>
+              <button onClick={() => setPayTarget(activeGroup)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
                 <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
               </button>
             </div>
@@ -550,7 +628,7 @@ export default function PosV2Order() {
       {/* ── Weight modal ───────────────────────────────────────── */}
       {weightItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setWeightItem(null)}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem, 38vw, 30rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label={`Вес порции: ${weightItem.name}`} className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem, 38vw, 30rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
               <span className="font-bold truncate" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>{weightItem.emoji} {weightItem.name}</span>
               <button onClick={() => setWeightItem(null)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
@@ -591,10 +669,23 @@ export default function PosV2Order() {
         </PosModal>
       )}
 
+      {/* Действия с заказом (разделить/перенести/отменить) — инлайн, без ухода на тикет */}
+      {activeGroup && (
+        <OrderExtras
+          order={activeGroup}
+          tables={tables}
+          servicePercent={restaurant?.servicePercent ?? 0}
+          open={extrasOpen}
+          onClose={() => setExtrasOpen(false)}
+          onChanged={() => { setExtrasOpen(false); reloadContext() }}
+          onCancelled={() => { setExtrasOpen(false); setActiveGroupId(null); reloadContext() }}
+        />
+      )}
+
       {/* ── Table picker overlay (hall) ────────────────────────── */}
       {tablesOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setTablesOpen(false)}>
-          <div className="rounded-3xl overflow-hidden flex flex-col" style={{ background: 'var(--pv-card)', width: 'clamp(26rem, 60vw, 56rem)', maxHeight: '82vh', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label="Выберите стол" className="rounded-3xl overflow-hidden flex flex-col" style={{ background: 'var(--pv-card)', width: 'clamp(26rem, 60vw, 56rem)', maxHeight: '82vh', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(1rem,1.6vw,1.4rem) clamp(1.2rem,1.8vw,1.6rem)', borderColor: 'var(--pv-border)' }}>
               <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>Выберите стол</span>
               <button onClick={() => setTablesOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
