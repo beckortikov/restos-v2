@@ -1,7 +1,7 @@
 'use client'
 
-import { useMemo, useRef, useState, useDeferredValue } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
   UtensilsCrossed, Banknote, X, Send, MapPin, Users,
@@ -28,6 +28,7 @@ const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; lab
 // С собой: инлайн-оплата (createOrder + closeOrderWithPayment). Логику не переписываем.
 export default function PosV2Order() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { user } = useAuth()
   const { menuItems, categories, tables, zones, loading } = useOrderData(true)
 
@@ -40,6 +41,12 @@ export default function PosV2Order() {
   const [tablesOpen, setTablesOpen] = useState(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
+
+  // Приход с карты зала: ?table=<id> → предвыбор зала + стола.
+  useEffect(() => {
+    const t = searchParams.get('table')
+    if (t) { setOrderType('hall'); setSelectedTableId(t) }
+  }, [searchParams])
 
   const visibleCats = useMemo(
     () => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')),

@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { LayoutGrid, RefreshCw, Banknote, CreditCard, X, ArrowLeft, SquareSplitHorizontal, UtensilsCrossed, ShoppingBag, Printer } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
@@ -21,6 +21,7 @@ import type { Order, Table, FinancialAccount, OrderPayment } from '@/lib/types'
 // (subtotal − discount) + сервис (для зала).
 export default function PosV2Pay() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { user, restaurant } = useAuth()
 
   const [orders, setOrders] = useState<Order[]>([])
@@ -71,6 +72,17 @@ export default function PosV2Pay() {
     load()
     fetchFinancialAccounts().then(setAccounts).catch(() => {})
   }, [load])
+
+  // Приход с карты зала: ?order=<id> → сразу открыть оплату этого заказа (один раз).
+  const autoOpenRef = useRef(false)
+  useEffect(() => {
+    if (autoOpenRef.current) return
+    const oid = searchParams.get('order')
+    if (oid && orders.length) {
+      const o = orders.find(x => x.id === oid)
+      if (o) { autoOpenRef.current = true; open(o) }
+    }
+  }, [orders, searchParams])
 
   function open(o: Order) {
     setTarget(o); setMode('pick'); setCashStr(''); setDiscType('none'); setDiscVal('')
