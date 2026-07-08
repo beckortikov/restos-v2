@@ -21,7 +21,7 @@ const TILES: Array<{
   { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay' },
   { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка и касса', to: '/operations/shifts' },
   { icon: ChefHat, label: 'Кухня (KDS)', sub: 'Бегунки по станциям', to: '/operations/kitchen' },
-  { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/operations/shifts' },
+  { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/pos2/service' },
   { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history' },
   { icon: Settings, label: 'Настройки', sub: 'Принтеры, меню, доступ', to: '/cashier/settings' },
 ]
