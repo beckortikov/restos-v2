@@ -1,0 +1,61 @@
+/*
+ * Токены нового POS-интерфейса (из design/restos.pen).
+ * ВСЁ скоупнуто под `.pos-v2` — не перекрашивает остальное приложение.
+ * Старый POS использует глобальные oklch-токены из src/index.css и не затрагивается.
+ */
+.pos-v2 {
+  --pv-bg: #f5f3ee;
+  --pv-card: #ffffff;
+  --pv-brand: #d85a30;
+  --pv-brand-soft: #fbebe4;
+  --pv-border: #e6e3db;
+  --pv-text: #23201c;
+  --pv-text-2: #6b6559;
+  --pv-text-3: #9a9488;
+  --pv-radius: 16px;
+
+  /* Fluid-масштаб: всё тянется с размером экрана между min и max (clamp).
+     Большой экран → крупные кнопки/текст; маленький → сжимается и влезает.
+     Переиспользуется всеми экранами /pos2, чтобы масштаб был единым. */
+  --pv-pad-x: clamp(1rem, 3vw, 2.75rem);
+  --pv-gap: clamp(0.6rem, 1.4vw, 1.35rem);
+  --pv-tile-pad: clamp(0.85rem, 2vw, 1.85rem);
+  --pv-tile-icon: clamp(2.25rem, 4.4vw, 4.25rem);
+  --pv-tile-title: clamp(1rem, 1.7vw, 1.55rem);
+  --pv-tile-sub: clamp(0.72rem, 1vw, 0.95rem);
+  --pv-logo: clamp(2.5rem, 4vw, 3.5rem);
+  --pv-h-title: clamp(1.05rem, 1.9vw, 1.5rem);
+  --pv-ctl: clamp(0.8rem, 1.1vw, 0.95rem);
+
+  /* free (зелёный) */
+  --pv-free-soft: #e7f4ec;
+  --pv-free-text: #2e7d46;
+  --pv-free-dot: #3e9e5e;
+  --pv-free-border: #c3e4ce;
+
+  /* occ (красный) */
+  --pv-occ-soft: #fbe9e7;
+  --pv-occ-text: #b23227;
+  --pv-occ-dot: #d23b2e;
+  --pv-occ-border: #f1c4be;
+
+  /* bill (янтарный) */
+  --pv-bill-soft: #fef3e0;
+  --pv-bill-text: #9a6412;
+  --pv-bill-dot: #e0a33a;
+
+  /* res (фиолетовый) */
+  --pv-res-soft: #eeeafb;
+  --pv-res-text: #6b4bc9;
+  --pv-res-dot: #8b5cf6;
+
+  background: var(--pv-bg);
+  color: var(--pv-text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+.pos-v2 *,
+.pos-v2 *::before,
+.pos-v2 *::after {
+  box-sizing: border-box;
+}
