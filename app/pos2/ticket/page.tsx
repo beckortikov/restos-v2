@@ -2,10 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Plus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users, SquareSplitHorizontal, Banknote, Check } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Plus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users, SquareSplitHorizontal, Banknote, Check, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder, splitOrderEqual, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts } from '@/lib/queries'
+import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder, splitOrderEqual, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import type { Order, OrderItem, Table, OrderSplit, FinancialAccount } from '@/lib/types'
@@ -33,6 +33,8 @@ export default function PosV2Ticket() {
   const [cancelItem, setCancelItem] = useState<OrderItem | null>(null)
   const [cancelOrderOpen, setCancelOrderOpen] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
+  const [noteItem, setNoteItem] = useState<OrderItem | null>(null)
+  const [noteText, setNoteText] = useState('')
   const [itemReason, setItemReason] = useState(ITEM_REASONS[0])
   const [orderReason, setOrderReason] = useState(ORDER_REASONS[0])
 
@@ -88,6 +90,17 @@ export default function PosV2Ticket() {
       toast.success('Заказ отменён')
       navigate('/pos2/tables')
     } catch (e) { toast.error(`Не удалось отменить: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
+  async function saveNote() {
+    if (busyRef.current || !order || !noteItem?.id) return
+    busyRef.current = true; setBusy(true)
+    try {
+      await setOrderItemNote(order.id, noteItem.id, noteText.trim() || null)
+      toast.success('Комментарий сохранён')
+      setNoteItem(null); await load()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
     finally { busyRef.current = false; setBusy(false) }
   }
 
@@ -210,8 +223,14 @@ export default function PosV2Ticket() {
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', textDecoration: cancelled ? 'line-through' : 'none' }}>{i.name}</div>
                     <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{formatCurrency(i.price)} × {i.qty}{cancelled ? ' · отменено' : ''}</div>
+                    {i.note && <div className="truncate" style={{ color: 'var(--pv-brand)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>💬 {i.note}</div>}
                   </div>
                   <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
+                  {!cancelled && (
+                    <button onClick={() => { setNoteItem(i); setNoteText(i.note ?? '') }} className="rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ width: '2.2rem', height: '2.2rem', background: i.note ? 'var(--pv-brand-soft)' : 'var(--pv-bg)' }}>
+                      <StickyNote style={{ width: '1.15rem', height: '1.15rem', color: i.note ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />
+                    </button>
+                  )}
                   {!cancelled && (
                     <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ width: '2.2rem', height: '2.2rem', background: 'var(--pv-occ-soft)' }}>
                       <XCircle style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
@@ -356,6 +375,27 @@ export default function PosV2Ticket() {
               <button disabled={busy} onClick={doSplit} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <SquareSplitHorizontal style={{ width: '1.3em', height: '1.3em' }} />Разделить на {splitN}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Item note modal */}
+      {noteItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setNoteItem(null) }}>
+          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,42vw,32rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold truncate" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>Комментарий: {noteItem.name}</span>
+              <button onClick={() => { if (!busy) setNoteItem(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
+              <div className="flex flex-wrap gap-2">
+                {['Без лука', 'Без соли', 'Острое', 'Прожарить', 'Отдельно'].map(p => (
+                  <button key={p} onClick={() => setNoteText(t => t ? `${t}, ${p}` : p)} className="rounded-full font-semibold border" style={{ background: 'var(--pv-card)', color: 'var(--pv-text-2)', borderColor: 'var(--pv-border)', padding: '0.35rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>+ {p}</button>
+                ))}
+              </div>
+              <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Комментарий к позиции" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+              <button disabled={busy} onClick={saveNote} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Сохранить</button>
             </div>
           </div>
         </div>
