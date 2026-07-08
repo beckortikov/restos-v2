@@ -47,6 +47,7 @@ const PosV2Ticket = () => L(() => import('@/app/pos2/ticket/page'))
 const PosV2Stop = () => L(() => import('@/app/pos2/stop/page'))
 const PosV2Orders = () => L(() => import('@/app/pos2/orders/page'))
 const PosV2Showcase = () => L(() => import('@/app/pos2/showcase/page'))
+const PosV2Batch = () => L(() => import('@/app/pos2/batch/page'))
 
 // Operations
 const POS = () => L(() => import('@/app/(app)/operations/pos/page'))
@@ -217,6 +218,7 @@ export function AppRouter() {
         <Route path="/pos2/stop" element={<PosV2Stop />} />
         <Route path="/pos2/orders" element={<PosV2Orders />} />
         <Route path="/pos2/showcase" element={<PosV2Showcase />} />
+        <Route path="/pos2/batch" element={<PosV2Batch />} />
       </Route>
 
       {/* Admin — superadmin only */}
