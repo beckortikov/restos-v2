@@ -23,7 +23,7 @@ const TILES: Array<{
   { icon: ChefHat, label: 'Кухня (KDS)', sub: 'Бегунки по станциям', to: '/operations/kitchen' },
   { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/pos2/service' },
   { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history' },
-  { icon: Settings, label: 'Настройки', sub: 'Принтеры, меню, доступ', to: '/cashier/settings' },
+  { icon: Settings, label: 'Настройки', sub: 'Интерфейс, принтеры, меню', to: '/pos2/settings' },
 ]
 
 export default function PosV2Launcher() {
