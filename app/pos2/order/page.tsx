@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Scale,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
+import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
@@ -30,8 +31,10 @@ const portionsOf = (l: CartLine) => (l.portionQty && l.portionQty > 1 ? l.portio
 export default function PosV2Order() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { user, canDo } = useAuth()
+  const { user, canDo, restaurantId } = useAuth()
   const { menuItems, categories, tables, zones, loading } = useOrderData(true)
+  const favorites = useFavorites(restaurantId ?? '')
+  const favSet = useMemo(() => new Set(favorites), [favorites])
 
   const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
   const [search, setSearch] = useState('')
@@ -73,8 +76,10 @@ export default function PosV2Order() {
 
   const dishes = useMemo(() => {
     const q = deferred.trim().toLowerCase()
-    return menuItems.filter(m => q ? m.name.toLowerCase().includes(q) : m.category === currentCat)
-  }, [menuItems, currentCat, deferred])
+    if (q) return menuItems.filter(m => m.name.toLowerCase().includes(q))
+    if (currentCat === '__fav__') return menuItems.filter(m => favSet.has(m.id))
+    return menuItems.filter(m => m.category === currentCat)
+  }, [menuItems, currentCat, deferred, favSet])
 
   const tablesByZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
@@ -242,6 +247,11 @@ export default function PosV2Order() {
 
         {!deferred.trim() && (
           <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
+            {favorites.length > 0 && (
+              <button onClick={() => setActiveCat('__fav__')} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
+                <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
+              </button>
+            )}
             {visibleCats.map(c => {
               const on = c === currentCat
               return <button key={c} onClick={() => setActiveCat(c)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
@@ -262,7 +272,11 @@ export default function PosV2Order() {
                 return (
                   <button key={m.id} onClick={() => add(m)} disabled={stopped && !canOverrideStop} className="relative flex flex-col rounded-2xl text-left transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', padding: 'clamp(0.7rem,1.1vw,1.1rem)', gap: 'clamp(0.4rem,0.8vw,0.7rem)', minHeight: 'clamp(6rem,9vw,8rem)', opacity: stopped ? 0.6 : 1 }}>
                     {stopped && <span className="absolute rounded-full font-bold" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
-                    {weight && <span className="absolute" style={{ top: '0.5rem', left: '0.5rem' }}><Scale style={{ width: '0.95rem', height: '0.95rem', color: 'var(--pv-text-3)' }} /></span>}
+                    {restaurantId && (
+                      <span onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} className="absolute" style={{ top: '0.4rem', left: '0.4rem', cursor: 'pointer', padding: '0.15rem' }}>
+                        <Star style={{ width: '1.05rem', height: '1.05rem', color: favSet.has(m.id) ? '#e8a33a' : 'var(--pv-text-3)', fill: favSet.has(m.id) ? '#e8a33a' : 'transparent' }} />
+                      </span>
+                    )}
                     <span style={{ fontSize: 'clamp(1.4rem,2.4vw,2rem)' }}>{m.emoji || '🍽️'}</span>
                     <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.82rem,1.1vw,1rem)' }}>{m.name}</span>
                     <span className="font-bold mt-auto" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(0.85rem,1.15vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? `/${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
