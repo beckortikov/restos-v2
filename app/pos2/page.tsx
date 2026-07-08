@@ -19,7 +19,7 @@ const TILES: Array<{
   { icon: Utensils, label: 'Новый заказ', sub: 'Меню и оплата', to: '/pos2/order', primary: true },
   { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/pos2/tables' },
   { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay' },
-  { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка и касса', to: '/operations/shifts' },
+  { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение кассы', to: '/pos2/shift' },
   { icon: ChefHat, label: 'Кухня (KDS)', sub: 'Бегунки по станциям', to: '/operations/kitchen' },
   { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/pos2/service' },
   { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history' },
