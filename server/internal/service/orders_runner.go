@@ -109,10 +109,17 @@ func orderTypeLabel(order *models.Order) string {
 
 // StationResolver — лёгкий interface, подменяемый для тестов.
 //
-// Реализуется printer.DBRouter.ResolveByStation. Сервис не знает про printer
-// напрямую, чтобы не циклить пакеты.
+// Реализуется printer.DBRouter. Сервис не знает про printer напрямую, чтобы не
+// циклить пакеты.
+//
+//   - ResolveByStation — id ВКЛЮЧЁННОГО принтера станции (ok=false, если нет).
+//   - StationHasPrinter — есть ли у станции принтер ВООБЩЕ (любой enabled).
+//     Нужно различать «станция настроена, но её принтер отключён» (→ бесбумажная,
+//     печатать НЕ надо, повар видит на KDS) и «у станции нет своего принтера»
+//     (→ как раньше, задание без printer_id уходит на общий станционный принтер).
 type StationResolver interface {
 	ResolveByStation(restaurantID, station string) (string, bool)
+	StationHasPrinter(restaurantID, station string) bool
 }
 
 // WithStationResolver — fluent setter (как WithPublisher).
@@ -172,7 +179,6 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			station = *mi.Station
 		}
 		byStation[station] = append(byStation[station], it)
-		printedItemIDs = append(printedItemIDs, it.ID)
 	}
 	if len(byStation) == 0 {
 		return nil
@@ -197,6 +203,19 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 	runnerTableLabel := joinNonEmpty(", ", meta.TableLabel, zoneLabel, guestsLabel)
 
 	for station, sItems := range byStation {
+		// Резолвим принтер станции. Если станция настроена, но её принтер(ы)
+		// ОТКЛЮЧЕНЫ — она бесбумажная (повар видит позиции на KDS): бегунок не
+		// печатаем и строки НЕ помечаем напечатанными. Если у станции нет своего
+		// принтера — как раньше: job без printer_id уходит на общий станционный.
+		var printerID *string
+		if s.stations != nil {
+			if pid, ok := s.stations.ResolveByStation(restaurantID, station); ok {
+				printerID = &pid
+			} else if s.stations.StationHasPrinter(restaurantID, station) {
+				continue
+			}
+		}
+
 		in := escpos.RunnerInput{
 			Station:     stationLabel(station),
 			OrderNumber: order.OrderNumber,
@@ -223,12 +242,6 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		}
 		payload := escpos.RunnerLayout(in)
 
-		var printerID *string
-		if s.stations != nil {
-			if pid, ok := s.stations.ResolveByStation(restaurantID, station); ok {
-				printerID = &pid
-			}
-		}
 		job := &models.PrintJob{
 			ID:           uuid.NewString(),
 			Type:         "runner",
@@ -242,6 +255,10 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		}
 		if err := tx.Session(&gorm.Session{SkipHooks: true}).Create(job).Error; err != nil {
 			return err
+		}
+		// Помечаем только строки реально напечатанных станций.
+		for _, it := range sItems {
+			printedItemIDs = append(printedItemIDs, it.ID)
 		}
 	}
 	// Помечаем строки как «полностью отданные повару» (qty_printed = qty).
@@ -309,6 +326,15 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 	cancelTableLabel := joinNonEmpty(", ", meta.TableLabel, meta.ZoneName)
 
 	for station, sItems := range byStation {
+		// Отключённая станция бесбумажная — «ОТМЕНА» на неё тоже не печатаем.
+		var printerID *string
+		if s.stations != nil {
+			if pid, ok := s.stations.ResolveByStation(restaurantID, station); ok {
+				printerID = &pid
+			} else if s.stations.StationHasPrinter(restaurantID, station) {
+				continue
+			}
+		}
 		in := escpos.CancelRunnerInput{
 			Station:     stationLabel(station),
 			OrderNumber: order.OrderNumber,
@@ -340,12 +366,6 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 		}
 		payload := escpos.CancelRunnerLayout(in)
 
-		var printerID *string
-		if s.stations != nil {
-			if pid, ok := s.stations.ResolveByStation(restaurantID, station); ok {
-				printerID = &pid
-			}
-		}
 		job := &models.PrintJob{
 			ID:           uuid.NewString(),
 			Type:         "cancel_runner",
