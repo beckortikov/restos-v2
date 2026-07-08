@@ -2,14 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Plus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users, SquareSplitHorizontal, Banknote, Check, StickyNote } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Plus, Minus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users, UserPlus, SquareSplitHorizontal, Banknote, Check, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote } from '@/lib/queries'
+import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, assignWaiter, fetchUsers, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
-import type { Order, OrderItem, Table, OrderSplit, FinancialAccount } from '@/lib/types'
+import type { Order, OrderItem, Table, OrderSplit, FinancialAccount, User } from '@/lib/types'
 
 const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни', 'Некачественно', 'Другое']
 const ORDER_REASONS = ['Ошибка официанта', 'Нет ингредиента', 'Отменено клиентом', 'Другое']
@@ -40,6 +40,8 @@ export default function PosV2Ticket() {
   const [noteText, setNoteText] = useState('')
   const [itemReason, setItemReason] = useState(ITEM_REASONS[0])
   const [orderReason, setOrderReason] = useState(ORDER_REASONS[0])
+  const [waiterOpen, setWaiterOpen] = useState(false)
+  const [waiters, setWaiters] = useState<User[]>([])
 
   const tableNo = useMemo(() => { const m = new Map<string, number>(); for (const t of tables) m.set(t.id, t.number); return m }, [tables])
 
@@ -66,11 +68,47 @@ export default function PosV2Ticket() {
     } finally { setLoading(false) }
   }, [orderId])
 
-  useEffect(() => { load(); fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [load])
+  useEffect(() => {
+    load()
+    fetchFinancialAccounts().then(setAccounts).catch(() => {})
+    fetchUsers().then(u => setWaiters(u.filter(x => x.role === 'waiter'))).catch(() => {})
+  }, [load])
 
   const label = order ? (order.type === 'hall' ? `Стол ${order.tableId ? (tableNo.get(order.tableId) ?? '—') : '—'}` : 'С собой') : ''
   const items = order?.items ?? []
   const liveItems = items.filter(i => !i.cancelledAt)
+
+  async function incItem(i: OrderItem) {
+    if (busyRef.current || !order) return
+    busyRef.current = true; setBusy(true)
+    try {
+      await addItemsToOrder(order.id, [{ menuItemId: i.menuItemId, name: i.name, qty: 1, price: i.price, cogs: i.cogs, unit: i.unit, unitSize: i.unitSize, emoji: i.emoji }])
+      await load()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
+  async function decItem(i: OrderItem) {
+    if (busyRef.current || !i.id) return
+    busyRef.current = true; setBusy(true)
+    try {
+      const res = await cancelOrderItemPartial(i.id, 1, 'Корректировка количества', user?.id)
+      if (res.allCancelled) { toast.info('Все позиции отменены — заказ закрыт'); navigate('/pos2/tables'); return }
+      await load()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
+  async function assignW(waiterId: string | null) {
+    if (busyRef.current || !order?.tableId) return
+    busyRef.current = true; setBusy(true)
+    try {
+      await assignWaiter(order.tableId, waiterId)
+      toast.success(waiterId ? 'Официант назначен' : 'Официант снят')
+      setWaiterOpen(false); await load()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
 
   async function doCancelItem() {
     if (busyRef.current || !cancelItem?.id) return
@@ -181,6 +219,12 @@ export default function PosV2Ticket() {
         <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,1.8vw,1.6rem)' }}>Заказ{label ? ` · ${label}` : ''}</span>
         <div className="flex-1" />
         {order?.type === 'hall' && order.tableId && (
+          <button onClick={() => setWaiterOpen(true)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+            <UserPlus style={{ width: 'clamp(1.05rem,1.3vw,1.3rem)', height: 'clamp(1.05rem,1.3vw,1.3rem)', color: 'var(--pv-text-2)' }} />
+            <span className="font-semibold hidden sm:block" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Официант</span>
+          </button>
+        )}
+        {order?.type === 'hall' && order.tableId && (
           <button onClick={() => navigate(`/pos2/order?table=${encodeURIComponent(order.tableId!)}`)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand-soft)', borderColor: 'var(--pv-brand)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
             <Plus style={{ width: 'clamp(1.05rem,1.3vw,1.3rem)', height: 'clamp(1.05rem,1.3vw,1.3rem)', color: 'var(--pv-brand)' }} />
             <span className="font-semibold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Группа</span>
@@ -243,6 +287,16 @@ export default function PosV2Ticket() {
                     {i.note && <div className="truncate" style={{ color: 'var(--pv-brand)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>💬 {i.note}</div>}
                   </div>
                   <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
+                  {!cancelled && (i.unit === 'piece' || !i.unit) && (
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button disabled={busy} onClick={() => decItem(i)} className="rounded-lg flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform" style={{ width: '2.2rem', height: '2.2rem', background: 'var(--pv-bg)', border: '1px solid var(--pv-border)' }}>
+                        <Minus style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-2)' }} />
+                      </button>
+                      <button disabled={busy} onClick={() => incItem(i)} className="rounded-lg flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform" style={{ width: '2.2rem', height: '2.2rem', background: 'var(--pv-bg)', border: '1px solid var(--pv-border)' }}>
+                        <Plus style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-2)' }} />
+                      </button>
+                    </div>
+                  )}
                   {!cancelled && (
                     <button onClick={() => { setNoteItem(i); setNoteText(i.note ?? '') }} className="rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ width: '2.2rem', height: '2.2rem', background: i.note ? 'var(--pv-brand-soft)' : 'var(--pv-bg)' }}>
                       <StickyNote style={{ width: '1.15rem', height: '1.15rem', color: i.note ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />
@@ -335,6 +389,30 @@ export default function PosV2Ticket() {
               <button disabled={busy} onClick={doCancelOrder} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <Trash2 style={{ width: '1.3em', height: '1.3em' }} />Отменить заказ
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Waiter assign modal */}
+      {waiterOpen && order && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setWaiterOpen(false) }}>
+          <div className="rounded-3xl overflow-hidden flex flex-col" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,42vw,30rem)', maxHeight: '80vh', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Официант стола</span>
+              <button onClick={() => { if (!busy) setWaiterOpen(false) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto flex flex-col" style={{ padding: 'clamp(0.9rem,1.4vw,1.3rem)', gap: '0.4rem' }}>
+              {waiters.length === 0 && <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '1.5rem', fontSize: 'var(--pv-ctl)' }}>Официанты не заведены</div>}
+              {waiters.map(w => { const on = order.waiterId === w.id; return (
+                <button key={w.id} disabled={busy} onClick={() => assignW(w.id)} className="flex items-center justify-between rounded-xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: on ? 'var(--pv-brand-soft)' : 'var(--pv-bg)', border: `1px solid ${on ? 'var(--pv-brand)' : 'var(--pv-border)'}`, padding: 'clamp(0.7rem,1.1vw,1rem)' }}>
+                  <span className="font-semibold" style={{ color: on ? 'var(--pv-brand)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{w.name}</span>
+                  {on && <Check style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-brand)' }} />}
+                </button>
+              ) })}
+              {order.waiterId && (
+                <button disabled={busy} onClick={() => assignW(null)} className="rounded-xl font-semibold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-3)', padding: 'clamp(0.6rem,1vw,0.9rem)', marginTop: '0.3rem', fontSize: 'var(--pv-ctl)' }}>Снять назначение</button>
+              )}
             </div>
           </div>
         </div>
