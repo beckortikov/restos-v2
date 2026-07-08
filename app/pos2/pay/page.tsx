@@ -11,7 +11,8 @@ import {
 import { V4Error } from '@/lib/api'
 import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
-import { dMul, dDiv, dAdd, dSub, dRound } from '@/lib/decimal'
+import { dSub } from '@/lib/decimal'
+import { discountAmount, payable as calcPayable } from '@/lib/pos-v2/pay'
 import type { Order, Table, FinancialAccount, OrderPayment } from '@/lib/types'
 
 // Phase 2.4–2.7: оплата открытого заказа — нал/безнал/смешанная + скидка + пре-чек.
@@ -50,9 +51,8 @@ export default function PosV2Pay() {
 
   // payable = (subtotal − скидка) + сервис (зал, если включён; бэк считает так же).
   const payableOf = useCallback((o: Order, discAmt = 0, serviceOn = true): number => {
-    const base = dSub(o.subtotal ?? o.total, discAmt)
     const sp = (o.type === 'hall' && serviceOn) ? (restaurant?.servicePercent ?? 0) : 0
-    return sp > 0 ? dRound(dAdd(base, dMul(base, dDiv(sp, 100)))) : base
+    return calcPayable(o.subtotal ?? o.total, discAmt, sp)
   }, [restaurant])
 
   const load = useCallback(async () => {
@@ -98,11 +98,8 @@ export default function PosV2Pay() {
 
   const discValNum = Math.max(0, parseFloat(discVal.replace(',', '.').replace(/\s/g, '')) || 0)
   const discAmt = useMemo(() => {
-    if (!target || discType === 'none' || discValNum <= 0) return 0
-    const base = target.subtotal ?? target.total
-    return discType === 'percent'
-      ? dRound(dMul(base, dDiv(Math.min(discValNum, 100), 100)))
-      : Math.min(discValNum, base)
+    if (!target) return 0
+    return discountAmount(target.subtotal ?? target.total, discType, discValNum)
   }, [target, discType, discValNum])
   const payable = target ? payableOf(target, discAmt, serviceOn) : 0
   const cashNum = Math.max(0, Math.min(payable, parseFloat(cashStr.replace(',', '.').replace(/\s/g, '')) || 0))

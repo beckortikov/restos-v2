@@ -12,6 +12,7 @@ import {
 } from '@/lib/queries'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
+import { deltaPct } from '@/lib/pos-v2/report'
 import { dSum, dAdd, dSub } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
 import type { CashShift, CashShiftOperation, FinancialAccount } from '@/lib/types'
@@ -81,10 +82,6 @@ export default function PosV2Shift() {
 
   const curRevenue = dAdd(rev.cashRevenue, rev.cardRevenue)
   const prev = zr?.previous ?? null
-  const deltaPct = (cur: number, was: number): number | null => {
-    if (!prev || !(was > 0)) return null
-    return ((cur - was) / was) * 100
-  }
 
   async function openHistory() {
     setHistOpen(true)

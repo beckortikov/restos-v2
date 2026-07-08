@@ -14,8 +14,9 @@ import { useOrderData } from '@/components/order/use-order-data'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
-import { dMul, dDiv, dSum } from '@/lib/decimal'
-import type { MenuItem, OrderItem, TableStatus } from '@/lib/types'
+import { dMul, dDiv } from '@/lib/decimal'
+import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
+import type { MenuItem, TableStatus } from '@/lib/types'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -25,7 +26,6 @@ const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; lab
   bill_requested: { soft: 'var(--pv-bill-soft)', dot: 'var(--pv-bill-dot)', text: 'var(--pv-bill-text)', label: 'Счёт' },
 }
 const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
-const portionsOf = (l: CartLine) => (l.portionQty && l.portionQty > 1 ? l.portionQty : 1)
 
 // Phase 2 + критичный блок: заказ на реальных данных. Зал/такаут, гости, стоп-лист
 // override (менеджер), весовые позиции (вес × порции). Логику не переписываем.
@@ -131,27 +131,11 @@ export default function PosV2Order() {
   }
   function removeLine(id: string) { setCart(prev => prev.filter(l => l.menuItemId !== id)) }
 
-  function lineTotal(l: CartLine): number {
-    const base = l.unit === 'piece' ? dMul(l.price, l.qty) : dMul(l.price, dDiv(l.qty, l.unitSize > 0 ? l.unitSize : 1))
-    return dMul(base, portionsOf(l))
-  }
-  const subtotal = useMemo(() => dSum(cart.map(lineTotal)), [cart])
-  const count = cart.reduce((s, l) => s + (l.unit === 'piece' ? l.qty : portionsOf(l)), 0)
+  const subtotal = useMemo(() => cartSubtotal(cart), [cart])
+  const count = cartCount(cart)
   const wUnit = weightItem?.unit === 'kg' ? 'кг' : 'г'
   const wPreview = weightItem ? dMul(dMul(weightItem.price, dDiv(num(wAmt), (weightItem.unitSize || 100))), wPortions) : 0
 
-  function cartToItems(): OrderItem[] {
-    return cart.flatMap(l => {
-      const one: OrderItem = { menuItemId: l.menuItemId, name: l.name, qty: l.qty, price: l.price, cogs: l.cogs, unit: l.unit, unitSize: l.unitSize, emoji: l.emoji }
-      return Array.from({ length: portionsOf(l) }, () => ({ ...one }))
-    })
-  }
-  function cartCogs(): number {
-    return dSum(cart.map(l => {
-      const per = l.unit === 'piece' ? dMul(l.cogs, l.qty) : dMul(l.cogs, dDiv(l.qty, l.unitSize > 0 ? l.unitSize : 1))
-      return dMul(per, portionsOf(l))
-    }))
-  }
   const overrideStopList = () => cart.some(l => l.overrideStopList)
 
   // ── Оплата «С собой» ──────────────────────────────────────────
@@ -166,12 +150,12 @@ export default function PosV2Order() {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
       const total = subtotal
-      const order = await createOrder({ type: orderType === 'delivery' ? 'delivery' : 'takeaway', items: cartToItems(), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      const order = await createOrder({ type: orderType === 'delivery' ? 'delivery' : 'takeaway', items: cartToItems(cart), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
       let accId = (shift as { accountId?: string }).accountId
       let accName = (shift as { accountName?: string }).accountName
       if (!accId) { const accs = await fetchFinancialAccounts().catch(() => []); const cash = accs.find(a => a.type === 'cash'); accId = cash?.id; accName = cash?.name }
-      await closeOrderWithPayment(order.id, method, null, total, cartCogs(), user?.id, accId, accName, 0, 0, total)
+      await closeOrderWithPayment(order.id, method, null, total, cartCogs(cart), user?.id, accId, accName, 0, 0, total)
       toast.success(`Оплачено · ${formatCurrency(total)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
       setCart([]); setPayOpen(false)
     } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
@@ -188,7 +172,7 @@ export default function PosV2Order() {
     try {
       const shift = await fetchActiveShift()
       const total = subtotal
-      const order = await createOrder({ type: 'hall', tableId: selectedTableId, items: cartToItems(), total, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: guests, overrideStopList: overrideStopList() })
+      const order = await createOrder({ type: 'hall', tableId: selectedTableId, items: cartToItems(cart), total, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: guests, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
       openTableForOrder(selectedTableId, order.id, user?.id).catch(() => {})
       toast.success(`Заказ отправлен · Стол ${selectedTable?.number ?? ''} · ${formatCurrency(total)}`, { description: 'Кухня уже видит заказ. Оплата — позже.' })
@@ -201,7 +185,7 @@ export default function PosV2Order() {
     if (addingRef.current || cart.length === 0 || !addOrderId) return
     addingRef.current = true; setAdding(true)
     try {
-      await addItemsToOrder(addOrderId, cartToItems(), { overrideStopList: overrideStopList() })
+      await addItemsToOrder(addOrderId, cartToItems(cart), { overrideStopList: overrideStopList() })
       toast.success(`Добавлено ${count} поз. в заказ`)
       navigate(`/pos2/ticket?order=${encodeURIComponent(addOrderId)}`)
     } catch (e) { toast.error(`Не удалось добавить: ${humanizeError(e)}`) }

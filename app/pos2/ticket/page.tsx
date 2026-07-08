@@ -8,6 +8,7 @@ import { useAuth } from '@/lib/auth-store'
 import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
+import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
 import type { Order, OrderItem, Table, OrderSplit, FinancialAccount } from '@/lib/types'
 
 const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни', 'Некачественно', 'Другое']
@@ -134,13 +135,9 @@ export default function PosV2Ticket() {
 
   async function doSplitItems() {
     if (busyRef.current || !order) return
-    const live = (order.items ?? []).filter(i => !i.cancelledAt && i.id)
-    const assignments: { splitNumber: number; items: { orderItemId: string }[] }[] = []
-    for (let p = 1; p <= splitN; p++) {
-      const its = live.filter(i => (itemPart[i.id!] ?? 1) === p).map(i => ({ orderItemId: i.id! }))
-      if (its.length) assignments.push({ splitNumber: p, items: its })
-    }
-    if (assignments.length < 2) { toast.error('Разнесите позиции минимум на 2 части'); return }
+    const liveIds = (order.items ?? []).filter(i => !i.cancelledAt && i.id).map(i => i.id!)
+    const assignments = buildItemAssignments(liveIds, itemPart, splitN)
+    if (!isSplitValid(assignments)) { toast.error('Разнесите позиции минимум на 2 части'); return }
     busyRef.current = true; setBusy(true)
     try {
       await splitOrderByItems(order.id, assignments, order.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
