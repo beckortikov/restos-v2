@@ -1,13 +1,16 @@
 'use client'
 
-import { useMemo, useState, useDeferredValue } from 'react'
+import { useMemo, useRef, useState, useDeferredValue } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, Search, Store, ShoppingBag, Plus, Minus, Trash2, CreditCard, UtensilsCrossed } from 'lucide-react'
+import { LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard, UtensilsCrossed, Banknote, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
+import { createOrder, closeOrderWithPayment, fetchActiveShift, fetchFinancialAccounts } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
-import { dMul, dSum } from '@/lib/decimal'
-import type { MenuItem } from '@/lib/types'
+import { humanizeError } from '@/lib/errors'
+import { dMul, dDiv, dSum } from '@/lib/decimal'
+import type { MenuItem, OrderItem } from '@/lib/types'
 import type { CartLine } from '@/components/order/types'
 
 // Phase 2 (шаг 1): экран заказа на РЕАЛЬНЫХ данных (useOrderData — тот же хук,
@@ -15,6 +18,7 @@ import type { CartLine } from '@/components/order/types'
 // Оплата — следующий шаг (самый рисковый), пока обозначена заглушкой.
 export default function PosV2Order() {
   const navigate = useNavigate()
+  const { user } = useAuth()
   const { menuItems, categories, loading } = useOrderData(true)
 
   const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
@@ -65,6 +69,62 @@ export default function PosV2Order() {
 
   const subtotal = useMemo(() => dSum(cart.map(l => dMul(l.qty, l.price))), [cart])
   const count = cart.reduce((s, l) => s + l.qty, 0)
+
+  const [payOpen, setPayOpen] = useState(false)
+  const [paying, setPaying] = useState(false)
+  // Guard-латч ставится СИНХРОННО до первого await → двойной тап невозможен
+  // (в старом POS флаг ставился после await — отсюда баг двойного платежа).
+  const payingRef = useRef(false)
+
+  async function payTakeaway(method: 'cash' | 'card') {
+    if (payingRef.current || cart.length === 0) return
+    payingRef.current = true
+    setPaying(true)
+    try {
+      const shift = await fetchActiveShift()
+      if (!shift) {
+        toast.error('Откройте кассовую смену перед оплатой')
+        return
+      }
+      const total = subtotal
+      const items: OrderItem[] = cart.map(l => ({
+        menuItemId: l.menuItemId, name: l.name, qty: l.qty, price: l.price,
+        cogs: l.cogs, unit: l.unit, unitSize: l.unitSize, emoji: l.emoji,
+      }))
+      const order = await createOrder({
+        type: 'takeaway', items, total, shiftId: shift.id,
+        waiterId: user?.id ?? undefined, guestsCount: 1,
+      })
+      if (!order) throw new Error('Заказ не создан')
+
+      // Счёт зачисления: активной смены, иначе первый cash-счёт.
+      let accId = (shift as { accountId?: string }).accountId
+      let accName = (shift as { accountName?: string }).accountName
+      if (!accId) {
+        const accs = await fetchFinancialAccounts().catch(() => [])
+        const cash = accs.find(a => a.type === 'cash')
+        accId = cash?.id
+        accName = cash?.name
+      }
+      const cogs = dSum(cart.map(l =>
+        l.unit === 'piece'
+          ? dMul(l.cogs, l.qty)
+          : dMul(l.cogs, dDiv(l.qty, l.unitSize > 0 ? l.unitSize : 1)),
+      ))
+      // Сервис для takeaway = 0. Чек печатает бэк внутри close (server enqueue).
+      await closeOrderWithPayment(order.id, method, null, total, cogs, user?.id, accId, accName, 0, 0, total)
+      toast.success(`Оплачено · ${formatCurrency(total)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, {
+        description: 'Чек отправлен на печать',
+      })
+      setCart([])
+      setPayOpen(false)
+    } catch (e) {
+      toast.error(`Оплата не прошла: ${humanizeError(e)}`)
+    } finally {
+      payingRef.current = false
+      setPaying(false)
+    }
+  }
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -204,7 +264,7 @@ export default function PosV2Order() {
           </div>
           <button
             disabled={cart.length === 0}
-            onClick={() => toast('Оплата — следующий шаг внедрения', { description: 'Экран оплаты /pos2 собирается на этом же реальном заказе.' })}
+            onClick={() => setPayOpen(true)}
             className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform"
             style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: cart.length ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}
           >
@@ -213,6 +273,64 @@ export default function PosV2Order() {
           </button>
         </div>
       </aside>
+
+      {/* ── Payment overlay ────────────────────────────────────── */}
+      {payOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center"
+          style={{ background: 'rgba(26,26,26,0.5)' }}
+          onClick={() => { if (!paying) setPayOpen(false) }}
+        >
+          <div
+            className="rounded-3xl overflow-hidden"
+            style={{ background: 'var(--pv-card)', width: 'clamp(22rem, 42vw, 34rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem) clamp(1.2rem,1.8vw,1.6rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>
+                Оплата · {formatCurrency(subtotal)}
+              </span>
+              <button onClick={() => { if (!paying) setPayOpen(false) }} className="rounded-lg" style={{ padding: '0.4rem' }}>
+                <X style={{ color: 'var(--pv-text-2)' }} />
+              </button>
+            </div>
+            <div style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
+              {orderType === 'takeaway' ? (
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    disabled={paying}
+                    onClick={() => payTakeaway('cash')}
+                    className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform"
+                    style={{ padding: 'clamp(1.1rem,1.8vw,1.6rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}
+                  >
+                    <Banknote style={{ width: '2rem', height: '2rem' }} />
+                    <span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
+                  </button>
+                  <button
+                    disabled={paying}
+                    onClick={() => payTakeaway('card')}
+                    className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform"
+                    style={{ padding: 'clamp(1.1rem,1.8vw,1.6rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}
+                  >
+                    <CreditCard style={{ width: '2rem', height: '2rem' }} />
+                    <span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Безналичные</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="text-center" style={{ color: 'var(--pv-text-2)', padding: '0.5rem 0.5rem 1rem', fontSize: 'var(--pv-ctl)', lineHeight: 1.5 }}>
+                  Оплата зала требует выбора стола — это следующий шаг внедрения.
+                  Пока в новом POS доступна оплата «С собой» (переключите вверху).
+                </div>
+              )}
+              {paying && (
+                <div className="text-center" style={{ marginTop: '1rem', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>
+                  Проводим оплату…
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
