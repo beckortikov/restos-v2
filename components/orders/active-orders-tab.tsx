@@ -13,10 +13,10 @@ import { useAuth } from '@/lib/auth-store'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { startOfToday, endOfDay, calcLineCogs } from '@/lib/helpers'
 import {
-  type Order, type OrderStatus, type OrderVoid, type Table, type User,
+  type Order, type OrderStatus, type OrderVoid, type Table, type User, type Zone,
 } from '@/lib/types'
 import {
-  fetchOrders, fetchTables, fetchUsers, fetchActiveShift, fetchVoidsForOrders,
+  fetchOrders, fetchTables, fetchZones, fetchUsers, fetchActiveShift, fetchVoidsForOrders,
   cleanupOrphanOrders, updateOrderStatus, deleteOrder, closeOrderWithPayment, reopenOrder,
 } from '@/lib/queries'
 
@@ -50,8 +50,11 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
   const [orders, setOrders] = useState<Order[]>([])
   const [voidsByOrderId, setVoidsByOrderId] = useState<Map<string, OrderVoid[]>>(() => new Map())
   const [tablesData, setTablesData] = useState<Table[]>([])
+  const [zonesData, setZonesData] = useState<Zone[]>([])
   const [usersData, setUsersData] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
+  // Фильтр по зоне — активен только в под-табе «Зал». 'all' = все зоны.
+  const [zoneFilter, setZoneFilter] = useState<string>('all')
 
   const columnsCount = useColumnCount()
 
@@ -68,9 +71,10 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
       if (sh?.id) shiftId = sh.id
     } catch { /* ignore */ }
 
-    const [o, t, u] = await Promise.all([
+    const [o, t, z, u] = await Promise.all([
       fetchOrders({ from, to: endOfDay(new Date()), shiftId, slim: true }),
       fetchTables(),
+      fetchZones().catch(() => [] as Zone[]),
       fetchUsers(),
     ])
     // Skip setState если ничего значимого не изменилось — это сохраняет
@@ -83,6 +87,7 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
       return prev
     })
     setTablesData(t)
+    setZonesData(prev => (prev.length === z.length && prev.every((p, i) => p.id === z[i].id && p.name === z[i].name)) ? prev : z)
     setUsersData(u)
     const ids = o.map(x => x.id)
     if (ids.length > 0) {
@@ -100,7 +105,14 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
       .finally(() => refetchAll().finally(() => setLoading(false)))
   }, [refetchAll])
 
-  useDataSync(['orders', 'order_items', 'order_splits', 'order_voids', 'tables', 'users'], () => { refetchAll().catch(console.error) })
+  useDataSync(['orders', 'order_items', 'order_splits', 'order_voids', 'tables', 'zones', 'users'], () => { refetchAll().catch(console.error) })
+
+  // Если выбранную зону удалили — сбрасываемся на «Все зоны».
+  useEffect(() => {
+    if (zoneFilter !== 'all' && zonesData.length > 0 && !zonesData.some(z => z.id === zoneFilter)) {
+      setZoneFilter('all')
+    }
+  }, [zoneFilter, zonesData])
 
   useEffect(() => {
     let isLocal = false
@@ -146,6 +158,10 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
       .filter((o) => {
         if (typeFilter === 'hall' && o.type !== 'hall') return false
         if (typeFilter === 'takeaway' && o.type !== 'takeaway') return false
+        if (typeFilter === 'hall' && zoneFilter !== 'all') {
+          const table = o.tableId ? tablesById.get(o.tableId) : null
+          if (table?.zone !== zoneFilter) return false
+        }
         if (q) {
           const table = o.tableId ? tablesById.get(o.tableId) : null
           const numStr = String(o.orderNumber ?? '')
@@ -154,7 +170,18 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
         return true
       })
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-  }, [visibleOrders, typeFilter, search, tablesById])
+  }, [visibleOrders, typeFilter, zoneFilter, search, tablesById])
+
+  // Счётчики заказов по зонам — для chips-фильтра в под-табе «Зал».
+  const zoneCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const o of visibleOrders) {
+      if (o.type !== 'hall' || !o.tableId) continue
+      const zoneId = tablesById.get(o.tableId)?.zone
+      if (zoneId) m.set(zoneId, (m.get(zoneId) ?? 0) + 1)
+    }
+    return m
+  }, [visibleOrders, tablesById])
 
   // Поднимаем счётчик очереди (всех видимых активных без учёта type-фильтра)
   // — header показывает «N заказов в очереди».
@@ -180,6 +207,7 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
     <ActiveOrderCard
       order={order}
       tablesData={tablesData}
+      zonesData={zonesData}
       usersData={usersData}
       voids={voidsByOrderId.get(order.id)}
       servicePercent={servicePercent}
@@ -187,7 +215,7 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
       onPay={handleOpenOrder}
       onCancel={handleOpenOrder}
     />
-  ), [tablesData, usersData, voidsByOrderId, servicePercent, handleOpenOrder])
+  ), [tablesData, zonesData, usersData, voidsByOrderId, servicePercent, handleOpenOrder])
 
   function handleOrderAction(action: string, data?: OrderActionData) {
     if (!selectedOrder) return
@@ -266,16 +294,44 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
     )
   }
 
+  // Chips-фильтр по зонам — только в под-табе «Зал». Рендерится и при пустом
+  // списке, иначе из зоны без заказов нельзя переключиться обратно.
+  const zoneChips = typeFilter === 'hall' && zonesData.length > 0 && (
+    <div className="flex items-center gap-2 flex-wrap">
+      {[{ id: 'all', name: 'Все зоны' }, ...zonesData].map((z) => {
+        const count = z.id === 'all' ? undefined : zoneCounts.get(z.id)
+        return (
+          <button
+            key={z.id}
+            onClick={() => setZoneFilter(z.id)}
+            className={`px-3.5 py-1.5 rounded-full text-sm font-medium transition-colors border ${
+              zoneFilter === z.id
+                ? 'bg-primary text-primary-foreground border-primary'
+                : 'bg-card border-border text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            {z.name}
+            {count ? <span className="ml-1.5 text-xs opacity-70 tabular-nums">{count}</span> : null}
+          </button>
+        )
+      })}
+    </div>
+  )
+
   if (filtered.length === 0) {
     return (
-      <div className="text-center py-16 text-muted-foreground text-sm">
-        Активных заказов нет
-      </div>
+      <>
+        {zoneChips}
+        <div className="text-center py-16 text-muted-foreground text-sm">
+          Активных заказов нет
+        </div>
+      </>
     )
   }
 
   return (
     <>
+      {zoneChips}
       {filtered.length > VIRTUALIZE_THRESHOLD ? (
         <VirtualOrderCardGrid
           items={filtered}
@@ -290,6 +346,7 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
               key={order.id}
               order={order}
               tablesData={tablesData}
+              zonesData={zonesData}
               usersData={usersData}
               voids={voidsByOrderId.get(order.id)}
               servicePercent={servicePercent}
