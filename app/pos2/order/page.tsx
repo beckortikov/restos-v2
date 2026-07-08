@@ -248,19 +248,6 @@ export default function PosV2Order() {
   const [paying, setPaying] = useState(false)
   const payingRef = useRef(false)
 
-  // Правильный счёт: нал → cash-счёт смены/первый cash; безнал → первый НЕ-cash.
-  async function resolvePayAccount(method: 'cash' | 'card', shift: unknown): Promise<{ id?: string; name?: string } | null> {
-    const s = shift as { accountId?: string; accountName?: string }
-    const accs = await fetchFinancialAccounts().catch(() => [])
-    if (method === 'cash') {
-      if (s.accountId) return { id: s.accountId, name: s.accountName }
-      const cash = accs.find(a => a.type === 'cash'); return { id: cash?.id, name: cash?.name }
-    }
-    const nc = accs.find(a => a.type !== 'cash')
-    if (!nc) { toast.error('Нет безналичного счёта — заведите его в настройках'); return null }
-    return { id: nc.id, name: nc.name }
-  }
-
   // «С собой»: создать заказ без оплаты (остаётся открытым до оплаты).
   async function createTakeawayNoPay() {
     if (payingRef.current || cart.length === 0) return
@@ -276,23 +263,21 @@ export default function PosV2Order() {
     finally { payingRef.current = false; setPaying(false) }
   }
 
-  // «С собой»: создать новый и сразу оплатить (нал/безнал).
-  async function payTakeaway(method: 'cash' | 'card') {
+  // «С собой»: создать заказ и открыть ОБЩУЮ панель оплаты (нал/безнал с выбором
+  // кошелька/смешанная/скидка/пре-чек) — как в зале. Единый платёжный флоу.
+  async function payNewTakeaway() {
     if (payingRef.current || cart.length === 0) return
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
-      const acc = await resolvePayAccount(method, shift)
-      if (!acc) return
-      const total = subtotal
-      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total: subtotal, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
-      await closeOrderWithPayment(order.id, method, null, total, cartCogs(cart), user?.id, acc.id, acc.name, 0, 0, total)
-      toast.success(`Оплачено · ${formatCurrency(total)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
       setCart([])
-      await loadTakeaway()
-    } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
+      const [fresh] = await fetchOrders({ ids: [order.id], slim: false }).catch(() => [order])
+      await loadTakeaway(order.id)
+      setPayTarget(fresh ?? order)
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
     finally { payingRef.current = false; setPaying(false) }
   }
 
@@ -579,10 +564,9 @@ export default function PosV2Order() {
             ) : cart.length > 0 ? (
               <div className="flex flex-col" style={{ gap: '0.6rem' }}>
                 <button disabled={paying} onClick={createTakeawayNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
-                <div className="flex items-center gap-2">
-                  <button disabled={paying} onClick={() => payTakeaway('cash')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><Banknote style={{ width: '1.2em', height: '1.2em' }} />Нал · {formatCurrency(subtotal)}</button>
-                  <button disabled={paying} onClick={() => payTakeaway('card')} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}><CreditCard style={{ width: '1.2em', height: '1.2em' }} />Карта · {formatCurrency(subtotal)}</button>
-                </div>
+                <button disabled={paying} onClick={payNewTakeaway} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                  <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате · {formatCurrency(subtotal)}
+                </button>
               </div>
             ) : (
               <button disabled className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold disabled:opacity-40" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-3)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
