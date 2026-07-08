@@ -3,7 +3,7 @@
 import { useNavigate } from 'react-router-dom'
 import {
   Utensils, LayoutGrid, ReceiptText, Wallet, ChefHat,
-  HandCoins, History, Settings, LogOut,
+  HandCoins, History, Settings, LogOut, OctagonX,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 
@@ -22,6 +22,7 @@ const TILES: Array<{
   { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение кассы', to: '/pos2/shift' },
   { icon: ChefHat, label: 'Кухня (KDS)', sub: 'Бегунки по станциям', to: '/operations/kitchen' },
   { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/pos2/service' },
+  { icon: OctagonX, label: 'Стоп-лист', sub: 'Стоп/возврат блюд', to: '/pos2/stop' },
   { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history' },
   { icon: Settings, label: 'Настройки', sub: 'Интерфейс, принтеры, меню', to: '/pos2/settings' },
 ]
