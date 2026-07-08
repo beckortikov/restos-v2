@@ -18,7 +18,7 @@ const TILES: Array<{
 }> = [
   { icon: Utensils, label: 'Новый заказ', sub: 'Меню и оплата', to: '/pos2/order', primary: true },
   { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/operations/table-map' },
-  { icon: ReceiptText, label: 'Активные заказы', sub: 'В работе', to: '/operations/orders' },
+  { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay' },
   { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка и касса', to: '/operations/shifts' },
   { icon: ChefHat, label: 'Кухня (KDS)', sub: 'Бегунки по станциям', to: '/operations/kitchen' },
   { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/operations/shifts' },

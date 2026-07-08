@@ -37,6 +37,7 @@ const ShowQR = () => L(() => import('@/app/(app)/show-qr/page'))
 // New POS — параллельный опциональный интерфейс (флаг pos_ui_v2). Изолирован.
 const PosV2Launcher = () => L(() => import('@/app/pos2/page'))
 const PosV2Order = () => L(() => import('@/app/pos2/order/page'))
+const PosV2Pay = () => L(() => import('@/app/pos2/pay/page'))
 
 // Operations
 const POS = () => L(() => import('@/app/(app)/operations/pos/page'))
@@ -197,6 +198,7 @@ export function AppRouter() {
       <Route element={<PosV2Layout />}>
         <Route path="/pos2" element={<PosV2Launcher />} />
         <Route path="/pos2/order" element={<PosV2Order />} />
+        <Route path="/pos2/pay" element={<PosV2Pay />} />
       </Route>
 
       {/* Admin — superadmin only */}
