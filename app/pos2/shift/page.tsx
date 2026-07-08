@@ -2,13 +2,15 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Clock } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Clock, Printer, FileSpreadsheet, HandCoins } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
   fetchActiveShift, fetchShiftRevenue, fetchShiftOperations, fetchFinancialAccounts,
   openShift, closeShift, addShiftOperation, createShiftExpense,
+  printShiftX, printShiftZ, printShiftService, fetchShiftZReport, type ShiftZReport,
 } from '@/lib/queries'
+import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
 import { dSum, dAdd, dSub } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
@@ -32,6 +34,7 @@ export default function PosV2Shift() {
   const [cat, setCat] = useState(EXPENSE_CATS[0])
   const [desc, setDesc] = useState('')
   const [busy, setBusy] = useState(false)
+  const [zr, setZr] = useState<ShiftZReport | null>(null)
   const busyRef = useRef(false)
 
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
@@ -42,12 +45,13 @@ export default function PosV2Shift() {
       const active = await fetchActiveShift().catch(() => null)
       setShift(active)
       if (active) {
-        const [r, o] = await Promise.all([
+        const [r, o, z] = await Promise.all([
           fetchShiftRevenue(active.id).catch(() => rev),
           fetchShiftOperations(active.id).catch(() => [] as CashShiftOperation[]),
+          fetchShiftZReport(active.id).catch(() => null),
         ])
-        setRev(r); setOps(o)
-      } else { setOps([]) }
+        setRev(r); setOps(o); setZr(z)
+      } else { setOps([]); setZr(null) }
     } finally { setLoading(false) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -72,6 +76,35 @@ export default function PosV2Shift() {
     const h = Math.floor(ms / 3_600_000), m = Math.floor((ms % 3_600_000) / 60_000)
     return `${h}ч ${m}м`
   }, [shift])
+
+  async function report(kind: 'x' | 'z' | 'service') {
+    if (!shift) return
+    try {
+      if (kind === 'x') await printShiftX(shift.id)
+      else if (kind === 'z') await printShiftZ(shift.id)
+      else await printShiftService(shift.id)
+      toast.success(kind === 'x' ? 'X-отчёт на печати' : kind === 'z' ? 'Z-отчёт на печати' : 'Служебный чек на печати')
+    } catch (e) { toast.error(`Печать не удалась: ${humanizeError(e)}`) }
+  }
+  async function exportXlsx() {
+    if (!shift) return
+    try { await exportShiftToXlsx(shift); toast.success('Excel сформирован') }
+    catch (e) { toast.error(`Экспорт не удался: ${humanizeError(e)}`) }
+  }
+
+  function breakdownCard(title: string, rows: [string, string][]) {
+    return (
+      <div key={title} className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)' }}>
+        <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', marginBottom: '0.6rem' }}>{title}</div>
+        {rows.length === 0 ? <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>—</div> : rows.map(([l, v], i) => (
+          <div key={i} className="flex items-center justify-between" style={{ padding: '0.25rem 0' }}>
+            <span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginRight: '0.5rem' }}>{l}</span>
+            <span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{v}</span>
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   async function doOpen() {
     if (busyRef.current) return
@@ -163,6 +196,16 @@ export default function PosV2Shift() {
               ))}
             </div>
 
+            {/* Reports toolbar */}
+            <div className="flex items-center flex-wrap" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)' }}>
+              {([['X-отчёт', () => report('x'), Printer], ['Печать Z', () => report('z'), Printer], ['Обслуживание', () => report('service'), HandCoins], ['Excel', exportXlsx, FileSpreadsheet]] as const).map(([l, fn, Icon]) => (
+                <button key={l} onClick={fn} className="flex items-center gap-2 rounded-xl border active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.55rem,0.9vw,0.8rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+                  <Icon style={{ width: 'clamp(1rem,1.3vw,1.25rem)', height: 'clamp(1rem,1.3vw,1.25rem)', color: 'var(--pv-text-2)' }} />
+                  <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l}</span>
+                </button>
+              ))}
+            </div>
+
             {/* Cash panel */}
             <div className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
               <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', marginBottom: '0.8rem' }}>Движение по кассе</div>
@@ -190,6 +233,16 @@ export default function PosV2Shift() {
             <button onClick={() => openAction('close')} className="flex items-center justify-center gap-2 rounded-2xl font-bold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>
               <Lock style={{ width: '1.35em', height: '1.35em' }} />Закрыть смену
             </button>
+
+            {/* Z-разбивки */}
+            {zr && (
+              <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(15rem,24vw,22rem), 1fr))', marginTop: '0.3rem' }}>
+                {breakdownCard('Выручка по способам', zr.revenueByMethod.map(r => [r.accountName || (r.paymentMethod === 'cash' ? 'Наличные' : 'Безнал'), formatCurrency(r.total)] as [string, string]))}
+                {breakdownCard('По типу заказа', zr.salesByOrderType.map(r => [r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type, formatCurrency(r.total)] as [string, string]))}
+                {breakdownCard('Продажи по категориям', zr.salesByCategory.slice(0, 8).map(r => [`${r.name} (${r.qty})`, formatCurrency(r.total)] as [string, string]))}
+                {breakdownCard('Проданные блюда', zr.salesByItem.slice(0, 10).map(r => [`${r.name} ×${r.qty}`, formatCurrency(r.total)] as [string, string]))}
+              </div>
+            )}
           </div>
         )}
       </div>
