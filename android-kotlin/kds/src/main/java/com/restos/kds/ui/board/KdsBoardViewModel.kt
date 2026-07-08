@@ -30,6 +30,10 @@ class KdsBoardViewModel @Inject constructor(
         val loading: Boolean = true,
         val error: String? = null,
         val items: List<KdsItemDto> = emptyList(),
+        // Отменённые блюда — держим отдельно от активной доски, чтобы refresh()
+        // (перечитывающий только items) их не стирал. Показываются красными
+        // карточками сверху «Новых», пока повар не закроет вручную.
+        val cancelledItems: List<KdsItemDto> = emptyList(),
         val soundEnabled: Boolean = true,
         val soundId: Int = 0,
         val cancelAlert: String? = null,
@@ -87,12 +91,64 @@ class KdsBoardViewModel @Inject constructor(
 
     private suspend fun onEvent(evt: ServerEvent) {
         // Отмена — по событию (блюдо уже уходит с доски, дифом не поймать).
-        if (evt is ServerEvent.Other && evt.type == "order.item.voided") {
-            if (_state.value.soundEnabled) sounds.playCancel()
-            _state.update { it.copy(cancelAlert = "Блюдо отменено") }
+        if (evt is ServerEvent.ItemVoided) {
+            handleVoided(evt)
+            // Подтянуть остальную доску (сервер уже не вернёт отменённую позицию).
+            refresh()
+            return
         }
         // Новое блюдо — по дифу в refresh (надёжнее, чем гадать по типу события).
         refresh()
+    }
+
+    /**
+     * Блюдо отменили: держим его красной карточкой в «Новых» (повар закроет сам),
+     * играем сигнал и показываем баннер с названием и номером заказа.
+     */
+    private fun handleVoided(evt: ServerEvent.ItemVoided) {
+        if (_state.value.soundEnabled) sounds.playCancel()
+
+        // Полные данные берём с доски (там есть станция/стол/кол-во); если блюдо
+        // уже ушло с доски — восстанавливаем из полей события.
+        val itemId = evt.itemId
+        val onBoard = itemId?.let { id -> _state.value.items.firstOrNull { it.id == id } }
+        val card = when {
+            onBoard != null -> onBoard.copy(cancelled = true, stationStatus = "pending")
+            itemId != null -> KdsItemDto(
+                id = itemId,
+                orderId = evt.orderId ?: "",
+                orderNumber = evt.orderNumber ?: 0,
+                name = evt.name ?: "Блюдо",
+                qty = evt.qty ?: "1",
+                stationStatus = "pending",
+                cancelled = true,
+            )
+            else -> null // без id карточку не построить — покажем только баннер
+        }
+
+        val name = onBoard?.name?.takeIf { it.isNotBlank() } ?: evt.name
+        val num = (onBoard?.orderNumber?.takeIf { it > 0 }) ?: evt.orderNumber?.takeIf { it > 0 }
+        val alert = when {
+            !name.isNullOrBlank() && num != null -> "Блюдо «$name» отменено · Заказ #$num"
+            !name.isNullOrBlank() -> "Блюдо «$name» отменено"
+            else -> "Блюдо отменено"
+        }
+
+        _state.update { s ->
+            val already = card != null && s.cancelledItems.any { it.id == card.id }
+            s.copy(
+                cancelledItems = if (card != null && !already) s.cancelledItems + card else s.cancelledItems,
+                // Убираем из активной доски сразу, чтобы блюдо не мигало в своей
+                // колонке до следующего refresh.
+                items = if (card != null) s.items.filterNot { it.id == card.id } else s.items,
+                cancelAlert = alert,
+            )
+        }
+    }
+
+    /** Повар нажал «ЗАКРЫТЬ» на отменённой карточке — убираем её с доски. */
+    fun closeCancelled(id: String) {
+        _state.update { it.copy(cancelledItems = it.cancelledItems.filterNot { c -> c.id == id }) }
     }
 
     fun refresh() {

@@ -672,6 +672,7 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 	actor, _ := audit.ActorFromContext(ctx)
 
 	var out *models.OrderItem
+	var voidedOrderNumber int
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 		var order models.Order
@@ -686,6 +687,7 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 		if order.Status != nil && (*order.Status == "closed" || *order.Status == "cancelled") {
 			return apperrors.Wrap("CONFLICT", "cannot cancel item in closed/cancelled order", nil)
 		}
+		voidedOrderNumber = order.OrderNumber
 		var item models.OrderItem
 		if err := tx.Where("id = ? AND order_id = ?", itemID, orderID).
 			First(&item).Error; err != nil {
@@ -864,11 +866,19 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 	}
 	if s.pub != nil {
 		buf := NewBuffer()
-		buf.Add(EventOrderItemVoided, map[string]any{
-			"order_id": orderID,
-			"item_id":  itemID,
-			"action":   "cancel",
-		})
+		// Обогащаем событие данными позиции — KDS показывает отменённое блюдо
+		// карточкой (с именем/кол-вом) и баннером «Блюдо «X» отменено · Заказ #N».
+		voidPayload := map[string]any{
+			"order_id":     orderID,
+			"item_id":      itemID,
+			"action":       "cancel",
+			"order_number": voidedOrderNumber,
+		}
+		if out != nil {
+			voidPayload["name"] = deref(out.Name)
+			voidPayload["qty"] = out.Qty.String()
+		}
+		buf.Add(EventOrderItemVoided, voidPayload)
 		// Дублируем как order.updated — UI слушает этот канал, чтобы
 		// перечитать заказ после partial-cancel/merge.
 		buf.Add(EventOrderUpdated, map[string]any{

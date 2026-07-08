@@ -23,6 +23,7 @@ object KdsColors {
     val Ready = Color(0xFF22C55E)
     val ReadySoft = Color(0xFF122A1C)
     val Urgent = Color(0xFFEF4444)
+    val CancelledCard = Color(0xFF2A1618) // тёмно-красный фон отменённой карточки
     val OnSolid = Color(0xFFFFFFFF)
 
     // Станции.

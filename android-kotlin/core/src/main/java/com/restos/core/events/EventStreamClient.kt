@@ -157,6 +157,16 @@ private class Listener(
                     orderNumber = p.string("order_number")?.toIntOrNull(),
                 )
             }
+            "order.item.voided" -> {
+                val p = parseJson(data)
+                ServerEvent.ItemVoided(
+                    itemId = p.string("item_id")?.takeIf { it.isNotBlank() },
+                    orderId = p.string("order_id")?.takeIf { it.isNotBlank() },
+                    name = p.string("name")?.takeIf { it.isNotBlank() },
+                    qty = p.string("qty")?.takeIf { it.isNotBlank() },
+                    orderNumber = p.string("order_number")?.toIntOrNull(),
+                )
+            }
             else -> ServerEvent.Other(t)
         }
     }

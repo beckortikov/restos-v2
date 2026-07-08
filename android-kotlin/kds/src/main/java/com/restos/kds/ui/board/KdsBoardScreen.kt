@@ -72,10 +72,14 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
         while (true) { now = System.currentTimeMillis(); delay(15_000) }
     }
 
-    // Баннер отмены — авто-скрытие через 4с.
+    // Баннер отмены — держим ~6с, чтобы повар успел прочитать блюдо и заказ.
     LaunchedEffect(state.cancelAlert) {
-        if (state.cancelAlert != null) { delay(4000); vm.dismissCancelAlert() }
+        if (state.cancelAlert != null) { delay(6000); vm.dismissCancelAlert() }
     }
+
+    // Фуллскрин-фокус: прячем топбар, колонки занимают весь экран (больше видно).
+    var fullscreen by remember { mutableStateOf(false) }
+    ImmersiveEffect(fullscreen)
 
     var showConfig by remember { mutableStateOf(false) }
     if (showConfig) {
@@ -90,42 +94,90 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
         )
     }
 
-    Column(Modifier.fillMaxSize().background(KdsColors.Bg)) {
-        TopBar(
-            count = state.items.size, nowMs = now,
-            soundOn = state.soundEnabled, onToggleSound = vm::toggleSound,
-            onConfig = { showConfig = true },
-        )
-        if (state.cancelAlert != null) {
-            Row(
-                Modifier.fillMaxWidth().background(KdsColors.Urgent).padding(horizontal = 20.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("⚠ ${state.cancelAlert}", color = KdsColors.OnSolid, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+    Box(Modifier.fillMaxSize().background(KdsColors.Bg)) {
+        Column(Modifier.fillMaxSize()) {
+            if (!fullscreen) {
+                TopBar(
+                    count = state.items.size + state.cancelledItems.size, nowMs = now,
+                    soundOn = state.soundEnabled, onToggleSound = vm::toggleSound,
+                    onConfig = { showConfig = true },
+                    onFullscreen = { fullscreen = true },
+                )
+            }
+            if (state.cancelAlert != null) {
+                Row(
+                    Modifier.fillMaxWidth().background(KdsColors.Urgent).padding(horizontal = 20.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("⚠ ${state.cancelAlert}", color = KdsColors.OnSolid, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            when {
+                state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    CircularProgressIndicator(color = KdsColors.New)
+                }
+                state.error != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                    Text(state.error ?: "", color = KdsColors.Urgent, fontSize = 18.sp)
+                }
+                else -> Row(
+                    Modifier.fillMaxSize().padding(if (fullscreen) 10.dp else 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (fullscreen) 10.dp else 16.dp),
+                ) {
+                    for (col in COLUMNS) {
+                        // Отменённые блюда — сверху «Новых», отдельными карточками.
+                        val base = state.items.filter { it.stationStatus == col.status }
+                        val colItems = if (col.status == "pending") state.cancelledItems + base else base
+                        BoardColumn(
+                            col, colItems, now,
+                            onAdvance = vm::advance, onClose = vm::closeCancelled,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
             }
         }
-        when {
-            state.loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                CircularProgressIndicator(color = KdsColors.New)
-            }
-            state.error != null -> Box(Modifier.fillMaxSize(), Alignment.Center) {
-                Text(state.error ?: "", color = KdsColors.Urgent, fontSize = 18.sp)
-            }
-            else -> Row(
-                Modifier.fillMaxSize().padding(16.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+        // Выход из фуллскрина — плавающая кнопка в углу.
+        if (fullscreen) {
+            Box(
+                Modifier.align(Alignment.TopEnd).padding(10.dp)
+                    .clip(RoundedCornerShape(12.dp)).background(KdsColors.Bar)
+                    .clickable { fullscreen = false }
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center,
             ) {
-                for (col in COLUMNS) {
-                    val colItems = state.items.filter { it.stationStatus == col.status }
-                    BoardColumn(col, colItems, now, onAdvance = vm::advance, modifier = Modifier.weight(1f))
-                }
+                Text("⛶ Свернуть", color = KdsColors.TextHi, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }
 }
 
+/**
+ * Пере-прячет системные панели (иногда возвращаются после диалогов/шторки),
+ * особенно при входе в фуллскрин-режим. Работает поверх киоск-режима Activity.
+ */
 @Composable
-private fun TopBar(count: Int, nowMs: Long, soundOn: Boolean, onToggleSound: () -> Unit, onConfig: () -> Unit) {
+private fun ImmersiveEffect(fullscreen: Boolean) {
+    val view = androidx.compose.ui.platform.LocalView.current
+    LaunchedEffect(fullscreen) {
+        val window = (view.context as? android.app.Activity)?.window ?: return@LaunchedEffect
+        runCatching {
+            val controller = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+            controller.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            controller.systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+}
+
+@Composable
+private fun TopBar(
+    count: Int,
+    nowMs: Long,
+    soundOn: Boolean,
+    onToggleSound: () -> Unit,
+    onConfig: () -> Unit,
+    onFullscreen: () -> Unit,
+) {
     val clock = remember(nowMs / 60000) {
         DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.systemDefault()).format(Instant.ofEpochMilli(nowMs))
     }
@@ -158,6 +210,14 @@ private fun TopBar(count: Int, nowMs: Long, soundOn: Boolean, onToggleSound: () 
             "⚙",
             fontSize = 22.sp,
             modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onConfig() }.padding(4.dp),
+        )
+        Spacer(Modifier.width(12.dp))
+        // Фуллскрин — прячет топбар, колонки на весь экран.
+        Text(
+            "⛶",
+            fontSize = 22.sp,
+            color = KdsColors.TextHi,
+            modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onFullscreen() }.padding(4.dp),
         )
         Spacer(Modifier.width(16.dp))
         Text(clock, color = KdsColors.TextHi, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -257,6 +317,7 @@ private fun BoardColumn(
     items: List<KdsItemDto>,
     nowMs: Long,
     onAdvance: (KdsItemDto) -> Unit,
+    onClose: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -281,28 +342,53 @@ private fun BoardColumn(
             contentPadding = PaddingValues(bottom = 12.dp),
         ) {
             items(items, key = { it.id }) { item ->
-                DishCard(item, col, nowMs, onAdvance)
+                DishCard(item, col, nowMs, onAdvance, onClose)
             }
         }
     }
 }
 
 @Composable
-private fun DishCard(item: KdsItemDto, col: ColumnSpec, nowMs: Long, onAdvance: (KdsItemDto) -> Unit) {
+private fun DishCard(
+    item: KdsItemDto,
+    col: ColumnSpec,
+    nowMs: Long,
+    onAdvance: (KdsItemDto) -> Unit,
+    onClose: (String) -> Unit,
+) {
+    val cancelled = item.cancelled
     val mins = minutesSince(item.createdAt, nowMs)
-    val urgent = mins != null && mins >= 20
+    val urgent = !cancelled && mins != null && mins >= 20
+    // Отменённая карточка — красный акцент, статичная (повар только закрывает).
+    val accent = if (cancelled) KdsColors.Urgent else col.color
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(KdsColors.Card)
-            .border(if (urgent) 2.dp else 1.dp, if (urgent) KdsColors.Urgent else KdsColors.CardLine, RoundedCornerShape(18.dp)),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+            .background(if (cancelled) KdsColors.CancelledCard else KdsColors.Card)
+            .border(
+                if (cancelled || urgent) 2.dp else 1.dp,
+                if (cancelled || urgent) KdsColors.Urgent else KdsColors.CardLine,
+                RoundedCornerShape(18.dp),
+            ),
     ) {
-        Box(Modifier.fillMaxWidth().height(6.dp).background(col.color))
+        Box(Modifier.fillMaxWidth().height(6.dp).background(accent))
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Плашка «ОТМЕНЕНО».
+            if (cancelled) {
+                Box(
+                    Modifier.clip(RoundedCornerShape(8.dp)).background(KdsColors.Urgent)
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                ) { Text("ОТМЕНЕНО", color = KdsColors.OnSolid, fontSize = 13.sp, fontWeight = FontWeight.Black) }
+            }
             // Название + крупное количество.
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(item.name, color = KdsColors.TextHi, fontSize = 21.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                Text(
+                    item.name, color = KdsColors.TextHi, fontSize = 21.sp, fontWeight = FontWeight.Bold,
+                    textDecoration = if (cancelled) TextDecoration.LineThrough else null,
+                    modifier = Modifier.weight(1f),
+                )
                 Spacer(Modifier.width(10.dp))
                 Box(
-                    Modifier.clip(RoundedCornerShape(10.dp)).background(col.color).padding(horizontal = 14.dp, vertical = 6.dp),
+                    Modifier.clip(RoundedCornerShape(10.dp)).background(accent).padding(horizontal = 14.dp, vertical = 6.dp),
                 ) { Text("×${item.qty}", color = KdsColors.OnSolid, fontSize = 26.sp, fontWeight = FontWeight.Black) }
             }
             // Комментарий.
@@ -317,7 +403,7 @@ private fun DishCard(item: KdsItemDto, col: ColumnSpec, nowMs: Long, onAdvance: 
                 Spacer(Modifier.width(8.dp))
                 Text(orderLabel(item), color = KdsColors.TextMid, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.weight(1f))
-                if (mins != null) {
+                if (!cancelled && mins != null) {
                     Text(
                         if (col.status == "ready") "готов" else "$mins мин",
                         color = if (urgent) KdsColors.Urgent else KdsColors.TextMid,
@@ -325,12 +411,18 @@ private fun DishCard(item: KdsItemDto, col: ColumnSpec, nowMs: Long, onAdvance: 
                     )
                 }
             }
-            // Крупная кнопка-бамп.
+            // Крупная кнопка-бамп: обычная двигает статус, отменённая — «ЗАКРЫТЬ».
             Box(
-                Modifier.fillMaxWidth().height(60.dp).clip(RoundedCornerShape(14.dp)).background(col.color)
-                    .clickable { onAdvance(item) },
+                Modifier.fillMaxWidth().height(60.dp).clip(RoundedCornerShape(14.dp))
+                    .background(if (cancelled) KdsColors.Urgent else col.color)
+                    .clickable { if (cancelled) onClose(item.id) else onAdvance(item) },
                 contentAlignment = Alignment.Center,
-            ) { Text(col.btn, color = KdsColors.OnSolid, fontSize = 20.sp, fontWeight = FontWeight.Black) }
+            ) {
+                Text(
+                    if (cancelled) "ЗАКРЫТЬ" else col.btn,
+                    color = KdsColors.OnSolid, fontSize = 20.sp, fontWeight = FontWeight.Black,
+                )
+            }
         }
     }
 }
@@ -353,6 +445,3 @@ private fun minutesSince(iso: String, nowMs: Long): Long? {
         .getOrNull() ?: return null
     return Duration.between(instant, Instant.ofEpochMilli(nowMs)).toMinutes().coerceAtLeast(0)
 }
-
-@Suppress("unused")
-private val strikethrough = TextDecoration.LineThrough

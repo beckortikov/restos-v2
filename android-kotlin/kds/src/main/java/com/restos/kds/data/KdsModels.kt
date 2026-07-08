@@ -19,6 +19,12 @@ data class KdsItemDto(
     @SerialName("station_status") val stationStatus: String = "pending",
     @SerialName("created_at") val createdAt: String = "",
     @SerialName("status_at") val statusAt: String? = null,
+    /**
+     * Клиентский флаг: блюдо отменено. Сервер его не присылает (default=false);
+     * KDS выставляет его при order.item.voided, чтобы держать блюдо красной
+     * карточкой в «Новых», пока повар не закроет её вручную.
+     */
+    val cancelled: Boolean = false,
 )
 
 @Serializable

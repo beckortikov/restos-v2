@@ -35,6 +35,19 @@ sealed interface ServerEvent {
         val orderNumber: Int?,
     ) : ServerEvent
 
+    /**
+     * Позиция заказа отменена (order.item.voided). KDS держит её на доске
+     * отдельной красной карточкой в «Новых», пока повар не закроет вручную,
+     * и показывает баннер с названием блюда и номером заказа.
+     */
+    data class ItemVoided(
+        val itemId: String?,
+        val orderId: String?,
+        val name: String?,
+        val qty: String?,
+        val orderNumber: Int?,
+    ) : ServerEvent
+
     /** Любое другое событие — для логирования / будущих фич. */
     data class Other(val type: String) : ServerEvent
 }
