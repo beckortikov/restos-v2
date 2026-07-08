@@ -20,6 +20,7 @@ export default function PosV2Ticket() {
 
   const [order, setOrder] = useState<Order | null>(null)
   const [tables, setTables] = useState<Table[]>([])
+  const [groups, setGroups] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
@@ -39,7 +40,15 @@ export default function PosV2Ticket() {
         fetchTables().catch(() => [] as Table[]),
       ])
       setTables(ts)
-      setOrder(os[0] ?? null)
+      const o = os[0] ?? null
+      setOrder(o)
+      // Мультитаб: другие открытые заказы (группы) на том же столе.
+      const t = o?.tableId ? ts.find(x => x.id === o.tableId) : undefined
+      const gids = (t?.currentOrderIds ?? []).filter(Boolean)
+      if (gids.length > 1) {
+        const gs = await fetchOrders({ ids: gids, slim: true }).catch(() => [] as Order[])
+        setGroups(gs.filter(g => g.status !== 'done' && g.status !== 'cancelled'))
+      } else setGroups([])
     } finally { setLoading(false) }
   }, [orderId])
 
@@ -83,6 +92,12 @@ export default function PosV2Ticket() {
         </button>
         <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,1.8vw,1.6rem)' }}>Заказ{label ? ` · ${label}` : ''}</span>
         <div className="flex-1" />
+        {order?.type === 'hall' && order.tableId && (
+          <button onClick={() => navigate(`/pos2/order?table=${encodeURIComponent(order.tableId!)}`)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand-soft)', borderColor: 'var(--pv-brand)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+            <Plus style={{ width: 'clamp(1.05rem,1.3vw,1.3rem)', height: 'clamp(1.05rem,1.3vw,1.3rem)', color: 'var(--pv-brand)' }} />
+            <span className="font-semibold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Группа</span>
+          </button>
+        )}
         <button onClick={() => load()} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
           <RefreshCw style={{ width: 'clamp(1.05rem,1.3vw,1.3rem)', height: 'clamp(1.05rem,1.3vw,1.3rem)', color: 'var(--pv-text-2)' }} className={loading ? 'animate-spin' : ''} />
           <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Обновить</span>
@@ -96,6 +111,14 @@ export default function PosV2Ticket() {
           <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Заказ не найден или закрыт</div>
         ) : (
           <div className="mx-auto flex flex-col" style={{ maxWidth: '44rem', gap: 'clamp(0.5rem,0.9vw,0.8rem)' }}>
+            {groups.length > 1 && (
+              <div className="flex items-center gap-2 flex-wrap" style={{ marginBottom: '0.3rem' }}>
+                {groups.map((g, i) => {
+                  const on = g.id === orderId
+                  return <button key={g.id} onClick={() => navigate(`/pos2/ticket?order=${g.id}`)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Группа {i + 1} · {formatCurrency(g.total)}</button>
+                })}
+              </div>
+            )}
             {items.map((i, idx) => {
               const cancelled = !!i.cancelledAt
               return (
