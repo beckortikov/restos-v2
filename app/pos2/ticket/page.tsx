@@ -516,7 +516,7 @@ export default function PosV2Ticket() {
                   <button key={p} onClick={() => setNoteText(t => t ? `${t}, ${p}` : p)} className="rounded-full font-semibold border" style={{ background: 'var(--pv-card)', color: 'var(--pv-text-2)', borderColor: 'var(--pv-border)', padding: '0.35rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>+ {p}</button>
                 ))}
               </div>
-              <input autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Комментарий к позиции" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+              <input aria-label="Комментарий к позиции" autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Комментарий к позиции" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
               <button disabled={busy} onClick={saveNote} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Сохранить</button>
             </div>
           </div>

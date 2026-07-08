@@ -1,6 +1,12 @@
 import type { OrderType, User } from '@/lib/types'
 
 export interface CartLine {
+  /** Устойчивый ID строки корзины. Нужен, чтобы весовые навески одного и того же
+   *  блюда (например «300г» и «500г») были ОТДЕЛЬНЫМИ строками и не перетирали
+   *  друг друга (адресация по menuItemId их бы схлопнула). Штучные позиции
+   *  по-прежнему мержатся по menuItemId. undefined — legacy-строки (fallback на
+   *  menuItemId). */
+  lineId?: string
   menuItemId: string
   name: string
   emoji: string

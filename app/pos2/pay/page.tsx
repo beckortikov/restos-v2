@@ -35,7 +35,9 @@ export default function PosV2Pay() {
       const ids = ts.flatMap(t => t.currentOrderIds).filter(Boolean)
       if (ids.length === 0) { setOrders([]); return }
       const os = await fetchOrders({ ids, slim: false }).catch(() => [] as Order[])
-      setOrders(os.filter(o => o.status !== 'done' && o.status !== 'cancelled'))
+      // Прячем заказы с активными сплитами: их платят по частям в тикете
+      // (split-UI). Полная оплата поверх оплаченных сплитов = двойная выручка.
+      setOrders(os.filter(o => o.status !== 'done' && o.status !== 'cancelled' && !o.isSplit))
     } finally { setLoading(false) }
   }, [])
 
@@ -50,7 +52,8 @@ export default function PosV2Pay() {
   }, [orders, searchParams])
 
   const labelOf = (o: Order) => o.type === 'hall' ? `Стол ${o.tableId ? (tableNo.get(o.tableId) ?? '—') : '—'}` : 'С собой'
-  const payableOf = (o: Order) => calcPayable(o.subtotal ?? o.total, 0, o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
+  // База = o.total (с модификаторами), как считает бэк; см. PaymentPanel.
+  const payableOf = (o: Order) => calcPayable(o.total, 0, o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
 
   async function onPaid() { setTarget(null); await load() }
 

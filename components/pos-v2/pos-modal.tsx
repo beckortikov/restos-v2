@@ -1,6 +1,6 @@
 'use client'
 
-import { type ReactNode } from 'react'
+import { type ReactNode, useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 
 // Единый модальный компонент /pos2. Ключевое отличие от прежних самодельных
@@ -27,6 +27,17 @@ export function PosModal({
   width?: string
   dismissable?: boolean
 }) {
+  const cardRef = useRef<HTMLDivElement>(null)
+  // Esc закрывает модалку (WCAG 2.1.2 — не ловушка клавиатуры), фокус уходит
+  // внутрь диалога при открытии (иначе он остаётся на фоне под оверлеем).
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && dismissable) onClose() }
+    window.addEventListener('keydown', onKey)
+    cardRef.current?.focus()
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, dismissable, onClose])
+
   if (!open) return null
   return (
     <div
@@ -35,13 +46,16 @@ export function PosModal({
       onClick={() => { if (dismissable) onClose() }}
     >
       <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
+        aria-label={typeof title === 'string' ? title : 'Диалог'}
+        tabIndex={-1}
         className="rounded-3xl flex flex-col"
         style={{
           position: 'fixed', left: '50%', top: '50%', transform: 'translate(-50%, -50%)',
           background: 'var(--pv-card)', width, maxHeight: '86vh', overflow: 'hidden',
-          boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+          boxShadow: '0 20px 60px rgba(0,0,0,0.3)', outline: 'none',
         }}
         onClick={e => e.stopPropagation()}
       >
@@ -51,7 +65,7 @@ export function PosModal({
             style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}
           >
             <span className="font-bold truncate" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>{title}</span>
-            <button onClick={() => onClose()} className="rounded-lg shrink-0" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            <button onClick={() => onClose()} aria-label="Закрыть" className="rounded-lg shrink-0 flex items-center justify-center" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
           </div>
         )}
         <div className="overflow-y-auto" style={{ minHeight: 0 }}>{children}</div>

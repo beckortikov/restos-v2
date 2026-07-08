@@ -11,7 +11,9 @@ import { useAuth } from '@/lib/auth-store'
 import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
 import { useFrequent, toggleFrequent } from '@/lib/pos-frequent'
 import { useOrderData } from '@/components/order/use-order-data'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits } from '@/lib/queries'
+import { useDataSync } from '@/hooks/use-data-sync'
+import { randomId } from '@/lib/random-id'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -68,6 +70,29 @@ export default function PosV2Order() {
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
   const canOverrideStop = canDo('orders.create_stopped')
+
+  // Backend stop-list: нехватка ингредиентов (computed-on-read) + ручной override.
+  // Без него касса видела стоп только по menu.is_available → ловила 409 на
+  // «Отправить», а менеджер не мог провести override (флаг уходил по неверному
+  // признаку). Копия логики order-composer (stoppedIds + reasons + SSE-refetch).
+  const [stoppedIds, setStoppedIds] = useState<Set<string>>(new Set())
+  const [stopReasons, setStopReasons] = useState<Map<string, string>>(new Map())
+  const reloadStopList = useCallback(async () => {
+    try {
+      const list = await fetchStopList()
+      const ids = new Set<string>()
+      const reasons = new Map<string, string>()
+      for (const row of list) {
+        ids.add(row.menuItemId)
+        if (row.manual) reasons.set(row.menuItemId, 'В стоп-листе (вручную)')
+        else if (row.ingredients?.length) { const n = row.ingredients.map(i => i.name).filter(Boolean).join(', '); reasons.set(row.menuItemId, n ? `Нет ингредиентов: ${n}` : 'Нет ингредиентов') }
+        else reasons.set(row.menuItemId, 'В стоп-листе')
+      }
+      setStoppedIds(ids); setStopReasons(reasons)
+    } catch { /* бэк недоступен — остаёмся на menu.is_available */ }
+  }, [])
+  useEffect(() => { void reloadStopList() }, [reloadStopList])
+  useDataSync(['ingredients', 'stock_movements', 'orders', 'menu_items'], reloadStopList)
 
   // Грузит открытые заказы (группы) стола. extraIds — только что созданный заказ,
   // которого ещё нет в tables.currentOrderIds (SSE догонит позже).
@@ -203,39 +228,49 @@ export default function PosV2Order() {
   const [wAmt, setWAmt] = useState('')
   const [wPortions, setWPortions] = useState(1)
 
+  // Два источника стопа: legacy menu.is_available (owner вручную в админке) и
+  // backend stop-list (stoppedIds — нехватка ингредиентов / override). Без права
+  // — отказ с причиной; с правом — info-toast + флаг override ТОЛЬКО для реально
+  // backend-стопнутых (иначе POST /orders вернёт 409 ITEM_STOPPED).
   function add(m: MenuItem) {
-    const stopped = m.isAvailable === false
-    if (stopped && !canOverrideStop) { toast.error(`«${m.name}» в стоп-листе`); return }
+    const backendStopped = stoppedIds.has(m.id)
+    const isStopped = m.isAvailable === false || backendStopped
+    if (isStopped && !canOverrideStop) {
+      toast.warning(`«${m.name}» — ${backendStopped ? (stopReasons.get(m.id) ?? 'в стопе') : 'в стоп-листе'}`)
+      return
+    }
+    const needsOverride = isStopped ? backendStopped : false
+    if (isStopped && canOverrideStop) toast.info(`«${m.name}» в стопе — добавлено по разрешению`)
     if ((m.unit ?? 'piece') !== 'piece') {
       setWeightItem(m); setWAmt(String(m.unitSize ?? 100)); setWPortions(1)
       return
     }
     setCart(prev => {
-      const i = prev.findIndex(l => l.menuItemId === m.id)
-      if (i >= 0) { const n = [...prev]; n[i] = { ...n[i], qty: n[i].qty + 1 }; return n }
-      return [...prev, { menuItemId: m.id, name: m.name, emoji: m.emoji, qty: 1, price: m.price, cogs: m.cogs, unit: 'piece', unitSize: 1, overrideStopList: stopped || undefined }]
+      const i = prev.findIndex(l => l.unit === 'piece' && l.menuItemId === m.id)
+      if (i >= 0) { const n = [...prev]; n[i] = { ...n[i], qty: n[i].qty + 1, overrideStopList: n[i].overrideStopList || needsOverride }; return n }
+      return [...prev, { lineId: randomId(), menuItemId: m.id, name: m.name, emoji: m.emoji, qty: 1, price: m.price, cogs: m.cogs, unit: 'piece', unitSize: 1, overrideStopList: needsOverride || undefined }]
     })
   }
   function addWeight() {
     if (!weightItem) return
     const amount = num(wAmt)
     if (amount <= 0) { toast.error('Укажите вес'); return }
-    const m = weightItem, stopped = m.isAvailable === false
-    setCart(prev => {
-      const i = prev.findIndex(l => l.menuItemId === m.id && l.unit !== 'piece')
-      if (i >= 0) { const n = [...prev]; n[i] = { ...n[i], qty: amount, portionQty: portionsOf(n[i]) + wPortions }; return n }
-      return [...prev, { menuItemId: m.id, name: m.name, emoji: m.emoji, qty: amount, price: m.price, cogs: m.cogs, unit: (m.unit ?? 'g'), unitSize: (m.unitSize ?? 100), portionQty: wPortions, overrideStopList: stopped || undefined }]
-    })
+    const m = weightItem
+    const needsOverride = stoppedIds.has(m.id)
+    // Весовые НЕ мержим: каждая навеска — отдельная строка (иначе прежний вес
+    // перезаписывался: «300г» + «500г» давали 2×500г). Как в старом ПОС.
+    setCart(prev => [...prev, { lineId: randomId(), menuItemId: m.id, name: m.name, emoji: m.emoji, qty: amount, price: m.price, cogs: m.cogs, unit: (m.unit ?? 'g'), unitSize: (m.unitSize ?? 100), portionQty: wPortions, overrideStopList: needsOverride || undefined }])
     setWeightItem(null)
   }
+  const lineKey = (l: CartLine) => l.lineId ?? l.menuItemId
   function setQty(id: string, delta: number) {
     setCart(prev => prev.flatMap(l => {
-      if (l.menuItemId !== id) return [l]
+      if (lineKey(l) !== id) return [l]
       if (l.unit !== 'piece') { const p = portionsOf(l) + delta; return p <= 0 ? [] : [{ ...l, portionQty: p }] }
       const q = l.qty + delta; return q <= 0 ? [] : [{ ...l, qty: q }]
     }))
   }
-  function removeLine(id: string) { setCart(prev => prev.filter(l => l.menuItemId !== id)) }
+  function removeLine(id: string) { setCart(prev => prev.filter(l => lineKey(l) !== id)) }
 
   const subtotal = useMemo(() => cartSubtotal(cart), [cart])
   const count = cartCount(cart)
@@ -412,7 +447,7 @@ export default function PosV2Order() {
           ) : (
             <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }}>
               {dishes.map(m => {
-                const stopped = m.isAvailable === false
+                const stopped = m.isAvailable === false || stoppedIds.has(m.id)
                 const weight = (m.unit ?? 'piece') !== 'piece'
                 const fav = favSet.has(m.id), freq = freqSet.has(m.id)
                 return (
@@ -426,7 +461,7 @@ export default function PosV2Order() {
                       <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.82rem,1.1vw,1rem)' }}>{m.name}</span>
                       <span className="font-bold mt-auto" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(0.85rem,1.15vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? `/${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
-                    {stopped && <span className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
+                    {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
                     {restaurantId && (
                       <div className="absolute flex items-center gap-1" style={{ top: '0.4rem', left: '0.4rem' }}>
                         <button type="button" className="pv-mini rounded-lg" aria-label={fav ? `Убрать «${m.name}» из избранного` : `Добавить «${m.name}» в избранное`} aria-pressed={fav} onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
@@ -474,17 +509,18 @@ export default function PosV2Order() {
               {activeGroup && <div className="rounded-lg text-center font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Дозаказ в {orderType === 'hall' ? `Группу ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : `заказ #${activeGroup.orderNumber ?? ''}`}</div>}
               {cart.map(l => {
                 const weight = l.unit !== 'piece'
+                const k = lineKey(l)
                 return (
-                  <div key={l.menuItemId} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
+                  <div key={k} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l.emoji} {l.name}{l.overrideStopList ? ' ⚠' : ''}</div>
                       <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{weight ? `${portionsOf(l)}×${l.qty}${l.unit === 'kg' ? 'кг' : 'г'} · ` : `${formatCurrency(l.price)} × ${l.qty} · `}{formatCurrency(lineTotal(l))}</div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => setQty(l.menuItemId, -1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                      <button onClick={() => setQty(k, -1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
                       <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{weight ? portionsOf(l) : l.qty}</span>
-                      <button onClick={() => setQty(l.menuItemId, +1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-brand)', width: '2rem', height: '2rem' }}><Plus className="size-4 text-white" /></button>
-                      <button onClick={() => removeLine(l.menuItemId)} className="rounded-lg flex items-center justify-center ml-1" style={{ width: '2rem', height: '2rem' }}><Trash2 className="size-4" style={{ color: 'var(--pv-occ-text)' }} /></button>
+                      <button onClick={() => setQty(k, +1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-brand)', width: '2rem', height: '2rem' }}><Plus className="size-4 text-white" /></button>
+                      <button onClick={() => removeLine(k)} className="rounded-lg flex items-center justify-center ml-1" style={{ width: '2rem', height: '2rem' }}><Trash2 className="size-4" style={{ color: 'var(--pv-occ-text)' }} /></button>
                     </div>
                   </div>
                 )

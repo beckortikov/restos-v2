@@ -70,7 +70,7 @@ export default function PosV2Stop() {
         <div className="shrink-0 flex items-center gap-2 flex-wrap" style={{ padding: '0.6rem var(--pv-pad-x) 0' }}>
           <div className="flex items-center rounded-xl border" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '0.4rem 0.8rem', gap: '0.5rem', minWidth: 'clamp(12rem,22vw,18rem)' }}>
             <Search style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-3)' }} />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+            <input aria-label="Поиск блюда" value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
             {search && <button onClick={() => setSearch('')}><X style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>}
           </div>
           {!search && visibleCats.map(c => { const on = (cat ?? visibleCats[0]) === c; return (

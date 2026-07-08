@@ -38,7 +38,11 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const cardAcc = useMemo(() => nonCash.find(a => a.id === cardAccId) ?? nonCash[0], [nonCash, cardAccId])
   const canMix = !!cashAcc && !!cardAcc && cashAcc.id !== cardAcc.id
 
-  const base = order.subtotal ?? order.total
+  // База = order.total (сумма позиций С модификаторами). НЕ order.subtotal:
+  // subtotal (computeSubtotal на бэке) исключает модификаторы, а бэк при
+  // закрытии считает скидку/сервис именно от order.Total (orders_close.go).
+  // Иначе одиночная оплата занижается, а смешанная падает на sum(payments)≠total.
+  const base = order.total
   const discValNum = Math.max(0, parseFloat(discVal.replace(',', '.').replace(/\s/g, '')) || 0)
   const discAmt = useMemo(() => discountAmount(base, discType, discValNum), [base, discType, discValNum])
   const sp = (order.type === 'hall' && serviceOn) ? servicePercent : 0

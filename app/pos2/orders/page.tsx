@@ -89,7 +89,7 @@ export default function PosV2Orders() {
         <div className="flex-1" />
         <div className="flex items-center rounded-xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '0.4rem 0.8rem', gap: '0.5rem', width: 'clamp(9rem,16vw,14rem)' }}>
           <Search style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-3)' }} />
-          <input value={search} onChange={e => setSearch(e.target.value)} inputMode="numeric" placeholder="№ / стол" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+          <input aria-label="№ / стол" value={search} onChange={e => setSearch(e.target.value)} inputMode="numeric" placeholder="№ / стол" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
           {search && <button onClick={() => setSearch('')}><X style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>}
         </div>
         <button onClick={() => load()} className="flex items-center justify-center rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem)' }}>
