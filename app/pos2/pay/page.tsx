@@ -2,11 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Banknote, CreditCard, X, ArrowLeft, SquareSplitHorizontal, UtensilsCrossed, ShoppingBag } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Banknote, CreditCard, X, ArrowLeft, SquareSplitHorizontal, UtensilsCrossed, ShoppingBag, Printer } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
-  fetchTables, fetchOrders, fetchActiveShift, fetchFinancialAccounts, closeOrderWithPayment,
+  fetchTables, fetchOrders, fetchActiveShift, fetchFinancialAccounts, closeOrderWithPayment, printPreBill,
 } from '@/lib/queries'
 import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
@@ -126,6 +126,20 @@ export default function PosV2Pay() {
     }
   }
 
+  const [printing, setPrinting] = useState(false)
+  async function printPre(o: Order) {
+    if (printing) return
+    setPrinting(true)
+    try {
+      await printPreBill(o.id)
+      toast.success('Пре-чек отправлен на печать')
+    } catch (e) {
+      toast.error(`Не удалось напечатать пре-чек: ${humanizeError(e)}`)
+    } finally {
+      setPrinting(false)
+    }
+  }
+
   const payable = target ? payableOf(target) : 0
   const cashNum = Math.max(0, Math.min(payable, parseFloat(cashStr.replace(',', '.').replace(/\s/g, '')) || 0))
   const cardNum = dSub(payable, cashNum)
@@ -215,6 +229,10 @@ export default function PosV2Pay() {
                       <span className="font-semibold" style={{ fontSize: 'var(--pv-ctl)' }}>Смешанная (нал + безнал)</span>
                     </button>
                   )}
+                  <button disabled={printing} onClick={() => printPre(target)} className="w-full flex items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ marginTop: '0.75rem', padding: 'clamp(0.7rem,1vw,0.9rem)', background: 'var(--pv-bg)', color: 'var(--pv-text-2)' }}>
+                    <Printer style={{ width: '1.15rem', height: '1.15rem' }} />
+                    <span className="font-semibold" style={{ fontSize: 'var(--pv-ctl)' }}>{printing ? 'Печать…' : 'Печать пре-чека'}</span>
+                  </button>
                 </>
               ) : (
                 <div className="flex flex-col" style={{ gap: '0.9rem' }}>
