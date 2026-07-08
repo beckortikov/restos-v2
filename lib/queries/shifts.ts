@@ -1,5 +1,6 @@
 import { api, unwrap, unwrapOr404 } from './_client'
 import { getBaseURL } from '../api/v4-typed'
+import { randomId } from '../random-id'
 import type { CashShift, CashShiftOperation } from '../types'
 import { logAction } from './audit'
 import { _mapV4Shift } from './_mappers'
@@ -41,7 +42,8 @@ export async function patchShiftAccount(shiftId: string, accountId: string): Pro
     if (tok) headers['Authorization'] = `Bearer ${tok}`
   }
   // Idempotency-Key как и в остальных write-вызовах (middleware api-клиента ставит UUID).
-  try { headers['Idempotency-Key'] = crypto.randomUUID() } catch { /* noop */ }
+  // randomId() безопасен по LAN (http) — crypto.randomUUID там недоступен.
+  headers['Idempotency-Key'] = randomId()
   const res = await fetch(`${getBaseURL()}/api/v1/shifts/${encodeURIComponent(shiftId)}`, {
     method: 'PATCH',
     headers,

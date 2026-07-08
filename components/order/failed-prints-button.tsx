@@ -6,6 +6,7 @@ import { Printer, RefreshCw, ExternalLink, Clock, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { fetchPrintJobs, type PrintJournalEntry } from '@/lib/queries'
+import { randomId } from '@/lib/random-id'
 import { decodeCP866Hex } from '@/lib/cp866'
 import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
@@ -105,7 +106,7 @@ export function FailedPrintsButton() {
         const tok = localStorage.getItem('restos-v4-token')
         if (tok) headers['Authorization'] = `Bearer ${tok}`
       }
-      try { headers['Idempotency-Key'] = crypto.randomUUID() } catch { /* noop */ }
+      headers['Idempotency-Key'] = randomId()
       const res = await fetch(`${getApiUrl()}/api/v1/print/jobs/${encodeURIComponent(logId)}/retry`, {
         method: 'POST',
         headers,
@@ -159,7 +160,7 @@ export function FailedPrintsButton() {
         const tok = localStorage.getItem('restos-v4-token')
         if (tok) headers['Authorization'] = `Bearer ${tok}`
       }
-      try { headers['Idempotency-Key'] = crypto.randomUUID() } catch { /* noop */ }
+      headers['Idempotency-Key'] = randomId()
       const res = await fetch(`${getApiUrl()}/api/v1/print/jobs/${encodeURIComponent(logId)}/dismiss`, {
         method: 'POST',
         headers,

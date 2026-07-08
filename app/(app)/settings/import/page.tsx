@@ -4,6 +4,7 @@ import { useState, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { createZone, createTable, fetchZones, fetchTables, createMenuItem, createIngredient, fetchMenuItems, fetchIngredients, createMenuCategory, fetchMenuCategoriesFull } from '@/lib/queries'
 import { api, unwrap, getBaseURL } from '@/lib/api'
+import { randomId } from '@/lib/random-id'
 import {
   parseFloorMapExcel, parseDishesExcel, parseTechCardsExcel, parseIngredientsExcel,
   type ParsedFloorMap, type ParsedDishList, type ParsedTechCards, type ParsedIngredientList,
@@ -154,7 +155,7 @@ export default function ImportPage() {
       // headers что и обычные API-запросы (Bearer + Idempotency-Key).
       const token = localStorage.getItem('restos-v4-token')
       const headers: Record<string, string> = {
-        'Idempotency-Key': crypto.randomUUID(),
+        'Idempotency-Key': randomId(),
       }
       if (token) headers['Authorization'] = `Bearer ${token}`
       const res = await fetch(getBaseURL() + path, {

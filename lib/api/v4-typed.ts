@@ -20,6 +20,7 @@
 
 import createClient, { type Middleware } from 'openapi-fetch'
 import type { paths } from './generated'
+import { randomId } from '../random-id'
 
 export function getBaseURL(): string {
   // 1. Electron sidecar — точечный URL пробрасывается preload-скриптом.
@@ -87,12 +88,11 @@ const authExpiredMiddleware: Middleware = {
   },
 }
 
+// Idempotency-Key. randomId() безопасен в любом контексте: crypto.randomUUID
+// есть только в secure context (HTTPS/localhost); по LAN на http://<ip>:3001
+// его нет, поэтому падаем на crypto.getRandomValues (полная энтропия v4).
 function cryptoRandomUUID(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-  const rnd = (Math.random() * 0xffffffff) >>> 0
-  return `00000000-0000-4000-8000-${rnd.toString(16).padStart(12, '0')}`
+  return randomId()
 }
 
 export const api = createClient<paths>({ baseUrl: getBaseURL() })

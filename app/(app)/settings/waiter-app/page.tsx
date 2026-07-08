@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { Smartphone, Upload, Wifi, AlertCircle, Download, RefreshCw } from 'lucide-react'
 
 import { getBaseURL } from '@/lib/api'
+import { randomId } from '@/lib/random-id'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
@@ -102,7 +103,7 @@ export default function WaiterAppPage() {
       fd.append('file', file)
       const res = await fetch(getBaseURL() + '/api/v1/waiter-app', {
         method: 'POST',
-        headers: authHeaders({ 'Idempotency-Key': crypto.randomUUID() }),
+        headers: authHeaders({ 'Idempotency-Key': randomId() }),
         body: fd,
       })
       if (!res.ok) throw new Error(await res.text())
