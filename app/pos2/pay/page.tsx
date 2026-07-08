@@ -33,6 +33,7 @@ export default function PosV2Pay() {
   const [cashStr, setCashStr] = useState('')
   const [discType, setDiscType] = useState<'none' | 'percent' | 'fixed'>('none')
   const [discVal, setDiscVal] = useState('')
+  const [serviceOn, setServiceOn] = useState(true)
   const [paying, setPaying] = useState(false)
   const [printing, setPrinting] = useState(false)
   const payingRef = useRef(false)
@@ -47,10 +48,10 @@ export default function PosV2Pay() {
     return m
   }, [tables])
 
-  // payable = (subtotal − скидка) + сервис (только зал; бэк считает так же).
-  const payableOf = useCallback((o: Order, discAmt = 0): number => {
+  // payable = (subtotal − скидка) + сервис (зал, если включён; бэк считает так же).
+  const payableOf = useCallback((o: Order, discAmt = 0, serviceOn = true): number => {
     const base = dSub(o.subtotal ?? o.total, discAmt)
-    const sp = o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
+    const sp = (o.type === 'hall' && serviceOn) ? (restaurant?.servicePercent ?? 0) : 0
     return sp > 0 ? dRound(dAdd(base, dMul(base, dDiv(sp, 100)))) : base
   }, [restaurant])
 
@@ -85,7 +86,7 @@ export default function PosV2Pay() {
   }, [orders, searchParams])
 
   function open(o: Order) {
-    setTarget(o); setMode('pick'); setCashStr(''); setDiscType('none'); setDiscVal('')
+    setTarget(o); setMode('pick'); setCashStr(''); setDiscType('none'); setDiscVal(''); setServiceOn(o.type === 'hall')
   }
 
   function labelOf(o: Order): string {
@@ -103,7 +104,7 @@ export default function PosV2Pay() {
       ? dRound(dMul(base, dDiv(Math.min(discValNum, 100), 100)))
       : Math.min(discValNum, base)
   }, [target, discType, discValNum])
-  const payable = target ? payableOf(target, discAmt) : 0
+  const payable = target ? payableOf(target, discAmt, serviceOn) : 0
   const cashNum = Math.max(0, Math.min(payable, parseFloat(cashStr.replace(',', '.').replace(/\s/g, '')) || 0))
   const cardNum = dSub(payable, cashNum)
 
@@ -135,7 +136,7 @@ export default function PosV2Pay() {
       const acc = method === 'cash' ? cashAcc : cardAcc
       const accId = (method === 'cash' && (shift as { accountId?: string }).accountId)
         ? (shift as { accountId?: string }).accountId : acc?.id
-      const sp = o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
+      const sp = (o.type === 'hall' && serviceOn) ? (restaurant?.servicePercent ?? 0) : 0
       const [dA, dT, dV] = discArgs()
       await closeOrderWithPayment(o.id, method, o.tableId || null, o.subtotal ?? o.total, cogsOf(o), user?.id, accId, acc?.name, sp, 0, payable, 0, dA, dT, dV)
       toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
@@ -157,7 +158,7 @@ export default function PosV2Pay() {
     try {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
-      const sp = o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
+      const sp = (o.type === 'hall' && serviceOn) ? (restaurant?.servicePercent ?? 0) : 0
       const [dA, dT, dV] = discArgs()
       await closeOrderWithPayment(o.id, parts[0].method, o.tableId || null, o.subtotal ?? o.total, cogsOf(o), user?.id, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts)
       toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: `Наличные ${formatCurrency(cash)} + Безнал ${formatCurrency(card)} · чек на печать` })
@@ -251,6 +252,15 @@ export default function PosV2Pay() {
             <div style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
               {mode === 'pick' ? (
                 <>
+                  {/* Обслуживание (тумблер) */}
+                  {target.type === 'hall' && (restaurant?.servicePercent ?? 0) > 0 && (
+                    <div className="flex items-center justify-between" style={{ marginBottom: '0.9rem' }}>
+                      <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Обслуживание {restaurant?.servicePercent}%</span>
+                      <button onClick={() => setServiceOn(v => !v)} className="rounded-full transition-colors" style={{ width: '3.2rem', height: '1.9rem', background: serviceOn ? 'var(--pv-brand)' : '#d8d3ca', padding: '3px', display: 'flex', justifyContent: serviceOn ? 'flex-end' : 'flex-start', alignItems: 'center' }}>
+                        <span className="rounded-full" style={{ width: '1.4rem', height: '1.4rem', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
+                      </button>
+                    </div>
+                  )}
                   {/* Скидка */}
                   <div style={{ marginBottom: '0.9rem' }}>
                     <div className="flex items-center gap-2" style={{ marginBottom: discType !== 'none' ? '0.5rem' : 0 }}>
