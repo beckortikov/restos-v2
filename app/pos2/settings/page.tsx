@@ -1,7 +1,7 @@
 'use client'
 
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store } from 'lucide-react'
+import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store, QrCode, Smartphone } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { usePosV2Flag } from '@/lib/pos-v2/flag'
@@ -16,6 +16,8 @@ export default function PosV2Settings() {
     { icon: Printer, label: 'Принтеры', sub: 'Чеки и кухонные станции', to: '/settings/printers', gate: 'printers.manage' },
     { icon: BookOpen, label: 'Меню', sub: 'Блюда, цены, стоп-лист', to: '/warehouse/menu', gate: 'menu.view' },
     { icon: Users, label: 'Клиенты', sub: 'База гостей и скидки', to: '/settings/customers', gate: 'customers.manage' },
+    { icon: QrCode, label: 'Подключить официантов', sub: 'QR для APK по локальной сети', to: '/show-qr' },
+    { icon: Smartphone, label: 'Приложение официанта', sub: 'Загрузка и раздача APK', to: '/settings/waiter-app' },
     { icon: Upload, label: 'Импорт данных', sub: 'Меню, остатки, клиенты', to: '/settings/import', gate: 'data.import' },
   ]
   const links = linksAll.filter(l => !l.gate || canDo(l.gate))

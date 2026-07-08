@@ -6,6 +6,7 @@ import {
   HandCoins, History, Settings, LogOut, OctagonX, ClipboardList, PackageCheck, CookingPot,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
+import { FailedPrintsButton } from '@/components/order/failed-prints-button'
 
 // Phase 1: плитки ведут на СУЩЕСТВУЮЩИЕ рабочие экраны (старый POS цел).
 // По мере готовности новых экранов цели будут переключаться на /pos2/*.
@@ -71,6 +72,8 @@ export default function PosV2Launcher() {
         </div>
 
         <div className="flex items-center shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.75rem)' }}>
+          {/* Непечатанные кухонные задания — retry/dismiss (как в старом POS) */}
+          <FailedPrintsButton />
           <div
             className="hidden md:flex items-center gap-2 rounded-full"
             style={{ background: 'var(--pv-free-soft)', padding: 'clamp(0.4rem,0.6vw,0.6rem) clamp(0.7rem,1vw,1rem)' }}
