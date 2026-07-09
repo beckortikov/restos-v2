@@ -5,6 +5,7 @@ package http_test
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -28,6 +29,22 @@ func TestPayout_DecreasesCash_AndShowsInShiftReport(t *testing.T) {
 	}
 	wID := mkUser(t, gdb, f.rid, "Alice", "waiter", "")
 	tok := f.login(t)
+
+	// Начисление обслуживания: закрытый заказ этого официанта в этой смене с
+	// service_amount ≥ выплаты. Без него cap выплаты (нельзя вывести больше
+	// начисленного) корректно отклонит перевод 50 при 0 начисленных.
+	closedStatus := "closed"
+	closedAt := time.Now().UTC()
+	if err := gdb.Create(&models.Order{
+		ID: uuid.NewString(), RestaurantID: &f.rid,
+		WaiterID: &wID, ShiftID: &shiftID, Status: &closedStatus, ClosedAt: &closedAt,
+		Total:            decimal.MustFromString("1000"),
+		ServiceAmount:    decimal.MustFromString("100"),
+		TotalWithService: decimal.MustFromString("1100"),
+		CreatedAt:        closedAt, UpdatedAt: closedAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	r, b := f.post(t, "/api/v1/finance/service-charge/pay", tok, uuid.NewString(), map[string]any{
 		"waiter_id":   wID,

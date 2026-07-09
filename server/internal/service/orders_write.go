@@ -737,7 +737,18 @@ func buildOrderItem(
 		if err != nil {
 			return nil, decimal.Zero, apperrors.Wrap("VALIDATION", "bad price", err)
 		}
-		oi.Price = d
+		// Override цены разрешён ТОЛЬКО там, где цену нельзя взять из меню:
+		//  - весовой товар (unit != 'piece') — цена = вес × цена/кг, вес с весов;
+		//  - позиция со свободной ценой (меню-цена 0) — кассир вбивает вручную.
+		// Для обычного штучного блюда с фикс-ценой клиентскую цену игнорируем и
+		// оставляем mi.Price — иначе крафтом запроса можно продать блюдо по любой
+		// цене. Признаки берём из МЕНЮ (mi.*), а не из клиентского override —
+		// чтобы нельзя было прислать unit:"kg" на штучное блюдо и открыть дыру.
+		isWeight := mi.Unit != nil && *mi.Unit != "piece"
+		isOpenPrice := mi.Price.IsZero()
+		if isWeight || isOpenPrice {
+			oi.Price = d
+		}
 	}
 	if it.Unit != nil {
 		u := *it.Unit
