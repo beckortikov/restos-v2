@@ -2,8 +2,9 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Search, OctagonX, Check, X } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Search, OctagonX, Check, X, Lock } from 'lucide-react'
 import { toast } from 'sonner'
+import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
 import { fetchStopList, toggleStopListOverride, toggleMenuAvailability } from '@/lib/queries'
 import { humanizeError } from '@/lib/errors'
@@ -13,6 +14,8 @@ type Tab = 'stop' | 'menu'
 
 export default function PosV2Stop() {
   const navigate = useNavigate()
+  const { canDo } = useAuth()
+  const canEdit = canDo('menu.edit') // мутации стоп-листа/меню — только с правом
   const { menuItems, categories, loading, reload } = useOrderData(true)
   const [stop, setStop] = useState<StopRow[]>([])
   const [tab, setTab] = useState<Tab>('stop')
@@ -32,6 +35,7 @@ export default function PosV2Stop() {
 
   async function act(fn: () => Promise<void>, ok: string) {
     if (busyRef.current) return
+    if (!canEdit) { toast.error('Нет прав на изменение меню (menu.edit)'); return }
     busyRef.current = true; setBusy(true)
     try { await fn(); toast.success(ok); await reload(); loadStop() }
     catch (e) { toast.error(humanizeError(e)) }
@@ -65,6 +69,12 @@ export default function PosV2Stop() {
           <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Обновить</span>
         </button>
       </div>
+
+      {!canEdit && (
+        <div className="shrink-0 flex items-center gap-2" style={{ margin: '0.6rem var(--pv-pad-x) 0', padding: '0.6rem 0.9rem', background: 'var(--pv-bill-soft)', color: 'var(--pv-bill-text)', borderRadius: 'var(--pv-radius)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+          <Lock style={{ width: '1rem', height: '1rem' }} />Только просмотр — для изменений нужно право «Меню» (menu.edit).
+        </div>
+      )}
 
       {tab === 'menu' && (
         <div className="shrink-0 flex items-center gap-2 flex-wrap" style={{ padding: '0.6rem var(--pv-pad-x) 0' }}>
@@ -101,9 +111,9 @@ export default function PosV2Stop() {
                         {manual ? 'снято вручную' : shortage ? `нет ингредиента: ${shortage.name}` : 'нет ингредиента'}{override ? ' · продаётся (override)' : ''}
                       </div>
                     </div>
-                    <button disabled={busy} onClick={() => act(() => toggleMenuAvailability(item.menuItemId, true), 'Возвращено в меню')} className="rounded-xl font-semibold shrink-0 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Вернуть в меню</button>
+                    <button disabled={busy || !canEdit} onClick={() => act(() => toggleMenuAvailability(item.menuItemId, true), 'Возвращено в меню')} className="rounded-xl font-semibold shrink-0 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Вернуть в меню</button>
                     {!manual && (
-                      <button disabled={busy} onClick={() => act(() => toggleStopListOverride(item.menuItemId, !override), override ? 'Возвращено в стоп' : 'Включено (override)')} className="rounded-xl font-semibold shrink-0 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: override ? 'var(--pv-occ-soft)' : 'var(--pv-brand-soft)', color: override ? 'var(--pv-occ-text)' : 'var(--pv-brand)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{override ? 'Вернуть в стоп' : 'Включить'}</button>
+                      <button disabled={busy || !canEdit} onClick={() => act(() => toggleStopListOverride(item.menuItemId, !override), override ? 'Возвращено в стоп' : 'Включено (override)')} className="rounded-xl font-semibold shrink-0 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: override ? 'var(--pv-occ-soft)' : 'var(--pv-brand-soft)', color: override ? 'var(--pv-occ-text)' : 'var(--pv-brand)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{override ? 'Вернуть в стоп' : 'Включить'}</button>
                     )}
                   </div>
                 )
@@ -121,7 +131,7 @@ export default function PosV2Stop() {
                     <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{m.name}</div>
                     <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{m.category}</div>
                   </div>
-                  <button disabled={busy} onClick={() => act(() => toggleMenuAvailability(m.id, off), off ? `«${m.name}» в наличии` : `«${m.name}» в стоп`)} className="rounded-xl font-semibold shrink-0 flex items-center gap-1.5 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: off ? 'var(--pv-occ-soft)' : 'var(--pv-free-soft)', color: off ? 'var(--pv-occ-text)' : 'var(--pv-free-text)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+                  <button disabled={busy || !canEdit} onClick={() => act(() => toggleMenuAvailability(m.id, off), off ? `«${m.name}» в наличии` : `«${m.name}» в стоп`)} className="rounded-xl font-semibold shrink-0 flex items-center gap-1.5 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: off ? 'var(--pv-occ-soft)' : 'var(--pv-free-soft)', color: off ? 'var(--pv-occ-text)' : 'var(--pv-free-text)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
                     {off ? <><OctagonX style={{ width: '1rem', height: '1rem' }} />СТОП</> : <><Check style={{ width: '1rem', height: '1rem' }} />В наличии</>}
                   </button>
                 </div>

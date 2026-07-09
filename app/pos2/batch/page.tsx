@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { LayoutGrid, RefreshCw, ChefHat, Trash2, Minus, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
 import { fetchBatchAvailability, calculateMaxPortions, produceBatch, writeoffPreparedBatch, fetchBatchCookingLogs } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
@@ -21,6 +22,8 @@ type Tab = 'batch' | 'history'
 
 export default function PosV2Batch() {
   const navigate = useNavigate()
+  const { canDo } = useAuth()
+  const canManage = canDo('batch_cooking.manage') // приготовление/списание — только с правом
   const { menuItems, loading, reload } = useOrderData(true)
   const [tab, setTab] = useState<Tab>('batch')
   const [avail, setAvail] = useState<Map<string, number>>(new Map())
@@ -51,6 +54,7 @@ export default function PosV2Batch() {
 
   async function doProduce() {
     if (busyRef.current || !prod) return
+    if (!canManage) { toast.error('Нет прав на заготовки (batch_cooking.manage)'); return }
     const max = calc?.maxPortions ?? 0
     if (qty < 1 || (max > 0 && qty > max)) { toast.error(`Можно приготовить максимум ${max} порц`); return }
     busyRef.current = true; setBusy(true)
@@ -61,6 +65,7 @@ export default function PosV2Batch() {
 
   async function doWriteoff() {
     if (busyRef.current || !woff) return
+    if (!canManage) { toast.error('Нет прав на заготовки (batch_cooking.manage)'); return }
     if (wMax > 0 && wQty > wMax) { toast.error(`Доступно только ${wMax} порц`); return }
     busyRef.current = true; setBusy(true)
     try { await writeoffPreparedBatch(woff.id, wQty, wReason); toast.success(`Списано: ${woff.name} × ${wQty}`); setWoff(null); await reload(); loadExtra() }
@@ -89,6 +94,12 @@ export default function PosV2Batch() {
           <RefreshCw style={{ width: 'clamp(1.05rem,1.3vw,1.3rem)', height: 'clamp(1.05rem,1.3vw,1.3rem)', color: 'var(--pv-text-2)' }} className={loading ? 'animate-spin' : ''} />
         </button>
       </div>
+
+      {!canManage && tab === 'batch' && (
+        <div className="shrink-0 flex items-center gap-2" style={{ margin: '0.6rem var(--pv-pad-x) 0', padding: '0.6rem 0.9rem', background: 'var(--pv-bill-soft)', color: 'var(--pv-bill-text)', borderRadius: 'var(--pv-radius)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+          <ChefHat style={{ width: '1rem', height: '1rem' }} />Только просмотр — приготовление и списание требуют права «Заготовки» (batch_cooking.manage).
+        </div>
+      )}
 
       <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--pv-gap) var(--pv-pad-x) var(--pv-pad-x)' }}>
         {tab === 'history' ? (
@@ -131,10 +142,10 @@ export default function PosV2Batch() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button onClick={() => openProduce(m)} className="flex-1 flex items-center justify-center gap-2 rounded-xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: '0.6rem', fontSize: 'var(--pv-ctl)' }}>
+                    <button onClick={() => openProduce(m)} disabled={!canManage} className="flex-1 flex items-center justify-center gap-2 rounded-xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: '0.6rem', fontSize: 'var(--pv-ctl)' }}>
                       <ChefHat style={{ width: '1.15em', height: '1.15em' }} />Приготовить
                     </button>
-                    <button onClick={() => { setWoff(m); setWQty(1); setWReason('spoilage'); setWMax(Math.floor(ready)) }} disabled={ready <= 0} className="rounded-xl flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.6rem', height: '2.6rem' }}>
+                    <button onClick={() => { setWoff(m); setWQty(1); setWReason('spoilage'); setWMax(Math.floor(ready)) }} disabled={ready <= 0 || !canManage} className="rounded-xl flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.6rem', height: '2.6rem' }}>
                       <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
                     </button>
                   </div>

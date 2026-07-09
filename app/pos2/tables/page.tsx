@@ -26,6 +26,10 @@ export default function PosV2Tables() {
   const { user, canDo, canAccessRoles } = useAuth()
   const { tables, zones, loading, reload } = useOrderData(true)
   const canManage = canDo('tables.edit') || canAccessRoles(['manager', 'owner'])
+  // Гейт orders.view_others: официант видит только свободные + свои столы
+  // (иначе утечка чужих столов и сумм). Копия старого table-map.
+  const canViewOthers = canDo('orders.view_others')
+  const visibleTables = useMemo(() => canViewOthers ? tables : tables.filter(t => t.status === 'free' || t.waiterId === user?.id), [tables, canViewOthers, user?.id])
 
   const [mode, setMode] = useState<Mode>('order')
   const [mergePrimary, setMergePrimary] = useState<Table | null>(null)
@@ -78,9 +82,9 @@ export default function PosV2Tables() {
   const byZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
     const map = new Map<string, Table[]>()
-    for (const t of tables) { const k = zoneName(t.zone); (map.get(k) ?? map.set(k, []).get(k)!).push(t) }
+    for (const t of visibleTables) { const k = zoneName(t.zone); (map.get(k) ?? map.set(k, []).get(k)!).push(t) }
     return Array.from(map.entries()).map(([zone, ts]) => ({ zone, tables: [...ts].sort((a, b) => a.number - b.number) }))
-  }, [tables, zones])
+  }, [visibleTables, zones])
 
   function openReserveForm(t: Table) {
     const d = new Date(Date.now() + 3600_000)

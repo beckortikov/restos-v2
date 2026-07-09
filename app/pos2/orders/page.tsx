@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { LayoutGrid, RefreshCw, Search, X, CreditCard, UtensilsCrossed, ShoppingBag, Bike } from 'lucide-react'
+import { useAuth } from '@/lib/auth-store'
 import { fetchActiveShift, fetchOrders, fetchTables } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { ORDER_STATUS_LABELS } from '@/lib/types'
@@ -23,6 +24,7 @@ const STATUS_TONE: Record<OrderStatus, { soft: string; text: string }> = {
 
 export default function PosV2Orders() {
   const navigate = useNavigate()
+  const { user, canDo } = useAuth()
   const [shift, setShift] = useState<CashShift | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [tables, setTables] = useState<Table[]>([])
@@ -46,28 +48,32 @@ export default function PosV2Orders() {
 
   const tableNo = useMemo(() => { const m = new Map<string, number>(); for (const t of tables) m.set(t.id, t.number); return m }, [tables])
 
+  // Гейт orders.view_others: официант видит только свои заказы (иначе чужие
+  // столы/суммы протекают). Копия старого active-orders-tab.
+  const scoped = useMemo(() => canDo('orders.view_others') ? orders : orders.filter(o => o.waiterId === user?.id), [orders, canDo, user?.id])
+
   const counts = useMemo(() => {
-    const act = orders.filter(o => ACTIVE.has(o.status) && (o.aliveItemsCount ?? o.items.filter(i => !i.cancelledAt).length) > 0)
+    const act = scoped.filter(o => ACTIVE.has(o.status) && (o.aliveItemsCount ?? o.items.filter(i => !i.cancelledAt).length) > 0)
     return {
       all: act.length,
       hall: act.filter(o => o.type === 'hall').length,
       togo: act.filter(o => o.type !== 'hall').length,
-      closed: orders.filter(o => o.status === 'done' || o.status === 'cancelled').length,
+      closed: scoped.filter(o => o.status === 'done' || o.status === 'cancelled').length,
     }
-  }, [orders])
+  }, [scoped])
 
   const list = useMemo(() => {
-    let rows = orders
-    if (tab === 'closed') rows = orders.filter(o => o.status === 'done' || o.status === 'cancelled')
+    let rows = scoped
+    if (tab === 'closed') rows = scoped.filter(o => o.status === 'done' || o.status === 'cancelled')
     else {
-      rows = orders.filter(o => ACTIVE.has(o.status) && (o.aliveItemsCount ?? o.items.filter(i => !i.cancelledAt).length) > 0)
+      rows = scoped.filter(o => ACTIVE.has(o.status) && (o.aliveItemsCount ?? o.items.filter(i => !i.cancelledAt).length) > 0)
       if (tab === 'hall') rows = rows.filter(o => o.type === 'hall')
       if (tab === 'togo') rows = rows.filter(o => o.type !== 'hall')
     }
     const q = search.trim().toLowerCase()
     if (q) rows = rows.filter(o => String(o.orderNumber ?? '').includes(q) || String(o.tableId ? tableNo.get(o.tableId) ?? '' : '').includes(q))
     return [...rows].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-  }, [orders, tab, search, tableNo])
+  }, [scoped, tab, search, tableNo])
 
   const TABS: [Tab, string, number][] = [['all', 'Все', counts.all], ['hall', 'Зал', counts.hall], ['togo', 'С собой', counts.togo], ['closed', 'Закрытые', counts.closed]]
   const typeMeta = (t: string) => t === 'hall' ? { icon: UtensilsCrossed, label: 'Зал' } : t === 'delivery' ? { icon: Bike, label: 'Доставка' } : { icon: ShoppingBag, label: 'С собой' }

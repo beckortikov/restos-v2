@@ -70,6 +70,9 @@ export default function PosV2Order() {
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
   const canOverrideStop = canDo('orders.create_stopped')
+  // Гейт orders.view_others: в пикере столов официант видит только свободные +
+  // свои занятые (иначе выбирает/видит чужие столы).
+  const canViewOthers = canDo('orders.view_others')
 
   // Backend stop-list: нехватка ингредиентов (computed-on-read) + ручной override.
   // Без него касса видела стоп только по menu.is_available → ловила 409 на
@@ -218,10 +221,11 @@ export default function PosV2Order() {
 
   const tablesByZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
+    const visible = canViewOthers ? tables : tables.filter(t => t.status === 'free' || t.waiterId === user?.id)
     const map = new Map<string, typeof tables>()
-    for (const t of tables) { const k = zoneName(t.zone); (map.get(k) ?? map.set(k, []).get(k)!).push(t) }
+    for (const t of visible) { const k = zoneName(t.zone); (map.get(k) ?? map.set(k, []).get(k)!).push(t) }
     return Array.from(map.entries()).map(([zone, ts]) => ({ zone, tables: [...ts].sort((a, b) => a.number - b.number) }))
-  }, [tables, zones])
+  }, [tables, zones, canViewOthers, user?.id])
 
   // ── Weight modal ──────────────────────────────────────────────
   const [weightItem, setWeightItem] = useState<MenuItem | null>(null)
