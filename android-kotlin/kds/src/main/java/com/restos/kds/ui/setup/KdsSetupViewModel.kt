@@ -51,7 +51,15 @@ class KdsSetupViewModel @Inject constructor(
     }
 
     fun setUrl(v: String) = _state.update { it.copy(url = v, error = null) }
-    fun setPin(v: String) = _state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(8), error = null) }
+    fun setPin(v: String) = _state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(MAX_PIN), error = null) }
+
+    /** PIN-пад: добавить цифру (до MAX_PIN). */
+    fun appendDigit(c: Char) = _state.update {
+        if (it.pin.length >= MAX_PIN) it else it.copy(pin = it.pin + c, error = null)
+    }
+
+    /** PIN-пад: стереть последнюю цифру. */
+    fun backspace() = _state.update { it.copy(pin = it.pin.dropLast(1), error = null) }
 
     /** QR из кассы: содержит адрес сервера — вытаскиваем origin и подключаемся. */
     fun onQrScanned(raw: String) {
@@ -90,8 +98,8 @@ class KdsSetupViewModel @Inject constructor(
     /** Вход по PIN (касса уже подтверждена). */
     fun login(onDone: () -> Unit) {
         val pin = _state.value.pin
-        if (pin.length < 4) {
-            _state.update { it.copy(error = "PIN не короче 4 цифр") }
+        if (pin.length < MIN_PIN) {
+            _state.update { it.copy(error = "PIN не короче $MIN_PIN цифр") }
             return
         }
         _state.update { it.copy(busy = true, error = null) }
@@ -112,5 +120,10 @@ class KdsSetupViewModel @Inject constructor(
             serverConfig.clear()
             _state.update { UiState() }
         }
+    }
+
+    companion object {
+        const val MAX_PIN = 6   // как у официанта (PinLoginViewModel)
+        const val MIN_PIN = 4
     }
 }
