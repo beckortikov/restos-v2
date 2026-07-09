@@ -61,8 +61,11 @@ vi.mock('@/lib/queries', () => {
     fetchServiceAccrualByShift: list,
     fetchServicePayoutByShift: ok,
     fetchUsers: list,
+    fetchZones: list,
     fetchTables: () => Promise.resolve([TABLE]),
     fetchOrders: () => Promise.resolve([ORDER]),
+    fetchOrdersWithCursor: () => Promise.resolve({ orders: [ORDER], nextCursor: null }),
+    fetchVoidsForOrders: () => Promise.resolve(new Map()),
     fetchOrderSplits: list,
     fetchFinancialAccounts: list,
     // stop-list / showcase / batch / prints
@@ -91,6 +94,7 @@ vi.mock('@/lib/queries', () => {
     createReservation: ok, updateReservationStatus: ok, mergeTables: ok, unmergeTables: ok,
     createTable: ok, updateTableData: ok, deleteTable: ok, createZone: ok, updateZone: ok, deleteZone: ok,
     payServiceCharge: ok,
+    patchShiftAccount: ok,
     openShift: ok, closeShift: ok, addShiftOperation: ok, createShiftExpense: ok,
     printShiftX: ok, printShiftZ: ok, printShiftService: ok,
   }
