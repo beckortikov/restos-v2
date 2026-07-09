@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Clock, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown, AlertTriangle, Ban } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown, AlertTriangle, Ban } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
@@ -208,25 +208,33 @@ export default function PosV2Shift() {
     // активной смены) доступна кассиру без ПИН.
     <PinSection label="Кассовая смена" gateWhen={!!shift}>
     <div className="flex flex-col h-full w-full overflow-hidden">
-      {/* Topbar */}
-      <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', padding: 'var(--pv-gap) var(--pv-pad-x) 0' }}>
+      {/* Hero: назад + заголовок + статус · панель отчётов + «Закрыть смену» (дизайн restos.pen) */}
+      <div className="flex items-center flex-wrap shrink-0" style={{ gap: 'clamp(0.4rem,0.7vw,0.65rem)', padding: 'var(--pv-gap) var(--pv-pad-x) 0' }}>
         <button onClick={() => navigate('/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
           <LayoutGrid style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
           <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
         </button>
-        <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,1.8vw,1.6rem)' }}>Кассовая смена</span>
+        <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.7vw,1.5rem)' }}>Кассовая смена</span>
         {shift && (
-          <div className="flex items-center gap-2 rounded-full" style={{ background: 'var(--pv-free-soft)', padding: '0.35rem 0.8rem' }}>
+          <div className="flex items-center gap-2 rounded-full shrink-0" style={{ background: 'var(--pv-free-soft)', padding: '0.35rem 0.8rem' }}>
             <span className="rounded-full" style={{ width: '0.55rem', height: '0.55rem', background: 'var(--pv-free-dot)' }} />
-            <span className="font-semibold" style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Открыта</span>
-            <Clock style={{ width: '0.9rem', height: '0.9rem', color: 'var(--pv-free-text)' }} />
-            <span className="font-medium" style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{duration}</span>
+            <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Открыта · {duration}</span>
           </div>
         )}
-        <div className="flex-1" />
-        <button onClick={() => load()} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+        <div className="flex-1" style={{ minWidth: '0.5rem' }} />
+        {shift && !loading && ([['X-отчёт', () => report('x'), Printer], ['Z-отчёт', () => report('z'), Printer], ['Обслуживание', () => report('service'), HandCoins], ['Excel', exportXlsx, FileSpreadsheet], ['История', openHistory, History]] as const).map(([l, fn, Icon]) => (
+          <button key={l} onClick={fn} className="flex items-center gap-1.5 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.72rem) clamp(0.65rem,0.95vw,0.95rem)' }}>
+            <Icon style={{ width: 'clamp(1rem,1.2vw,1.15rem)', height: 'clamp(1rem,1.2vw,1.15rem)', color: 'var(--pv-text-2)' }} />
+            <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{l}</span>
+          </button>
+        ))}
+        {shift && !loading && (
+          <button onClick={() => openAction('close')} className="flex items-center gap-1.5 rounded-xl font-bold text-white shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.5rem,0.8vw,0.72rem) clamp(0.8rem,1.1vw,1.1rem)', boxShadow: '0 4px 12px rgba(210,59,46,0.32)' }}>
+            <Lock style={{ width: 'clamp(1rem,1.2vw,1.15rem)', height: 'clamp(1rem,1.2vw,1.15rem)' }} /><span className="whitespace-nowrap">Закрыть смену</span>
+          </button>
+        )}
+        <button onClick={() => load()} className="flex items-center justify-center rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.82rem)' }}>
           <RefreshCw style={{ width: 'clamp(1.05rem,1.3vw,1.3rem)', height: 'clamp(1.05rem,1.3vw,1.3rem)', color: 'var(--pv-text-2)' }} className={loading ? 'animate-spin' : ''} />
-          <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Обновить</span>
         </button>
       </div>
 
@@ -288,8 +296,13 @@ export default function PosV2Shift() {
                 )}
               </div>
             )}
-            {/* KPIs */}
+            {/* KPIs — 4 карточки (дизайн): Наличные в кассе / Выручка / Заказов / Ср.чек */}
             <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(11rem,16vw,15rem), 1fr))' }}>
+              <div className="rounded-2xl" style={{ background: 'var(--pv-free-soft)', border: '1px solid var(--pv-free-border)', padding: 'clamp(0.9rem,1.4vw,1.4rem)' }}>
+                <div style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Наличные в кассе</div>
+                <div className="font-bold" style={{ color: 'var(--pv-free-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)', margin: '0.15rem 0' }}>{formatCurrency(expected)}</div>
+                <div className="truncate" style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)', opacity: 0.8 }}>ожидается сейчас</div>
+              </div>
               {([
                 ['Выручка', formatCurrency(curRevenue), `Нал ${formatCurrency(rev.cashRevenue)} · Безнал ${formatCurrency(rev.cardRevenue)}`, deltaPct(curRevenue, prev?.revenue ?? 0)],
                 ['Заказов', String(rev.ordersCount), 'закрыто', deltaPct(rev.ordersCount, prev?.ordersCount ?? 0)],
@@ -318,54 +331,47 @@ export default function PosV2Shift() {
               </div>
             )}
 
-            {/* Reports toolbar */}
-            <div className="flex items-center flex-wrap" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)' }}>
-              {([['X-отчёт', () => report('x'), Printer], ['Печать Z', () => report('z'), Printer], ['Обслуживание', () => report('service'), HandCoins], ['Excel', exportXlsx, FileSpreadsheet], ['История смен', openHistory, History]] as const).map(([l, fn, Icon]) => (
-                <button key={l} onClick={fn} className="flex items-center gap-2 rounded-xl border active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.55rem,0.9vw,0.8rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
-                  <Icon style={{ width: 'clamp(1rem,1.3vw,1.25rem)', height: 'clamp(1rem,1.3vw,1.25rem)', color: 'var(--pv-text-2)' }} />
-                  <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Cash panel */}
-            <div className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
-              <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', marginBottom: '0.8rem' }}>Движение по кассе</div>
-              {([['Начальный размен', openingBalance, ''], ['Наличная выручка', rev.cashRevenue, '+'], ['Внесения', cashIn, '+'], ['Изъятия', withdraw, '−'], ['Расходы', expenses, '−']] as const).map(([l, v, sign]) => (
-                <div key={l} className="flex items-center justify-between" style={{ padding: '0.4rem 0' }}>
-                  <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{l}</span>
-                  <span className="font-semibold" style={{ color: sign === '−' ? 'var(--pv-occ-text)' : sign === '+' ? 'var(--pv-free-text)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{sign}{formatCurrency(v)}</span>
+            {/* Тело: слева разбивки, справа касса + действия (дизайн — 2 колонки) */}
+            <div className="flex flex-wrap" style={{ gap: 'var(--pv-gap)', alignItems: 'flex-start' }}>
+              <div className="flex-1 grid content-start" style={{ minWidth: 'clamp(15rem,38vw,28rem)', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(13rem,17vw,17rem), 1fr))' }}>
+                {zr ? (
+                  <>
+                    {breakdownCard('Выручка по способам', zr.revenueByMethod.map(r => [r.accountName || (r.paymentMethod === 'cash' ? 'Наличные' : 'Безнал'), formatCurrency(r.total)] as [string, string]))}
+                    {breakdownCard('Официанты', zr.salesByWaiter.map(w => [`${w.name} (${w.ordersCount})`, formatCurrency(w.total)] as [string, string]))}
+                    {breakdownCard('По типу заказа', zr.salesByOrderType.map(r => [r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type, formatCurrency(r.total)] as [string, string]))}
+                    {breakdownCard('Продажи по категориям', zr.salesByCategory.slice(0, 8).map(r => [`${r.name} (${r.qty})`, formatCurrency(r.total)] as [string, string]))}
+                    {breakdownCard('Проданные блюда', zr.salesByItem.slice(0, 10).map(r => [`${r.name} ×${r.qty}`, formatCurrency(r.total)] as [string, string]))}
+                  </>
+                ) : (
+                  <div className="rounded-2xl flex items-center justify-center text-center" style={{ background: 'var(--pv-card)', border: '1px dashed var(--pv-border)', padding: '2rem', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', minHeight: '10rem', gridColumn: '1 / -1' }}>Разбивки (способы оплаты, официанты, категории, блюда) появятся после продаж.</div>
+                )}
+              </div>
+              <div className="shrink-0 flex flex-col" style={{ width: 'clamp(19rem,29vw,25rem)', gap: 'var(--pv-gap)' }}>
+                {/* Движение по кассе */}
+                <div className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
+                  <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', marginBottom: '0.8rem' }}>Движение по кассе</div>
+                  {([['Начальный размен', openingBalance, ''], ['Наличная выручка', rev.cashRevenue, '+'], ['Внесения', cashIn, '+'], ['Изъятия', withdraw, '−'], ['Расходы', expenses, '−']] as const).map(([l, v, sign]) => (
+                    <div key={l} className="flex items-center justify-between" style={{ padding: '0.4rem 0' }}>
+                      <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{l}</span>
+                      <span className="font-semibold" style={{ color: sign === '−' ? 'var(--pv-occ-text)' : sign === '+' ? 'var(--pv-free-text)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{sign}{formatCurrency(v)}</span>
+                    </div>
+                  ))}
+                  <div style={{ height: '1px', background: 'var(--pv-border)', margin: '0.6rem 0' }} />
+                  <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-brand-soft)', padding: '0.7rem 1rem' }}>
+                    <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Ожидается в кассе</span>
+                    <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.2rem,1.7vw,1.6rem)' }}>{formatCurrency(expected)}</span>
+                  </div>
                 </div>
-              ))}
-              <div style={{ height: '1px', background: 'var(--pv-border)', margin: '0.6rem 0' }} />
-              <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-brand-soft)', padding: '0.7rem 1rem' }}>
-                <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Ожидается в кассе</span>
-                <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.2rem,1.7vw,1.6rem)' }}>{formatCurrency(expected)}</span>
+                {/* Действия */}
+                <div className="grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
+                  {([['cash_in', 'Внести', ArrowDownToLine, '#17a45e'], ['cash_out', 'Изъять', ArrowUpFromLine, '#e8890c'], ['expense', 'Расход', ReceiptText, '#e0245a']] as const).map(([a, l, Icon, color]) => (
+                    <button key={a} onClick={() => openAction(a)} className="flex flex-col items-center justify-center gap-1.5 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: color, padding: 'clamp(0.85rem,1.3vw,1.15rem) 0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>
+                      <Icon style={{ width: '1.5em', height: '1.5em' }} />{l}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-
-            {/* Actions */}
-            <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(10rem,15vw,14rem), 1fr))' }}>
-              {([['cash_in', 'Внесение', ArrowDownToLine, '#17a45e'], ['cash_out', 'Изъятие', ArrowUpFromLine, '#e8890c'], ['expense', 'Расход', ReceiptText, '#e0245a']] as const).map(([a, l, Icon, color]) => (
-                <button key={a} onClick={() => openAction(a)} className="flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: color, padding: 'clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>
-                  <Icon style={{ width: '1.4em', height: '1.4em' }} />{l}
-                </button>
-              ))}
-            </div>
-            <button onClick={() => openAction('close')} className="flex items-center justify-center gap-2 rounded-2xl font-bold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>
-              <Lock style={{ width: '1.35em', height: '1.35em' }} />Закрыть смену
-            </button>
-
-            {/* Z-разбивки */}
-            {zr && (
-              <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(15rem,24vw,22rem), 1fr))', marginTop: '0.3rem' }}>
-                {breakdownCard('Выручка по способам', zr.revenueByMethod.map(r => [r.accountName || (r.paymentMethod === 'cash' ? 'Наличные' : 'Безнал'), formatCurrency(r.total)] as [string, string]))}
-                {breakdownCard('Официанты', zr.salesByWaiter.map(w => [`${w.name} (${w.ordersCount})`, formatCurrency(w.total)] as [string, string]))}
-                {breakdownCard('По типу заказа', zr.salesByOrderType.map(r => [r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type, formatCurrency(r.total)] as [string, string]))}
-                {breakdownCard('Продажи по категориям', zr.salesByCategory.slice(0, 8).map(r => [`${r.name} (${r.qty})`, formatCurrency(r.total)] as [string, string]))}
-                {breakdownCard('Проданные блюда', zr.salesByItem.slice(0, 10).map(r => [`${r.name} ×${r.qty}`, formatCurrency(r.total)] as [string, string]))}
-              </div>
-            )}
           </div>
         )}
       </div>
