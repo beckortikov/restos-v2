@@ -455,15 +455,16 @@ export default function PosV2Order() {
                 const weight = (m.unit ?? 'piece') !== 'piece'
                 const fav = favSet.has(m.id), freq = freqSet.has(m.id)
                 return (
-                  // Обёртка: карточка-«добавить» и угловые тумблеры теперь СОСЕДИ, а не
-                  // вложенные интерактивы внутри <button> (был невалидный HTML + тумблеры
-                  // ловились только мышью). Теперь все три — настоящие кнопки, доступные
-                  // с клавиатуры (WCAG 2.1.1 / 4.1.2).
+                  // Карточка блюда по дизайну restos.pen (DishTile): белая карточка
+                  // (radius 16, тонкая рамка + мягкая тень), содержимое ПО ЦЕНТРУ —
+                  // название и цена-«пилюля» (brand-soft фон, бренд-текст). БЕЗ
+                  // эмодзи-плейсхолдера (на Windows он рендерился «квадратом» и не по
+                  // дизайну). Тумблеры избранное/часто — соседи-кнопки в углу (не
+                  // вложены в <button>, WCAG 2.1.1 / 4.1.2).
                   <div key={m.id} className="relative">
-                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrency(m.price)}`} className="w-full flex flex-col rounded-2xl text-left transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', boxShadow: '0 1px 4px rgba(0,0,0,0.04)', padding: 'clamp(0.7rem,1.1vw,1.1rem)', gap: 'clamp(0.4rem,0.8vw,0.7rem)', minHeight: 'clamp(6rem,9vw,8rem)', opacity: stopped ? 0.6 : 1 }}>
-                      <span style={{ fontSize: 'clamp(1.4rem,2.4vw,2rem)' }}>{m.emoji || '🍽️'}</span>
-                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.82rem,1.1vw,1rem)' }}>{m.name}</span>
-                      <span className="font-bold mt-auto" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(0.85rem,1.15vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? `/${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrency(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: 'clamp(7rem,11vw,9.5rem)', opacity: stopped ? 0.6 : 1 }}>
+                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.25vw,1.2rem)' }}>{m.name}</span>
+                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
                     {restaurantId && (
