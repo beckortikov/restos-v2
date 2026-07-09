@@ -92,6 +92,7 @@ vi.mock('@/lib/queries', () => {
     splitOrderEqual: ok, splitOrderByItems: ok, paySplit: ok, cancelSplits: ok,
     refundOrder: ok, reprintOrderReceipt: ok, reopenOrder: ok,
     createReservation: ok, updateReservationStatus: ok, mergeTables: ok, unmergeTables: ok,
+    cleanupStuckTables: () => Promise.resolve(0),
     createTable: ok, updateTableData: ok, deleteTable: ok, createZone: ok, updateZone: ok, deleteZone: ok,
     payServiceCharge: ok,
     patchShiftAccount: ok,

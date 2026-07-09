@@ -1,12 +1,13 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { LayoutGrid, Users, Plus, CalendarPlus, Combine, Clock, Check, Ban, Pencil, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
-import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone } from '@/lib/queries'
+import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone, fetchOrders, cleanupStuckTables } from '@/lib/queries'
+import { formatCurrency, startOfToday, getTimeSince } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { Table, TableStatus, Reservation } from '@/lib/types'
@@ -47,6 +48,32 @@ export default function PosV2Tables() {
   // Reservation view
   const [viewTable, setViewTable] = useState<Table | null>(null)
   const [resInfo, setResInfo] = useState<Reservation | null>(null)
+
+  // Сумма открытого счёта по столам — для показа на плитке (карта зала была
+  // информационно бедной: не видно, на сколько «висит» стол).
+  const [tableTotals, setTableTotals] = useState<Map<string, number>>(new Map())
+  useEffect(() => {
+    let cancelled = false
+    fetchOrders({ from: startOfToday(), slim: true }).then(os => {
+      if (cancelled) return
+      const m = new Map<string, number>()
+      for (const o of os) {
+        if (!o.tableId || o.status === 'done' || o.status === 'cancelled') continue
+        m.set(o.tableId, (m.get(o.tableId) ?? 0) + (o.totalWithService ?? o.total ?? 0))
+      }
+      setTableTotals(m)
+    }).catch(() => {})
+    return () => { cancelled = true }
+  }, [tables])
+
+  // Самолечение залипших «оплачен-но-занят» столов при входе на карту (как
+  // старый table-map). Без этого стол мог висеть занятым после оплаты.
+  const cleanedRef = useRef(false)
+  useEffect(() => {
+    if (cleanedRef.current) return
+    cleanedRef.current = true
+    cleanupStuckTables().then(n => { if (n > 0) reload() }).catch(() => {})
+  }, [reload])
 
   const byZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
@@ -228,17 +255,28 @@ export default function PosV2Tables() {
                 const st = STATUS[t.status] ?? STATUS.free
                 const busyTile = !!t.currentOrderIds?.length
                 const selForMerge = mergePrimary?.id === t.id
+                const total = tableTotals.get(t.id)
+                const groups = t.currentOrderIds?.length ?? 0
+                const since = busyTile && t.openedAt ? getTimeSince(t.openedAt) : null
                 return (
                   <button key={t.id} onClick={() => tap(t)} disabled={busy} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform disabled:opacity-60" style={{ background: selForMerge ? 'var(--pv-brand)' : st.soft, border: `${selForMerge || busyTile ? 2 : 1}px solid ${selForMerge ? 'var(--pv-brand)' : busyTile ? st.dot : 'transparent'}`, padding: 'clamp(0.9rem,1.5vw,1.4rem)', gap: '0.4rem', minHeight: 'clamp(6rem,9vw,8rem)' }}>
                     {t.mergedWith && <span className="absolute" style={{ top: '0.4rem', right: '0.4rem' }}><Combine style={{ width: '0.95rem', height: '0.95rem', color: 'var(--pv-text-3)' }} /></span>}
+                    {groups >= 2 && <span className="absolute font-bold flex items-center justify-center rounded-full" style={{ top: '0.4rem', left: '0.4rem', background: selForMerge ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: selForMerge ? 'var(--pv-brand)' : '#fff', minWidth: '1.25rem', height: '1.25rem', fontSize: '0.65rem', padding: '0 0.3rem' }}>{groups}</span>}
                     <span className="font-bold" style={{ color: selForMerge ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.4rem,2.2vw,2rem)' }}>№{t.number}</span>
                     <div className="flex items-center gap-1.5">
                       <span className="rounded-full" style={{ width: '0.55rem', height: '0.55rem', background: selForMerge ? '#fff' : st.dot }} />
                       <span className="font-semibold" style={{ color: selForMerge ? '#fff' : st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{selForMerge ? 'Выбран' : st.label}</span>
                     </div>
-                    <div className="flex items-center gap-1" style={{ color: selForMerge ? 'rgba(255,255,255,0.8)' : 'var(--pv-text-3)' }}>
-                      <Users style={{ width: '0.85rem', height: '0.85rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
-                    </div>
+                    {busyTile && !selForMerge && total != null ? (
+                      <div className="flex flex-col items-center" style={{ gap: '0.1rem' }}>
+                        <span className="font-bold" style={{ color: 'var(--pv-occ-text)', fontSize: 'calc(var(--pv-ctl) + 0.05rem)' }}>{formatCurrency(total)}</span>
+                        {since && <span className="flex items-center gap-0.5" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}><Clock style={{ width: '0.7rem', height: '0.7rem' }} />{since}</span>}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1" style={{ color: selForMerge ? 'rgba(255,255,255,0.8)' : 'var(--pv-text-3)' }}>
+                        <Users style={{ width: '0.85rem', height: '0.85rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
+                      </div>
+                    )}
                   </button>
                 )
               })}
