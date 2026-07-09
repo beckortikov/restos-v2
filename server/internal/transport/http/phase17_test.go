@@ -58,26 +58,31 @@ func TestPhase17_CreateOrder_PriceOverride_PieceIgnored(t *testing.T) {
 	}
 }
 
-// Для ВЕСОВОГО блюда (unit != 'piece') override цены РАЗРЕШЁН — итоговая цена
-// приходит с весов клиента, из меню её взять нельзя.
-func TestPhase17_CreateOrder_PriceOverride_WeightAllowed(t *testing.T) {
+// У ВЕСОВОГО блюда цена тоже фиксирована в меню — клиентский override цены
+// ИГНОРИРУЕТСЯ. Вручную кассир вбивает только ВЕС (qty), а сервер сам считает
+// total = mi.Price × qty/unitSize.
+func TestPhase17_CreateOrder_PriceOverride_WeightIgnored(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	gdb, _, _, _ := seedForWrite(t, f)
 
+	// Весовое блюдо: 100 с. за 1 кг.
 	wName := "Meat by weight"
 	wUnit := "kg"
 	weightID := uuid.NewString()
 	if err := gdb.Create(&models.MenuItem{
 		ID: weightID, Name: &wName, Unit: &wUnit,
-		Price: decimal.MustFromString("100"), RestaurantID: &f.rid,
+		Price:        decimal.MustFromString("100"),
+		UnitSize:     decimal.MustFromString("1"),
+		RestaurantID: &f.rid,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
 
+	// qty = 0.5 кг (вес). Попытка override цены на 37.50 должна игнорироваться.
 	r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
 		"items": []map[string]any{
-			{"menu_item_id": weightID, "qty": "1", "price": "37.50"},
+			{"menu_item_id": weightID, "qty": "0.5", "price": "37.50"},
 		},
 	})
 	if r.StatusCode != 201 {
@@ -85,6 +90,10 @@ func TestPhase17_CreateOrder_PriceOverride_WeightAllowed(t *testing.T) {
 	}
 	var created models.Order
 	_ = json.Unmarshal(b, &created)
+	// total = 100 × 0.5/1 = 50 (меню-цена × вес; override 37.50 не влияет).
+	if !created.Total.Equal(decimal.MustFromString("50")) {
+		t.Errorf("total = %s, want 50 (menu price × weight; price override must be ignored)", created.Total.String())
+	}
 	_, gb := f.get(t, fmt.Sprintf("/api/v1/orders/%s", created.ID), tok)
 	var detail struct {
 		Items []models.OrderItem `json:"items"`
@@ -93,8 +102,8 @@ func TestPhase17_CreateOrder_PriceOverride_WeightAllowed(t *testing.T) {
 	if len(detail.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(detail.Items))
 	}
-	if !detail.Items[0].Price.Equal(decimal.MustFromString("37.50")) {
-		t.Errorf("item price = %s, want 37.50 (weight override applied)", detail.Items[0].Price.String())
+	if !detail.Items[0].Price.Equal(decimal.MustFromString("100")) {
+		t.Errorf("item price = %s, want 100 (menu price, override ignored)", detail.Items[0].Price.String())
 	}
 }
 

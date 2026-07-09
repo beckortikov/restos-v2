@@ -732,35 +732,17 @@ func buildOrderItem(
 		n := *it.Name
 		oi.Name = &n
 	}
-	if it.Price != nil {
-		d, err := decimal.FromString(*it.Price)
-		if err != nil {
-			return nil, decimal.Zero, apperrors.Wrap("VALIDATION", "bad price", err)
-		}
-		// Override цены разрешён ТОЛЬКО там, где цену нельзя взять из меню:
-		//  - весовой товар (unit != 'piece') — цена = вес × цена/кг, вес с весов;
-		//  - позиция со свободной ценой (меню-цена 0) — кассир вбивает вручную.
-		// Для обычного штучного блюда с фикс-ценой клиентскую цену игнорируем и
-		// оставляем mi.Price — иначе крафтом запроса можно продать блюдо по любой
-		// цене. Признаки берём из МЕНЮ (mi.*), а не из клиентского override —
-		// чтобы нельзя было прислать unit:"kg" на штучное блюдо и открыть дыру.
-		isWeight := mi.Unit != nil && *mi.Unit != "piece"
-		isOpenPrice := mi.Price.IsZero()
-		if isWeight || isOpenPrice {
-			oi.Price = d
-		}
-	}
-	if it.Unit != nil {
-		u := *it.Unit
-		oi.Unit = &u
-	}
-	if it.UnitSize != nil {
-		d, err := decimal.FromString(*it.UnitSize)
-		if err != nil {
-			return nil, decimal.Zero, apperrors.Wrap("VALIDATION", "bad unit_size", err)
-		}
-		oi.UnitSize = d
-	}
+	// ЦЕНА, UNIT и UNIT_SIZE — всегда из МЕНЮ (mi.*), клиентские override НЕ
+	// применяются. Цена любой позиции фиксирована в меню: у весовой mi.Price и
+	// mi.UnitSize задают цену за вес, а кассир вручную вбивает только ВЕС — он
+	// приходит в qty, и сервер сам считает line_total = mi.Price × qty/unitSize
+	// (см. effectivePortions). Приём цены/порционирования с клиента был дырой:
+	// крафтом запроса можно было продать блюдо по любой цене либо занизить
+	// весовую через unit_size. Фронт и так шлёт меню-значения — поведение не
+	// меняется, закрыт лишь канал подмены. Свободной цены как отдельной фичи в
+	// системе нет; если появится — вернуть управляемый override здесь. Поля
+	// it.Price/it.Unit/it.UnitSize остаются в DTO для совместимости, но
+	// игнорируются.
 	if it.COGS != nil {
 		d, err := decimal.FromString(*it.COGS)
 		if err != nil {
