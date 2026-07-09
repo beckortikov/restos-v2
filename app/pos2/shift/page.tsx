@@ -2,13 +2,14 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Clock, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Clock, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown, AlertTriangle, Ban } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
   fetchActiveShift, fetchShiftRevenue, fetchShiftOperations, fetchFinancialAccounts,
   openShift, closeShift, addShiftOperation, createShiftExpense,
   printShiftX, printShiftZ, printShiftService, fetchShiftZReport, type ShiftZReport, fetchShifts,
+  fetchOrders, cancelOrder, patchShiftAccount,
 } from '@/lib/queries'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
@@ -16,7 +17,8 @@ import { deltaPct } from '@/lib/pos-v2/report'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import { dSum, dAdd, dSub } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
-import type { CashShift, CashShiftOperation, FinancialAccount } from '@/lib/types'
+import { V4Error } from '@/lib/api'
+import type { CashShift, CashShiftOperation, FinancialAccount, Order } from '@/lib/types'
 
 const EXPENSE_CATS = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
 type Action = 'cash_in' | 'cash_out' | 'expense' | 'close'
@@ -41,7 +43,17 @@ export default function PosV2Shift() {
   const [hist, setHist] = useState<CashShift[] | null>(null)
   const busyRef = useRef(false)
 
-  const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
+  const cashAccounts = useMemo(() => accounts.filter(a => a.type === 'cash'), [accounts])
+  // Счёт смены при открытии — обязателен (иначе расход/выплата обслуживания падают).
+  const [openAccountId, setOpenAccountId] = useState('')
+  // Гард закрытия: бэк называет блокирующие заказы в details.order_ids.
+  const [stuckOrders, setStuckOrders] = useState<Order[] | null>(null)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+  // Recovery: legacy-смена без счёта — привязываем cash-счёт без закрытия.
+  const [attachId, setAttachId] = useState('')
+  const [attaching, setAttaching] = useState(false)
+  useEffect(() => { if (!openAccountId && cashAccounts.length) setOpenAccountId(cashAccounts[0].id) }, [cashAccounts, openAccountId])
+  useEffect(() => { if (shift && !shift.accountId && !attachId && cashAccounts.length) setAttachId(cashAccounts[0].id) }, [shift, cashAccounts, attachId])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -121,9 +133,13 @@ export default function PosV2Shift() {
 
   async function doOpen() {
     if (busyRef.current) return
+    // Хард-блок: смена без cash-счёта делает Расход и выплату обслуживания
+    // невозможными (бэк требует счёт). Старый ПОС так же блокировал открытие.
+    if (cashAccounts.length === 0) { toast.error('Нет счёта «Касса» — создайте его в Финансы → Счета'); return }
+    if (!openAccountId) { toast.error('Выберите счёт смены — без него расход/выплаты не работают'); return }
     busyRef.current = true; setBusy(true)
     try {
-      await openShift(user?.id ?? '', num(openBal), cashAcc?.id)
+      await openShift(user?.id ?? '', num(openBal), openAccountId)
       toast.success('Смена открыта'); setOpenBal(''); await load()
     } catch (e) { toast.error(`Не удалось открыть: ${humanizeError(e)}`) }
     finally { busyRef.current = false; setBusy(false) }
@@ -132,6 +148,7 @@ export default function PosV2Shift() {
   async function submitAction() {
     if (busyRef.current || !shift || !action) return
     if (action !== 'close' && num(amt) <= 0) { toast.error('Укажите сумму'); return }
+    if (action === 'close') setStuckOrders(null)
     busyRef.current = true; setBusy(true)
     try {
       if (action === 'cash_in') await addShiftOperation(shift.id, 'cash_in', num(amt), desc)
@@ -140,12 +157,39 @@ export default function PosV2Shift() {
       else if (action === 'close') { await closeShift(shift.id, user?.id ?? '', amt ? num(amt) : expected); toast.success('Смена закрыта'); setAction(null); await load(); return }
       toast.success(action === 'cash_in' ? 'Внесение проведено' : action === 'cash_out' ? 'Изъятие проведено' : 'Расход проведён')
       setAction(null); setAmt(''); setDesc(''); await load()
-    } catch (e) { toast.error(`Ошибка: ${humanizeError(e)}`) }
+    } catch (e) {
+      toast.error(`Ошибка: ${humanizeError(e)}`)
+      // Закрытие заблокировано незакрытыми заказами: бэк называет их в
+      // details.order_ids. Грузим по id (без scope по смене/дате) — «хвост» из
+      // прошлой смены иначе не найти нигде. Даём отменить их прямо в модалке.
+      if (action === 'close') {
+        const ids = e instanceof V4Error ? (e.envelope()?.details?.order_ids as unknown) : undefined
+        if (Array.isArray(ids) && ids.length > 0) {
+          try { setStuckOrders(await fetchOrders({ ids: ids as string[], slim: true })) } catch { /* покажем только текст ошибки */ }
+        }
+      }
+    }
     finally { busyRef.current = false; setBusy(false) }
   }
 
+  async function cancelStuck(orderId: string) {
+    if (!window.confirm('Отменить этот заказ? Он мешает закрыть смену.')) return
+    setCancellingId(orderId)
+    try { await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены'); setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId)); toast.success('Заказ отменён') }
+    catch (e) { toast.error(humanizeError(e)) }
+    finally { setCancellingId(null) }
+  }
+
+  async function attachAccount() {
+    if (!shift || !attachId) return
+    setAttaching(true)
+    try { await patchShiftAccount(shift.id, attachId); toast.success('Счёт привязан к смене'); setAttachId(''); await load() }
+    catch (e) { toast.error(humanizeError(e)) }
+    finally { setAttaching(false) }
+  }
+
   function openAction(a: Action) {
-    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0])
+    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0]); setStuckOrders(null)
     setAmt(a === 'close' ? String(expected) : '')
   }
 
@@ -191,13 +235,48 @@ export default function PosV2Shift() {
                   <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>TJS</span>
                 </div>
               </div>
-              <button disabled={busy} onClick={doOpen} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              {/* Счёт смены — обязателен (иначе расход/выплаты недоступны). */}
+              <div className="w-full">
+                <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>Счёт смены</div>
+                {cashAccounts.length === 0 ? (
+                  <div className="rounded-xl" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.7rem 1rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Нет счёта «Касса» — создайте его в Финансы → Счета. Без него расход и выплаты не работают.</div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {cashAccounts.map(a => { const on = a.id === openAccountId; return (
+                      <button key={a.id} onClick={() => setOpenAccountId(a.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{a.name}</button>
+                    ) })}
+                  </div>
+                )}
+              </div>
+              <button disabled={busy || cashAccounts.length === 0 || !openAccountId} onClick={doOpen} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 {busy ? 'Открываем…' : 'Открыть смену'}
               </button>
             </div>
           </div>
         ) : (
           <div className="flex flex-col" style={{ gap: 'var(--pv-gap)' }}>
+            {/* Recovery: смена без счёта → Расход и выплата обслуживания заблокированы. */}
+            {!shift.accountId && (
+              <div className="rounded-2xl flex flex-col gap-3" style={{ background: 'var(--pv-bill-soft)', border: '1px solid var(--pv-bill-dot)', padding: 'clamp(1rem,1.5vw,1.4rem)' }}>
+                <div className="flex items-start gap-2">
+                  <AlertTriangle style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-bill-text)', flexShrink: 0, marginTop: '0.1rem' }} />
+                  <div>
+                    <div className="font-bold" style={{ color: 'var(--pv-bill-text)', fontSize: 'var(--pv-ctl)' }}>У смены не указан счёт</div>
+                    <div style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)', opacity: 0.9 }}>Привяжите счёт, чтобы разблокировать Расход и выплату обслуживания официантам.</div>
+                  </div>
+                </div>
+                {cashAccounts.length === 0 ? (
+                  <div style={{ color: 'var(--pv-occ-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Нет cash-счетов. Создайте в Финансы → Счета.</div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {cashAccounts.map(a => { const on = a.id === attachId; return (
+                      <button key={a.id} onClick={() => setAttachId(a.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.45rem 0.85rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{a.name}</button>
+                    ) })}
+                    <button disabled={!attachId || attaching} onClick={attachAccount} className="rounded-xl font-bold text-white disabled:opacity-50" style={{ background: 'var(--pv-bill-text)', padding: '0.45rem 1rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{attaching ? '…' : 'Привязать'}</button>
+                  </div>
+                )}
+              </div>
+            )}
             {/* KPIs */}
             <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(11rem,16vw,15rem), 1fr))' }}>
               {([
@@ -282,7 +361,7 @@ export default function PosV2Shift() {
 
       {/* Action modal */}
       {action && shift && (
-        <PosModal open onClose={() => { if (!busy) setAction(null) }} dismissable={!busy} width="clamp(22rem, 44vw, 34rem)"
+        <PosModal open onClose={() => { if (!busy) { setAction(null); setStuckOrders(null) } }} dismissable={!busy} width="clamp(22rem, 44vw, 34rem)"
           title={action === 'cash_in' ? 'Внесение' : action === 'cash_out' ? 'Изъятие' : action === 'expense' ? 'Расход из кассы' : 'Закрытие смены'}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
               {action === 'close' && (
@@ -317,6 +396,21 @@ export default function PosV2Shift() {
               )}
               {action !== 'close' && (
                 <input aria-label="Комментарий (необязательно)" value={desc} onChange={e => setDesc(e.target.value)} placeholder="Комментарий (необязательно)" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.6rem 1rem' }} />
+              )}
+              {/* Гард закрытия: незакрытые заказы (в т.ч. «хвост» прошлой смены). */}
+              {action === 'close' && stuckOrders && stuckOrders.length > 0 && (
+                <div className="rounded-xl flex flex-col gap-2" style={{ background: 'var(--pv-bill-soft)', border: '1px solid var(--pv-bill-dot)', padding: '0.8rem 1rem' }}>
+                  <div className="flex items-center gap-1.5 font-bold" style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><AlertTriangle style={{ width: '1rem', height: '1rem' }} />Смена не закрывается — есть незакрытые заказы</div>
+                  <div style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)', opacity: 0.9 }}>Отмените их (или закройте с оплатой из заказа), затем нажмите «Закрыть смену» ещё раз.</div>
+                  <div className="flex flex-col gap-1.5">
+                    {stuckOrders.map(o => { const label = o.type === 'takeaway' ? 'С собой' : 'Зал'; return (
+                      <div key={o.id} className="flex items-center justify-between rounded-lg" style={{ background: 'var(--pv-card)', padding: '0.5rem 0.7rem' }}>
+                        <span style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{label} №{o.orderNumber ?? '—'} <span style={{ color: 'var(--pv-text-3)' }}>{formatCurrency(o.total ?? 0)}</span></span>
+                        <button disabled={cancellingId === o.id} onClick={() => cancelStuck(o.id)} className="flex items-center gap-1 rounded-md font-semibold disabled:opacity-50" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.35rem 0.6rem', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}><Ban style={{ width: '0.85rem', height: '0.85rem' }} />{cancellingId === o.id ? 'Отмена…' : 'Отменить'}</button>
+                      </div>
+                    ) })}
+                  </div>
+                </div>
               )}
               <button disabled={busy} onClick={submitAction} className="w-full flex items-center justify-center rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: action === 'close' ? 'var(--pv-occ-dot)' : 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 {busy ? 'Проводим…' : action === 'close' ? 'Закрыть смену' : 'Подтвердить'}

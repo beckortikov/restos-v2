@@ -66,12 +66,15 @@ export default function PosV2Service() {
 
   async function pay(r: Row) {
     if (payRef.current || r.toPay <= 0 || !shift) return
-    if (!cashAcc) { toast.error('Нет кассового счёта для выплаты'); return }
+    // Выплата — со СЧЁТА СМЕНЫ (shift.accountId), а не с первого cash-счёта:
+    // при расхождении счетов деньги иначе уйдут не туда. Как в старом ПОС.
+    const acc = shift.accountId ? { id: shift.accountId, name: shift.accountName } : cashAcc
+    if (!acc?.id) { toast.error('У смены нет счёта — привяжите его в разделе «Смена»'); return }
     payRef.current = true; setPayingId(r.waiterId)
     try {
       await payServiceCharge({
         waiterId: r.waiterId, waiterName: r.waiterName, amount: r.toPay,
-        accountId: cashAcc.id, accountName: cashAcc.name,
+        accountId: acc.id, accountName: acc.name ?? '',
         periodFrom: shift.openedAt, periodTo: new Date().toISOString(), shiftId: shift.id,
       })
       toast.success(`Выплачено · ${r.waiterName} · ${formatCurrency(r.toPay)}`)
