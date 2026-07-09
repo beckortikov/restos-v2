@@ -272,8 +272,9 @@ class NewOrderViewModel @Inject constructor(
                     weightQty = w,
                 )
             }
-            // Очищаем поиск — удобно искать следующее блюдо.
-            s.copy(cart = newCart, weightItem = null, search = "")
+            // Поиск НЕ чистим: строка блюда должна остаться на месте (под пальцем),
+            // а не пропасть из поля зрения после добавления.
+            s.copy(cart = newCart, weightItem = null)
         }
         persistDraft()
     }
@@ -297,8 +298,9 @@ class NewOrderViewModel @Inject constructor(
             } else {
                 s.cart + CartLine(item.id, item.name, item.price, qty = 1)
             }
-            // Очищаем поиск после добавления — удобно вводить следующее блюдо.
-            s.copy(cart = newCart, search = "")
+            // Поиск НЕ чистим: добавленное блюдо остаётся видимым в списке на
+            // своём месте (иначе оно «исчезало из поля зрения» после тапа).
+            s.copy(cart = newCart)
         }
         persistDraft()
     }

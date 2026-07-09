@@ -202,8 +202,8 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
                   ) })}
                 </div>
               )}
-              <div className="flex items-center rounded-xl" style={{ border: '2px solid var(--pv-brand)', background: 'var(--pv-card)', padding: '0.65rem 1rem' }}>
-                <input autoFocus inputMode="decimal" value={addAmt} onChange={e => setAddAmt(e.target.value)} placeholder="0" className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,1.7vw,1.5rem)' }} />
+              <div className="flex items-center rounded-xl" style={{ border: '1px solid var(--pv-border)', background: 'var(--pv-card)', padding: '0.65rem 1rem' }}>
+                <input autoFocus inputMode="decimal" value={addAmt} onChange={e => setAddAmt(e.target.value)} placeholder="0" className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,1.7vw,1.5rem)', textAlign: 'center' }} />
                 <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>с.</span>
               </div>
               <button onClick={addPart} className="w-full flex items-center justify-center gap-2 rounded-xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.7rem,1.1vw,0.95rem)', fontSize: 'var(--pv-ctl)' }}>

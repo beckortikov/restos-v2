@@ -280,6 +280,12 @@ export default function PosV2Order() {
 
   const subtotal = useMemo(() => cartSubtotal(cart), [cart])
   const count = cartCount(cart)
+  // Превью обслуживания в сайдбаре (зал): база (новый заказ = подытог корзины,
+  // иначе итог группы) + сервис-% ресторана. Бэк начисляет то же при закрытии.
+  const footBase = cart.length > 0 ? subtotal : (activeGroup?.total ?? 0)
+  const svcPct = orderType === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
+  const footSvc = svcPct > 0 ? dMul(footBase, dDiv(svcPct, 100)) : 0
+  const footTotal = footBase + footSvc
   const wUnit = weightItem?.unit === 'kg' ? 'кг' : 'г'
   const wPreview = weightItem ? dMul(dMul(weightItem.price, dDiv(num(wAmt), (weightItem.unitSize || 100))), wPortions) : 0
 
@@ -426,19 +432,19 @@ export default function PosV2Order() {
           </div>
         </div>
 
-        {!deferred.trim() && (
-          <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
-            {favorites.length > 0 && (
-              <button onClick={() => setActiveCat('__fav__')} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
-                <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
-              </button>
-            )}
-            {visibleCats.map(c => {
-              const on = c === currentCat
-              return <button key={c} onClick={() => setActiveCat(c)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
-            })}
-          </div>
-        )}
+        {/* Категории видны ВСЕГДА (раньше прятались при любом тексте в поиске —
+            даже одна буква убирала все категории). Тап по категории очищает поиск. */}
+        <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
+          {favorites.length > 0 && (
+            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
+              <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
+            </button>
+          )}
+          {visibleCats.map(c => {
+            const on = c === currentCat && !deferred.trim()
+            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
+          })}
+        </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--pv-gap) var(--pv-gap) var(--pv-pad-x) 0' }}>
           {loading ? (
@@ -578,9 +584,15 @@ export default function PosV2Order() {
               </div>
             </div>
           )}
+          {svcPct > 0 && footBase > 0 && (
+            <div className="flex items-center justify-between" style={{ marginBottom: '0.35rem' }}>
+              <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Обслуживание {svcPct}%</span>
+              <span className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>+{formatCurrency(footSvc)}</span>
+            </div>
+          )}
           <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.6rem,1vw,1rem)' }}>
             <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
-            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(cart.length > 0 ? subtotal : activeGroup?.total ?? 0)}</span>
+            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(footTotal)}</span>
           </div>
           {orderType !== 'hall' ? (
             activeGroup ? (
@@ -642,40 +654,35 @@ export default function PosV2Order() {
         </div>
       </aside>
 
-      {/* ── Weight modal ───────────────────────────────────────── */}
+      {/* ── Weight modal — PosModal (role=dialog): экранная клавиатура поднимает
+             модалку, а не скроллит фон (раньше сырой оверлей → экран прыгал). ── */}
       {weightItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setWeightItem(null)}>
-          <div role="dialog" aria-modal="true" aria-label={`Вес порции: ${weightItem.name}`} className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem, 38vw, 30rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold truncate" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>{weightItem.emoji} {weightItem.name}</span>
-              <button onClick={() => setWeightItem(null)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+        <PosModal open onClose={() => setWeightItem(null)} width="clamp(20rem,38vw,30rem)" title={weightItem.name}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
+            <div>
+              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>Вес порции ({wUnit})</div>
+              <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-border)', borderWidth: '1px', padding: '0.7rem 1rem' }}>
+                <input autoFocus inputMode="decimal" value={wAmt} onChange={e => setWAmt(e.target.value)} aria-label={`Вес порции, ${wUnit}`} className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)', textAlign: 'center' }} />
+                <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>{wUnit}</span>
+              </div>
             </div>
-            <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
-              <div>
-                <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>Вес порции ({wUnit})</div>
-                <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-brand)', borderWidth: '2px', padding: '0.7rem 1rem' }}>
-                  <input autoFocus inputMode="decimal" value={wAmt} onChange={e => setWAmt(e.target.value)} aria-label={`Вес порции, ${wUnit}`} className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)' }} />
-                  <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>{wUnit}</span>
-                </div>
+            <div className="flex items-center justify-between">
+              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Порций (печатается N строками)</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setWPortions(p => Math.max(1, p - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{wPortions}</span>
+                <button onClick={() => setWPortions(p => p + 1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
               </div>
-              <div className="flex items-center justify-between">
-                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Порций (печатается N строками)</span>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => setWPortions(p => Math.max(1, p - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
-                  <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{wPortions}</span>
-                  <button onClick={() => setWPortions(p => p + 1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
-                </div>
-              </div>
-              <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 1rem' }}>
-                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Стоимость</span>
-                <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>{formatCurrency(wPreview)}</span>
-              </div>
-              <button onClick={addWeight} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
-                <Plus style={{ width: '1.3em', height: '1.3em' }} />Добавить
-              </button>
             </div>
+            <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 1rem' }}>
+              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Стоимость</span>
+              <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>{formatCurrency(wPreview)}</span>
+            </div>
+            <button onClick={addWeight} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Plus style={{ width: '1.3em', height: '1.3em' }} />Добавить
+            </button>
           </div>
-        </div>
+        </PosModal>
       )}
 
       {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}

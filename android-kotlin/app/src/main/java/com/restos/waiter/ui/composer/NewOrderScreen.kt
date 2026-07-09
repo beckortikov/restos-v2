@@ -1,10 +1,14 @@
 package com.restos.waiter.ui.composer
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.FlowRowOverflow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -13,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,6 +32,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.ShoppingCart
@@ -34,9 +41,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -44,10 +54,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +74,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.waiter.data.menu.CategoryDto
 import com.restos.waiter.data.menu.MenuItemDto
+import com.restos.waiter.util.Translit
 import com.restos.waiter.util.formatCurrency
 import java.math.BigDecimal
 
@@ -72,15 +87,25 @@ fun NewOrderScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val snackbar = remember { SnackbarHostState() }
+    // Превью перед отправкой на кухню (item 4): корзина уходит на подтверждение,
+    // а не создаёт заказ сразу.
+    var showPreview by rememberSaveable { mutableStateOf(false) }
 
     LaunchedEffect(state.createdOrderId) {
         state.createdOrderId?.let(onOrderCreated)
     }
     LaunchedEffect(state.error) {
         state.error?.let {
+            // Закрываем превью, чтобы снекбар с ошибкой был виден; ключ
+            // идемпотентности в VM сохранён — повторная отправка безопасна.
+            showPreview = false
             snackbar.showSnackbar(it)
             viewModel.consumeError()
         }
+    }
+    // Если в превью убрали все позиции — закрываем лист.
+    LaunchedEffect(state.cart.isEmpty()) {
+        if (state.cart.isEmpty()) showPreview = false
     }
 
     // Диалог количества гостей: быстрые кнопки 1–6 + «Больше 6» со счётчиком.
@@ -137,8 +162,9 @@ fun NewOrderScreen(
                 cartTotal = viewModel.cartTotal(),
                 busy = state.busy,
                 canSubmit = state.cart.isNotEmpty(),
-                submitLabel = if (viewModel.isAppendMode) "Добавить" else "Создать заказ",
-                onSubmit = viewModel::submit,
+                // Кнопка открывает превью, а не отправляет заказ сразу (item 4).
+                submitLabel = if (viewModel.isAppendMode) "Проверить и добавить" else "Проверить заказ",
+                onSubmit = { showPreview = true },
             )
         },
         snackbarHost = { SnackbarHost(snackbar) },
@@ -157,6 +183,198 @@ fun NewOrderScreen(
                 onDec = viewModel::decrement,
                 onRemove = viewModel::remove,
             )
+        }
+    }
+
+    // Превью заказа перед отправкой на кухню: официант может уменьшить/удалить
+    // позиции или отменить, и только затем подтвердить создание/дозаказ.
+    if (showPreview && state.cart.isNotEmpty()) {
+        OrderPreviewSheet(
+            cart = state.cart,
+            total = viewModel.cartTotal(),
+            busy = state.busy,
+            confirmLabel = if (viewModel.isAppendMode) "Добавить к заказу" else "Отправить на кухню",
+            onInc = viewModel::increment,
+            onDec = viewModel::decrement,
+            onRemove = viewModel::remove,
+            onConfirm = viewModel::submit,
+            onDismiss = { showPreview = false },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun OrderPreviewSheet(
+    cart: List<CartLine>,
+    total: BigDecimal,
+    busy: Boolean,
+    confirmLabel: String,
+    onInc: (String) -> Unit,
+    onDec: (String) -> Unit,
+    onRemove: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = { if (!busy) onDismiss() },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .navigationBarsPadding(),
+        ) {
+            Text(
+                "Проверьте заказ",
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                "Перед отправкой на кухню можно изменить количество или убрать позицию.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                modifier = Modifier.padding(top = 2.dp, bottom = 12.dp),
+            )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 380.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(cart, key = { it.menuItemId }) { line ->
+                    PreviewLineRow(
+                        line = line,
+                        onInc = { onInc(line.menuItemId) },
+                        onDec = { onDec(line.menuItemId) },
+                        onRemove = { onRemove(line.menuItemId) },
+                    )
+                }
+            }
+            HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Итого", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    formatCurrency(total),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 12.dp, bottom = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedButton(
+                    onClick = onDismiss,
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f).height(52.dp),
+                ) {
+                    Text("Отмена", fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = onConfirm,
+                    enabled = !busy,
+                    modifier = Modifier.weight(1.4f).height(52.dp),
+                ) {
+                    if (busy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp,
+                        )
+                    } else {
+                        Text(confirmLabel, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PreviewLineRow(
+    line: CartLine,
+    onInc: () -> Unit,
+    onDec: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    line.name,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    formatCurrency(line.lineTotal()) +
+                        if (line.isWeight && line.weightQty != null)
+                            " · ${line.qty} × ${formatWeight(line.weightQty, line.unit)}"
+                        else "",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (line.isWeight) {
+                // Вес правится в основном списке через диалог — здесь только удаление.
+                QtySquare(
+                    text = "✕",
+                    bg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    fg = MaterialTheme.colorScheme.error,
+                    onClick = onRemove,
+                )
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    QtySquare(
+                        text = "−",
+                        bg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                        fg = MaterialTheme.colorScheme.onSurface,
+                        onClick = onDec,
+                    )
+                    Text(
+                        line.qty.toString(),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 10.dp),
+                    )
+                    QtySquare(
+                        text = "+",
+                        bg = MaterialTheme.colorScheme.primary,
+                        fg = MaterialTheme.colorScheme.onPrimary,
+                        onClick = onInc,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    IconButton(onClick = onRemove, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = "Удалить",
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+            }
         }
     }
 }
@@ -206,16 +424,11 @@ private fun filterMenu(state: NewOrderUiState): List<MenuItemDto> {
     // (в POS видно, у официанта — нет). OrderDetailScreen уже сравнивает с trim.
     val byCat = if (state.selectedCategoryId == null || q.isNotBlank()) visible
     else visible.filter { it.category?.trim() == state.selectedCategoryId }
-    val filtered = if (q.isBlank()) byCat
-    else byCat.filter { it.name.lowercase().contains(q) }
-
-    // Блюда уже добавленные в заказ — поднимаем в топ списка, чтобы официант
-    // быстро видел/менял их количество. Внутри групп (в корзине / не в корзине)
-    // сохраняем исходный порядок (stable sort by partition).
-    if (state.cart.isEmpty()) return filtered
-    val inCart = state.cart.map { it.menuItemId }.toSet()
-    val (selected, rest) = filtered.partition { it.id in inCart }
-    return selected + rest
+    // Кросслитеральный поиск: «plov» находит «Плов» и наоборот (см. Translit).
+    return if (q.isBlank()) byCat
+    else byCat.filter { Translit.matches(it.name, state.search) }
+    // Порядок списка НЕ меняем: добавленное блюдо остаётся на своём месте, а не
+    // прыгает в топ и не исчезает из поля зрения (partition-to-top убран).
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -245,6 +458,12 @@ private fun SearchField(value: String, onChange: (String) -> Unit) {
     )
 }
 
+/**
+ * Категории — раскрывающаяся строка (не горизонтальный скролл). В свёрнутом
+ * виде один ряд + чип «Ещё»: тап разворачивает ВСЕ категории вниз переносом
+ * (FlowRow), появляется чип «Свернуть».
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CategoriesRow(
     categories: List<CategoryDto>,
@@ -252,21 +471,72 @@ private fun CategoriesRow(
     onSelect: (String?) -> Unit,
 ) {
     if (categories.isEmpty()) return
-    androidx.compose.foundation.lazy.LazyRow(
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        maxLines = if (expanded) Int.MAX_VALUE else 1,
+        overflow = FlowRowOverflow.expandOrCollapseIndicator(
+            minRowsToShowCollapse = 2,
+            expandIndicator = {
+                ToggleChip(
+                    label = "Ещё",
+                    icon = Icons.Outlined.ExpandMore,
+                    onClick = { expanded = true },
+                )
+            },
+            collapseIndicator = {
+                ToggleChip(
+                    label = "Свернуть",
+                    icon = Icons.Outlined.ExpandLess,
+                    onClick = { expanded = false },
+                )
+            },
+        ),
     ) {
-        item {
-            Chip(
-                label = "Все",
-                active = selectedId == null,
-                onClick = { onSelect(null) },
-            )
-        }
-        items(categories, key = { it.id }) { cat ->
+        Chip(
+            label = "Все",
+            active = selectedId == null,
+            onClick = { onSelect(null) },
+        )
+        categories.forEach { cat ->
             Chip(
                 label = cat.name,
                 active = cat.id == selectedId,
                 onClick = { onSelect(cat.id) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ToggleChip(
+    label: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onClick: () -> Unit,
+) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        onClick = onClick,
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+        ) {
+            Text(
+                label,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
             )
         }
     }

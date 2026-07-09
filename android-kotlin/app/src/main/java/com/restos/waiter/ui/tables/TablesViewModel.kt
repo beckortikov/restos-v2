@@ -71,6 +71,9 @@ class TablesViewModel @Inject constructor(
                     is ServerEvent.OrderUpdated,
                     is ServerEvent.TableUpdated -> refresh()
                     is ServerEvent.KdsItemUpdated -> refresh()
+                    // Повар снял позицию (void) → сумма/состав заказа изменились,
+                    // на карточке стола это видно → перечитываем столы.
+                    is ServerEvent.ItemVoided -> refresh()
                     is ServerEvent.Other -> Unit
                 }
             }

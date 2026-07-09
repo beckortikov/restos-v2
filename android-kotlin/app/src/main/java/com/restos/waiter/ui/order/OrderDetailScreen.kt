@@ -19,7 +19,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
@@ -32,7 +31,6 @@ import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Receipt
 import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.SwapHoriz
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -52,8 +50,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TextField
-import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -63,13 +59,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.restos.waiter.data.menu.MenuItemDto
 import com.restos.waiter.data.orders.CancelReasons
 import com.restos.waiter.data.orders.OrderDto
 import com.restos.waiter.data.orders.OrderItemDto
@@ -175,9 +169,6 @@ fun OrderDetailScreen(
                 state.order == null -> Box(Modifier.fillMaxSize())
                 else -> OrderBody(
                     state = state,
-                    onAddItem = viewModel::addItem,
-                    onSearch = viewModel::setSearch,
-                    onSelectCategory = viewModel::selectCategory,
                     onCancelItem = viewModel::openCancelItem,
                     onIncrementItem = viewModel::incrementItem,
                     onDecrementItem = viewModel::decrementItem,
@@ -418,9 +409,6 @@ private fun formatOrderWeight(qtyDec: String, unit: String?): String {
 @Composable
 private fun OrderBody(
     state: OrderDetailUiState,
-    onAddItem: (MenuItemDto) -> Unit,
-    onSearch: (String) -> Unit,
-    onSelectCategory: (String?) -> Unit,
     onCancelItem: (OrderItemDto) -> Unit,
     onToggleServed: (OrderItemDto) -> Unit,
     onEditNote: (OrderItemDto) -> Unit,
@@ -436,25 +424,6 @@ private fun OrderBody(
     val items = order.items.filter { it.cancelledAt == null }
     // Группируем одинаковые весовые порции в строку «100г × N».
     val displayLines = remember(items) { groupWeightLines(items) }
-    // Категории дозаказ-поиска — по именам из меню (как на вебе/в композере).
-    val categories = remember(state.menu) {
-        state.menu.mapNotNull { it.category?.trim()?.takeIf { c -> c.isNotEmpty() } }
-            .distinct()
-            .sortedWith(String.CASE_INSENSITIVE_ORDER)
-    }
-    val searchResults = remember(state.search, state.menu, state.selectedCategoryId) {
-        val q = state.search.trim().lowercase()
-        when {
-            // Текстовый поиск важнее фильтра категории.
-            q.isNotBlank() -> state.menu
-                .filter { it.isAvailable && it.name.lowercase().contains(q) }
-                .take(8)
-            // Выбрана категория → показываем её блюда (даже без ввода).
-            state.selectedCategoryId != null -> state.menu
-                .filter { it.isAvailable && it.category?.trim() == state.selectedCategoryId }
-            else -> emptyList()
-        }
-    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -474,22 +443,9 @@ private fun OrderBody(
         }
         // OrderHeaderCard убран — те же поля (имя стола / зона / статус /
         // время / гости / официант) есть в TopAppBar и в chips групп.
+        // Инлайн-поиск/категории дозаказа убраны: блюда добавляются только
+        // кнопкой «Добавить» внизу (item 5) → экран нового заказа с превью.
         item { Spacer(Modifier.height(4.dp)) }
-        if (OrderStatus.isFresh(order.status)) {
-            item {
-                AddItemSearch(
-                    query = state.search,
-                    results = searchResults,
-                    categories = categories,
-                    selectedCategory = state.selectedCategoryId,
-                    busy = state.busy,
-                    onQuery = onSearch,
-                    onSelectCategory = onSelectCategory,
-                    onPick = onAddItem,
-                )
-            }
-            item { Spacer(Modifier.height(4.dp)) }
-        }
         if (items.isEmpty()) {
             item {
                 Text(
@@ -670,118 +626,6 @@ private fun StatusBadge(status: String, label: String) {
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        )
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AddItemSearch(
-    query: String,
-    results: List<MenuItemDto>,
-    categories: List<String>,
-    selectedCategory: String?,
-    busy: Boolean,
-    onQuery: (String) -> Unit,
-    onSelectCategory: (String?) -> Unit,
-    onPick: (MenuItemDto) -> Unit,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextField(
-            value = query,
-            onValueChange = onQuery,
-            placeholder = { Text("Поиск блюда для дозаказа...") },
-            leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-            trailingIcon = if (query.isNotEmpty()) {
-                @Composable {
-                    IconButton(onClick = { onQuery("") }) {
-                        Icon(Icons.Outlined.Close, contentDescription = null)
-                    }
-                }
-            } else null,
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            colors = TextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surface,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                focusedIndicatorColor = Color.Transparent,
-                unfocusedIndicatorColor = Color.Transparent,
-            ),
-            shape = RoundedCornerShape(12.dp),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            enabled = !busy,
-        )
-        // Чипы категорий под поиском: тап показывает блюда категории (без ввода).
-        if (categories.isNotEmpty() && query.isBlank()) {
-            androidx.compose.foundation.lazy.LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                item {
-                    CategoryChip("Все", active = selectedCategory == null, onClick = { onSelectCategory(null) })
-                }
-                items(categories) { cat ->
-                    CategoryChip(cat, active = cat == selectedCategory, onClick = { onSelectCategory(cat) })
-                }
-            }
-        }
-        if (results.isNotEmpty()) {
-            Surface(
-                shape = RoundedCornerShape(12.dp),
-                color = MaterialTheme.colorScheme.surface,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Column {
-                    results.forEach { m ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(0.dp))
-                                .background(Color.Transparent),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            TextButton(
-                                onClick = { onPick(m) },
-                                enabled = !busy,
-                                modifier = Modifier.fillMaxWidth(),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                            ) {
-                                Text(
-                                    m.name,
-                                    modifier = Modifier.weight(1f),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                )
-                                Spacer(Modifier.width(12.dp))
-                                Text(
-                                    formatCurrency(m.price.toBigDecimalSafe()),
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                                    fontSize = 13.sp,
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CategoryChip(label: String, active: Boolean, onClick: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(50),
-        color = if (active) MaterialTheme.colorScheme.primary
-        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
-        onClick = onClick,
-    ) {
-        Text(
-            label,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            color = if (active) MaterialTheme.colorScheme.onPrimary
-            else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
         )
     }
 }
