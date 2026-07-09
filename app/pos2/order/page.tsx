@@ -132,19 +132,26 @@ export default function PosV2Order() {
   const initedRef = useRef(false)
   useEffect(() => {
     if (initedRef.current || loading) return
-    initedRef.current = true
     const orderParam = searchParams.get('order')
     const tableParam = searchParams.get('table')
     if (orderParam) {
+      initedRef.current = true
       fetchOrders({ ids: [orderParam], slim: false }).then(os => {
         const o = os[0]; if (!o) return
         if (o.tableId) { setOrderType('hall'); setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
         else { setOrderType('takeaway'); setTableOrders([o]); setActiveGroupId(o.id) }
       }).catch(() => {})
     } else if (tableParam) {
+      // tables грузятся ОТДЕЛЬНО от loading (loading завязан только на menuItems,
+      // см. use-order-data), поэтому в момент loading=false стол может ещё не
+      // подъехать. Ждём, пока он появится в tables — иначе loadTableOrders не
+      // найдёт currentOrderIds и сайдбар останется пустым (баг: тап по столу с
+      // экрана «Столы» открывал ПОС с пустым сайдбаром вместо заказа стола).
+      if (!tables.some(t => t.id === tableParam)) return
+      initedRef.current = true
       setOrderType('hall'); setSelectedTableId(tableParam); loadTableOrders(tableParam)
     }
-  }, [loading, searchParams, loadTableOrders])
+  }, [loading, searchParams, tables, loadTableOrders])
 
   // Как только SSE обновил tables (стол реально занят) — снимаем оптимистичную метку.
   useEffect(() => {
