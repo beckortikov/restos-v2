@@ -9,6 +9,7 @@ import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, cancelOrderItem
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
+import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { Order, OrderItem, Table, OrderSplit, FinancialAccount, User } from '@/lib/types'
 
 const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни', 'Некачественно', 'Другое']
@@ -502,25 +503,20 @@ export default function PosV2Ticket() {
         </div>
       )}
 
-      {/* Item note modal */}
+      {/* Item note modal — PosModal (role=dialog): экранная клавиатура корректно
+          поднимает модалку и НЕ теряет фокус инпута при вводе. */}
       {noteItem && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => { if (!busy) setNoteItem(null) }}>
-          <div className="rounded-3xl overflow-hidden" style={{ background: 'var(--pv-card)', width: 'clamp(20rem,42vw,32rem)', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between border-b" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-              <span className="font-bold truncate" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: 'var(--pv-text)' }}>Комментарий: {noteItem.name}</span>
-              <button onClick={() => { if (!busy) setNoteItem(null) }} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+        <PosModal open onClose={() => setNoteItem(null)} dismissable={!busy} width="clamp(20rem,42vw,32rem)" title={`Комментарий: ${noteItem.name}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
+            <div className="flex flex-wrap gap-2">
+              {['Без лука', 'Без соли', 'Острое', 'Прожарить', 'Отдельно'].map(p => (
+                <button key={p} onClick={() => setNoteText(t => t ? `${t}, ${p}` : p)} className="rounded-full font-semibold border" style={{ background: 'var(--pv-card)', color: 'var(--pv-text-2)', borderColor: 'var(--pv-border)', padding: '0.35rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>+ {p}</button>
+              ))}
             </div>
-            <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
-              <div className="flex flex-wrap gap-2">
-                {['Без лука', 'Без соли', 'Острое', 'Прожарить', 'Отдельно'].map(p => (
-                  <button key={p} onClick={() => setNoteText(t => t ? `${t}, ${p}` : p)} className="rounded-full font-semibold border" style={{ background: 'var(--pv-card)', color: 'var(--pv-text-2)', borderColor: 'var(--pv-border)', padding: '0.35rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>+ {p}</button>
-                ))}
-              </div>
-              <input aria-label="Комментарий к позиции" autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Комментарий к позиции" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
-              <button disabled={busy} onClick={saveNote} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Сохранить</button>
-            </div>
+            <input aria-label="Комментарий к позиции" autoFocus value={noteText} onChange={e => setNoteText(e.target.value)} placeholder="Комментарий к позиции" className="rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.7rem 1rem' }} />
+            <button disabled={busy} onClick={saveNote} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Сохранить</button>
           </div>
-        </div>
+        </PosModal>
       )}
     </div>
   )
