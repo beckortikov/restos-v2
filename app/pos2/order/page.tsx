@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, XCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
@@ -12,7 +12,7 @@ import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -20,7 +20,7 @@ import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems }
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
-import type { MenuItem, TableStatus, Order, FinancialAccount, OrderSplit } from '@/lib/types'
+import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit } from '@/lib/types'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -30,6 +30,7 @@ const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; lab
   bill_requested: { soft: 'var(--pv-bill-soft)', dot: 'var(--pv-bill-dot)', text: 'var(--pv-bill-text)', label: 'Счёт' },
 }
 const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
+const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни', 'Некачественно', 'Другое']
 
 // Phase 2 + критичный блок: заказ на реальных данных. Зал/такаут, гости, стоп-лист
 // override (менеджер), весовые позиции (вес × порции). Логику не переписываем.
@@ -63,6 +64,11 @@ export default function PosV2Order() {
   const [payTarget, setPayTarget] = useState<Order | null>(null)
   const [extrasOpen, setExtrasOpen] = useState(false)
   const [splits, setSplits] = useState<OrderSplit[]>([])
+  // Отмена отдельной позиции уже отправленного заказа (как в старом POS/тикете).
+  const [cancelItem, setCancelItem] = useState<OrderItem | null>(null)
+  const [itemReason, setItemReason] = useState(ITEM_REASONS[0])
+  const [itemBusy, setItemBusy] = useState(false)
+  const itemBusyRef = useRef(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -186,6 +192,21 @@ export default function PosV2Order() {
     const known = tableOrders.map(o => o.id)
     if (selectedTableId) await loadTableOrders(selectedTableId, activeGroupId ?? undefined, known)
     else await loadTakeaway(activeGroupId ?? undefined)
+  }
+
+  // Отмена одной позиции. Бэк сам пересчитывает total и, если это была последняя
+  // живая позиция, закрывает заказ (allCancelled) — тогда снимаем активную группу.
+  async function doCancelItem() {
+    if (itemBusyRef.current || !cancelItem?.id) return
+    itemBusyRef.current = true; setItemBusy(true)
+    try {
+      const res = await cancelOrderItem(cancelItem.id, itemReason, user?.id)
+      toast.success('Позиция отменена')
+      setCancelItem(null)
+      if (res.allCancelled) { toast.info('Все позиции отменены — заказ закрыт'); setActiveGroupId(null) }
+      await reloadContext()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { itemBusyRef.current = false; setItemBusy(false) }
   }
 
   async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
@@ -567,6 +588,11 @@ export default function PosV2Order() {
                     <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{c ? ' · отменено' : ''}{i.note ? ` · 💬 ${i.note}` : ''}</div>
                   </div>
                   <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
+                  {!c && i.id && (
+                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ width: '2.1rem', height: '2.1rem', background: 'var(--pv-occ-soft)' }} aria-label="Отменить позицию">
+                      <XCircle style={{ width: '1.15rem', height: '1.15rem', color: 'var(--pv-occ-text)' }} />
+                    </button>
+                  )}
                 </div>
               ) })}
               <div className="text-center shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)', marginTop: '0.3rem' }}>Тапайте блюда слева — дозаказ в эту группу</div>
@@ -710,6 +736,20 @@ export default function PosV2Order() {
           onChanged={() => { setExtrasOpen(false); reloadContext() }}
           onCancelled={() => { setExtrasOpen(false); setActiveGroupId(null); reloadContext() }}
         />
+      )}
+
+      {/* Отмена отдельной позиции — причина + подтверждение */}
+      {cancelItem && (
+        <PosModal open onClose={() => { if (!itemBusy) setCancelItem(null) }} dismissable={!itemBusy} width="clamp(20rem,42vw,32rem)" title={`Отмена: ${cancelItem.name}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '1rem' }}>
+            <div className="flex flex-wrap gap-2">
+              {ITEM_REASONS.map(r => { const on = r === itemReason; return <button key={r} onClick={() => setItemReason(r)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{r}</button> })}
+            </div>
+            <button disabled={itemBusy} onClick={doCancelItem} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <XCircle style={{ width: '1.3em', height: '1.3em' }} />Отменить позицию
+            </button>
+          </div>
+        </PosModal>
       )}
 
       {/* ── Table picker overlay (hall) ────────────────────────── */}
