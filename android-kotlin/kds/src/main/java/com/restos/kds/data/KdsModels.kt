@@ -35,6 +35,9 @@ data class KdsListResponse(val data: List<KdsItemDto> = emptyList())
 data class SetStatusRequest(val status: String)
 
 @Serializable
+data class CallWaiterResponse(@SerialName("waiter_name") val waiterName: String = "")
+
+@Serializable
 data class StationsResponse(val data: List<String> = emptyList())
 
 /** GET /bootstrap/status — для онбординга KDS (выбор ресторана). */

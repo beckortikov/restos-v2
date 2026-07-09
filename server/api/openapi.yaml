@@ -700,6 +700,28 @@ paths:
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
 
+  /api/v1/kds/items/{id}/call-waiter:
+    post:
+      tags: [kds]
+      summary: Вызвать официанта заказа на кухню
+      description: >
+        Повар нажал «колокольчик» на карточке блюда. Официанту, оформившему
+        заказ, уходит SSE-событие kds.waiter.called (уведомление «приходи на
+        кухню»). Ничего не пишется в БД. 422, если у заказа нет официанта.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  waiter_name: { type: string }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
   /api/v1/orders:
     get:
       tags: [orders]

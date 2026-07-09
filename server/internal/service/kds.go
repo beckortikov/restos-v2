@@ -170,6 +170,69 @@ func (s *KDSService) ListStations(ctx context.Context) ([]string, error) {
 	return stations, nil
 }
 
+// CallWaiter — повар нажал «колокольчик» на карточке блюда: шлём официанту,
+// оформившему заказ, уведомление «приходи на кухню». Ничего не пишем в БД —
+// это fire-and-forget сигнал по SSE (kds.waiter.called), официант фильтрует по
+// своему waiter_id (как уведомления о готовности).
+//
+// Возвращает имя официанта (для подтверждения на кухне) или ошибку, если у
+// заказа нет официанта (некому звонить).
+func (s *KDSService) CallWaiter(ctx context.Context, itemID string) (string, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var row struct {
+		WaiterID    *string `gorm:"column:waiter_id"`
+		WaiterName  *string `gorm:"column:waiter_name"`
+		OrderNumber int     `gorm:"column:order_number"`
+		OrderType   *string `gorm:"column:order_type"`
+		TableNumber *int    `gorm:"column:table_number"`
+		TableName   *string `gorm:"column:table_name"`
+		DishName    *string `gorm:"column:dish_name"`
+	}
+	err = s.r.Raw().WithContext(ctx).
+		Table("order_items AS oi").
+		Select(`o.waiter_id AS waiter_id, u.name AS waiter_name,
+			o.order_number, o.type AS order_type,
+			t.number AS table_number, t.name AS table_name,
+			oi.name AS dish_name`).
+		Joins("JOIN orders o ON o.id = oi.order_id").
+		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id").
+		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
+		Where("oi.id = ? AND o.restaurant_id = ?", itemID, rid).
+		First(&row).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", apperrors.Wrap("NOT_FOUND", "order item not found", nil)
+		}
+		return "", err
+	}
+	if row.WaiterID == nil || *row.WaiterID == "" {
+		return "", apperrors.Wrap("VALIDATION", "у заказа нет официанта", nil)
+	}
+
+	waiterName := ""
+	if row.WaiterName != nil {
+		waiterName = *row.WaiterName
+	}
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventKDSWaiterCalled, map[string]any{
+			"waiter_id":    *row.WaiterID,
+			"waiter_name":  waiterName,
+			"order_number": row.OrderNumber,
+			"order_type":   deref(row.OrderType),
+			"table_number": row.TableNumber,
+			"table_name":   deref(row.TableName),
+			"name":         deref(row.DishName),
+		})
+		s.pub.Flush(ctx, rid, buf)
+	}
+	return waiterName, nil
+}
+
 // SetItemStatus переводит одну позицию в указанный статус (кнопка на карточке:
 // В ГОТОВКУ → cooking, ГОТОВО → ready, ВЫДАНО → served). Идемпотентно:
 // повторная установка того же статуса — no-op-успех.

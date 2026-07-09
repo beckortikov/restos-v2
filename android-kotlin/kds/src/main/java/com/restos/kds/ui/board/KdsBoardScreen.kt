@@ -131,6 +131,7 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
                         BoardColumn(
                             col, colItems, now,
                             onAdvance = vm::advance, onClose = vm::closeCancelled,
+                            calledIds = state.calledItems, onCallWaiter = vm::callWaiter,
                             modifier = Modifier.weight(1f),
                         )
                     }
@@ -319,6 +320,8 @@ private fun BoardColumn(
     nowMs: Long,
     onAdvance: (KdsItemDto) -> Unit,
     onClose: (String) -> Unit,
+    calledIds: Set<String>,
+    onCallWaiter: (KdsItemDto) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -343,7 +346,7 @@ private fun BoardColumn(
             contentPadding = PaddingValues(bottom = 8.dp),
         ) {
             items(items, key = { it.id }) { item ->
-                DishCard(item, col, nowMs, onAdvance, onClose)
+                DishCard(item, col, nowMs, onAdvance, onClose, item.id in calledIds, onCallWaiter)
             }
         }
     }
@@ -356,6 +359,8 @@ private fun DishCard(
     nowMs: Long,
     onAdvance: (KdsItemDto) -> Unit,
     onClose: (String) -> Unit,
+    called: Boolean,
+    onCallWaiter: (KdsItemDto) -> Unit,
 ) {
     val cancelled = item.cancelled
     val mins = minutesSince(item.createdAt, nowMs)
@@ -381,7 +386,7 @@ private fun DishCard(
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 ) { Text("ОТМЕНЕНО", color = KdsColors.OnSolid, fontSize = 12.sp, fontWeight = FontWeight.Black) }
             }
-            // Название + крупное количество.
+            // Название + вызов официанта + крупное количество.
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     item.name, color = KdsColors.TextHi, fontSize = 18.sp, fontWeight = FontWeight.Bold,
@@ -389,6 +394,23 @@ private fun DishCard(
                     maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
+                // Колокольчик — позвать официанта заказа на кухню.
+                if (!cancelled && !item.waiterName.isNullOrBlank()) {
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        Modifier.clip(RoundedCornerShape(10.dp))
+                            .background(if (called) KdsColors.Ready else KdsColors.ColBg)
+                            .clickable(enabled = !called) { onCallWaiter(item) }
+                            .padding(horizontal = 10.dp, vertical = 7.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            if (called) "✓ Вызван" else "🔔",
+                            color = if (called) KdsColors.OnSolid else KdsColors.TextHi,
+                            fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                        )
+                    }
+                }
                 Spacer(Modifier.width(8.dp))
                 Box(
                     Modifier.clip(RoundedCornerShape(8.dp)).background(accent).padding(horizontal = 10.dp, vertical = 3.dp),

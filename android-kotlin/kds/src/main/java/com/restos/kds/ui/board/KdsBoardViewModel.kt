@@ -37,6 +37,9 @@ class KdsBoardViewModel @Inject constructor(
         val soundEnabled: Boolean = true,
         val soundId: Int = 0,
         val cancelAlert: String? = null,
+        // id блюд, по которым только что вызвали официанта — колокольчик зеленеет
+        // «Вызван» на несколько секунд.
+        val calledItems: Set<String> = emptySet(),
         val stations: List<String> = emptyList(),          // выбранные; пусто = все
         val availableStations: List<String> = emptyList(), // все станции ресторана (из API)
     )
@@ -97,8 +100,31 @@ class KdsBoardViewModel @Inject constructor(
             refresh()
             return
         }
+        // Вызов официанта — это событие ДЛЯ официанта, кухне доску обновлять не надо.
+        if (evt is ServerEvent.WaiterCalled) return
         // Новое блюдо — по дифу в refresh (надёжнее, чем гадать по типу события).
         refresh()
+    }
+
+    /**
+     * Повар нажал колокольчик — зовём официанта заказа на кухню. Оптимистично
+     * помечаем блюдо «Вызван» на 5с; при ошибке снимаем метку и показываем баннер.
+     */
+    fun callWaiter(item: KdsItemDto) {
+        _state.update { it.copy(calledItems = it.calledItems + item.id) }
+        viewModelScope.launch {
+            runCatching { repo.callWaiter(item.id) }
+                .onFailure {
+                    _state.update {
+                        it.copy(
+                            calledItems = it.calledItems - item.id,
+                            cancelAlert = "Не удалось вызвать официанта",
+                        )
+                    }
+                }
+            delay(5000)
+            _state.update { it.copy(calledItems = it.calledItems - item.id) }
+        }
     }
 
     /**

@@ -50,9 +50,12 @@ class WaiterAlertService : Service() {
         scope.launch { myId = runCatching { tokenStore.currentMe()?.user?.id }.getOrNull() }
         scope.launch {
             eventBus.events.collect { evt ->
-                if (evt is ServerEvent.KdsItemUpdated && evt.status == "ready") {
-                    val me = myId
-                    if (me != null && evt.waiterId == me) notifyReady(evt)
+                val me = myId ?: return@collect
+                when {
+                    evt is ServerEvent.KdsItemUpdated && evt.status == "ready" && evt.waiterId == me ->
+                        notifyReady(evt)
+                    evt is ServerEvent.WaiterCalled && evt.waiterId == me ->
+                        notifyCall(evt)
                 }
             }
         }
@@ -79,6 +82,31 @@ class WaiterAlertService : Service() {
             .setContentText("«$dish» готово$order")
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setAutoCancel(true)
+            .setContentIntent(open)
+            .build()
+        nm.notify(notifSeq.incrementAndGet(), n)
+    }
+
+    private fun notifyCall(evt: ServerEvent.WaiterCalled) {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        val place = when {
+            evt.tableNumber != null -> "Стол ${evt.tableNumber}"
+            !evt.tableName.isNullOrBlank() -> evt.tableName!!
+            else -> null
+        }
+        val order = evt.orderNumber?.let { "Заказ #$it" }
+        val where = listOfNotNull(place, order).joinToString(" · ")
+        val open = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val n = NotificationCompat.Builder(this, CH_CALL)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Вас зовут на кухню")
+            .setContentText(if (where.isNotBlank()) "Подойдите на кухню · $where" else "Подойдите на кухню")
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
             .setAutoCancel(true)
             .setContentIntent(open)
             .build()
@@ -113,11 +141,25 @@ class WaiterAlertService : Service() {
             setSound(sound, attrs)
         }
         nm.createNotificationChannel(ready)
+
+        val call = NotificationChannel(CH_CALL, "Вызов на кухню", NotificationManager.IMPORTANCE_HIGH).apply {
+            description = "Повар зовёт официанта на кухню"
+            enableVibration(true)
+            vibrationPattern = longArrayOf(0, 300, 200, 300)
+            val sound = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            setSound(sound, attrs)
+        }
+        nm.createNotificationChannel(call)
     }
 
     companion object {
         const val CH_SERVICE = "waiter_service"
         const val CH_READY = "waiter_ready"
+        const val CH_CALL = "waiter_call"
         const val SERVICE_NOTIF_ID = 42
     }
 }

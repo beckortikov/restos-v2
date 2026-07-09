@@ -415,6 +415,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Use(middleware.Idempotency(idemSvc))
 
 			g.Post("/kds/items/{id}/status", kdsH.SetStatus)
+			g.Post("/kds/items/{id}/call-waiter", kdsH.CallWaiter)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)
