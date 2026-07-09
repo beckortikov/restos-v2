@@ -4073,7 +4073,8 @@ components:
       type: object
       properties:
         available:     { type: boolean }
-        version:       { type: string }
+        version:       { type: string, description: "versionName из APK, напр. 0.2.16" }
+        version_code:  { type: integer, description: "versionCode из APK — для сравнения при LAN-автообновлении" }
         file_name:     { type: string }
         size_bytes:    { type: integer, format: int64 }
         uploaded_at:   { type: string, format: date-time, nullable: true }

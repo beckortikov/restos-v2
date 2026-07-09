@@ -5,6 +5,7 @@ import com.restos.waiter.data.menu.MenuApi
 import com.restos.waiter.data.orders.CreateOrderApi
 import com.restos.waiter.data.orders.OrdersApi
 import com.restos.waiter.data.tables.TablesApi
+import com.restos.waiter.data.update.WaiterAppApi
 import com.restos.waiter.data.users.UsersApi
 import com.restos.waiter.data.onboarding.LicenseApi
 import dagger.Module
@@ -53,4 +54,9 @@ object NetworkModule {
     @Singleton
     fun provideLicenseApi(retrofit: Retrofit): LicenseApi =
         retrofit.create(LicenseApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideWaiterAppApi(retrofit: Retrofit): WaiterAppApi =
+        retrofit.create(WaiterAppApi::class.java)
 }

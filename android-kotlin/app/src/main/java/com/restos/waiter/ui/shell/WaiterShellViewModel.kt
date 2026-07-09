@@ -11,6 +11,7 @@ import com.restos.core.net.NetworkStatus
 import com.restos.waiter.data.orders.OrdersApi
 import com.restos.waiter.data.orders.OrderStatus
 import com.restos.waiter.data.orders.WaiterTodayStats
+import com.restos.waiter.data.preferences.CategoryLayout
 import com.restos.waiter.data.preferences.HomeScreen
 import com.restos.waiter.data.preferences.ViewMode
 import com.restos.waiter.data.preferences.WaiterPrefsStore
@@ -50,6 +51,9 @@ class WaiterShellViewModel @Inject constructor(
 
     val homeScreen: StateFlow<HomeScreen> = prefs.homeScreen
         .stateIn(viewModelScope, SharingStarted.Eagerly, HomeScreen.Tables)
+
+    val categoryLayout: StateFlow<CategoryLayout> = prefs.categoryLayout
+        .stateIn(viewModelScope, SharingStarted.Eagerly, CategoryLayout.Expand)
 
     init {
         viewModelScope.launch {
@@ -111,6 +115,7 @@ class WaiterShellViewModel @Inject constructor(
 
     fun setViewMode(mode: ViewMode) { viewModelScope.launch { prefs.setViewMode(mode) } }
     fun setHomeScreen(screen: HomeScreen) { viewModelScope.launch { prefs.setHomeScreen(screen) } }
+    fun setCategoryLayout(mode: CategoryLayout) { viewModelScope.launch { prefs.setCategoryLayout(mode) } }
 
     fun logout(onDone: () -> Unit) {
         viewModelScope.launch {

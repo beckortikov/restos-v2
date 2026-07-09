@@ -20,6 +20,8 @@ import com.restos.waiter.data.orders.CreateOrderApi
 import com.restos.waiter.data.orders.CreateOrderRequest
 import com.restos.waiter.data.orders.NewOrderItem
 import com.restos.waiter.data.orders.OrdersApi
+import com.restos.waiter.data.preferences.CategoryLayout
+import com.restos.waiter.data.preferences.WaiterPrefsStore
 import com.restos.waiter.data.tables.TableDto
 import com.restos.waiter.data.tables.TablesApi
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -102,6 +104,8 @@ data class NewOrderUiState(
     val weightItem: MenuItemDto? = null,
     // Живой остаток заготовок: menu_item_id → доступно сейчас (порц.).
     val batchAvail: Map<String, Int> = emptyMap(),
+    // Режим показа чипов категорий (настройка официанта): раскрытие / скролл.
+    val categoryLayout: CategoryLayout = CategoryLayout.Expand,
 )
 
 @HiltViewModel
@@ -115,6 +119,7 @@ class NewOrderViewModel @Inject constructor(
     private val auth: AuthRepository,
     private val cache: AppCache,
     private val eventBus: EventBus,
+    private val prefs: WaiterPrefsStore,
 ) : ViewModel() {
 
     /** UUID-строка либо null, если пришёл sentinel "" / отсутствует. */
@@ -160,6 +165,11 @@ class NewOrderViewModel @Inject constructor(
             if (!isAppendMode) tableId?.let { restoreDraft(it) }
         }
         observeBatchAvailability()
+        viewModelScope.launch {
+            prefs.categoryLayout.collect { layout ->
+                _state.update { it.copy(categoryLayout = layout) }
+            }
+        }
     }
 
     /** Живой остаток заготовок с бэка (prepared − незакрытые заказы). */

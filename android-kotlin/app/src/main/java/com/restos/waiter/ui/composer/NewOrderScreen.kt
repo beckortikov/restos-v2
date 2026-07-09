@@ -3,12 +3,10 @@ package com.restos.waiter.ui.composer
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.FlowRowOverflow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -23,10 +21,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
@@ -74,6 +75,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.waiter.data.menu.CategoryDto
 import com.restos.waiter.data.menu.MenuItemDto
+import com.restos.waiter.data.preferences.CategoryLayout
 import com.restos.waiter.util.Translit
 import com.restos.waiter.util.formatCurrency
 import java.math.BigDecimal
@@ -392,7 +394,7 @@ private fun ComposerBody(
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp)) {
         SearchField(state.search, onSearch)
         Spacer(Modifier.height(8.dp))
-        CategoriesRow(state.categories, state.selectedCategoryId, onSelectCategory)
+        CategoriesRow(state.categoryLayout, state.categories, state.selectedCategoryId, onSelectCategory)
         Spacer(Modifier.height(8.dp))
 
         // Единый список меню с inline [-] qty [+]; корзинная панель убрана —
@@ -459,81 +461,136 @@ private fun SearchField(value: String, onChange: (String) -> Unit) {
 }
 
 /**
- * Категории — раскрывающаяся строка (не горизонтальный скролл). В свёрнутом
- * виде один ряд + чип «Ещё»: тап разворачивает ВСЕ категории вниз переносом
- * (FlowRow), появляется чип «Свернуть».
+ * Категории — два режима по настройке официанта (см. [CategoryLayout]):
+ * - Scroll: один ряд с горизонтальным скроллом.
+ * - Expand: один ряд занимает максимум места, а «хвост» открывается кнопкой
+ *   снизу в блок до 3 строк с горизонтальным скроллом.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CategoriesRow(
+    layout: CategoryLayout,
     categories: List<CategoryDto>,
     selectedId: String?,
     onSelect: (String?) -> Unit,
 ) {
     if (categories.isEmpty()) return
-    var expanded by rememberSaveable { mutableStateOf(false) }
-    FlowRow(
-        modifier = Modifier.fillMaxWidth().animateContentSize(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        maxLines = if (expanded) Int.MAX_VALUE else 1,
-        overflow = FlowRowOverflow.expandOrCollapseIndicator(
-            minRowsToShowCollapse = 2,
-            expandIndicator = {
-                ToggleChip(
-                    label = "Ещё",
-                    icon = Icons.Outlined.ExpandMore,
-                    onClick = { expanded = true },
-                )
-            },
-            collapseIndicator = {
-                ToggleChip(
-                    label = "Свернуть",
-                    icon = Icons.Outlined.ExpandLess,
-                    onClick = { expanded = false },
-                )
-            },
-        ),
-    ) {
-        Chip(
-            label = "Все",
-            active = selectedId == null,
-            onClick = { onSelect(null) },
-        )
-        categories.forEach { cat ->
-            Chip(
-                label = cat.name,
-                active = cat.id == selectedId,
-                onClick = { onSelect(cat.id) },
-            )
+    when (layout) {
+        CategoryLayout.Scroll -> CategoriesScrollRow(categories, selectedId, onSelect)
+        CategoryLayout.Expand -> CategoriesExpandable(categories, selectedId, onSelect)
+    }
+}
+
+/** Один ряд чипов, свайп вправо. */
+@Composable
+private fun CategoriesScrollRow(
+    categories: List<CategoryDto>,
+    selectedId: String?,
+    onSelect: (String?) -> Unit,
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { Chip("Все", active = selectedId == null, onClick = { onSelect(null) }) }
+        items(categories, key = { it.id }) { cat ->
+            Chip(cat.name, active = cat.id == selectedId, onClick = { onSelect(cat.id) })
         }
     }
 }
 
+/**
+ * Свёрнуто — категории заполняют один ряд по максимуму (скролл выключен, лишнее
+ * обрезается). Если поместились не все — снизу кнопка «Ещё», которая раскрывает
+ * блок до 3 строк с горизонтальным скроллом. В развёрнутом виде — кнопка
+ * «Свернуть».
+ */
 @Composable
-private fun ToggleChip(
-    label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onClick: () -> Unit,
+private fun CategoriesExpandable(
+    categories: List<CategoryDto>,
+    selectedId: String?,
+    onSelect: (String?) -> Unit,
 ) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    Column(
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (expanded) {
+            CategoriesThreeRowScroller(categories, selectedId, onSelect)
+            CategoryMoreButton(expanded = true) { expanded = false }
+        } else {
+            // userScrollEnabled = false → ряд не скроллится, а обрезается: видно
+            // столько, сколько влезло. canScrollForward = true, если что-то за
+            // краем — тогда показываем кнопку раскрытия снизу.
+            val listState = rememberLazyListState()
+            LazyRow(
+                state = listState,
+                userScrollEnabled = false,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                item { Chip("Все", active = selectedId == null, onClick = { onSelect(null) }) }
+                items(categories, key = { it.id }) { cat ->
+                    Chip(cat.name, active = cat.id == selectedId, onClick = { onSelect(cat.id) })
+                }
+            }
+            if (listState.canScrollForward) {
+                CategoryMoreButton(expanded = false) { expanded = true }
+            }
+        }
+    }
+}
+
+/**
+ * До 3 строк категорий с общим горизонтальным скроллом. Чипы раскладываются по
+ * строкам «колонками» (round-robin i % 3), чтобы строки были примерно равной
+ * длины и читались сверху-вниз, как в сетке.
+ */
+@Composable
+private fun CategoriesThreeRowScroller(
+    categories: List<CategoryDto>,
+    selectedId: String?,
+    onSelect: (String?) -> Unit,
+) {
+    val chips: List<Pair<String?, String>> =
+        listOf(null to "Все") + categories.map { it.id to it.name }
+    val scroll = rememberScrollState()
+    Column(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(scroll),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        for (rowIndex in 0 until 3) {
+            val rowChips = chips.filterIndexed { i, _ -> i % 3 == rowIndex }
+            if (rowChips.isEmpty()) continue
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                rowChips.forEach { (id, name) ->
+                    Chip(name, active = id == selectedId, onClick = { onSelect(id) })
+                }
+            }
+        }
+    }
+}
+
+/** Кнопка снизу: раскрыть все категории / свернуть. */
+@Composable
+private fun CategoryMoreButton(expanded: Boolean, onClick: () -> Unit) {
     Surface(
-        shape = RoundedCornerShape(50),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
         onClick = onClick,
     ) {
         Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 12.dp, end = 10.dp, top = 8.dp, bottom = 8.dp),
+            horizontalArrangement = Arrangement.Center,
         ) {
             Text(
-                label,
+                if (expanded) "Свернуть" else "Ещё категории",
                 fontSize = 13.sp,
                 fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Spacer(Modifier.width(2.dp))
             Icon(
-                icon,
+                if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
                 contentDescription = null,
                 modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.onSurface,
