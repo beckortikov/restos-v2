@@ -31,6 +31,7 @@ export default function PosV2Batch() {
   const [qty, setQty] = useState(1)
   const [woff, setWoff] = useState<MenuItem | null>(null)
   const [wQty, setWQty] = useState(1)
+  const [wMax, setWMax] = useState(0) // доступно к списанию (не даём уйти в минус)
   const [wReason, setWReason] = useState('spoilage')
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
@@ -60,6 +61,7 @@ export default function PosV2Batch() {
 
   async function doWriteoff() {
     if (busyRef.current || !woff) return
+    if (wMax > 0 && wQty > wMax) { toast.error(`Доступно только ${wMax} порц`); return }
     busyRef.current = true; setBusy(true)
     try { await writeoffPreparedBatch(woff.id, wQty, wReason); toast.success(`Списано: ${woff.name} × ${wQty}`); setWoff(null); await reload(); loadExtra() }
     catch (e) { toast.error(humanizeError(e)) }
@@ -94,15 +96,22 @@ export default function PosV2Batch() {
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>История пуста</div>
           ) : (
             <div className="mx-auto flex flex-col" style={{ maxWidth: '48rem', gap: '0.5rem' }}>
-              {logs.map(l => (
+              {logs.map(l => {
+                // Различаем по reason: бэк ставит reason='produce' на приготовление
+                // и 'consume'/'writeoff'/spoilage… на расход. Раньше judging по
+                // truthiness reason → produce показывался как «Списание» с минусом.
+                const isProduce = l.reason === 'produce'
+                const isConsume = l.reason === 'consume'
+                const kind = isProduce ? 'Приготовлено' : isConsume ? 'Расход в заказ' : `Списание: ${reasonLabel(l.reason)}`
+                return (
                 <div key={l.id} className="flex items-center justify-between rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.7rem,1.1vw,1.1rem)', gap: '0.5rem' }}>
                   <div className="min-w-0">
-                    <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l.menuItemName} × {l.qty}</div>
-                    <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{l.reason ? `Списание: ${reasonLabel(l.reason)}` : 'Приготовлено'} · {new Date(l.createdAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{l.producedBy ? ` · ${l.producedBy}` : ''}</div>
+                    <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l.menuItemName} × {Math.abs(l.qty)}</div>
+                    <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{kind} · {new Date(l.createdAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{l.producedBy ? ` · ${l.producedBy}` : ''}</div>
                   </div>
-                  <span className="font-bold shrink-0" style={{ color: l.reason ? 'var(--pv-occ-text)' : 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{l.reason ? '−' : ''}{formatCurrency(l.costTotal)}</span>
+                  <span className="font-bold shrink-0" style={{ color: isProduce ? 'var(--pv-text-2)' : 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>{isProduce ? (l.costTotal > 0 ? formatCurrency(l.costTotal) : '') : `−${formatCurrency(l.costTotal)}`}</span>
                 </div>
-              ))}
+              )})}
             </div>
           )
         ) : items.length === 0 ? (
@@ -125,7 +134,7 @@ export default function PosV2Batch() {
                     <button onClick={() => openProduce(m)} className="flex-1 flex items-center justify-center gap-2 rounded-xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: '0.6rem', fontSize: 'var(--pv-ctl)' }}>
                       <ChefHat style={{ width: '1.15em', height: '1.15em' }} />Приготовить
                     </button>
-                    <button onClick={() => { setWoff(m); setWQty(1); setWReason('spoilage') }} disabled={ready <= 0} className="rounded-xl flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.6rem', height: '2.6rem' }}>
+                    <button onClick={() => { setWoff(m); setWQty(1); setWReason('spoilage'); setWMax(Math.floor(ready)) }} disabled={ready <= 0} className="rounded-xl flex items-center justify-center disabled:opacity-40 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.6rem', height: '2.6rem' }}>
                       <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
                     </button>
                   </div>
@@ -147,8 +156,11 @@ export default function PosV2Batch() {
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
               <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 1rem' }}>
                 <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Максимум из остатков</span>
-                <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>{calc ? `${calc.maxPortions} порц` : '…'}</span>
+                <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>{calc ? (calc.hasRecipe ? `${calc.maxPortions} порц` : 'Без техкарты') : '…'}</span>
               </div>
+              {calc && !calc.hasRecipe && (
+                <div className="rounded-xl" style={{ background: 'var(--pv-bill-soft)', color: 'var(--pv-bill-text)', padding: '0.6rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>У блюда нет техкарты — ингредиенты не списываются, просто увеличивается остаток готового.</div>
+              )}
               <div className="flex items-center justify-between">
                 <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Приготовить порций</span>
                 <div className="flex items-center gap-2">
@@ -170,7 +182,7 @@ export default function PosV2Batch() {
                   </div>
                 </div>
               )}
-              <button disabled={busy || (calc?.maxPortions ?? 0) < 1} onClick={doProduce} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <button disabled={busy || !calc || (calc.hasRecipe && calc.maxPortions < 1)} onClick={doProduce} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
                 <ChefHat style={{ width: '1.3em', height: '1.3em' }} />{busy ? 'Готовим…' : `Приготовить ${qty}`}
               </button>
             </div>
@@ -188,11 +200,11 @@ export default function PosV2Batch() {
             </div>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
               <div className="flex items-center justify-between">
-                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Порций</span>
+                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Порций <span style={{ color: 'var(--pv-text-3)' }}>· доступно {wMax}</span></span>
                 <div className="flex items-center gap-2">
                   <button onClick={() => setWQty(q => Math.max(1, q - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
                   <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '3rem', fontSize: 'clamp(1.1rem,1.5vw,1.4rem)' }}>{wQty}</span>
-                  <button onClick={() => setWQty(q => q + 1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                  <button onClick={() => setWQty(q => wMax > 0 ? Math.min(wMax, q + 1) : q + 1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
                 </div>
               </div>
               <div>

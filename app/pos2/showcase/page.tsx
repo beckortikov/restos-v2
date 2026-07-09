@@ -21,6 +21,7 @@ const REASONS: { value: WriteoffReason; label: string }[] = [
 ]
 const reasonLabel = (r: string) => REASONS.find(x => x.value === r)?.label ?? r
 type Tab = 'writeoff' | 'history'
+const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
 
 export default function PosV2Showcase() {
   const navigate = useNavigate()
@@ -33,8 +34,8 @@ export default function PosV2Showcase() {
   const [loading, setLoading] = useState(true)
 
   // Writeoff modal
-  const [target, setTarget] = useState<{ type: 'menu' | 'semi'; name: string; id: string; unit: string } | null>(null)
-  const [qty, setQty] = useState(1)
+  const [target, setTarget] = useState<{ type: 'menu' | 'semi'; name: string; id: string; unit: string; max: number } | null>(null)
+  const [qtyStr, setQtyStr] = useState('1')
   const [reason, setReason] = useState<WriteoffReason>('spoilage')
   const [desc, setDesc] = useState('')
   const [busy, setBusy] = useState(false)
@@ -60,12 +61,17 @@ export default function PosV2Showcase() {
 
   const ingByName = useMemo(() => { const m = new Map<string, Ingredient>(); for (const i of ings) m.set(i.name.toLowerCase(), i); return m }, [ings])
 
-  function openWriteoff(type: 'menu' | 'semi', name: string, id: string, unit: string) {
-    setTarget({ type, name, id, unit }); setQty(1); setReason('spoilage'); setDesc('')
+  function openWriteoff(type: 'menu' | 'semi', name: string, id: string, unit: string, max: number) {
+    setTarget({ type, name, id, unit, max }); setQtyStr('1'); setReason('spoilage'); setDesc('')
   }
 
   async function submit() {
-    if (busyRef.current || !target || qty <= 0) return
+    if (busyRef.current || !target) return
+    // Дробное кол-во (весовые п/ф в кг/л) + гард нуля: бэк semi/consume не
+    // клампит остаток к 0 → без этого п/ф уходит в минус. Как в старом POS.
+    const qty = num(qtyStr)
+    if (qty <= 0) { toast.error('Укажите количество'); return }
+    if (target.max > 0 && qty > target.max) { toast.error(`Доступно только ${target.max} ${target.unit}`); return }
     busyRef.current = true; setBusy(true)
     try {
       if (target.type === 'menu') {
@@ -143,7 +149,7 @@ export default function PosV2Showcase() {
                           <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{d.name}</div>
                           <div style={{ color: low ? 'var(--pv-occ-text)' : 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{ing ? `остаток ${ing.qty} ${ing.unit}` : 'нет на складе'}</div>
                         </div>
-                        <button onClick={() => openWriteoff('menu', d.name, d.id, ing?.unit ?? 'шт')} className="rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.4rem', height: '2.4rem' }}>
+                        <button onClick={() => openWriteoff('menu', d.name, d.id, ing?.unit ?? 'шт', ing?.qty ?? 0)} disabled={!ing || ing.qty <= 0} className="rounded-xl flex items-center justify-center shrink-0 disabled:opacity-40 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.4rem', height: '2.4rem' }}>
                           <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
                         </button>
                       </div>
@@ -164,7 +170,7 @@ export default function PosV2Showcase() {
                         <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{s.name}</div>
                         <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>остаток {s.qty} {s.unit}</div>
                       </div>
-                      <button onClick={() => openWriteoff('semi', s.name, s.id, s.unit)} className="rounded-xl flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.4rem', height: '2.4rem' }}>
+                      <button onClick={() => openWriteoff('semi', s.name, s.id, s.unit, s.qty)} disabled={s.qty <= 0} className="rounded-xl flex items-center justify-center shrink-0 disabled:opacity-40 active:scale-90 transition-transform" style={{ background: 'var(--pv-occ-soft)', width: '2.4rem', height: '2.4rem' }}>
                         <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
                       </button>
                     </div>
@@ -183,12 +189,18 @@ export default function PosV2Showcase() {
       {target && (
         <PosModal open onClose={() => { if (!busy) setTarget(null) }} dismissable={!busy} width="clamp(20rem,42vw,32rem)" title={`Списать · ${target.name}`}>
             <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
-              <div className="flex items-center justify-between">
-                <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Количество ({target.unit})</span>
+              <div>
+                <div className="flex items-center justify-between" style={{ marginBottom: '0.45rem' }}>
+                  <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Количество ({target.unit})</span>
+                  <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>доступно {target.max} {target.unit}</span>
+                </div>
                 <div className="flex items-center gap-2">
-                  <button onClick={() => setQty(q => Math.max(1, q - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
-                  <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '2.5rem', fontSize: 'clamp(1.1rem,1.5vw,1.4rem)' }}>{qty}</span>
-                  <button onClick={() => setQty(q => q + 1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.2rem', height: '2.2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                  <button onClick={() => setQtyStr(s => String(Math.max(0, num(s) - 1)))} className="rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.6rem', height: '2.6rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                  <div className="flex items-center rounded-xl border flex-1 min-w-0" style={{ borderColor: 'var(--pv-brand)', borderWidth: '2px', padding: '0.5rem 0.9rem' }}>
+                    <input inputMode="decimal" value={qtyStr} onChange={e => setQtyStr(e.target.value)} aria-label={`Количество, ${target.unit}`} className="flex-1 min-w-0 bg-transparent outline-none font-bold text-center" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.5vw,1.4rem)' }} />
+                    <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{target.unit}</span>
+                  </div>
+                  <button onClick={() => setQtyStr(s => String(target.max > 0 ? Math.min(target.max, num(s) + 1) : num(s) + 1))} className="rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2.6rem', height: '2.6rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
                 </div>
               </div>
               <div>
