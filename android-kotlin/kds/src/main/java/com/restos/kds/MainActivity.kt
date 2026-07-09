@@ -6,8 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
@@ -30,8 +31,14 @@ class MainActivity : ComponentActivity() {
         setContent {
             KdsTheme {
                 Surface(color = KdsColors.Bg, modifier = Modifier.fillMaxSize()) {
-                    // safeDrawing → контент не лезет под вырез камеры / панели.
-                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    // Панели скрыты (киоск), поэтому отступаем ТОЛЬКО под вырез камеры —
+                    // доска занимает всю высоту планшета. imePadding — чтобы клавиатура
+                    // на экране PIN не перекрывала поле ввода.
+                    Box(
+                        Modifier.fillMaxSize()
+                            .windowInsetsPadding(WindowInsets.displayCutout)
+                            .imePadding(),
+                    ) {
                         KdsRoot()
                     }
                 }

@@ -120,8 +120,9 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
                     Text(state.error ?: "", color = KdsColors.Urgent, fontSize = 18.sp)
                 }
                 else -> Row(
-                    Modifier.fillMaxSize().padding(if (fullscreen) 10.dp else 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(if (fullscreen) 10.dp else 16.dp),
+                    // В фуллскрине — минимум полей, колонки на всю высоту/ширину.
+                    Modifier.fillMaxSize().padding(if (fullscreen) 6.dp else 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(if (fullscreen) 6.dp else 12.dp),
                 ) {
                     for (col in COLUMNS) {
                         // Отменённые блюда — сверху «Новых», отдельными карточками.
@@ -325,21 +326,21 @@ private fun BoardColumn(
             .border(1.dp, KdsColors.CardLine, RoundedCornerShape(18.dp)),
     ) {
         Row(
-            Modifier.fillMaxWidth().height(52.dp).background(col.soft).padding(horizontal = 16.dp),
+            Modifier.fillMaxWidth().height(42.dp).background(col.soft).padding(horizontal = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Box(Modifier.size(12.dp).clip(RoundedCornerShape(999.dp)).background(col.color))
-            Spacer(Modifier.width(10.dp))
-            Text(col.label, color = KdsColors.TextHi, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Box(Modifier.size(11.dp).clip(RoundedCornerShape(999.dp)).background(col.color))
+            Spacer(Modifier.width(8.dp))
+            Text(col.label, color = KdsColors.TextHi, fontSize = 16.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.weight(1f))
             Box(
-                Modifier.clip(RoundedCornerShape(999.dp)).background(col.color).padding(horizontal = 12.dp, vertical = 3.dp),
+                Modifier.clip(RoundedCornerShape(999.dp)).background(col.color).padding(horizontal = 11.dp, vertical = 2.dp),
             ) { Text("${items.size}", color = KdsColors.OnSolid, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
         }
         LazyColumn(
-            Modifier.fillMaxSize().padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            contentPadding = PaddingValues(bottom = 12.dp),
+            Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = 8.dp),
         ) {
             items(items, key = { it.id }) { item ->
                 DishCard(item, col, nowMs, onAdvance, onClose)
@@ -362,77 +363,72 @@ private fun DishCard(
     // Отменённая карточка — красный акцент, статичная (повар только закрывает).
     val accent = if (cancelled) KdsColors.Urgent else col.color
     Column(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp))
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
             .background(if (cancelled) KdsColors.CancelledCard else KdsColors.Card)
             .border(
                 if (cancelled || urgent) 2.dp else 1.dp,
                 if (cancelled || urgent) KdsColors.Urgent else KdsColors.CardLine,
-                RoundedCornerShape(18.dp),
+                RoundedCornerShape(14.dp),
             ),
     ) {
-        Box(Modifier.fillMaxWidth().height(6.dp).background(accent))
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(Modifier.fillMaxWidth().height(4.dp).background(accent))
+        // Компактная карточка — влезает максимум заказов на экран.
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             // Плашка «ОТМЕНЕНО».
             if (cancelled) {
                 Box(
-                    Modifier.clip(RoundedCornerShape(8.dp)).background(KdsColors.Urgent)
-                        .padding(horizontal = 10.dp, vertical = 4.dp),
-                ) { Text("ОТМЕНЕНО", color = KdsColors.OnSolid, fontSize = 13.sp, fontWeight = FontWeight.Black) }
+                    Modifier.clip(RoundedCornerShape(6.dp)).background(KdsColors.Urgent)
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                ) { Text("ОТМЕНЕНО", color = KdsColors.OnSolid, fontSize = 12.sp, fontWeight = FontWeight.Black) }
             }
             // Название + крупное количество.
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    item.name, color = KdsColors.TextHi, fontSize = 21.sp, fontWeight = FontWeight.Bold,
+                    item.name, color = KdsColors.TextHi, fontSize = 18.sp, fontWeight = FontWeight.Bold,
                     textDecoration = if (cancelled) TextDecoration.LineThrough else null,
+                    maxLines = 2, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(8.dp))
                 Box(
-                    Modifier.clip(RoundedCornerShape(10.dp)).background(accent).padding(horizontal = 14.dp, vertical = 6.dp),
-                ) { Text("×${item.qty}", color = KdsColors.OnSolid, fontSize = 26.sp, fontWeight = FontWeight.Black) }
+                    Modifier.clip(RoundedCornerShape(8.dp)).background(accent).padding(horizontal = 10.dp, vertical = 3.dp),
+                ) { Text("×${item.qty}", color = KdsColors.OnSolid, fontSize = 20.sp, fontWeight = FontWeight.Black) }
             }
             // Комментарий.
             if (!item.comment.isNullOrBlank()) {
                 Box(
-                    Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).background(KdsColors.CookingSoft).padding(horizontal = 10.dp, vertical = 8.dp),
-                ) { Text("💬 ${item.comment}", color = KdsColors.Cooking, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)).background(KdsColors.CookingSoft).padding(horizontal = 8.dp, vertical = 5.dp),
+                ) { Text("💬 ${item.comment}", color = KdsColors.Cooking, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
             }
-            // Станция + заказ + таймер.
+            // Станция + заказ + официант + таймер — одной строкой (экономим высоту).
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(10.dp).clip(RoundedCornerShape(999.dp)).background(stationColor(item.station)))
-                Spacer(Modifier.width(8.dp))
-                Text(orderLabel(item), color = KdsColors.TextMid, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.weight(1f))
+                Box(Modifier.size(9.dp).clip(RoundedCornerShape(999.dp)).background(stationColor(item.station)))
+                Spacer(Modifier.width(7.dp))
+                Text(
+                    orderLabel(item) + (item.waiterName?.takeIf { it.isNotBlank() }?.let { " · 👤 $it" } ?: ""),
+                    color = KdsColors.TextMid, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
                 if (!cancelled && mins != null) {
+                    Spacer(Modifier.width(6.dp))
                     Text(
                         if (col.status == "ready") "готов" else "$mins мин",
                         color = if (urgent) KdsColors.Urgent else KdsColors.TextMid,
-                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
                     )
                 }
             }
-            // Официант заказа.
-            if (!item.waiterName.isNullOrBlank()) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("👤", fontSize = 13.sp)
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        item.waiterName!!,
-                        color = KdsColors.TextDim, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            // Крупная кнопка-бамп: обычная двигает статус, отменённая — «ЗАКРЫТЬ».
+            // Кнопка-бамп: обычная двигает статус, отменённая — «ЗАКРЫТЬ».
             Box(
-                Modifier.fillMaxWidth().height(60.dp).clip(RoundedCornerShape(14.dp))
+                Modifier.fillMaxWidth().height(46.dp).clip(RoundedCornerShape(11.dp))
                     .background(if (cancelled) KdsColors.Urgent else col.color)
                     .clickable { if (cancelled) onClose(item.id) else onAdvance(item) },
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     if (cancelled) "ЗАКРЫТЬ" else col.btn,
-                    color = KdsColors.OnSolid, fontSize = 20.sp, fontWeight = FontWeight.Black,
+                    color = KdsColors.OnSolid, fontSize = 16.sp, fontWeight = FontWeight.Black,
                 )
             }
         }
