@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Utensils, LayoutGrid, ReceiptText, Wallet, ChefHat,
-  HandCoins, History, Settings, LogOut, OctagonX, ClipboardList, PackageCheck, CookingPot,
+  History, Settings, LogOut, OctagonX, ClipboardList, PackageCheck, CookingPot,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 import { fetchActiveShift } from '@/lib/queries'
@@ -28,8 +28,7 @@ const TILES: Array<{
   { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/pos2/tables', req: '/operations/table-map' },
   { icon: ClipboardList, label: 'Активные заказы', sub: 'Все / зал / с собой / закрытые', to: '/pos2/orders', req: '/operations/orders' },
   { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay', req: '/operations/pos' },
-  { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение кассы', to: '/pos2/shift', req: '/operations/shifts' },
-  { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/pos2/service', req: '/operations/shifts' },
+  { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение · обслуживание', to: '/pos2/shift', req: '/operations/shifts' },
   { icon: OctagonX, label: 'Стоп-лист', sub: 'Стоп/возврат блюд', to: '/pos2/stop', req: '/warehouse/menu' },
   { icon: PackageCheck, label: 'Витрина', sub: 'Списания и полуфабрикаты', to: '/pos2/showcase', req: '/operations/showcase' },
   { icon: CookingPot, label: 'Заготовки', sub: 'Приготовление партий', to: '/pos2/batch', req: '/operations/batch-cooking' },

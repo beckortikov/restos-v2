@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown, AlertTriangle, Ban } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown, AlertTriangle, Ban, Check } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
@@ -10,6 +10,7 @@ import {
   openShift, closeShift, addShiftOperation, createShiftExpense,
   printShiftX, printShiftZ, printShiftService, fetchShiftZReport, type ShiftZReport, fetchShifts,
   fetchOrders, cancelOrder, patchShiftAccount,
+  fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchUsers, payServiceCharge,
 } from '@/lib/queries'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
@@ -22,6 +23,7 @@ import { V4Error } from '@/lib/api'
 import type { CashShift, CashShiftOperation, FinancialAccount, Order } from '@/lib/types'
 
 const EXPENSE_CATS = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
+interface SvcRow { waiterId: string; waiterName: string; ordersCount: number; accrued: number; paid: number; toPay: number }
 type Action = 'cash_in' | 'cash_out' | 'expense' | 'close'
 const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
 
@@ -45,6 +47,10 @@ export default function PosV2Shift() {
   const [zr, setZr] = useState<ShiftZReport | null>(null)
   const [histOpen, setHistOpen] = useState(false)
   const [hist, setHist] = useState<CashShift[] | null>(null)
+  // Обслуживание официантов — встроено в смену (по дизайну restos.pen).
+  const [svcRows, setSvcRows] = useState<SvcRow[]>([])
+  const [svcPayingId, setSvcPayingId] = useState<string | null>(null)
+  const svcPayRef = useRef(false)
   const busyRef = useRef(false)
 
   const cashAccounts = useMemo(() => accounts.filter(a => a.type === 'cash'), [accounts])
@@ -71,7 +77,18 @@ export default function PosV2Shift() {
           fetchShiftZReport(active.id).catch(() => null),
         ])
         setRev(r); setOps(o); setZr(z)
-      } else { setOps([]); setZr(null) }
+        // Обслуживание официантов — начислено/выплачено/к выплате по смене.
+        const [accrual, payout, users] = await Promise.all([
+          fetchServiceAccrualByShift(active.id).catch(() => []),
+          fetchServicePayoutByShift(active.id).catch(() => ({} as Record<string, number>)),
+          fetchUsers().catch(() => []),
+        ])
+        const nameById = new Map(users.map(u => [u.id, u.name]))
+        setSvcRows(accrual.filter(x => x.waiterId).map(x => {
+          const wid = x.waiterId as string; const paid = payout[wid] ?? 0
+          return { waiterId: wid, waiterName: nameById.get(wid) ?? 'Без имени', ordersCount: x.ordersCount, accrued: x.accrued, paid, toPay: Math.max(0, x.accrued - paid) }
+        }).sort((a, b) => b.toPay - a.toPay))
+      } else { setOps([]); setZr(null); setSvcRows([]) }
     } finally { setLoading(false) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -99,6 +116,22 @@ export default function PosV2Shift() {
 
   const curRevenue = dAdd(rev.cashRevenue, rev.cardRevenue)
   const prev = zr?.previous ?? null
+  const svcToPay = useMemo(() => dSum(svcRows.map(r => r.toPay)), [svcRows])
+  const svcCashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
+  const svcInitials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
+  async function payService(r: SvcRow) {
+    if (svcPayRef.current || r.toPay <= 0 || !shift) return
+    // Выплата — со СЧЁТА СМЕНЫ (иначе деньги уйдут не туда). Как в старом ПОС.
+    const acc = shift.accountId ? { id: shift.accountId, name: shift.accountName } : svcCashAcc
+    if (!acc?.id) { toast.error('У смены нет счёта — привяжите его выше'); return }
+    svcPayRef.current = true; setSvcPayingId(r.waiterId)
+    try {
+      await payServiceCharge({ waiterId: r.waiterId, waiterName: r.waiterName, amount: r.toPay, accountId: acc.id, accountName: acc.name ?? '', periodFrom: shift.openedAt, periodTo: new Date().toISOString(), shiftId: shift.id })
+      toast.success(`Выплачено · ${r.waiterName} · ${formatCurrency(r.toPay)}`)
+      await load()
+    } catch (e) { toast.error(`Не удалось выплатить: ${humanizeError(e)}`) }
+    finally { svcPayRef.current = false; setSvcPayingId(null) }
+  }
 
   async function openHistory() {
     setHistOpen(true)
@@ -369,6 +402,35 @@ export default function PosV2Shift() {
                       <Icon style={{ width: '1.5em', height: '1.5em' }} />{l}
                     </button>
                   ))}
+                </div>
+                {/* Обслуживание официантов — выплаты (дизайн: в правой колонке смены) */}
+                <div className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.4rem)' }}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: '0.7rem' }}>
+                    <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Обслуживание</span>
+                    {svcToPay > 0 && <span className="rounded-full font-bold" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.2rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>к выплате {formatCurrency(svcToPay)}</span>}
+                  </div>
+                  {svcRows.length === 0 ? (
+                    <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '0.6rem 0', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Нет начислений в этой смене</div>
+                  ) : (
+                    <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+                      {svcRows.map(r => (
+                        <div key={r.waiterId} className="flex items-center gap-2.5 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.55rem 0.7rem' }}>
+                          <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', width: '2.2rem', height: '2.2rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{svcInitials(r.waiterName)}</div>
+                          <div className="min-w-0 flex-1">
+                            <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{r.waiterName}</div>
+                            <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>нач. {formatCurrency(r.accrued)} · вып. {formatCurrency(r.paid)}</div>
+                          </div>
+                          {r.toPay > 0 ? (
+                            <button disabled={svcPayingId === r.waiterId} onClick={() => payService(r)} className="flex items-center gap-1.5 rounded-lg font-bold text-white shrink-0 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+                              <HandCoins style={{ width: '0.95rem', height: '0.95rem' }} />{svcPayingId === r.waiterId ? '…' : formatCurrency(r.toPay)}
+                            </button>
+                          ) : (
+                            <span className="flex items-center gap-1 rounded-lg shrink-0" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.4rem 0.6rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}><Check style={{ width: '0.9rem', height: '0.9rem' }} />Выплачено</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
