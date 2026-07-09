@@ -5,7 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { LayoutGrid, RefreshCw, Plus, Minus, CreditCard, XCircle, Trash2, X, ArrowRightLeft, Users, UserPlus, SquareSplitHorizontal, Banknote, Check, StickyNote } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, assignWaiter, fetchUsers, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote } from '@/lib/queries'
+import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, assignWaiter, fetchUsers, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote, fetchActiveShift } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
@@ -188,10 +188,14 @@ export default function PosV2Ticket() {
 
   async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
     if (busyRef.current) return
-    const acc = method === 'cash' ? cashAcc : cardAcc
-    if (!acc) { toast.error('Нет счёта для оплаты'); return }
     busyRef.current = true; setBusy(true)
     try {
+      // Нал по сплиту — на СЧЁТ СМЕНЫ (как полная оплата), иначе нал по сплитам
+      // и по полной оплате лёг бы на разные счета.
+      const shift = method === 'cash' ? await fetchActiveShift().catch(() => null) : null
+      const sAcc = shift as { accountId?: string; accountName?: string } | null
+      const acc = method === 'cash' ? (sAcc?.accountId ? { id: sAcc.accountId, name: sAcc.accountName } : cashAcc) : cardAcc
+      if (!acc?.id) { toast.error('Нет счёта для оплаты'); return }
       await paySplit(s.id, method, acc.id, acc.name ?? '', user?.id)
       toast.success(`Часть ${s.splitNumber} оплачена · ${formatCurrency(s.total)}`)
       const remaining = splits.filter(x => x.id !== s.id && x.status !== 'paid')

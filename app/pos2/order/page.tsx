@@ -190,10 +190,16 @@ export default function PosV2Order() {
 
   async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
     if (payingRef.current || !activeGroup) return
-    const acc = method === 'cash' ? (accounts.find(a => a.type === 'cash') ?? accounts[0]) : (accounts.find(a => a.type !== 'cash') ?? accounts[0])
-    if (!acc) { toast.error('Нет счёта для оплаты'); return }
     payingRef.current = true; setPaying(true)
     try {
+      // Нал по сплиту — на СЧЁТ СМЕНЫ (как полная оплата closeOrderWithPayment),
+      // иначе нал по сплитам и по полной оплате лёг бы на разные счета.
+      const shift = method === 'cash' ? await fetchActiveShift().catch(() => null) : null
+      const sAcc = shift as { accountId?: string; accountName?: string } | null
+      const acc = method === 'cash'
+        ? (sAcc?.accountId ? { id: sAcc.accountId, name: sAcc.accountName } : (accounts.find(a => a.type === 'cash') ?? accounts[0]))
+        : (accounts.find(a => a.type !== 'cash') ?? accounts[0])
+      if (!acc?.id) { toast.error('Нет счёта для оплаты'); return }
       await paySplit(s.id, method, acc.id, acc.name ?? '', user?.id)
       toast.success(`Часть ${s.splitNumber} оплачена · ${formatCurrency(s.total)}`)
       const remaining = splits.filter(x => x.id !== s.id && x.status !== 'paid')
