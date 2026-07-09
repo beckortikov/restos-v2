@@ -108,6 +108,11 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		if err != nil {
 			return nil, nil, apperrors.Wrap("VALIDATION", "bad tip_amount", err)
 		}
+		// Отрицательные чаевые занижали total_with_service (а с ним и требуемую
+		// Σ payments) — работали как невалидируемая скидка в обход approval-гейта.
+		if decimal.IsNegative(tip) {
+			return nil, nil, apperrors.Wrap("VALIDATION", "tip_amount must be >= 0", nil)
+		}
 	}
 
 	// Pre-validate discount fields (значение/тип проверим против order.Total внутри tx).
@@ -367,18 +372,57 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				}).Error
 		}
 
-		if isMulti {
-			for _, p := range in.Payments {
-				amt, _ := decimal.FromString(p.Amount)
-				amtN := decimal.Normalize(amt)
-				acc := p.AccountID
+		// Идемпотентность выручки (повторное закрытие после reopen): если по
+		// заказу уже есть revenue-FO — НЕ постим выручку/кредит счёта/агрегаты
+		// смены повторно. Склад ниже уже идемпотентен по тому же source_ref.
+		// Иначе reopen→reclose давал двойную выручку при однократном списании.
+		var revExisting int64
+		if err := tx.Model(&models.FinancialOperation{}).
+			Where("restaurant_id = ? AND source_ref = ? AND category = ?", rid, opSourceRef, opCat).
+			Count(&revExisting).Error; err != nil {
+			return err
+		}
+		alreadyPosted := revExisting > 0
+
+		if !alreadyPosted {
+			if isMulti {
+				for _, p := range in.Payments {
+					amt, _ := decimal.FromString(p.Amount)
+					amtN := decimal.Normalize(amt)
+					acc := p.AccountID
+					finOp := &models.FinancialOperation{
+						ID:           uuid.NewString(),
+						Type:         &opType,
+						Amount:       amtN,
+						Category:     &opCat,
+						Activity:     &opActivity,
+						AccountID:    &acc,
+						Date:         &opDate,
+						Description:  &opDesc,
+						IsAuto:       &opAuto,
+						SourceRef:    &opSourceRef,
+						RestaurantID: &rid,
+						ShiftID:      &shiftID,
+						CreatedAt:    now,
+						UpdatedAt:    now,
+					}
+					if err := tx.Create(finOp).Error; err != nil {
+						return err
+					}
+					if err := creditAccount(acc, amtN); err != nil {
+						return err
+					}
+					applied = append(applied, payApplied{Method: p.Method, Amount: amtN})
+				}
+			} else {
+				opAccount := in.AccountID
 				finOp := &models.FinancialOperation{
 					ID:           uuid.NewString(),
 					Type:         &opType,
-					Amount:       amtN,
+					Amount:       order.TotalWithService,
 					Category:     &opCat,
 					Activity:     &opActivity,
-					AccountID:    &acc,
+					AccountID:    &opAccount,
 					Date:         &opDate,
 					Description:  &opDesc,
 					IsAuto:       &opAuto,
@@ -391,75 +435,50 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				if err := tx.Create(finOp).Error; err != nil {
 					return err
 				}
-				if err := creditAccount(acc, amtN); err != nil {
+				if err := creditAccount(opAccount, order.TotalWithService); err != nil {
 					return err
 				}
-				applied = append(applied, payApplied{Method: p.Method, Amount: amtN})
+				applied = append(applied, payApplied{Method: in.PaymentMethod, Amount: order.TotalWithService})
 			}
-		} else {
-			opAccount := in.AccountID
-			finOp := &models.FinancialOperation{
-				ID:           uuid.NewString(),
-				Type:         &opType,
-				Amount:       order.TotalWithService,
-				Category:     &opCat,
-				Activity:     &opActivity,
-				AccountID:    &opAccount,
-				Date:         &opDate,
-				Description:  &opDesc,
-				IsAuto:       &opAuto,
-				SourceRef:    &opSourceRef,
-				RestaurantID: &rid,
-				ShiftID:      &shiftID,
-				CreatedAt:    now,
-				UpdatedAt:    now,
-			}
-			if err := tx.Create(finOp).Error; err != nil {
-				return err
-			}
-			if err := creditAccount(opAccount, order.TotalWithService); err != nil {
-				return err
-			}
-			applied = append(applied, payApplied{Method: in.PaymentMethod, Amount: order.TotalWithService})
-		}
 
-		// 6. Stock deduct через tech_card_lines.
-		//
-		// Идемпотентность: смотрим, не было ли уже movements для этого заказа.
-		// description = "order:{id}" — наша конвенция.
-		var existing int64
-		if err := tx.Model(&models.StockMovement{}).
-			Where("restaurant_id = ? AND description = ?", rid, opSourceRef).
-			Count(&existing).Error; err != nil {
-			return err
-		}
-		if existing == 0 {
-			if err := s.deductStockForOrder(tx, rid, &order, opSourceRef, now); err != nil {
+			// 6. Stock deduct через tech_card_lines.
+			//
+			// Идемпотентность: смотрим, не было ли уже movements для этого заказа.
+			// description = "order:{id}" — наша конвенция.
+			var existing int64
+			if err := tx.Model(&models.StockMovement{}).
+				Where("restaurant_id = ? AND description = ?", rid, opSourceRef).
+				Count(&existing).Error; err != nil {
 				return err
 			}
-		}
-
-		// 7. Update shift aggregates (по каждому payment split-у отдельно).
-		for _, p := range applied {
-			switch p.Method {
-			case "cash":
-				shift.CashRevenue = decimal.Add(shift.CashRevenue, p.Amount)
-			case "card":
-				shift.CardRevenue = decimal.Add(shift.CardRevenue, p.Amount)
+			if existing == 0 {
+				if err := s.deductStockForOrder(tx, rid, &order, opSourceRef, now); err != nil {
+					return err
+				}
 			}
-		}
-		ordersCount := 1
-		if shift.OrdersCount != nil {
-			ordersCount = *shift.OrdersCount + 1
-		}
-		shift.OrdersCount = &ordersCount
-		// avg_check пересчитываем: (cash+card)/count
-		total := decimal.Add(shift.CashRevenue, shift.CardRevenue)
-		shift.AvgCheck = decimal.Normalize(decimal.DivRound(total, decimal.FromInt(int64(ordersCount))))
-		shift.UpdatedAt = now
-		if err := tx.Save(&shift).Error; err != nil {
-			return err
-		}
+
+			// 7. Update shift aggregates (по каждому payment split-у отдельно).
+			for _, p := range applied {
+				switch p.Method {
+				case "cash":
+					shift.CashRevenue = decimal.Add(shift.CashRevenue, p.Amount)
+				case "card":
+					shift.CardRevenue = decimal.Add(shift.CardRevenue, p.Amount)
+				}
+			}
+			ordersCount := 1
+			if shift.OrdersCount != nil {
+				ordersCount = *shift.OrdersCount + 1
+			}
+			shift.OrdersCount = &ordersCount
+			// avg_check пересчитываем: (cash+card)/count
+			total := decimal.Add(shift.CashRevenue, shift.CardRevenue)
+			shift.AvgCheck = decimal.Normalize(decimal.DivRound(total, decimal.FromInt(int64(ordersCount))))
+			shift.UpdatedAt = now
+			if err := tx.Save(&shift).Error; err != nil {
+				return err
+			}
+		} // end if !alreadyPosted — выручка/кредит/склад/агрегаты постятся ОДИН раз
 
 		// 8. Enqueue receipt print job (fire-and-forget: worker отправит после commit).
 		//    SkipReceipt — кассир явно выбрал «Закрыть без печати» в sidebar'е;

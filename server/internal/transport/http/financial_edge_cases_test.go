@@ -214,9 +214,9 @@ func TestFinancialEdgeCases(t *testing.T) {
 	})
 
 	t.Run("Reopen_DoesNotReverseFinops", func(t *testing.T) {
-		// Reopen — намеренное legacy-поведение: финопы и stock_movements
-		// остаются. Тест документирует это и ловит дубль revenue после
-		// повторного close.
+		// Reopen оставляет финопы/stock_movements (legacy). А повторное close
+		// теперь ИДЕМПОТЕНТНО по выручке — не постит revenue-FO/кредит счёта
+		// дважды (v3.16.4). Тест фиксирует это.
 		f := setupE2E(t)
 		tok := f.login(t)
 		gdb, _ := db.Open(testDSN())
@@ -271,21 +271,25 @@ func TestFinancialEdgeCases(t *testing.T) {
 				balAfter1.Balance.String(), balAfterReopen.Balance.String())
 		}
 
-		// Re-close → дубль revenue (намеренно). Если фиксят логику —
-		// тест должен будет обновиться.
+		// Re-close после reopen НЕ должен постить выручку повторно — идемпотентно
+		// по source_ref (иначе двойной учёт выручки при однократном списании
+		// склада). Регресс-гард для v3.16.4.
 		cr2, cb2 := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", ord.ID), tok, uuid.NewString(),
 			map[string]any{"payment_method": "cash", "account_id": accID, "shift_id": sid})
 		if cr2.StatusCode != 200 {
 			t.Logf("re-close after reopen returned %d: %s", cr2.StatusCode, cb2)
 		}
 		var opsAfterReclose []models.FinancialOperation
-		gdb.Where("source_ref = ?", "order:"+ord.ID).Find(&opsAfterReclose)
-		if len(opsAfterReclose) < 1 {
-			t.Errorf("MISSING revenue finop after reclose")
+		gdb.Where("source_ref = ? AND category = ?", "order:"+ord.ID, "revenue").Find(&opsAfterReclose)
+		if len(opsAfterReclose) != 1 {
+			t.Errorf("DOUBLE REVENUE: reopen+reclose должен оставить РОВНО 1 revenue-FO, got %d", len(opsAfterReclose))
 		}
-		// Если дубль — это знаём.
-		if len(opsAfterReclose) == 2 {
-			t.Logf("DOCUMENTED: reopen+reclose creates duplicate revenue finop (legacy)")
+		// Баланс счёта тоже не должен удвоиться (кредит выполняется один раз).
+		var balAfterReclose models.FinancialAccount
+		gdb.First(&balAfterReclose, "id = ?", accID)
+		if !balAfterReclose.Balance.Equal(balAfter1.Balance) {
+			t.Errorf("DOUBLE CREDIT: reclose удвоил баланс (было %s, стало %s)",
+				balAfter1.Balance.String(), balAfterReclose.Balance.String())
 		}
 	})
 
