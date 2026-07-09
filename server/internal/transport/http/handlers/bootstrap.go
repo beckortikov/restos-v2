@@ -17,14 +17,22 @@ func NewBootstrap(svc *service.BootstrapService) *BootstrapHandler {
 }
 
 // Status — GET /api/v1/bootstrap/status (публично, без auth).
-// Возвращает {initialized: bool} — фронт решает что показать.
+// Возвращает {initialized: bool, restaurants: [{id,name}]} — фронт решает что
+// показать. Список ресторанов позволяет браузеру по LAN выбрать ресторан для
+// входа вместо ручного ввода UUID (при одном — автоподстановка).
 func (h *BootstrapHandler) Status(w http.ResponseWriter, r *http.Request) {
 	init, err := h.svc.IsInitialized(r.Context())
 	if err != nil {
 		respond.Error(w, err)
 		return
 	}
-	respond.JSON(w, http.StatusOK, map[string]any{"initialized": init})
+	restaurants := []service.PublicRestaurant{}
+	if init {
+		if rs, err := h.svc.ListRestaurantsPublic(r.Context()); err == nil {
+			restaurants = rs
+		}
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"initialized": init, "restaurants": restaurants})
 }
 
 // Run — POST /api/v1/bootstrap (публично, без auth; защищено CONFLICT-чеком).

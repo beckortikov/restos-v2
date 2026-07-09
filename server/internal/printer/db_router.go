@@ -141,3 +141,18 @@ func (r *DBRouter) ResolveByStation(restaurantID, station string) (string, bool)
 	}
 	return p.ID, true
 }
+
+// StationHasPrinter — есть ли у станции ХОТЬ ОДИН принтер в БД (независимо от
+// enabled). Позволяет write-side отличить «станция настроена, но её принтер
+// отключён» (ResolveByStation=false, StationHasPrinter=true → бесбумажная, runner
+// не печатаем) от «у станции нет своего принтера» (обе false → runner уходит на
+// общий станционный принтер, как раньше).
+func (r *DBRouter) StationHasPrinter(restaurantID, station string) bool {
+	var count int64
+	if err := r.db.Model(&models.Printer{}).
+		Where("restaurant_id = ? AND kind = ? AND station = ?", restaurantID, "station", station).
+		Count(&count).Error; err != nil {
+		return false
+	}
+	return count > 0
+}

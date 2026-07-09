@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Тёмная тема-контейнер для окна; UI рисует Compose (KdsTheme). -->
+    <style name="Theme.Kds" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#0E1116</item>
+        <item name="android:statusBarColor">#0E1116</item>
+        <item name="android:navigationBarColor">#0E1116</item>
+    </style>
+</resources>

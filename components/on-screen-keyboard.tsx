@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type CSSProperties } from 'react'
 import { Delete, ArrowBigUp, X, CornerDownLeft, Globe } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -131,8 +131,9 @@ export function OnScreenKeyboard() {
     const kbHeight = kb.offsetHeight
     const kbTop = window.innerHeight - kbHeight
 
-    // 1) Центрированный диалог — поднимаем целиком.
-    const host = active.closest('[role="dialog"]') as HTMLElement | null
+    // 1) Центрированный диалог — поднимаем целиком. AlertDialog рендерится
+    //    с role="alertdialog", обычный Dialog — role="dialog".
+    const host = active.closest('[role="dialog"], [role="alertdialog"]') as HTMLElement | null
     if (host && window.getComputedStyle(host).top !== 'auto') {
       const rect = host.getBoundingClientRect()
       if (rect.bottom <= kbTop - gap) return // уже не перекрыт
@@ -293,22 +294,28 @@ export function OnScreenKeyboard() {
       ref={rootRef}
       data-no-vk
       className={cn(
-        'fixed inset-x-0 bottom-0 z-[90] select-none',
-        'bg-card/95 backdrop-blur-md border-t border-border shadow-2xl',
-        'px-1.5 pt-1 pb-[max(0.375rem,env(safe-area-inset-bottom))]',
+        // pointer-events-auto: модальные Radix-диалоги (Dialog/AlertDialog)
+        // ставят pointer-events:none на <body> — без явного auto клавиатура
+        // видна (z-90), но не кликабельна.
+        'fixed inset-x-0 bottom-0 z-[90] select-none pointer-events-auto',
+        'shadow-2xl',
+        'px-4 pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom))]',
         'animate-in slide-in-from-bottom-4 duration-150',
       )}
+      // Дизайн restos.pen (Keyboard Wrap): бежевый лоток #E6E3DB, клавиши белые.
+      style={{ background: '#E6E3DB', borderTop: '1px solid #D5D1C9' }}
     >
       <div className="w-full">
         {/* Хедер: ручка + закрыть */}
-        <div className="relative flex items-center justify-center py-1">
-          <div className="h-1 w-10 rounded-full bg-muted-foreground/30" />
+        <div className="relative flex items-center justify-center py-1.5">
+          <div className="h-1 w-10 rounded-full" style={{ background: '#C4BFB4' }} />
           <button
             type="button"
             tabIndex={-1}
             aria-label="Скрыть клавиатуру"
             onClick={applyDone}
-            className="absolute right-1 top-1/2 -translate-y-1/2 grid size-8 place-items-center rounded-lg bg-muted text-muted-foreground hover:bg-muted/70 active:scale-95 touch-manipulation"
+            className="absolute right-0 top-1/2 -translate-y-1/2 grid size-9 place-items-center rounded-[10px] active:scale-95 touch-manipulation"
+            style={{ background: '#D5D1C9', color: '#3A382F' }}
           >
             <X className="size-4" />
           </button>
@@ -360,17 +367,24 @@ function Key({
       // поэтому сама клавиша — просто onClick. touch-manipulation убирает задержку.
       onClick={onTap}
       className={cn(
-        'flex h-12 flex-1 items-center justify-center rounded-lg text-xl font-medium touch-manipulation',
-        'border transition-transform active:scale-[0.97] sm:h-[54px]',
-        variant === 'default' && 'border-border bg-background hover:bg-muted',
-        variant === 'muted' && 'border-border bg-muted text-muted-foreground hover:bg-muted/70',
-        variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+        'flex h-14 flex-1 items-center justify-center rounded-[10px] text-xl font-medium touch-manipulation',
+        'transition-transform active:scale-[0.97]',
         className,
       )}
+      // Дизайн restos.pen: белые клавиши с мягкой тенью; действия — бежевые
+      // #D5D1C9; праймери (Enter/язык-акцент) — бренд #D85A30.
+      style={KEY_STYLE[variant]}
     >
       {children}
     </button>
   )
+}
+
+// Палитра клавиш из restos.pen (Keyboard Wrap).
+const KEY_STYLE: Record<'default' | 'muted' | 'primary', CSSProperties> = {
+  default: { background: '#FFFFFF', color: '#1A1A1A', boxShadow: '0 1px 2px rgba(0,0,0,0.08)' },
+  muted: { background: '#D5D1C9', color: '#3A382F' },
+  primary: { background: '#D85A30', color: '#FFFFFF' },
 }
 
 // ── Текстовая раскладка (ЙЦУКЕН / QWERTY, на всю ширину, iiko-style) ─────────
@@ -455,13 +469,11 @@ function NumericPad({
       tabIndex={-1}
       onClick={onTap}
       className={cn(
-        'flex h-16 items-center justify-center rounded-lg text-2xl font-semibold touch-manipulation',
-        'border transition-transform active:scale-[0.97] sm:h-[68px]',
-        variant === 'default' && 'border-border bg-background hover:bg-muted',
-        variant === 'muted' && 'border-border bg-muted text-muted-foreground hover:bg-muted/70',
-        variant === 'primary' && 'border-primary bg-primary text-primary-foreground hover:bg-primary/90',
+        'flex h-16 items-center justify-center rounded-[10px] text-2xl font-semibold touch-manipulation',
+        'transition-transform active:scale-[0.97] sm:h-[68px]',
         className,
       )}
+      style={KEY_STYLE[variant]}
     >
       {children}
     </button>

@@ -829,7 +829,9 @@ func (s *ReservationsService) Patch(ctx context.Context, id string, in Reservati
 						}).Error; err != nil {
 							return err
 						}
-					case "completed", "cancelled":
+					case "completed", "cancelled", "no_show":
+						// no_show тоже освобождает стол — гость не пришёл, держать
+						// бронь на столе незачем (иначе стол залипает в 'reserved').
 						if tbl.Status != nil && (*tbl.Status == "reserved" || *tbl.Status == "occupied") {
 							scopedU, _ := tr.ForTenant(ctx)
 							freeUpd := map[string]any{

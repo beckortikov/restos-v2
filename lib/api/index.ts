@@ -26,7 +26,7 @@ export class V4Error extends Error {
     this.name = 'V4Error'
   }
   /** Возвращает структурированный ErrorEnvelope (если сервер его вернул). */
-  envelope(): { code?: string; message?: string } | null {
+  envelope(): { code?: string; message?: string; details?: Record<string, unknown> } | null {
     if (this.body && typeof this.body === 'object') return this.body as any
     return null
   }

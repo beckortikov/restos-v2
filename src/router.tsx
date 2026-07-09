@@ -3,6 +3,7 @@ import { lazy, Suspense } from 'react'
 import { AppLayout } from './layouts/AppLayout'
 import { AuthLayout } from './layouts/AuthLayout'
 import { AdminLayout } from './layouts/AdminLayout'
+import { PosV2Layout } from './layouts/PosV2Layout'
 
 // Suspense fallback is intentionally empty — pages render their own skeletons
 // once they mount. A spinner here would flash briefly before the skeleton.
@@ -32,6 +33,21 @@ const WaiterOrderDetail = () => L(() => import('@/app/(app)/waiter/order/[id]/pa
 // Cashier
 const CashierSettings = () => L(() => import('@/app/(app)/cashier/settings/page'))
 const ShowQR = () => L(() => import('@/app/(app)/show-qr/page'))
+
+// New POS — параллельный опциональный интерфейс (флаг pos_ui_v2). Изолирован.
+const PosV2Launcher = () => L(() => import('@/app/pos2/page'))
+const PosV2Order = () => L(() => import('@/app/pos2/order/page'))
+const PosV2Pay = () => L(() => import('@/app/pos2/pay/page'))
+const PosV2History = () => L(() => import('@/app/pos2/history/page'))
+const PosV2Tables = () => L(() => import('@/app/pos2/tables/page'))
+const PosV2Service = () => L(() => import('@/app/pos2/service/page'))
+const PosV2Shift = () => L(() => import('@/app/pos2/shift/page'))
+const PosV2Settings = () => L(() => import('@/app/pos2/settings/page'))
+const PosV2Ticket = () => L(() => import('@/app/pos2/ticket/page'))
+const PosV2Stop = () => L(() => import('@/app/pos2/stop/page'))
+const PosV2Orders = () => L(() => import('@/app/pos2/orders/page'))
+const PosV2Showcase = () => L(() => import('@/app/pos2/showcase/page'))
+const PosV2Batch = () => L(() => import('@/app/pos2/batch/page'))
 
 // Operations
 const POS = () => L(() => import('@/app/(app)/operations/pos/page'))
@@ -199,6 +215,24 @@ export function AppRouter() {
         <Route path="/settings/customers" element={<Customers />} />
         <Route path="/settings/audit" element={<Audit />} />
         <Route path="/settings/license" element={<License />} />
+      </Route>
+
+      {/* New POS — параллельная опциональная ветка, изолированный layout без рейла.
+          Старый POS (/operations/pos) остаётся дефолтом и не затрагивается. */}
+      <Route element={<PosV2Layout />}>
+        <Route path="/pos2" element={<PosV2Launcher />} />
+        <Route path="/pos2/order" element={<PosV2Order />} />
+        <Route path="/pos2/pay" element={<PosV2Pay />} />
+        <Route path="/pos2/history" element={<PosV2History />} />
+        <Route path="/pos2/tables" element={<PosV2Tables />} />
+        <Route path="/pos2/service" element={<PosV2Service />} />
+        <Route path="/pos2/shift" element={<PosV2Shift />} />
+        <Route path="/pos2/settings" element={<PosV2Settings />} />
+        <Route path="/pos2/ticket" element={<PosV2Ticket />} />
+        <Route path="/pos2/stop" element={<PosV2Stop />} />
+        <Route path="/pos2/orders" element={<PosV2Orders />} />
+        <Route path="/pos2/showcase" element={<PosV2Showcase />} />
+        <Route path="/pos2/batch" element={<PosV2Batch />} />
       </Route>
 
       {/* Admin — superadmin only */}

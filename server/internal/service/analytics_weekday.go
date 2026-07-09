@@ -95,7 +95,7 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 		COGS    decimal.Decimal `gorm:"column:cogs"`
 	}
 	qc := scopedC.Table("order_items AS oi").
-		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, COALESCE(SUM(oi.cogs * oi.qty),0) AS cogs`).
+		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
 		Where("oi.cancelled_at IS NULL")
@@ -173,7 +173,7 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 		COGS    decimal.Decimal `gorm:"column:cogs"`
 	}
 	qhc := scopedHC.Table("order_items AS oi").
-		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, EXTRACT(HOUR FROM o.closed_at)::int AS hour, COALESCE(SUM(oi.cogs * oi.qty),0) AS cogs`).
+		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, EXTRACT(HOUR FROM o.closed_at)::int AS hour, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
 		Where("oi.cancelled_at IS NULL")
@@ -206,7 +206,7 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 	}
 	qcat := scopedCat.Table("order_items AS oi").
 		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, COALESCE(NULLIF(mi.category,''),'—') AS category,
-		        COALESCE(SUM(oi.qty),0) AS qty, COALESCE(SUM(oi.price * oi.qty),0) AS revenue, COALESCE(SUM(oi.cogs * oi.qty),0) AS cogs`).
+		        COALESCE(SUM(oi.qty),0) AS qty, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END),0) AS revenue, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").

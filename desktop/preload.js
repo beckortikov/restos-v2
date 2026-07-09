@@ -36,4 +36,7 @@ contextBridge.exposeInMainWorld('restosDesktop', {
 
   // Screenshot for bug reports
   captureScreenshot: () => ipcRenderer.invoke('capture-screenshot'),
+
+  // Полноэкранный режим — включает/выключает новый POS (/pos2) на вход/выход.
+  setFullscreen: (on) => ipcRenderer.send('set-fullscreen', on),
 })

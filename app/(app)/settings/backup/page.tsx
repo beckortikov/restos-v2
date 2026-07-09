@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { getBaseURL } from '@/lib/api'
+import { randomId } from '@/lib/random-id'
 import {
   DatabaseBackup, Download, Trash2, Upload, RotateCcw, Loader2,
   CheckCircle2, AlertTriangle, HardDrive, Clock,
@@ -85,7 +86,7 @@ export default function BackupPage() {
     try {
       const res = await fetch(getBaseURL() + '/api/v1/backup/create', {
         method: 'POST',
-        headers: authHeaders({ 'Idempotency-Key': crypto.randomUUID() }),
+        headers: authHeaders({ 'Idempotency-Key': randomId() }),
       })
       if (!res.ok) {
         const txt = await res.text()
@@ -127,7 +128,7 @@ export default function BackupPage() {
     try {
       const res = await fetch(getBaseURL() + `/api/v1/backup/${encodeURIComponent(name)}`, {
         method: 'DELETE',
-        headers: authHeaders({ 'Idempotency-Key': crypto.randomUUID() }),
+        headers: authHeaders({ 'Idempotency-Key': randomId() }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       toast.success('Бэкап удалён')
@@ -157,13 +158,13 @@ export default function BackupPage() {
         fd.append('file', restoreConfirm.file)
         res = await fetch(getBaseURL() + '/api/v1/backup/restore', {
           method: 'POST',
-          headers: authHeaders({ 'Idempotency-Key': crypto.randomUUID() }),
+          headers: authHeaders({ 'Idempotency-Key': randomId() }),
           body: fd,
         })
       } else {
         res = await fetch(getBaseURL() + `/api/v1/backup/${encodeURIComponent(restoreConfirm.name)}/restore`, {
           method: 'POST',
-          headers: authHeaders({ 'Idempotency-Key': crypto.randomUUID() }),
+          headers: authHeaders({ 'Idempotency-Key': randomId() }),
         })
       }
       if (!res.ok) {

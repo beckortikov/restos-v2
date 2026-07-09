@@ -148,7 +148,20 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 			return err
 		}
 		if len(openOrders) > 0 {
-			return apperrors.Wrap("CONFLICT", openOrdersMessage(tx, rid, openOrders), nil)
+			// order_ids/order_numbers — machine-readable, чтобы фронт мог сразу
+			// предложить открыть/отменить именно эти заказы (независимо от того,
+			// к какой смене/дате они привязаны — «Активные заказы» скоупятся на
+			// текущую смену и не находят заказы-«хвосты» из прошлых смен).
+			ids := make([]string, len(openOrders))
+			numbers := make([]int, len(openOrders))
+			for i, o := range openOrders {
+				ids[i] = o.ID
+				numbers[i] = o.OrderNumber
+			}
+			return apperrors.WrapDetails("CONFLICT", openOrdersMessage(tx, rid, openOrders), map[string]any{
+				"order_ids":     ids,
+				"order_numbers": numbers,
+			}, nil)
 		}
 
 		// Сумма shift-операций (внос/изъятие) — для expected_cash.

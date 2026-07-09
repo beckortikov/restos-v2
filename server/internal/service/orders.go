@@ -60,14 +60,14 @@ type OrdersFilter struct {
 //
 // Поля выбираем явным SELECT — это снижает payload и I/O.
 type OrderSlim struct {
-	ID           string          `json:"id"`
-	OrderNumber  int             `json:"order_number"`
-	Status       *string         `json:"status,omitempty"`
-	Type         *string         `json:"type,omitempty"`
-	TableID      *string         `json:"table_id,omitempty"`
-	WaiterID     *string         `json:"waiter_id,omitempty"`
-	GuestsCount  *int            `json:"guests_count,omitempty"`
-	Total        decimal.Decimal `json:"total"`
+	ID          string          `json:"id"`
+	OrderNumber int             `json:"order_number"`
+	Status      *string         `json:"status,omitempty"`
+	Type        *string         `json:"type,omitempty"`
+	TableID     *string         `json:"table_id,omitempty"`
+	WaiterID    *string         `json:"waiter_id,omitempty"`
+	GuestsCount *int            `json:"guests_count,omitempty"`
+	Total       decimal.Decimal `json:"total"`
 	// Subtotal — пересчёт из позиций (Σ price × effectivePortions), единый
 	// источник правды. Клиент должен использовать его, а не зафиксированный
 	// total (он у старых заказов мог считаться прежней формулой и расходиться).
@@ -141,6 +141,15 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 		switch f.Status {
 		case "new", "open":
 			q = q.Where("status IN ?", []string{"new", "open"})
+		case "closed":
+			// Раздел «Закрытые»: только финализированные заказы (оплачен/возврат/отменён),
+			// НЕ активные «Новый». Оба под-фильтра (Оплаченные/Отменённые) — их подмножества.
+			// 'closed'/'refunded' — канонические v4-статусы, 'done' — legacy v1.
+			q = q.Where("status IN ?", []string{"closed", "done", "refunded", "cancelled"})
+		case "done":
+			// Под-фильтр «Оплаченные»: v4 пишет 'closed' (полный возврат — 'refunded'),
+			// legacy v1 — 'done'. Фронт маппит все три в UI-статус 'done'.
+			q = q.Where("status IN ?", []string{"closed", "done", "refunded"})
 		default:
 			q = q.Where("status = ?", f.Status)
 		}

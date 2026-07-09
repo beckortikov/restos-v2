@@ -82,6 +82,7 @@ function mapBatchIngredient(b: Record<string, unknown>) {
     recipeUnit: (b.recipe_unit as string) ?? '',
     stockQty: Number(b.stock_qty ?? 0),
     recipeQtyPerPortion: Number(b.recipe_qty_per_portion ?? 0),
+    stockQtyPerPortion: Number(b.stock_qty_per_portion ?? 0),
     possiblePortions: Number(b.possible_portions ?? 0),
     isBottleneck: Boolean(b.is_bottleneck),
   }
@@ -95,6 +96,7 @@ function mapBatchBlocker(b: Record<string, unknown>) {
     recipeUnit: '',
     stockQty: Number(b.have ?? 0),
     recipeQtyPerPortion: Number(b.need ?? 0),
+    stockQtyPerPortion: Number(b.need ?? 0),
     possiblePortions: 0,
     isBottleneck: true,
   }

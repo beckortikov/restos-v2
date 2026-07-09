@@ -210,6 +210,7 @@ export interface BatchPortionCalc {
     recipeUnit: string
     stockQty: number
     recipeQtyPerPortion: number
+    stockQtyPerPortion: number // расход на порцию в единице склада (после конвертации)
     possiblePortions: number
     isBottleneck: boolean
   }[]
@@ -224,6 +225,11 @@ export interface Ingredient {
   unit: string
   pricePerUnit: number
   wastePercent: number // 15 = 15% отходов при очистке
+  // Per-unit фактор: вес/объём ОДНОЙ складской единицы, если основная единица
+  // штучная (шт/уп/бут), а тех-карта — в весе/объёме. Напр. «1 банка = 340 г».
+  // 0/undefined = фактор не задан. См. convertDeductToStockUnit.
+  unitWeight?: number
+  unitWeightUnit?: string // единица фактора (г/мл)
   isFood: boolean // true = продукт, false = хозтовар
   nomenclatureId?: string | null // multi-branch: привязка к сетевому каталогу (ADR-003)
 }

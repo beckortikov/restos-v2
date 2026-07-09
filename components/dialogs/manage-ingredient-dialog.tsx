@@ -20,7 +20,17 @@ interface IngredientForm {
   minQty: number
   pricePerUnit: number
   wastePercent: number
+  unitWeight: number
+  unitWeightUnit: string
   isFood: boolean
+}
+
+// Штучные единицы (нет универсального метрического коэффициента к г/мл).
+// Для них тех-карта в весе/объёме требует per-unit фактор («1 банка = 340 г»).
+const DISCRETE_UNITS = ['шт', 'порц', 'уп', 'бут']
+function isDiscreteUnit(u: string): boolean {
+  const n = u.toLowerCase().trim().replace(/\.$/, '')
+  return DISCRETE_UNITS.includes(n)
 }
 
 interface ManageIngredientDialogProps {
@@ -41,6 +51,8 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
     minQty: 0,
     pricePerUnit: 0,
     wastePercent: 0,
+    unitWeight: 0,
+    unitWeightUnit: 'г',
     isFood: true,
   })
 
@@ -91,10 +103,12 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
           minQty: ingredient.minQty,
           pricePerUnit: ingredient.pricePerUnit,
           wastePercent: ingredient.wastePercent ?? 0,
+          unitWeight: ingredient.unitWeight ?? 0,
+          unitWeightUnit: ingredient.unitWeightUnit || 'г',
           isFood: ingredient.isFood ?? true,
         })
       } else {
-        setForm({ name: '', category: '', unit: '', initialQty: 0, minQty: 0, pricePerUnit: 0, wastePercent: 0, isFood: defaultIsFood })
+        setForm({ name: '', category: '', unit: '', initialQty: 0, minQty: 0, pricePerUnit: 0, wastePercent: 0, unitWeight: 0, unitWeightUnit: 'г', isFood: defaultIsFood })
       }
     }
   }, [open, ingredient])
@@ -224,6 +238,37 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
               </div>
             )}
           </div>
+
+          {/* Per-unit фактор: только для штучных пищевых ингредиентов, у которых
+              тех-карта пишется в весе/объёме (1 банка = 340 г). Опционально. */}
+          {form.isFood && isDiscreteUnit(form.unit) && (
+            <div className="space-y-1.5 px-3 py-2.5 rounded-lg border border-border bg-muted/30">
+              <label className="text-sm font-medium text-foreground">Вес/объём одной единицы (необязательно)</label>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground whitespace-nowrap">1 {form.unit || 'шт.'} =</span>
+                <DecimalInput
+                  value={form.unitWeight}
+                  onChange={(v) => setForm((p) => ({ ...p, unitWeight: v }))}
+                  min={0}
+                  placeholder="0"
+                  className="flex-1 min-w-0 px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+                <select
+                  value={form.unitWeightUnit}
+                  onChange={(e) => setForm((p) => ({ ...p, unitWeightUnit: e.target.value }))}
+                  className="px-2 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="г">г</option>
+                  <option value="кг">кг</option>
+                  <option value="мл">мл</option>
+                  <option value="л">л</option>
+                </select>
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Для пересчёта расхода в тех-карте (в г/мл) в штучный остаток. Оставьте 0, если не нужно.
+              </p>
+            </div>
+          )}
         </div>
 
         <DialogFooter className="flex-col sm:flex-row gap-2">

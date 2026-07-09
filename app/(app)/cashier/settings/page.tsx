@@ -6,10 +6,11 @@ import {
   Users, Printer, Link2, RefreshCw, Lock, ChevronRight, Trash2, CookingPot,
   ChefHat, BookOpen, FlaskConical, Package, ScrollText, ClipboardCheck, History,
   Truck, TrendingDown, TrendingUp, Scale, Wallet, Target, HandCoins,
-  BarChart3, Upload, FileClock, Copy,
+  BarChart3, Upload, FileClock, Copy, Sparkles,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
+import { usePosV2Flag } from '@/lib/pos-v2/flag'
 import type { PermissionKey } from '@/lib/types'
 
 type DesktopUpdateState = {
@@ -68,6 +69,7 @@ export default function CashierSettingsPage() {
   const desktopVersion = typeof window !== 'undefined' ? (window as any).restosDesktop?.version : undefined
   const connectUrl = typeof window !== 'undefined' ? (window as any).restosDesktop?.connectUrl : undefined
   const pinEnabled = restaurant?.pinLockEnabled ?? false
+  const [posV2On, setPosV2On] = usePosV2Flag()
 
   function handleConnectWaiters() {
     // Кассир показывает QR официантам — отдельная страница /show-qr,
@@ -198,6 +200,17 @@ export default function CashierSettingsPage() {
     },
 
     // Система
+    {
+      section: 'system', icon: Sparkles, label: 'Новый интерфейс (бета)',
+      description: posV2On
+        ? 'Включён · кнопка «Новый POS» на экране кассы'
+        : 'Попробовать переработанный тач-дизайн кассы',
+      onClick: () => {
+        const next = !posV2On
+        setPosV2On(next)
+        toast.success(next ? 'Новый интерфейс включён' : 'Новый интерфейс выключен')
+      },
+    },
     !!connectUrl && {
       section: 'system', icon: Link2, label: 'Подключить официантов',
       description: 'QR-код для входа с телефона',

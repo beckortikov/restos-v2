@@ -15,8 +15,8 @@ android {
         applicationId = "com.restos.waiter"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "0.2.14"
+        versionCode = 18
+        versionName = "0.2.16"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Backend URL — реальный host подменяется HostRedirectInterceptor из
@@ -71,6 +71,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

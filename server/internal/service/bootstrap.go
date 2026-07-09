@@ -135,3 +135,25 @@ func (s *BootstrapService) IsInitialized(ctx context.Context) (bool, error) {
 	}
 	return count > 0, nil
 }
+
+// PublicRestaurant — минимум для выбора ресторана до логина.
+type PublicRestaurant struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ListRestaurantsPublic — id+name всех ресторанов без auth. Нужно, чтобы
+// браузер, открывший SPA по LAN с чистым localStorage (ноутбук владельца),
+// выбрал ресторан для входа вместо ручного ввода UUID. Раскрытие id безопасно:
+// логин всё равно требует PIN.
+func (s *BootstrapService) ListRestaurantsPublic(ctx context.Context) ([]PublicRestaurant, error) {
+	var out []PublicRestaurant
+	if err := s.r.Raw().WithContext(ctx).
+		Model(&models.Restaurant{}).
+		Select("id", "name").
+		Order("name").
+		Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
+}

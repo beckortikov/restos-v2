@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"time"
 
@@ -219,9 +220,22 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 
 // ─── Z-report ──────────────────────────────────────────────────────────────
 
-// ZReportRevenueByMethod — выручка в разрезе payment_method.
+// ZReportRevenueByMethod — выручка в разрезе конкретного счёта (financial_account).
+//
+// Раньше группировали по orders.payment_method → все карточные оплаты падали в
+// один бакет «Банк. карта», и было не видно, на какой именно счёт/терминал они
+// пришли. Теперь источник — financial_operations (одна запись на каждую часть
+// оплаты, и single-, и split-заказы), сгруппированные по account_id. Так видно
+// «какая именно карта/терминал и сколько».
+//
+//   - PaymentMethod — производный (cash|card) из типа счёта, для иконки/фолбэка.
+//   - AccountName   — имя счёта (та самая «конкретная карта»).
+//   - AccountType   — cash|bank (тип financial_account).
 type ZReportRevenueByMethod struct {
 	PaymentMethod string          `json:"payment_method"`
+	AccountID     string          `json:"account_id,omitempty"`
+	AccountName   string          `json:"account_name,omitempty"`
+	AccountType   string          `json:"account_type,omitempty"`
 	OrdersCount   int             `json:"orders_count"`
 	Total         decimal.Decimal `json:"total"`
 }
@@ -398,33 +412,94 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		out.ExpensesByCategory = append(out.ExpensesByCategory, *row)
 	}
 
-	// Revenue по способу оплаты — из orders (закрытых) в этой смене.
-	type aggRow struct {
-		PaymentMethod *string         `gorm:"column:payment_method"`
-		OrdersCount   int             `gorm:"column:orders_count"`
-		Total         decimal.Decimal `gorm:"column:total"`
+	// Revenue по конкретному счёту оплаты — из financial_operations (revenue),
+	// созданных при закрытии заказов в этой смене. Каждая часть оплаты (и
+	// single-, и split-заказа) — отдельная запись с account_id, поэтому
+	// группировка по счёту даёт разбивку «какая именно карта/терминал и сколько».
+	// source_ref LIKE 'order:%' — только выручка заказов (ручные приходы не в счёт,
+	// чтобы «Выручка» билась с суммой закрытых чеков).
+	// Шаг 1: агрегируем по account_id (без JOIN — financial_accounts.id это UUID,
+	// а financial_operations.account_id это TEXT, прямой JOIN 'uuid = text' падает
+	// в Postgres). Имя/тип счёта дотягиваем отдельным IN-запросом (как
+	// enrichWithAccountNames).
+	type revRow struct {
+		AccountID *string         `gorm:"column:account_id"`
+		OpsCount  int             `gorm:"column:ops_count"`
+		Total     decimal.Decimal `gorm:"column:total"`
 	}
-	var aggs []aggRow
+	var revRows []revRow
 	if err := s.r.Raw().WithContext(ctx).
-		Model(&models.Order{}).
-		Select("payment_method, COUNT(*) AS orders_count, COALESCE(SUM(total_with_service), 0) AS total").
-		Where("restaurant_id = ? AND shift_id = ? AND status = ?", rid, shiftID, "closed").
-		Group("payment_method").
-		Order("payment_method ASC").
-		Find(&aggs).Error; err != nil {
+		Table("financial_operations").
+		Select("account_id, COUNT(*) AS ops_count, COALESCE(SUM(amount), 0) AS total").
+		Where("restaurant_id = ? AND shift_id = ? AND category = ? AND type = ? AND source_ref LIKE ?",
+			rid, shiftID, "revenue", "in", "order:%").
+		Group("account_id").
+		Find(&revRows).Error; err != nil {
 		return nil, err
 	}
-	for _, a := range aggs {
-		pm := ""
-		if a.PaymentMethod != nil {
-			pm = *a.PaymentMethod
+	// Шаг 2: имена/типы счетов одним IN-запросом.
+	accIDs := make([]string, 0, len(revRows))
+	for _, rr := range revRows {
+		if rr.AccountID != nil && *rr.AccountID != "" {
+			accIDs = append(accIDs, *rr.AccountID)
+		}
+	}
+	type accInfo struct{ name, typ string }
+	accByID := map[string]accInfo{}
+	if len(accIDs) > 0 {
+		type arow struct {
+			ID   string  `gorm:"column:id"`
+			Name *string `gorm:"column:name"`
+			Type *string `gorm:"column:type"`
+		}
+		var arows []arow
+		if err := s.r.Raw().WithContext(ctx).
+			Table("financial_accounts").
+			Select("id, name, type").
+			Where("restaurant_id = ? AND id IN ?", rid, accIDs).
+			Find(&arows).Error; err != nil {
+			return nil, err
+		}
+		for _, a := range arows {
+			info := accInfo{}
+			if a.Name != nil {
+				info.name = *a.Name
+			}
+			if a.Type != nil {
+				info.typ = *a.Type
+			}
+			accByID[a.ID] = info
+		}
+	}
+	// Шаг 3: собираем ответ, детерминированный порядок (bank → cash, затем по имени).
+	for _, rr := range revRows {
+		accID := ""
+		if rr.AccountID != nil {
+			accID = *rr.AccountID
+		}
+		info := accByID[accID]
+		// PaymentMethod — производный ярлык для фронта: cash-счёт → cash,
+		// любой другой (bank) → card.
+		pm := "card"
+		if info.typ == "cash" {
+			pm = "cash"
 		}
 		out.RevenueByMethod = append(out.RevenueByMethod, ZReportRevenueByMethod{
 			PaymentMethod: pm,
-			OrdersCount:   a.OrdersCount,
-			Total:         decimal.Normalize(a.Total),
+			AccountID:     accID,
+			AccountName:   info.name,
+			AccountType:   info.typ,
+			OrdersCount:   rr.OpsCount,
+			Total:         decimal.Normalize(rr.Total),
 		})
 	}
+	sort.Slice(out.RevenueByMethod, func(i, j int) bool {
+		a, b := out.RevenueByMethod[i], out.RevenueByMethod[j]
+		if a.AccountType != b.AccountType {
+			return a.AccountType < b.AccountType // bank < cash
+		}
+		return a.AccountName < b.AccountName
+	})
 
 	// Расхождение = closing - expected (если expected заполнен).
 	if shift.ExpectedCash != nil {
@@ -496,7 +571,7 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	var catRows []catRow
 	if err := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
-		Select("COALESCE(NULLIF(mi.category, ''), 'Без категории') AS name, COUNT(oi.id) AS qty, COALESCE(SUM(oi.qty * oi.price), 0) AS total").
+		Select("COALESCE(NULLIF(mi.category, ''), 'Без категории') AS name, COUNT(oi.id) AS qty, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS total").
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Where("o.restaurant_id = ? AND o.shift_id = ? AND o.status = ? AND oi.cancelled_at IS NULL", rid, shiftID, "closed").
@@ -525,7 +600,7 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	var itemRows []itemRow
 	if err := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
-		Select("COALESCE(NULLIF(MAX(mi.name), ''), MAX(oi.name), 'Блюдо') AS name, COALESCE(SUM(oi.qty), 0) AS qty, COALESCE(SUM(oi.qty * oi.price), 0) AS total").
+		Select("COALESCE(NULLIF(MAX(mi.name), ''), MAX(oi.name), 'Блюдо') AS name, COALESCE(SUM(oi.qty), 0) AS qty, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS total").
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 		Where("o.restaurant_id = ? AND o.shift_id = ? AND o.status = ? AND oi.cancelled_at IS NULL", rid, shiftID, "closed").

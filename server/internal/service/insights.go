@@ -331,10 +331,10 @@ func (s *InsightsService) deadStockInsights(ctx context.Context, f PeriodFilter)
 	}
 	return []Insight{{
 		ID: "stock_dead", Category: "stock", Severity: sev,
-		Title:       fmt.Sprintf("Неликвид на складе: %s ₽ (%d позиций)", rub(total), len(deads)),
-		Detail:      "Нет расхода за период: " + joinTop(names, 6) + ".",
-		Impact:      decimal.Normalize(total), ImpactLabel: "Заморожено в неликвиде",
-		Action:      "Распродать/списать, убрать из закупок или ввести в блюда дня.",
+		Title:  fmt.Sprintf("Неликвид на складе: %s ₽ (%d позиций)", rub(total), len(deads)),
+		Detail: "Нет расхода за период: " + joinTop(names, 6) + ".",
+		Impact: decimal.Normalize(total), ImpactLabel: "Заморожено в неликвиде",
+		Action: "Распродать/списать, убрать из закупок или ввести в блюда дня.",
 	}}, nil
 }
 
@@ -457,7 +457,7 @@ func (s *InsightsService) cogsDriftInsights(ctx context.Context, f PeriodFilter)
 		}
 	}
 	type drift struct {
-		id, name           string
+		id, name                 string
 		pct, impact, first, last decimal.Decimal
 	}
 	var drifts []drift
@@ -586,7 +586,7 @@ func (s *InsightsService) lostSalesInsights(ctx context.Context, f PeriodFilter)
 		Revenue decimal.Decimal `gorm:"column:revenue"`
 	}
 	q := scoped.Table("order_items AS oi").
-		Select("COALESCE(SUM(oi.price * oi.qty),0) AS revenue").
+		Select("COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END),0) AS revenue").
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
 		Where("oi.cancelled_at IS NULL").

@@ -2,10 +2,10 @@ package com.restos.waiter.ui.tables
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.restos.waiter.data.auth.AuthRepository
-import com.restos.waiter.data.events.EventBus
-import com.restos.waiter.data.events.ServerEvent
-import com.restos.waiter.data.net.ApiException
+import com.restos.core.auth.AuthRepository
+import com.restos.core.events.EventBus
+import com.restos.core.events.ServerEvent
+import com.restos.core.net.ApiException
 import com.restos.waiter.data.preferences.TablesTab
 import com.restos.waiter.data.preferences.ViewMode
 import com.restos.waiter.data.preferences.WaiterPrefsStore
@@ -70,6 +70,10 @@ class TablesViewModel @Inject constructor(
                     is ServerEvent.OrderCreated,
                     is ServerEvent.OrderUpdated,
                     is ServerEvent.TableUpdated -> refresh()
+                    is ServerEvent.KdsItemUpdated -> refresh()
+                    // Повар снял позицию (void) → сумма/состав заказа изменились,
+                    // на карточке стола это видно → перечитываем столы.
+                    is ServerEvent.ItemVoided -> refresh()
                     is ServerEvent.Other -> Unit
                 }
             }

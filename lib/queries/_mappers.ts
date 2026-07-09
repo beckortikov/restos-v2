@@ -97,20 +97,47 @@ export function convertToRecipeUnit(stockQty: number, stockUnit: string, recipeU
   return stockQty
 }
 
-export function convertDeductToStockUnit(deductQty: number, stockUnit: string, recipeUnit: string): number {
-  const s = stockUnit.toLowerCase().trim()
-  const r = recipeUnit.toLowerCase().trim()
-  if (s === r) return deductQty
-  if ((s === 'кг' || s === 'kg') && (r === 'г' || r === 'g' || r === 'гр')) return deductQty / 1000
-  if ((s === 'г' || s === 'g' || s === 'гр') && (r === 'кг' || r === 'kg')) return deductQty * 1000
-  if ((s === 'л' || s === 'l') && (r === 'мл' || r === 'ml')) return deductQty / 1000
-  if ((s === 'мл' || s === 'ml') && (r === 'л' || r === 'l')) return deductQty * 1000
+// metricConvert — конвертация внутри одной размерности (масса кг↔г, объём л↔мл).
+// null, если единицы разной размерности или неизвестны (шт, уп, пустая).
+// Зеркалит server units.Convert/Convertible.
+function metricConvert(qty: number, from: string, to: string): number | null {
+  const f = from.toLowerCase().trim()
+  const t = to.toLowerCase().trim()
+  if (f === t) return qty
+  const mass: Record<string, number> = { 'кг': 1000, 'kg': 1000, 'г': 1, 'g': 1, 'гр': 1, 'gr': 1 }
+  const vol: Record<string, number> = { 'л': 1000, 'l': 1000, 'lt': 1000, 'мл': 1, 'ml': 1 }
+  for (const table of [mass, vol]) {
+    if (f in table && t in table) return (qty * table[f]) / table[t]
+  }
+  return null
+}
+
+// convertDeductToStockUnit — приводит рецептурный расход к складской единице.
+// Зеркалит server units.ConvertToStock (см. internal/pkg/units):
+//  1. одна размерность → метрическая конвертация;
+//  2. штучный склад + per-unit фактор (unitWeight в unitWeightUnit) →
+//     приводим к единице фактора и делим (10 г ÷ 340 г/шт = 0.0294 шт);
+//  3. фолбэк — без изменений.
+// Только оценка для UI; истина — на бэке.
+export function convertDeductToStockUnit(
+  deductQty: number,
+  stockUnit: string,
+  recipeUnit: string,
+  unitWeight = 0,
+  unitWeightUnit = '',
+): number {
+  const inStock = metricConvert(deductQty, recipeUnit, stockUnit)
+  if (inStock !== null) return inStock
+  if (unitWeight > 0 && unitWeightUnit) {
+    const inFactor = metricConvert(deductQty, recipeUnit, unitWeightUnit)
+    if (inFactor !== null) return inFactor / unitWeight
+  }
   return deductQty
 }
 
 export function calcCogsFromTechCard(
   techLines: Record<string, unknown>[],
-  ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number }>,
+  ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>,
 ): number {
   let cogs = 0
   for (const line of techLines) {
@@ -122,7 +149,7 @@ export function calcCogsFromTechCard(
     const recipeUnit = (line.unit as string) || ''
     const wasteMultiplier = ing.wastePercent > 0 ? 1 / (1 - ing.wastePercent / 100) : 1
     const adjustedQty = recipeQty * wasteMultiplier
-    const qtyInStockUnit = convertDeductToStockUnit(adjustedQty, ing.unit, recipeUnit)
+    const qtyInStockUnit = convertDeductToStockUnit(adjustedQty, ing.unit, recipeUnit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
     cogs += qtyInStockUnit * ing.price
   }
   return dRound(cogs)

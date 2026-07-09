@@ -607,9 +607,12 @@ export default function TableMapPage() {
       // карточка стола показывает завышенную сумму, а PrintReceipt включает
       // отменённую позицию (visibleReceiptItems фильтрует по cancelledAt,
       // которого в устаревших items ещё нет).
+      //
+      // НЕ закрываем sheet: 'refresh' шлётся из onItemsChanged при отмене ОДНОЙ
+      // позиции — заказ остаётся открытым, кассир продолжает работу в панели.
+      // Полное закрытие/отмену заказа шлют onClosed/onCancelled, которые сами
+      // вызывают onOpenChange(false) до 'refresh'.
       refetchAll().catch(console.error)
-      setSheetOpen(false)
-      setSelectedTable(null)
     } else if (action === 'edit_table') {
       const tbl = tables.find((t) => t.id === tableId)
       if (tbl) {

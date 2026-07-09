@@ -84,7 +84,11 @@ func migrateUp(ctx context.Context, sqlDB *sql.DB) error {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
 	goose.SetLogger(gooseZerolog{})
-	if err := goose.UpContext(ctx, sqlDB, "migrations"); err != nil {
+	// WithAllowMissing: применяем миграции с «дырами» в нумерации без строгой
+	// ошибки. Нужно при слиянии параллельных веток: напр. multi-branch держит
+	// 026–032, а на кассе уже применены 033/034 (KDS/units) — без этой опции
+	// goose падает «found missing migrations before current version».
+	if err := goose.UpContext(ctx, sqlDB, "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("goose up: %w", err)
 	}
 	log.Info().Msg("migrations applied")

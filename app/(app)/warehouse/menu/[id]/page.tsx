@@ -353,14 +353,30 @@ export default function EditMenuItemPage() {
     }
   }
 
-  const techCardValid = form.techCard.length === 0 || form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
+  // Реальные строки техкарты (с ингредиентом/п-ф). ПУСТЫЕ строки-плейсхолдеры
+  // (по умолчанию форма держит одну) игнорируем — иначе «Сохранить» залипало
+  // серым даже при заполненной техкарте: `.every()` падал на пустой строке.
+  const realTechLines = form.techCard.filter((l) => l.ingredientId || l.semiId)
+  const realTechLinesValid = realTechLines.every((l) => l.qty > 0)
+  // Весовое сырьё (на развес) продаётся по весу и НЕ требует техкарты-рецепта.
+  const isWeightItem = form.unit !== 'piece'
+  const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
   const canSubmit = !!form.name && !!form.category && form.price > 0 && (
     form.isPurchased
       ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
-      : requireTechCard
-        ? form.techCard.length > 0 && form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
-        : techCardValid
+      : needTechCard
+        ? realTechLines.length > 0 && realTechLinesValid
+        : realTechLinesValid
   )
+  // Почему «Сохранить» недоступно — показываем явно (раньше кнопка просто серая).
+  const disabledReason = submitting ? ''
+    : !form.name ? 'Укажите название'
+    : !form.category ? 'Выберите категорию'
+    : !(form.price > 0) ? 'Укажите цену больше 0'
+    : form.isPurchased && !((form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit) ? 'Заполните закупочную цену и единицу'
+    : needTechCard && realTechLines.length === 0 ? 'Добавьте хотя бы один ингредиент в техкарту'
+    : !realTechLinesValid ? 'Укажите количество (> 0) во всех строках техкарты'
+    : ''
 
   if (loading) {
     return (
@@ -390,12 +406,16 @@ export default function EditMenuItemPage() {
             type="button"
             onClick={handleSubmit}
             disabled={!canSubmit || submitting}
+            title={disabledReason || undefined}
             className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
           >
             <CheckCircle className="size-4" />
             {submitting ? 'Сохранение...' : 'Сохранить изменения'}
           </button>
         </div>
+        {!canSubmit && disabledReason && (
+          <div className="px-4 md:px-6 pb-2 -mt-1 text-xs font-medium text-amber-600">Нельзя сохранить: {disabledReason}</div>
+        )}
       </div>
 
       {/* Main Body */}

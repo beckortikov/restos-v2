@@ -197,43 +197,43 @@ describe('voidedItemFlags', () => {
 //
 // Format functions are run on every render of every receipt line, every menu
 // chip, every order card. They must be defensive against null/undefined and
-// preserve the "ru-RU + space-separated thousands + TJS suffix" convention.
+// preserve the "ru-RU + space-separated thousands + с. suffix" convention.
 
 describe('formatCurrency', () => {
-  it('formats with 2 decimals, ru-RU grouping, TJS suffix', () => {
+  it('formats with 2 decimals, ru-RU grouping, с. suffix', () => {
     // ru-RU uses U+00A0 (non-breaking space) for thousands. Match by regex
     // rather than literal string so tests don't break on locale tweaks.
     const out = formatCurrency(1234.5)
-    expect(out).toMatch(/^1[\s ]234,50 TJS$/)
+    expect(out).toMatch(/^1[\s ]234,50 с.$/)
   })
 
   it('always shows .00 for whole numbers', () => {
-    expect(formatCurrency(40)).toBe('40,00 TJS')
+    expect(formatCurrency(40)).toBe('40,00 с.')
   })
 
   it('coerces null/undefined/NaN to 0', () => {
-    expect(formatCurrency(null)).toBe('0,00 TJS')
-    expect(formatCurrency(undefined)).toBe('0,00 TJS')
-    expect(formatCurrency(NaN)).toBe('0,00 TJS')
+    expect(formatCurrency(null)).toBe('0,00 с.')
+    expect(formatCurrency(undefined)).toBe('0,00 с.')
+    expect(formatCurrency(NaN)).toBe('0,00 с.')
   })
 
   it('rounds to 2 decimals (no truncation drift)', () => {
-    expect(formatCurrency(40.005)).toBe('40,01 TJS')
+    expect(formatCurrency(40.005)).toBe('40,01 с.')
   })
 })
 
 describe('formatCurrencyCompact', () => {
   // Same spec as formatCurrency EXCEPT whole numbers drop the ",00".
   it('drops ",00" when the value is a whole number', () => {
-    expect(formatCurrencyCompact(40)).toBe('40 TJS')
+    expect(formatCurrencyCompact(40)).toBe('40 с.')
   })
 
   it('keeps fractional decimals', () => {
-    expect(formatCurrencyCompact(40.5)).toBe('40,50 TJS')
+    expect(formatCurrencyCompact(40.5)).toBe('40,50 с.')
   })
 
-  it('coerces null/undefined to 0 TJS (whole)', () => {
-    expect(formatCurrencyCompact(null)).toBe('0 TJS')
+  it('coerces null/undefined to 0 с. (whole)', () => {
+    expect(formatCurrencyCompact(null)).toBe('0 с.')
   })
 })
 
@@ -259,19 +259,19 @@ describe('formatQty', () => {
 
 describe('formatPriceLabel', () => {
   it('plain currency for piece items', () => {
-    expect(formatPriceLabel(15, 'piece')).toBe('15 TJS')
+    expect(formatPriceLabel(15, 'piece')).toBe('15 с.')
   })
 
   it('appends "/ Ng" for gram items with unitSize', () => {
-    expect(formatPriceLabel(15, 'g', 100)).toBe('15 TJS / 100г')
+    expect(formatPriceLabel(15, 'g', 100)).toBe('15 с. / 100г')
   })
 
   it('falls back to / 100г when unitSize missing', () => {
-    expect(formatPriceLabel(15, 'g')).toBe('15 TJS / 100г')
+    expect(formatPriceLabel(15, 'g')).toBe('15 с. / 100г')
   })
 
   it('appends "/ кг" for kg items', () => {
-    expect(formatPriceLabel(150, 'kg')).toBe('150 TJS / кг')
+    expect(formatPriceLabel(150, 'kg')).toBe('150 с. / кг')
   })
 })
 

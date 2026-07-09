@@ -732,16 +732,9 @@ export default function BatchCookingPage() {
                   <p className="text-xs font-medium text-muted-foreground">Будет списано:</p>
                   <div className="max-h-40 overflow-y-auto space-y-1">
                     {portionCalc.ingredients.map(ing => {
-                      // Show deduction in recipe units (г/мл), stock in stock units (кг/л)
-                      const deductRecipe = ing.recipeQtyPerPortion * qty
-                      // Convert deduction to stock units for proper % calculation
-                      const su = ing.unit.toLowerCase().trim()
-                      const ru = (ing.recipeUnit || ing.unit).toLowerCase().trim()
-                      let deductStock = deductRecipe
-                      if ((su === 'кг' || su === 'kg') && (ru === 'г' || ru === 'g' || ru === 'гр')) deductStock = deductRecipe / 1000
-                      else if ((su === 'л' || su === 'l') && (ru === 'мл' || ru === 'ml')) deductStock = deductRecipe / 1000
-                      else if ((su === 'г' || su === 'g' || su === 'гр') && (ru === 'кг' || ru === 'kg')) deductStock = deductRecipe * 1000
-                      else if ((su === 'мл' || su === 'ml') && (ru === 'л' || ru === 'l')) deductStock = deductRecipe * 1000
+                      // Расход на порцию уже приведён к единице склада на бэке
+                      // (units.ConvertToStock: метрика + per-unit фактор для штучных).
+                      const deductStock = ing.stockQtyPerPortion * qty
                       const pct = ing.stockQty > 0 ? Math.round(deductStock / ing.stockQty * 100) : 100
                       return (
                         <div key={ing.ingredientId} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs ${

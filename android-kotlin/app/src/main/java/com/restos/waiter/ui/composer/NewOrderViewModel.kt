@@ -3,18 +3,18 @@ package com.restos.waiter.ui.composer
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.restos.waiter.data.auth.AuthRepository
+import com.restos.core.auth.AuthRepository
 import com.restos.waiter.data.cache.AppCache
 import com.restos.waiter.data.drafts.DraftLine
 import com.restos.waiter.data.drafts.WaiterDraft
 import com.restos.waiter.data.drafts.WaiterDraftStore
-import com.restos.waiter.data.events.EventBus
-import com.restos.waiter.data.events.ServerEvent
+import com.restos.core.events.EventBus
+import com.restos.core.events.ServerEvent
 import com.restos.waiter.data.menu.CategoryDto
 import com.restos.waiter.data.menu.MenuApi
 import com.restos.waiter.data.menu.MenuItemDto
 import com.restos.waiter.data.menu.listAllItems
-import com.restos.waiter.data.net.ApiException
+import com.restos.core.net.ApiException
 import com.restos.waiter.data.orders.AddItemsRequest
 import com.restos.waiter.data.orders.CreateOrderApi
 import com.restos.waiter.data.orders.CreateOrderRequest
@@ -272,8 +272,9 @@ class NewOrderViewModel @Inject constructor(
                     weightQty = w,
                 )
             }
-            // Очищаем поиск — удобно искать следующее блюдо.
-            s.copy(cart = newCart, weightItem = null, search = "")
+            // Поиск НЕ чистим: строка блюда должна остаться на месте (под пальцем),
+            // а не пропасть из поля зрения после добавления.
+            s.copy(cart = newCart, weightItem = null)
         }
         persistDraft()
     }
@@ -297,8 +298,9 @@ class NewOrderViewModel @Inject constructor(
             } else {
                 s.cart + CartLine(item.id, item.name, item.price, qty = 1)
             }
-            // Очищаем поиск после добавления — удобно вводить следующее блюдо.
-            s.copy(cart = newCart, search = "")
+            // Поиск НЕ чистим: добавленное блюдо остаётся видимым в списке на
+            // своём месте (иначе оно «исчезало из поля зрения» после тапа).
+            s.copy(cart = newCart)
         }
         persistDraft()
     }

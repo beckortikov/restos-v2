@@ -427,7 +427,16 @@ function createWindow() {
       backgroundThrottling: false,
     },
     autoHideMenuBar: true,
+    // По умолчанию окно maximize'ится (панель задач видна). Полноэкранный режим
+    // включается ТОЛЬКО в новом POS (/pos2) через IPC 'set-fullscreen' (см.
+    // ниже и PosV2Layout). F11 — ручной тумблер.
     show: false,
+  })
+
+  // Полноэкранный режим по запросу рендерера (новый POS включает на входе,
+  // выключает на выходе). Гардим mainWindow — окно может быть уже закрыто.
+  ipcMain.on('set-fullscreen', (_e, on) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setFullScreen(!!on)
   })
 
   // Load the bundled SPA from disk (file://). The SPA fetches API from 127.0.0.1:3001.
@@ -451,6 +460,10 @@ function createWindow() {
     }
     if (input.type === 'keyDown' && input.key === 'F5') {
       mainWindow.reload()
+    }
+    // F11 — тумблер полноэкранного режима (выход/вход, если нужно к панели задач).
+    if (input.type === 'keyDown' && input.key === 'F11') {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen())
     }
   })
 

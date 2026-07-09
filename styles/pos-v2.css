@@ -1,0 +1,116 @@
+/*
+ * Токены нового POS-интерфейса (из design/restos.pen).
+ * ВСЁ скоупнуто под `.pos-v2` — не перекрашивает остальное приложение.
+ * Старый POS использует глобальные oklch-токены из src/index.css и не затрагивается.
+ */
+.pos-v2 {
+  --pv-bg: #f5f3ee;
+  --pv-card: #ffffff;
+  /* --pv-brand затемнён с #d85a30 → белый-на-бренде и бренд-на-белом теперь ≥4.89:1
+     (WCAG AA для мелкого текста в чипах/подписях). Тот же терракотовый, чуть глубже. */
+  --pv-brand: #c24a22;
+  --pv-brand-soft: #fbebe4;
+  --pv-border: #e6e3db;
+  --pv-text: #23201c;
+  --pv-text-2: #6b6559;
+  /* --pv-text-3 затемнён с #9a9488 (2.72:1 — провал) → 4.63:1 на фоне, 5.13:1 на карточке. */
+  --pv-text-3: #736d62;
+  --pv-radius: 16px;
+  /* Минимальная тач-цель (WCAG 2.5.5): применяется ко всем кнопкам ниже. */
+  --pv-hit: 2.75rem;
+
+  /* Fluid-масштаб: всё тянется с размером экрана между min и max (clamp).
+     Большой экран → крупные кнопки/текст; маленький → сжимается и влезает.
+     Переиспользуется всеми экранами /pos2, чтобы масштаб был единым. */
+  --pv-pad-x: clamp(1rem, 3vw, 2.75rem);
+  --pv-gap: clamp(0.6rem, 1.4vw, 1.35rem);
+  --pv-tile-pad: clamp(0.85rem, 2vw, 1.85rem);
+  --pv-tile-icon: clamp(2.25rem, 4.4vw, 4.25rem);
+  --pv-tile-title: clamp(1rem, 1.7vw, 1.55rem);
+  --pv-tile-sub: clamp(0.72rem, 1vw, 0.95rem);
+  --pv-logo: clamp(2.5rem, 4vw, 3.5rem);
+  --pv-h-title: clamp(1.05rem, 1.9vw, 1.5rem);
+  --pv-ctl: clamp(0.8rem, 1.1vw, 0.95rem);
+
+  /* free (зелёный) */
+  --pv-free-soft: #e7f4ec;
+  --pv-free-text: #2b7541;
+  --pv-free-dot: #3e9e5e;
+  --pv-free-border: #c3e4ce;
+
+  /* occ (красный) */
+  --pv-occ-soft: #fbe9e7;
+  --pv-occ-text: #b23227;
+  --pv-occ-dot: #d23b2e;
+  --pv-occ-border: #f1c4be;
+
+  /* bill (янтарный) */
+  --pv-bill-soft: #fef3e0;
+  --pv-bill-text: #9a6412;
+  --pv-bill-dot: #e0a33a;
+
+  /* res (фиолетовый) */
+  --pv-res-soft: #eeeafb;
+  --pv-res-text: #6b4bc9;
+  --pv-res-dot: #8b5cf6;
+
+  background: var(--pv-bg);
+  color: var(--pv-text);
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  /* Табличные цифры (ui-ux-pro-max: number-tabular) — цены/итоги/кол-во имеют
+     одинаковую ширину знака, поэтому не «прыгают» при изменении суммы. */
+  font-variant-numeric: tabular-nums;
+}
+
+.pos-v2 *,
+.pos-v2 *::before,
+.pos-v2 *::after {
+  box-sizing: border-box;
+}
+
+/* ── Доступность (a11y) ───────────────────────────────────────────
+   Видимый фокус клавиатуры на всех интерактивах /pos2. Раньше инпуты
+   гасили outline (outline-none) и :focus-visible нигде не задавался —
+   на кассе с USB-клавиатурой/сканером фокус был невидим (WCAG 2.4.7). */
+.pos-v2 :focus-visible {
+  outline: 2px solid var(--pv-brand);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+/* Инпуты с outline-none всё равно показывают фокус-рамку. */
+.pos-v2 input:focus-visible,
+.pos-v2 textarea:focus-visible {
+  outline: 2px solid var(--pv-brand);
+  outline-offset: 1px;
+}
+
+/* ── Тач-цели ─────────────────────────────────────────────────────
+   Все кнопки минимум 44×44px (WCAG 2.5.5). min-* перекрывает инлайновые
+   width/height:2rem у иконочных кнопок (степперы −/+, корзина, крестики),
+   не растягивая уже широкие/full-width кнопки. touch-action убирает
+   задержку 300ms и двойной тап-зум на тач-экране. */
+.pos-v2 button {
+  min-width: var(--pv-hit);
+  min-height: var(--pv-hit);
+  touch-action: manipulation;
+  cursor: pointer;
+}
+.pos-v2 button:disabled { cursor: not-allowed; }
+/* Вторичные иконки-тумблеры в углу карточки (избранное/часто) остаются
+   компактными — им 44px не нужен, важна лишь клавиатурная доступность. */
+.pos-v2 button.pv-mini {
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ── Уважение к prefers-reduced-motion (WCAG 2.3.3) ──────────────── */
+@media (prefers-reduced-motion: reduce) {
+  .pos-v2 *,
+  .pos-v2 *::before,
+  .pos-v2 *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

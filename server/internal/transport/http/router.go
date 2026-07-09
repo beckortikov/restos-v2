@@ -66,6 +66,10 @@ func NewRouter(deps Deps) http.Handler {
 	r.Use(chimw.RealIP)
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
+	// gzip: SPA-бандл (charts/xlsx/react ~1.5 МБ) и JSON-ответы едут по LAN/WiFi
+	// сжатыми (~70% для JS). chimw.Compress по умолчанию НЕ трогает
+	// text/event-stream, поэтому SSE (/events) не буферизуется — стриминг цел.
+	r.Use(chimw.Compress(5))
 	r.Use(middleware.CORS(corsOriginsFromEnv()))
 	// 30-секундный таймаут НЕ применяем к SSE-эндпоинту — он long-lived.
 	// Применяем только к /api/v1/auth и /api/v1/<resource>, оставляя /events
@@ -109,6 +113,7 @@ func NewRouter(deps Deps) http.Handler {
 	// Stations resolver — DBRouter ищет принтер по station.
 	stations := printer.NewDBRouter(deps.DB, nil)
 	ordersSvc := service.NewOrdersService(rep).WithPublisher(pub).WithStationResolver(stations)
+	kdsSvc := service.NewKDSService(rep).WithPublisher(pub)
 	shiftsSvc = shiftsSvc.WithPublisher(pub)
 	stockSvc = stockSvc.WithPublisher(pub)
 	inventorySvc := service.NewInventoryService(rep)
@@ -163,6 +168,7 @@ func NewRouter(deps Deps) http.Handler {
 	syncSettingsH := handlers.NewSyncSettings(service.NewSyncSettingsService(rep))
 	shiftsH := handlers.NewShifts(shiftsSvc)
 	ordersH := handlers.NewOrders(ordersSvc)
+	kdsH := handlers.NewKDS(kdsSvc)
 	inventoryH := handlers.NewInventory(inventorySvc)
 	printersH := handlers.NewPrinters(printersSvc)
 	printJobsH := handlers.NewPrintJobs(printJobsSvc)
@@ -278,6 +284,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/shifts/{id}/revenue", shiftsH.Revenue)
 			g.Get("/shifts/{id}/operations", shiftsH.Operations)
 
+			g.Get("/kds/items", kdsH.List)
+			g.Get("/kds/stations", kdsH.Stations)
 			g.Get("/orders", ordersH.List)
 			g.Get("/orders/{id}", ordersH.Get)
 			g.Get("/order-items/{id}", ordersH.GetItem)
@@ -431,6 +439,7 @@ func NewRouter(deps Deps) http.Handler {
 			}
 			g.Use(middleware.Idempotency(idemSvc))
 
+			g.Post("/kds/items/{id}/status", kdsH.SetStatus)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)

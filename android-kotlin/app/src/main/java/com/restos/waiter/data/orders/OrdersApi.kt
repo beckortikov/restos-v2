@@ -1,6 +1,6 @@
 package com.restos.waiter.data.orders
 
-import com.restos.waiter.data.common.PagedEnvelope
+import com.restos.core.common.PagedEnvelope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import retrofit2.http.Body
@@ -206,6 +206,8 @@ data class RawOrderItem(
     @SerialName("served_at") val servedAt: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     @SerialName("kitchen_status") val kitchenStatus: String? = null,
+    // v4 KDS: реальный статус готовки от повара (pending/cooking/ready/served).
+    @SerialName("station_status") val stationStatus: String? = null,
     val modifiers: List<RawOrderItemModifier> = emptyList(),
 )
 
@@ -269,7 +271,9 @@ internal fun RawOrderItem.toDto(): OrderItemDto {
         cancelledAt = cancelledAt,
         sentToKitchenAt = printedAt,
         servedAt = servedAt,
-        kitchenStatus = kitchenStatus,
+        // Реальный статус готовки (station_status от повара) приоритетнее
+        // legacy kitchen_status, который v4-бэк на уровне позиции не заполняет.
+        kitchenStatus = stationStatus ?: kitchenStatus,
         subtotal = sub,
         unit = unit,
         unitSize = unitSize,

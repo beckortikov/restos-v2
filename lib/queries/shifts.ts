@@ -1,5 +1,6 @@
 import { api, unwrap, unwrapOr404 } from './_client'
 import { getBaseURL } from '../api/v4-typed'
+import { randomId } from '../random-id'
 import type { CashShift, CashShiftOperation } from '../types'
 import { logAction } from './audit'
 import { _mapV4Shift } from './_mappers'
@@ -41,7 +42,8 @@ export async function patchShiftAccount(shiftId: string, accountId: string): Pro
     if (tok) headers['Authorization'] = `Bearer ${tok}`
   }
   // Idempotency-Key как и в остальных write-вызовах (middleware api-клиента ставит UUID).
-  try { headers['Idempotency-Key'] = crypto.randomUUID() } catch { /* noop */ }
+  // randomId() безопасен по LAN (http) — crypto.randomUUID там недоступен.
+  headers['Idempotency-Key'] = randomId()
   const res = await fetch(`${getBaseURL()}/api/v1/shifts/${encodeURIComponent(shiftId)}`, {
     method: 'PATCH',
     headers,
@@ -129,7 +131,7 @@ export interface ShiftZReport {
   avgCheck: number
   guestsCount: number
   discrepancy: number
-  revenueByMethod: { paymentMethod: string; ordersCount: number; total: number }[]
+  revenueByMethod: { paymentMethod: string; accountId: string; accountName: string; accountType: string; ordersCount: number; total: number }[]
   salesByWaiter: { waiterId: string; name: string; ordersCount: number; total: number; avgCheck: number }[]
   salesByCategory: { name: string; qty: number; total: number }[]
   salesByItem: { name: string; qty: number; total: number }[]
@@ -154,6 +156,9 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
     discrepancy: Number(r?.discrepancy ?? 0),
     revenueByMethod: (r?.revenue_by_method ?? []).map((m: any) => ({
       paymentMethod: String(m.payment_method ?? ''),
+      accountId: String(m.account_id ?? ''),
+      accountName: String(m.account_name ?? ''),
+      accountType: String(m.account_type ?? ''),
       ordersCount: Number(m.orders_count ?? 0),
       total: Number(m.total ?? 0),
     })),

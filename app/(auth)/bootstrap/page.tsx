@@ -22,6 +22,8 @@ export default function BootstrapPage() {
 
   // Connect (existing) form
   const [restId, setRestId] = useState('')
+  const [restaurants, setRestaurants] = useState<{ id: string; name: string }[]>([])
+  const [manual, setManual] = useState(false)
 
   useEffect(() => {
     let cancel = false
@@ -29,6 +31,10 @@ export default function BootstrapPage() {
       try {
         const s: any = await unwrap(api.GET('/api/v1/bootstrap/status'))
         if (cancel) return
+        const list: { id: string; name: string }[] = s.restaurants ?? []
+        setRestaurants(list)
+        // Предвыбираем единственный ресторан — владельцу останется только «Войти».
+        if (list.length === 1) setRestId(list[0].id)
         setMode(s.initialized ? 'connect' : 'init')
       } catch (e) {
         if (cancel) return
@@ -180,21 +186,59 @@ export default function BootstrapPage() {
 
         {mode === 'connect' && (
           <form onSubmit={saveExistingRestaurantId} className="bg-card rounded-2xl border border-border p-6 space-y-4 shadow-sm">
-            <p className="text-sm text-muted-foreground">
-              База уже инициализирована. Введите <code className="font-mono text-foreground">restaurant_id</code>{' '}
-              (UUID) от вашего ресторана. Найти его можно у владельца в настройках.
-            </p>
-            <input
-              type="text"
-              value={restId}
-              onChange={e => setRestId(e.target.value)}
-              placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-              className="w-full px-4 py-3 bg-background border border-input rounded-xl font-mono text-sm"
-              autoFocus
-            />
+            {restaurants.length > 0 && !manual ? (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  Выберите ресторан для входа{restaurants.length === 1 ? '' : ' на этом устройстве'}.
+                </p>
+                <select
+                  value={restId}
+                  onChange={e => setRestId(e.target.value)}
+                  className="w-full px-4 py-3 bg-background border border-input rounded-xl text-sm"
+                  autoFocus
+                >
+                  <option value="">— выберите ресторан —</option>
+                  {restaurants.map(r => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setManual(true)}
+                  className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Ввести restaurant_id вручную
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-muted-foreground">
+                  База уже инициализирована. Введите <code className="font-mono text-foreground">restaurant_id</code>{' '}
+                  (UUID) от вашего ресторана. Найти его можно у владельца в настройках.
+                </p>
+                <input
+                  type="text"
+                  value={restId}
+                  onChange={e => setRestId(e.target.value)}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  className="w-full px-4 py-3 bg-background border border-input rounded-xl font-mono text-sm"
+                  autoFocus
+                />
+                {restaurants.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setManual(false)}
+                    className="text-xs text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    ← Выбрать из списка
+                  </button>
+                )}
+              </>
+            )}
             <button
               type="submit"
-              className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-3.5 rounded-xl text-base font-semibold hover:bg-primary/90 transition-colors"
+              disabled={!restId.trim()}
+              className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-3.5 rounded-xl text-base font-semibold hover:bg-primary/90 disabled:opacity-60 transition-colors"
             >
               <ArrowRight className="size-4" />
               Сохранить и перейти на вход

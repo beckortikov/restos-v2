@@ -52,6 +52,7 @@ func Error(w http.ResponseWriter, err error) {
 	case errors.As(err, &ae):
 		env.Code = ae.Code
 		env.Message = ae.Message
+		env.Details = ae.Details
 		status = statusForCode(ae.Code)
 	case errors.Is(err, tenant.ErrMissing):
 		env.Code = "TENANT_MISSING"

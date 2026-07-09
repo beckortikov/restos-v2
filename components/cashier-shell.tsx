@@ -1,14 +1,19 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { LayoutGrid } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 import { useInactivityTimer } from '@/hooks/use-inactivity-timer'
 import { PinLockScreen } from '@/components/pin-lock-screen'
 import { CashierRail } from '@/components/cashier-rail'
+import { usePosV2Flag } from '@/lib/pos-v2/flag'
 import { type User } from '@/lib/types'
 
 export function CashierShell({ children }: { children: React.ReactNode }) {
   const { user, restaurant } = useAuth()
+  const navigate = useNavigate()
+  const [posV2Enabled] = usePosV2Flag()
 
   const pinEnabled = restaurant?.pinLockEnabled ?? false
   const pinTimeoutMs = (restaurant?.pinLockTimeoutMin ?? 5) * 60 * 1000
@@ -47,6 +52,17 @@ export function CashierShell({ children }: { children: React.ReactNode }) {
       <main className="flex-1 min-w-0 flex flex-col overflow-y-auto overflow-x-hidden pb-[68px] md:pb-0">
         {children}
       </main>
+      {/* Вход в новый POS — виден только при включённом флаге (Настройки → «Новый интерфейс»). */}
+      {posV2Enabled && (
+        <button
+          onClick={() => navigate('/pos2')}
+          className="fixed bottom-24 md:bottom-6 right-5 z-40 flex items-center gap-2 px-4 py-3 rounded-full text-white active:scale-95 transition-transform"
+          style={{ background: '#d85a30', boxShadow: '0 6px 20px rgba(216,90,48,0.45)' }}
+        >
+          <LayoutGrid className="size-5" />
+          <span className="text-sm font-semibold">Новый POS</span>
+        </button>
+      )}
     </div>
   )
 }

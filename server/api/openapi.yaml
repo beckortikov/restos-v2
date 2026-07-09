@@ -843,6 +843,69 @@ paths:
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
 
   # ─── Orders ─────────────────────────────────────────────────────────────
+  /api/v1/kds/items:
+    get:
+      tags: [kds]
+      summary: Блюда на кухонной доске (per-dish, KDS)
+      description: >
+        Позиции заказов «в работе» для кухонного дисплея. Каждое блюдо — отдельная
+        карточка со своим статусом станции. Отсортировано по времени создания (FIFO).
+        Отменённые позиции исключены (доставляются событием order.item.voided).
+      parameters:
+        - { in: query, name: stations, schema: { type: string }, description: "CSV станций (hot_kitchen,grill); пусто = все" }
+        - { in: query, name: status, schema: { type: string }, description: "CSV статусов (pending,cooking,ready); пусто = в работе" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/KDSItem" }
+
+  /api/v1/kds/stations:
+    get:
+      tags: [kds]
+      summary: Станции ресторана (для настройки KDS-дисплея)
+      description: Уникальные menu_items.station ресторана — экран кухни выбирает из них.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { type: string } }
+
+  /api/v1/kds/items/{id}/status:
+    post:
+      tags: [kds]
+      summary: Сменить статус блюда (кнопка на карточке)
+      description: >
+        Переводит одну позицию в статус pending/cooking/ready/served. Идемпотентно.
+        Не трогает orders.status и склад — отдельная плоскость KDS.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [pending, cooking, ready, served] }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/KDSItem" } } }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+
   /api/v1/orders:
     get:
       tags: [orders]
@@ -1948,6 +2011,14 @@ paths:
                 type: object
                 properties:
                   initialized: { type: boolean }
+                  restaurants:
+                    type: array
+                    description: id+name ресторанов (для выбора при входе по LAN без сохранённого restaurant_id)
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+                        name: { type: string }
 
   /api/v1/bootstrap:
     post:
@@ -2717,6 +2788,7 @@ paths:
                         recipe_unit: { type: string, description: "единица расхода в тех-карте (г, мл)" }
                         stock_qty: { type: string, description: "остаток (в единице склада)" }
                         recipe_qty_per_portion: { type: string, description: "расход на 1 порцию (в единице тех-карты)" }
+                        stock_qty_per_portion: { type: string, description: "расход на 1 порцию, приведённый к единице склада" }
                         possible_portions: { type: integer }
                         is_bottleneck: { type: boolean }
                   blockers:
@@ -2961,6 +3033,24 @@ components:
 
   # ───── schemas ─────
   schemas:
+    KDSItem:
+      type: object
+      description: Блюдо на кухонной доске (одна карточка KDS).
+      properties:
+        id: { type: string, format: uuid }
+        order_id: { type: string, format: uuid }
+        order_number: { type: integer }
+        order_type: { type: string, description: "hall/takeaway/delivery" }
+        table_number: { type: integer, nullable: true }
+        table_name: { type: string, nullable: true }
+        name: { type: string }
+        qty: { type: string, description: "decimal" }
+        comment: { type: string, nullable: true }
+        station: { type: string }
+        station_status: { type: string, enum: [pending, cooking, ready, served] }
+        created_at: { type: string, format: date-time }
+        status_at: { type: string, format: date-time, nullable: true }
+
     ErrorEnvelope:
       type: object
       required: [code, message]
@@ -3038,6 +3128,8 @@ components:
         price: { $ref: "#/components/schemas/Decimal" }
         unit: { type: string }
         waste_percent: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
     MenuItemsList:
       type: object
       description: |
@@ -3104,6 +3196,8 @@ components:
         unit: { type: string }
         min_qty: { $ref: "#/components/schemas/Decimal" }
         price_per_unit: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
     IngredientsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Ingredient" } }, next_cursor: { type: string } } }
     IngredientInput:
       type: object
@@ -3115,6 +3209,8 @@ components:
         unit: { type: string }
         price_per_unit: { $ref: "#/components/schemas/Decimal" }
         waste_percent: { $ref: "#/components/schemas/Decimal" }
+        unit_weight: { $ref: "#/components/schemas/Decimal" }
+        unit_weight_unit: { type: string }
         is_food: { type: boolean }
     StringList: { type: object, properties: { data: { type: array, items: { type: string } } } }
     StockMovement:

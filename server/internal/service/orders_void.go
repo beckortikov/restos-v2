@@ -194,6 +194,7 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 	actor, _ := audit.ActorFromContext(ctx)
 
 	var voided *models.OrderItem
+	var voidedOrderNumber int
 	autoCancelled := false
 	buf := NewBuffer()
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -212,6 +213,7 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 		if order.Status != nil && (*order.Status == "closed" || *order.Status == "cancelled") {
 			return apperrors.Wrap("CONFLICT", "cannot void item in closed/cancelled order", nil)
 		}
+		voidedOrderNumber = order.OrderNumber
 
 		// 2. Item with FK isolation (order_items не имеет restaurant_id, проверяем order_id).
 		var item models.OrderItem
@@ -414,11 +416,19 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 		return nil, err
 	}
 	if s.pub != nil {
-		buf.Add(EventOrderItemVoided, map[string]any{
-			"order_id": orderID,
-			"item_id":  itemID,
-			"reason":   in.Reason,
-		})
+		// Обогащаем событие данными позиции — KDS рисует отменённую карточку и
+		// баннер «Блюдо «X» отменено · Заказ #N» (см. service/kds.go).
+		voidPayload := map[string]any{
+			"order_id":     orderID,
+			"item_id":      itemID,
+			"reason":       in.Reason,
+			"order_number": voidedOrderNumber,
+		}
+		if voided != nil {
+			voidPayload["name"] = deref(voided.Name)
+			voidPayload["qty"] = voided.Qty.String()
+		}
+		buf.Add(EventOrderItemVoided, voidPayload)
 		if autoCancelled {
 			buf.Add(EventOrderCancelled, map[string]any{
 				"id":     orderID,

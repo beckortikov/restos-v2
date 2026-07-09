@@ -1,0 +1,752 @@
+'use client'
+
+import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
+import {
+  LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check,
+} from 'lucide-react'
+import { toast } from 'sonner'
+import { useAuth } from '@/lib/auth-store'
+import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
+import { useOrderData } from '@/components/order/use-order-data'
+import { useDataSync } from '@/hooks/use-data-sync'
+import { randomId } from '@/lib/random-id'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList } from '@/lib/queries'
+import { formatCurrency } from '@/lib/helpers'
+import { humanizeError } from '@/lib/errors'
+import { dMul, dDiv } from '@/lib/decimal'
+import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
+import { PosModal } from '@/components/pos-v2/pos-modal'
+import { PaymentPanel } from '@/components/pos-v2/payment-panel'
+import { OrderExtras } from '@/components/pos-v2/order-extras'
+import type { MenuItem, TableStatus, Order, FinancialAccount, OrderSplit } from '@/lib/types'
+import type { CartLine } from '@/components/order/types'
+
+const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
+  free: { soft: 'var(--pv-free-soft)', dot: 'var(--pv-free-dot)', text: 'var(--pv-free-text)', label: 'Свободен' },
+  occupied: { soft: 'var(--pv-occ-soft)', dot: 'var(--pv-occ-dot)', text: 'var(--pv-occ-text)', label: 'Занят' },
+  reserved: { soft: 'var(--pv-res-soft)', dot: 'var(--pv-res-dot)', text: 'var(--pv-res-text)', label: 'Бронь' },
+  bill_requested: { soft: 'var(--pv-bill-soft)', dot: 'var(--pv-bill-dot)', text: 'var(--pv-bill-text)', label: 'Счёт' },
+}
+const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
+
+// Phase 2 + критичный блок: заказ на реальных данных. Зал/такаут, гости, стоп-лист
+// override (менеджер), весовые позиции (вес × порции). Логику не переписываем.
+export default function PosV2Order() {
+  const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const { user, canDo, restaurantId, restaurant } = useAuth()
+  const { menuItems, categories, tables, zones, loading } = useOrderData(true)
+  const favorites = useFavorites(restaurantId ?? '')
+  const favSet = useMemo(() => new Set(favorites), [favorites])
+
+  const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
+  const [search, setSearch] = useState('')
+  const deferred = useDeferredValue(search)
+  const [activeCat, setActiveCat] = useState<string | null>(null)
+  const [cart, setCart] = useState<CartLine[]>([])
+  const [selectedTableId, setSelectedTableId] = useState<string>('')
+  const [tablesOpen, setTablesOpen] = useState(false)
+  const [guests, setGuests] = useState(1)
+  // Единый сайдбар: занятый стол раскрывается на месте — вкладки групп + содержимое.
+  const [tableOrders, setTableOrders] = useState<Order[]>([])
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null)
+  const [tableLoading, setTableLoading] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const addingRef = useRef(false)
+  // Оптимистичная занятость: стол помечается занятым сразу после «Отправить»,
+  // пока SSE не обновит tables.currentOrderIds (иначе плитка ~1с оставалась «Свободен»).
+  const [justOccupied, setJustOccupied] = useState<Set<string>>(() => new Set())
+  // Инлайн-оплата зального заказа прямо в сайдбаре (без ухода на /pos2/pay).
+  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  const [payTarget, setPayTarget] = useState<Order | null>(null)
+  const [extrasOpen, setExtrasOpen] = useState(false)
+  const [splits, setSplits] = useState<OrderSplit[]>([])
+
+  const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
+  const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
+  const canOverrideStop = canDo('orders.create_stopped')
+  // Гейт orders.view_others: в пикере столов официант видит только свободные +
+  // свои занятые (иначе выбирает/видит чужие столы).
+  const canViewOthers = canDo('orders.view_others')
+
+  // Backend stop-list: нехватка ингредиентов (computed-on-read) + ручной override.
+  // Без него касса видела стоп только по menu.is_available → ловила 409 на
+  // «Отправить», а менеджер не мог провести override (флаг уходил по неверному
+  // признаку). Копия логики order-composer (stoppedIds + reasons + SSE-refetch).
+  const [stoppedIds, setStoppedIds] = useState<Set<string>>(new Set())
+  const [stopReasons, setStopReasons] = useState<Map<string, string>>(new Map())
+  const reloadStopList = useCallback(async () => {
+    try {
+      const list = await fetchStopList()
+      const ids = new Set<string>()
+      const reasons = new Map<string, string>()
+      for (const row of list) {
+        ids.add(row.menuItemId)
+        if (row.manual) reasons.set(row.menuItemId, 'В стоп-листе (вручную)')
+        else if (row.ingredients?.length) { const n = row.ingredients.map(i => i.name).filter(Boolean).join(', '); reasons.set(row.menuItemId, n ? `Нет ингредиентов: ${n}` : 'Нет ингредиентов') }
+        else reasons.set(row.menuItemId, 'В стоп-листе')
+      }
+      setStoppedIds(ids); setStopReasons(reasons)
+    } catch { /* бэк недоступен — остаёмся на menu.is_available */ }
+  }, [])
+  useEffect(() => { void reloadStopList() }, [reloadStopList])
+  useDataSync(['ingredients', 'stock_movements', 'orders', 'menu_items'], reloadStopList)
+
+  // Грузит открытые заказы (группы) стола. extraIds — только что созданный заказ,
+  // которого ещё нет в tables.currentOrderIds (SSE догонит позже).
+  const loadTableOrders = useCallback(async (tableId: string, selectId?: string, extraIds: string[] = []) => {
+    const t = tables.find(x => x.id === tableId)
+    const ids = Array.from(new Set([...(t?.currentOrderIds ?? []), ...extraIds])).filter(Boolean)
+    if (ids.length === 0) { setTableOrders([]); setActiveGroupId(null); return }
+    setTableLoading(true)
+    try {
+      const os = await fetchOrders({ ids, slim: false })
+      const live = os.filter(o => o.status !== 'done' && o.status !== 'cancelled')
+      setTableOrders(live)
+      setActiveGroupId(selectId && live.some(o => o.id === selectId) ? selectId : (live[0]?.id ?? null))
+    } catch { /* ignore */ } finally { setTableLoading(false) }
+  }, [tables])
+
+  // Загрузка открытых заказов «С собой» — тот же модельный слой (tableOrders),
+  // чтобы созданный «без оплаты» заказ оставался виден в сайдбаре до оплаты.
+  const loadTakeaway = useCallback(async (selectId?: string) => {
+    setTableLoading(true)
+    try {
+      const os = await fetchOrders({ type: 'takeaway', slim: false }).catch(() => [] as Order[])
+      const live = os.filter(o => o.status !== 'done' && o.status !== 'cancelled')
+        .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      setTableOrders(live)
+      if (selectId) setActiveGroupId(selectId)
+    } finally { setTableLoading(false) }
+  }, [])
+
+  // Приход с ?table= / ?order= — раскрываем контекст стола/группы (после загрузки данных).
+  const initedRef = useRef(false)
+  useEffect(() => {
+    if (initedRef.current || loading) return
+    initedRef.current = true
+    const orderParam = searchParams.get('order')
+    const tableParam = searchParams.get('table')
+    if (orderParam) {
+      fetchOrders({ ids: [orderParam], slim: false }).then(os => {
+        const o = os[0]; if (!o) return
+        if (o.tableId) { setOrderType('hall'); setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+        else { setOrderType('takeaway'); setTableOrders([o]); setActiveGroupId(o.id) }
+      }).catch(() => {})
+    } else if (tableParam) {
+      setOrderType('hall'); setSelectedTableId(tableParam); loadTableOrders(tableParam)
+    }
+  }, [loading, searchParams, loadTableOrders])
+
+  // Как только SSE обновил tables (стол реально занят) — снимаем оптимистичную метку.
+  useEffect(() => {
+    if (justOccupied.size === 0) return
+    const keep = new Set<string>()
+    for (const id of justOccupied) {
+      const t = tables.find(x => x.id === id)
+      if (!t || (t.currentOrderIds?.length ?? 0) === 0) keep.add(id)
+    }
+    if (keep.size !== justOccupied.size) setJustOccupied(keep)
+  }, [tables, justOccupied])
+
+  // Переключение типа заказа (после mount): такаут → грузим открытые «С собой»,
+  // зал → сбрасываем контекст (стол выбирается заново).
+  const typeInitRef = useRef(true)
+  useEffect(() => {
+    if (typeInitRef.current) { typeInitRef.current = false; return }
+    setCart([]); setActiveGroupId(null)
+    if (orderType === 'takeaway') { setSelectedTableId(''); loadTakeaway() }
+    else { setSelectedTableId(''); setTableOrders([]) }
+  }, [orderType, loadTakeaway])
+
+  useEffect(() => { fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [])
+
+  // Разделённый заказ — грузим части (оплачиваются прямо в сайдбаре).
+  useEffect(() => {
+    if (activeGroup?.isSplit) fetchOrderSplits(activeGroup.id).then(setSplits).catch(() => setSplits([]))
+    else setSplits([])
+  }, [activeGroupId, activeGroup?.isSplit, activeGroup])
+
+  // После оплаты из сайдбара — перечитываем контекст (стол или список «С собой»).
+  async function onPaidDone() {
+    const t = payTarget
+    setPayTarget(null); setActiveGroupId(null)
+    if (t?.tableId) await loadTableOrders(t.tableId)
+    else await loadTakeaway()
+  }
+
+  async function reloadContext() {
+    // Перечитываем контекст, СОХРАНЯЯ уже известные заказы группы (extraIds) и
+    // активную вкладку. Без этого после действий вроде «назначить официанта»
+    // (assignWaiter каскадит waiter_id) заказ пропадал из сайдбара, если
+    // tables.currentOrderIds на миг оказывался пустым (SSE ещё не догнал), хотя
+    // на карте зала стол занят.
+    const known = tableOrders.map(o => o.id)
+    if (selectedTableId) await loadTableOrders(selectedTableId, activeGroupId ?? undefined, known)
+    else await loadTakeaway(activeGroupId ?? undefined)
+  }
+
+  async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
+    if (payingRef.current || !activeGroup) return
+    const acc = method === 'cash' ? (accounts.find(a => a.type === 'cash') ?? accounts[0]) : (accounts.find(a => a.type !== 'cash') ?? accounts[0])
+    if (!acc) { toast.error('Нет счёта для оплаты'); return }
+    payingRef.current = true; setPaying(true)
+    try {
+      await paySplit(s.id, method, acc.id, acc.name ?? '', user?.id)
+      toast.success(`Часть ${s.splitNumber} оплачена · ${formatCurrency(s.total)}`)
+      const remaining = splits.filter(x => x.id !== s.id && x.status !== 'paid')
+      if (remaining.length === 0) { toast.success('Все части оплачены — заказ закрыт'); setActiveGroupId(null); await reloadContext() }
+      else setSplits(await fetchOrderSplits(activeGroup.id).catch(() => splits))
+    } catch (e) { toast.error(`Оплата не прошла: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
+  }
+
+  async function doCancelSplits() {
+    if (payingRef.current || !activeGroup) return
+    payingRef.current = true; setPaying(true)
+    try { await cancelSplits(activeGroup.id); toast.success('Разделение отменено'); await reloadContext() }
+    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
+  }
+
+  const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
+  const currentCat = activeCat ?? visibleCats[0] ?? null
+
+  const dishes = useMemo(() => {
+    const q = deferred.trim().toLowerCase()
+    if (q) return menuItems.filter(m => m.name.toLowerCase().includes(q))
+    if (currentCat === '__fav__') return menuItems.filter(m => favSet.has(m.id))
+    return menuItems.filter(m => m.category === currentCat)
+  }, [menuItems, currentCat, deferred, favSet])
+
+  const tablesByZone = useMemo(() => {
+    const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
+    const visible = canViewOthers ? tables : tables.filter(t => t.status === 'free' || t.waiterId === user?.id)
+    const map = new Map<string, typeof tables>()
+    for (const t of visible) { const k = zoneName(t.zone); (map.get(k) ?? map.set(k, []).get(k)!).push(t) }
+    return Array.from(map.entries()).map(([zone, ts]) => ({ zone, tables: [...ts].sort((a, b) => a.number - b.number) }))
+  }, [tables, zones, canViewOthers, user?.id])
+
+  // ── Weight modal ──────────────────────────────────────────────
+  const [weightItem, setWeightItem] = useState<MenuItem | null>(null)
+  const [wAmt, setWAmt] = useState('')
+  const [wPortions, setWPortions] = useState(1)
+
+  // Два источника стопа: legacy menu.is_available (owner вручную в админке) и
+  // backend stop-list (stoppedIds — нехватка ингредиентов / override). Без права
+  // — отказ с причиной; с правом — info-toast + флаг override ТОЛЬКО для реально
+  // backend-стопнутых (иначе POST /orders вернёт 409 ITEM_STOPPED).
+  function add(m: MenuItem) {
+    const backendStopped = stoppedIds.has(m.id)
+    const isStopped = m.isAvailable === false || backendStopped
+    if (isStopped && !canOverrideStop) {
+      toast.warning(`«${m.name}» — ${backendStopped ? (stopReasons.get(m.id) ?? 'в стопе') : 'в стоп-листе'}`)
+      return
+    }
+    const needsOverride = isStopped ? backendStopped : false
+    if (isStopped && canOverrideStop) toast.info(`«${m.name}» в стопе — добавлено по разрешению`)
+    if ((m.unit ?? 'piece') !== 'piece') {
+      setWeightItem(m); setWAmt(String(m.unitSize ?? 100)); setWPortions(1)
+      return
+    }
+    setCart(prev => {
+      const i = prev.findIndex(l => l.unit === 'piece' && l.menuItemId === m.id)
+      if (i >= 0) { const n = [...prev]; n[i] = { ...n[i], qty: n[i].qty + 1, overrideStopList: n[i].overrideStopList || needsOverride }; return n }
+      return [...prev, { lineId: randomId(), menuItemId: m.id, name: m.name, emoji: m.emoji, qty: 1, price: m.price, cogs: m.cogs, unit: 'piece', unitSize: 1, overrideStopList: needsOverride || undefined }]
+    })
+  }
+  function addWeight() {
+    if (!weightItem) return
+    const amount = num(wAmt)
+    if (amount <= 0) { toast.error('Укажите вес'); return }
+    const m = weightItem
+    const needsOverride = stoppedIds.has(m.id)
+    // Весовые НЕ мержим: каждая навеска — отдельная строка (иначе прежний вес
+    // перезаписывался: «300г» + «500г» давали 2×500г). Как в старом ПОС.
+    setCart(prev => [...prev, { lineId: randomId(), menuItemId: m.id, name: m.name, emoji: m.emoji, qty: amount, price: m.price, cogs: m.cogs, unit: (m.unit ?? 'g'), unitSize: (m.unitSize ?? 100), portionQty: wPortions, overrideStopList: needsOverride || undefined }])
+    setWeightItem(null)
+  }
+  const lineKey = (l: CartLine) => l.lineId ?? l.menuItemId
+  function setQty(id: string, delta: number) {
+    setCart(prev => prev.flatMap(l => {
+      if (lineKey(l) !== id) return [l]
+      if (l.unit !== 'piece') { const p = portionsOf(l) + delta; return p <= 0 ? [] : [{ ...l, portionQty: p }] }
+      const q = l.qty + delta; return q <= 0 ? [] : [{ ...l, qty: q }]
+    }))
+  }
+  function removeLine(id: string) { setCart(prev => prev.filter(l => lineKey(l) !== id)) }
+
+  const subtotal = useMemo(() => cartSubtotal(cart), [cart])
+  const count = cartCount(cart)
+  // Превью обслуживания в сайдбаре (зал): база (новый заказ = подытог корзины,
+  // иначе итог группы) + сервис-% ресторана. Бэк начисляет то же при закрытии.
+  const footBase = cart.length > 0 ? subtotal : (activeGroup?.total ?? 0)
+  const svcPct = orderType === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
+  const footSvc = svcPct > 0 ? dMul(footBase, dDiv(svcPct, 100)) : 0
+  const footTotal = footBase + footSvc
+  const wUnit = weightItem?.unit === 'kg' ? 'кг' : 'г'
+  const wPreview = weightItem ? dMul(dMul(weightItem.price, dDiv(num(wAmt), (weightItem.unitSize || 100))), wPortions) : 0
+
+  const overrideStopList = () => cart.some(l => l.overrideStopList)
+
+  // ── Оплата «С собой» ──────────────────────────────────────────
+  const [paying, setPaying] = useState(false)
+  const payingRef = useRef(false)
+
+  // «С собой»: создать заказ без оплаты (остаётся открытым до оплаты).
+  async function createTakeawayNoPay() {
+    if (payingRef.current || cart.length === 0) return
+    payingRef.current = true; setPaying(true)
+    try {
+      const shift = await fetchActiveShift()
+      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total: subtotal, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      if (!order) throw new Error('Заказ не создан')
+      toast.success(`Заказ создан · ${formatCurrency(subtotal)}`, { description: 'Без оплаты — оплатите позже' })
+      setCart([])
+      await loadTakeaway(order.id) // остаётся в списке открытых «С собой»
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
+  }
+
+  // «С собой»: создать заказ и открыть ОБЩУЮ панель оплаты (нал/безнал с выбором
+  // кошелька/смешанная/скидка/пре-чек) — как в зале. Единый платёжный флоу.
+  async function payNewTakeaway() {
+    if (payingRef.current || cart.length === 0) return
+    payingRef.current = true; setPaying(true)
+    try {
+      const shift = await fetchActiveShift()
+      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total: subtotal, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      if (!order) throw new Error('Заказ не создан')
+      setCart([])
+      const [fresh] = await fetchOrders({ ids: [order.id], slim: false }).catch(() => [order])
+      await loadTakeaway(order.id)
+      setPayTarget(fresh ?? order)
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { payingRef.current = false; setPaying(false) }
+  }
+
+  // Выбор стола из пикера — раскрываем его контекст (группы + содержимое) в сайдбаре.
+  function selectTable(tableId: string) {
+    setSelectedTableId(tableId); setCart([]); setGuests(1); setTablesOpen(false)
+    loadTableOrders(tableId)
+  }
+  // Переключение вкладки группы. null = новая группа на том же столе.
+  function selectGroup(id: string | null) { setActiveGroupId(id); setCart([]) }
+
+  // ── Отправка заказа зала на кухню (новая группа / первый заказ стола) ──
+  const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
+
+  async function sendToKitchen() {
+    if (sendingRef.current || cart.length === 0 || !selectedTableId) return
+    sendingRef.current = true; setSending(true)
+    try {
+      const shift = await fetchActiveShift()
+      const total = subtotal
+      const groupsBefore = tableOrders.length
+      const order = await createOrder({ type: 'hall', tableId: selectedTableId, items: cartToItems(cart), total, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: guests, tabLabel: groupsBefore > 0 ? `Группа ${groupsBefore + 1}` : undefined, overrideStopList: overrideStopList() })
+      if (!order) throw new Error('Заказ не создан')
+      await openTableForOrder(selectedTableId, order.id, user?.id).catch(() => {})
+      setJustOccupied(prev => { const n = new Set(prev); n.add(selectedTableId); return n }) // стол занят сразу
+      toast.success(`Заказ отправлен · Стол ${selectedTable?.number ?? ''} · ${formatCurrency(total)}`, { description: 'Кухня уже видит заказ' })
+      setCart([]); setGuests(1)
+      await loadTableOrders(selectedTableId, order.id, [order.id]) // новая группа сразу в сайдбаре
+    } catch (e) { toast.error(`Не удалось отправить: ${humanizeError(e)}`) }
+    finally { sendingRef.current = false; setSending(false) }
+  }
+
+  // Дозаказ в активную группу — список обновляется на месте, без ухода со страницы.
+  async function addToActiveGroup() {
+    if (addingRef.current || cart.length === 0 || !activeGroupId) return
+    addingRef.current = true; setAdding(true)
+    try {
+      await addItemsToOrder(activeGroupId, cartToItems(cart), { overrideStopList: overrideStopList() })
+      toast.success(`Добавлено ${count} поз.`)
+      setCart([])
+      await loadTableOrders(selectedTableId, activeGroupId, [activeGroupId])
+    } catch (e) { toast.error(`Не удалось добавить: ${humanizeError(e)}`) }
+    finally { addingRef.current = false; setAdding(false) }
+  }
+
+  async function groupGuests(delta: number) {
+    if (!activeGroup) return
+    const cur = activeGroup.guestsCount ?? 1
+    const next = Math.max(1, cur + delta)
+    if (next === cur) return
+    const gid = activeGroup.id
+    setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: next } : o))
+    try { await patchOrder(gid, { guestsCount: next }) }
+    catch (e) { toast.error(humanizeError(e)); setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: cur } : o)) }
+  }
+
+  async function doPreBill(id: string) {
+    try { await printPreBill(id); toast.success('Пре-чек отправлен на печать') }
+    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+  }
+
+  const busy = paying || sending || adding || tableLoading
+
+  // Esc закрывает открытый инлайн-оверлей (вес / выбор стола) — WCAG 2.1.2.
+  // PaymentPanel-модалка (payTarget) закрывается через свой PosModal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (weightItem) setWeightItem(null)
+      else if (tablesOpen) setTablesOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [weightItem, tablesOpen])
+
+  return (
+    <div className="flex h-full w-full overflow-hidden">
+      {/* ── Left: menu ─────────────────────────────────────────── */}
+      <div className="flex-1 min-w-0 flex flex-col" style={{ padding: 'var(--pv-gap) 0 0 var(--pv-pad-x)' }}>
+        <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', paddingRight: 'var(--pv-gap)' }}>
+          <button onClick={() => navigate(orderType === 'hall' ? '/pos2/tables' : '/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+            <LayoutGrid style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
+            <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{orderType === 'hall' ? 'Столы' : 'Меню'}</span>
+          </button>
+          <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
+            {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
+              const on = orderType === val
+              return (
+                <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                  <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{label}
+                </button>
+              )
+            })}
+          </div>
+          {orderType === 'hall' && (
+            <button onClick={() => setTablesOpen(true)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+              <MapPin style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
+              <span className="font-semibold whitespace-nowrap" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}</span>
+            </button>
+          )}
+          <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1vw,1rem)' }}>
+            <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" aria-label="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+          </div>
+        </div>
+
+        {/* Категории видны ВСЕГДА (раньше прятались при любом тексте в поиске —
+            даже одна буква убирала все категории). Тап по категории очищает поиск. */}
+        <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
+          {favorites.length > 0 && (
+            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
+              <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
+            </button>
+          )}
+          {visibleCats.map(c => {
+            const on = c === currentCat && !deferred.trim()
+            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
+          })}
+        </div>
+
+        <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--pv-gap) var(--pv-gap) var(--pv-pad-x) 0' }}>
+          {loading ? (
+            <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка меню…</div>
+          ) : dishes.length === 0 ? (
+            <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
+          ) : (
+            <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }}>
+              {dishes.map(m => {
+                const stopped = m.isAvailable === false || stoppedIds.has(m.id)
+                const weight = (m.unit ?? 'piece') !== 'piece'
+                const fav = favSet.has(m.id)
+                return (
+                  // Карточка блюда по дизайну restos.pen (DishTile): белая карточка
+                  // (radius 16, тонкая рамка + мягкая тень), содержимое ПО ЦЕНТРУ —
+                  // название и цена-«пилюля» (brand-soft фон, бренд-текст). БЕЗ
+                  // эмодзи-плейсхолдера (на Windows он рендерился «квадратом» и не по
+                  // дизайну). Тумблеры избранное/часто — соседи-кнопки в углу (не
+                  // вложены в <button>, WCAG 2.1.1 / 4.1.2).
+                  <div key={m.id} className="relative">
+                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrency(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: 'clamp(7rem,11vw,9.5rem)', opacity: stopped ? 0.6 : 1 }}>
+                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.25vw,1.2rem)' }}>{m.name}</span>
+                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                    </button>
+                    {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
+                    {restaurantId && (
+                      <button type="button" className="pv-mini rounded-lg absolute" aria-label={fav ? `Убрать «${m.name}» из избранного` : `Добавить «${m.name}» в избранное`} aria-pressed={fav} onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ top: '0.4rem', left: '0.4rem', background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
+                        <Star style={{ width: '1.05rem', height: '1.05rem', color: fav ? '#e8a33a' : 'var(--pv-text-3)', fill: fav ? '#e8a33a' : 'transparent' }} />
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Right: cart ────────────────────────────────────────── */}
+      <aside className="shrink-0 flex flex-col border-l" style={{ width: 'clamp(20rem, 26vw, 30rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }}>
+        {/* Header */}
+        <div className="flex items-center justify-between shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+          <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>
+            {orderType === 'hall' && selectedTable ? `Стол ${selectedTable.number}` : 'Заказ'}{activeGroup && tableOrders.length > 1 ? ` · Группа ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}
+          </span>
+          <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
+        </div>
+
+        {/* Вкладки: группы занятого стола / открытые «С собой» */}
+        {((orderType === 'hall' && selectedTable) || orderType === 'takeaway') && (tableOrders.length >= 1 || tableLoading) && (
+          <div className="flex items-center gap-2 flex-wrap shrink-0 border-b" style={{ padding: '0.6rem clamp(0.7rem,1vw,1rem)', borderColor: 'var(--pv-border)' }}>
+            {tableOrders.map((o, i) => { const on = o.id === activeGroupId; return (
+              <button key={o.id} onClick={() => selectGroup(o.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{orderType === 'hall' ? `Группа ${i + 1}` : `#${o.orderNumber ?? i + 1} · ${formatCurrency(o.total)}`}</button>
+            ) })}
+            <button onClick={() => selectGroup(null)} className="rounded-xl font-semibold border border-dashed flex items-center gap-1" style={{ background: activeGroupId === null ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: 'var(--pv-brand)', color: 'var(--pv-brand)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+              <Plus style={{ width: '0.95rem', height: '0.95rem' }} />{orderType === 'hall' ? 'Группа' : 'Новый'}
+            </button>
+          </div>
+        )}
+
+        {/* Контент: корзина / уже заказано / пусто */}
+        <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.7rem,1vw,1rem)' }}>
+          {cart.length > 0 ? (
+            <div className="flex flex-col" style={{ gap: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
+              {activeGroup && <div className="rounded-lg text-center font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Дозаказ в {orderType === 'hall' ? `Группу ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : `заказ #${activeGroup.orderNumber ?? ''}`}</div>}
+              {cart.map(l => {
+                const weight = l.unit !== 'piece'
+                const k = lineKey(l)
+                return (
+                  <div key={k} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l.emoji} {l.name}{l.overrideStopList ? ' ⚠' : ''}</div>
+                      <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{weight ? `${portionsOf(l)}×${l.qty}${l.unit === 'kg' ? 'кг' : 'г'} · ` : `${formatCurrency(l.price)} × ${l.qty} · `}{formatCurrency(lineTotal(l))}</div>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => setQty(k, -1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                      <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{weight ? portionsOf(l) : l.qty}</span>
+                      <button onClick={() => setQty(k, +1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-brand)', width: '2rem', height: '2rem' }}><Plus className="size-4 text-white" /></button>
+                      <button onClick={() => removeLine(k)} className="rounded-lg flex items-center justify-center ml-1" style={{ width: '2rem', height: '2rem' }}><Trash2 className="size-4" style={{ color: 'var(--pv-occ-text)' }} /></button>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : activeGroup?.isSplit ? (
+            <div className="flex flex-col" style={{ gap: 'clamp(0.5rem,0.9vw,0.8rem)' }}>
+              <div className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Счёт разделён — оплата по частям</div>
+              {splits.map(s => { const paid = s.status === 'paid'; return (
+                <div key={s.id} className="flex items-center gap-3 rounded-2xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.6rem,1vw,0.9rem)' }}>
+                  <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: paid ? 'var(--pv-free-soft)' : 'var(--pv-brand-soft)', color: paid ? 'var(--pv-free-text)' : 'var(--pv-brand)', width: '2.2rem', height: '2.2rem' }}>{s.splitNumber}</div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Часть {s.splitNumber}</div>
+                    <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(s.total)}</div>
+                  </div>
+                  {paid ? (
+                    <div className="flex items-center gap-1 rounded-xl shrink-0" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.4rem 0.7rem' }}><Check style={{ width: '1rem', height: '1rem' }} /><span className="font-semibold" style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Оплачено</span></div>
+                  ) : (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button disabled={paying} onClick={() => paySplitNow(s, 'cash')} className="rounded-lg flex items-center gap-1 font-semibold disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}><Banknote style={{ width: '0.95rem', height: '0.95rem' }} />Нал</button>
+                      <button disabled={paying} onClick={() => paySplitNow(s, 'card')} className="rounded-lg flex items-center gap-1 font-semibold disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}><CreditCard style={{ width: '0.95rem', height: '0.95rem' }} />Карта</button>
+                    </div>
+                  )}
+                </div>
+              ) })}
+            </div>
+          ) : activeGroup ? (
+            <div className="flex flex-col" style={{ gap: 'clamp(0.4rem,0.7vw,0.6rem)' }}>
+              <div className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Уже заказано</div>
+              {(activeGroup.items ?? []).map((i, idx) => { const c = !!i.cancelledAt; return (
+                <div key={i.id ?? idx} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.7rem)', opacity: c ? 0.5 : 1 }}>
+                  <span style={{ fontSize: '1.2rem' }}>{i.emoji || '🍽️'}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', textDecoration: c ? 'line-through' : 'none' }}>{i.name}</div>
+                    <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{c ? ' · отменено' : ''}{i.note ? ` · 💬 ${i.note}` : ''}</div>
+                  </div>
+                  <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
+                </div>
+              ) })}
+              <div className="text-center shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)', marginTop: '0.3rem' }}>Тапайте блюда слева — дозаказ в эту группу</div>
+            </div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center gap-2" style={{ color: 'var(--pv-text-3)' }}>
+              <ShoppingBag style={{ width: '2.5rem', height: '2.5rem', opacity: 0.5 }} /><span style={{ fontSize: 'var(--pv-ctl)' }}>{tableLoading ? 'Загрузка…' : 'Корзина пуста'}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="shrink-0 border-t" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+          {orderType === 'hall' && (activeGroup || cart.length > 0 || !selectedTableId) && (
+            <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.5rem,0.9vw,0.85rem)' }}>
+              <span className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><Users style={{ width: '1.1rem', height: '1.1rem' }} />Гостей</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => activeGroup ? groupGuests(-1) : setGuests(g => Math.max(1, g - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{activeGroup ? (activeGroup.guestsCount ?? 1) : guests}</span>
+                <button onClick={() => activeGroup ? groupGuests(1) : setGuests(g => Math.min(20, g + 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+              </div>
+            </div>
+          )}
+          {svcPct > 0 && footBase > 0 && (
+            <div className="flex items-center justify-between" style={{ marginBottom: '0.35rem' }}>
+              <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Обслуживание {svcPct}%</span>
+              <span className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>+{formatCurrency(footSvc)}</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.6rem,1vw,1rem)' }}>
+            <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
+            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(footTotal)}</span>
+          </div>
+          {orderType !== 'hall' ? (
+            activeGroup ? (
+              cart.length > 0 ? (
+                <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                  <Plus style={{ width: '1.3em', height: '1.3em' }} />{adding ? 'Добавляем…' : `Добавить в заказ #${activeGroup.orderNumber ?? ''}`}
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button disabled={busy} onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center shrink-0 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)' }}><Printer style={{ width: '1.3em', height: '1.3em' }} /></button>
+                  <button onClick={() => setPayTarget(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}><CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате</button>
+                </div>
+              )
+            ) : cart.length > 0 ? (
+              <div className="flex flex-col" style={{ gap: '0.6rem' }}>
+                <button disabled={paying} onClick={createTakeawayNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
+                <button disabled={paying} onClick={payNewTakeaway} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                  <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате · {formatCurrency(subtotal)}
+                </button>
+              </div>
+            ) : (
+              <button disabled className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold disabled:opacity-40" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-3)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+                Добавьте блюда
+              </button>
+            )
+          ) : cart.length > 0 ? (
+            activeGroup ? (
+              <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                <Plus style={{ width: '1.3em', height: '1.3em' }} />{adding ? 'Добавляем…' : `Добавить в Группу ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}`}
+              </button>
+            ) : (
+              <button disabled={!selectedTableId || busy} onClick={sendToKitchen} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: selectedTableId ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
+                <Send style={{ width: '1.3em', height: '1.3em' }} />{sending ? 'Отправка…' : selectedTableId ? (tableOrders.length > 0 ? 'Отправить (новая группа)' : 'Отправить на кухню') : 'Выберите стол'}
+              </button>
+            )
+          ) : activeGroup?.isSplit ? (
+            splits.some(s => s.status === 'paid') ? (
+              <div className="text-center font-semibold" style={{ color: 'var(--pv-text-3)', padding: '0.6rem', fontSize: 'var(--pv-ctl)' }}>Оплата по частям — см. выше</div>
+            ) : (
+              <button disabled={paying} onClick={doCancelSplits} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-occ-dot)', borderWidth: '2px', color: 'var(--pv-occ-text)', padding: 'clamp(0.8rem,1.2vw,1.1rem)', fontSize: 'var(--pv-ctl)' }}>
+                <X style={{ width: '1.2em', height: '1.2em' }} />Отменить разделение
+              </button>
+            )
+          ) : activeGroup ? (
+            <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+              <div className="flex items-center gap-2">
+                <button onClick={() => doPreBill(activeGroup.id)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><Printer style={{ width: '1.15em', height: '1.15em' }} />Пре-чек</button>
+                <button onClick={() => setExtrasOpen(true)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.15em', height: '1.15em' }} />Ещё</button>
+              </div>
+              <button onClick={() => setPayTarget(activeGroup)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
+              </button>
+            </div>
+          ) : (
+            <button disabled className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold disabled:opacity-40" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-3)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              {selectedTableId ? 'Добавьте блюда' : 'Выберите стол'}
+            </button>
+          )}
+        </div>
+      </aside>
+
+      {/* ── Weight modal — PosModal (role=dialog): экранная клавиатура поднимает
+             модалку, а не скроллит фон (раньше сырой оверлей → экран прыгал). ── */}
+      {weightItem && (
+        <PosModal open onClose={() => setWeightItem(null)} width="clamp(20rem,38vw,30rem)" title={weightItem.name}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
+            <div>
+              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>Вес порции ({wUnit})</div>
+              <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-border)', borderWidth: '1px', padding: '0.7rem 1rem' }}>
+                <input autoFocus inputMode="decimal" value={wAmt} onChange={e => setWAmt(e.target.value)} aria-label={`Вес порции, ${wUnit}`} className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)', textAlign: 'center' }} />
+                <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>{wUnit}</span>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Порций (печатается N строками)</span>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setWPortions(p => Math.max(1, p - 1))} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{wPortions}</span>
+                <button onClick={() => setWPortions(p => p + 1)} className="rounded-lg flex items-center justify-center" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Plus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 1rem' }}>
+              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Стоимость</span>
+              <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>{formatCurrency(wPreview)}</span>
+            </div>
+            <button onClick={addWeight} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Plus style={{ width: '1.3em', height: '1.3em' }} />Добавить
+            </button>
+          </div>
+        </PosModal>
+      )}
+
+      {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}
+      {payTarget && (
+        <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,42vw,34rem)"
+          title={`Оплата · ${payTarget.type === 'hall' ? `Стол ${selectedTable?.number ?? ''}` : `С собой #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
+          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} />
+        </PosModal>
+      )}
+
+      {/* Действия с заказом (разделить/перенести/отменить) — инлайн, без ухода на тикет */}
+      {activeGroup && (
+        <OrderExtras
+          order={activeGroup}
+          tables={tables}
+          servicePercent={restaurant?.servicePercent ?? 0}
+          open={extrasOpen}
+          onClose={() => setExtrasOpen(false)}
+          onChanged={() => { setExtrasOpen(false); reloadContext() }}
+          onCancelled={() => { setExtrasOpen(false); setActiveGroupId(null); reloadContext() }}
+        />
+      )}
+
+      {/* ── Table picker overlay (hall) ────────────────────────── */}
+      {tablesOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setTablesOpen(false)}>
+          <div role="dialog" aria-modal="true" aria-label="Выберите стол" className="rounded-3xl overflow-hidden flex flex-col" style={{ background: 'var(--pv-card)', width: 'clamp(26rem, 60vw, 56rem)', maxHeight: '82vh', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(1rem,1.6vw,1.4rem) clamp(1.2rem,1.8vw,1.6rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>Выберите стол</span>
+              <button onClick={() => setTablesOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
+              {tables.length === 0 ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Столы не заведены</div>
+              ) : tablesByZone.map(group => (
+                <div key={group.zone} style={{ marginBottom: '1.25rem' }}>
+                  <div className="font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', marginBottom: '0.6rem' }}>{group.zone}</div>
+                  <div style={{ display: 'grid', gap: 'clamp(0.6rem,1vw,0.9rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(6.5rem,10vw,8.5rem), 1fr))' }}>
+                    {group.tables.map(t => {
+                      const optOcc = justOccupied.has(t.id) && (t.currentOrderIds?.length ?? 0) === 0
+                      const st = optOcc ? STATUS.occupied : (STATUS[t.status] ?? STATUS.free)
+                      const sel = t.id === selectedTableId
+                      const groupsN = Math.max(t.currentOrderIds?.length ?? 0, optOcc ? 1 : 0)
+                      return (
+                        <button key={t.id} onClick={() => selectTable(t.id)} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
+                          {groupsN >= 2 && <span className="absolute rounded-full font-bold flex items-center justify-center" style={{ top: '0.35rem', right: '0.35rem', background: sel ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: sel ? 'var(--pv-brand)' : '#fff', minWidth: '1.3rem', height: '1.3rem', fontSize: '0.7rem' }}>{groupsN}</span>}
+                          <span className="font-bold" style={{ color: sel ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.6vw,1.5rem)' }}>№{t.number}</span>
+                          <div className="flex items-center gap-1.5">
+                            <span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: sel ? 'rgba(255,255,255,0.9)' : st.dot }} />
+                            <span className="font-medium" style={{ color: sel ? 'rgba(255,255,255,0.9)' : st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{sel ? 'Выбран' : st.label}</span>
+                          </div>
+                          <div className="flex items-center gap-1" style={{ color: sel ? 'rgba(255,255,255,0.75)' : 'var(--pv-text-3)' }}>
+                            <Users style={{ width: '0.8rem', height: '0.8rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
