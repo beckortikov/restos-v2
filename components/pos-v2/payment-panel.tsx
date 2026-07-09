@@ -1,13 +1,13 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft } from 'lucide-react'
+import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft, Trash2, Plus, ReceiptText } from 'lucide-react'
 import { toast } from 'sonner'
 import { closeOrderWithPayment, printPreBill, fetchActiveShift } from '@/lib/queries'
 import { V4Error } from '@/lib/api'
 import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
-import { dSub } from '@/lib/decimal'
+import { dSub, dSum } from '@/lib/decimal'
 import { discountAmount, payable as calcPayable, type DiscountType } from '@/lib/pos-v2/pay'
 import type { Order, FinancialAccount, OrderPayment } from '@/lib/types'
 
@@ -26,7 +26,13 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const [discType, setDiscType] = useState<DiscountType>('none')
   const [discVal, setDiscVal] = useState('')
   const [mode, setMode] = useState<'pick' | 'mixed'>('pick')
-  const [cashStr, setCashStr] = useState('')
+  // Смешанная оплата — билдер из N платежей (нал/безнал по счетам) с остатком,
+  // по дизайну restos.pen «POS — Смешанная оплата»: Итого/Внесено/Остаток +
+  // список платежей + форма добавления + «Провести».
+  const [parts, setParts] = useState<OrderPayment[]>([])
+  const [addMethod, setAddMethod] = useState<'cash' | 'card'>('cash')
+  const [addAmt, setAddAmt] = useState('')
+  const [mixedShift, setMixedShift] = useState<{ accountId?: string; accountName?: string } | null>(null)
   const [paying, setPaying] = useState(false)
   const [printing, setPrinting] = useState(false)
   const payingRef = useRef(false)
@@ -47,8 +53,9 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const discAmt = useMemo(() => discountAmount(base, discType, discValNum), [base, discType, discValNum])
   const sp = (order.type === 'hall' && serviceOn) ? servicePercent : 0
   const payable = calcPayable(base, discAmt, sp)
-  const cashNum = Math.max(0, Math.min(payable, parseFloat(cashStr.replace(',', '.').replace(/\s/g, '')) || 0))
-  const cardNum = dSub(payable, cashNum)
+  const paidSum = useMemo(() => dSum(parts.map(p => p.amount)), [parts])
+  const remaining = dSub(payable, paidSum)
+  const canContinue = parts.length > 0 && Math.abs(remaining) <= 0.01
 
   function cogsOf(o: Order): number {
     return (o.items ?? []).reduce((s, i) => s + calcLineCogs(i.cogs || 0, i.qty, i.unit, i.unitSize), 0)
@@ -90,20 +97,41 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
     finally { payingRef.current = false; setPaying(false) }
   }
 
-  async function payMixed() {
+  // Вход в смешанную: подтягиваем cash-счёт смены (для наличной части) и ставим
+  // сумму добавления = весь остаток (чаще всего первый платёж закрывает большую часть).
+  async function enterMixed() {
+    setMode('mixed'); setParts([]); setAddMethod('cash')
+    const shift = await fetchActiveShift().catch(() => null)
+    const s = shift as { accountId?: string; accountName?: string } | null
+    setMixedShift(s?.accountId ? { accountId: s.accountId, accountName: s.accountName } : { accountId: cashAcc?.id, accountName: cashAcc?.name })
+    setAddAmt(String(payable))
+  }
+  function addPart() {
+    const raw = Math.max(0, parseFloat(addAmt.replace(',', '.').replace(/\s/g, '')) || 0)
+    // Не даём внести больше остатка (бэк требует sum(payments)==итог; переплата
+    // завела бы в тупик). Последний платёж закрывается ровно на остаток.
+    const amt = Math.min(raw, remaining)
+    if (amt <= 0) { toast.error('Укажите сумму'); return }
+    // Нал → счёт смены (Касса); безнал → выбранный кошелёк.
+    const acc = addMethod === 'cash'
+      ? { id: mixedShift?.accountId, name: mixedShift?.accountName ?? 'Касса' }
+      : { id: cardAcc?.id, name: cardAcc?.name }
+    if (!acc.id) { toast.error(addMethod === 'cash' ? 'Нет счёта кассы' : 'Нет безналичного счёта'); return }
+    setParts(p => [...p, { method: addMethod, amount: amt, accountId: acc.id!, accountName: acc.name }])
+    const rest = dSub(remaining, amt)
+    setAddAmt(rest > 0.001 ? String(rest) : '')
+  }
+  function removePart(i: number) { setParts(p => p.filter((_, idx) => idx !== i)) }
+  async function submitMixed() {
     if (payingRef.current) return
+    if (!canContinue) { toast.error('Сумма платежей должна равняться сумме к оплате'); return }
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
-      const cash = cashAccount(shift)
-      const parts: OrderPayment[] = []
-      if (cashNum > 0) parts.push({ method: 'cash', amount: cashNum, accountId: cash.id ?? '', accountName: cash.name })
-      if (cardNum > 0) parts.push({ method: 'card', amount: cardNum, accountId: cardAcc?.id ?? '', accountName: cardAcc?.name })
-      if (parts.length === 0 || parts.some(p => !p.accountId)) { toast.error('Нет счетов для смешанной оплаты'); return }
       const [dA, dT, dV] = discArgs()
       await closeOrderWithPayment(order.id, parts[0].method, order.tableId || null, base, cogsOf(order), userId, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts)
-      toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: `Наличные ${formatCurrency(cashNum)} + Безнал ${formatCurrency(cardNum)}` })
+      toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: parts.map(p => `${p.method === 'cash' ? 'Нал' : 'Безнал'} ${formatCurrency(p.amount)}`).join(' + ') })
       onPaid()
     } catch (e) { handleErr(e) }
     finally { payingRef.current = false; setPaying(false) }
@@ -120,21 +148,72 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   return (
     <div style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
       {mode === 'mixed' ? (
-        <div className="flex flex-col" style={{ gap: '0.9rem' }}>
-          <button onClick={() => setMode('pick')} className="flex items-center gap-1.5 font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><ArrowLeft style={{ width: '1.1rem', height: '1.1rem' }} />Назад</button>
-          <div>
-            <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>Наличными</div>
-            <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-brand)', borderWidth: '2px', padding: '0.7rem 1rem' }}>
-              <input autoFocus inputMode="decimal" value={cashStr} onChange={e => setCashStr(e.target.value)} placeholder="0" className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.2rem,1.8vw,1.6rem)' }} />
-              <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>TJS</span>
+        <div className="flex flex-col" style={{ gap: '1rem' }}>
+          <button onClick={() => setMode('pick')} className="flex items-center gap-1.5 font-semibold self-start" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><ArrowLeft style={{ width: '1.1rem', height: '1.1rem' }} />Назад</button>
+
+          {/* Итого / Внесено / Остаток */}
+          <div className="grid grid-cols-3" style={{ gap: '0.6rem' }}>
+            {([['Итого', payable], ['Внесено', paidSum]] as const).map(([l, v]) => (
+              <div key={l} className="flex flex-col items-center rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.7rem 0.5rem', gap: '0.2rem' }}>
+                <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{l}</span>
+                <span className="font-bold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.3vw,1.15rem)' }}>{formatCurrency(v)}</span>
+              </div>
+            ))}
+            <div className="flex flex-col items-center rounded-xl" style={{ background: 'var(--pv-bill-soft)', border: '1px solid #EAD49C', padding: '0.7rem 0.5rem', gap: '0.2rem' }}>
+              <span className="font-medium" style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>Остаток</span>
+              <span className="font-bold whitespace-nowrap" style={{ color: 'var(--pv-bill-text)', fontSize: 'clamp(0.95rem,1.3vw,1.15rem)' }}>{formatCurrency(Math.max(0, remaining))}</span>
             </div>
           </div>
-          <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.7rem 1rem' }}>
-            <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Безналичными{cardAcc ? ` · ${cardAcc.name}` : ''}</span>
-            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.3rem)' }}>{formatCurrency(cardNum)}</span>
-          </div>
-          <button disabled={paying} onClick={payMixed} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
-            Оплатить {formatCurrency(payable)}
+
+          {/* Добавленные платежи */}
+          {parts.length > 0 && (
+            <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+              {parts.map((p, i) => (
+                <div key={i} className="flex items-center justify-between rounded-2xl" style={{ border: '1px solid var(--pv-border)', padding: '0.7rem 0.9rem' }}>
+                  <div className="flex items-center gap-2 min-w-0">
+                    {p.method === 'cash' ? <Banknote style={{ width: '1.15rem', height: '1.15rem', color: 'var(--pv-text-2)' }} /> : <CreditCard style={{ width: '1.15rem', height: '1.15rem', color: 'var(--pv-brand)' }} />}
+                    <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{p.method === 'cash' ? 'Наличные' : 'Безналичные'}</span>
+                    {p.accountName && <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>· {p.accountName}</span>}
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(p.amount)}</span>
+                    <button onClick={() => removePart(i)} aria-label="Удалить платёж" className="pv-mini"><Trash2 style={{ width: '1.05rem', height: '1.05rem', color: 'var(--pv-text-3)' }} /></button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Форма добавления (пока есть остаток) */}
+          {remaining > 0.01 && (
+            <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-bg)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.15rem)', gap: '0.8rem' }}>
+              <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Добавить платёж</span>
+              <div className="grid grid-cols-2" style={{ gap: '0.6rem' }}>
+                {([['cash', Banknote, 'Наличные'], ['card', CreditCard, 'Безналичные']] as const).map(([mm, Icon, label]) => { const on = addMethod === mm; return (
+                  <button key={mm} onClick={() => setAddMethod(mm)} className="flex items-center justify-center gap-2 rounded-xl font-semibold" style={{ height: '3.1rem', background: on ? 'var(--pv-brand-soft)' : 'var(--pv-card)', border: on ? '2px solid var(--pv-brand)' : '1px solid var(--pv-border)', color: on ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+                    <Icon style={{ width: '1.2rem', height: '1.2rem' }} />{label}
+                  </button>
+                ) })}
+              </div>
+              {addMethod === 'card' && nonCash.length > 1 && (
+                <div className="flex flex-wrap gap-2">
+                  {nonCash.map(a => { const on = a.id === cardAccId; return (
+                    <button key={a.id} onClick={() => setCardAccId(a.id)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.85rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{a.name}</button>
+                  ) })}
+                </div>
+              )}
+              <div className="flex items-center rounded-xl" style={{ border: '2px solid var(--pv-brand)', background: 'var(--pv-card)', padding: '0.65rem 1rem' }}>
+                <input autoFocus inputMode="decimal" value={addAmt} onChange={e => setAddAmt(e.target.value)} placeholder="0" className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,1.7vw,1.5rem)' }} />
+                <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>TJS</span>
+              </div>
+              <button onClick={addPart} className="w-full flex items-center justify-center gap-2 rounded-xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.7rem,1.1vw,0.95rem)', fontSize: 'var(--pv-ctl)' }}>
+                <Plus style={{ width: '1.2rem', height: '1.2rem' }} />Добавить платёж
+              </button>
+            </div>
+          )}
+
+          <button disabled={!canContinue || paying} onClick={submitMixed} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: canContinue ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
+            <ReceiptText style={{ width: '1.3em', height: '1.3em' }} />Провести · {formatCurrency(payable)}
           </button>
         </div>
       ) : (
@@ -193,7 +272,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
             </button>
           </div>
           {canMix && (
-            <button disabled={paying} onClick={() => { setMode('mixed'); setCashStr('') }} className="w-full flex items-center justify-center gap-2 rounded-2xl border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ marginTop: '0.75rem', padding: 'clamp(0.8rem,1.2vw,1rem)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)' }}>
+            <button disabled={paying} onClick={enterMixed} className="w-full flex items-center justify-center gap-2 rounded-2xl border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ marginTop: '0.75rem', padding: 'clamp(0.8rem,1.2vw,1rem)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)' }}>
               <SquareSplitHorizontal style={{ width: '1.25rem', height: '1.25rem' }} /><span className="font-semibold" style={{ fontSize: 'var(--pv-ctl)' }}>Смешанная (нал + безнал)</span>
             </button>
           )}
