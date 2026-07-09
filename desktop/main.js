@@ -427,6 +427,9 @@ function createWindow() {
       backgroundThrottling: false,
     },
     autoHideMenuBar: true,
+    // Терминал кассира — на весь экран, поверх панели задач Windows (раньше
+    // окно только maximize'илось и снизу оставался бар ОС). F11 — тумблер.
+    fullscreen: true,
     show: false,
   })
 
@@ -451,6 +454,10 @@ function createWindow() {
     }
     if (input.type === 'keyDown' && input.key === 'F5') {
       mainWindow.reload()
+    }
+    // F11 — тумблер полноэкранного режима (выход/вход, если нужно к панели задач).
+    if (input.type === 'keyDown' && input.key === 'F11') {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen())
     }
   })
 

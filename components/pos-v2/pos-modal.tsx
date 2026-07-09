@@ -28,13 +28,19 @@ export function PosModal({
   dismissable?: boolean
 }) {
   const cardRef = useRef<HTMLDivElement>(null)
-  // Esc закрывает модалку (WCAG 2.1.2 — не ловушка клавиатуры), фокус уходит
-  // внутрь диалога при открытии (иначе он остаётся на фоне под оверлеем).
+  // Фокус в карточку — ТОЛЬКО при открытии модалки. Раньше это стояло в одном
+  // эффекте с Esc-listener'ом (deps [open, dismissable, onClose]); onClose
+  // почти всегда инлайн-стрелка (новая ссылка на каждый рендер) → эффект
+  // перезапускался на КАЖДЫЙ ре-рендер и cardRef.focus() КРАЛ фокус у инпута.
+  // При вводе символа родитель ре-рендерился → фокус улетал в карточку →
+  // экранная клавиатура закрывалась после первой же цифры. Теперь фокус — раз.
+  useEffect(() => { if (open) cardRef.current?.focus() }, [open])
+  // Esc закрывает модалку (WCAG 2.1.2 — не ловушка клавиатуры) — отдельный
+  // эффект, его перезапуск на смену onClose безвреден (только listener).
   useEffect(() => {
     if (!open) return
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && dismissable) onClose() }
     window.addEventListener('keydown', onKey)
-    cardRef.current?.focus()
     return () => window.removeEventListener('keydown', onKey)
   }, [open, dismissable, onClose])
 

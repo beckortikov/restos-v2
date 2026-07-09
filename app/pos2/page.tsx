@@ -10,32 +10,39 @@ import { useAuth } from '@/lib/auth-store'
 import { fetchActiveShift } from '@/lib/queries'
 import { FailedPrintsButton } from '@/components/order/failed-prints-button'
 
-// Phase 1: плитки ведут на СУЩЕСТВУЮЩИЕ рабочие экраны (старый POS цел).
-// По мере готовности новых экранов цели будут переключаться на /pos2/*.
+// Плитки ведут ТОЛЬКО на экраны /pos2/*. Плитка «Кухня (KDS)» убрана — она вела
+// на старый POS (/operations/kitchen), из-за чего кассир проваливался в старый
+// дизайн. KDS живёт в старом POS / отдельном планшете.
+//
+// `req` — старый маршрут для проверки прав: плитка видна только если у роли есть
+// доступ (hasAccess). Кассир видит лишь доступные ему разделы (как старый rail).
 const TILES: Array<{
   icon: React.ElementType
   label: string
   sub: string
   to: string
+  req: string
   primary?: boolean
 }> = [
-  { icon: Utensils, label: 'Новый заказ', sub: 'Меню и оплата', to: '/pos2/order', primary: true },
-  { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/pos2/tables' },
-  { icon: ClipboardList, label: 'Активные заказы', sub: 'Все / зал / с собой / закрытые', to: '/pos2/orders' },
-  { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay' },
-  { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение кассы', to: '/pos2/shift' },
-  { icon: ChefHat, label: 'Кухня (KDS)', sub: 'Бегунки по станциям', to: '/operations/kitchen' },
-  { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/pos2/service' },
-  { icon: OctagonX, label: 'Стоп-лист', sub: 'Стоп/возврат блюд', to: '/pos2/stop' },
-  { icon: PackageCheck, label: 'Витрина', sub: 'Списания и полуфабрикаты', to: '/pos2/showcase' },
-  { icon: CookingPot, label: 'Заготовки', sub: 'Приготовление партий', to: '/pos2/batch' },
-  { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history' },
-  { icon: Settings, label: 'Настройки', sub: 'Интерфейс, принтеры, меню', to: '/pos2/settings' },
+  { icon: Utensils, label: 'Новый заказ', sub: 'Меню и оплата', to: '/pos2/order', req: '/operations/pos', primary: true },
+  { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/pos2/tables', req: '/operations/table-map' },
+  { icon: ClipboardList, label: 'Активные заказы', sub: 'Все / зал / с собой / закрытые', to: '/pos2/orders', req: '/operations/orders' },
+  { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay', req: '/operations/pos' },
+  { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение кассы', to: '/pos2/shift', req: '/operations/shifts' },
+  { icon: HandCoins, label: 'Обслуживание', sub: 'Выплаты официантам', to: '/pos2/service', req: '/operations/shifts' },
+  { icon: OctagonX, label: 'Стоп-лист', sub: 'Стоп/возврат блюд', to: '/pos2/stop', req: '/warehouse/menu' },
+  { icon: PackageCheck, label: 'Витрина', sub: 'Списания и полуфабрикаты', to: '/pos2/showcase', req: '/operations/showcase' },
+  { icon: CookingPot, label: 'Заготовки', sub: 'Приготовление партий', to: '/pos2/batch', req: '/operations/batch-cooking' },
+  { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history', req: '/operations/orders' },
+  { icon: Settings, label: 'Настройки', sub: 'Интерфейс, принтеры, меню', to: '/pos2/settings', req: '/cashier/settings' },
 ]
 
 export default function PosV2Launcher() {
   const navigate = useNavigate()
-  const { user, restaurant } = useAuth()
+  const { user, restaurant, hasAccess } = useAuth()
+  // Владелец/менеджер видят всё; кассир/официант — только разделы по своим
+  // правам (hasAccess мапит /pos2-плитку на старый маршрут). owner/manager → всё.
+  const tiles = TILES.filter(t => hasAccess(t.req))
   const initial = (user?.name || 'К').trim().charAt(0).toUpperCase()
   // Реальный статус смены вместо захардкоженного «Смена открыта» (вводил в
   // заблуждение — показывался всегда). null = ещё грузим, не показываем бейдж.
@@ -135,7 +142,7 @@ export default function PosV2Launcher() {
           className="grid flex-1 min-h-0 grid-cols-2 md:grid-cols-4 auto-rows-fr"
           style={{ gap: 'var(--pv-gap)' }}
         >
-          {TILES.map((t) => {
+          {tiles.map((t) => {
             const Icon = t.icon
             return (
               <button
