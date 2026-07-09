@@ -298,10 +298,13 @@ export default function NewMenuItemPage() {
     }
   }
 
+  // Весовое сырьё (на развес) продаётся по весу и НЕ требует техкарты-рецепта
+  // (иначе «Сохранить» серое при включённом контроле остатков).
+  const isWeightItem = form.unit !== 'piece'
   const canSubmit = !!form.name && !!form.category && form.price > 0 && (
     form.isPurchased
       ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
-      : !requireTechCard
+      : (!requireTechCard || isWeightItem)
         ? true
         : form.techCard.length > 0 && form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
   )

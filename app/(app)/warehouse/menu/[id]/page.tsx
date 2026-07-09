@@ -354,10 +354,14 @@ export default function EditMenuItemPage() {
   }
 
   const techCardValid = form.techCard.length === 0 || form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
+  // Весовое сырьё (мясо/фрукты на развес) продаётся по весу и НЕ требует
+  // техкарты-рецепта — иначе «Сохранить» залипало серым (requireTechCard при
+  // включённом контроле остатков). Для веса техкарта опциональна (techCardValid).
+  const isWeightItem = form.unit !== 'piece'
   const canSubmit = !!form.name && !!form.category && form.price > 0 && (
     form.isPurchased
       ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
-      : requireTechCard
+      : (requireTechCard && !isWeightItem)
         ? form.techCard.length > 0 && form.techCard.every((l) => (l.ingredientId || l.semiId) && l.qty > 0)
         : techCardValid
   )
