@@ -10,6 +10,7 @@ import { humanizeError } from '@/lib/errors'
 import { exportOrdersToXlsx } from '@/lib/orders-export'
 import { getPresetRange, type RangePreset } from '@/components/finance/date-range-presets'
 import { PosModal } from '@/components/pos-v2/pos-modal'
+import { PinSection } from '@/components/pos-v2/pin-section'
 import type { Order, Table, Zone, User, OrderVoid } from '@/lib/types'
 
 const REASONS = ['Ошибка кассира', 'Просьба гостя', 'Некачественное блюдо', 'Отмена заказа', 'Другое']
@@ -149,6 +150,7 @@ export default function PosV2History() {
   }
 
   return (
+    <PinSection label="История заказов">
     <div className="flex flex-col h-full w-full overflow-hidden">
       {/* Topbar */}
       <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', padding: 'var(--pv-gap) var(--pv-pad-x) 0' }}>
@@ -284,5 +286,6 @@ export default function PosV2History() {
         </PosModal>
       )}
     </div>
+    </PinSection>
   )
 }

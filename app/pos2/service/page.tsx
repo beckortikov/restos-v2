@@ -11,6 +11,7 @@ import {
 import { formatCurrency } from '@/lib/helpers'
 import { dSum } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
+import { PinSection } from '@/components/pos-v2/pin-section'
 import type { CashShift, FinancialAccount } from '@/lib/types'
 
 interface Row { waiterId: string; waiterName: string; ordersCount: number; accrued: number; paid: number; toPay: number }
@@ -89,6 +90,7 @@ export default function PosV2Service() {
   function initials(name: string) { return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('') }
 
   return (
+    <PinSection label="Обслуживание официантов">
     <div className="flex flex-col h-full w-full overflow-hidden">
       {/* Topbar */}
       <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', padding: 'var(--pv-gap) var(--pv-pad-x) 0' }}>
@@ -160,5 +162,6 @@ export default function PosV2Service() {
         )}
       </div>
     </div>
+    </PinSection>
   )
 }

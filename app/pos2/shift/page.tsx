@@ -15,6 +15,7 @@ import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
 import { deltaPct } from '@/lib/pos-v2/report'
 import { PosModal } from '@/components/pos-v2/pos-modal'
+import { PinSection } from '@/components/pos-v2/pin-section'
 import { dSum, dAdd, dSub } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
 import { V4Error } from '@/lib/api'
@@ -27,6 +28,9 @@ const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\
 export default function PosV2Shift() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  // Владелец/superadmin — без ПИН; кассир открывает смену, но управление
+  // активной сменой (KPI/закрытие/Z/история) — под ПИН владельца (см. PinSection).
+  const isOwnerRole = user?.role === 'owner' || user?.role === 'superadmin'
   const [shift, setShift] = useState<CashShift | null>(null)
   const [rev, setRev] = useState({ cashRevenue: 0, cardRevenue: 0, ordersCount: 0, avgCheck: 0 })
   const [ops, setOps] = useState<CashShiftOperation[]>([])
@@ -140,7 +144,11 @@ export default function PosV2Shift() {
     busyRef.current = true; setBusy(true)
     try {
       await openShift(user?.id ?? '', num(openBal), openAccountId)
-      toast.success('Смена открыта'); setOpenBal(''); await load()
+      toast.success('Смена открыта'); setOpenBal('')
+      // Кассир открыл смену → на лаунчер (управление активной сменой под ПИН
+      // владельца). Владелец остаётся и видит управление.
+      if (!isOwnerRole) { busyRef.current = false; setBusy(false); navigate('/pos2'); return }
+      await load()
     } catch (e) { toast.error(`Не удалось открыть: ${humanizeError(e)}`) }
     finally { busyRef.current = false; setBusy(false) }
   }
@@ -196,6 +204,9 @@ export default function PosV2Shift() {
   const closeDiff = action === 'close' ? dSub(amt ? num(amt) : expected, expected) : 0
 
   return (
+    // Управление активной сменой — под ПИН владельца; форма ОТКРЫТИЯ (нет
+    // активной смены) доступна кассиру без ПИН.
+    <PinSection label="Кассовая смена" gateWhen={!!shift}>
     <div className="flex flex-col h-full w-full overflow-hidden">
       {/* Topbar */}
       <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', padding: 'var(--pv-gap) var(--pv-pad-x) 0' }}>
@@ -463,5 +474,6 @@ export default function PosV2Shift() {
         </div>
       )}
     </div>
+    </PinSection>
   )
 }
