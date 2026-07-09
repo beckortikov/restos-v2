@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Navigate, Outlet } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { LicenseGate } from '@/components/license-gate'
@@ -52,6 +52,15 @@ function LockGate({ children }: { children: React.ReactNode }) {
  * навигация — через лаунчер и кнопки «Меню». Полностью изолирован от старого POS.
  */
 export function PosV2Layout() {
+  // Полноэкранный режим — ТОЛЬКО пока открыт новый POS. Вход в любой /pos2/*
+  // включает fullscreen, выход из ветки (unmount лейаута) — выключает, чтобы
+  // старый POS/десктоп оставались в обычном окне. В браузере (LAN) моста нет —
+  // guard по restosDesktop (no-op).
+  useEffect(() => {
+    const d = (window as unknown as { restosDesktop?: { setFullscreen?: (on: boolean) => void } }).restosDesktop
+    d?.setFullscreen?.(true)
+    return () => { d?.setFullscreen?.(false) }
+  }, [])
   return (
     <PosV2Guard>
       <LicenseGate>

@@ -4,12 +4,11 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Clock, Printer, MoreHorizontal, Check,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
-import { useFrequent, toggleFrequent } from '@/lib/pos-frequent'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
@@ -41,8 +40,6 @@ export default function PosV2Order() {
   const { menuItems, categories, tables, zones, loading } = useOrderData(true)
   const favorites = useFavorites(restaurantId ?? '')
   const favSet = useMemo(() => new Set(favorites), [favorites])
-  const frequent = useFrequent(restaurantId ?? '')
-  const freqSet = useMemo(() => new Set(frequent), [frequent])
 
   const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
   const [search, setSearch] = useState('')
@@ -181,8 +178,14 @@ export default function PosV2Order() {
   }
 
   async function reloadContext() {
-    if (selectedTableId) await loadTableOrders(selectedTableId)
-    else await loadTakeaway()
+    // Перечитываем контекст, СОХРАНЯЯ уже известные заказы группы (extraIds) и
+    // активную вкладку. Без этого после действий вроде «назначить официанта»
+    // (assignWaiter каскадит waiter_id) заказ пропадал из сайдбара, если
+    // tables.currentOrderIds на миг оказывался пустым (SSE ещё не догнал), хотя
+    // на карте зала стол занят.
+    const known = tableOrders.map(o => o.id)
+    if (selectedTableId) await loadTableOrders(selectedTableId, activeGroupId ?? undefined, known)
+    else await loadTakeaway(activeGroupId ?? undefined)
   }
 
   async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
@@ -215,9 +218,8 @@ export default function PosV2Order() {
     const q = deferred.trim().toLowerCase()
     if (q) return menuItems.filter(m => m.name.toLowerCase().includes(q))
     if (currentCat === '__fav__') return menuItems.filter(m => favSet.has(m.id))
-    if (currentCat === '__freq__') return menuItems.filter(m => freqSet.has(m.id))
     return menuItems.filter(m => m.category === currentCat)
-  }, [menuItems, currentCat, deferred, favSet, freqSet])
+  }, [menuItems, currentCat, deferred, favSet])
 
   const tablesByZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
@@ -431,11 +433,6 @@ export default function PosV2Order() {
                 <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
               </button>
             )}
-            {frequent.length > 0 && (
-              <button onClick={() => setActiveCat('__freq__')} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__freq__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__freq__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__freq__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
-                <Clock style={{ width: '0.95rem', height: '0.95rem' }} />Часто
-              </button>
-            )}
             {visibleCats.map(c => {
               const on = c === currentCat
               return <button key={c} onClick={() => setActiveCat(c)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
@@ -453,7 +450,7 @@ export default function PosV2Order() {
               {dishes.map(m => {
                 const stopped = m.isAvailable === false || stoppedIds.has(m.id)
                 const weight = (m.unit ?? 'piece') !== 'piece'
-                const fav = favSet.has(m.id), freq = freqSet.has(m.id)
+                const fav = favSet.has(m.id)
                 return (
                   // Карточка блюда по дизайну restos.pen (DishTile): белая карточка
                   // (radius 16, тонкая рамка + мягкая тень), содержимое ПО ЦЕНТРУ —
@@ -468,14 +465,9 @@ export default function PosV2Order() {
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
                     {restaurantId && (
-                      <div className="absolute flex items-center gap-1" style={{ top: '0.4rem', left: '0.4rem' }}>
-                        <button type="button" className="pv-mini rounded-lg" aria-label={fav ? `Убрать «${m.name}» из избранного` : `Добавить «${m.name}» в избранное`} aria-pressed={fav} onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
-                          <Star style={{ width: '1.05rem', height: '1.05rem', color: fav ? '#e8a33a' : 'var(--pv-text-3)', fill: fav ? '#e8a33a' : 'transparent' }} />
-                        </button>
-                        <button type="button" className="pv-mini rounded-lg" aria-label={freq ? `Убрать «${m.name}» из частых` : `Добавить «${m.name}» в часто заказываемые`} aria-pressed={freq} onClick={(e) => { e.stopPropagation(); toggleFrequent(restaurantId, m.id) }} style={{ background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
-                          <Clock style={{ width: '1rem', height: '1rem', color: freq ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />
-                        </button>
-                      </div>
+                      <button type="button" className="pv-mini rounded-lg absolute" aria-label={fav ? `Убрать «${m.name}» из избранного` : `Добавить «${m.name}» в избранное`} aria-pressed={fav} onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ top: '0.4rem', left: '0.4rem', background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
+                        <Star style={{ width: '1.05rem', height: '1.05rem', color: fav ? '#e8a33a' : 'var(--pv-text-3)', fill: fav ? '#e8a33a' : 'transparent' }} />
+                      </button>
                     )}
                   </div>
                 )

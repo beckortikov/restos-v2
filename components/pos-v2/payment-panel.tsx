@@ -204,7 +204,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
               )}
               <div className="flex items-center rounded-xl" style={{ border: '2px solid var(--pv-brand)', background: 'var(--pv-card)', padding: '0.65rem 1rem' }}>
                 <input autoFocus inputMode="decimal" value={addAmt} onChange={e => setAddAmt(e.target.value)} placeholder="0" className="flex-1 min-w-0 bg-transparent outline-none font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,1.7vw,1.5rem)' }} />
-                <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>TJS</span>
+                <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>с.</span>
               </div>
               <button onClick={addPart} className="w-full flex items-center justify-center gap-2 rounded-xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.7rem,1.1vw,0.95rem)', fontSize: 'var(--pv-ctl)' }}>
                 <Plus style={{ width: '1.2rem', height: '1.2rem' }} />Добавить платёж
@@ -232,7 +232,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
             <div className="flex items-center gap-2" style={{ marginBottom: discType !== 'none' ? '0.5rem' : 0 }}>
               <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Скидка</span>
               <div className="flex rounded-lg border" style={{ borderColor: 'var(--pv-border)', padding: '2px', gap: '2px', marginLeft: 'auto' }}>
-                {(['none', 'percent', 'fixed'] as const).map(v => { const on = discType === v; const l = v === 'none' ? 'Нет' : v === 'percent' ? '%' : 'TJS'; return (
+                {(['none', 'percent', 'fixed'] as const).map(v => { const on = discType === v; const l = v === 'none' ? 'Нет' : v === 'percent' ? '%' : 'с.'; return (
                   <button key={v} onClick={() => { setDiscType(v); if (v === 'none') setDiscVal('') }} className="rounded-md font-semibold" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: '0.35rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{l}</button>
                 ) })}
               </div>
@@ -241,7 +241,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
               <div className="flex items-center gap-2">
                 <div className="flex items-center rounded-xl border flex-1 min-w-0" style={{ borderColor: 'var(--pv-border)', padding: '0.5rem 0.8rem' }}>
                   <input inputMode="decimal" value={discVal} onChange={e => setDiscVal(e.target.value)} placeholder="0" className="flex-1 min-w-0 bg-transparent outline-none font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
-                  <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{discType === 'percent' ? '%' : 'TJS'}</span>
+                  <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{discType === 'percent' ? '%' : 'с.'}</span>
                 </div>
                 {discAmt > 0 && <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(discAmt)}</span>}
               </div>

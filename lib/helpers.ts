@@ -120,7 +120,7 @@ export function formatCurrency(amount: number | null | undefined): string {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
     useGrouping: true,
-  }).format(safe) + ' TJS'
+  }).format(safe) + ' с.'
 }
 
 /** Compact currency: drops «,00» when the amount is a whole number.
@@ -136,7 +136,7 @@ export function formatCurrencyCompact(amount: number | null | undefined): string
     minimumFractionDigits: isWhole ? 0 : 2,
     maximumFractionDigits: 2,
     useGrouping: true,
-  }).format(safe) + ' TJS'
+  }).format(safe) + ' с.'
 }
 
 // Format order item quantity with unit label
