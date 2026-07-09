@@ -1,14 +1,14 @@
 'use client'
 
-import { useState, useRef } from 'react'
-import { SquareSplitHorizontal, ArrowRightLeft, Trash2, Users, ChevronRight } from 'lucide-react'
+import { useState, useRef, useEffect } from 'react'
+import { SquareSplitHorizontal, ArrowRightLeft, Trash2, Users, ChevronRight, UserCog, Receipt, CheckCircle2, Check } from 'lucide-react'
 import { toast } from 'sonner'
-import { splitOrderEqual, splitOrderByItems, transferOrder, cancelOrder } from '@/lib/queries'
+import { splitOrderEqual, splitOrderByItems, transferOrder, cancelOrder, updateOrderStatus, updateTableStatus, assignWaiter, fetchUsers } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
 import { PosModal } from '@/components/pos-v2/pos-modal'
-import type { Order, Table } from '@/lib/types'
+import type { Order, Table, User } from '@/lib/types'
 
 const ORDER_REASONS = ['Ошибка официанта', 'Нет ингредиента', 'Отменено клиентом', 'Другое']
 
@@ -24,17 +24,24 @@ export function OrderExtras({ order, tables, servicePercent, open, onClose, onCh
   onChanged: () => void
   onCancelled: () => void
 }) {
-  const [view, setView] = useState<'menu' | 'split' | 'transfer' | 'cancel'>('menu')
+  const [view, setView] = useState<'menu' | 'split' | 'transfer' | 'cancel' | 'waiter'>('menu')
   const [splitN, setSplitN] = useState(2)
   const [splitMode, setSplitMode] = useState<'equal' | 'items'>('equal')
   const [itemPart, setItemPart] = useState<Record<string, number>>({})
   const [orderReason, setOrderReason] = useState(ORDER_REASONS[0])
+  const [waiters, setWaiters] = useState<User[]>([])
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+
+  // Официанты для назначения на стол (только при открытом меню действий).
+  useEffect(() => { if (open) fetchUsers().then(u => setWaiters(u.filter(x => x.role === 'waiter'))).catch(() => {}) }, [open])
 
   if (!open) return null
   const sp = order.type === 'hall' ? servicePercent : 0
   const freeTables = tables.filter(t => t.status === 'free' && t.id !== order.tableId)
+  // Назначение официанта / запрос счёта — только для зальных заказов (нужен стол).
+  const isHall = order.type === 'hall' && !!order.tableId
+  const curWaiter = waiters.find(w => w.id === order.waiterId)
 
   function reset() { setView('menu'); setSplitN(2); setSplitMode('equal'); setItemPart({}); setOrderReason(ORDER_REASONS[0]) }
   function close() { reset(); onClose() }
@@ -67,10 +74,25 @@ export function OrderExtras({ order, tables, servicePercent, open, onClose, onCh
     await cancelOrder(order.id, orderReason)
     toast.success('Заказ отменён'); reset(); onCancelled()
   })
+  const doAssign = (waiterId: string | null) => run(async () => {
+    await assignWaiter(order.tableId!, waiterId)
+    toast.success(waiterId ? 'Официант назначен' : 'Официант снят'); reset(); onChanged()
+  })
+  // Запрос счёта: order-level bill_requested в v4 не имеет эндпоинта — флипаем
+  // статус СТОЛА (updateTableStatus), он и красит плитку «Счёт» на карте.
+  const doRequestBill = () => run(async () => {
+    await updateTableStatus(order.tableId!, 'bill_requested')
+    toast.success('Счёт запрошен'); reset(); onChanged()
+  })
+  const doServed = () => run(async () => {
+    await updateOrderStatus(order.id, 'served')
+    toast.success('Отмечено «подано»'); reset(); onChanged()
+  })
 
   const title = view === 'menu' ? 'Действия с заказом'
     : view === 'split' ? 'Разделить счёт'
     : view === 'transfer' ? 'Перенести на стол'
+    : view === 'waiter' ? 'Назначить официанта'
     : 'Отменить заказ'
 
   return (
@@ -78,6 +100,34 @@ export function OrderExtras({ order, tables, servicePercent, open, onClose, onCh
       <div style={{ padding: 'clamp(1.1rem,1.7vw,1.5rem)' }}>
         {view === 'menu' && (
           <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+            {isHall && (
+              <button onClick={() => setView('waiter')} className="flex items-center gap-3 rounded-2xl text-left active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
+                <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-brand-soft)', width: '2.6rem', height: '2.6rem' }}><UserCog style={{ width: '1.35rem', height: '1.35rem', color: 'var(--pv-brand)' }} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Официант</div>
+                  <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{curWaiter ? curWaiter.name : 'не назначен'}</div>
+                </div>
+                <ChevronRight style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-text-3)' }} />
+              </button>
+            )}
+            {isHall && order.status !== 'bill_requested' && (
+              <button disabled={busy} onClick={doRequestBill} className="flex items-center gap-3 rounded-2xl text-left disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
+                <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-bill-soft)', width: '2.6rem', height: '2.6rem' }}><Receipt style={{ width: '1.35rem', height: '1.35rem', color: 'var(--pv-bill-text)' }} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Запросить счёт</div>
+                  <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Стол → «Счёт» на карте зала</div>
+                </div>
+              </button>
+            )}
+            {order.status !== 'served' && order.status !== 'done' && (
+              <button disabled={busy} onClick={doServed} className="flex items-center gap-3 rounded-2xl text-left disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
+                <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-free-soft)', width: '2.6rem', height: '2.6rem' }}><CheckCircle2 style={{ width: '1.35rem', height: '1.35rem', color: 'var(--pv-free-text)' }} /></div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Отметить «подано»</div>
+                  <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Заказ подан гостю</div>
+                </div>
+              </button>
+            )}
             {([
               ['split', SquareSplitHorizontal, 'Разделить счёт', 'Поровну или по позициям'],
               ['transfer', ArrowRightLeft, 'Перенести на другой стол', 'Свободный стол'],
@@ -158,6 +208,23 @@ export function OrderExtras({ order, tables, servicePercent, open, onClose, onCh
                   </button>
                 ))}
               </div>
+            )}
+            <button onClick={() => setView('menu')} className="text-center font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>← Назад</button>
+          </div>
+        )}
+
+        {view === 'waiter' && (
+          <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+            {waiters.length === 0 && <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '1.5rem', fontSize: 'var(--pv-ctl)' }}>Официанты не заведены</div>}
+            {waiters.map(w => { const on = order.waiterId === w.id; return (
+              <button key={w.id} disabled={busy} onClick={() => doAssign(w.id)} className="flex items-center gap-3 rounded-2xl text-left disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: on ? 'var(--pv-brand-soft)' : 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }}>
+                <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', width: '2.4rem', height: '2.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{w.name.trim().split(/\s+/).slice(0, 2).map(s => s[0]?.toUpperCase() ?? '').join('')}</div>
+                <span className="flex-1 min-w-0 truncate font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{w.name}</span>
+                {on && <Check style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-brand)' }} />}
+              </button>
+            ) })}
+            {order.waiterId && (
+              <button disabled={busy} onClick={() => doAssign(null)} className="w-full text-center font-semibold rounded-xl disabled:opacity-50" style={{ color: 'var(--pv-occ-text)', padding: '0.6rem', fontSize: 'var(--pv-ctl)' }}>Снять официанта</button>
             )}
             <button onClick={() => setView('menu')} className="text-center font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>← Назад</button>
           </div>
