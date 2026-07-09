@@ -38,7 +38,6 @@ const ShowQR = () => L(() => import('@/app/(app)/show-qr/page'))
 const PosV2Launcher = () => L(() => import('@/app/pos2/page'))
 const PosV2Order = () => L(() => import('@/app/pos2/order/page'))
 const PosV2Pay = () => L(() => import('@/app/pos2/pay/page'))
-const PosV2History = () => L(() => import('@/app/pos2/history/page'))
 const PosV2Tables = () => L(() => import('@/app/pos2/tables/page'))
 const PosV2Service = () => L(() => import('@/app/pos2/service/page'))
 const PosV2Shift = () => L(() => import('@/app/pos2/shift/page'))
@@ -209,7 +208,6 @@ export function AppRouter() {
         <Route path="/pos2" element={<PosV2Launcher />} />
         <Route path="/pos2/order" element={<PosV2Order />} />
         <Route path="/pos2/pay" element={<PosV2Pay />} />
-        <Route path="/pos2/history" element={<PosV2History />} />
         <Route path="/pos2/tables" element={<PosV2Tables />} />
         <Route path="/pos2/service" element={<PosV2Service />} />
         <Route path="/pos2/shift" element={<PosV2Shift />} />

@@ -2,12 +2,17 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Search, X, CreditCard, UtensilsCrossed, ShoppingBag, Bike } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Search, X, CreditCard, UtensilsCrossed, ShoppingBag, Bike, Clock, Printer } from 'lucide-react'
+import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { fetchActiveShift, fetchOrders, fetchTables } from '@/lib/queries'
-import { formatCurrency } from '@/lib/helpers'
+import { fetchActiveShift, fetchOrders, fetchTables, fetchZones, fetchUsers, reprintOrderReceipt } from '@/lib/queries'
+import { formatCurrency, getTimeSince } from '@/lib/helpers'
+import { humanizeError } from '@/lib/errors'
+import { buildReceiptData } from '@/lib/receipt-data'
+import { PrintReceipt } from '@/components/print-receipt'
+import { PosModal } from '@/components/pos-v2/pos-modal'
 import { ORDER_STATUS_LABELS } from '@/lib/types'
-import type { Order, Table, CashShift, OrderStatus } from '@/lib/types'
+import type { Order, Table, Zone, User, CashShift, OrderStatus } from '@/lib/types'
 
 const ACTIVE = new Set<OrderStatus>(['new', 'cooking', 'ready', 'served', 'bill_requested'])
 type Tab = 'all' | 'hall' | 'togo' | 'closed'
@@ -16,7 +21,7 @@ const STATUS_TONE: Record<OrderStatus, { soft: string; text: string }> = {
   new: { soft: 'var(--pv-brand-soft)', text: 'var(--pv-brand)' },
   cooking: { soft: 'var(--pv-occ-soft)', text: 'var(--pv-occ-text)' },
   ready: { soft: 'var(--pv-free-soft)', text: 'var(--pv-free-text)' },
-  served: { soft: 'var(--pv-brand-soft)', text: 'var(--pv-brand)' },
+  served: { soft: 'var(--pv-free-soft)', text: 'var(--pv-free-text)' },
   bill_requested: { soft: 'var(--pv-bill-soft)', text: 'var(--pv-bill-text)' },
   done: { soft: 'var(--pv-free-soft)', text: 'var(--pv-free-text)' },
   cancelled: { soft: 'var(--pv-bg)', text: 'var(--pv-text-3)' },
@@ -24,13 +29,20 @@ const STATUS_TONE: Record<OrderStatus, { soft: string; text: string }> = {
 
 export default function PosV2Orders() {
   const navigate = useNavigate()
-  const { user, canDo } = useAuth()
+  const { user, canDo, restaurant } = useAuth()
   const [shift, setShift] = useState<CashShift | null>(null)
   const [orders, setOrders] = useState<Order[]>([])
   const [tables, setTables] = useState<Table[]>([])
+  const [zones, setZones] = useState<Zone[]>([])
+  const [users, setUsers] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<Tab>('all')
   const [search, setSearch] = useState('')
+  // Просмотр/печать чека закрытого заказа (замена удалённого экрана «История»).
+  const [receiptOrder, setReceiptOrder] = useState<Order | null>(null)
+  const [printing, setPrinting] = useState(false)
+  // Тик для обновления «прошло N мин» на карточках без перезагрузки данных.
+  const [, setNowTick] = useState(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -45,8 +57,40 @@ export default function PosV2Orders() {
     } finally { setLoading(false) }
   }, [])
   useEffect(() => { load() }, [load])
+  // Зоны/пользователи — для чека (имя официанта, зона). Грузим один раз.
+  useEffect(() => { fetchZones().then(setZones).catch(() => {}); fetchUsers().then(setUsers).catch(() => {}) }, [])
+  // «Прошло N мин» обновляем каждые 30с (getTimeSince читает Date.now() при рендере).
+  useEffect(() => { const i = setInterval(() => setNowTick(t => t + 1), 30000); return () => clearInterval(i) }, [])
 
   const tableNo = useMemo(() => { const m = new Map<string, number>(); for (const t of tables) m.set(t.id, t.number); return m }, [tables])
+
+  // Данные чека закрытого заказа — реконструкция из сохранённых полей заказа.
+  // Печать идёт через backend reprint (авторитетно), это только визуальный просмотр.
+  const receiptData = useMemo(() => {
+    if (!receiptOrder) return null
+    return buildReceiptData(
+      receiptOrder,
+      { restaurant, tables, zones, users, currentUser: user },
+      {
+        isPreCheck: false,
+        includeService: (receiptOrder.serviceAmount ?? 0) > 0 || (receiptOrder.servicePercent ?? 0) > 0,
+        servicePercent: receiptOrder.servicePercent,
+        discountAmount: receiptOrder.discountAmount,
+        discountReason: receiptOrder.discountReason,
+        tipAmount: receiptOrder.tipAmount,
+        paymentMethod: receiptOrder.paymentMethod,
+        payments: receiptOrder.payments,
+      },
+    )
+  }, [receiptOrder, restaurant, tables, zones, users, user])
+
+  async function doReprint() {
+    if (!receiptOrder || printing) return
+    setPrinting(true)
+    try { await reprintOrderReceipt(receiptOrder.id); toast.success('Чек отправлен на принтер') }
+    catch (e) { toast.error(humanizeError(e, 'Ошибка печати чека')) }
+    finally { setPrinting(false) }
+  }
 
   // Гейт orders.view_others: официант видит только свои заказы (иначе чужие
   // столы/суммы протекают). Копия старого active-orders-tab.
@@ -120,7 +164,7 @@ export default function PosV2Orders() {
               const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tableNo.get(o.tableId) ?? '—') : '—'}` : tm.label
               return (
                 <div key={o.id} className="flex flex-col rounded-2xl overflow-hidden" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)' }}>
-                  <button onClick={() => navigate(closed ? '/pos2/history' : `/pos2/ticket?order=${encodeURIComponent(o.id)}`)} className="flex flex-col items-stretch text-left active:scale-[0.99] transition-transform" style={{ padding: 'clamp(0.7rem,1.1vw,1rem)', gap: '0.5rem' }}>
+                  <button onClick={() => { if (o.status === 'done') setReceiptOrder(o); else if (!closed) navigate(`/pos2/ticket?order=${encodeURIComponent(o.id)}`) }} className="flex flex-col items-stretch text-left active:scale-[0.99] transition-transform" style={{ padding: 'clamp(0.7rem,1.1vw,1rem)', gap: '0.5rem' }}>
                     <div className="flex items-center justify-between">
                       <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.25rem)' }}>№{o.orderNumber ?? '—'}</span>
                       <span className="rounded-full font-semibold" style={{ background: tone.soft, color: tone.text, padding: '0.2rem 0.6rem', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{ORDER_STATUS_LABELS[o.status]}</span>
@@ -128,6 +172,7 @@ export default function PosV2Orders() {
                     <div className="flex items-center gap-1.5" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
                       <tm.icon style={{ width: '1rem', height: '1rem' }} /><span className="truncate">{loc}</span>
                       <span style={{ color: 'var(--pv-text-3)' }}>· {n} поз.</span>
+                      {!closed && <span className="flex items-center gap-0.5 shrink-0" style={{ color: 'var(--pv-text-3)' }}><Clock style={{ width: '0.85rem', height: '0.85rem' }} />{getTimeSince(o.createdAt)}</span>}
                     </div>
                     <div className="font-bold" style={{ color: closed && o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-brand)', fontSize: 'clamp(1.15rem,1.6vw,1.45rem)' }}>{formatCurrency(o.total)}</div>
                   </button>
@@ -142,6 +187,20 @@ export default function PosV2Orders() {
           </div>
         )}
       </div>
+
+      {/* Просмотр + печать чека закрытого заказа (замена экрана «История») */}
+      {receiptOrder && (
+        <PosModal open onClose={() => { if (!printing) setReceiptOrder(null) }} dismissable={!printing} width="clamp(20rem,42vw,30rem)" title={`Чек · №${receiptOrder.orderNumber ?? '—'}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '1rem' }}>
+            <div className="overflow-y-auto flex justify-center" style={{ maxHeight: '58vh', background: 'var(--pv-bg)', borderRadius: 'var(--pv-radius)', padding: '0.8rem' }}>
+              {receiptData ? <PrintReceipt data={receiptData} /> : <span style={{ color: 'var(--pv-text-3)' }}>Нет данных чека</span>}
+            </div>
+            <button disabled={printing} onClick={doReprint} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Printer style={{ width: '1.3em', height: '1.3em' }} />{printing ? 'Печать…' : 'Печать чека'}
+            </button>
+          </div>
+        </PosModal>
+      )}
     </div>
   )
 }

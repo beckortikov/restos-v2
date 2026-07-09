@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Utensils, LayoutGrid, ReceiptText, Wallet, ChefHat,
-  History, Settings, LogOut, OctagonX, ClipboardList, PackageCheck, CookingPot,
+  Settings, LogOut, OctagonX, ClipboardList, PackageCheck, CookingPot,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 import { fetchActiveShift } from '@/lib/queries'
@@ -32,7 +32,6 @@ const TILES: Array<{
   { icon: OctagonX, label: 'Стоп-лист', sub: 'Стоп/возврат блюд', to: '/pos2/stop', req: '/warehouse/menu' },
   { icon: PackageCheck, label: 'Витрина', sub: 'Списания и полуфабрикаты', to: '/pos2/showcase', req: '/operations/showcase' },
   { icon: CookingPot, label: 'Заготовки', sub: 'Приготовление партий', to: '/pos2/batch', req: '/operations/batch-cooking' },
-  { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history', req: '/operations/orders' },
   { icon: Settings, label: 'Настройки', sub: 'Интерфейс, принтеры, меню', to: '/pos2/settings', req: '/cashier/settings' },
 ]
 
