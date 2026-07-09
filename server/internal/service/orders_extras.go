@@ -609,13 +609,25 @@ func (s *OrdersService) CreateVoid(ctx context.Context, in CreateVoidInput) (*mo
 			return err
 		}
 
+		// Защита от произвольной item_price: для уменьшения total берём СЕРВЕРНУЮ
+		// цену совпадающей позиции заказа (по имени), а не клиентскую item_price.
+		// Иначе крафтом запроса можно было занизить total на любую сумму.
+		var oi models.OrderItem
+		matched := tx.Where("order_id = ? AND name = ? AND cancelled_at IS NULL", oid, itemName).
+			Order("created_at ASC").First(&oi).Error == nil
+		if matched {
+			v.ItemPrice = oi.Price // audit-запись — серверная цена, не клиентская
+		}
+
 		if err := tx.Create(v).Error; err != nil {
 			return err
 		}
 
+		// total уменьшаем ТОЛЬКО если позиция реально есть на открытом заказе —
+		// нельзя «списать» несуществующую позицию и произвольно занизить сумму.
 		mutable := order.Status == nil || (*order.Status != "closed" && *order.Status != "cancelled")
-		if mutable {
-			lineTotal := decimal.Normalize(decimal.Mul(price, decimal.FromInt(int64(qty))))
+		if mutable && matched {
+			lineTotal := decimal.Normalize(decimal.Mul(oi.Price, decimal.FromInt(int64(qty))))
 			newTotal := decimal.Sub(order.Total, lineTotal)
 			if decimal.IsNegative(newTotal) {
 				newTotal = decimal.Zero

@@ -1134,6 +1134,39 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 			}
 		}
 	}
+	// Кап суммы: выплатить нельзя больше, чем НАЧИСЛЕНО официанту минус уже
+	// ВЫПЛАЧЕНО (по этой смене). Прежде единственным гейтом было «хватает денег
+	// на счёте» — можно было вывести сверх заработанного. Скоуп — по shift_id
+	// (source of truth начисления). Допуск 0.01 на округление.
+	if in.ShiftID != nil && *in.ShiftID != "" && in.WaiterID != nil && *in.WaiterID != "" && in.Amount != nil {
+		if payAmt, perr := decimal.FromString(*in.Amount); perr == nil {
+			accrual, aerr := s.AccrualByWaiter(ctx, nil, nil, *in.ShiftID)
+			payouts, err2 := s.PayoutByWaiter(ctx, nil, nil, *in.ShiftID)
+			if aerr == nil && err2 == nil {
+				accrued := decimal.Zero
+				for _, r := range accrual {
+					if r.WaiterID == *in.WaiterID {
+						accrued = r.AccruedAmount
+						break
+					}
+				}
+				paid := decimal.Zero
+				for _, r := range payouts {
+					if r.WaiterID == *in.WaiterID {
+						paid = r.PaidAmount
+						break
+					}
+				}
+				remaining := decimal.Sub(accrued, paid)
+				if decimal.Sub(payAmt, remaining).GreaterThan(decimal.MustFromString("0.01")) {
+					return nil, apperrors.Wrap("VALIDATION",
+						fmt.Sprintf("сумма выплаты %s превышает остаток к выплате %s (начислено %s − выплачено %s)",
+							payAmt.String(), remaining.String(), accrued.String(), paid.String()), nil)
+				}
+			}
+		}
+	}
+
 	cp := counterparty
 	return s.payout(ctx, payoutInput{
 		UserID:       in.WaiterID,

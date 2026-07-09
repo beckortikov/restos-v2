@@ -385,6 +385,33 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		alreadyPosted := revExisting > 0
 
 		if !alreadyPosted {
+			// Валидируем СУЩЕСТВОВАНИЕ счетов ДО кредита: creditAccount ниже — это
+			// UPDATE ... WHERE id=?, при несуществующем/пустом id молча меняет 0
+			// строк → revenue-FO создаётся, а баланс «Кассы» не растёт (расхождение
+			// ДДС↔Касса). Теперь несуществующий счёт → явная ошибка.
+			var accIDs []string
+			if isMulti {
+				for _, p := range in.Payments {
+					accIDs = append(accIDs, p.AccountID)
+				}
+			} else {
+				if in.AccountID == "" {
+					return apperrors.Wrap("VALIDATION", "account_id is required to post revenue", nil)
+				}
+				accIDs = append(accIDs, in.AccountID)
+			}
+			for _, aid := range accIDs {
+				var cnt int64
+				if err := tx.Model(&models.FinancialAccount{}).
+					Where("restaurant_id = ? AND id = ?", rid, aid).
+					Count(&cnt).Error; err != nil {
+					return err
+				}
+				if cnt == 0 {
+					return apperrors.Wrap("VALIDATION", "financial account not found: "+aid, nil)
+				}
+			}
+
 			if isMulti {
 				for _, p := range in.Payments {
 					amt, _ := decimal.FromString(p.Amount)
