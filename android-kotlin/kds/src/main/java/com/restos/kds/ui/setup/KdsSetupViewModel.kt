@@ -31,6 +31,25 @@ class KdsSetupViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state = _state.asStateFlow()
 
+    init {
+        // Касса уже привязана (онбординг проходили раньше)? Тогда после выхода
+        // сессии показываем сразу PIN, а не скан QR заново — как у официанта
+        // (AuthGateViewModel: baseUrl есть + не залогинен → экран PIN).
+        viewModelScope.launch {
+            val savedUrl = serverConfig.current()
+            val savedRid = serverConfig.currentRestaurantId()
+            if (!savedUrl.isNullOrBlank() && !savedRid.isNullOrBlank()) {
+                _state.update {
+                    it.copy(
+                        url = savedUrl,
+                        connected = true,
+                        restaurantName = serverConfig.currentRestaurantName(),
+                    )
+                }
+            }
+        }
+    }
+
     fun setUrl(v: String) = _state.update { it.copy(url = v, error = null) }
     fun setPin(v: String) = _state.update { it.copy(pin = v.filter { c -> c.isDigit() }.take(8), error = null) }
 
@@ -83,6 +102,15 @@ class KdsSetupViewModel @Inject constructor(
         }
     }
 
-    /** Сменить кассу — вернуться к вводу адреса. */
-    fun reset() = _state.update { UiState() }
+    /**
+     * Сменить кассу — стираем привязку к кассе и возвращаемся к скану QR/вводу
+     * адреса. Без очистки конфига экран сразу отскочил бы обратно на PIN (init
+     * снова увидит сохранённую кассу).
+     */
+    fun reset() {
+        viewModelScope.launch {
+            serverConfig.clear()
+            _state.update { UiState() }
+        }
+    }
 }
