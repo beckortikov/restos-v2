@@ -7,16 +7,16 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
 import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone, fetchOrders, cleanupStuckTables } from '@/lib/queries'
-import { formatCurrency, startOfToday, getTimeSince } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, startOfToday, getTimeSince } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { Table, TableStatus, Reservation } from '@/lib/types'
 
-const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
-  free: { soft: 'var(--pv-free-soft)', dot: 'var(--pv-free-dot)', text: 'var(--pv-free-text)', label: 'Свободен' },
-  occupied: { soft: 'var(--pv-occ-soft)', dot: 'var(--pv-occ-dot)', text: 'var(--pv-occ-text)', label: 'Занят' },
-  reserved: { soft: 'var(--pv-res-soft)', dot: 'var(--pv-res-dot)', text: 'var(--pv-res-text)', label: 'Бронь' },
-  bill_requested: { soft: 'var(--pv-bill-soft)', dot: 'var(--pv-bill-dot)', text: 'var(--pv-bill-text)', label: 'Счёт' },
+const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string; border: string }> = {
+  free: { soft: 'var(--pv-free-soft)', dot: 'var(--pv-free-dot)', text: 'var(--pv-free-text)', label: 'Свободен', border: 'var(--pv-free-border)' },
+  occupied: { soft: 'var(--pv-occ-soft)', dot: 'var(--pv-occ-dot)', text: 'var(--pv-occ-text)', label: 'Занят', border: 'var(--pv-occ-border)' },
+  reserved: { soft: 'var(--pv-res-soft)', dot: 'var(--pv-res-dot)', text: 'var(--pv-res-text)', label: 'Бронь', border: '#c9c0ef' },
+  bill_requested: { soft: 'var(--pv-bill-soft)', dot: 'var(--pv-bill-dot)', text: 'var(--pv-bill-text)', label: 'Счёт', border: '#ead49c' },
 }
 type Mode = 'order' | 'reserve' | 'merge' | 'manage'
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -85,6 +85,19 @@ export default function PosV2Tables() {
     for (const t of visibleTables) { const k = zoneName(t.zone); (map.get(k) ?? map.set(k, []).get(k)!).push(t) }
     return Array.from(map.entries()).map(([zone, ts]) => ({ zone, tables: [...ts].sort((a, b) => a.number - b.number) }))
   }, [visibleTables, zones])
+
+  // Сводка сверху карты (по дизайну restos.pen): Свободно / Занято / Бронь /
+  // Выручка (сумма открытых столов). Занятость — по наличию активных заказов.
+  const stats = useMemo(() => {
+    let free = 0, occ = 0, res = 0, revenue = 0
+    for (const t of visibleTables) {
+      const busy = !!t.currentOrderIds?.length
+      if (busy) { occ++; revenue += tableTotals.get(t.id) ?? 0 }
+      else if (t.status === 'reserved') res++
+      else free++
+    }
+    return { free, occ, res, revenue }
+  }, [visibleTables, tableTotals])
 
   function openReserveForm(t: Table) {
     const d = new Date(Date.now() + 3600_000)
@@ -251,42 +264,83 @@ export default function PosV2Tables() {
           <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка зала…</div>
         ) : tables.length === 0 ? (
           <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Столы не заведены</div>
-        ) : byZone.map(group => (
-          <div key={group.zone} style={{ marginBottom: 'clamp(1rem,1.8vw,1.75rem)' }}>
-            <div className="font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', marginBottom: '0.7rem' }}>{group.zone}</div>
-            <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(7rem,11vw,10rem), 1fr))' }}>
-              {group.tables.map(t => {
-                const st = STATUS[t.status] ?? STATUS.free
-                const busyTile = !!t.currentOrderIds?.length
-                const selForMerge = mergePrimary?.id === t.id
-                const total = tableTotals.get(t.id)
-                const groups = t.currentOrderIds?.length ?? 0
-                const since = busyTile && t.openedAt ? getTimeSince(t.openedAt) : null
-                return (
-                  <button key={t.id} onClick={() => tap(t)} disabled={busy} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform disabled:opacity-60" style={{ background: selForMerge ? 'var(--pv-brand)' : st.soft, border: `${selForMerge || busyTile ? 2 : 1}px solid ${selForMerge ? 'var(--pv-brand)' : busyTile ? st.dot : 'transparent'}`, padding: 'clamp(0.9rem,1.5vw,1.4rem)', gap: '0.4rem', minHeight: 'clamp(6rem,9vw,8rem)' }}>
-                    {t.mergedWith && <span className="absolute" style={{ top: '0.4rem', right: '0.4rem' }}><Combine style={{ width: '0.95rem', height: '0.95rem', color: 'var(--pv-text-3)' }} /></span>}
-                    {groups >= 2 && <span className="absolute font-bold flex items-center justify-center rounded-full" style={{ top: '0.4rem', left: '0.4rem', background: selForMerge ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: selForMerge ? 'var(--pv-brand)' : '#fff', minWidth: '1.25rem', height: '1.25rem', fontSize: '0.65rem', padding: '0 0.3rem' }}>{groups}</span>}
-                    <span className="font-bold" style={{ color: selForMerge ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.4rem,2.2vw,2rem)' }}>№{t.number}</span>
-                    <div className="flex items-center gap-1.5">
-                      <span className="rounded-full" style={{ width: '0.55rem', height: '0.55rem', background: selForMerge ? '#fff' : st.dot }} />
-                      <span className="font-semibold" style={{ color: selForMerge ? '#fff' : st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{selForMerge ? 'Выбран' : st.label}</span>
-                    </div>
-                    {busyTile && !selForMerge && total != null ? (
-                      <div className="flex flex-col items-center" style={{ gap: '0.1rem' }}>
-                        <span className="font-bold" style={{ color: 'var(--pv-occ-text)', fontSize: 'calc(var(--pv-ctl) + 0.05rem)' }}>{formatCurrency(total)}</span>
-                        {since && <span className="flex items-center gap-0.5" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}><Clock style={{ width: '0.7rem', height: '0.7rem' }} />{since}</span>}
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1" style={{ color: selForMerge ? 'rgba(255,255,255,0.8)' : 'var(--pv-text-3)' }}>
-                        <Users style={{ width: '0.85rem', height: '0.85rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
-                      </div>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        ))}
+        ) : (
+          <>
+            {/* Сводка (дизайн restos.pen): Свободно / Занято / Бронь / Выручка */}
+            {mode === 'order' && (
+              <div className="grid grid-cols-2 md:grid-cols-4" style={{ gap: 'var(--pv-gap)', marginBottom: 'var(--pv-gap)' }}>
+                {([['Свободно', stats.free, '#EAF7EF', '#1F6B3E'], ['Занято', stats.occ, '#FBEAE8', '#A0392C'], ['Бронь', stats.res, '#E9EFFB', '#2F4E9E']] as const).map(([lbl, val, bg, color]) => (
+                  <div key={lbl} className="flex flex-col rounded-2xl" style={{ background: bg, padding: 'clamp(0.8rem,1.4vw,1.15rem) clamp(1rem,1.6vw,1.4rem)', gap: '0.1rem', boxShadow: '0 1px 6px rgba(0,0,0,0.05)' }}>
+                    <span style={{ color, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{lbl}</span>
+                    <span className="font-bold" style={{ color, fontSize: 'clamp(1.5rem,2.6vw,2rem)' }}>{val}</span>
+                  </div>
+                ))}
+                <div className="flex flex-col rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.8rem,1.4vw,1.15rem) clamp(1rem,1.6vw,1.4rem)', gap: '0.1rem', boxShadow: '0 1px 6px rgba(0,0,0,0.05)' }}>
+                  <span style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Выручка</span>
+                  <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,2.2vw,1.7rem)' }}>{formatCurrency(stats.revenue)}</span>
+                </div>
+              </div>
+            )}
+            {byZone.map(group => (
+              <div key={group.zone} style={{ marginBottom: 'clamp(1rem,1.8vw,1.75rem)' }}>
+                <div className="font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', marginBottom: '0.7rem' }}>{group.zone}</div>
+                <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem,14vw,13rem), 1fr))' }}>
+                  {group.tables.map(t => {
+                    const st = STATUS[t.status] ?? STATUS.free
+                    const busyTile = !!t.currentOrderIds?.length
+                    const selForMerge = mergePrimary?.id === t.id
+                    const total = tableTotals.get(t.id)
+                    const groups = t.currentOrderIds?.length ?? 0
+                    const since = busyTile && t.openedAt ? getTimeSince(t.openedAt) : null
+                    const sumBig = total != null ? formatCurrencyCompact(total).replace(/\sс\.$/, '') : '—'
+                    return (
+                      <button key={t.id} onClick={() => tap(t)} disabled={busy} className="relative flex flex-col justify-between text-left active:scale-[0.98] transition-transform disabled:opacity-60" style={{ background: selForMerge ? 'var(--pv-brand)' : st.soft, border: `${selForMerge ? 2 : 1}px solid ${selForMerge ? 'var(--pv-brand)' : st.border}`, borderRadius: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', padding: 'clamp(0.85rem,1.4vw,1.2rem)', minHeight: 'clamp(8rem,12vw,10.5rem)' }}>
+                        {selForMerge ? (
+                          <div className="flex-1 flex flex-col items-center justify-center" style={{ gap: '0.25rem' }}>
+                            <span className="font-bold text-white" style={{ fontSize: 'clamp(1.4rem,2.2vw,2rem)' }}>№{t.number}</span>
+                            <span className="font-semibold text-white" style={{ fontSize: 'var(--pv-ctl)' }}>Выбран</span>
+                          </div>
+                        ) : busyTile ? (
+                          <>
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Стол {t.number}</span>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {t.mergedWith && <Combine style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} />}
+                                {groups >= 2 && <span className="rounded-full font-bold flex items-center justify-center" style={{ background: 'var(--pv-brand)', color: '#fff', minWidth: '1.35rem', height: '1.35rem', fontSize: '0.7rem', padding: '0 0.35rem' }}>{groups}</span>}
+                              </div>
+                            </div>
+                            <div className="flex items-end gap-1">
+                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.6rem,2.8vw,2.3rem)', lineHeight: 1 }}>{sumBig}</span>
+                              <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)', marginBottom: '0.15rem' }}>с.</span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="flex items-center gap-1.5 font-semibold" style={{ color: st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: st.dot }} />{st.label}</span>
+                              {since && <span className="flex items-center gap-0.5" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}><Clock style={{ width: '0.75rem', height: '0.75rem' }} />{since}</span>}
+                            </div>
+                          </>
+                        ) : t.status === 'reserved' ? (
+                          <>
+                            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Стол {t.number}</span>
+                            <span className="flex items-center gap-1.5 font-semibold" style={{ color: st.text, fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}><span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: st.dot }} />Бронь</span>
+                            <div className="flex items-center gap-1" style={{ color: 'var(--pv-text-3)' }}><Users style={{ width: '0.9rem', height: '0.9rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{t.capacity} мест</span></div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="flex flex-col" style={{ gap: '0.35rem' }}>
+                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Стол {t.number}</span>
+                              <span className="flex items-center gap-1.5 font-semibold" style={{ color: st.text, fontSize: 'var(--pv-ctl)' }}><span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: st.dot }} />{st.label}</span>
+                            </div>
+                            <div className="flex items-center gap-1" style={{ color: 'var(--pv-text-3)' }}><Users style={{ width: '0.9rem', height: '0.9rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{t.capacity} мест</span></div>
+                          </>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+          </>
+        )}
       </div>
 
       {/* Reservation form */}
