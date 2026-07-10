@@ -15,7 +15,13 @@ export async function fetchReservations(dateFrom?: string, dateTo?: string): Pro
 }
 
 export async function fetchReservationForTable(tableId: string): Promise<Reservation | null> {
-  const res: any = await unwrap(api.GET('/api/v1/reservations/for-table/{table_id}', { params: { path: { table_id: tableId } } }))
+  // Backend ForTable по умолчанию отдаёт брони только за окно [now, now+12h),
+  // поэтому бронь на текущее время (reserved_at чуть в прошлом) или дальше 12ч не
+  // находилась — при тапе по забронированному столу модалка висела на «Загрузка
+  // брони…». Берём широкое окно (±год) и выбираем активную бронь.
+  const from = new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+  const to = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString()
+  const res: any = await unwrap(api.GET('/api/v1/reservations/for-table/{table_id}', { params: { path: { table_id: tableId }, query: { from, to } } as any }))
   const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
   const active = rows.find(r => r.status === 'active') ?? rows[0]
   if (!active) return null

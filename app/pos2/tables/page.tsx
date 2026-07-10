@@ -205,7 +205,7 @@ export default function PosV2Tables() {
     finally { busyRef.current = false; setBusy(false) }
   }
 
-  const MODES: [Mode, string][] = [['order', 'Заказы'], ['reserve', 'Бронь'], ['merge', 'Объединить'], ...(canManage ? [['manage', 'Управление'] as [Mode, string]] : [])]
+  const MODES: [Mode, string][] = [['order', 'Заказы'], ['reserve', 'Бронь'], ...(canManage ? [['manage', 'Управление'] as [Mode, string]] : [])]
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
@@ -242,7 +242,7 @@ export default function PosV2Tables() {
 
       {mode !== 'order' && (
         <div className="shrink-0" style={{ padding: '0.5rem var(--pv-pad-x) 0', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>
-          {mode === 'reserve' ? 'Нажмите свободный стол, чтобы забронировать.' : mode === 'manage' ? 'Нажмите стол, чтобы изменить или удалить. Кнопки сверху — добавить зону/стол.' : mergePrimary ? `Выбран стол ${mergePrimary.number} — нажмите второй для объединения. Объединённый стол — нажать для разъединения.` : 'Нажмите два стола для объединения (или объединённый — для разъединения).'}
+          {mode === 'reserve' ? 'Нажмите свободный стол, чтобы забронировать.' : 'Нажмите стол, чтобы изменить или удалить. Кнопки сверху — добавить зону/стол.'}
         </div>
       )}
 
@@ -266,19 +266,15 @@ export default function PosV2Tables() {
           <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Столы не заведены</div>
         ) : (
           <>
-            {/* Сводка (дизайн restos.pen): Свободно / Занято / Бронь / Выручка */}
+            {/* Сводка (как в старом POS — БЕЗ выручки): Свободно / Занято / Бронь. */}
             {mode === 'order' && (
-              <div className="grid grid-cols-2 md:grid-cols-4" style={{ gap: 'var(--pv-gap)', marginBottom: 'var(--pv-gap)' }}>
+              <div className="grid grid-cols-3" style={{ gap: 'var(--pv-gap)', marginBottom: 'var(--pv-gap)' }}>
                 {([['Свободно', stats.free, '#EAF7EF', '#1F6B3E'], ['Занято', stats.occ, '#FBEAE8', '#A0392C'], ['Бронь', stats.res, '#E9EFFB', '#2F4E9E']] as const).map(([lbl, val, bg, color]) => (
                   <div key={lbl} className="flex flex-col rounded-2xl" style={{ background: bg, padding: 'clamp(0.8rem,1.4vw,1.15rem) clamp(1rem,1.6vw,1.4rem)', gap: '0.1rem', boxShadow: '0 1px 6px rgba(0,0,0,0.05)' }}>
                     <span style={{ color, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{lbl}</span>
                     <span className="font-bold" style={{ color, fontSize: 'clamp(1.5rem,2.6vw,2rem)' }}>{val}</span>
                   </div>
                 ))}
-                <div className="flex flex-col rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.8rem,1.4vw,1.15rem) clamp(1rem,1.6vw,1.4rem)', gap: '0.1rem', boxShadow: '0 1px 6px rgba(0,0,0,0.05)' }}>
-                  <span style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Выручка</span>
-                  <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.15rem,2.2vw,1.7rem)' }}>{formatCurrency(stats.revenue)}</span>
-                </div>
               </div>
             )}
             {byZone.map(group => (
@@ -289,10 +285,8 @@ export default function PosV2Tables() {
                     const st = STATUS[t.status] ?? STATUS.free
                     const busyTile = !!t.currentOrderIds?.length
                     const selForMerge = mergePrimary?.id === t.id
-                    const total = tableTotals.get(t.id)
                     const groups = t.currentOrderIds?.length ?? 0
                     const since = busyTile && t.openedAt ? getTimeSince(t.openedAt) : null
-                    const sumBig = total != null ? formatCurrencyCompact(total).replace(/\sс\.$/, '') : '—'
                     return (
                       <button key={t.id} onClick={() => tap(t)} disabled={busy} className="relative flex flex-col justify-between text-left active:scale-[0.98] transition-transform disabled:opacity-60" style={{ background: selForMerge ? 'var(--pv-brand)' : st.soft, border: `${selForMerge ? 2 : 1}px solid ${selForMerge ? 'var(--pv-brand)' : st.border}`, borderRadius: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', padding: 'clamp(0.85rem,1.4vw,1.2rem)', minHeight: 'clamp(8rem,12vw,10.5rem)' }}>
                         {selForMerge ? (
@@ -309,12 +303,11 @@ export default function PosV2Tables() {
                                 {groups >= 2 && <span className="rounded-full font-bold flex items-center justify-center" style={{ background: 'var(--pv-brand)', color: '#fff', minWidth: '1.35rem', height: '1.35rem', fontSize: '0.7rem', padding: '0 0.35rem' }}>{groups}</span>}
                               </div>
                             </div>
-                            <div className="flex items-end gap-1">
-                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.6rem,2.8vw,2.3rem)', lineHeight: 1 }}>{sumBig}</span>
-                              <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)', marginBottom: '0.15rem' }}>с.</span>
+                            <div className="flex-1 flex items-center">
+                              <span className="flex items-center gap-1.5 font-bold" style={{ color: st.text, fontSize: 'clamp(1.2rem,1.9vw,1.7rem)' }}><span className="rounded-full" style={{ width: '0.55rem', height: '0.55rem', background: st.dot }} />{st.label}</span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span className="flex items-center gap-1.5 font-semibold" style={{ color: st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: st.dot }} />{st.label}</span>
+                              <span className="flex items-center gap-1" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><Users style={{ width: '0.85rem', height: '0.85rem' }} />{t.capacity} мест</span>
                               {since && <span className="flex items-center gap-0.5" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}><Clock style={{ width: '0.75rem', height: '0.75rem' }} />{since}</span>}
                             </div>
                           </>

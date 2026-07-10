@@ -4,16 +4,16 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, XCircle,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
+import { useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem } from '@/lib/queries'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -49,6 +49,8 @@ export default function PosV2Order() {
   const [cart, setCart] = useState<CartLine[]>([])
   const [selectedTableId, setSelectedTableId] = useState<string>('')
   const [tablesOpen, setTablesOpen] = useState(false)
+  // Активная зона-таб в пикере столов (иначе при многих столах не помещается).
+  const [pickerZone, setPickerZone] = useState<string | null>(null)
   const [guests, setGuests] = useState(1)
   // Единый сайдбар: занятый стол раскрывается на месте — вкладки групп + содержимое.
   const [tableOrders, setTableOrders] = useState<Order[]>([])
@@ -363,8 +365,10 @@ export default function PosV2Order() {
   }
 
   // Выбор стола из пикера — раскрываем его контекст (группы + содержимое) в сайдбаре.
+  // Корзину НЕ чистим: если набрали блюда до выбора стола, они остаются и уходят
+  // на выбранный стол (баг: раньше setCart([]) стирал набранное при выборе стола).
   function selectTable(tableId: string) {
-    setSelectedTableId(tableId); setCart([]); setGuests(1); setTablesOpen(false)
+    setSelectedTableId(tableId); setTablesOpen(false)
     loadTableOrders(tableId)
   }
   // Переключение вкладки группы. null = новая группа на том же столе.
@@ -440,9 +444,9 @@ export default function PosV2Order() {
       {/* ── Left: menu ─────────────────────────────────────────── */}
       <div className="flex-1 min-w-0 flex flex-col" style={{ padding: 'var(--pv-gap) 0 0 var(--pv-pad-x)' }}>
         <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', paddingRight: 'var(--pv-gap)' }}>
-          <button onClick={() => navigate(orderType === 'hall' ? '/pos2/tables' : '/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+          <button onClick={() => navigate('/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
             <LayoutGrid style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
-            <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{orderType === 'hall' ? 'Столы' : 'Меню'}</span>
+            <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
           </button>
           <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
             {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
@@ -490,25 +494,18 @@ export default function PosV2Order() {
               {dishes.map(m => {
                 const stopped = m.isAvailable === false || stoppedIds.has(m.id)
                 const weight = (m.unit ?? 'piece') !== 'piece'
-                const fav = favSet.has(m.id)
                 return (
                   // Карточка блюда по дизайну restos.pen (DishTile): белая карточка
                   // (radius 16, тонкая рамка + мягкая тень), содержимое ПО ЦЕНТРУ —
                   // название и цена-«пилюля» (brand-soft фон, бренд-текст). БЕЗ
-                  // эмодзи-плейсхолдера (на Windows он рендерился «квадратом» и не по
-                  // дизайну). Тумблеры избранное/часто — соседи-кнопки в углу (не
-                  // вложены в <button>, WCAG 2.1.1 / 4.1.2).
+                  // эмодзи-плейсхолдера и БЕЗ звёздочки-избранного на карточке.
+                  // Цена — без ,00 (formatCurrencyCompact): «300 с.», не «300,00 с.».
                   <div key={m.id} className="relative">
-                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrency(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: 'clamp(7rem,11vw,9.5rem)', opacity: stopped ? 0.6 : 1 }}>
+                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: 'clamp(7rem,11vw,9.5rem)', opacity: stopped ? 0.6 : 1 }}>
                       <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.25vw,1.2rem)' }}>{m.name}</span>
-                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
-                    {restaurantId && (
-                      <button type="button" className="pv-mini rounded-lg absolute" aria-label={fav ? `Убрать «${m.name}» из избранного` : `Добавить «${m.name}» в избранное`} aria-pressed={fav} onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ top: '0.4rem', left: '0.4rem', background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
-                        <Star style={{ width: '1.05rem', height: '1.05rem', color: fav ? '#e8a33a' : 'var(--pv-text-3)', fill: fav ? '#e8a33a' : 'transparent' }} />
-                      </button>
-                    )}
                   </div>
                 )
               })}
@@ -589,15 +586,14 @@ export default function PosV2Order() {
               <div className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Уже заказано</div>
               {(activeGroup.items ?? []).map((i, idx) => { const c = !!i.cancelledAt; return (
                 <div key={i.id ?? idx} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.7rem)', opacity: c ? 0.5 : 1 }}>
-                  <span style={{ fontSize: '1.2rem' }}>{i.emoji || '🍽️'}</span>
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', textDecoration: c ? 'line-through' : 'none' }}>{i.name}</div>
                     <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{c ? ' · отменено' : ''}{i.note ? ` · 💬 ${i.note}` : ''}</div>
                   </div>
                   <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
                   {!c && i.id && (
-                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ width: '2.1rem', height: '2.1rem', background: 'var(--pv-occ-soft)' }} aria-label="Отменить позицию">
-                      <XCircle style={{ width: '1.15rem', height: '1.15rem', color: 'var(--pv-occ-text)' }} />
+                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-xl flex items-center justify-center shrink-0 border active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-occ-soft)' }} aria-label={`Отменить «${i.name}»`} title="Отменить позицию">
+                      <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
                     </button>
                   )}
                 </div>
@@ -753,7 +749,7 @@ export default function PosV2Order() {
               {ITEM_REASONS.map(r => { const on = r === itemReason; return <button key={r} onClick={() => setItemReason(r)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{r}</button> })}
             </div>
             <button disabled={itemBusy} onClick={doCancelItem} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
-              <XCircle style={{ width: '1.3em', height: '1.3em' }} />Отменить позицию
+              <Trash2 style={{ width: '1.3em', height: '1.3em' }} />{itemBusy ? 'Отмена…' : 'Отменить позицию'}
             </button>
           </div>
         </PosModal>
@@ -767,35 +763,48 @@ export default function PosV2Order() {
               <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>Выберите стол</span>
               <button onClick={() => setTablesOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
             </div>
-            <div className="flex-1 overflow-y-auto" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
               {tables.length === 0 ? (
                 <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Столы не заведены</div>
-              ) : tablesByZone.map(group => (
-                <div key={group.zone} style={{ marginBottom: '1.25rem' }}>
-                  <div className="font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', marginBottom: '0.6rem' }}>{group.zone}</div>
-                  <div style={{ display: 'grid', gap: 'clamp(0.6rem,1vw,0.9rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(6.5rem,10vw,8.5rem), 1fr))' }}>
-                    {group.tables.map(t => {
-                      const optOcc = justOccupied.has(t.id) && (t.currentOrderIds?.length ?? 0) === 0
-                      const st = optOcc ? STATUS.occupied : (STATUS[t.status] ?? STATUS.free)
-                      const sel = t.id === selectedTableId
-                      const groupsN = Math.max(t.currentOrderIds?.length ?? 0, optOcc ? 1 : 0)
-                      return (
-                        <button key={t.id} onClick={() => selectTable(t.id)} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
-                          {groupsN >= 2 && <span className="absolute rounded-full font-bold flex items-center justify-center" style={{ top: '0.35rem', right: '0.35rem', background: sel ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: sel ? 'var(--pv-brand)' : '#fff', minWidth: '1.3rem', height: '1.3rem', fontSize: '0.7rem' }}>{groupsN}</span>}
-                          <span className="font-bold" style={{ color: sel ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.6vw,1.5rem)' }}>№{t.number}</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: sel ? 'rgba(255,255,255,0.9)' : st.dot }} />
-                            <span className="font-medium" style={{ color: sel ? 'rgba(255,255,255,0.9)' : st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{sel ? 'Выбран' : st.label}</span>
-                          </div>
-                          <div className="flex items-center gap-1" style={{ color: sel ? 'rgba(255,255,255,0.75)' : 'var(--pv-text-3)' }}>
-                            <Users style={{ width: '0.8rem', height: '0.8rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
+              ) : (() => {
+                // Зоны — табы (а не стопкой), иначе при многих столах не помещается.
+                const activeZone = (pickerZone && tablesByZone.some(g => g.zone === pickerZone)) ? pickerZone : tablesByZone[0]?.zone
+                const activeTables = tablesByZone.find(g => g.zone === activeZone)?.tables ?? []
+                return (
+                  <>
+                    {tablesByZone.length > 1 && (
+                      <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.7vw,0.6rem)', marginBottom: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
+                        {tablesByZone.map(g => { const on = g.zone === activeZone; return (
+                          <button key={g.zone} onClick={() => setPickerZone(g.zone)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{g.zone}</button>
+                        ) })}
+                      </div>
+                    )}
+                    <div className="flex-1 min-h-0 overflow-y-auto">
+                      <div style={{ display: 'grid', gap: 'clamp(0.6rem,1vw,0.9rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(6.5rem,10vw,8.5rem), 1fr))' }}>
+                        {activeTables.map(t => {
+                          const optOcc = justOccupied.has(t.id) && (t.currentOrderIds?.length ?? 0) === 0
+                          const st = optOcc ? STATUS.occupied : (STATUS[t.status] ?? STATUS.free)
+                          const sel = t.id === selectedTableId
+                          const groupsN = Math.max(t.currentOrderIds?.length ?? 0, optOcc ? 1 : 0)
+                          return (
+                            <button key={t.id} onClick={() => selectTable(t.id)} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
+                              {groupsN >= 2 && <span className="absolute rounded-full font-bold flex items-center justify-center" style={{ top: '0.35rem', right: '0.35rem', background: sel ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: sel ? 'var(--pv-brand)' : '#fff', minWidth: '1.3rem', height: '1.3rem', fontSize: '0.7rem' }}>{groupsN}</span>}
+                              <span className="font-bold" style={{ color: sel ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.6vw,1.5rem)' }}>№{t.number}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: sel ? 'rgba(255,255,255,0.9)' : st.dot }} />
+                                <span className="font-medium" style={{ color: sel ? 'rgba(255,255,255,0.9)' : st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{sel ? 'Выбран' : st.label}</span>
+                              </div>
+                              <div className="flex items-center gap-1" style={{ color: sel ? 'rgba(255,255,255,0.75)' : 'var(--pv-text-3)' }}>
+                                <Users style={{ width: '0.8rem', height: '0.8rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )
+              })()}
             </div>
           </div>
         </div>
