@@ -322,9 +322,11 @@ interface CancelResult {
   needsCancelPrint: boolean
 }
 
-export async function cancelOrderItem(orderItemId: string, reason: string, cancelledBy?: string): Promise<{ orderId: string; allCancelled: boolean; newTotal: number }> {
+export async function cancelOrderItem(orderItemId: string, reason: string, cancelledBy?: string, knownOrderId?: string): Promise<{ orderId: string; allCancelled: boolean; newTotal: number }> {
   if (!reason || !reason.trim()) throw new Error('Укажите причину отмены')
-  const orderId = await _findOrderIdForItem(orderItemId)
+  // knownOrderId (когда вызывающий уже знает заказ) минует _findOrderIdForItem —
+  // тот полагается на кэш/доп-запрос и мог не найти позицию (отмена «висла»).
+  const orderId = knownOrderId || await _findOrderIdForItem(orderItemId)
   if (!orderId) throw new Error('Позиция не найдена')
   await unwrap(api.POST('/api/v1/orders/{id}/items/{itemId}/cancel', {
     params: { path: { id: orderId, itemId: orderItemId } },

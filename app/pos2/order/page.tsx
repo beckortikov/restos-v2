@@ -18,6 +18,8 @@ import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
 import { PosModal } from '@/components/pos-v2/pos-modal'
+import { buildReceiptData } from '@/lib/receipt-data'
+import { PrintReceipt } from '@/components/print-receipt'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
 import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit } from '@/lib/types'
@@ -31,6 +33,12 @@ const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; lab
 }
 const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
 const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни', 'Некачественно', 'Другое']
+// Печать требует настроенного чекового принтера (бэк: «no default receipt
+// printer configured»). Показываем понятную подсказку вместо сырой ошибки.
+function printerErr(e: unknown): string {
+  const msg = humanizeError(e)
+  return /printer|принтер/i.test(msg) ? 'Не настроен чековый принтер — Настройки → Принтеры' : `Не удалось: ${msg}`
+}
 
 // Phase 2 + критичный блок: заказ на реальных данных. Зал/такаут, гости, стоп-лист
 // override (менеджер), весовые позиции (вес × порции). Логику не переписываем.
@@ -71,6 +79,9 @@ export default function PosV2Order() {
   const [itemReason, setItemReason] = useState(ITEM_REASONS[0])
   const [itemBusy, setItemBusy] = useState(false)
   const itemBusyRef = useRef(false)
+  // Пре-чек: превью на экране + печать (превью работает и без принтера).
+  const [preBill, setPreBill] = useState<Order | null>(null)
+  const [printingPre, setPrintingPre] = useState(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -209,7 +220,7 @@ export default function PosV2Order() {
     if (itemBusyRef.current || !cancelItem?.id) return
     itemBusyRef.current = true; setItemBusy(true)
     try {
-      const res = await cancelOrderItem(cancelItem.id, itemReason, user?.id)
+      const res = await cancelOrderItem(cancelItem.id, itemReason, user?.id, activeGroup?.id)
       toast.success('Позиция отменена')
       setCancelItem(null)
       if (res.allCancelled) { toast.info('Все позиции отменены — заказ закрыт'); setActiveGroupId(null) }
@@ -420,10 +431,24 @@ export default function PosV2Order() {
     catch (e) { toast.error(humanizeError(e)); setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: cur } : o)) }
   }
 
-  async function doPreBill(id: string) {
-    try { await printPreBill(id); toast.success('Пре-чек отправлен на печать') }
-    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+  // Пре-чек: открываем ПРЕВЬЮ на экране (как в старом POS) — оно работает и без
+  // принтера. Печать — из превью.
+  function doPreBill(id: string) {
+    const o = tableOrders.find(x => x.id === id) ?? (activeGroup && activeGroup.id === id ? activeGroup : null)
+    if (o) setPreBill(o)
   }
+  async function doPrintPreBill() {
+    if (!preBill || printingPre) return
+    setPrintingPre(true)
+    try { await printPreBill(preBill.id); toast.success('Пре-чек отправлен на печать') }
+    catch (e) { toast.error(printerErr(e)) }
+    finally { setPrintingPre(false) }
+  }
+  const preBillReceipt = useMemo(() => preBill ? buildReceiptData(
+    preBill,
+    { restaurant, tables, zones, currentUser: user },
+    { isPreCheck: true, includeService: preBill.type === 'hall', servicePercent: restaurant?.servicePercent ?? 0 },
+  ) : null, [preBill, restaurant, tables, zones, user])
 
   const busy = paying || sending || adding || tableLoading
 
@@ -750,6 +775,20 @@ export default function PosV2Order() {
             </div>
             <button disabled={itemBusy} onClick={doCancelItem} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
               <Trash2 style={{ width: '1.3em', height: '1.3em' }} />{itemBusy ? 'Отмена…' : 'Отменить позицию'}
+            </button>
+          </div>
+        </PosModal>
+      )}
+
+      {/* Пре-чек — превью на экране + печать (превью работает и без принтера) */}
+      {preBill && (
+        <PosModal open onClose={() => { if (!printingPre) setPreBill(null) }} dismissable={!printingPre} width="clamp(20rem,42vw,30rem)" title="Пре-чек">
+          <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '1rem' }}>
+            <div className="overflow-y-auto flex justify-center" style={{ maxHeight: '58vh', background: 'var(--pv-bg)', borderRadius: 'var(--pv-radius)', padding: '0.8rem' }}>
+              {preBillReceipt ? <PrintReceipt data={preBillReceipt} /> : <span style={{ color: 'var(--pv-text-3)' }}>Нет данных</span>}
+            </div>
+            <button disabled={printingPre} onClick={doPrintPreBill} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Printer style={{ width: '1.3em', height: '1.3em' }} />{printingPre ? 'Печать…' : 'Печать пре-чека'}
             </button>
           </div>
         </PosModal>
