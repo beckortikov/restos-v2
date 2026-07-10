@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
 import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone, fetchOrders, cleanupStuckTables } from '@/lib/queries'
-import { formatCurrency, formatCurrencyCompact, startOfToday, getTimeSince } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, startOfToday, getTimeSince, calcOrderDisplayTotal } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { Table, TableStatus, Reservation } from '@/lib/types'
@@ -23,7 +23,7 @@ const pad = (n: number) => String(n).padStart(2, '0')
 
 export default function PosV2Tables() {
   const navigate = useNavigate()
-  const { user, canDo, canAccessRoles } = useAuth()
+  const { user, canDo, canAccessRoles, restaurant } = useAuth()
   const { tables, zones, loading, reload } = useOrderData(true)
   const canManage = canDo('tables.edit') || canAccessRoles(['manager', 'owner'])
   // Гейт orders.view_others: официант видит только свободные + свои столы
@@ -52,6 +52,8 @@ export default function PosV2Tables() {
   // Reservation view
   const [viewTable, setViewTable] = useState<Table | null>(null)
   const [resInfo, setResInfo] = useState<Reservation | null>(null)
+  // Активная зона-таб на карте (иначе при многих зонах — длинная простыня).
+  const [mapZone, setMapZone] = useState<string | null>(null)
 
   // Сумма открытого счёта по столам — для показа на плитке (карта зала была
   // информационно бедной: не видно, на сколько «висит» стол).
@@ -63,12 +65,16 @@ export default function PosV2Tables() {
       const m = new Map<string, number>()
       for (const o of os) {
         if (!o.tableId || o.status === 'done' || o.status === 'cancelled') continue
-        m.set(o.tableId, (m.get(o.tableId) ?? 0) + (o.totalWithService ?? o.total ?? 0))
+        // calcOrderDisplayTotal = subtotal + обслуживание (для зала) — то же, что
+        // считает сайдбар заказа. Раньше брали totalWithService ?? total: у
+        // открытого заказа totalWithService не заполнен → падало на total БЕЗ
+        // обслуживания, и сумма на плитке не совпадала с «Итого» в сайдбаре.
+        m.set(o.tableId, (m.get(o.tableId) ?? 0) + calcOrderDisplayTotal(o, restaurant?.servicePercent))
       }
       setTableTotals(m)
     }).catch(() => {})
     return () => { cancelled = true }
-  }, [tables])
+  }, [tables, restaurant?.servicePercent])
 
   // Самолечение залипших «оплачен-но-занят» столов при входе на карту (как
   // старый table-map). Без этого стол мог висеть занятым после оплаты.
@@ -277,16 +283,28 @@ export default function PosV2Tables() {
                 ))}
               </div>
             )}
-            {byZone.map(group => (
-              <div key={group.zone} style={{ marginBottom: 'clamp(1rem,1.8vw,1.75rem)' }}>
-                <div className="font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', marginBottom: '0.7rem' }}>{group.zone}</div>
+            {(() => {
+              // Зоны — табы (а не стопкой), иначе при многих зонах неудобно.
+              const activeZone = (mapZone && byZone.some(g => g.zone === mapZone)) ? mapZone : byZone[0]?.zone
+              const activeTables = byZone.find(g => g.zone === activeZone)?.tables ?? []
+              return (
+              <>
+                {byZone.length > 1 && (
+                  <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', marginBottom: 'clamp(0.8rem,1.4vw,1.2rem)' }}>
+                    {byZone.map(g => { const on = g.zone === activeZone; return (
+                      <button key={g.zone} onClick={() => setMapZone(g.zone)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{g.zone}</button>
+                    ) })}
+                  </div>
+                )}
                 <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem,14vw,13rem), 1fr))' }}>
-                  {group.tables.map(t => {
+                  {activeTables.map(t => {
                     const st = STATUS[t.status] ?? STATUS.free
                     const busyTile = !!t.currentOrderIds?.length
                     const selForMerge = mergePrimary?.id === t.id
                     const groups = t.currentOrderIds?.length ?? 0
                     const since = busyTile && t.openedAt ? getTimeSince(t.openedAt) : null
+                    const total = tableTotals.get(t.id)
+                    const sumBig = total != null ? formatCurrencyCompact(total).replace(/\sс\.$/, '') : '—'
                     return (
                       <button key={t.id} onClick={() => tap(t)} disabled={busy} className="relative flex flex-col justify-between text-left active:scale-[0.98] transition-transform disabled:opacity-60" style={{ background: selForMerge ? 'var(--pv-brand)' : st.soft, border: `${selForMerge ? 2 : 1}px solid ${selForMerge ? 'var(--pv-brand)' : st.border}`, borderRadius: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', padding: 'clamp(0.85rem,1.4vw,1.2rem)', minHeight: 'clamp(8rem,12vw,10.5rem)' }}>
                         {selForMerge ? (
@@ -303,11 +321,12 @@ export default function PosV2Tables() {
                                 {groups >= 2 && <span className="rounded-full font-bold flex items-center justify-center" style={{ background: 'var(--pv-brand)', color: '#fff', minWidth: '1.35rem', height: '1.35rem', fontSize: '0.7rem', padding: '0 0.35rem' }}>{groups}</span>}
                               </div>
                             </div>
-                            <div className="flex-1 flex items-center">
-                              <span className="flex items-center gap-1.5 font-bold" style={{ color: st.text, fontSize: 'clamp(1.2rem,1.9vw,1.7rem)' }}><span className="rounded-full" style={{ width: '0.55rem', height: '0.55rem', background: st.dot }} />{st.label}</span>
+                            <div className="flex items-end gap-1">
+                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.6rem,2.8vw,2.3rem)', lineHeight: 1 }}>{sumBig}</span>
+                              <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)', marginBottom: '0.15rem' }}>с.</span>
                             </div>
                             <div className="flex items-center justify-between">
-                              <span className="flex items-center gap-1" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><Users style={{ width: '0.85rem', height: '0.85rem' }} />{t.capacity} мест</span>
+                              <span className="flex items-center gap-1.5 font-semibold" style={{ color: st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: st.dot }} />{st.label}</span>
                               {since && <span className="flex items-center gap-0.5" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}><Clock style={{ width: '0.75rem', height: '0.75rem' }} />{since}</span>}
                             </div>
                           </>
@@ -330,8 +349,9 @@ export default function PosV2Tables() {
                     )
                   })}
                 </div>
-              </div>
-            ))}
+              </>
+              )
+            })()}
           </>
         )}
       </div>

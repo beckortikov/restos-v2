@@ -323,40 +323,44 @@ export default function PosV2Ticket() {
       {/* Footer actions */}
       {order && (
         <div className="shrink-0 border-t" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem) var(--pv-pad-x)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }}>
-          <div className="mx-auto flex items-center" style={{ maxWidth: '44rem', gap: 'var(--pv-gap)' }}>
-            <div className="flex-1 min-w-0">
-              <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Итого</div>
-              <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(order.total)}</div>
+          <div className="mx-auto flex flex-col" style={{ maxWidth: '44rem', gap: 'clamp(0.55rem,0.9vw,0.85rem)' }}>
+            {/* Итого — отдельной строкой сверху, всегда видно (раньше зажималось
+                flex-1 min-w-0 и пряталось за кнопками действий). */}
+            <div className="flex items-center justify-between">
+              <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
+              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(order.total)}</span>
             </div>
-            <button onClick={() => setCancelOrderOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1rem,1.5vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
-              <Trash2 style={{ width: '1.2em', height: '1.2em' }} />Отменить
-            </button>
-            {order.isSplit ? (
-              splits.some(s => s.status === 'paid') ? (
-                <span className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Оплата по частям…</span>
-              ) : (
-                <button disabled={busy} onClick={doCancelSplits} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1rem,1.5vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
-                  <X style={{ width: '1.2em', height: '1.2em' }} />Отменить разделение
-                </button>
-              )
-            ) : (
-              <>
-                <button onClick={() => { setSplitN(2); setSplitMode('equal'); setItemPart({}); setSplitOpen(true) }} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                  <SquareSplitHorizontal style={{ width: '1.2em', height: '1.2em' }} />Разделить
-                </button>
-                {order.type === 'hall' && (
-                  <button onClick={() => setTransferOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                    <ArrowRightLeft style={{ width: '1.2em', height: '1.2em' }} />Перенести
+            <div className="flex items-center flex-wrap" style={{ gap: 'var(--pv-gap)' }}>
+              <button onClick={() => setCancelOrderOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1rem,1.5vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
+                <Trash2 style={{ width: '1.2em', height: '1.2em' }} />Отменить
+              </button>
+              {order.isSplit ? (
+                splits.some(s => s.status === 'paid') ? (
+                  <span className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Оплата по частям…</span>
+                ) : (
+                  <button disabled={busy} onClick={doCancelSplits} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-semibold disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1rem,1.5vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <X style={{ width: '1.2em', height: '1.2em' }} />Отменить разделение
                   </button>
-                )}
-                <button onClick={() => navigate(`/pos2/order?order=${encodeURIComponent(order.id)}`)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                  <Plus style={{ width: '1.2em', height: '1.2em' }} />Добавить
-                </button>
-                <button onClick={() => navigate(`/pos2/pay?order=${encodeURIComponent(order.id)}`)} className="flex items-center gap-2 rounded-2xl font-bold text-white shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1.2rem,1.8vw,1.6rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
-                  <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
-                </button>
-              </>
-            )}
+                )
+              ) : (
+                <>
+                  <button onClick={() => { setSplitN(2); setSplitMode('equal'); setItemPart({}); setSplitOpen(true) }} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <SquareSplitHorizontal style={{ width: '1.2em', height: '1.2em' }} />Разделить
+                  </button>
+                  {order.type === 'hall' && (
+                    <button onClick={() => setTransferOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                      <ArrowRightLeft style={{ width: '1.2em', height: '1.2em' }} />Перенести
+                    </button>
+                  )}
+                  <button onClick={() => navigate(`/pos2/order?order=${encodeURIComponent(order.id)}`)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.9rem,1.4vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <Plus style={{ width: '1.2em', height: '1.2em' }} />Добавить
+                  </button>
+                  <button onClick={() => navigate(`/pos2/pay?order=${encodeURIComponent(order.id)}`)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1.2rem,1.8vw,1.6rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                    <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
       )}
