@@ -71,12 +71,13 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 			return err
 		}
 
-		// 3a. Default receipt-принтер. Без него worker не знает, куда печатать,
-		// поэтому возвращаем 412 PRECONDITION с понятной ошибкой — UI покажет
-		// тост «Настройте принтер в Параметры → Принтеры».
+		// 3a. Чековый принтер: дефолтный, а если «По умолчанию» не отмечено —
+		// единственный включённый чековый (is_default DESC ставит дефолт первым).
+		// Убирает ловушку «добавил чековый принтер, но забыл отметить по умолчанию
+		// → печать молча не работает». Без ЛЮБОГО чекового — 412 PRECONDITION.
 		var receiptP models.Printer
-		printerErr := tx.Where("restaurant_id = ? AND kind = 'receipt' AND is_default = TRUE AND enabled = TRUE",
-			rid).First(&receiptP).Error
+		printerErr := tx.Where("restaurant_id = ? AND kind = 'receipt' AND enabled = TRUE", rid).
+			Order("is_default DESC, created_at ASC").First(&receiptP).Error
 		if errors.Is(printerErr, gorm.ErrRecordNotFound) {
 			return apperrors.Wrap("PRECONDITION", "no default receipt printer configured", nil)
 		}

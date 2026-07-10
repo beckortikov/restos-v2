@@ -834,8 +834,9 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 	// Если не настроен — заказ всё равно закрываем (close_order не должен падать),
 	// просто кладём job без printer_id и worker сам резолвит / помечает failed.
 	var receiptP models.Printer
-	hasReceiptP := tx.Where("restaurant_id = ? AND kind = 'receipt' AND is_default = TRUE AND enabled = TRUE",
-		restaurantID).First(&receiptP).Error == nil
+	// Дефолтный чековый принтер, иначе единственный включённый (is_default DESC).
+	hasReceiptP := tx.Where("restaurant_id = ? AND kind = 'receipt' AND enabled = TRUE", restaurantID).
+		Order("is_default DESC, created_at ASC").First(&receiptP).Error == nil
 
 	// 2b. Догружаем стол/зону/официанта/кассира — без них чек шёл без шапки
 	// "Стол / Официант / Кассир" (баг v2.0.99).

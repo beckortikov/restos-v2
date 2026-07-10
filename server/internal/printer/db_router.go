@@ -15,8 +15,8 @@ import (
 // Логика:
 //  1. Если job.PrinterID != nil → ищем именно этот принтер (любого ресторана —
 //     tenant-проверка уже на write-side в enqueue).
-//  2. Иначе и job.Type == "receipt" → принтер ресторана с kind=receipt
-//     and is_default=true.
+//  2. Иначе и job.Type == "receipt"/"pre_bill"/*_report → включённый чековый
+//     принтер ресторана: дефолтный, иначе единственный (is_default DESC).
 //  3. Иначе и job.Type == "runner" → принтер ресторана с kind=station
 //     и station=<station из payload meta>. Если в job нет hint — используем
 //     первый station-printer ресторана.
@@ -78,19 +78,19 @@ func (r *DBRouter) resolveFromDB(job *models.PrintJob) Printer {
 		}
 		switch job.Type {
 		case "receipt":
-			if err := q.Where("restaurant_id = ? AND kind = ? AND is_default = true",
-				*job.RestaurantID, "receipt").First(&p).Error; err != nil {
+			if err := q.Where("restaurant_id = ? AND kind = ? AND enabled = true",
+				*job.RestaurantID, "receipt").Order("is_default DESC, created_at ASC").First(&p).Error; err != nil {
 				return nil
 			}
 		case "pre_bill":
-			if err := q.Where("restaurant_id = ? AND kind = ? AND is_default = true",
-				*job.RestaurantID, "receipt").First(&p).Error; err != nil {
+			if err := q.Where("restaurant_id = ? AND kind = ? AND enabled = true",
+				*job.RestaurantID, "receipt").Order("is_default DESC, created_at ASC").First(&p).Error; err != nil {
 				return nil
 			}
 		case "z_report", "x_report", "service_report":
 			// Отчёты смены (Z/X/Обслуживание) печатаются на receipt-принтере.
-			if err := q.Where("restaurant_id = ? AND kind = ? AND is_default = true",
-				*job.RestaurantID, "receipt").First(&p).Error; err != nil {
+			if err := q.Where("restaurant_id = ? AND kind = ? AND enabled = true",
+				*job.RestaurantID, "receipt").Order("is_default DESC, created_at ASC").First(&p).Error; err != nil {
 				return nil
 			}
 		case "runner", "cancel_runner":
