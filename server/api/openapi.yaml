@@ -719,8 +719,8 @@ paths:
                 type: object
                 properties:
                   waiter_name: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
-        "422": { $ref: "#/components/responses/Error" }
 
   /api/v1/orders:
     get:

@@ -202,7 +202,9 @@ func (s *KDSService) CallWaiter(ctx context.Context, itemID string) (string, err
 		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id").
 		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
 		Where("oi.id = ? AND o.restaurant_id = ?", itemID, rid).
-		First(&row).Error
+		// Take, а не First: First навешивает ORDER BY по «первичному ключу»
+		// целевой структуры (oi.waiter_id — такой колонки нет), падает 42703.
+		Take(&row).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return "", apperrors.Wrap("NOT_FOUND", "order item not found", nil)

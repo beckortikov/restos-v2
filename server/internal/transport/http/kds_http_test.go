@@ -134,6 +134,65 @@ func TestKDS_HTTP(t *testing.T) {
 	}
 }
 
+// TestKDS_CallWaiter — колокольчик «позвать официанта»: 200 + имя, когда у
+// заказа есть официант; 422, когда официанта нет.
+func TestKDS_CallWaiter(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	waiterID := uuid.NewString()
+	wname, wrole := "Диляра", "waiter"
+	if err := gdb.Create(&models.User{ID: waiterID, Name: &wname, Role: &wrole, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	st, typ := "new", "hall"
+	dish := "Салат Домашний большой"
+
+	// Заказ С официантом.
+	oid := uuid.NewString()
+	if err := gdb.Create(&models.Order{ID: oid, RestaurantID: &f.rid, Status: &st, Type: &typ, OrderNumber: 58, WaiterID: &waiterID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	itemID := uuid.NewString()
+	if err := gdb.Create(&models.OrderItem{ID: itemID, OrderID: &oid, Name: &dish, Qty: decimal.MustFromString("1")}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	tok := f.login(t)
+
+	code, body := postJSON(t, f.srv.URL+fmt.Sprintf("/api/v1/kds/items/%s/call-waiter", itemID), tok, map[string]any{})
+	if code != 200 {
+		t.Fatalf("call-waiter: %d %s", code, body)
+	}
+	var out struct {
+		WaiterName string `json:"waiter_name"`
+	}
+	_ = json.Unmarshal(body, &out)
+	if out.WaiterName != wname {
+		t.Errorf("waiter_name = %q, want %q", out.WaiterName, wname)
+	}
+
+	// Заказ БЕЗ официанта → 422.
+	oid2 := uuid.NewString()
+	if err := gdb.Create(&models.Order{ID: oid2, RestaurantID: &f.rid, Status: &st, Type: &typ, OrderNumber: 59}).Error; err != nil {
+		t.Fatal(err)
+	}
+	item2 := uuid.NewString()
+	if err := gdb.Create(&models.OrderItem{ID: item2, OrderID: &oid2, Name: &dish, Qty: decimal.MustFromString("1")}).Error; err != nil {
+		t.Fatal(err)
+	}
+	code2, body2 := postJSON(t, f.srv.URL+fmt.Sprintf("/api/v1/kds/items/%s/call-waiter", item2), tok, map[string]any{})
+	if code2 != 400 {
+		t.Errorf("no-waiter call = %d %s, want 400", code2, body2)
+	}
+}
+
 // postJSON — POST с Bearer + Idempotency-Key (write-эндпоинты его требуют).
 func postJSON(t *testing.T, url, token string, body any) (int, []byte) {
 	t.Helper()
