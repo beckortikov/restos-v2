@@ -88,6 +88,7 @@ export default function PosV2Order() {
   const [ordersTab, setOrdersTab] = useState<'active' | 'closed'>('active')
   const [ordersList, setOrdersList] = useState<Order[]>([])
   const [ordersLoading, setOrdersLoading] = useState(false)
+  const [ordersSearch, setOrdersSearch] = useState('')
   const [viewReceipt, setViewReceipt] = useState<Order | null>(null)
   const [reprinting, setReprinting] = useState(false)
 
@@ -464,7 +465,7 @@ export default function PosV2Order() {
 
   // ── Заказы модалкой прямо в ПОС ──────────────────────────────────────────
   async function openOrders() {
-    setOrdersOpen(true); setOrdersLoading(true)
+    setOrdersOpen(true); setOrdersLoading(true); setOrdersSearch('')
     try {
       const shift = await fetchActiveShift().catch(() => null)
       const os = shift ? await fetchOrders({ shiftId: (shift as { id?: string })?.id, slim: false }).catch(() => [] as Order[]) : []
@@ -857,31 +858,73 @@ export default function PosV2Order() {
       {ordersOpen && (
         <PosModal open onClose={() => setOrdersOpen(false)} width="clamp(24rem,64vw,54rem)" title="Заказы">
           <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: 'clamp(0.8rem,1.2vw,1.1rem)', maxHeight: '72vh' }}>
-            <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px', alignSelf: 'flex-start' }}>
-              {([['active', 'Активные'], ['closed', 'Закрытые']] as const).map(([t, l]) => { const on = ordersTab === t; return (
-                <button key={t} onClick={() => setOrdersTab(t)} className="rounded-xl font-semibold" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{l}</button>
-              ) })}
+            <div className="flex items-center shrink-0 flex-wrap" style={{ gap: 'clamp(0.5rem,0.9vw,0.8rem)' }}>
+              <div className="flex items-center rounded-2xl border" style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
+                {([['active', 'Активные'], ['closed', 'Закрытые']] as const).map(([t, l]) => { const on = ordersTab === t; return (
+                  <button key={t} onClick={() => setOrdersTab(t)} className="rounded-xl font-semibold" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{l}</button>
+                ) })}
+              </div>
+              <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.7rem,1vw,1rem)' }}>
+                <Search style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-3)' }} className="shrink-0" />
+                <input value={ordersSearch} onChange={e => setOrdersSearch(e.target.value)} inputMode="numeric" placeholder="№ заказа или стол" aria-label="Поиск заказа" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+                {ordersSearch && <button onClick={() => setOrdersSearch('')} className="shrink-0"><X style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>}
+              </div>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto">
+            <div className="flex-1 min-h-0 overflow-y-auto pv-noscroll">
               {ordersLoading ? (
                 <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
               ) : (() => {
-                const rows = ordersList.filter(o => ordersTab === 'closed' ? (o.status === 'done' || o.status === 'cancelled') : (o.status !== 'done' && o.status !== 'cancelled')).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
-                if (rows.length === 0) return <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Заказов нет</div>
+                const q = ordersSearch.trim().toLowerCase()
+                const tNum = (o: Order) => o.tableId ? (tables.find(t => t.id === o.tableId)?.number ?? '') : ''
+                let rows = ordersList.filter(o => ordersTab === 'closed' ? (o.status === 'done' || o.status === 'cancelled') : (o.status !== 'done' && o.status !== 'cancelled'))
+                if (q) rows = rows.filter(o => String(o.orderNumber ?? '').includes(q) || String(tNum(o)).includes(q))
+                // Закрытые — по времени закрытия (свежие сверху); активные — по созданию.
+                rows = rows.slice().sort((a, b) => {
+                  const ka = ordersTab === 'closed' ? (a.closedAt ?? a.createdAt) : a.createdAt
+                  const kb = ordersTab === 'closed' ? (b.closedAt ?? b.createdAt) : b.createdAt
+                  return String(kb).localeCompare(String(ka))
+                })
+                if (rows.length === 0) return <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>{q ? 'Ничего не найдено' : 'Заказов нет'}</div>
+
+                // ЗАКРЫТЫЕ — плотный список-строки (удобно при большом количестве).
+                if (ordersTab === 'closed') {
+                  return (
+                    <div className="flex flex-col" style={{ gap: '0.4rem' }}>
+                      {rows.map(o => {
+                        const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
+                        const n = (o.items ?? []).filter(i => !i.cancelledAt).length
+                        const cancelled = o.status === 'cancelled'
+                        const when = o.closedAt ? new Date(o.closedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
+                        return (
+                          <button key={o.id} onClick={() => tapOrder(o)} className="w-full flex items-center gap-3 rounded-xl border text-left active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.55rem,0.9vw,0.8rem) clamp(0.75rem,1.1vw,1.05rem)' }}>
+                            <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', minWidth: '2.8rem' }}>№{o.orderNumber ?? '—'}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{loc} · {n} поз.</div>
+                              <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.18rem)' }}>{when}</div>
+                            </div>
+                            <span className="font-bold shrink-0" style={{ color: cancelled ? 'var(--pv-text-3)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</span>
+                            <span className="rounded-full shrink-0 font-semibold" style={{ background: cancelled ? 'var(--pv-bg)' : 'var(--pv-free-soft)', color: cancelled ? 'var(--pv-text-3)' : 'var(--pv-free-text)', padding: '0.15rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.22rem)' }}>{cancelled ? 'Отменён' : 'Оплачен'}</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )
+                }
+
+                // АКТИВНЫЕ — карточки.
                 return (
                   <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(12rem,20vw,16rem), 1fr))' }}>
                     {rows.map(o => {
-                      const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tables.find(t => t.id === o.tableId)?.number ?? '—') : '—'}` : 'С собой'
+                      const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
                       const n = (o.items ?? []).filter(i => !i.cancelledAt).length
-                      const label = o.status === 'done' ? 'Оплачен' : o.status === 'cancelled' ? 'Отменён' : 'Открыт'
                       return (
                         <button key={o.id} onClick={() => tapOrder(o)} className="flex flex-col text-left rounded-2xl border active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.7rem,1.1vw,1rem)', gap: '0.35rem' }}>
                           <div className="flex items-center justify-between">
                             <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>№{o.orderNumber ?? '—'}</span>
-                            <span style={{ color: o.status === 'done' || o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{label}</span>
+                            <span style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Открыт</span>
                           </div>
                           <div style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{loc} · {n} поз.</div>
-                          <div className="font-bold" style={{ color: o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</div>
+                          <div className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</div>
                         </button>
                       )
                     })}
