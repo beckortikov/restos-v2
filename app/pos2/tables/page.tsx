@@ -290,7 +290,7 @@ export default function PosV2Tables() {
               return (
               <>
                 {byZone.length > 1 && (
-                  <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', marginBottom: 'clamp(0.8rem,1.4vw,1.2rem)' }}>
+                  <div className="flex items-center overflow-x-auto shrink-0 pv-noscroll" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', marginBottom: 'clamp(0.8rem,1.4vw,1.2rem)' }}>
                     {byZone.map(g => { const on = g.zone === activeZone; return (
                       <button key={g.zone} onClick={() => setMapZone(g.zone)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{g.zone}</button>
                     ) })}

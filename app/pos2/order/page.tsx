@@ -556,15 +556,15 @@ export default function PosV2Order() {
 
         {/* Категории видны ВСЕГДА (раньше прятались при любом тексте в поиске —
             даже одна буква убирала все категории). Тап по категории очищает поиск. */}
-        <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
+        <div className="flex items-center overflow-x-auto shrink-0 pv-noscroll" style={{ gap: 'clamp(0.45rem,0.85vw,0.75rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
           {favorites.length > 0 && (
-            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
-              <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
+            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.65rem,1vw,0.9rem) clamp(1.05rem,1.55vw,1.6rem)', fontSize: 'var(--pv-ctl)' }}>
+              <Star style={{ width: '1rem', height: '1rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
             </button>
           )}
           {visibleCats.map(c => {
             const on = c === currentCat && !deferred.trim()
-            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
+            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.65rem,1vw,0.9rem) clamp(1.05rem,1.55vw,1.6rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
           })}
         </div>
 
@@ -925,7 +925,7 @@ export default function PosV2Order() {
                 return (
                   <>
                     {tablesByZone.length > 1 && (
-                      <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.7vw,0.6rem)', marginBottom: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
+                      <div className="flex items-center overflow-x-auto shrink-0 pv-noscroll" style={{ gap: 'clamp(0.4rem,0.7vw,0.6rem)', marginBottom: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
                         {tablesByZone.map(g => { const on = g.zone === activeZone; return (
                           <button key={g.zone} onClick={() => setPickerZone(g.zone)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{g.zone}</button>
                         ) })}

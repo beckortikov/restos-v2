@@ -103,6 +103,18 @@
   min-height: 0;
 }
 
+/* Горизонтальные ленты (категории, зоны-табы): скролл работает свайпом/колесом,
+   но полоса прокрутки внизу не показывается — она мешает и ломает высоту. */
+.pos-v2 .pv-noscroll {
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* IE/Edge */
+}
+.pos-v2 .pv-noscroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;              /* WebKit (Chrome/Electron) */
+}
+
 /* ── Уважение к prefers-reduced-motion (WCAG 2.3.3) ──────────────── */
 @media (prefers-reduced-motion: reduce) {
   .pos-v2 *,
