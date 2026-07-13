@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Utensils, LayoutGrid, ReceiptText, Wallet, ChefHat,
-  Settings, LogOut, OctagonX, ClipboardList, PackageCheck, CookingPot,
+  Utensils, LayoutGrid, Wallet, ChefHat,
+  Settings, LogOut, OctagonX, PackageCheck, CookingPot,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 import { fetchActiveShift } from '@/lib/queries'
@@ -26,8 +26,6 @@ const TILES: Array<{
 }> = [
   { icon: Utensils, label: 'Новый заказ', sub: 'Меню и оплата', to: '/pos2/order', req: '/operations/pos', primary: true },
   { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/pos2/tables', req: '/operations/table-map' },
-  { icon: ClipboardList, label: 'Активные заказы', sub: 'Все / зал / с собой / закрытые', to: '/pos2/orders', req: '/operations/orders' },
-  { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay', req: '/operations/pos' },
   { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение · обслуживание', to: '/pos2/shift', req: '/operations/shifts' },
   { icon: OctagonX, label: 'Стоп-лист', sub: 'Стоп/возврат блюд', to: '/pos2/stop', req: '/warehouse/menu' },
   { icon: PackageCheck, label: 'Витрина', sub: 'Списания и полуфабрикаты', to: '/pos2/showcase', req: '/operations/showcase' },

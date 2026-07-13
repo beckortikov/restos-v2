@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
@@ -493,6 +493,12 @@ export default function PosV2Order() {
             <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" aria-label="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
           </div>
+          {/* Заказы прямо из ПОС (как раздел «Заказы» в старом POS): активные +
+              закрытые, просмотр и печать чека закрытого заказа. */}
+          <button onClick={() => navigate('/pos2/orders')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }} title="Заказы: активные и закрытые, печать чека">
+            <ClipboardList style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
+            <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Заказы</span>
+          </button>
         </div>
 
         {/* Категории видны ВСЕГДА (раньше прятались при любом тексте в поиске —
