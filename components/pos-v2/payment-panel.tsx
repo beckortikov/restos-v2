@@ -9,18 +9,22 @@ import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dSub, dSum } from '@/lib/decimal'
 import { discountAmount, payable as calcPayable, type DiscountType } from '@/lib/pos-v2/pay'
-import type { Order, FinancialAccount, OrderPayment } from '@/lib/types'
+import { buildReceiptData } from '@/lib/receipt-data'
+import { PrintReceipt } from '@/components/print-receipt'
+import type { Order, FinancialAccount, OrderPayment, Restaurant, Table, Zone, User } from '@/lib/types'
 
 // Единая панель оплаты заказа (сайдбар зала + /pos2/pay). Нал / Безнал с выбором
 // счёта-кошелька / Смешанная (нал+безнал по счетам) / скидка / обслуживание /
 // пре-чек. Бэк пересчитывает суммы; клиент шлёт метод, account_id, servicePercent,
 // discountType/Value. payable = (subtotal − скидка) + сервис (зал).
-export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }: {
+export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, previewCtx }: {
   order: Order
   servicePercent: number
   accounts: FinancialAccount[]
   userId?: string
   onPaid: () => void
+  // Контекст для превью чека слева от панели (имена стола/официанта/ресторана).
+  previewCtx?: { restaurant?: Restaurant | null; tables?: Table[]; zones?: Zone[]; users?: User[]; currentUser?: { name?: string } | null }
 }) {
   const [serviceOn, setServiceOn] = useState(order.type === 'hall')
   const [discType, setDiscType] = useState<DiscountType>('none')
@@ -37,7 +41,11 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const [printing, setPrinting] = useState(false)
   // Чек не всегда нужен (как в старом POS — закрытие без чека). Тумблер: по
   // умолчанию печатаем, но кассир может выключить → закрытие без печати чека.
-  const [printReceipt, setPrintReceipt] = useState(true)
+  // Состояние СОХРАНЯЕТСЯ (localStorage): выключил раз — так и стоит, пока не включит.
+  const [printReceipt, setPrintReceipt] = useState(() => {
+    try { return localStorage.getItem('pos-v2-print-receipt') !== '0' } catch { return true }
+  })
+  useEffect(() => { try { localStorage.setItem('pos-v2-print-receipt', printReceipt ? '1' : '0') } catch {} }, [printReceipt])
   const payingRef = useRef(false)
 
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
@@ -56,6 +64,12 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const discAmt = useMemo(() => discountAmount(base, discType, discValNum), [base, discType, discValNum])
   const sp = (order.type === 'hall' && serviceOn) ? servicePercent : 0
   const payable = calcPayable(base, discAmt, sp)
+  // Превью чека — с ЖИВЫМИ скидкой/обслуживанием (итог совпадает с «К оплате»).
+  const receiptPreview = useMemo(() => previewCtx ? buildReceiptData(
+    order,
+    { restaurant: previewCtx.restaurant, tables: previewCtx.tables, zones: previewCtx.zones, users: previewCtx.users, currentUser: previewCtx.currentUser },
+    { isPreCheck: false, includeService: sp > 0, servicePercent: sp, discountAmount: discAmt > 0 ? discAmt : undefined },
+  ) : null, [previewCtx, order, sp, discAmt])
   const paidSum = useMemo(() => dSum(parts.map(p => p.amount)), [parts])
   const remaining = dSub(payable, paidSum)
   const canContinue = parts.length > 0 && Math.abs(remaining) <= 0.01
@@ -149,7 +163,13 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   }
 
   return (
-    <div style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
+    <div className="flex items-stretch">
+      {previewCtx && receiptPreview && (
+        <aside className="shrink-0 overflow-y-auto pv-noscroll flex justify-center border-r" style={{ width: 'clamp(15rem,21vw,19rem)', background: 'var(--pv-bg)', padding: 'clamp(0.8rem,1.2vw,1.1rem)', maxHeight: '82vh', borderColor: 'var(--pv-border)' }}>
+          <PrintReceipt data={receiptPreview} />
+        </aside>
+      )}
+      <div className="flex-1 min-w-0" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
       {mode === 'mixed' ? (
         <div className="flex flex-col" style={{ gap: '1rem' }}>
           <button onClick={() => setMode('pick')} className="flex items-center gap-1.5 font-semibold self-start" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><ArrowLeft style={{ width: '1.1rem', height: '1.1rem' }} />Назад</button>
@@ -302,6 +322,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
         </>
       )}
       {paying && <div className="text-center" style={{ marginTop: '1rem', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Проводим оплату…</div>}
+      </div>
     </div>
   )
 }

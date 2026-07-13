@@ -826,9 +826,9 @@ export default function PosV2Order() {
 
       {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}
       {payTarget && (
-        <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,42vw,34rem)"
+        <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,64vw,52rem)"
           title={`Оплата · ${payTarget.type === 'hall' ? `Стол ${selectedTable?.number ?? ''}` : `С собой #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
-          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} />
+          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} previewCtx={{ restaurant, tables, zones, currentUser: user }} />
         </PosModal>
       )}
 

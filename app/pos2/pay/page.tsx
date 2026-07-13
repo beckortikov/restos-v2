@@ -118,9 +118,9 @@ export default function PosV2Pay() {
 
       {/* Payment modal — общий PaymentPanel */}
       {target && (
-        <PosModal open onClose={() => setTarget(null)} width="clamp(22rem,42vw,34rem)"
+        <PosModal open onClose={() => setTarget(null)} width="clamp(22rem,64vw,52rem)"
           title={`Оплата · ${labelOf(target)} · ${formatCurrency(target.total)}`}>
-          <PaymentPanel order={target} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaid} />
+          <PaymentPanel order={target} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaid} previewCtx={{ restaurant, tables, currentUser: user }} />
         </PosModal>
       )}
     </div>
