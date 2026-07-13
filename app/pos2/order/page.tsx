@@ -13,7 +13,7 @@ import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem } from '@/lib/queries'
-import { formatCurrency, formatCurrencyCompact } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, calcLineTotal } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -621,7 +621,7 @@ export default function PosV2Order() {
                     <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', textDecoration: c ? 'line-through' : 'none' }}>{i.name}</div>
                     <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{c ? ' · отменено' : ''}{i.note ? ` · 💬 ${i.note}` : ''}</div>
                   </div>
-                  <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
+                  <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcLineTotal(i.price, i.qty, i.unit, i.unitSize))}</span>
                   {!c && i.id && (
                     <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-xl flex items-center justify-center shrink-0 border active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-occ-soft)' }} aria-label={`Отменить «${i.name}»`} title="Отменить позицию">
                       <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />

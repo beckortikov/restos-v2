@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { LayoutGrid, RefreshCw, UtensilsCrossed, ShoppingBag } from 'lucide-react'
+import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { fetchTables, fetchOrders, fetchFinancialAccounts } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
@@ -33,11 +34,13 @@ export default function PosV2Pay() {
       const ts = await fetchTables().catch(() => [] as Table[])
       setTables(ts)
       const ids = ts.flatMap(t => t.currentOrderIds).filter(Boolean)
-      if (ids.length === 0) { setOrders([]); return }
+      if (ids.length === 0) { setOrders([]); return 0 }
       const os = await fetchOrders({ ids, slim: false }).catch(() => [] as Order[])
       // Прячем заказы с активными сплитами: их платят по частям в тикете
       // (split-UI). Полная оплата поверх оплаченных сплитов = двойная выручка.
-      setOrders(os.filter(o => o.status !== 'done' && o.status !== 'cancelled' && !o.isSplit))
+      const open = os.filter(o => o.status !== 'done' && o.status !== 'cancelled' && !o.isSplit)
+      setOrders(open)
+      return open.length
     } finally { setLoading(false) }
   }, [])
 
@@ -55,7 +58,13 @@ export default function PosV2Pay() {
   // База = o.total (с модификаторами), как считает бэк; см. PaymentPanel.
   const payableOf = (o: Order) => calcPayable(o.total, 0, o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
 
-  async function onPaid() { setTarget(null); await load() }
+  // После оплаты: если открытых заказов больше нет — не оставляем кассира на
+  // пустом экране «Заказы к оплате», а возвращаем в ПОС (следующий заказ).
+  async function onPaid() {
+    setTarget(null)
+    const remaining = await load()
+    if (remaining === 0) { toast.success('Заказ оплачен'); navigate('/pos2/order') }
+  }
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden">
