@@ -253,8 +253,8 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
           {order.type === 'hall' && servicePercent > 0 && (
             <div className="flex items-center justify-between" style={{ marginBottom: '0.9rem' }}>
               <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Обслуживание {servicePercent}%</span>
-              <button onClick={() => setServiceOn(v => !v)} className="rounded-full transition-colors" style={{ width: '3.2rem', height: '1.9rem', background: serviceOn ? 'var(--pv-brand)' : '#d8d3ca', padding: '3px', display: 'flex', justifyContent: serviceOn ? 'flex-end' : 'flex-start', alignItems: 'center' }}>
-                <span className="rounded-full" style={{ width: '1.4rem', height: '1.4rem', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
+              <button onClick={() => setServiceOn(v => !v)} className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: serviceOn ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }} aria-pressed={serviceOn} aria-label="Обслуживание">
+                <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: serviceOn ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
               </button>
             </div>
           )}
