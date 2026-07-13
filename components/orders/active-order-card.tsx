@@ -9,7 +9,7 @@ import { memo } from 'react'
 import {
   formatCurrency, calcOrderDisplayTotal, voidedItemFlags,
 } from '@/lib/helpers'
-import type { Order, OrderStatus, OrderVoid, Table, User } from '@/lib/types'
+import type { Order, OrderStatus, OrderVoid, Table, User, Zone } from '@/lib/types'
 import { ordersEqualShallow } from './order-row'
 
 const STATUS_BADGE: Record<OrderStatus, { label: string; cls: string }> = {
@@ -59,6 +59,7 @@ function summarizeItems(order: Order, voids?: OrderVoid[]): string {
 interface Props {
   order: Order
   tablesData: Table[]
+  zonesData?: Zone[]
   usersData: User[]
   voids?: OrderVoid[]
   servicePercent?: number
@@ -67,11 +68,15 @@ interface Props {
   onCancel: (order: Order) => void
 }
 
-function ActiveOrderCardInner({ order, tablesData, usersData, voids, servicePercent, onOpen, onPay, onCancel }: Props) {
+function ActiveOrderCardInner({ order, tablesData, zonesData, usersData, voids, servicePercent, onOpen, onPay, onCancel }: Props) {
   const typeKey = order.type === 'takeaway' || order.type === 'delivery' ? 'takeaway' : 'hall'
   const typeMeta = TYPE_BADGE[typeKey]
   const statusMeta = STATUS_BADGE[order.status] ?? STATUS_BADGE.new
   const table = order.tableId ? tablesData.find(t => t.id === order.tableId) : null
+  // Для заказов в зале бейдж показывает зону стола (иначе «Зал» путается
+  // с одноимённой зоной); table.zone хранит id зоны — резолвим в имя.
+  const zoneName = table?.zone ? zonesData?.find(z => z.id === table.zone)?.name : undefined
+  const badgeLabel = typeKey === 'hall' ? (zoneName || typeMeta.label) : typeMeta.label
   const waiter = order.waiterId ? usersData.find(u => u.id === order.waiterId) : null
   const total = calcOrderDisplayTotal(order, servicePercent)
   const guests = order.guestsCount && order.guestsCount > 0 ? order.guestsCount : null
@@ -102,8 +107,8 @@ function ActiveOrderCardInner({ order, tablesData, usersData, voids, servicePerc
             <span className="font-bold text-sm text-foreground">
               #{order.orderNumber ?? order.id.slice(0, 6)}
             </span>
-            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${typeMeta.cls}`}>
-              {typeMeta.label}
+            <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium max-w-[10rem] truncate ${typeMeta.cls}`}>
+              {badgeLabel}
             </span>
           </div>
           <span className="text-xs text-muted-foreground tabular-nums">{formatHHMM(order.createdAt)}</span>
@@ -159,6 +164,7 @@ function guestsWord(n: number): string {
 
 export const ActiveOrderCard = memo(ActiveOrderCardInner, (prev, next) => {
   if (prev.tablesData !== next.tablesData) return false
+  if (prev.zonesData !== next.zonesData) return false
   if (prev.usersData !== next.usersData) return false
   if (prev.servicePercent !== next.servicePercent) return false
   if (prev.voids !== next.voids) return false

@@ -16,7 +16,7 @@ import {
 } from '@/lib/types'
 import {
   fetchOrdersWithCursor, fetchOrders, fetchTables, fetchUsers, fetchVoidsForOrders,
-  refundOrder, reprintOrderReceipt,
+  refundOrder, reprintOrderReceipt, reopenOrder,
 } from '@/lib/queries'
 import { exportOrdersToXlsx } from '@/lib/orders-export'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
@@ -467,7 +467,17 @@ export function HistoryOrdersTab() {
         order={selectedOrder}
         open={actionsDialogOpen}
         onOpenChange={setActionsDialogOpen}
-        onAction={() => { /* история — read-only; действия отключены */ }}
+        onAction={(action) => {
+          // История в основном read-only, но reopen закрытого заказа доступен
+          // (кнопка «Открыть для редактирования» в теле диалога).
+          if (action === 'reopen' && selectedOrder) {
+            reopenOrder(selectedOrder.id)
+              .then(() => { toast.success('Заказ открыт для редактирования'); return load() })
+              .catch(e => toast.error(humanizeError(e, 'Ошибка reopen')))
+            setActionsDialogOpen(false)
+            setSelectedOrder(null)
+          }
+        }}
         onItemsChanged={() => { load().catch(console.error) }}
       />
 
