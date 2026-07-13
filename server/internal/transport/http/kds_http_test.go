@@ -99,6 +99,10 @@ func TestKDS_HTTP(t *testing.T) {
 	if plovCard["qty"] != "2" {
 		t.Errorf("qty = %v, want 2", plovCard["qty"])
 	}
+	// age_seconds присутствует и неотрицателен (блюдо только что создано → ~0).
+	if age, ok := plovCard["age_seconds"].(float64); !ok || age < 0 {
+		t.Errorf("age_seconds = %v (ok=%v), want number >= 0", plovCard["age_seconds"], ok)
+	}
 
 	// ─── Фильтр по станции grill → только люля ───────────────────────────────
 	grillOnly := list(t, "?stations=grill")

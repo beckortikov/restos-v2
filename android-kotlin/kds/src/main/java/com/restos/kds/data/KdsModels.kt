@@ -19,6 +19,11 @@ data class KdsItemDto(
     @SerialName("station_status") val stationStatus: String = "pending",
     @SerialName("waiter_name") val waiterName: String? = null,
     @SerialName("created_at") val createdAt: String = "",
+    // Возраст блюда в секундах по часам СЕРВЕРА на момент выборки. Кухня считает
+    // «сколько прошло» от него + время с момента загрузки — не завися от часов
+    // планшета (они часто выставлены криво → таймер застревал на «0 мин»).
+    // null = старая касса без этого поля → фолбэк на created_at + часы планшета.
+    @SerialName("age_seconds") val ageSeconds: Long? = null,
     @SerialName("status_at") val statusAt: String? = null,
     /**
      * Клиентский флаг: блюдо отменено. Сервер его не присылает (default=false);

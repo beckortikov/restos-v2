@@ -30,6 +30,9 @@ class KdsBoardViewModel @Inject constructor(
         val loading: Boolean = true,
         val error: String? = null,
         val items: List<KdsItemDto> = emptyList(),
+        // Момент (по монотонным часам планшета), когда пришёл текущий список.
+        // Возраст блюда = item.ageSeconds (серверный) + (сейчас - fetchedAtMs).
+        val fetchedAtMs: Long = 0,
         // Отменённые блюда — держим отдельно от активной доски, чтобы refresh()
         // (перечитывающий только items) их не стирал. Показываются красными
         // карточками сверху «Новых», пока повар не закроет вручную.
@@ -187,7 +190,15 @@ class KdsBoardViewModel @Inject constructor(
                     val ring = loaded && added.isNotEmpty()
                     knownIds = newIds
                     loaded = true
-                    _state.update { it.copy(loading = false, error = null, items = list) }
+                    _state.update {
+                        it.copy(
+                            loading = false, error = null, items = list,
+                            // Те же часы, что тикают на экране (System.currentTimeMillis):
+                            // считаем ТОЛЬКО дельту с момента загрузки, поэтому кривой
+                            // абсолютный сдвиг часов планшета не важен.
+                            fetchedAtMs = System.currentTimeMillis(),
+                        )
+                    }
                     // Пришло новое блюдо на доску → сигнал (если звук вкл).
                     if (ring && _state.value.soundEnabled) sounds.playNew(_state.value.soundId)
                 }

@@ -2864,7 +2864,9 @@ components:
         comment: { type: string, nullable: true }
         station: { type: string }
         station_status: { type: string, enum: [pending, cooking, ready, served] }
+        waiter_name: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+        age_seconds: { type: integer, description: "Возраст блюда в секундах по часам сервера (для таймера кухни)" }
         status_at: { type: string, format: date-time, nullable: true }
 
     ErrorEnvelope:

@@ -55,7 +55,11 @@ type KDSItem struct {
 	StationStatus string     `json:"station_status"`
 	WaiterName    *string    `json:"waiter_name"`
 	CreatedAt     time.Time  `json:"created_at"`
-	StatusAt      *time.Time `json:"status_at"`
+	// AgeSeconds — сколько секунд назад создано блюдо, по ЧАСАМ СЕРВЕРА. Кухонный
+	// планшет считает «сколько прошло» от него, а не от своих часов (которые
+	// часто выставлены криво → таймер застревал на «0 мин»).
+	AgeSeconds int64      `json:"age_seconds"`
+	StatusAt   *time.Time `json:"status_at"`
 }
 
 type kdsRow struct {
@@ -121,6 +125,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 	}
 
 	out := make([]KDSItem, 0, len(rows))
+	nowUTC := time.Now()
 	for _, r := range rows {
 		name := ""
 		if r.Name != nil {
@@ -129,6 +134,10 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 		orderType := "hall"
 		if r.OrderType != nil && *r.OrderType != "" {
 			orderType = *r.OrderType
+		}
+		ageSeconds := int64(nowUTC.Sub(r.CreatedAt).Seconds())
+		if ageSeconds < 0 {
+			ageSeconds = 0
 		}
 		out = append(out, KDSItem{
 			ID:            r.ID,
@@ -144,6 +153,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 			StationStatus: r.StationStatus,
 			WaiterName:    r.WaiterName,
 			CreatedAt:     r.CreatedAt,
+			AgeSeconds:    ageSeconds,
 			StatusAt:      r.StatusAt,
 		})
 	}

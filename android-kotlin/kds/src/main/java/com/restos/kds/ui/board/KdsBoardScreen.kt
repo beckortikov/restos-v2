@@ -129,7 +129,7 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
                         val base = state.items.filter { it.stationStatus == col.status }
                         val colItems = if (col.status == "pending") state.cancelledItems + base else base
                         BoardColumn(
-                            col, colItems, now,
+                            col, colItems, now, state.fetchedAtMs,
                             onAdvance = vm::advance, onClose = vm::closeCancelled,
                             calledIds = state.calledItems, onCallWaiter = vm::callWaiter,
                             modifier = Modifier.weight(1f),
@@ -318,6 +318,7 @@ private fun BoardColumn(
     col: ColumnSpec,
     items: List<KdsItemDto>,
     nowMs: Long,
+    fetchedAtMs: Long,
     onAdvance: (KdsItemDto) -> Unit,
     onClose: (String) -> Unit,
     calledIds: Set<String>,
@@ -346,7 +347,7 @@ private fun BoardColumn(
             contentPadding = PaddingValues(bottom = 8.dp),
         ) {
             items(items, key = { it.id }) { item ->
-                DishCard(item, col, nowMs, onAdvance, onClose, item.id in calledIds, onCallWaiter)
+                DishCard(item, col, nowMs, fetchedAtMs, onAdvance, onClose, item.id in calledIds, onCallWaiter)
             }
         }
     }
@@ -357,13 +358,14 @@ private fun DishCard(
     item: KdsItemDto,
     col: ColumnSpec,
     nowMs: Long,
+    fetchedAtMs: Long,
     onAdvance: (KdsItemDto) -> Unit,
     onClose: (String) -> Unit,
     called: Boolean,
     onCallWaiter: (KdsItemDto) -> Unit,
 ) {
     val cancelled = item.cancelled
-    val mins = minutesSince(item.createdAt, nowMs)
+    val mins = elapsedMinutes(item, nowMs, fetchedAtMs)
     val urgent = !cancelled && mins != null && mins >= 20
     // Отменённая карточка — красный акцент, статичная (повар только закрывает).
     val accent = if (cancelled) KdsColors.Urgent else col.color
@@ -466,6 +468,22 @@ private fun orderLabel(item: KdsItemDto): String {
         else -> "Зал"
     }
     return "$place · #${item.orderNumber}"
+}
+
+/**
+ * Сколько минут прошло с поступления блюда. Основа — серверный `ageSeconds`
+ * (часы КАССЫ, а не планшета) плюс время, прошедшее с момента загрузки списка.
+ * Дельта считается по одним и тем же часам планшета, поэтому кривой абсолютный
+ * сдвиг часов кухонного планшета не важен. Фолбэк на created_at — только для
+ * старой кассы, которая ещё не присылает ageSeconds.
+ */
+private fun elapsedMinutes(item: KdsItemDto, nowMs: Long, fetchedAtMs: Long): Long? {
+    val age = item.ageSeconds
+    if (age != null) {
+        val sinceFetch = if (fetchedAtMs > 0) ((nowMs - fetchedAtMs) / 1000).coerceAtLeast(0) else 0
+        return ((age + sinceFetch) / 60).coerceAtLeast(0)
+    }
+    return minutesSince(item.createdAt, nowMs)
 }
 
 private fun minutesSince(iso: String, nowMs: Long): Long? {
