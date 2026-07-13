@@ -13,7 +13,7 @@ import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, reprintOrderReceipt } from '@/lib/queries'
-import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -856,84 +856,75 @@ export default function PosV2Order() {
 
       {/* Заказы прямо в ПОС: активные + закрытые (закрытый → чек + печать) */}
       {ordersOpen && (
-        <PosModal open onClose={() => setOrdersOpen(false)} width="clamp(24rem,64vw,54rem)" title="Заказы">
-          <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: 'clamp(0.8rem,1.2vw,1.1rem)', maxHeight: '72vh' }}>
-            <div className="flex items-center shrink-0 flex-wrap" style={{ gap: 'clamp(0.5rem,0.9vw,0.8rem)' }}>
-              <div className="flex items-center rounded-2xl border" style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-                {([['active', 'Активные'], ['closed', 'Закрытые']] as const).map(([t, l]) => { const on = ordersTab === t; return (
-                  <button key={t} onClick={() => setOrdersTab(t)} className="rounded-xl font-semibold" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{l}</button>
-                ) })}
-              </div>
-              <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.7rem,1vw,1rem)' }}>
-                <Search style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-3)' }} className="shrink-0" />
-                <input value={ordersSearch} onChange={e => setOrdersSearch(e.target.value)} inputMode="numeric" placeholder="№ заказа или стол" aria-label="Поиск заказа" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
-                {ordersSearch && <button onClick={() => setOrdersSearch('')} className="shrink-0"><X style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>}
-              </div>
+        <div className="fixed inset-0 z-50" onClick={() => setOrdersOpen(false)}>
+          <div className="absolute inset-0" style={{ background: 'rgba(26,26,26,0.4)' }} />
+          {/* Боковой drawer слева (как «Заказы» в старом POS): плотный список строк
+              для открытых и закрытых, с фильтром-счётчиком и поиском. */}
+          <div role="dialog" aria-modal="true" aria-label="Заказы за сегодня" className="absolute inset-y-0 left-0 flex flex-col pv-drawer-left" style={{ width: 'clamp(20rem,34vw,32rem)', background: 'var(--pv-card)', boxShadow: '0 0 60px rgba(0,0,0,0.35)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(0.9rem,1.4vw,1.3rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Заказы за сегодня</span>
+              <button onClick={() => setOrdersOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }} aria-label="Закрыть"><X style={{ color: 'var(--pv-text-2)' }} /></button>
             </div>
-            <div className="flex-1 min-h-0 overflow-y-auto pv-noscroll">
-              {ordersLoading ? (
-                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
-              ) : (() => {
-                const q = ordersSearch.trim().toLowerCase()
-                const tNum = (o: Order) => o.tableId ? (tables.find(t => t.id === o.tableId)?.number ?? '') : ''
-                let rows = ordersList.filter(o => ordersTab === 'closed' ? (o.status === 'done' || o.status === 'cancelled') : (o.status !== 'done' && o.status !== 'cancelled'))
-                if (q) rows = rows.filter(o => String(o.orderNumber ?? '').includes(q) || String(tNum(o)).includes(q))
-                // Закрытые — по времени закрытия (свежие сверху); активные — по созданию.
-                rows = rows.slice().sort((a, b) => {
-                  const ka = ordersTab === 'closed' ? (a.closedAt ?? a.createdAt) : a.createdAt
-                  const kb = ordersTab === 'closed' ? (b.closedAt ?? b.createdAt) : b.createdAt
-                  return String(kb).localeCompare(String(ka))
-                })
-                if (rows.length === 0) return <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>{q ? 'Ничего не найдено' : 'Заказов нет'}</div>
-
-                // ЗАКРЫТЫЕ — плотный список-строки (удобно при большом количестве).
-                if (ordersTab === 'closed') {
-                  return (
-                    <div className="flex flex-col" style={{ gap: '0.4rem' }}>
-                      {rows.map(o => {
-                        const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
-                        const n = (o.items ?? []).filter(i => !i.cancelledAt).length
-                        const cancelled = o.status === 'cancelled'
-                        const when = o.closedAt ? new Date(o.closedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''
-                        return (
-                          <button key={o.id} onClick={() => tapOrder(o)} className="w-full flex items-center gap-3 rounded-xl border text-left active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.55rem,0.9vw,0.8rem) clamp(0.75rem,1.1vw,1.05rem)' }}>
-                            <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', minWidth: '2.8rem' }}>№{o.orderNumber ?? '—'}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{loc} · {n} поз.</div>
-                              <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.18rem)' }}>{when}</div>
-                            </div>
-                            <span className="font-bold shrink-0" style={{ color: cancelled ? 'var(--pv-text-3)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</span>
-                            <span className="rounded-full shrink-0 font-semibold" style={{ background: cancelled ? 'var(--pv-bg)' : 'var(--pv-free-soft)', color: cancelled ? 'var(--pv-text-3)' : 'var(--pv-free-text)', padding: '0.15rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.22rem)' }}>{cancelled ? 'Отменён' : 'Оплачен'}</span>
-                          </button>
-                        )
-                      })}
+            {(() => {
+              const q = ordersSearch.trim().toLowerCase()
+              const tNum = (o: Order) => o.tableId ? (tables.find(t => t.id === o.tableId)?.number ?? '') : ''
+              const matchQ = (o: Order) => !q || String(o.orderNumber ?? '').includes(q) || String(tNum(o)).includes(q)
+              const openOrders = ordersList.filter(o => o.status !== 'done' && o.status !== 'cancelled')
+              const closedOrders = ordersList.filter(o => o.status === 'done' || o.status === 'cancelled')
+              const rows = (ordersTab === 'closed' ? closedOrders : openOrders).filter(matchQ).slice().sort((a, b) => {
+                const ka = ordersTab === 'closed' ? (a.closedAt ?? a.createdAt) : a.createdAt
+                const kb = ordersTab === 'closed' ? (b.closedAt ?? b.createdAt) : b.createdAt
+                return String(kb).localeCompare(String(ka))
+              })
+              return (
+                <>
+                  <div className="flex flex-col shrink-0 border-b" style={{ padding: 'clamp(0.7rem,1vw,1rem)', gap: 'clamp(0.5rem,0.8vw,0.7rem)', borderColor: 'var(--pv-border)' }}>
+                    <div className="grid grid-cols-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '3px', gap: '3px' }}>
+                      {([['active', 'Открытые', openOrders.length], ['closed', 'Закрытые', closedOrders.length]] as const).map(([t, l, cnt]) => { const on = ordersTab === t; return (
+                        <button key={t} onClick={() => setOrdersTab(t)} className="rounded-lg font-semibold" style={{ background: on ? 'var(--pv-card)' : 'transparent', color: on ? 'var(--pv-brand)' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.7rem)', fontSize: 'var(--pv-ctl)', boxShadow: on ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>{l} · {cnt}</button>
+                      ) })}
                     </div>
-                  )
-                }
-
-                // АКТИВНЫЕ — карточки.
-                return (
-                  <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(12rem,20vw,16rem), 1fr))' }}>
-                    {rows.map(o => {
-                      const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
-                      const n = (o.items ?? []).filter(i => !i.cancelledAt).length
-                      return (
-                        <button key={o.id} onClick={() => tapOrder(o)} className="flex flex-col text-left rounded-2xl border active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.7rem,1.1vw,1rem)', gap: '0.35rem' }}>
-                          <div className="flex items-center justify-between">
-                            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>№{o.orderNumber ?? '—'}</span>
-                            <span style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Открыт</span>
-                          </div>
-                          <div style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{loc} · {n} поз.</div>
-                          <div className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</div>
-                        </button>
-                      )
-                    })}
+                    <div className="flex items-center gap-2 rounded-xl border" style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.7rem,1vw,1rem)' }}>
+                      <Search style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-3)' }} className="shrink-0" />
+                      <input value={ordersSearch} onChange={e => setOrdersSearch(e.target.value)} inputMode="numeric" placeholder="№ заказа или стол" aria-label="Поиск заказа" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+                      {ordersSearch && <button onClick={() => setOrdersSearch('')} className="shrink-0"><X style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>}
+                    </div>
                   </div>
-                )
-              })()}
-            </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto pv-noscroll" style={{ padding: 'clamp(0.6rem,1vw,0.9rem)' }}>
+                    {ordersLoading && ordersList.length === 0 ? (
+                      <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
+                    ) : rows.length === 0 ? (
+                      <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>{q ? 'Ничего не найдено' : (ordersTab === 'closed' ? 'Нет закрытых заказов' : 'Нет открытых заказов')}</div>
+                    ) : (
+                      <div className="flex flex-col" style={{ gap: '0.4rem' }}>
+                        {rows.map(o => {
+                          const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
+                          const n = (o.items ?? []).filter(i => !i.cancelledAt).length
+                          const isClosed = o.status === 'done' || o.status === 'cancelled'
+                          const time = isClosed ? (o.closedAt ? ` · закрыт ${new Date(o.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : '') : ` · ${getTimeSince(o.createdAt)}`
+                          const badge = o.status === 'cancelled' ? 'Отменён' : o.status === 'done' ? 'Оплачен' : o.status === 'cooking' ? 'Готовится' : o.status === 'ready' ? 'Готов' : o.status === 'served' ? 'Подан' : o.status === 'bill_requested' ? 'Счёт' : 'Открыт'
+                          const bt = o.status === 'cancelled' ? { bg: 'var(--pv-bg)', c: 'var(--pv-text-3)' } : o.status === 'done' ? { bg: 'var(--pv-free-soft)', c: 'var(--pv-free-text)' } : o.status === 'bill_requested' ? { bg: 'var(--pv-bill-soft)', c: 'var(--pv-bill-text)' } : { bg: 'var(--pv-brand-soft)', c: 'var(--pv-brand)' }
+                          return (
+                            <button key={o.id} onClick={() => tapOrder(o)} className="w-full text-left rounded-xl border active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.95vw,0.85rem)' }}>
+                              <div className="flex items-baseline justify-between gap-2" style={{ marginBottom: '0.25rem' }}>
+                                <span className="font-bold tabular-nums" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>№{o.orderNumber ?? '—'}</span>
+                                <span className="rounded-full font-semibold shrink-0" style={{ background: bt.bg, color: bt.c, padding: '0.1rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{badge}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-2">
+                                <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{loc} · {n} поз{time}</span>
+                                <span className="font-bold tabular-nums whitespace-nowrap" style={{ color: o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</span>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )
+            })()}
           </div>
-        </PosModal>
+        </div>
       )}
 
       {/* Чек закрытого заказа — просмотр + печать (из модалки «Заказы») */}
