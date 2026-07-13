@@ -1,5 +1,7 @@
 package com.restos.waiter.ui.shell
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -198,6 +200,9 @@ private fun ProfileSheetContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Профиль оброс секциями (настройки + обновление) — контент перерос
+            // высоту шита и «Выйти» внизу уезжала за экран. Делаем прокручиваемым.
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
             .padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
