@@ -35,6 +35,9 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const [mixedShift, setMixedShift] = useState<{ accountId?: string; accountName?: string } | null>(null)
   const [paying, setPaying] = useState(false)
   const [printing, setPrinting] = useState(false)
+  // Чек не всегда нужен (как в старом POS — закрытие без чека). Тумблер: по
+  // умолчанию печатаем, но кассир может выключить → закрытие без печати чека.
+  const [printReceipt, setPrintReceipt] = useState(true)
   const payingRef = useRef(false)
 
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
@@ -90,8 +93,8 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
       const acc = method === 'cash' ? cashAccount(shift) : { id: cardAcc?.id, name: cardAcc?.name }
       const [dA, dT, dV] = discArgs()
-      await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc.id, acc.name, sp, 0, payable, 0, dA, dT, dV)
-      toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
+      await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc.id, acc.name, sp, 0, payable, 0, dA, dT, dV, undefined, undefined, !printReceipt)
+      toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: printReceipt ? 'Чек отправлен на печать' : 'Без чека' })
       onPaid()
     } catch (e) { handleErr(e) }
     finally { payingRef.current = false; setPaying(false) }
@@ -130,7 +133,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
       const [dA, dT, dV] = discArgs()
-      await closeOrderWithPayment(order.id, parts[0].method, order.tableId || null, base, cogsOf(order), userId, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts)
+      await closeOrderWithPayment(order.id, parts[0].method, order.tableId || null, base, cogsOf(order), userId, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts, !printReceipt)
       toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: parts.map(p => `${p.method === 'cash' ? 'Нал' : 'Безнал'} ${formatCurrency(p.amount)}`).join(' + ') })
       onPaid()
     } catch (e) { handleErr(e) }
@@ -212,6 +215,14 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
             </div>
           )}
 
+          <button onClick={() => setPrintReceipt(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={printReceipt} aria-label="Печатать чек">
+            <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+              <Printer style={{ width: '1.15rem', height: '1.15rem', color: printReceipt ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Печатать чек
+            </span>
+            <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: printReceipt ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
+              <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: printReceipt ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+            </span>
+          </button>
           <button disabled={!canContinue || paying} onClick={submitMixed} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: canContinue ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
             <ReceiptText style={{ width: '1.3em', height: '1.3em' }} />Провести · {formatCurrency(payable)}
           </button>
@@ -263,6 +274,15 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
               </div>
             </div>
           )}
+          {/* Печатать чек — тумблер (чек не всегда нужен; выкл → закрытие без чека) */}
+          <button onClick={() => setPrintReceipt(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ marginBottom: '0.9rem', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={printReceipt} aria-label="Печатать чек">
+            <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+              <Printer style={{ width: '1.15rem', height: '1.15rem', color: printReceipt ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Печатать чек
+            </span>
+            <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: printReceipt ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
+              <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: printReceipt ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+            </span>
+          </button>
           <div className="grid grid-cols-2 gap-3">
             <button disabled={paying} onClick={() => payFull('cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
               <Banknote style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
