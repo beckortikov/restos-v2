@@ -740,6 +740,7 @@ export const TEST_PASSWORD = '1234'
 export const ALL_PERMISSIONS = [
   'orders.create', 'orders.close', 'orders.cancel', 'orders.void',
   'orders.refund',
+  'orders.edit',
   'orders.reprint',
   'orders.view_others',
   'orders.create_stopped',
@@ -769,7 +770,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'orders.close': 'Закрытие / оплата заказов',
   'orders.cancel': 'Отмена заказов',
   'orders.void': 'Отмена позиций (void)',
-  'orders.refund': 'Возврат заказа',
+  'orders.refund': 'Возврат закрытого заказа',
+  'orders.edit': 'Редактирование заказа (переоткрытие закрытого)',
   'orders.reprint': 'Повторная печать чека (копия)',
   'orders.view_others': 'Просмотр и дозаказ к чужим заказам',
   'orders.create_stopped': 'Пробивать стоп-блюда (отметка в чеке)',
@@ -801,7 +803,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 export const PERMISSION_GROUPS: { label: string; keys: PermissionKey[] }[] = [
-  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'pos.access', 'showcase.view'] },
+  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.edit', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'pos.access', 'showcase.view'] },
   { label: 'Склад', keys: ['inventory.view', 'inventory.manage', 'suppliers.manage', 'menu.view', 'menu.edit', 'menu.view_cost', 'writeoffs.create'] },
   { label: 'Финансы', keys: ['finance.view', 'finance.manage', 'payroll.manage'] },
   { label: 'Аналитика и клиенты', keys: ['analytics.view', 'customers.manage'] },
@@ -856,7 +858,8 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
     nav: [],
     actions: {
       'orders.create': true, 'orders.close': true, 'orders.void': true,
-      'orders.refund': true,
+      // orders.refund / orders.edit — выключены по умолчанию; выдаются в матрице
+      // доступов вручную (возврат и переоткрытие закрытого — чувствительные).
       'orders.reprint': true,
       'orders.view_others': true,
       'orders.service_charge': true,

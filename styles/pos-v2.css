@@ -121,6 +121,11 @@
   to   { transform: translateX(0); }
 }
 .pos-v2 .pv-drawer-left { animation: pv-slide-in-left 0.2s ease-out; }
+@keyframes pv-slide-in-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.pos-v2 .pv-drawer-right { animation: pv-slide-in-right 0.2s ease-out; }
 
 /* ── Уважение к prefers-reduced-motion (WCAG 2.3.3) ──────────────── */
 @media (prefers-reduced-motion: reduce) {

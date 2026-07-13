@@ -1137,6 +1137,11 @@ func (s *OrdersService) Reopen(ctx context.Context, orderID string, in ReopenOrd
 	if err != nil {
 		return nil, err
 	}
+	// Переоткрытие закрытого = редактирование заказа — по праву orders.edit
+	// (по умолчанию выключено; выдаётся в матрице доступов).
+	if err := s.requirePerm(ctx, "orders.edit"); err != nil {
+		return nil, err
+	}
 	var out *models.Order
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
@@ -12,7 +12,7 @@ import { useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder } from '@/lib/queries'
 import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -91,6 +91,11 @@ export default function PosV2Order() {
   const [ordersSearch, setOrdersSearch] = useState('')
   const [viewReceipt, setViewReceipt] = useState<Order | null>(null)
   const [reprinting, setReprinting] = useState(false)
+  // Возврат/редактирование закрытого заказа (по правам orders.refund / orders.edit).
+  const [refundTarget, setRefundTarget] = useState<Order | null>(null)
+  const [refundReason, setRefundReason] = useState('')
+  const [refundAmt, setRefundAmt] = useState('')
+  const [refundBusy, setRefundBusy] = useState(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -518,6 +523,42 @@ export default function PosV2Order() {
     },
   ) : null, [viewReceipt, restaurant, tables, zones, user])
 
+  // Права на действия с закрытым заказом (по умолчанию выключены в матрице).
+  const canRefund = canDo('orders.refund')
+  const canEditClosed = canDo('orders.edit')
+  const remainingRefund = (o: Order) => Math.max(0, ((o.totalWithService ?? o.total) || 0) - (o.refundedTotal ?? 0))
+
+  // «Редактировать» закрытый заказ = переоткрыть и загрузить в сайдбар ПОС.
+  async function doEditClosed(o: Order) {
+    try {
+      await reopenOrder(o.id)
+      toast.success('Заказ переоткрыт для редактирования')
+      setViewReceipt(null); setOrdersOpen(false)
+      const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && o.tableId) ? 'hall' : 'takeaway'
+      if (nextType !== orderType) skipTypeResetRef.current = true
+      setOrderType(nextType)
+      if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+      else { loadTakeaway(o.id) }
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+  }
+  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))) }
+  async function doRefund() {
+    if (!refundTarget || refundBusy) return
+    const rem = remainingRefund(refundTarget)
+    const amt = Math.max(0, parseFloat(refundAmt.replace(',', '.').replace(/\s/g, '')) || 0)
+    if (amt <= 0) { toast.error('Укажите сумму возврата'); return }
+    if (amt > rem + 0.01) { toast.error(`Больше остатка (${formatCurrency(rem)}) нельзя`); return }
+    if (!refundReason.trim()) { toast.error('Укажите причину возврата'); return }
+    setRefundBusy(true)
+    try {
+      await refundOrder(refundTarget.id, refundReason.trim(), amt)
+      toast.success(`Возврат ${formatCurrency(amt)}`)
+      setRefundTarget(null); setViewReceipt(null)
+      await openOrders()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { setRefundBusy(false) }
+  }
+
   const busy = paying || sending || adding || tableLoading
 
   // Esc закрывает открытый инлайн-оверлей (вес / выбор стола) — WCAG 2.1.2.
@@ -877,9 +918,9 @@ export default function PosV2Order() {
       {ordersOpen && (
         <div className="fixed inset-0 z-50" onClick={() => setOrdersOpen(false)}>
           <div className="absolute inset-0" style={{ background: 'rgba(26,26,26,0.4)' }} />
-          {/* Боковой drawer слева (как «Заказы» в старом POS): плотный список строк
+          {/* Боковой drawer СПРАВА — поверх сайдбара «Заказ»: плотный список строк
               для открытых и закрытых, с фильтром-счётчиком и поиском. */}
-          <div role="dialog" aria-modal="true" aria-label="Заказы за сегодня" className="absolute inset-y-0 left-0 flex flex-col pv-drawer-left" style={{ width: 'clamp(20rem,34vw,32rem)', background: 'var(--pv-card)', boxShadow: '0 0 60px rgba(0,0,0,0.35)' }} onClick={e => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label="Заказы за сегодня" className="absolute inset-y-0 right-0 flex flex-col pv-drawer-right" style={{ width: 'clamp(20rem,34vw,32rem)', background: 'var(--pv-card)', boxShadow: '0 0 60px rgba(0,0,0,0.35)' }} onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(0.9rem,1.4vw,1.3rem)', borderColor: 'var(--pv-border)' }}>
               <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Заказы за сегодня</span>
               <button onClick={() => setOrdersOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }} aria-label="Закрыть"><X style={{ color: 'var(--pv-text-2)' }} /></button>
@@ -955,6 +996,51 @@ export default function PosV2Order() {
             </div>
             <button disabled={reprinting} onClick={doReprintReceipt} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
               <Printer style={{ width: '1.3em', height: '1.3em' }} />{reprinting ? 'Печать…' : 'Печать чека'}
+            </button>
+            {/* Редактирование / возврат закрытого — только по правам (матрица доступов). */}
+            {viewReceipt.status === 'done' && (canEditClosed || (canRefund && remainingRefund(viewReceipt) > 0)) && (
+              <div className="flex gap-2">
+                {canEditClosed && (
+                  <button onClick={() => doEditClosed(viewReceipt)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-semibold border active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <Pencil style={{ width: '1.15em', height: '1.15em' }} />Редактировать
+                  </button>
+                )}
+                {canRefund && remainingRefund(viewReceipt) > 0 && (
+                  <button onClick={() => openRefund(viewReceipt)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-semibold border active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <Undo2 style={{ width: '1.15em', height: '1.15em' }} />Возврат
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </PosModal>
+      )}
+
+      {/* Возврат закрытого заказа (по праву orders.refund) */}
+      {refundTarget && (
+        <PosModal open onClose={() => { if (!refundBusy) setRefundTarget(null) }} dismissable={!refundBusy} width="clamp(20rem,42vw,30rem)" title={`Возврат · №${refundTarget.orderNumber ?? '—'}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.1rem,1.7vw,1.5rem)', gap: '0.9rem' }}>
+            <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 0.9rem' }}>
+              <span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Остаток к возврату</span>
+              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(remainingRefund(refundTarget))}</span>
+            </div>
+            <div>
+              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.35rem' }}>Сумма возврата</div>
+              <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-border)', padding: '0.55rem 0.9rem' }}>
+                <input inputMode="decimal" value={refundAmt} onChange={e => setRefundAmt(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+                <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>с.</span>
+              </div>
+            </div>
+            <div>
+              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.35rem' }}>Причина</div>
+              <div className="flex flex-wrap gap-2">
+                {['Жалоба гостя', 'Ошибка кассира', 'Некачественно', 'Другое'].map(r => { const on = r === refundReason; return (
+                  <button key={r} onClick={() => setRefundReason(r)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{r}</button>
+                ) })}
+              </div>
+            </div>
+            <button disabled={refundBusy} onClick={doRefund} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Undo2 style={{ width: '1.3em', height: '1.3em' }} />{refundBusy ? 'Возврат…' : 'Оформить возврат'}
             </button>
           </div>
         </PosModal>
