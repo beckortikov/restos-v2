@@ -636,7 +636,10 @@ export function OrderActionsBody({
           </div>
         )}
 
-        {order.status === 'done' && canDo('orders.cancel') && !order.isSplit && (
+        {/* Переоткрытие закрытого заказа — по праву orders.edit (в матрице
+            выдаётся отдельно от orders.cancel: reopen удаляет фин-операции и
+            выводит заказ из смены, потому чувствительнее обычной отмены). */}
+        {order.status === 'done' && canDo('orders.edit') && !order.isSplit && (
           <button
             onClick={() => {
               const total = order.totalWithService ?? order.total
@@ -657,7 +660,7 @@ export function OrderActionsBody({
             Открыть для редактирования
           </button>
         )}
-        {order.status === 'done' && canDo('orders.cancel') && order.isSplit && (
+        {order.status === 'done' && canDo('orders.edit') && order.isSplit && (
           <p className="text-xs text-muted-foreground italic text-center">
             Reopen split-заказа недоступен. Используйте отмену split-заказа отдельно.
           </p>
