@@ -308,8 +308,8 @@ export default function PosV2Ticket() {
                     </button>
                   )}
                   {!cancelled && (
-                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-lg flex items-center justify-center shrink-0 active:scale-90 transition-transform" style={{ width: '2.2rem', height: '2.2rem', background: 'var(--pv-occ-soft)' }}>
-                      <XCircle style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
+                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-xl flex items-center justify-center shrink-0 border active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-occ-soft)' }} aria-label={`Удалить «${i.name}»`} title="Удалить эту позицию">
+                      <Trash2 style={{ width: '1.15rem', height: '1.15rem', color: 'var(--pv-occ-text)' }} />
                     </button>
                   )}
                 </div>
@@ -332,7 +332,7 @@ export default function PosV2Ticket() {
             </div>
             <div className="flex items-center flex-wrap" style={{ gap: 'var(--pv-gap)' }}>
               <button onClick={() => setCancelOrderOpen(true)} className="flex items-center gap-2 rounded-2xl font-semibold shrink-0 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '2px solid var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(1rem,1.5vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
-                <Trash2 style={{ width: '1.2em', height: '1.2em' }} />Отменить
+                <Trash2 style={{ width: '1.2em', height: '1.2em' }} />Отменить заказ
               </button>
               {order.isSplit ? (
                 splits.some(s => s.status === 'paid') ? (
