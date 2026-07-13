@@ -12,8 +12,8 @@ import { useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem } from '@/lib/queries'
-import { formatCurrency, formatCurrencyCompact, calcLineTotal } from '@/lib/helpers'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, reprintOrderReceipt } from '@/lib/queries'
+import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -82,6 +82,14 @@ export default function PosV2Order() {
   // Пре-чек: превью на экране + печать (превью работает и без принтера).
   const [preBill, setPreBill] = useState<Order | null>(null)
   const [printingPre, setPrintingPre] = useState(false)
+  // Заказы прямо в ПОС (модалка вместо перехода на /pos2/orders): активные +
+  // закрытые; закрытый → просмотр + печать чека.
+  const [ordersOpen, setOrdersOpen] = useState(false)
+  const [ordersTab, setOrdersTab] = useState<'active' | 'closed'>('active')
+  const [ordersList, setOrdersList] = useState<Order[]>([])
+  const [ordersLoading, setOrdersLoading] = useState(false)
+  const [viewReceipt, setViewReceipt] = useState<Order | null>(null)
+  const [reprinting, setReprinting] = useState(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -180,8 +188,12 @@ export default function PosV2Order() {
   // Переключение типа заказа (после mount): такаут → грузим открытые «С собой»,
   // зал → сбрасываем контекст (стол выбирается заново).
   const typeInitRef = useRef(true)
+  // Когда тип переключается ради загрузки конкретного заказа из модалки «Заказы»,
+  // сброс контекста не нужен (иначе он затрёт выбранный стол/группу).
+  const skipTypeResetRef = useRef(false)
   useEffect(() => {
     if (typeInitRef.current) { typeInitRef.current = false; return }
+    if (skipTypeResetRef.current) { skipTypeResetRef.current = false; return }
     setCart([]); setActiveGroupId(null)
     if (orderType === 'takeaway') { setSelectedTableId(''); loadTakeaway() }
     else { setSelectedTableId(''); setTableOrders([]) }
@@ -450,6 +462,47 @@ export default function PosV2Order() {
     { isPreCheck: true, includeService: preBill.type === 'hall', servicePercent: restaurant?.servicePercent ?? 0 },
   ) : null, [preBill, restaurant, tables, zones, user])
 
+  // ── Заказы модалкой прямо в ПОС ──────────────────────────────────────────
+  async function openOrders() {
+    setOrdersOpen(true); setOrdersLoading(true)
+    try {
+      const shift = await fetchActiveShift().catch(() => null)
+      const os = shift ? await fetchOrders({ shiftId: (shift as { id?: string })?.id, slim: false }).catch(() => [] as Order[]) : []
+      setOrdersList(os)
+    } finally { setOrdersLoading(false) }
+  }
+  function tapOrder(o: Order) {
+    if (o.status === 'done') { setViewReceipt(o); return } // закрытый → чек
+    if (o.status === 'cancelled') return
+    // активный → грузим в сайдбар (без ухода с экрана)
+    setOrdersOpen(false)
+    const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && o.tableId) ? 'hall' : 'takeaway'
+    if (nextType !== orderType) skipTypeResetRef.current = true
+    setOrderType(nextType)
+    if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+    else { loadTakeaway(o.id) }
+  }
+  async function doReprintReceipt() {
+    if (!viewReceipt || reprinting) return
+    setReprinting(true)
+    try { await reprintOrderReceipt(viewReceipt.id); toast.success('Чек отправлен на печать') }
+    catch (e) { toast.error(printerErr(e)) }
+    finally { setReprinting(false) }
+  }
+  const closedReceipt = useMemo(() => viewReceipt ? buildReceiptData(
+    viewReceipt,
+    { restaurant, tables, zones, currentUser: user },
+    {
+      isPreCheck: false,
+      includeService: (viewReceipt.serviceAmount ?? 0) > 0 || (viewReceipt.servicePercent ?? 0) > 0,
+      servicePercent: viewReceipt.servicePercent,
+      discountAmount: viewReceipt.discountAmount,
+      tipAmount: viewReceipt.tipAmount,
+      paymentMethod: viewReceipt.paymentMethod,
+      payments: viewReceipt.payments,
+    },
+  ) : null, [viewReceipt, restaurant, tables, zones, user])
+
   const busy = paying || sending || adding || tableLoading
 
   // Esc закрывает открытый инлайн-оверлей (вес / выбор стола) — WCAG 2.1.2.
@@ -495,7 +548,7 @@ export default function PosV2Order() {
           </div>
           {/* Заказы прямо из ПОС (как раздел «Заказы» в старом POS): активные +
               закрытые, просмотр и печать чека закрытого заказа. */}
-          <button onClick={() => navigate('/pos2/orders')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }} title="Заказы: активные и закрытые, печать чека">
+          <button onClick={openOrders} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }} title="Заказы: активные и закрытые, печать чека">
             <ClipboardList style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
             <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Заказы</span>
           </button>
@@ -795,6 +848,60 @@ export default function PosV2Order() {
             </div>
             <button disabled={printingPre} onClick={doPrintPreBill} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
               <Printer style={{ width: '1.3em', height: '1.3em' }} />{printingPre ? 'Печать…' : 'Печать пре-чека'}
+            </button>
+          </div>
+        </PosModal>
+      )}
+
+      {/* Заказы прямо в ПОС: активные + закрытые (закрытый → чек + печать) */}
+      {ordersOpen && (
+        <PosModal open onClose={() => setOrdersOpen(false)} width="clamp(24rem,64vw,54rem)" title="Заказы">
+          <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: 'clamp(0.8rem,1.2vw,1.1rem)', maxHeight: '72vh' }}>
+            <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px', alignSelf: 'flex-start' }}>
+              {([['active', 'Активные'], ['closed', 'Закрытые']] as const).map(([t, l]) => { const on = ordersTab === t; return (
+                <button key={t} onClick={() => setOrdersTab(t)} className="rounded-xl font-semibold" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{l}</button>
+              ) })}
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              {ordersLoading ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
+              ) : (() => {
+                const rows = ordersList.filter(o => ordersTab === 'closed' ? (o.status === 'done' || o.status === 'cancelled') : (o.status !== 'done' && o.status !== 'cancelled')).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+                if (rows.length === 0) return <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Заказов нет</div>
+                return (
+                  <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(12rem,20vw,16rem), 1fr))' }}>
+                    {rows.map(o => {
+                      const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tables.find(t => t.id === o.tableId)?.number ?? '—') : '—'}` : 'С собой'
+                      const n = (o.items ?? []).filter(i => !i.cancelledAt).length
+                      const label = o.status === 'done' ? 'Оплачен' : o.status === 'cancelled' ? 'Отменён' : 'Открыт'
+                      return (
+                        <button key={o.id} onClick={() => tapOrder(o)} className="flex flex-col text-left rounded-2xl border active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.7rem,1.1vw,1rem)', gap: '0.35rem' }}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>№{o.orderNumber ?? '—'}</span>
+                            <span style={{ color: o.status === 'done' || o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{label}</span>
+                          </div>
+                          <div style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{loc} · {n} поз.</div>
+                          <div className="font-bold" style={{ color: o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
+            </div>
+          </div>
+        </PosModal>
+      )}
+
+      {/* Чек закрытого заказа — просмотр + печать (из модалки «Заказы») */}
+      {viewReceipt && (
+        <PosModal open onClose={() => { if (!reprinting) setViewReceipt(null) }} dismissable={!reprinting} width="clamp(20rem,42vw,30rem)" title={`Чек · №${viewReceipt.orderNumber ?? '—'}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '1rem' }}>
+            <div className="overflow-y-auto flex justify-center" style={{ maxHeight: '58vh', background: 'var(--pv-bg)', borderRadius: 'var(--pv-radius)', padding: '0.8rem' }}>
+              {closedReceipt ? <PrintReceipt data={closedReceipt} /> : <span style={{ color: 'var(--pv-text-3)' }}>Нет данных</span>}
+            </div>
+            <button disabled={reprinting} onClick={doReprintReceipt} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Printer style={{ width: '1.3em', height: '1.3em' }} />{reprinting ? 'Печать…' : 'Печать чека'}
             </button>
           </div>
         </PosModal>
