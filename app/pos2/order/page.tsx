@@ -12,7 +12,7 @@ import { useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, reprintOrderReceipt } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt } from '@/lib/queries'
 import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -237,6 +237,20 @@ export default function PosV2Order() {
       toast.success('Позиция отменена')
       setCancelItem(null)
       if (res.allCancelled) { toast.info('Все позиции отменены — заказ закрыт'); setActiveGroupId(null) }
+      await reloadContext()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { itemBusyRef.current = false; setItemBusy(false) }
+  }
+
+  // Убрать ОДНУ штуку из отправленной позиции (qty×N → qty×(N−1)) без отмены всей
+  // позиции. Для штучных с qty>1; у весовых «одну штуку» смысла нет — там корзина.
+  async function decOrderItem(i: OrderItem) {
+    if (itemBusyRef.current || !i.id) return
+    itemBusyRef.current = true; setItemBusy(true)
+    try {
+      const res = await cancelOrderItemPartial(i.id, 1, 'Корректировка количества', user?.id, activeGroup?.id)
+      toast.success('Убрана 1 шт.')
+      if (res.allCancelled) { setActiveGroupId(null) }
       await reloadContext()
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
     finally { itemBusyRef.current = false; setItemBusy(false) }
@@ -676,8 +690,13 @@ export default function PosV2Order() {
                     <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{c ? ' · отменено' : ''}{i.note ? ` · 💬 ${i.note}` : ''}</div>
                   </div>
                   <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcLineTotal(i.price, i.qty, i.unit, i.unitSize))}</span>
+                  {!c && i.id && (i.unit ?? 'piece') === 'piece' && i.qty > 1 && (
+                    <button disabled={itemBusy} onClick={() => decOrderItem(i)} className="rounded-xl flex items-center justify-center shrink-0 border disabled:opacity-50 active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }} aria-label={`Убрать одну «${i.name}»`} title="Убрать 1 шт.">
+                      <Minus style={{ width: '1.15rem', height: '1.15rem', color: 'var(--pv-text-2)' }} />
+                    </button>
+                  )}
                   {!c && i.id && (
-                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-xl flex items-center justify-center shrink-0 border active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-occ-soft)' }} aria-label={`Отменить «${i.name}»`} title="Отменить позицию">
+                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-xl flex items-center justify-center shrink-0 border active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-occ-soft)' }} aria-label={`Отменить «${i.name}»`} title="Отменить всю позицию">
                       <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
                     </button>
                   )}
