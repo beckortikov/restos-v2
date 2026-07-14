@@ -432,82 +432,94 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* ═══ Способы оплаты за день (нал/безнал/перевод) ═══ */}
-      <div className="bg-card rounded-xl border border-border p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-            <CreditCard className="size-4 text-primary" />
-            {isToday ? 'Продажи по способам оплаты' : 'Продажи по способам оплаты за день'}
-          </h2>
-          <span className="text-xs text-muted-foreground tabular-nums">Итого {formatCurrency(paymentTotal)}</span>
-        </div>
-        <div className="grid grid-cols-3 gap-2.5 md:gap-3">
-          {([
-            { key: 'cash', label: 'Наличные', icon: Banknote, color: 'text-emerald-600 bg-emerald-500/10' },
-            { key: 'card', label: 'Карта', icon: CreditCard, color: 'text-blue-600 bg-blue-500/10' },
-            { key: 'transfer', label: 'Перевод', icon: ArrowRight, color: 'text-violet-600 bg-violet-500/10' },
-          ] as const).map(({ key, label, icon: Icon, color }) => {
-            const val = paymentBreakdown[key]
-            const pct = paymentTotal > 0 ? Math.round(val / paymentTotal * 100) : 0
-            return (
-              <div key={key} className="rounded-lg border border-border p-3">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <div className={`size-7 rounded-md flex items-center justify-center shrink-0 ${color}`}>
-                    <Icon className="size-3.5" />
-                  </div>
-                  <span className="text-xs font-medium text-muted-foreground truncate">{label}</span>
+      {/* ═══ Требует внимания (слева) + Способы оплаты (компактно, справа) ═══ */}
+      {(() => {
+        const hasAlerts = lowStock.length > 0 || longCooking.length > 0 || overdueSuppliers.length > 0 || billRequested.length > 0
+        const payMethods = ([
+          { key: 'cash', label: 'Наличные', icon: Banknote, color: 'text-emerald-600 bg-emerald-500/10' },
+          { key: 'card', label: 'Карта', icon: CreditCard, color: 'text-blue-600 bg-blue-500/10' },
+          { key: 'transfer', label: 'Перевод', icon: ArrowRight, color: 'text-violet-600 bg-violet-500/10' },
+        ] as const)
+        return (
+          <div className="flex flex-col lg:flex-row gap-3 md:gap-4 items-start">
+            {/* Требует внимания — слева, растягивается */}
+            {hasAlerts ? (
+              <div className="bg-card rounded-xl border border-border p-4 flex-1 min-w-0 w-full">
+                <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+                  <AlertTriangle className="size-4 text-amber-500" />
+                  Требует внимания
+                </h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {lowStock.length > 0 && (
+                    <AlertItem
+                      icon={Package}
+                      text={`${lowStock.length} ингредиент${lowStock.length > 1 ? 'ов' : ''} ниже минимума: ${lowStock.slice(0, 3).map(i => i.name).join(', ')}`}
+                      severity="warn"
+                      href="/warehouse/inventory"
+                    />
+                  )}
+                  {longCooking.length > 0 && (
+                    <AlertItem
+                      icon={Timer}
+                      text={`${longCooking.length} заказ${longCooking.length > 1 ? 'ов' : ''} готовятся > 30 мин`}
+                      severity="error"
+                      href="/operations/kitchen"
+                    />
+                  )}
+                  {overdueSuppliers.length > 0 && (
+                    <AlertItem
+                      icon={Truck}
+                      text={`Долг поставщикам: ${formatCurrency(overdueSuppliers.reduce((s, sup) => s + sup.currentDebt, 0))}`}
+                      severity="warn"
+                      href="/warehouse/suppliers"
+                    />
+                  )}
+                  {billRequested.length > 0 && (
+                    <AlertItem
+                      icon={CreditCard}
+                      text={`${billRequested.length} стол${billRequested.length > 1 ? 'ов' : ''} ждут оплату`}
+                      severity="info"
+                      href="/operations/table-map"
+                    />
+                  )}
                 </div>
-                <p className="text-base md:text-lg font-bold text-foreground tabular-nums leading-none">{formatCurrency(val)}</p>
-                <p className="text-[11px] text-muted-foreground mt-1 tabular-nums">{pct}%</p>
               </div>
-            )
-          })}
-        </div>
-      </div>
+            ) : (
+              <div className="hidden lg:block flex-1" />
+            )}
 
-      {/* ═══ Alerts ═══ */}
-      {(lowStock.length > 0 || longCooking.length > 0 || overdueSuppliers.length > 0 || billRequested.length > 0) && (
-        <div className="bg-card rounded-xl border border-border p-4">
-          <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
-            <AlertTriangle className="size-4 text-amber-500" />
-            Требует внимания
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {lowStock.length > 0 && (
-              <AlertItem
-                icon={Package}
-                text={`${lowStock.length} ингредиент${lowStock.length > 1 ? 'ов' : ''} ниже минимума: ${lowStock.slice(0, 3).map(i => i.name).join(', ')}`}
-                severity="warn"
-                href="/warehouse/inventory"
-              />
-            )}
-            {longCooking.length > 0 && (
-              <AlertItem
-                icon={Timer}
-                text={`${longCooking.length} заказ${longCooking.length > 1 ? 'ов' : ''} готовятся > 30 мин`}
-                severity="error"
-                href="/operations/kitchen"
-              />
-            )}
-            {overdueSuppliers.length > 0 && (
-              <AlertItem
-                icon={Truck}
-                text={`Долг поставщикам: ${formatCurrency(overdueSuppliers.reduce((s, sup) => s + sup.currentDebt, 0))}`}
-                severity="warn"
-                href="/warehouse/suppliers"
-              />
-            )}
-            {billRequested.length > 0 && (
-              <AlertItem
-                icon={CreditCard}
-                text={`${billRequested.length} стол${billRequested.length > 1 ? 'ов' : ''} ждут оплату`}
-                severity="info"
-                href="/operations/table-map"
-              />
-            )}
+            {/* Способы оплаты — компактная карточка справа */}
+            <div className="bg-card rounded-xl border border-border p-4 w-full lg:w-[19rem] shrink-0">
+              <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+                <CreditCard className="size-4 text-primary" />
+                Способы оплаты{isToday ? '' : ' за день'}
+              </h2>
+              <div className="space-y-2">
+                {payMethods.map(({ key, label, icon: Icon, color }) => {
+                  const val = paymentBreakdown[key]
+                  const pct = paymentTotal > 0 ? Math.round(val / paymentTotal * 100) : 0
+                  return (
+                    <div key={key} className="flex items-center gap-2.5">
+                      <div className={`size-7 rounded-md flex items-center justify-center shrink-0 ${color}`}>
+                        <Icon className="size-3.5" />
+                      </div>
+                      <span className="text-xs font-medium text-muted-foreground flex-1 min-w-0 truncate">{label}</span>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-bold text-foreground tabular-nums leading-none">{formatCurrency(val)}</p>
+                        <p className="text-[10px] text-muted-foreground tabular-nums mt-0.5">{pct}%</p>
+                      </div>
+                    </div>
+                  )
+                })}
+                <div className="border-t border-border pt-2 mt-1 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground">Итого</span>
+                  <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(paymentTotal)}</span>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* ═══ Operations (real-time) + Finance ═══ */}
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
