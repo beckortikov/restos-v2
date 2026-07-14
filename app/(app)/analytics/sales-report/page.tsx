@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
-import { TrendingUp, ShoppingBag, Package, Receipt, UtensilsCrossed, ShoppingCart } from 'lucide-react'
+import * as XLSX from 'xlsx'
+import { TrendingUp, ShoppingBag, Package, Receipt, ShoppingCart, Download, ChevronDown } from 'lucide-react'
 
 import { formatCurrency, calcLineTotal } from '@/lib/helpers'
 import { fetchOrders, fetchMenuItems } from '@/lib/queries'
@@ -35,6 +36,14 @@ function heatClass(v: number, max: number): string {
   return 'bg-primary text-white'
 }
 
+// Дни недели с понедельника (getDay: 0=вс..6=сб).
+const WD_ORDER = [1, 2, 3, 4, 5, 6, 0]
+
+function appendSheet(wb: XLSX.WorkBook, name: string, rows: Record<string, unknown>[]) {
+  const ws = XLSX.utils.json_to_sheet(rows)
+  XLSX.utils.book_append_sheet(wb, ws, name.slice(0, 31))
+}
+
 type Kind = 'all' | 'kitchen' | 'purchased'
 type Dim = 'dish' | 'category'
 
@@ -57,6 +66,7 @@ export default function SalesReportPage() {
   const [dateTo, setDateTo] = useState(initial.to)
   const [dim, setDim] = useState<Dim>('dish')
   const [kind, setKind] = useState<Kind>('all')
+  const [expandedDate, setExpandedDate] = useState<string | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -181,6 +191,55 @@ export default function SalesReportPage() {
       .sort((a, b) => (a.date < b.date ? 1 : -1))
   }, [soldOrders, menuMeta, kind])
 
+  // Тепловая карта: блюдо/категория × день недели (сумма выручки за период).
+  const weekday = useMemo(() => {
+    const rowKeys = rows.slice(0, 12).map(r => r.key)
+    const rowSet = new Set(rowKeys)
+    const cell = new Map<string, number>()
+    let max = 0
+    for (const r of items) {
+      const rk = dim === 'dish' ? r.name : r.category
+      if (!rowSet.has(rk)) continue
+      const wd = new Date(r.date + 'T00:00:00').getDay()
+      const k = `${rk}:${wd}`
+      const v = (cell.get(k) ?? 0) + r.revenue
+      cell.set(k, v)
+      if (v > max) max = v
+    }
+    return { rowKeys, cell, max: Math.max(1, max) }
+  }, [items, rows, dim])
+
+  // Drill-down: блюда выбранного дня (по выручке).
+  const dayDetail = useMemo(() => {
+    if (!expandedDate) return []
+    const m = new Map<string, { name: string; qty: number; revenue: number; isPurchased: boolean }>()
+    for (const r of items) {
+      if (r.date !== expandedDate) continue
+      const e = m.get(r.name)
+      if (e) { e.qty += r.qty; e.revenue += r.revenue }
+      else m.set(r.name, { name: r.name, qty: r.qty, revenue: r.revenue, isPurchased: r.isPurchased })
+    }
+    return [...m.values()].sort((a, b) => b.revenue - a.revenue)
+  }, [items, expandedDate])
+
+  // Экспорт в Excel: листы «Топ за период» + «По дням».
+  function exportReport() {
+    const wb = XLSX.utils.book_new()
+    const dimLabel = dim === 'dish' ? 'Блюдо' : 'Категория'
+    const topRows = rows.map((r, i) => ({
+      '#': i + 1,
+      [dimLabel]: r.name,
+      ...(dim === 'dish' ? { 'Категория': r.category, 'Покупной': r.isPurchased ? 'да' : '' } : {}),
+      'Кол-во': Number(r.qty.toFixed(2)),
+      'Выручка': Number(r.revenue.toFixed(2)),
+      'Доля %': rowsTotal > 0 ? Number(((r.revenue / rowsTotal) * 100).toFixed(1)) : 0,
+    }))
+    appendSheet(wb, dim === 'dish' ? 'Блюда' : 'Категории', topRows)
+    const dayRows = byDate.map(d => ({ 'Дата': d.date, 'День': d.wd, 'Заказов': d.orders, 'Позиций': Number(d.qty.toFixed(2)), 'Выручка': Number(d.revenue.toFixed(2)), 'Топ-блюдо': d.top }))
+    appendSheet(wb, 'По дням', dayRows)
+    XLSX.writeFile(wb, `Продажи_${dateFrom}_${dateTo}.xlsx`)
+  }
+
   return (
     <div className="p-4 md:p-6 space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -188,7 +247,13 @@ export default function SalesReportPage() {
           <h1 className="text-xl font-bold">Продажи</h1>
           <p className="text-sm text-muted-foreground">Что и когда продавалось — блюда, категории и покупные товары по дням и часам</p>
         </div>
-        <DateRangePicker from={dateFrom} to={dateTo} maxDate={today()} onChange={r => { setDateFrom(r.from); setDateTo(r.to) }} />
+        <div className="flex items-center gap-2">
+          <DateRangePicker from={dateFrom} to={dateTo} maxDate={today()} onChange={r => { setDateFrom(r.from); setDateTo(r.to) }} />
+          <button onClick={exportReport} className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:bg-muted transition-colors" title="Выгрузить в Excel">
+            <Download className="size-4" />
+            <span className="hidden sm:inline">Excel</span>
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -301,6 +366,42 @@ export default function SalesReportPage() {
             )}
           </div>
 
+          {/* Тепловая карта: по дням недели */}
+          <div className="bg-card rounded-xl border border-border p-4 md:p-5">
+            <h2 className="text-sm font-semibold mb-1">{dim === 'dish' ? 'Блюда' : 'Категории'} по дням недели</h2>
+            <p className="text-xs text-muted-foreground mb-3">Суммарная выручка по дням недели за период — для планирования заготовок и промо</p>
+            {weekday.rowKeys.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">Нет данных</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="border-separate border-spacing-0.5">
+                  <thead>
+                    <tr>
+                      <th className="sticky left-0 bg-card" />
+                      {WD_ORDER.map(wd => <th key={wd} className="text-[10px] font-normal text-muted-foreground w-12 text-center">{WD_LABEL[wd]}</th>)}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {weekday.rowKeys.map(rk => (
+                      <tr key={rk}>
+                        <td className="sticky left-0 bg-card pr-2 text-xs font-medium truncate max-w-[140px]" title={rk}>{rk}</td>
+                        {WD_ORDER.map(wd => {
+                          const v = weekday.cell.get(`${rk}:${wd}`) ?? 0
+                          return (
+                            <td key={wd} className={`w-12 h-8 text-center text-[10px] rounded tabular-nums ${heatClass(v, weekday.max)}`} title={v > 0 ? `${rk} · ${WD_LABEL[wd]} — ${formatCurrency(v)}` : `${rk} · ${WD_LABEL[wd]}`}>
+                              {v > 0 ? Math.round(v / 1000) || '·' : ''}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <p className="text-[10px] text-muted-foreground mt-2">Числа — выручка в тыс. сум. Топ-{weekday.rowKeys.length} по выручке.</p>
+              </div>
+            )}
+          </div>
+
           {/* История по датам */}
           <div className="bg-card rounded-xl border border-border p-4 md:p-5">
             <h2 className="text-sm font-semibold mb-1">По дням</h2>
@@ -312,6 +413,7 @@ export default function SalesReportPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="text-xs text-muted-foreground border-b border-border">
+                      <th className="w-6" />
                       <th className="text-left font-medium py-2 pr-2">Дата</th>
                       <th className="text-left font-medium py-2 pr-2">День</th>
                       <th className="text-right font-medium py-2 px-2">Заказов</th>
@@ -321,16 +423,47 @@ export default function SalesReportPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {byDate.map(d => (
-                      <tr key={d.date} className="border-b border-border/50 last:border-0">
-                        <td className="py-2 pr-2 font-medium whitespace-nowrap">{d.label}</td>
-                        <td className="py-2 pr-2 text-muted-foreground">{d.wd}</td>
-                        <td className="py-2 px-2 text-right tabular-nums">{d.orders}</td>
-                        <td className="py-2 px-2 text-right tabular-nums">{fmtQty(d.qty)}</td>
-                        <td className="py-2 px-2 text-right font-medium tabular-nums">{formatCurrency(d.revenue)}</td>
-                        <td className="py-2 pl-2 text-muted-foreground truncate max-w-[200px]">{d.top}</td>
-                      </tr>
-                    ))}
+                    {byDate.map(d => {
+                      const isOpen = expandedDate === d.date
+                      return (
+                        <Fragment key={d.date}>
+                          <tr className="border-b border-border/50 last:border-0 cursor-pointer hover:bg-muted/40" onClick={() => setExpandedDate(isOpen ? null : d.date)}>
+                            <td className="py-2 pl-1 pr-1"><ChevronDown className={`size-3.5 text-muted-foreground transition-transform ${isOpen ? 'rotate-180' : ''}`} /></td>
+                            <td className="py-2 pr-2 font-medium whitespace-nowrap">{d.label}</td>
+                            <td className="py-2 pr-2 text-muted-foreground">{d.wd}</td>
+                            <td className="py-2 px-2 text-right tabular-nums">{d.orders}</td>
+                            <td className="py-2 px-2 text-right tabular-nums">{fmtQty(d.qty)}</td>
+                            <td className="py-2 px-2 text-right font-medium tabular-nums">{formatCurrency(d.revenue)}</td>
+                            <td className="py-2 pl-2 text-muted-foreground truncate max-w-[200px]">{d.top}</td>
+                          </tr>
+                          {isOpen && (
+                            <tr className="bg-muted/20">
+                              <td colSpan={7} className="px-3 py-2">
+                                {dayDetail.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground py-1">Нет позиций</p>
+                                ) : (
+                                  <div className="space-y-0.5">
+                                    <p className="text-xs font-medium text-muted-foreground mb-1.5">Продано {d.label} ({d.wd}):</p>
+                                    {dayDetail.map(x => (
+                                      <div key={x.name} className="flex items-center justify-between text-xs py-0.5">
+                                        <span className="flex items-center gap-1.5 min-w-0">
+                                          <span className="truncate max-w-[240px]">{x.name}</span>
+                                          {x.isPurchased && <ShoppingCart className="size-3 text-blue-500 shrink-0" />}
+                                        </span>
+                                        <span className="flex items-center gap-3 shrink-0 tabular-nums">
+                                          <span className="text-muted-foreground">{fmtQty(x.qty)} шт</span>
+                                          <span className="font-medium w-20 text-right">{formatCurrency(x.revenue)}</span>
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
