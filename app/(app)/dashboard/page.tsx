@@ -196,6 +196,9 @@ export default function DashboardPage() {
   const [users, setUsers] = useState<User[]>([])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [loading, setLoading] = useState(true)
+  // Выбранный день (по умолчанию сегодня). Все дневные показатели считаются за
+  // него — фильтром по дате из уже загруженных заказов/операций.
+  const [selectedDate, setSelectedDate] = useState<string>(today())
 
   useEffect(() => {
     Promise.all([
@@ -222,7 +225,8 @@ export default function DashboardPage() {
   }, [loading])
 
   // ─── Calculations (must be before any early return for hooks) ──────────────
-  const todayStr = today()
+  const todayStr = selectedDate
+  const isToday = selectedDate === today()
 
   // Revenue
   const todayOrders = useMemo(() => orders.filter(o => o.status === 'done' && o.closedAt?.startsWith(todayStr)), [orders, todayStr])
@@ -320,7 +324,7 @@ export default function DashboardPage() {
   const recentOps = operations.slice(0, 6)
 
   // Current date display
-  const dateStr = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })
+  const dateStr = new Date(selectedDate + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })
 
   if (loading) return (
     <div className="p-6 flex items-center justify-center h-64">
@@ -336,16 +340,26 @@ export default function DashboardPage() {
           <h1 className="text-xl font-bold text-foreground">Дашборд</h1>
           <p className="text-muted-foreground text-sm mt-0.5 capitalize">{dateStr}</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <CircleDot className="size-3 text-emerald-500 animate-pulse" />
-          Реальное время · обновление 30 сек
+        <div className="flex items-center gap-2">
+          <input type="date" value={selectedDate} max={today()} onChange={e => setSelectedDate(e.target.value || today())} className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground" aria-label="Дата" />
+          {!isToday && <button onClick={() => setSelectedDate(today())} className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:bg-muted">Сегодня</button>}
+          {isToday && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap">
+              <CircleDot className="size-3 text-emerald-500 animate-pulse" />Реальное время
+            </span>
+          )}
         </div>
       </div>
+      {!isToday && (
+        <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Показатели за <b className="text-foreground">{dateStr}</b>. Оперативные блоки (касса, остатки, активные заказы) — всегда текущие.
+        </div>
+      )}
 
       {/* ═══ KPI Row ═══ */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2.5 md:gap-3">
         <KpiCard
-          label="Выручка сегодня"
+          label={isToday ? "Выручка сегодня" : "Выручка за день"}
           value={formatCurrency(todayRevenue)}
           sub={`${todayOrders.length} закрытых заказов`}
           icon={TrendingUp}
@@ -353,7 +367,7 @@ export default function DashboardPage() {
           href="/finance/cashflow"
         />
         <KpiCard
-          label="Заказов сегодня"
+          label={isToday ? "Заказов сегодня" : "Заказов за день"}
           value={String(todayOrdersCount)}
           sub={`${activeOrders.length} активных сейчас`}
           icon={ShoppingBag}
@@ -377,7 +391,7 @@ export default function DashboardPage() {
           href="/finance/accounts"
         />
         <KpiCard
-          label="Расходы сегодня"
+          label={isToday ? "Расходы сегодня" : "Расходы за день"}
           value={formatCurrency(todayExpenses)}
           sub={`Чистый: ${formatCurrency(todayRevenue - todayExpenses)}`}
           icon={Banknote}
@@ -619,7 +633,7 @@ export default function DashboardPage() {
           {/* Top dishes today */}
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-foreground">🔥 Топ блюда сегодня</h2>
+              <h2 className="text-sm font-semibold text-foreground">🔥 Топ блюда{isToday ? " сегодня" : " за день"}</h2>
               <Link to="/analytics/abc-menu" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                 ABC <ArrowRight className="size-3" />
               </Link>
@@ -649,7 +663,7 @@ export default function DashboardPage() {
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
                 <UsersIcon className="size-4 text-muted-foreground" />
-                Официанты сегодня
+                Официанты{isToday ? " сегодня" : " за день"}
               </h2>
             </div>
             {topWaiters.length === 0 ? (
