@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight } from 'lucide-react'
 import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { formatCurrency } from '@/lib/helpers'
+import { dMul } from '@/lib/decimal'
 import { toast } from 'sonner'
 import type { Supplier, StockReceipt } from '@/lib/types'
 
@@ -80,6 +81,7 @@ export default function EditSupplierPage() {
   const [ingredientCategories, setIngredientCategories] = useState<string[]>([])
   const [receipts, setReceipts] = useState<StockReceipt[]>([])
   const [loadingReceipts, setLoadingReceipts] = useState(true)
+  const [expandedReceipt, setExpandedReceipt] = useState<string | null>(null)
 
   const totalPurchased = useMemo(() => receipts.reduce((s, r) => s + r.totalAmount, 0), [receipts])
   const totalDebt = useMemo(() => receipts.reduce((s, r) => s + r.debtAmount, 0), [receipts])
@@ -435,11 +437,23 @@ export default function EditSupplierPage() {
                   {sortedReceipts.map((r) => {
                     const badge = PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid
                     const itemsCount = r.lines?.length ?? 0
+                    const open = expandedReceipt === r.id
                     return (
-                      <tr key={r.id} className="border-b border-border/40 last:border-0 hover:bg-muted/30 transition-colors">
+                      <React.Fragment key={r.id}>
+                      <tr
+                        onClick={() => itemsCount > 0 && setExpandedReceipt(open ? null : r.id)}
+                        className={`border-b border-border/40 last:border-0 transition-colors ${itemsCount > 0 ? 'cursor-pointer hover:bg-muted/30' : ''} ${open ? 'bg-muted/40' : ''}`}
+                      >
                         <td className="py-2.5 pr-3">
-                          <div className="font-medium text-foreground tabular-nums">{r.date || '—'}</div>
-                          {itemsCount > 0 && <div className="text-[11px] text-muted-foreground">{itemsCount} позиц.</div>}
+                          <div className="flex items-center gap-1.5">
+                            {itemsCount > 0
+                              ? (open ? <ChevronDown className="size-3.5 text-muted-foreground shrink-0" /> : <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />)
+                              : <span className="size-3.5 shrink-0" />}
+                            <div>
+                              <div className="font-medium text-foreground tabular-nums">{r.date || '—'}</div>
+                              {itemsCount > 0 && <div className="text-[11px] text-muted-foreground">{itemsCount} позиц.</div>}
+                            </div>
+                          </div>
                         </td>
                         <td className="py-2.5 pr-3">
                           <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${badge.cls}`}>
@@ -454,6 +468,36 @@ export default function EditSupplierPage() {
                             : <span className="text-muted-foreground">0</span>}
                         </td>
                       </tr>
+                      {open && (
+                        <tr className="bg-muted/20">
+                          <td colSpan={5} className="px-3 pb-3 pt-1">
+                            <div className="rounded-lg border border-border/60 overflow-hidden">
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/40">
+                                    <th className="text-left font-semibold px-3 py-1.5">Товар</th>
+                                    <th className="text-right font-semibold px-3 py-1.5">Кол-во</th>
+                                    <th className="text-right font-semibold px-3 py-1.5">Цена</th>
+                                    <th className="text-right font-semibold px-3 py-1.5">Сумма</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {(r.lines ?? []).map((l, i) => (
+                                    <tr key={i} className="border-t border-border/40">
+                                      <td className="px-3 py-1.5 text-foreground">{l.name}</td>
+                                      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{l.qty} {l.unit}</td>
+                                      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{formatCurrency(l.pricePerUnit)}</td>
+                                      <td className="px-3 py-1.5 text-right font-medium text-foreground tabular-nums">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                            {r.note && <p className="text-[11px] text-muted-foreground mt-2">Примечание: {r.note}</p>}
+                          </td>
+                        </tr>
+                      )}
+                      </React.Fragment>
                     )
                   })}
                 </tbody>
