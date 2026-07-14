@@ -213,10 +213,12 @@ func TestFinancialEdgeCases(t *testing.T) {
 		}
 	})
 
-	t.Run("Reopen_DoesNotReverseFinops", func(t *testing.T) {
-		// Reopen оставляет финопы/stock_movements (legacy). А повторное close
-		// теперь ИДЕМПОТЕНТНО по выручке — не постит revenue-FO/кредит счёта
-		// дважды (v3.16.4). Тест фиксирует это.
+	t.Run("Reopen_ReversesFinancials_RecloseReposts", func(t *testing.T) {
+		// Reopen СТОРНИРУЕТ финансовый след закрытия (v3.16.31): revenue-FO
+		// удаляется, баланс счёта возвращается, агрегаты смены уменьшаются.
+		// Повторный close постит выручку заново (по новой сумме), но склад
+		// НЕ списывается второй раз. До v3.16.31 reopen ничего не сторнировал,
+		// а reclose был no-op по выручке — смена не видела редактирование.
 		f := setupE2E(t)
 		tok := f.login(t)
 		gdb, _ := db.Open(testDSN())
@@ -228,6 +230,11 @@ func TestFinancialEdgeCases(t *testing.T) {
 
 		mid, sid, accID, _ := bootstrapForOrder(t, f, gdb, "1000")
 		gdb.Model(&models.MenuItem{}).Where("id = ?", mid).Update("price", decimal.MustFromString("100"))
+
+		var balBefore models.FinancialAccount
+		gdb.First(&balBefore, "id = ?", accID)
+		var shiftBefore models.CashShift
+		gdb.First(&shiftBefore, "id = ?", sid)
 
 		r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(),
 			map[string]any{"items": []map[string]any{{"menu_item_id": mid, "qty": "1"}}})
@@ -242,6 +249,13 @@ func TestFinancialEdgeCases(t *testing.T) {
 
 		var balAfter1 models.FinancialAccount
 		gdb.First(&balAfter1, "id = ?", accID)
+		var shiftAfterClose models.CashShift
+		gdb.First(&shiftAfterClose, "id = ?", sid)
+		if shiftAfterClose.CashRevenue.Equal(shiftBefore.CashRevenue) {
+			t.Fatalf("close did not increment shift cash_revenue (still %s)", shiftBefore.CashRevenue.String())
+		}
+		var movesAfterClose int64
+		gdb.Model(&models.StockMovement{}).Where("description = ?", "order:"+ord.ID).Count(&movesAfterClose)
 
 		// Reopen.
 		rr, rb := f.post(t, fmt.Sprintf("/api/v1/orders/%s/reopen", ord.ID), tok, uuid.NewString(), nil)
@@ -255,41 +269,75 @@ func TestFinancialEdgeCases(t *testing.T) {
 			t.Errorf("MISMATCH status after reopen = %v, want served", ordReopened.Status)
 		}
 
-		// Финоп НЕ должен быть удалён по текущему дизайну.
+		// Revenue-FO удалён (сторно).
 		var opsAfterReopen []models.FinancialOperation
-		gdb.Where("source_ref = ?", "order:"+ord.ID).Find(&opsAfterReopen)
-		if len(opsAfterReopen) != 1 {
-			t.Errorf("MISSING/MISMATCH: reopen should leave finop (legacy), got %d", len(opsAfterReopen))
+		gdb.Where("source_ref = ? AND category = ?", "order:"+ord.ID, "revenue").Find(&opsAfterReopen)
+		if len(opsAfterReopen) != 0 {
+			t.Errorf("STALE REVENUE: reopen must delete revenue finops, got %d", len(opsAfterReopen))
 		}
 
-		// Balance не уменьшается на reopen — это БАГ с точки зрения учёта,
-		// но текущее поведение. Фиксируем.
+		// Баланс счёта вернулся к состоянию до закрытия.
 		var balAfterReopen models.FinancialAccount
 		gdb.First(&balAfterReopen, "id = ?", accID)
-		if !balAfterReopen.Balance.Equal(balAfter1.Balance) {
-			t.Errorf("MISMATCH: reopen reverted balance (was %s, now %s) — expected unchanged per current design",
-				balAfter1.Balance.String(), balAfterReopen.Balance.String())
+		if !balAfterReopen.Balance.Equal(balBefore.Balance) {
+			t.Errorf("MISMATCH: reopen must revert balance to %s, got %s",
+				balBefore.Balance.String(), balAfterReopen.Balance.String())
 		}
 
-		// Re-close после reopen НЕ должен постить выручку повторно — идемпотентно
-		// по source_ref (иначе двойной учёт выручки при однократном списании
-		// склада). Регресс-гард для v3.16.4.
+		// Агрегаты смены вернулись к состоянию до закрытия.
+		var shiftAfterReopen models.CashShift
+		gdb.First(&shiftAfterReopen, "id = ?", sid)
+		if !shiftAfterReopen.CashRevenue.Equal(shiftBefore.CashRevenue) {
+			t.Errorf("MISMATCH: reopen must revert shift cash_revenue to %s, got %s",
+				shiftBefore.CashRevenue.String(), shiftAfterReopen.CashRevenue.String())
+		}
+		cntBefore, cntAfterReopen := 0, 0
+		if shiftBefore.OrdersCount != nil {
+			cntBefore = *shiftBefore.OrdersCount
+		}
+		if shiftAfterReopen.OrdersCount != nil {
+			cntAfterReopen = *shiftAfterReopen.OrdersCount
+		}
+		if cntAfterReopen != cntBefore {
+			t.Errorf("MISMATCH: reopen must revert shift orders_count to %d, got %d", cntBefore, cntAfterReopen)
+		}
+
+		// Склад НЕ возвращается на reopen — блюда приготовлены.
+		var movesAfterReopen int64
+		gdb.Model(&models.StockMovement{}).Where("description = ?", "order:"+ord.ID).Count(&movesAfterReopen)
+		if movesAfterReopen != movesAfterClose {
+			t.Errorf("MISMATCH: reopen must keep stock movements (%d), got %d", movesAfterClose, movesAfterReopen)
+		}
+
+		// Re-close после reopen постит выручку заново — ровно 1 revenue-FO,
+		// баланс и агрегаты как после первого закрытия.
 		cr2, cb2 := f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", ord.ID), tok, uuid.NewString(),
 			map[string]any{"payment_method": "cash", "account_id": accID, "shift_id": sid})
 		if cr2.StatusCode != 200 {
-			t.Logf("re-close after reopen returned %d: %s", cr2.StatusCode, cb2)
+			t.Fatalf("re-close after reopen returned %d: %s", cr2.StatusCode, cb2)
 		}
 		var opsAfterReclose []models.FinancialOperation
 		gdb.Where("source_ref = ? AND category = ?", "order:"+ord.ID, "revenue").Find(&opsAfterReclose)
 		if len(opsAfterReclose) != 1 {
-			t.Errorf("DOUBLE REVENUE: reopen+reclose должен оставить РОВНО 1 revenue-FO, got %d", len(opsAfterReclose))
+			t.Errorf("MISMATCH: reopen+reclose должен оставить РОВНО 1 revenue-FO, got %d", len(opsAfterReclose))
 		}
-		// Баланс счёта тоже не должен удвоиться (кредит выполняется один раз).
 		var balAfterReclose models.FinancialAccount
 		gdb.First(&balAfterReclose, "id = ?", accID)
 		if !balAfterReclose.Balance.Equal(balAfter1.Balance) {
-			t.Errorf("DOUBLE CREDIT: reclose удвоил баланс (было %s, стало %s)",
-				balAfter1.Balance.String(), balAfterReclose.Balance.String())
+			t.Errorf("MISMATCH: reclose balance = %s, want %s (как после первого закрытия)",
+				balAfterReclose.Balance.String(), balAfter1.Balance.String())
+		}
+		var shiftAfterReclose models.CashShift
+		gdb.First(&shiftAfterReclose, "id = ?", sid)
+		if !shiftAfterReclose.CashRevenue.Equal(shiftAfterClose.CashRevenue) {
+			t.Errorf("MISMATCH: reclose shift cash_revenue = %s, want %s",
+				shiftAfterReclose.CashRevenue.String(), shiftAfterClose.CashRevenue.String())
+		}
+		// Склад не списан второй раз.
+		var movesAfterReclose int64
+		gdb.Model(&models.StockMovement{}).Where("description = ?", "order:"+ord.ID).Count(&movesAfterReclose)
+		if movesAfterReclose != movesAfterClose {
+			t.Errorf("DOUBLE DEDUCT: reclose must not deduct stock again (%d), got %d", movesAfterClose, movesAfterReclose)
 		}
 	})
 

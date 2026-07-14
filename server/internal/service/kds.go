@@ -42,19 +42,19 @@ var kdsStatusSet = map[string]bool{"pending": true, "cooking": true, "ready": tr
 
 // KDSItem — блюдо на кухонной доске (одна карточка).
 type KDSItem struct {
-	ID            string     `json:"id"`
-	OrderID       string     `json:"order_id"`
-	OrderNumber   int        `json:"order_number"`
-	OrderType     string     `json:"order_type"`
-	TableNumber   *int       `json:"table_number"`
-	TableName     *string    `json:"table_name"`
-	Name          string     `json:"name"`
-	Qty           string     `json:"qty"`
-	Comment       *string    `json:"comment"`
-	Station       string     `json:"station"`
-	StationStatus string     `json:"station_status"`
-	WaiterName    *string    `json:"waiter_name"`
-	CreatedAt     time.Time  `json:"created_at"`
+	ID            string    `json:"id"`
+	OrderID       string    `json:"order_id"`
+	OrderNumber   int       `json:"order_number"`
+	OrderType     string    `json:"order_type"`
+	TableNumber   *int      `json:"table_number"`
+	TableName     *string   `json:"table_name"`
+	Name          string    `json:"name"`
+	Qty           string    `json:"qty"`
+	Comment       *string   `json:"comment"`
+	Station       string    `json:"station"`
+	StationStatus string    `json:"station_status"`
+	WaiterName    *string   `json:"waiter_name"`
+	CreatedAt     time.Time `json:"created_at"`
 	// AgeSeconds — сколько секунд назад создано блюдо, по ЧАСАМ СЕРВЕРА. Кухонный
 	// планшет считает «сколько прошло» от него, а не от своих часов (которые
 	// часто выставлены криво → таймер застревал на «0 мин»).

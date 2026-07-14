@@ -1905,6 +1905,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/kds/items/{id}/call-waiter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Вызвать официанта заказа на кухню
+         * @description Повар нажал «колокольчик» на карточке блюда. Официанту, оформившему заказ, уходит SSE-событие kds.waiter.called (уведомление «приходи на кухню»). Ничего не пишется в БД. 422, если у заказа нет официанта.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            waiter_name?: string;
+                        };
+                    };
+                };
+                400: components["responses"]["Error"];
+                404: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/orders": {
         parameters: {
             query?: never;
@@ -9705,8 +9750,11 @@ export interface components {
             station?: string;
             /** @enum {string} */
             station_status?: "pending" | "cooking" | "ready" | "served";
+            waiter_name?: string | null;
             /** Format: date-time */
             created_at?: string;
+            /** @description Возраст блюда в секундах по часам сервера (для таймера кухни) */
+            age_seconds?: number;
             /** Format: date-time */
             status_at?: string | null;
         };
@@ -11013,7 +11061,10 @@ export interface components {
         };
         WaiterAppInfo: {
             available?: boolean;
+            /** @description versionName из APK, напр. 0.2.16 */
             version?: string;
+            /** @description versionCode из APK — для сравнения при LAN-автообновлении */
+            version_code?: number;
             file_name?: string;
             /** Format: int64 */
             size_bytes?: number;

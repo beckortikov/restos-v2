@@ -38,7 +38,7 @@ test.describe('Warehouse & Financial Flow E2E', () => {
       )
       console.log('[E2E DB] Truncated test tables successfully.')
     } catch (e) {
-      console.error('[E2E DB] Truncate error (trying fallback to standard 5432):', e.message)
+      console.error('[E2E DB] Truncate error (trying fallback to standard 5432):', (e as Error).message)
       try {
         execSync(
           `PGPASSWORD="restos" psql -h 127.0.0.1 -p 5432 -U restos -d restos_v4_test -c "${truncateQuery}"`,
@@ -46,7 +46,7 @@ test.describe('Warehouse & Financial Flow E2E', () => {
         )
         console.log('[E2E DB] Truncated test tables on port 5432 successfully.')
       } catch (err) {
-        console.error('[E2E DB] All truncates failed. Proceeding anyway.', err.message)
+        console.error('[E2E DB] All truncates failed. Proceeding anyway.', (err as Error).message)
       }
     }
   })
@@ -93,7 +93,7 @@ test.describe('Warehouse & Financial Flow E2E', () => {
         )
         console.log('[E2E DB] Set license expires at on 5432 successfully.')
       } catch (err) {
-        console.error('[E2E DB] Failed to update license_expires_at:', err.message)
+        console.error('[E2E DB] Failed to update license_expires_at:', (err as Error).message)
       }
     }
 
@@ -153,12 +153,12 @@ test.describe('Warehouse & Financial Flow E2E', () => {
       // Find ingredient "Мясо" and menu item "Плов"
       const ingResp = await safeFetch('/api/v1/stock/ingredients', { method: 'GET' })
       const ingredients = (await ingResp.json()).data || []
-      const meat = ingredients.find(i => i.name === 'Мясо')
+      const meat = ingredients.find((i: { name: string }) => i.name === 'Мясо')
       if (!meat) throw new Error('Meat ingredient not found')
 
       const menuResp = await safeFetch('/api/v1/menu/items', { method: 'GET' })
       const menuItems = (await menuResp.json()).data || []
-      const plov = menuItems.find(m => m.name === 'Плов')
+      const plov = menuItems.find((m: { name: string }) => m.name === 'Плов')
       if (!plov) throw new Error('Plov menu item not found')
 
       // Update meat price_per_unit to 20
