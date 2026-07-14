@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
@@ -77,6 +78,23 @@ type StockMovement struct {
 }
 
 func (StockMovement) TableName() string { return "stock_movements" }
+
+// BeforeCreate — централизованная привязка движения к складу (мультисклад, Ф1).
+// Если warehouse_id не задан явно, берём склад товара (ingredients.warehouse_id).
+// Так ВСЕ движения (продажа/приёмка/списание/инвентаризация/…) несут склад без
+// правки каждого места создания — минимум регрессии. Перемещение (type=transfer)
+// задаёт warehouse_id/from/to само → метод его не трогает (WarehouseID != nil).
+func (m *StockMovement) BeforeCreate(tx *gorm.DB) error {
+	if m.WarehouseID != nil || m.IngredientID == nil || *m.IngredientID == "" {
+		return nil
+	}
+	var ing Ingredient
+	if err := tx.Session(&gorm.Session{NewDB: true}).
+		Select("warehouse_id").Where("id = ?", *m.IngredientID).First(&ing).Error; err == nil {
+		m.WarehouseID = ing.WarehouseID
+	}
+	return nil
+}
 
 // Supplier — поставщик.
 type Supplier struct {
