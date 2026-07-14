@@ -26,6 +26,10 @@ interface WriteoffLine {
   qty: number
   unit: string
   pricePerUnit: number
+  // Тип: ingredient (по умолч.) / semi (полуфабрикат) / batch (готовое блюдо).
+  // Бэк по нему выбирает, какой остаток уменьшать. Без него semi/batch списывались
+  // «в никуда» (тихий no-op).
+  kind: 'ingredient' | 'semi' | 'batch'
 }
 
 const GROUP_LABELS: Record<string, { icon: string; label: string }> = {
@@ -113,8 +117,9 @@ export default function NewWriteoffPage() {
     if (exists) {
       setLines(prev => prev.map(l => l.ingredientId === item.id ? { ...l, qty: l.qty + 1 } : l))
     } else {
+      const kind: WriteoffLine['kind'] = item.group === 'semi' ? 'semi' : item.group === 'batch' ? 'batch' : 'ingredient'
       setLines(prev => [...prev, {
-        ingredientId: item.id, name: item.name, qty: 1, unit: item.unit, pricePerUnit: item.pricePerUnit,
+        ingredientId: item.id, name: item.name, qty: 1, unit: item.unit, pricePerUnit: item.pricePerUnit, kind,
       }])
     }
   }

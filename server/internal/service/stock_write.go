@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/audit"
@@ -60,6 +61,12 @@ type WriteoffLine struct {
 	Qty          string  `json:"qty"`
 	Unit         *string `json:"unit,omitempty"`
 	Cost         string  `json:"cost"`
+	// Kind — тип списываемого: "ingredient" (по умолчанию), "semi"
+	// (полуфабрикат → semi_finished_stock), "batch" (готовое blюдо →
+	// menu_items.prepared_qty). Раньше поля не было: строки semi/batch писались
+	// как ingredient-движение с чужим id → хук денорма находил 0 строк, остаток
+	// не уменьшался (тихий no-op). IngredientID для semi/batch несёт их id.
+	Kind string `json:"kind,omitempty"`
 }
 
 // WithPublisher (как в других сервисах).
@@ -429,21 +436,48 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 			if err := tx.Create(wl).Error; err != nil {
 				return err
 			}
-			mvType := "writeoff"
-			desc := "writeoff:" + writeoffID
-			mv := &models.StockMovement{
-				ID:             uuid.NewString(),
-				Type:           &mvType,
-				IngredientID:   &pl.in.IngredientID,
-				IngredientName: &pl.in.Name,
-				Description:    &desc,
-				Qty:            pl.qty.Neg(),
-				Unit:           pl.in.Unit,
-				RestaurantID:   &rid,
-				CreatedAt:      now,
-			}
-			if err := tx.Create(mv).Error; err != nil {
-				return err
+			// Уменьшаем фактический остаток по типу позиции. GREATEST(0, …) не даёт
+			// уйти в минус; RowsAffected=0 → id не найден (иначе был бы тихий no-op).
+			switch pl.in.Kind {
+			case "semi":
+				res := tx.Model(&models.SemiFinishedStock{}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).
+					Updates(map[string]any{"qty": gorm.Expr("GREATEST(0, qty - ?)", pl.qty), "updated_at": now})
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected == 0 {
+					return apperrors.Wrap("VALIDATION", "semi stock not found: "+pl.in.IngredientID, nil)
+				}
+			case "batch":
+				res := tx.Model(&models.MenuItem{}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).
+					Updates(map[string]any{"prepared_qty": gorm.Expr("GREATEST(0, prepared_qty - ?)", int(pl.qty.IntPart())), "updated_at": now})
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected == 0 {
+					return apperrors.Wrap("VALIDATION", "batch menu item not found: "+pl.in.IngredientID, nil)
+				}
+			default:
+				// Ингредиент: stock_movement type='writeoff' → хук денормализует
+				// ingredients.qty (единственный корректный путь для сырья).
+				mvType := "writeoff"
+				desc := "writeoff:" + writeoffID
+				mv := &models.StockMovement{
+					ID:             uuid.NewString(),
+					Type:           &mvType,
+					IngredientID:   &pl.in.IngredientID,
+					IngredientName: &pl.in.Name,
+					Description:    &desc,
+					Qty:            pl.qty.Neg(),
+					Unit:           pl.in.Unit,
+					RestaurantID:   &rid,
+					CreatedAt:      now,
+				}
+				if err := tx.Create(mv).Error; err != nil {
+					return err
+				}
 			}
 		}
 		created = w

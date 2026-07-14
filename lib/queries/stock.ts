@@ -147,7 +147,7 @@ export async function fetchWriteoffs(): Promise<StockWriteoff[]> {
 export async function createWriteoff(data: {
   reason: WriteoffReason
   description?: string
-  lines: { ingredientId: string; name: string; qty: number; unit: string; pricePerUnit: number }[]
+  lines: { ingredientId: string; name: string; qty: number; unit: string; pricePerUnit: number; kind?: 'ingredient' | 'semi' | 'batch' }[]
   createdBy?: string
 }) {
   const totalCost = dSum(data.lines.map(l => dMul(l.qty, l.pricePerUnit)))
@@ -161,6 +161,8 @@ export async function createWriteoff(data: {
         qty: String(l.qty),
         unit: l.unit,
         cost: String(dMul(l.qty, l.pricePerUnit)),
+        // kind: ingredient/semi/batch — бэк выбирает, какой остаток уменьшать.
+        kind: l.kind || 'ingredient',
       })),
     } as any,
   }))

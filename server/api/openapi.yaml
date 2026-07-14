@@ -3176,7 +3176,15 @@ components:
               ingredient_id: { type: string, format: uuid }
               name: { type: string }
               qty: { $ref: "#/components/schemas/Decimal" }
+              unit: { type: string }
               cost: { $ref: "#/components/schemas/Decimal" }
+              kind:
+                type: string
+                enum: [ingredient, semi, batch]
+                description: |
+                  Тип списываемого. ingredient (по умолчанию) → stock_movement по
+                  ingredient_id. semi → декремент semi_finished_stock.qty (id п/ф).
+                  batch → декремент menu_items.prepared_qty (id блюда).
     StockWriteoff:
       type: object
       properties:
