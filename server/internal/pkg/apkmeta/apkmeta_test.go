@@ -8,7 +8,8 @@ import (
 
 // Голден: реальный AndroidManifest.xml из debug-сборки waiter-приложения
 // (versionCode 18, versionName "0.2.16"). Извлечён:
-//   unzip -p app-debug.apk AndroidManifest.xml > testdata/AndroidManifest.xml
+//
+//	unzip -p app-debug.apk AndroidManifest.xml > testdata/AndroidManifest.xml
 func TestParseManifest_Golden(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("testdata", "AndroidManifest.xml"))
 	if err != nil {
