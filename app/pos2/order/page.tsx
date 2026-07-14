@@ -13,7 +13,7 @@ import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder } from '@/lib/queries'
-import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, startOfToday, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -486,9 +486,22 @@ export default function PosV2Order() {
   async function openOrders() {
     setOrdersOpen(true); setOrdersLoading(true); setOrdersSearch('')
     try {
-      const shift = await fetchActiveShift().catch(() => null)
-      const os = shift ? await fetchOrders({ shiftId: (shift as { id?: string })?.id, slim: false }).catch(() => [] as Order[]) : []
-      setOrdersList(os)
+      // Раньше скоуп был строго по текущей кассовой смене (fetchOrders({ shiftId })).
+      // Из-за этого открытые заказы ЗАЛА не попадали в список: их пробивает
+      // официант (Kotlin APK, без кассовой смены) или они остались с прошлой
+      // смены — их shift_id ≠ текущей смене. Виден был только «С собой» (его
+      // пробивает касса в текущей смене). Скоуп по ДАТЕ (сегодня, любой тип и
+      // смена) + добор открытых заказов занятых столов (currentOrderIds) на
+      // случай заказа, открытого до полуночи — чтобы ни один открытый заказ
+      // не потерялся. Заголовок «Заказы за сегодня» этому и соответствует.
+      const strandedIds = Array.from(new Set(tables.flatMap(t => t.currentOrderIds ?? []).filter(Boolean)))
+      const [today, stranded] = await Promise.all([
+        fetchOrders({ from: startOfToday(), to: endOfDay(new Date()), slim: false }).catch(() => [] as Order[]),
+        strandedIds.length ? fetchOrders({ ids: strandedIds, slim: false }).catch(() => [] as Order[]) : Promise.resolve([] as Order[]),
+      ])
+      const byId = new Map<string, Order>()
+      for (const o of [...today, ...stranded]) byId.set(o.id, o)
+      setOrdersList(Array.from(byId.values()))
     } finally { setOrdersLoading(false) }
   }
   function tapOrder(o: Order) {
