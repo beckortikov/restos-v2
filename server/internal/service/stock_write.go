@@ -248,10 +248,13 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			if ing != nil && decimal.IsPositive(stockQty) {
 				denom := decimal.Add(ing.Qty, stockQty)
 				var newPrice decimal.Decimal
-				if decimal.IsPositive(denom) {
+				if decimal.IsPositive(denom) && !decimal.IsNegative(ing.Qty) {
 					newPrice = decimal.DivRound(decimal.Add(decimal.Mul(ing.Qty, ing.PricePerUnit), pl.line), denom)
 				} else {
-					// Остаток был отрицательным/нулевым — берём цену прихода.
+					// Остаток был отрицательным/нулевым — историческая стоимость
+					// невалидна (напр. ушёл в минус при выключенном контроле остатков),
+					// поэтому смешивать нельзя: берём чистую цену прихода. Без проверки
+					// ing.Qty<0 средневзвешенная давала отрицательную с/с (−5*100+200)/5.
 					newPrice = decimal.DivRound(pl.line, stockQty)
 				}
 				newPrice = decimal.Normalize(newPrice)

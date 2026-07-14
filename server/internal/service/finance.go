@@ -657,6 +657,11 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	q3 := scoped3.Table("financial_operations").
 		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total").
 		Where("type = ?", "out").
+		// Переводы между счетами (activity='financial', категория «Перевод») — это
+		// НЕ операционный расход: деньги не покидают бизнес, встречный in-leg их
+		// возвращает на другой счёт. Раньше они попадали в opex и занижали прибыль
+		// на каждую инкассацию в банк.
+		Where("COALESCE(activity, '') <> ?", "financial").
 		Where("COALESCE(category, '') NOT IN ?", []string{"stock_purchase"})
 	if f.From != nil {
 		q3 = q3.Where("created_at >= ?", *f.From)
