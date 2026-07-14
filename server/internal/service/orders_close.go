@@ -372,10 +372,12 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				}).Error
 		}
 
-		// Идемпотентность выручки (повторное закрытие после reopen): если по
+		// Идемпотентность выручки (ретрай/гонка двойного close): если по
 		// заказу уже есть revenue-FO — НЕ постим выручку/кредит счёта/агрегаты
 		// смены повторно. Склад ниже уже идемпотентен по тому же source_ref.
-		// Иначе reopen→reclose давал двойную выручку при однократном списании.
+		// Reopen сторнирует revenue-FO (reverseCloseFinancials), поэтому
+		// reopen→reclose сюда попадает с alreadyPosted=false и постит
+		// выручку заново — уже по новой сумме.
 		var revExisting int64
 		if err := tx.Model(&models.FinancialOperation{}).
 			Where("restaurant_id = ? AND source_ref = ? AND category = ?", rid, opSourceRef, opCat).
