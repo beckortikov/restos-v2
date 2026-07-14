@@ -657,6 +657,39 @@ type SupplierPayDebtInput struct {
 	AccountID string `json:"account_id"`
 }
 
+// RecomputeDebts пересчитывает current_debt ВСЕХ поставщиков из первоисточника:
+//
+//	current_debt = Σ(stock_receipts.debt_amount данного поставщика)
+//	             − Σ(оплат долга: financial_operations category='supplier_payment')
+//
+// Нужен, когда денормализованное поле разошлось с реальностью: миграция бэкфилла
+// (035) не отработала после восстановления из бэкапа / обновления со старой
+// версии, где её ещё не было. Это ручной само-ремонт «в один клик» — не полагаемся
+// на одноразовую миграцию. Каст обеих сторон к text — против дрейфа типов uuid/text.
+// GREATEST(0,…) — долг не уходит в минус. Возвращает число обновлённых строк.
+func (s *SuppliersService) RecomputeDebts(ctx context.Context) (int64, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	res := s.r.Raw().WithContext(ctx).Exec(`
+		UPDATE suppliers s SET
+		  current_debt = GREATEST(0,
+		    COALESCE((SELECT SUM(sr.debt_amount) FROM stock_receipts sr
+		              WHERE sr.supplier_id::text = s.id::text), 0)
+		    - COALESCE((SELECT SUM(fo.amount) FROM financial_operations fo
+		                WHERE fo.category = 'supplier_payment'
+		                  AND fo.counterparty = s.name
+		                  AND fo.restaurant_id::text = s.restaurant_id::text), 0)
+		  ),
+		  updated_at = now()
+		WHERE s.restaurant_id = ?`, rid)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
 // PayDebt — гашение долга поставщику. Атомарно: списывает сумму со счёта,
 // уменьшает supplier.current_debt, создаёт financial_operation out
 // category='supplier_payment'. Это гашение обязательства, а НЕ операционный

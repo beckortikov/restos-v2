@@ -50,6 +50,15 @@ export async function paySupplierDebt(id: string, amount: number, accountId: str
   return mapSupplier(data)
 }
 
+// recomputeSupplierDebts — пересчёт current_debt всех поставщиков из накладных
+// (Σ debt_amount − Σ оплат долга). Нужен, когда поле разошлось: бэкфилл-миграция
+// не отработала после восстановления/обновления. Возвращает число обновлённых.
+export async function recomputeSupplierDebts(): Promise<number> {
+  const data: any = await unwrap((api.POST as any)('/api/v1/suppliers/recompute-debts', { body: {} }))
+  logAction('supplier.recompute_debts', 'supplier', undefined)
+  return Number(data?.updated ?? 0)
+}
+
 export async function deleteSupplier(id: string) {
   await unwrap(api.DELETE('/api/v1/suppliers/{id}', { params: { path: { id } } }))
   logAction('supplier.delete', 'supplier', id)

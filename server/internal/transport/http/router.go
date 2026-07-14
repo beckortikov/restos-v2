@@ -538,6 +538,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/customers/{id}/stats", customersH.IncrementStats)
 			g.Delete("/customers/{id}", customersH.Delete)
 			g.Post("/suppliers", suppliersH.Create)
+			g.Post("/suppliers/recompute-debts", suppliersH.RecomputeDebts)
 			g.Patch("/suppliers/{id}", suppliersH.Patch)
 			g.Post("/suppliers/{id}/pay-debt", suppliersH.PayDebt)
 			g.Delete("/suppliers/{id}", suppliersH.Delete)

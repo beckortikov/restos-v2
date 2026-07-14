@@ -237,6 +237,14 @@ func (h *SuppliersHandler) PayDebt(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, s)
 }
+func (h *SuppliersHandler) RecomputeDebts(w http.ResponseWriter, r *http.Request) {
+	n, err := h.svc.RecomputeDebts(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"updated": n})
+}
 
 // ─── Reservations ──────────────────────────────────────────────────────────
 

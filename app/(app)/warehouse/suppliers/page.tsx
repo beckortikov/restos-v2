@@ -5,8 +5,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { type Supplier, type FinancialAccount } from '@/lib/types'
-import { fetchSuppliers, deleteSupplier, paySupplierDebt, fetchFinancialAccounts } from '@/lib/queries'
-import { Phone, User, AlertTriangle, Plus, Search, Pencil, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users } from 'lucide-react'
+import { fetchSuppliers, deleteSupplier, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
+import { Phone, User, AlertTriangle, Plus, Search, Pencil, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
 
@@ -26,10 +26,25 @@ export default function SuppliersPage() {
   const [payAmount, setPayAmount] = useState(0)
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [payAccountId, setPayAccountId] = useState<string>('')
+  const [recomputing, setRecomputing] = useState(false)
 
   const reload = async () => {
     const data = await fetchSuppliers()
     setSuppliers(data)
+  }
+
+  async function handleRecompute() {
+    if (recomputing) return
+    setRecomputing(true)
+    try {
+      await recomputeSupplierDebts()
+      await reload()
+      toast.success('Долги пересчитаны из накладных')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка пересчёта')
+    } finally {
+      setRecomputing(false)
+    }
   }
 
   useEffect(() => {
@@ -142,13 +157,24 @@ export default function SuppliersPage() {
           </p>
         </div>
         {isManager && (
-          <button
-            onClick={() => navigate('/warehouse/suppliers/new')}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
-          >
-            <Plus className="size-4" />
-            Добавить
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={handleRecompute}
+              disabled={recomputing}
+              title="Пересчитать долги поставщикам из накладных (если в отчёте 0, а по накладным долг есть)"
+              className="flex items-center gap-2 bg-card border border-border text-foreground px-3 py-2.5 rounded-xl text-sm font-medium hover:bg-muted disabled:opacity-60 transition-colors justify-center"
+            >
+              <RefreshCw className={`size-4 ${recomputing ? 'animate-spin' : ''}`} />
+              {recomputing ? 'Считаем…' : 'Пересчитать долги'}
+            </button>
+            <button
+              onClick={() => navigate('/warehouse/suppliers/new')}
+              className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors flex-1 sm:flex-none justify-center"
+            >
+              <Plus className="size-4" />
+              Добавить
+            </button>
+          </div>
         )}
       </div>
 
