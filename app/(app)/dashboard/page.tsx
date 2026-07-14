@@ -265,6 +265,23 @@ export default function DashboardPage() {
     .filter(o => o.type === 'out' && o.date === todayStr)
     .reduce((s, o) => s + o.amount, 0), [operations, todayStr])
 
+  // Разбивка выручки по способам оплаты (нал/безнал/перевод) за выбранный день.
+  // Для смешанной оплаты — по частям payments[]; иначе весь чек на paymentMethod
+  // (по умолчанию cash). Это «продажи кассы» из запроса аналитики за день.
+  const paymentBreakdown = useMemo(() => {
+    const acc = { cash: 0, card: 0, transfer: 0 } as Record<'cash' | 'card' | 'transfer', number>
+    todayOrders.forEach(o => {
+      if (o.payments && o.payments.length > 0) {
+        o.payments.forEach(p => { if (acc[p.method] !== undefined) acc[p.method] += p.amount })
+      } else {
+        const m = (o.paymentMethod ?? 'cash') as 'cash' | 'card' | 'transfer'
+        if (acc[m] !== undefined) acc[m] += orderRevenue(o)
+      }
+    })
+    return acc
+  }, [todayOrders])
+  const paymentTotal = paymentBreakdown.cash + paymentBreakdown.card + paymentBreakdown.transfer
+
   // Top dishes today
   const topDishes = useMemo(() => {
     const dishSales: Record<string, { name: string; qty: number; revenue: number }> = {}
@@ -275,6 +292,21 @@ export default function DashboardPage() {
     }))
     return Object.values(dishSales).sort((a, b) => b.revenue - a.revenue).slice(0, 5)
   }, [todayOrders])
+
+  // Продажи по категориям меню за день. Категория берётся из menuItems по
+  // menuItemId (в OrderItem её нет). Item-level база (calcLineTotal), без сервиса.
+  const categorySales = useMemo(() => {
+    const menuCat = new Map(menuItems.map(m => [m.id, m.category || 'Без категории']))
+    const cat: Record<string, { name: string; qty: number; revenue: number }> = {}
+    todayOrders.forEach(o => o.items.forEach(i => {
+      const name = menuCat.get(i.menuItemId) || 'Без категории'
+      if (!cat[name]) cat[name] = { name, qty: 0, revenue: 0 }
+      cat[name].qty += i.unit && i.unit !== 'piece' ? i.qty / (i.unitSize && i.unitSize > 0 ? i.unitSize : 1) : i.qty
+      cat[name].revenue += calcLineTotal(i.price, i.qty, i.unit, i.unitSize)
+    }))
+    return Object.values(cat).sort((a, b) => b.revenue - a.revenue)
+  }, [todayOrders, menuItems])
+  const categoryTotal = useMemo(() => categorySales.reduce((s, c) => s + c.revenue, 0), [categorySales])
 
   // Hourly revenue (chart 1)
   const hourlyRevenue = useMemo(() => {
@@ -398,6 +430,39 @@ export default function DashboardPage() {
           color="bg-red-500/10 text-red-600"
           href="/finance/cashflow"
         />
+      </div>
+
+      {/* ═══ Способы оплаты за день (нал/безнал/перевод) ═══ */}
+      <div className="bg-card rounded-xl border border-border p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <CreditCard className="size-4 text-primary" />
+            {isToday ? 'Продажи по способам оплаты' : 'Продажи по способам оплаты за день'}
+          </h2>
+          <span className="text-xs text-muted-foreground tabular-nums">Итого {formatCurrency(paymentTotal)}</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2.5 md:gap-3">
+          {([
+            { key: 'cash', label: 'Наличные', icon: Banknote, color: 'text-emerald-600 bg-emerald-500/10' },
+            { key: 'card', label: 'Карта', icon: CreditCard, color: 'text-blue-600 bg-blue-500/10' },
+            { key: 'transfer', label: 'Перевод', icon: ArrowRight, color: 'text-violet-600 bg-violet-500/10' },
+          ] as const).map(({ key, label, icon: Icon, color }) => {
+            const val = paymentBreakdown[key]
+            const pct = paymentTotal > 0 ? Math.round(val / paymentTotal * 100) : 0
+            return (
+              <div key={key} className="rounded-lg border border-border p-3">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <div className={`size-7 rounded-md flex items-center justify-center shrink-0 ${color}`}>
+                    <Icon className="size-3.5" />
+                  </div>
+                  <span className="text-xs font-medium text-muted-foreground truncate">{label}</span>
+                </div>
+                <p className="text-base md:text-lg font-bold text-foreground tabular-nums leading-none">{formatCurrency(val)}</p>
+                <p className="text-[11px] text-muted-foreground mt-1 tabular-nums">{pct}%</p>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {/* ═══ Alerts ═══ */}
@@ -654,6 +719,36 @@ export default function DashboardPage() {
                     <span className="text-sm font-medium shrink-0 ml-2">{formatCurrency(d.revenue)}</span>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          {/* Категории за день */}
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <BarChart3 className="size-4 text-muted-foreground" />
+                Категории{isToday ? " сегодня" : " за день"}
+              </h2>
+            </div>
+            {categorySales.length === 0 ? (
+              <p className="text-muted-foreground text-xs text-center py-4">Нет продаж</p>
+            ) : (
+              <div className="space-y-2.5">
+                {categorySales.slice(0, 6).map(c => {
+                  const pct = categoryTotal > 0 ? Math.round(c.revenue / categoryTotal * 100) : 0
+                  return (
+                    <div key={c.name}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm truncate min-w-0">{c.name}</span>
+                        <span className="text-sm font-medium shrink-0 ml-2 tabular-nums">{formatCurrency(c.revenue)}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
