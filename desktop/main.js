@@ -202,27 +202,32 @@ function killStaleSidecars() {
   console.log('[sidecar] cleanup done')
 }
 
-// Проверка что порт API_PORT (3002 в v3.8+) свободен. Если занят — пробуем
-// убить владельца (стало быть, прошлый зомби-инстанс самого v2, а не v1 —
-// v1 живёт на 3001 и не конфликтует).
-function ensurePortFree(port) {
+// Проверка что порт свободен (одна попытка bind).
+function isPortFree(port) {
   return new Promise((resolve) => {
     const tester = net.createServer()
-    tester.once('error', (err) => {
-      if (err.code === 'EADDRINUSE') {
-        console.log(`[sidecar] port ${port} is busy — attempting to free`)
-        killStaleSidecars()
-        // Дать ОС время освободить порт.
-        setTimeout(() => resolve(false), 1500)
-      } else {
-        resolve(true)
-      }
-    })
-    tester.once('listening', () => {
-      tester.close(() => resolve(true))
-    })
+    tester.once('error', () => resolve(false))
+    tester.once('listening', () => tester.close(() => resolve(true)))
     tester.listen(port, '127.0.0.1')
   })
+}
+
+// Освобождаем порт (3002 API или 54330 PG), удерживаемый зомби-инстансом v2 после
+// апдейта/краша. Раньше была ОДНА попытка kill + ожидание 1.5 с без проверки —
+// если ОС не успевала освободить порт (форс-килл PG оставляет сокет в TIME_WAIT,
+// дерево умирает не мгновенно), новый сервер стартовал в занятый порт и падал.
+// Теперь — цикл: kill стейл-процессов + ждём + перепроверяем, пока порт реально
+// не освободится (до ~18 с). v1 на 3001 не конфликтует.
+async function ensurePortFree(port, attempts = 12) {
+  for (let i = 0; i < attempts; i++) {
+    if (await isPortFree(port)) return true
+    console.log(`[sidecar] port ${port} busy (попытка ${i + 1}/${attempts}) — kill stale + wait`)
+    killStaleSidecars()
+    await new Promise((r) => setTimeout(r, 1500))
+  }
+  const free = await isPortFree(port)
+  if (!free) console.error(`[sidecar] port ${port} ВСЁ ЕЩЁ занят после ${attempts} попыток`)
+  return free
 }
 
 function startSidecar() {
@@ -312,20 +317,34 @@ function startSidecar() {
 }
 
 function stopSidecar() {
-  if (!goProc) return
-  console.log('[sidecar] sending SIGTERM')
-  try {
-    if (process.platform === 'win32') {
-      // On Windows there's no SIGTERM; use taskkill /T to kill tree (includes postgres child).
-      const pid = goProc.pid
-      spawn('taskkill', ['/pid', String(pid), '/T', '/F'])
-    } else {
-      goProc.kill('SIGTERM')
-    }
-  } catch (e) {
-    console.error('[sidecar] stop error:', e)
-  }
+  const isWin = process.platform === 'win32'
+  const pid = goProc?.pid
   goProc = null
+  goReady = false
+  // СИНХРОННО (execSync), а не async spawn: к моменту установки обновления и
+  // выхода дерево процессов (Go + embedded Postgres) должно быть УЖЕ мертво.
+  // Раньше был fire-and-forget spawn('taskkill') — не успевал отработать до
+  // quitAndInstall, старый PG выживал, держал порт 3002/54330 и pgdata-lock →
+  // новый сервер после апдейта не стартовал («Сервер не отвечает»).
+  console.log('[sidecar] stopping (sync)')
+  try {
+    if (pid) {
+      if (isWin) execSync(`taskkill /F /PID ${pid} /T 2>nul`, { stdio: 'ignore', timeout: 8000 })
+      else { try { process.kill(pid, 'SIGTERM') } catch {} }
+    }
+  } catch (e) { console.error('[sidecar] stop error:', e.message || e) }
+  // Добиваем embedded Postgres по postmaster.pid — taskkill /T мог его не
+  // захватить, если PG отвязался от дерева процессов.
+  try {
+    const pgLock = path.join(app.getPath('userData'), 'pgdata', 'postmaster.pid')
+    if (fs.existsSync(pgLock)) {
+      const pgPid = parseInt(fs.readFileSync(pgLock, 'utf8').split('\n')[0], 10)
+      if (pgPid > 0) {
+        if (isWin) execSync(`taskkill /F /PID ${pgPid} /T 2>nul`, { stdio: 'ignore', timeout: 5000 })
+        else { try { process.kill(pgPid, 'SIGKILL') } catch {} }
+      }
+    }
+  } catch {}
 }
 
 // Wait for backend /healthz to respond OK before showing window.
@@ -381,14 +400,17 @@ if (!gotTheLock) {
     await ensurePortFree(54330)
     // 2) Стартуем sidecar.
     startSidecar()
+    // 130 с > 90 с StartTimeout embedded-postgres: холодный старт / WAL-recovery
+    // после апдейта должен успеть завершиться до показа ошибки.
+    const BACKEND_TIMEOUT_MS = 130000
     try {
-      await waitForBackend(90000)
+      await waitForBackend(BACKEND_TIMEOUT_MS)
     } catch (e) {
       console.error('[main] backend failed to start:', e.message)
       Sentry.captureMessage('Backend failed to start within timeout')
       dialog.showErrorBox(
         'RestOS — Сервер не отвечает',
-        `Бэкенд не запустился за 60 секунд.\n\nВозможные причины:\n• Не хватает интернета для скачивания PostgreSQL (~80 МБ) при первом запуске\n• Антивирус блокирует embedded-postgres\n• Порт ${API_PORT} занят другой программой\n\nЛог: ${path.join(app.getPath('userData'), 'logs', 'main.log')}`,
+        `Бэкенд не запустился за ${Math.round(BACKEND_TIMEOUT_MS / 1000)} секунд.\n\nВозможные причины:\n• Не хватает интернета для скачивания PostgreSQL (~80 МБ) при первом запуске\n• Антивирус блокирует embedded-postgres или restos-server.exe\n• Порт ${API_PORT} занят другой программой\n\nЧто попробовать: закройте RestOS полностью и запустите заново (или перезагрузите ПК) — это освободит зависшие процессы прошлой версии.\n\nЛог: ${path.join(app.getPath('userData'), 'logs', 'main.log')}`,
       )
     }
     createWindow()
@@ -565,7 +587,15 @@ function setupAutoUpdater() {
 }
 
 ipcMain.on('install-update', () => {
-  try { autoUpdater.quitAndInstall() } catch (e) { console.error('install-update:', e) }
+  try {
+    // isQuitting=true ДО stopSidecar — иначе goProc.on('exit') перезапустит
+    // sidecar прямо во время установки. Затем СИНХРОННО валим Go+PG, чтобы
+    // installer не столкнулся с занятыми портами/локом, а новая версия
+    // стартовала с чистого листа.
+    app.isQuitting = true
+    stopSidecar()
+    autoUpdater.quitAndInstall()
+  } catch (e) { console.error('install-update:', e) }
 })
 
 ipcMain.handle('check-update', async () => {
