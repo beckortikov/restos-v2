@@ -470,13 +470,28 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 // обслуживание) наличными списывали баланс счёта, но не уменьшали expected_cash →
 // Z-отчёт показывал ложную недостачу. Вызывается ВНУТРИ транзакции операции.
 // No-op, если открытой смены на этом счёте нет (напр. безнал-счёт или смена закрыта).
-func recordShiftCashOutIfActive(tx *gorm.DB, rid, accountID, desc string, amount decimal.Decimal, now time.Time) error {
-	if accountID == "" || !decimal.IsPositive(amount) {
+func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc string, amount decimal.Decimal, now time.Time) error {
+	if !decimal.IsPositive(amount) {
 		return nil
 	}
 	var shift models.CashShift
-	err := tx.Where("restaurant_id = ? AND status = ? AND account_id = ?", rid, "open", accountID).
-		First(&shift).Error
+	var err error
+	if shiftID != "" {
+		// Операция явно привязана к смене (выплата/возврат «со смены» несёт
+		// shift_id) — зеркалим ИМЕННО в неё, даже если у смены не задан или не
+		// совпадает счёт. Раньше искали только по account_id: если смена без
+		// счёта (или выплата с другого счёта), матчинг промахивался → баланс
+		// счёта уменьшался, а expected_cash смены — нет (касса и смена
+		// расходились). Одно зеркало на операцию — двойного оттока нет.
+		err = tx.Where("restaurant_id = ? AND status = ? AND id = ?", rid, "open", shiftID).First(&shift).Error
+	} else {
+		// Вне контекста смены (shift_id не передан) — зеркалим, только если счёт
+		// принадлежит открытой смене.
+		if accountID == "" {
+			return nil
+		}
+		err = tx.Where("restaurant_id = ? AND status = ? AND account_id = ?", rid, "open", accountID).First(&shift).Error
+	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
 	}

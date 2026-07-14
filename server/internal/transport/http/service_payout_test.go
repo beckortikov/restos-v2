@@ -121,3 +121,59 @@ func TestPayout_NoShift_NotInShiftReport(t *testing.T) {
 		}
 	}
 }
+
+// Выплата официанту «со смены» должна зеркалить отток в кассовую смену
+// (cash_out) — уменьшать expected_cash — ДАЖЕ если у смены не привязан счёт
+// (seedForWrite открывает смену без account_id, как частый реальный случай).
+//
+// Баг был: зеркало искало смену по account_id и промахивалось → баланс счёта
+// (касса) уменьшался, а смена — нет («с кассы снимает, а не со смены»).
+// Фикс зеркалит по shift_id. Проверяем РОВНО одну cash_out операцию: 0 =
+// касса и смена расходятся, 2 = двойной отток из смены.
+func TestPayout_MirrorsCashOutToShift_NoDoubleCount(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _, shiftID, accountID := seedForWrite(t, f)
+
+	if err := gdb.Model(&models.FinancialAccount{}).Where("id = ?", accountID).
+		Update("balance", decimal.MustFromString("1000")).Error; err != nil {
+		t.Fatal(err)
+	}
+	wID := mkUser(t, gdb, f.rid, "Carol", "waiter", "")
+	tok := f.login(t)
+
+	closedStatus := "closed"
+	closedAt := time.Now().UTC()
+	if err := gdb.Create(&models.Order{
+		ID: uuid.NewString(), RestaurantID: &f.rid,
+		WaiterID: &wID, ShiftID: &shiftID, Status: &closedStatus, ClosedAt: &closedAt,
+		Total:            decimal.MustFromString("1000"),
+		ServiceAmount:    decimal.MustFromString("100"),
+		TotalWithService: decimal.MustFromString("1100"),
+		CreatedAt:        closedAt, UpdatedAt: closedAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r, b := f.post(t, "/api/v1/finance/service-charge/pay", tok, uuid.NewString(), map[string]any{
+		"waiter_id":   wID,
+		"amount":      "50",
+		"account_id":  accountID,
+		"period_from": "2026-01-01T00:00:00Z",
+		"period_to":   "2026-12-31T00:00:00Z",
+		"shift_id":    shiftID,
+	})
+	if r.StatusCode != 201 && r.StatusCode != 200 {
+		t.Fatalf("pay %d: %s", r.StatusCode, b)
+	}
+
+	var ops []models.CashShiftOperation
+	if err := gdb.Where("shift_id = ? AND type = ?", shiftID, "cash_out").Find(&ops).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(ops) != 1 {
+		t.Fatalf("cash_out операций в смене = %d, ожидали 1 (0 = касса ≠ смена, 2 = двойной отток)", len(ops))
+	}
+	if got := decimal.Normalize(ops[0].Amount).String(); got != "50" {
+		t.Errorf("сумма зеркала cash_out = %s, ожидали 50", got)
+	}
+}

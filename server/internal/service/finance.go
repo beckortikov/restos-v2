@@ -1262,7 +1262,7 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 		// Наличная выплата (зарплата/обслуживание) со счёта открытой смены →
 		// зеркалим отток в кассовую смену (cash_out), иначе expected_cash в
 		// Z-отчёте покажет ложную недостачу. No-op для безнала/закрытой смены.
-		if err := recordShiftCashOutIfActive(tx, rid, *in.AccountID, derefOr(desc, category), amount, now); err != nil {
+		if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), amount, now); err != nil {
 			return err
 		}
 		op = models.FinancialOperation{

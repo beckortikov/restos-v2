@@ -211,7 +211,7 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 		// Если возврат наличными со счёта открытой смены — зеркалим в кассовую
 		// смену (cash_out), иначе expected_cash в Z-отчёте не сойдётся с ящиком
 		// (ложная недостача). No-op для безнала/без активной смены.
-		if err := recordShiftCashOutIfActive(tx, rid, accountID, opDesc, amount, now); err != nil {
+		if err := recordShiftCashOutIfActive(tx, rid, "", accountID, opDesc, amount, now); err != nil {
 			return err
 		}
 		refunded = amount

@@ -15,11 +15,14 @@
 -- приёмка (+debt_amount) и pay-debt (-pay). Значение авторитетно на момент
 -- миграции: перезапись (=), а не инкремент, поэтому уже начисленный после фикса
 -- долг не задваивается.
+-- suppliers.id — UUID, stock_receipts.supplier_id — TEXT (хранит uuid-строку),
+-- поэтому кастуем s.id к text: без каста Postgres падает «operator does not
+-- exist: text = uuid» и вся миграция не применяется (backend не стартует).
 UPDATE suppliers s SET
   current_debt = COALESCE((
     SELECT SUM(sr.debt_amount)
     FROM stock_receipts sr
-    WHERE sr.supplier_id = s.id
+    WHERE sr.supplier_id = s.id::text
       AND sr.restaurant_id = s.restaurant_id
   ), 0),
   updated_at = now();
