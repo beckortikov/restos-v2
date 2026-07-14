@@ -47,6 +47,10 @@ export default function PosV2Shift() {
   const [zr, setZr] = useState<ShiftZReport | null>(null)
   const [histOpen, setHistOpen] = useState(false)
   const [hist, setHist] = useState<CashShift[] | null>(null)
+  // Разбивка прошлой смены (Z-отчёт по тапу в истории).
+  const [histZShift, setHistZShift] = useState<CashShift | null>(null)
+  const [histZ, setHistZ] = useState<ShiftZReport | null>(null)
+  const [histZLoading, setHistZLoading] = useState(false)
   // Обслуживание официантов — встроено в смену (по дизайну restos.pen).
   const [svcRows, setSvcRows] = useState<SvcRow[]>([])
   const [svcPayingId, setSvcPayingId] = useState<string | null>(null)
@@ -150,6 +154,12 @@ export default function PosV2Shift() {
     setHistOpen(true)
     if (hist) return
     try { setHist(await fetchShifts(30)) } catch (e) { toast.error(humanizeError(e)); setHist([]) }
+  }
+  // Полная разбивка прошлой смены (тот же zreport-эндпоинт, что и у текущей).
+  async function openHistZ(s: CashShift) {
+    setHistZShift(s); setHistZ(null); setHistZLoading(true)
+    try { setHistZ(await fetchShiftZReport(s.id)) } catch (e) { toast.error(humanizeError(e)) }
+    finally { setHistZLoading(false) }
   }
 
   async function report(kind: 'x' | 'z' | 'service') {
@@ -566,7 +576,7 @@ export default function PosV2Shift() {
                     const disc = (s.closingBalance != null && s.expectedCash != null) ? dSub(s.closingBalance, s.expectedCash) : null
                     const isOpen = s.status !== 'closed'
                     return (
-                      <div key={s.id} className="rounded-2xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }}>
+                      <button key={s.id} onClick={() => openHistZ(s)} className="w-full text-left rounded-2xl active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }} title="Открыть разбивку смены">
                         <div className="flex items-center justify-between" style={{ gap: '0.5rem' }}>
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{new Date(s.openedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{s.closedAt ? ` — ${new Date(s.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
@@ -580,11 +590,80 @@ export default function PosV2Shift() {
                           <span>Ср. чек {formatCurrency(s.avgCheck)}</span>
                           {disc != null && <span style={{ color: disc === 0 ? 'var(--pv-text-3)' : 'var(--pv-occ-text)' }}>Расхождение {disc > 0 ? '+' : ''}{formatCurrency(disc)}</span>}
                         </div>
-                      </div>
+                      </button>
                     )
                   })}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Разбивка прошлой смены (Z-отчёт по тапу в истории) */}
+      {histZShift && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setHistZShift(null)}>
+          <div className="rounded-3xl overflow-hidden flex flex-col" style={{ background: 'var(--pv-card)', width: 'clamp(22rem,56vw,44rem)', maxHeight: '88vh', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+              <div className="min-w-0">
+                <div className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Разбивка смены</div>
+                <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{new Date(histZShift.openedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{histZShift.closedAt ? ` — ${new Date(histZShift.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : ''}</div>
+              </div>
+              <button onClick={() => setHistZShift(null)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.8rem,1.4vw,1.2rem)', display: 'flex', flexDirection: 'column', gap: 'var(--pv-gap)' }}>
+              {histZLoading || !histZ ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
+              ) : (() => {
+                const rev = histZ.cashRevenue + histZ.cardRevenue
+                return (<>
+                  <div className="grid grid-cols-3" style={{ gap: 'var(--pv-gap)' }}>
+                    {([['Выручка', formatCurrency(rev)], ['Заказов', String(histZ.ordersCount)], ['Средний чек', formatCurrency(histZ.avgCheck)]] as const).map(([l, v]) => (
+                      <div key={l} className="rounded-2xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }}>
+                        <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{l}</div>
+                        <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.3rem)' }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.6rem' }}>
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Оплата по способам</div>
+                    {histZ.revenueByMethod.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Нет продаж</span> : histZ.revenueByMethod.map((r, i) => { const cash = r.paymentMethod === 'cash'; return (
+                      <div key={i} className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{r.accountName || (cash ? 'Наличные' : 'Безналичные')}</span><span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                    ) })}
+                    <div style={{ height: '1px', background: 'var(--pv-border)' }} />
+                    <div className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Расход</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(histZ.expensesTotal)}</span></div>
+                    <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Итог</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>{formatCurrency(rev - histZ.expensesTotal)}</span></div>
+                  </div>
+                  <div className="flex flex-wrap" style={{ gap: 'var(--pv-gap)' }}>
+                    <div className="flex-1 rounded-2xl flex flex-col" style={{ minWidth: '12rem', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>По категориям</div>
+                      {histZ.salesByCategory.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>—</span> : histZ.salesByCategory.map((r, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{r.name} · {r.qty}</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                      ))}
+                    </div>
+                    <div className="flex-1 rounded-2xl flex flex-col" style={{ minWidth: '12rem', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Проданные блюда</div>
+                      {histZ.salesByItem.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>—</span> : histZ.salesByItem.map((r, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{r.name} ×{r.qty}</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>По типу заказа</div>
+                    {histZ.salesByOrderType.map((r, i) => (
+                      <div key={i} className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type} · {r.ordersCount}</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                    ))}
+                  </div>
+                  {histZ.salesByWaiter.length > 0 && (
+                    <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>По официантам</div>
+                      {histZ.salesByWaiter.map((w, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{w.name} · {w.ordersCount} зак.</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(w.total)}</span></div>
+                      ))}
+                    </div>
+                  )}
+                </>)
+              })()}
             </div>
           </div>
         </div>
