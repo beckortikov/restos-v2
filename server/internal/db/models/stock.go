@@ -27,14 +27,30 @@ type Ingredient struct {
 	UnitWeight decimal.Decimal `gorm:"column:unit_weight;type:numeric(14,4);default:0" json:"unit_weight"`
 	// UnitWeightUnit — единица, в которой задан UnitWeight (г/мл), т.е. единица
 	// той же размерности, что и рецепт.
-	UnitWeightUnit *string   `gorm:"column:unit_weight_unit" json:"unit_weight_unit"`
-	IsFood         *bool     `gorm:"column:is_food;default:true" json:"is_food"`
-	RestaurantID   *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	UnitWeightUnit *string `gorm:"column:unit_weight_unit" json:"unit_weight_unit"`
+	IsFood         *bool   `gorm:"column:is_food;default:true" json:"is_food"`
+	// WarehouseID — склад, где целиком лежит товар (мультисклад, Фаза 1).
+	// Списание продажи/расхода идёт с этого склада; перемещение = смена значения.
+	WarehouseID  *string   `gorm:"column:warehouse_id;type:uuid;index" json:"warehouse_id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (Ingredient) TableName() string { return "ingredients" }
+
+// Warehouse — склад (мультисклад, Фаза 1). Ровно 3 фиксированных на ресторан:
+// products «Продукты», purchased «Покупные товары», supplies «Хозтовары».
+type Warehouse struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name         *string   `json:"name"`
+	Kind         *string   `json:"kind"` // products | purchased | supplies
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (Warehouse) TableName() string { return "warehouses" }
 
 // StockMovement — append-only event-stream движений склада.
 // type: receipt | writeoff | order_deduct | inventory_correction | ...
@@ -47,8 +63,13 @@ type StockMovement struct {
 	Qty            decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"qty"`
 	Unit           *string         `json:"unit"`
 	BelowZero      *bool           `gorm:"column:below_zero;default:false" json:"below_zero"`
-	RestaurantID   *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt      time.Time       `json:"created_at"`
+	// Склад движения. Для type=transfer заполнены FromWarehouseID/ToWarehouseID;
+	// для остальных типов — WarehouseID (где произошло движение).
+	WarehouseID     *string   `gorm:"column:warehouse_id;type:uuid" json:"warehouse_id"`
+	FromWarehouseID *string   `gorm:"column:from_warehouse_id;type:uuid" json:"from_warehouse_id"`
+	ToWarehouseID   *string   `gorm:"column:to_warehouse_id;type:uuid" json:"to_warehouse_id"`
+	RestaurantID    *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt       time.Time `json:"created_at"`
 	// Колонка БД "timestamp" заполняется автоматически (DEFAULT now()).
 	// В Go-модели не маппим — колонка зарезервирована, плюс CreatedAt
 	// покрывает ту же информацию. Если потребуется чтение — добавить
