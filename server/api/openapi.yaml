@@ -1671,6 +1671,19 @@ paths:
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses: { "204": { description: No content } }
 
+  /api/v1/suppliers/{id}/pay-debt:
+    post:
+      tags: [admin]
+      summary: Гашение долга поставщику
+      description: |
+        Атомарно: списывает `amount` со счёта `account_id`, уменьшает
+        `suppliers.current_debt` и создаёт financial_operation out
+        (category='supplier_payment', исключён из opex ОПиУ). Сумма клампится
+        к остатку долга (переплатить нельзя).
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierPayDebtInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Supplier" } } } } }
+
   /api/v1/reservations:
     get:
       tags: [admin]
@@ -3494,6 +3507,12 @@ components:
         categories: { type: array, items: { type: string } }
         payment_terms_days: { type: integer }
         credit_limit: { $ref: "#/components/schemas/Decimal" }
+    SupplierPayDebtInput:
+      type: object
+      required: [amount, account_id]
+      properties:
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
     SuppliersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Supplier" } } } }
 
     Reservation:

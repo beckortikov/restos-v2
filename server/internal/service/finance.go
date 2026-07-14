@@ -662,7 +662,9 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 		// возвращает на другой счёт. Раньше они попадали в opex и занижали прибыль
 		// на каждую инкассацию в банк.
 		Where("COALESCE(activity, '') <> ?", "financial").
-		Where("COALESCE(category, '') NOT IN ?", []string{"stock_purchase"})
+		// stock_purchase — это склад (станет COGS при продаже), а supplier_payment —
+		// гашение долга поставщику (обязательство, не расход). Обе — не opex.
+		Where("COALESCE(category, '') NOT IN ?", []string{"stock_purchase", "supplier_payment"})
 	if f.From != nil {
 		q3 = q3.Where("created_at >= ?", *f.From)
 	}

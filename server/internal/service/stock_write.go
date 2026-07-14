@@ -268,20 +268,18 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				ing.PricePerUnit = newPrice
 			}
 		}
-		// Атомарный финоп (v2.0.87): если AccountID указан И paid=true (default),
-		// создаём financial_operation type="out" category="stock_purchase" с
-		// source_ref="receipt:<id>". UNIQUE INDEX по (restaurant_id, source_ref)
-		// для префикса "receipt:" обеспечивает идемпотентность на DB-уровне.
-		paidFlag := true
-		if in.Paid != nil {
-			paidFlag = *in.Paid
-		}
-		if in.AccountID != nil && *in.AccountID != "" && paidFlag && decimal.IsPositive(totalAmount) {
+		// Атомарный финоп (v2.0.87): списываем со счёта ОПЛАЧЕННУЮ СЕЙЧАС часть
+		// (`paid`: для 'paid' = total, 'partial' = paid_amount, 'credit' = 0).
+		// Раньше гейт был на `in.Paid` (bool) и списывался ВЕСЬ total: частичная
+		// оплата не списывала ничего (paid=false), а при in.Paid+partial могла
+		// переплатить. Теперь драйвер — рассчитанная сумма `paid`.
+		// source_ref="receipt:<id>" + UNIQUE(restaurant_id, source_ref) → идемпотентность.
+		if in.AccountID != nil && *in.AccountID != "" && decimal.IsPositive(paid) {
 			var acc models.FinancialAccount
 			if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
 				return apperrors.Wrap("VALIDATION", "account not found", err)
 			}
-			newBal := decimal.Normalize(decimal.Sub(acc.Balance, totalAmount))
+			newBal := decimal.Normalize(decimal.Sub(acc.Balance, paid))
 			if decimal.IsNegative(newBal) {
 				return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)
 			}
@@ -303,7 +301,7 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			finOp := &models.FinancialOperation{
 				ID:           uuid.NewString(),
 				Type:         &opType,
-				Amount:       totalAmount,
+				Amount:       paid,
 				Category:     &opCat,
 				AccountID:    &accID,
 				AccountName:  acc.Name,
@@ -318,6 +316,22 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				UpdatedAt:    now,
 			}
 			if err := tx.Create(finOp).Error; err != nil {
+				return err
+			}
+		}
+
+		// Неоплаченная часть → долг поставщику (авто-обязательство: баланс читает
+		// Σ suppliers.current_debt). Раньше долг нигде не начислялся, из-за чего
+		// кредитные/частичные приёмки занижали пассивы и завышали капитал на
+		// сумму долга. Начисляем только при известном поставщике.
+		if in.SupplierID != nil && *in.SupplierID != "" && decimal.IsPositive(debt) {
+			var sup models.Supplier
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *in.SupplierID).First(&sup).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "supplier not found", err)
+			}
+			sup.CurrentDebt = decimal.Normalize(decimal.Add(sup.CurrentDebt, debt))
+			if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
 				return err
 			}
 		}

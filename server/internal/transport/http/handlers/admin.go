@@ -224,6 +224,19 @@ func (h *SuppliersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+func (h *SuppliersHandler) PayDebt(w http.ResponseWriter, r *http.Request) {
+	var in service.SupplierPayDebtInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	s, err := h.svc.PayDebt(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, s)
+}
 
 // ─── Reservations ──────────────────────────────────────────────────────────
 
