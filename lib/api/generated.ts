@@ -781,6 +781,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/warehouses/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Переместить товар на другой склад */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["WarehouseTransferInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/ingredients": {
         parameters: {
             query?: never;
@@ -10001,6 +10042,12 @@ export interface components {
         };
         WarehousesList: {
             data?: components["schemas"]["Warehouse"][];
+        };
+        WarehouseTransferInput: {
+            /** Format: uuid */
+            ingredient_id: string;
+            /** Format: uuid */
+            to_warehouse_id: string;
         };
         TableInput: {
             name?: string;

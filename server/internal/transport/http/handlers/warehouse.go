@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -24,4 +25,18 @@ func (h *WarehouseHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, makeList[models.Warehouse](rows, ""))
+}
+
+// Transfer — POST /api/v1/warehouses/transfer. Перемещает товар на другой склад.
+func (h *WarehouseHandler) Transfer(w http.ResponseWriter, r *http.Request) {
+	var in service.WarehouseTransferInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	if err := h.svc.Transfer(r.Context(), in); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }

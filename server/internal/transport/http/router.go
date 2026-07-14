@@ -476,6 +476,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/stock/inventory", inventoryH.Create)
 			g.Post("/stock/inventory/{id}/apply", inventoryH.Apply)
 			g.Post("/stock/ingredients", ingredientsWriteH.Create)
+			g.Post("/warehouses/transfer", warehouseH.Transfer)
 			g.Patch("/stock/ingredients/{id}", ingredientsWriteH.Patch)
 			g.Delete("/stock/ingredients/{id}", ingredientsWriteH.Delete)
 			g.Post("/supply-expenses", supplyExpensesH.Create)

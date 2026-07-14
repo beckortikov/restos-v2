@@ -328,6 +328,13 @@ paths:
   # ─── Stock ──────────────────────────────────────────────────────────────
   /api/v1/warehouses:
     get: { tags: [stock], summary: Склады (мультисклад), responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WarehousesList" } } } } } }
+  /api/v1/warehouses/transfer:
+    post:
+      tags: [stock]
+      summary: Переместить товар на другой склад
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WarehouseTransferInput" } } } }
+      responses: { "200": { description: OK } }
   /api/v1/stock/ingredients:
     get:
       tags: [stock]
@@ -3024,6 +3031,7 @@ components:
     TablesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Table" } } } }
     Warehouse: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, kind: { type: string, enum: [products, purchased, supplies] }, restaurant_id: { type: string } } }
     WarehousesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Warehouse" } } } }
+    WarehouseTransferInput: { type: object, required: [ingredient_id, to_warehouse_id], properties: { ingredient_id: { type: string, format: uuid }, to_warehouse_id: { type: string, format: uuid } } }
     TableInput:
       type: object
       properties:

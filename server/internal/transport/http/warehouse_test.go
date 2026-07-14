@@ -120,3 +120,52 @@ func TestStockMovement_InheritsWarehouseFromIngredient(t *testing.T) {
 		t.Errorf("явный warehouse_id перезатёрт хуком: %v, ожидали %s", saved2.WarehouseID, other)
 	}
 }
+
+// Ф1 2c: перемещение товара на другой склад меняет warehouse_id и пишет движение
+// transfer, при этом ОБЩИЙ ОСТАТОК НЕ меняется (denorm игнорирует transfer — нет
+// двойного счёта qty).
+func TestWarehouseTransfer_MovesIngredient_NoQtyChange(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _, _, _ := seedForWrite(t, f)
+	tok := f.login(t)
+
+	_, cb := f.post(t, "/api/v1/stock/ingredients", tok, uuid.NewString(), map[string]any{
+		"name": "Сахар", "unit": "kg", "is_food": true, "qty": "10",
+	})
+	var ing struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(cb, &ing)
+
+	var purchased models.Warehouse
+	if err := gdb.Where("restaurant_id = ? AND kind = ?", f.rid, "purchased").First(&purchased).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r, b := f.post(t, "/api/v1/warehouses/transfer", tok, uuid.NewString(), map[string]any{
+		"ingredient_id":   ing.ID,
+		"to_warehouse_id": purchased.ID,
+	})
+	if r.StatusCode != 200 {
+		t.Fatalf("transfer %d: %s", r.StatusCode, b)
+	}
+
+	var saved models.Ingredient
+	if err := gdb.First(&saved, "id = ?", ing.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if saved.WarehouseID == nil || *saved.WarehouseID != purchased.ID {
+		t.Errorf("товар не переехал: warehouse_id=%v, ожидали %s", saved.WarehouseID, purchased.ID)
+	}
+	if got := decimal.Normalize(saved.Qty).String(); got != "10" {
+		t.Errorf("остаток изменился при перемещении: qty=%s, ожидали 10 (двойной счёт!)", got)
+	}
+
+	var mv models.StockMovement
+	if err := gdb.Where("ingredient_id = ? AND type = ?", ing.ID, "transfer").First(&mv).Error; err != nil {
+		t.Fatalf("нет движения transfer: %v", err)
+	}
+	if mv.ToWarehouseID == nil || *mv.ToWarehouseID != purchased.ID {
+		t.Errorf("движение transfer to=%v, ожидали %s", mv.ToWarehouseID, purchased.ID)
+	}
+}

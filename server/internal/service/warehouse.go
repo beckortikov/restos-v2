@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
+	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
@@ -85,4 +87,60 @@ func resolveWarehouseID(tx *gorm.DB, rid string, isFood, isPurchased bool) (*str
 		return nil, err
 	}
 	return &w.ID, nil
+}
+
+// WarehouseTransferInput — перемещение товара на другой склад.
+type WarehouseTransferInput struct {
+	IngredientID  string `json:"ingredient_id"`
+	ToWarehouseID string `json:"to_warehouse_id"`
+}
+
+// Transfer перемещает товар ЦЕЛИКОМ на другой склад: меняет
+// ingredients.warehouse_id и пишет движение type=transfer (from/to). Остаток
+// товара НЕ меняется (denorm-хук игнорирует transfer) — модель «один товар на
+// одном складе», остаток не дробится.
+func (s *WarehouseService) Transfer(ctx context.Context, in WarehouseTransferInput) error {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
+	if in.IngredientID == "" || in.ToWarehouseID == "" {
+		return apperrors.Wrap("VALIDATION", "ingredient_id и to_warehouse_id обязательны", nil)
+	}
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var to models.Warehouse
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, in.ToWarehouseID).First(&to).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("VALIDATION", "целевой склад не найден", nil)
+			}
+			return err
+		}
+		var ing models.Ingredient
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, in.IngredientID).First(&ing).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("NOT_FOUND", "товар не найден", nil)
+			}
+			return err
+		}
+		from := ing.WarehouseID
+		if from != nil && *from == in.ToWarehouseID {
+			return apperrors.Wrap("VALIDATION", "товар уже на этом складе", nil)
+		}
+		now := time.Now().UTC()
+		if err := tx.Model(&models.Ingredient{}).
+			Where("id = ? AND restaurant_id = ?", in.IngredientID, rid).
+			Updates(map[string]any{"warehouse_id": in.ToWarehouseID, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		tp := "transfer"
+		desc := "warehouse_transfer"
+		mv := &models.StockMovement{
+			ID: uuid.NewString(), Type: &tp, IngredientID: &ing.ID, IngredientName: ing.Name,
+			Description: &desc, Qty: ing.Qty, Unit: ing.Unit,
+			WarehouseID: &in.ToWarehouseID, FromWarehouseID: from, ToWarehouseID: &in.ToWarehouseID,
+			RestaurantID: &rid, CreatedAt: now,
+		}
+		return tx.Create(mv).Error
+	})
 }
