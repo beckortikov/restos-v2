@@ -576,9 +576,15 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 		Method string          `gorm:"column:method"`
 		Total  decimal.Decimal `gorm:"column:total"`
 	}
+	// 'refunded' (полный возврат) включаем НАРАВНЕ с 'closed': их валовая выручка
+	// и COGS должны считаться, а сам возврат вычитается отдельной строкой opex
+	// (category='refund'). Иначе полный возврат бил по прибыли дважды: выручка
+	// пропадала (статус 'refunded' выпадал) И возврат шёл в расход. Частичный
+	// возврат оставляет статус 'closed' и уже считался корректно — теперь оба
+	// пути согласованы.
 	q := scoped.Table("orders").
 		Select("COALESCE(payment_method, '') AS method, COALESCE(SUM(total_with_service), 0) AS total").
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("closed_at >= ?", *f.From)
 	}
@@ -605,7 +611,9 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	q2 := scoped2.Table("orders AS o").
 		Select("COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS total").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
+		// 'refunded' наравне с 'closed' — согласовано с revenue-запросом (см. выше):
+		// себестоимость возвращённого заказа остаётся реальной потерей.
+		Where("o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q2 = q2.Where("o.closed_at >= ?", *f.From)
 	}

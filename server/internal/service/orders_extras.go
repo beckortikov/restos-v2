@@ -1165,6 +1165,21 @@ func (s *OrdersService) Reopen(ctx context.Context, orderID string, in ReopenOrd
 		}
 		now := time.Now().UTC()
 
+		// Заказы, оплаченные РАЗДЕЛЕНИЕМ счёта (split), переоткрывать нельзя:
+		// reverseCloseFinancials сторнирует только order-level revenue-FO
+		// (source_ref='order:'), а split-платежи идут как 'split:' → сторно бы
+		// ничего не вернул, и повторное закрытие дублировало бы выручку двойным
+		// кредитом на счёт. Для таких заказов — только возврат (refund).
+		var paidSplits int64
+		if err := tx.Model(&models.OrderSplit{}).
+			Where("restaurant_id = ? AND order_id = ? AND paid_at IS NOT NULL", rid, orderID).
+			Count(&paidSplits).Error; err != nil {
+			return err
+		}
+		if paidSplits > 0 {
+			return apperrors.Wrap("CONFLICT", "заказ оплачен разделением счёта — переоткрытие недоступно, оформите возврат", nil)
+		}
+
 		if err := s.reverseCloseFinancials(tx, rid, &order, now); err != nil {
 			return err
 		}
