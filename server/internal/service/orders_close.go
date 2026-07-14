@@ -18,6 +18,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -689,8 +690,11 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 					return err
 				}
 			case line.SemiTypeID != nil:
-				// Каскад: для каждого ингредиента в semi_recipe_lines.
-				if err := s.cascadeSemiDeduct(tx, restaurantID, *line.SemiTypeID, lineQty, sourceRef, now, 0); err != nil {
+				// iiko-модель: сперва расходуем ГОТОВУЮ заготовку со склада, а
+				// нехватку разузловываем в сырьё. Раньше всегда каскадили в сырьё
+				// (cascadeSemiDeduct), игнорируя остаток заготовки, — из-за чего при
+				// использовании предзаготовки (Prepare) сырьё списывалось дважды.
+				if err := s.deductSemiForSale(tx, restaurantID, *line.SemiTypeID, lineQty, deref(line.Unit), sourceRef, now); err != nil {
 					return err
 				}
 			}
@@ -748,6 +752,93 @@ func writeIngredientDeduct(
 // мы делим на yield/100, чтобы получить сырьё «до уварки»).
 //
 // depth — текущая глубина (защита от циклов: max 5).
+// deductSemiForSale — списание заготовки при продаже по модели iiko: сперва
+// расходуем ГОТОВЫЙ остаток semi_finished_stock (сырьё для него уже списано в
+// Prepare), а нехватку разузловываем в базовые ингредиенты (cascadeSemiDeduct,
+// «на лету»). Раньше при продаже ВСЕГДА каскадили в сырьё, игнорируя остаток
+// заготовки, — при использовании предзаготовки сырьё уходило дважды (баг C1).
+//
+// lineQty — потребность в единице тех-карты блюда (lineUnit); приводим к единице
+// заготовки. yield_percent при расходе готовой заготовки НЕ применяется (он уже
+// учтён при производстве); cascadeSemiDeduct применит его только к остатку-нехватке.
+func (s *OrdersService) deductSemiForSale(
+	tx *gorm.DB,
+	restaurantID, semiTypeID string,
+	lineQty decimal.Decimal,
+	lineUnit, sourceRef string,
+	now time.Time,
+) error {
+	var sft models.SemiFinishedType
+	if err := tx.Where("restaurant_id = ? AND id = ?", restaurantID, semiTypeID).
+		First(&sft).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // заготовка не настроена — не блокируем закрытие
+		}
+		return err
+	}
+	needed := units.Convert(lineQty, lineUnit, deref(sft.OutputUnit))
+	if !decimal.IsPositive(needed) {
+		return nil
+	}
+
+	// Готовый остаток заготовки (с блокировкой строки от гонок параллельных продаж).
+	var stock models.SemiFinishedStock
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("restaurant_id = ? AND semi_type_id = ?", restaurantID, semiTypeID).
+		First(&stock).Error
+	hasStock := err == nil
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	fromStock := decimal.Zero
+	if hasStock && decimal.IsPositive(stock.Qty) {
+		if stock.Qty.GreaterThanOrEqual(needed) {
+			fromStock = needed
+		} else {
+			fromStock = stock.Qty // частичная нехватка — берём сколько есть
+		}
+	}
+
+	// 1. Расход готовой заготовки со склада (сырьё уже списано при Prepare).
+	if decimal.IsPositive(fromStock) {
+		stock.Qty = decimal.Normalize(decimal.Sub(stock.Qty, fromStock))
+		stock.UpdatedAt = now
+		if err := tx.Save(&stock).Error; err != nil {
+			return err
+		}
+		// Маркер-движение (semi_out, без ингредиента — хук денорма его пропускает):
+		// 1) идемпотентность close считает движения по description=order:{id} —
+		//    без маркера блюдо ТОЛЬКО из заготовки не оставляло следа и могло
+		//    списаться повторно при reopen→reclose; 2) аудит расхода п/ф.
+		mvType := "semi_out"
+		desc := sourceRef
+		u := deref(sft.OutputUnit)
+		mv := &models.StockMovement{
+			ID:             uuid.NewString(),
+			Type:           &mvType,
+			Description:    &desc,
+			IngredientName: sft.Name,
+			Qty:            decimal.Normalize(fromStock).Neg(),
+			Unit:           &u,
+			RestaurantID:   &restaurantID,
+			CreatedAt:      now,
+		}
+		if err := tx.Create(mv).Error; err != nil {
+			return err
+		}
+	}
+
+	// 2. Нехватку разузловываем в сырьё (модель «на лету»); cascadeSemiDeduct сам
+	//    применит yield_percent к этому остатку.
+	if remainder := decimal.Sub(needed, fromStock); decimal.IsPositive(remainder) {
+		if err := s.cascadeSemiDeduct(tx, restaurantID, semiTypeID, remainder, sourceRef, now, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *OrdersService) cascadeSemiDeduct(
 	tx *gorm.DB,
 	restaurantID, semiTypeID string,
