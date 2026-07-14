@@ -45,11 +45,19 @@ type IngredientPrice struct {
 	UnitWeightUnit string          `json:"unit_weight_unit"`
 }
 
+// SemiPrice — себестоимость полуфабриката за единицу (для строк тех-карты
+// semi_type_id). Источник — semi_finished_stock.price_per_unit (yield уже зашит).
+type SemiPrice struct {
+	Price decimal.Decimal `json:"price"`
+	Unit  string          `json:"unit"`
+}
+
 // MenuItemsResult — результат ListItems. Всегда включает Items и пустые
 // extras-поля; фронт читает их безусловно.
 type MenuItemsResult struct {
 	Items            []MenuItemWithExtras
 	IngredientPrices map[string]IngredientPrice
+	SemiPrices       map[string]SemiPrice
 	NextCursor       string
 }
 
@@ -88,6 +96,7 @@ func (s *MenuService) ListItems(ctx context.Context, f MenuItemsFilter) (MenuIte
 	out := MenuItemsResult{
 		Items:            make([]MenuItemWithExtras, 0, len(trimmed)),
 		IngredientPrices: map[string]IngredientPrice{},
+		SemiPrices:       map[string]SemiPrice{},
 		NextCursor:       next,
 	}
 
@@ -149,6 +158,39 @@ func (s *MenuService) ListItems(ctx context.Context, f MenuItemsFilter) (MenuIte
 						WastePercent:   i.WastePercent,
 						UnitWeight:     i.UnitWeight,
 						UnitWeightUnit: weightUnit,
+					}
+				}
+			}
+
+			// Batch semi prices (1 запрос) — себестоимость полуфабрикатов из строк
+			// тех-карты с semi_type_id. Источник — semi_finished_stock.price_per_unit.
+			// Без этого блюда на п/ф считали бы с/с без стоимости п/ф (маржа завышена).
+			semiIDsSet := map[string]struct{}{}
+			for _, l := range lines {
+				if l.SemiTypeID != nil && *l.SemiTypeID != "" {
+					semiIDsSet[*l.SemiTypeID] = struct{}{}
+				}
+			}
+			if len(semiIDsSet) > 0 {
+				semiIDs := make([]string, 0, len(semiIDsSet))
+				for id := range semiIDsSet {
+					semiIDs = append(semiIDs, id)
+				}
+				scopedSemi, err := s.r.ForTenant(ctx)
+				if err != nil {
+					return MenuItemsResult{}, err
+				}
+				var stocks []models.SemiFinishedStock
+				if err := scopedSemi.Where("semi_type_id IN ?", semiIDs).Find(&stocks).Error; err == nil {
+					for _, st := range stocks {
+						if st.SemiTypeID == nil {
+							continue
+						}
+						unit := ""
+						if st.Unit != nil {
+							unit = *st.Unit
+						}
+						out.SemiPrices[*st.SemiTypeID] = SemiPrice{Price: st.PricePerUnit, Unit: unit}
 					}
 				}
 			}

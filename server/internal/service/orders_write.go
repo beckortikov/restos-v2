@@ -1256,9 +1256,11 @@ func itoa(n int) string {
 }
 
 // techCardCogs — себестоимость блюда по тех-карте: Σ (расход × цена ингредиента)
-// с конвертацией единиц (units.Convert) и учётом waste (1/(1-waste/100)).
-// Зеркало фронтового calcCogsFromTechCard (lib/queries/_mappers.ts). Semi-строки
-// не учитываются (как и на фронте). 0 — если тех-карты/цен нет.
+// + Σ (расход × себестоимость полуфабриката). С конвертацией единиц
+// (units.Convert/ConvertToStock) и учётом waste ингредиентов (1/(1-waste/100)).
+// Зеркало фронтового calcCogsFromTechCard (lib/queries/_mappers.ts). Полуфабрикаты
+// (semi_type_id) берутся по price_per_unit из semi_finished_stock — их yield уже
+// зашит в эту цену, поэтому waste к ним не применяется. 0 — если тех-карты/цен нет.
 func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
 	if mi.RestaurantID == nil {
 		return decimal.Zero
@@ -1268,43 +1270,74 @@ func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
 		Find(&lines).Error; err != nil {
 		return decimal.Zero
 	}
-	ids := make([]string, 0, len(lines))
+	ingIDs := make([]string, 0, len(lines))
+	semiIDs := make([]string, 0, len(lines))
 	for _, l := range lines {
 		if l.IngredientID != nil && *l.IngredientID != "" {
-			ids = append(ids, *l.IngredientID)
+			ingIDs = append(ingIDs, *l.IngredientID)
+		} else if l.SemiTypeID != nil && *l.SemiTypeID != "" {
+			semiIDs = append(semiIDs, *l.SemiTypeID)
 		}
 	}
-	if len(ids) == 0 {
+	if len(ingIDs) == 0 && len(semiIDs) == 0 {
 		return decimal.Zero
 	}
-	var ings []models.Ingredient
-	if err := tx.Where("id IN ?", ids).Find(&ings).Error; err != nil {
-		return decimal.Zero
+	byID := make(map[string]models.Ingredient, len(ingIDs))
+	if len(ingIDs) > 0 {
+		var ings []models.Ingredient
+		if err := tx.Where("id IN ?", ingIDs).Find(&ings).Error; err != nil {
+			return decimal.Zero
+		}
+		for _, i := range ings {
+			byID[i.ID] = i
+		}
 	}
-	byID := make(map[string]models.Ingredient, len(ings))
-	for _, i := range ings {
-		byID[i.ID] = i
+	// Себестоимость полуфабрикатов: price_per_unit + unit из semi_finished_stock
+	// (одна строка остатка на semi_type в ресторане). last-wins, если строк
+	// несколько.
+	type semiCost struct {
+		price decimal.Decimal
+		unit  string
+	}
+	semiByType := make(map[string]semiCost, len(semiIDs))
+	if len(semiIDs) > 0 {
+		var stocks []models.SemiFinishedStock
+		if err := tx.Where("restaurant_id = ? AND semi_type_id IN ?", *mi.RestaurantID, semiIDs).
+			Find(&stocks).Error; err == nil {
+			for _, s := range stocks {
+				if s.SemiTypeID != nil {
+					semiByType[*s.SemiTypeID] = semiCost{price: s.PricePerUnit, unit: deref(s.Unit)}
+				}
+			}
+		}
 	}
 	hundred := decimal.FromInt(100)
 	one := decimal.FromInt(1)
 	total := decimal.Zero
 	for _, l := range lines {
-		if l.IngredientID == nil {
-			continue
-		}
-		ing, ok := byID[*l.IngredientID]
-		if !ok {
-			continue
-		}
-		qty := l.Qty
-		if ing.WastePercent.IsPositive() {
-			divisor := decimal.Sub(one, decimal.DivRound(ing.WastePercent, hundred))
-			if divisor.IsPositive() {
-				qty = decimal.DivRound(qty, divisor)
+		switch {
+		case l.IngredientID != nil && *l.IngredientID != "":
+			ing, ok := byID[*l.IngredientID]
+			if !ok {
+				continue
 			}
+			qty := l.Qty
+			if ing.WastePercent.IsPositive() {
+				divisor := decimal.Sub(one, decimal.DivRound(ing.WastePercent, hundred))
+				if divisor.IsPositive() {
+					qty = decimal.DivRound(qty, divisor)
+				}
+			}
+			qtyStock := units.ConvertToStock(qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
+			total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
+		case l.SemiTypeID != nil && *l.SemiTypeID != "":
+			sc, ok := semiByType[*l.SemiTypeID]
+			if !ok || !sc.price.IsPositive() {
+				continue
+			}
+			qtyStock := units.Convert(l.Qty, deref(l.Unit), sc.unit)
+			total = decimal.Add(total, decimal.Mul(qtyStock, sc.price))
 		}
-		qtyStock := units.ConvertToStock(qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
-		total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
 	}
 	return decimal.Normalize(total)
 }

@@ -25,6 +25,7 @@ func NewMenu(svc *service.MenuService) *MenuHandler { return &MenuHandler{svc: s
 type menuItemsEnvelope struct {
 	Data             []service.MenuItemWithExtras       `json:"data"`
 	IngredientPrices map[string]service.IngredientPrice `json:"ingredient_prices"`
+	SemiPrices       map[string]service.SemiPrice       `json:"semi_prices"`
 	NextCursor       string                             `json:"next_cursor,omitempty"`
 }
 
@@ -58,6 +59,7 @@ func (h *MenuHandler) ListItems(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, menuItemsEnvelope{
 		Data:             res.Items,
 		IngredientPrices: res.IngredientPrices,
+		SemiPrices:       res.SemiPrices,
 		NextCursor:       res.NextCursor,
 	})
 }

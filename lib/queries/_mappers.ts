@@ -138,19 +138,35 @@ export function convertDeductToStockUnit(
 export function calcCogsFromTechCard(
   techLines: Record<string, unknown>[],
   ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>,
+  // Себестоимость полуфабрикатов (semi_type_id → цена/ед). Без неё блюда на п/ф
+  // считались бы с/с без стоимости п/ф → маржа завышена. Зеркалит бэк techCardCogs.
+  semiPrices?: Map<string, { price: number; unit: string }>,
 ): number {
   let cogs = 0
   for (const line of techLines) {
     const ingId = line.ingredient_id as string | null
-    if (!ingId) continue
-    const ing = ingredientPrices.get(ingId)
-    if (!ing) continue
-    const recipeQty = Number(line.qty) || 0
-    const recipeUnit = (line.unit as string) || ''
-    const wasteMultiplier = ing.wastePercent > 0 ? 1 / (1 - ing.wastePercent / 100) : 1
-    const adjustedQty = recipeQty * wasteMultiplier
-    const qtyInStockUnit = convertDeductToStockUnit(adjustedQty, ing.unit, recipeUnit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
-    cogs += qtyInStockUnit * ing.price
+    if (ingId) {
+      const ing = ingredientPrices.get(ingId)
+      if (!ing) continue
+      const recipeQty = Number(line.qty) || 0
+      const recipeUnit = (line.unit as string) || ''
+      const wasteMultiplier = ing.wastePercent > 0 ? 1 / (1 - ing.wastePercent / 100) : 1
+      const adjustedQty = recipeQty * wasteMultiplier
+      const qtyInStockUnit = convertDeductToStockUnit(adjustedQty, ing.unit, recipeUnit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
+      cogs += qtyInStockUnit * ing.price
+      continue
+    }
+    const semiId = (line.semi_type_id ?? line.semi_fab_type_id) as string | null
+    if (semiId && semiPrices) {
+      const semi = semiPrices.get(semiId)
+      if (!semi || !(semi.price > 0)) continue
+      const recipeQty = Number(line.qty) || 0
+      const recipeUnit = (line.unit as string) || ''
+      // yield п/ф уже зашит в цену → waste не применяем. Конвертируем в ед. п/ф;
+      // если единицы несравнимы (шт) — берём qty как есть (фолбэк, как на бэке).
+      const qtyInSemiUnit = metricConvert(recipeQty, recipeUnit, semi.unit) ?? recipeQty
+      cogs += qtyInSemiUnit * semi.price
+    }
   }
   return dRound(cogs)
 }

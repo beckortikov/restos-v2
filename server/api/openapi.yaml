@@ -2949,6 +2949,15 @@ components:
         waste_percent: { $ref: "#/components/schemas/Decimal" }
         unit_weight: { $ref: "#/components/schemas/Decimal" }
         unit_weight_unit: { type: string }
+    SemiPrice:
+      type: object
+      description: |
+        Себестоимость полуфабриката за единицу (для строк тех-карты с
+        `semi_type_id`). Источник — semi_finished_stock.price_per_unit
+        (yield п/ф уже зашит в цену). Используется в расчёте с/с блюда.
+      properties:
+        price: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
     MenuItemsList:
       type: object
       description: |
@@ -2960,7 +2969,9 @@ components:
         (одним batch-SELECT'ом, не N+1).
 
         `?include=tech_cards,ingredient_prices` — дополнительно подгружает цены
-        ингредиентов из tech card lines в top-level `ingredient_prices`.
+        ингредиентов из tech card lines в top-level `ingredient_prices`, а также
+        себестоимость полуфабрикатов (по `semi_type_id`) в `semi_prices` —
+        нужна для корректного расчёта с/с блюд, собранных из п/ф.
       properties:
         data:
           type: array
@@ -2968,6 +2979,9 @@ components:
         ingredient_prices:
           type: object
           additionalProperties: { $ref: "#/components/schemas/IngredientPrice" }
+        semi_prices:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/SemiPrice" }
         next_cursor: { type: string }
 
     MenuCategory:

@@ -16,6 +16,7 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
   // меню и из Склад→Меню. Идём по next_cursor, пока он не пуст.
   const items: Record<string, unknown>[] = []
   const ingredientPrices = new Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>()
+  const semiPrices = new Map<string, { price: number; unit: string }>()
   let cursor: string | undefined
   for (let guard = 0; guard < 200; guard++) {
     const query: { limit: number; include?: string; cursor?: string } = { limit: 200 }
@@ -37,6 +38,10 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
           unitWeightUnit: (v?.unit_weight_unit as string) || '',
         })
       }
+      const spMap = (res?.semi_prices ?? {}) as Record<string, { price?: unknown; unit?: unknown }>
+      for (const [id, v] of Object.entries(spMap)) {
+        semiPrices.set(id, { price: Number(v?.price) || 0, unit: (v?.unit as string) || '' })
+      }
     }
     cursor = (res?.next_cursor as string) || undefined
     if (!cursor || page.length === 0) break
@@ -53,7 +58,7 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
     }
   }
 
-  return items.map(r => mapMenuItem(r, techByItem.get(r.id as string) ?? [], ingredientPrices)) as MenuItem[]
+  return items.map(r => mapMenuItem(r, techByItem.get(r.id as string) ?? [], ingredientPrices, semiPrices)) as MenuItem[]
 }
 
 export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
@@ -346,8 +351,9 @@ function mapMenuItem(
   r: Record<string, unknown>,
   techLines: Record<string, unknown>[],
   ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>,
+  semiPrices?: Map<string, { price: number; unit: string }>,
 ): MenuItem {
-  const autoCogs = techLines.length > 0 ? calcCogsFromTechCard(techLines, ingredientPrices) : 0
+  const autoCogs = techLines.length > 0 ? calcCogsFromTechCard(techLines, ingredientPrices, semiPrices) : 0
   const effectiveCogs = autoCogs > 0 ? autoCogs : (Number(r.cogs) || 0)
   return {
     id: r.id as string,
