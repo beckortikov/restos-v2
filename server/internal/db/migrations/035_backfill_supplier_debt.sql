@@ -15,15 +15,18 @@
 -- приёмка (+debt_amount) и pay-debt (-pay). Значение авторитетно на момент
 -- миграции: перезапись (=), а не инкремент, поэтому уже начисленный после фикса
 -- долг не задваивается.
--- suppliers.id — UUID, stock_receipts.supplier_id — TEXT (хранит uuid-строку),
--- поэтому кастуем s.id к text: без каста Postgres падает «operator does not
--- exist: text = uuid» и вся миграция не применяется (backend не стартует).
+-- Типы id/ссылок в разных инсталляциях «поплыли» (uuid vs text — GORM
+-- auto-migrate + ручные правки за много версий). Без каста Postgres падает
+-- «operator does not exist: text = uuid», миграция не применяется, и (до фикса
+-- wipe-fallback в main.go) это приводило к УНИЧТОЖЕНИЮ базы. Поэтому кастуем
+-- ОБЕ стороны каждого сравнения к text — сравнение text=text работает при любой
+-- комбинации исходных типов.
 UPDATE suppliers s SET
   current_debt = COALESCE((
     SELECT SUM(sr.debt_amount)
     FROM stock_receipts sr
-    WHERE sr.supplier_id = s.id::text
-      AND sr.restaurant_id = s.restaurant_id
+    WHERE sr.supplier_id::text = s.id::text
+      AND sr.restaurant_id::text = s.restaurant_id::text
   ), 0),
   updated_at = now();
 -- +goose StatementEnd
