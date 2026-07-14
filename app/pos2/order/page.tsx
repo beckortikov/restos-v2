@@ -625,25 +625,27 @@ export default function PosV2Order() {
 
         {/* Категории видны ВСЕГДА (раньше прятались при любом тексте в поиске —
             даже одна буква убирала все категории). Тап по категории очищает поиск. */}
-        <div className="flex items-center overflow-x-auto shrink-0 pv-noscroll" style={{ gap: 'clamp(0.45rem,0.85vw,0.75rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
+        {/* Категории переносятся на второй ряд (flex-wrap), а не скроллятся
+            горизонтально — все категории видны сразу. Интервалы уменьшены. */}
+        <div className="flex flex-wrap items-center shrink-0" style={{ gap: 'clamp(0.3rem,0.5vw,0.5rem)', padding: 'var(--pv-gap) var(--pv-gap) clamp(0.35rem,0.6vw,0.55rem) 0' }}>
           {favorites.length > 0 && (
-            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.65rem,1vw,0.9rem) clamp(1.05rem,1.55vw,1.6rem)', fontSize: 'var(--pv-ctl)' }}>
+            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>
               <Star style={{ width: '1rem', height: '1rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
             </button>
           )}
           {visibleCats.map(c => {
             const on = c === currentCat && !deferred.trim()
-            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.65rem,1vw,0.9rem) clamp(1.05rem,1.55vw,1.6rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
+            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
           })}
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--pv-gap) var(--pv-gap) var(--pv-pad-x) 0' }}>
+        <div className="flex-1 min-h-0 overflow-y-auto pv-scroll" style={{ padding: 'clamp(0.4rem,0.7vw,0.7rem) clamp(0.4rem,0.7vw,0.7rem) clamp(0.5rem,1vw,1rem) 0' }}>
           {loading ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка меню…</div>
           ) : dishes.length === 0 ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
           ) : (
-            <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }}>
+            <div style={{ display: 'grid', gap: 'clamp(0.4rem,0.7vw,0.7rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }}>
               {dishes.map(m => {
                 const stopped = m.isAvailable === false || stoppedIds.has(m.id)
                 const weight = (m.unit ?? 'piece') !== 'piece'
