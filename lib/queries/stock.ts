@@ -2,7 +2,7 @@ import { api, unwrap } from './_client'
 import { fetchAllPages } from './_paginate'
 import { dMul, dSub, dSum } from '../decimal'
 import type {
-  Ingredient, StockReceipt, StockMovement, StockWriteoff, WriteoffReason, ReceiptPaymentType,
+  Ingredient, StockReceipt, StockMovement, StockWriteoff, WriteoffReason, ReceiptPaymentType, Warehouse,
 } from '../types'
 import { logAction } from './audit'
 
@@ -30,6 +30,21 @@ export async function fetchIngredients(): Promise<Ingredient[]> {
   // Курсор: бэк капит limit до 200, одностраничный запрос терял ингредиенты >200.
   const rows = await fetchAllPages('/api/v1/stock/ingredients')
   return rows.map(mapIngredient) as Ingredient[]
+}
+
+// fetchWarehouses — 3 фиксированных склада ресторана (мультисклад).
+export async function fetchWarehouses(): Promise<Warehouse[]> {
+  const res: any = await unwrap(api.GET('/api/v1/warehouses'))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : []
+  return rows.map(r => ({ id: r.id, name: r.name, kind: r.kind }))
+}
+
+// transferWarehouse — переместить товар ЦЕЛИКОМ на другой склад.
+export async function transferWarehouse(ingredientId: string, toWarehouseId: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/warehouses/transfer', {
+    body: { ingredient_id: ingredientId, to_warehouse_id: toWarehouseId } as any,
+  }))
+  logAction('warehouse.transfer', 'ingredient', ingredientId, 'Перемещение между складами')
 }
 
 export async function createIngredient(data: { name: string; category: string; qty: number; min_qty: number; unit: string; price_per_unit: number; waste_percent?: number; unit_weight?: number; unit_weight_unit?: string; is_food?: boolean }) {
@@ -327,6 +342,7 @@ function mapIngredient(r: Record<string, unknown>): Ingredient {
     unitWeight: Number(r.unit_weight ?? 0),
     unitWeightUnit: (r.unit_weight_unit as string) ?? '',
     isFood: r.is_food !== false,
+    warehouseId: (r.warehouse_id as string) ?? undefined,
   } as Ingredient
 }
 

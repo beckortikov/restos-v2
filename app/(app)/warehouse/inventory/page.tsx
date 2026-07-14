@@ -1,17 +1,18 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
-import { type Ingredient } from '@/lib/types'
-import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient, deleteIngredient } from '@/lib/queries'
+import { type Ingredient, type Warehouse } from '@/lib/types'
+import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient, deleteIngredient, fetchWarehouses, transferWarehouse } from '@/lib/queries'
 import { queryKeys } from '@/lib/query-client'
 import { humanizeError } from '@/lib/errors'
 
-import { Search, AlertTriangle, TrendingDown, Package, Plus, Trash2, X, Check } from 'lucide-react'
+import { Search, AlertTriangle, TrendingDown, Package, Plus, Trash2, X, Check, ArrowRightLeft } from 'lucide-react'
 import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 
 function StockLevel({ qty, minQty }: { qty: number; minQty: number }) {
@@ -32,7 +33,13 @@ function StockLevel({ qty, minQty }: { qty: number; minQty: number }) {
 // Virtualized table for ingredients lists > 50 rows. Uses a CSS grid layout to
 // mirror the columns of the original <table> while keeping rows as absolutely
 // positioned divs so @tanstack/react-virtual can place them.
-function VirtualIngredientsTable({ items, onEdit, selectMode, selectedIds, onToggleSelect }: { items: Ingredient[]; onEdit: (ing: Ingredient) => void; selectMode: boolean; selectedIds: Set<string>; onToggleSelect: (id: string) => void }) {
+const WAREHOUSE_BADGE: Record<string, string> = {
+  products: 'bg-emerald-100 text-emerald-700',
+  purchased: 'bg-blue-100 text-blue-700',
+  supplies: 'bg-zinc-200 text-zinc-700',
+}
+
+function VirtualIngredientsTable({ items, onEdit, onMove, warehouseById, selectMode, selectedIds, onToggleSelect }: { items: Ingredient[]; onEdit: (ing: Ingredient) => void; onMove: (ing: Ingredient) => void; warehouseById: Map<string, Warehouse>; selectMode: boolean; selectedIds: Set<string>; onToggleSelect: (id: string) => void }) {
   const parentRef = useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
     count: items.length,
@@ -70,6 +77,16 @@ function VirtualIngredientsTable({ items, onEdit, selectMode, selectedIds, onTog
                     {ing.qty < ing.minQty && <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />}
                     <span className="font-medium text-foreground">{ing.name}</span>
                   </div>
+                  {ing.warehouseId && warehouseById.get(ing.warehouseId) && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onMove(ing) }}
+                      className={`mt-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded transition-opacity hover:opacity-70 ${WAREHOUSE_BADGE[warehouseById.get(ing.warehouseId)!.kind] ?? 'bg-muted text-muted-foreground'}`}
+                      title="Переместить на другой склад"
+                    >
+                      <ArrowRightLeft className="size-2.5" />
+                      {warehouseById.get(ing.warehouseId)!.name}
+                    </button>
+                  )}
                 </div>
                 <div className="px-4 py-3">
                   <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{ing.category}</span>
@@ -121,10 +138,33 @@ export default function InventoryPage() {
     queryFn: fetchIngredientCategories,
     staleTime: 5 * 60_000,
   })
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: fetchWarehouses,
+    staleTime: 10 * 60_000,
+  })
+  const warehouseById = useMemo(() => new Map(warehouses.map(w => [w.id, w])), [warehouses])
+  const [moveTarget, setMoveTarget] = useState<Ingredient | null>(null)
+  const [moving, setMoving] = useState(false)
   const loading = ingredientsQuery.isLoading
   const reloadStock = () => {
     qc.invalidateQueries({ queryKey: queryKeys.stock.ingredients })
     qc.invalidateQueries({ queryKey: CATS_KEY })
+  }
+
+  async function doMove(toWarehouseId: string) {
+    if (!moveTarget || moving) return
+    setMoving(true)
+    try {
+      await transferWarehouse(moveTarget.id, toWarehouseId)
+      toast.success(`«${moveTarget.name}» перемещён`)
+      setMoveTarget(null)
+      qc.invalidateQueries({ queryKey: queryKeys.stock.ingredients })
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось переместить'))
+    } finally {
+      setMoving(false)
+    }
   }
 
   async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; unitWeight?: number; unitWeightUnit?: string; isFood?: boolean }) {
@@ -365,7 +405,7 @@ export default function InventoryPage() {
 
       {/* Table */}
       {filtered.length > 50 ? (
-        <VirtualIngredientsTable items={filtered} onEdit={openEditDialog} selectMode={selectMode} selectedIds={selectedIds} onToggleSelect={toggleSelect} />
+        <VirtualIngredientsTable items={filtered} onEdit={openEditDialog} onMove={setMoveTarget} warehouseById={warehouseById} selectMode={selectMode} selectedIds={selectedIds} onToggleSelect={toggleSelect} />
       ) : (
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
@@ -425,6 +465,34 @@ export default function InventoryPage() {
         defaultIsFood={tab === 'food'}
         onSubmit={handleIngredientSubmit}
       />
+
+      <Dialog open={!!moveTarget} onOpenChange={(o) => { if (!o) setMoveTarget(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Переместить «{moveTarget?.name}»</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground mb-1">Выберите склад назначения:</p>
+          <div className="space-y-2">
+            {warehouses.map(w => {
+              const current = moveTarget?.warehouseId === w.id
+              return (
+                <button
+                  key={w.id}
+                  disabled={current || moving}
+                  onClick={() => doMove(w.id)}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-sm transition-colors ${current ? 'border-border bg-muted/50 text-muted-foreground cursor-default' : 'border-border hover:bg-muted text-foreground'}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className={`inline-block size-2 rounded-full ${w.kind === 'products' ? 'bg-emerald-500' : w.kind === 'purchased' ? 'bg-blue-500' : 'bg-zinc-400'}`} />
+                    {w.name}
+                  </span>
+                  {current && <span className="text-xs">текущий</span>}
+                </button>
+              )
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

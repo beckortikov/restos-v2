@@ -230,6 +230,14 @@ export interface Ingredient {
   unitWeight?: number
   unitWeightUnit?: string // единица фактора (г/мл)
   isFood: boolean // true = продукт, false = хозтовар
+  warehouseId?: string // склад, где лежит товар (мультисклад)
+}
+
+// Warehouse — склад (мультисклад). 3 фиксированных: products/purchased/supplies.
+export interface Warehouse {
+  id: string
+  name: string
+  kind: 'products' | 'purchased' | 'supplies'
 }
 
 export interface OrderItem {
