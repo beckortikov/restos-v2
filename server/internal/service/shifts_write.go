@@ -462,3 +462,37 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 	}
 	return op, nil
 }
+
+// recordShiftCashOutIfActive зеркалит отток наличных со счёта в кассовую смену.
+// Если accountID — счёт открытой смены, создаёт cash_shift_operation type=cash_out,
+// чтобы expected_cash в Z-отчёте (= opening + cash_revenue + cash_in − cash_out)
+// совпал с фактической наличкой в ящике. Без этого возвраты и выплаты (зарплата/
+// обслуживание) наличными списывали баланс счёта, но не уменьшали expected_cash →
+// Z-отчёт показывал ложную недостачу. Вызывается ВНУТРИ транзакции операции.
+// No-op, если открытой смены на этом счёте нет (напр. безнал-счёт или смена закрыта).
+func recordShiftCashOutIfActive(tx *gorm.DB, rid, accountID, desc string, amount decimal.Decimal, now time.Time) error {
+	if accountID == "" || !decimal.IsPositive(amount) {
+		return nil
+	}
+	var shift models.CashShift
+	err := tx.Where("restaurant_id = ? AND status = ? AND account_id = ?", rid, "open", accountID).
+		First(&shift).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	t := "cash_out"
+	d := desc
+	op := &models.CashShiftOperation{
+		ID:          uuid.NewString(),
+		ShiftID:     &shift.ID,
+		Type:        &t,
+		Amount:      decimal.Normalize(amount),
+		Description: &d,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	return tx.Create(op).Error
+}

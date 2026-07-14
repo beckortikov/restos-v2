@@ -154,6 +154,20 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 				accountID = *firstOp.AccountID
 			}
 		}
+		// 3) fallback для заказов, оплаченных РАЗДЕЛЕНИЕМ счёта (split): у них нет
+		// ни payments JSON, ни order-level FO — только оплаченные order_splits со
+		// своим account_id. Раньше это давало 409 «cannot determine source account»
+		// → split-заказы вообще нельзя было вернуть. Берём счёт первого оплаченного
+		// split'а (весь возврат идёт с него).
+		if accountID == "" {
+			var sp models.OrderSplit
+			if err := tx.Where("restaurant_id = ? AND order_id = ? AND account_id IS NOT NULL", rid, order.ID).
+				Order("paid_at ASC").
+				Limit(1).
+				First(&sp).Error; err == nil && sp.AccountID != nil {
+				accountID = *sp.AccountID
+			}
+		}
 		if accountID == "" {
 			return apperrors.Wrap("CONFLICT", "cannot determine source account for refund", nil)
 		}
@@ -194,6 +208,12 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 			return err
 		}
 
+		// Если возврат наличными со счёта открытой смены — зеркалим в кассовую
+		// смену (cash_out), иначе expected_cash в Z-отчёте не сойдётся с ящиком
+		// (ложная недостача). No-op для безнала/без активной смены.
+		if err := recordShiftCashOutIfActive(tx, rid, accountID, opDesc, amount, now); err != nil {
+			return err
+		}
 		refunded = amount
 		buf.Add(EventOrderUpdated, map[string]any{
 			"id":             order.ID,
@@ -321,6 +341,14 @@ func deref(p *string) string {
 		return ""
 	}
 	return *p
+}
+
+// derefOr разыменовывает p, а при nil/пустом — возвращает fallback.
+func derefOr(p *string, fallback string) string {
+	if p != nil && *p != "" {
+		return *p
+	}
+	return fallback
 }
 
 // jsonUnmarshal — мини-обёртка вокруг encoding/json чтобы не таскать import
