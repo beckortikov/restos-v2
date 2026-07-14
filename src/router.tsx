@@ -94,6 +94,7 @@ const PeakHours = () => L(() => import('@/app/(app)/analytics/peak-hours/page'))
 const Forecast = () => L(() => import('@/app/(app)/analytics/forecast/page'))
 const Trends = () => L(() => import('@/app/(app)/analytics/trends/page'))
 const Weekday = () => L(() => import('@/app/(app)/analytics/weekday/page'))
+const SalesReport = () => L(() => import('@/app/(app)/analytics/sales-report/page'))
 
 // Settings
 const Settings = () => L(() => import('@/app/(app)/settings/page'))
@@ -188,6 +189,7 @@ export function AppRouter() {
         <Route path="/analytics/forecast" element={<Forecast />} />
         <Route path="/analytics/trends" element={<Trends />} />
         <Route path="/analytics/weekday" element={<Weekday />} />
+        <Route path="/analytics/sales-report" element={<SalesReport />} />
 
         {/* Settings */}
         <Route path="/settings" element={<Settings />} />
