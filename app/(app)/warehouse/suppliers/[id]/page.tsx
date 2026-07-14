@@ -1,12 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2 } from 'lucide-react'
-import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier } from '@/lib/queries'
+import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History } from 'lucide-react'
+import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { formatCurrency } from '@/lib/helpers'
 import { toast } from 'sonner'
-import type { Supplier } from '@/lib/types'
+import type { Supplier, StockReceipt } from '@/lib/types'
+
+const PAY_BADGE: Record<string, { label: string; cls: string }> = {
+  paid: { label: 'Оплачено', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' },
+  credit: { label: 'В кредит', cls: 'bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400' },
+  partial: { label: 'Частично', cls: 'bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400' },
+}
 
 interface SupplierForm {
   name: string
@@ -71,6 +78,24 @@ export default function EditSupplierPage() {
   const [saving, setSaving] = useState(false)
   const [catSearch, setCatSearch] = useState('')
   const [ingredientCategories, setIngredientCategories] = useState<string[]>([])
+  const [receipts, setReceipts] = useState<StockReceipt[]>([])
+  const [loadingReceipts, setLoadingReceipts] = useState(true)
+
+  const totalPurchased = useMemo(() => receipts.reduce((s, r) => s + r.totalAmount, 0), [receipts])
+  const totalDebt = useMemo(() => receipts.reduce((s, r) => s + r.debtAmount, 0), [receipts])
+  const sortedReceipts = useMemo(
+    () => [...receipts].sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    [receipts],
+  )
+
+  useEffect(() => {
+    if (!id) return
+    setLoadingReceipts(true)
+    fetchReceipts({ supplierId: id })
+      .then(setReceipts)
+      .catch(() => setReceipts([]))
+      .finally(() => setLoadingReceipts(false))
+  }, [id])
 
   useEffect(() => {
     Promise.all([fetchIngredientCategories(), fetchSuppliers()])
@@ -364,6 +389,77 @@ export default function EditSupplierPage() {
               )}
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* История закупок — накладные этого поставщика */}
+      <div className="max-w-7xl mx-auto w-full px-4 md:px-6 pb-8">
+        <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between gap-3 pb-2 border-b border-border/60 flex-wrap">
+            <div className="flex items-center gap-2">
+              <History className="size-4.5 text-primary" />
+              <h2 className="text-sm font-bold text-foreground">История закупок</h2>
+            </div>
+            {receipts.length > 0 && (
+              <div className="flex items-center gap-4 text-xs">
+                <span className="text-muted-foreground">Накладных: <span className="font-bold text-foreground tabular-nums">{receipts.length}</span></span>
+                <span className="text-muted-foreground">Закуплено: <span className="font-bold text-foreground tabular-nums">{formatCurrency(totalPurchased)}</span></span>
+                {totalDebt > 0.005 && (
+                  <span className="text-muted-foreground">Долг: <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatCurrency(totalDebt)}</span></span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {loadingReceipts ? (
+            <div className="py-10 flex items-center justify-center">
+              <div className="size-6 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+            </div>
+          ) : sortedReceipts.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              У этого поставщика ещё нет накладных
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border/60">
+                    <th className="text-left font-semibold py-2 pr-3">Дата</th>
+                    <th className="text-left font-semibold py-2 pr-3">Оплата</th>
+                    <th className="text-right font-semibold py-2 pr-3">Сумма</th>
+                    <th className="text-right font-semibold py-2 pr-3">Оплачено</th>
+                    <th className="text-right font-semibold py-2">Долг</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedReceipts.map((r) => {
+                    const badge = PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid
+                    const itemsCount = r.lines?.length ?? 0
+                    return (
+                      <tr key={r.id} className="border-b border-border/40 last:border-0 hover:bg-muted/30 transition-colors">
+                        <td className="py-2.5 pr-3">
+                          <div className="font-medium text-foreground tabular-nums">{r.date || '—'}</div>
+                          {itemsCount > 0 && <div className="text-[11px] text-muted-foreground">{itemsCount} позиц.</div>}
+                        </td>
+                        <td className="py-2.5 pr-3">
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${badge.cls}`}>
+                            {badge.label}
+                          </span>
+                        </td>
+                        <td className="py-2.5 pr-3 text-right font-semibold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</td>
+                        <td className="py-2.5 pr-3 text-right text-muted-foreground tabular-nums">{formatCurrency(r.paidAmount)}</td>
+                        <td className="py-2.5 text-right tabular-nums font-medium">
+                          {r.debtAmount > 0.005
+                            ? <span className="text-rose-600 dark:text-rose-400">{formatCurrency(r.debtAmount)}</span>
+                            : <span className="text-muted-foreground">0</span>}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       </div>
     </div>

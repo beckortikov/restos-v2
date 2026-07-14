@@ -80,8 +80,12 @@ export async function fetchStockMovements(): Promise<StockMovement[]> {
   return rows.map(mapStockMovement) as StockMovement[]
 }
 
-export async function fetchReceipts(): Promise<StockReceipt[]> {
-  const rows = await fetchAllPages('/api/v1/stock/receipts', { include: 'lines' }, 2000)
+export async function fetchReceipts(opts?: { supplierId?: string }): Promise<StockReceipt[]> {
+  const params: Record<string, string> = { include: 'lines' }
+  // supplier_id фильтрует накладные на бэке (handlers/stock_extra.go) — для
+  // истории закупок конкретного поставщика.
+  if (opts?.supplierId) params.supplier_id = opts.supplierId
+  const rows = await fetchAllPages('/api/v1/stock/receipts', params, 2000)
   return rows.map(mapStockReceipt) as StockReceipt[]
 }
 
