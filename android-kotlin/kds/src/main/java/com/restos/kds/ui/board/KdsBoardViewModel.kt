@@ -135,28 +135,17 @@ class KdsBoardViewModel @Inject constructor(
      * играем сигнал и показываем баннер с названием и номером заказа.
      */
     private fun handleVoided(evt: ServerEvent.ItemVoided) {
+        // Показываем отмену ТОЛЬКО если блюдо есть на ЭТОЙ доске (нужная станция).
+        // Событие order.item.voided broadcast'ится по всему ресторану, поэтому без
+        // этой проверки холодный цех сигналил бы об отмене ГОРЯЧЕГО блюда (и наоборот).
+        val itemId = evt.itemId ?: return
+        val onBoard = _state.value.items.firstOrNull { it.id == itemId } ?: return
+
         if (_state.value.soundEnabled) sounds.playCancel()
 
-        // Полные данные берём с доски (там есть станция/стол/кол-во); если блюдо
-        // уже ушло с доски — восстанавливаем из полей события.
-        val itemId = evt.itemId
-        val onBoard = itemId?.let { id -> _state.value.items.firstOrNull { it.id == id } }
-        val card = when {
-            onBoard != null -> onBoard.copy(cancelled = true, stationStatus = "pending")
-            itemId != null -> KdsItemDto(
-                id = itemId,
-                orderId = evt.orderId ?: "",
-                orderNumber = evt.orderNumber ?: 0,
-                name = evt.name ?: "Блюдо",
-                qty = evt.qty ?: "1",
-                stationStatus = "pending",
-                cancelled = true,
-            )
-            else -> null // без id карточку не построить — покажем только баннер
-        }
-
-        val name = onBoard?.name?.takeIf { it.isNotBlank() } ?: evt.name
-        val num = (onBoard?.orderNumber?.takeIf { it > 0 }) ?: evt.orderNumber?.takeIf { it > 0 }
+        val card = onBoard.copy(cancelled = true, stationStatus = "pending")
+        val name = onBoard.name.takeIf { it.isNotBlank() } ?: evt.name
+        val num = onBoard.orderNumber.takeIf { it > 0 } ?: evt.orderNumber?.takeIf { it > 0 }
         val alert = when {
             !name.isNullOrBlank() && num != null -> "Блюдо «$name» отменено · Заказ #$num"
             !name.isNullOrBlank() -> "Блюдо «$name» отменено"
@@ -164,12 +153,12 @@ class KdsBoardViewModel @Inject constructor(
         }
 
         _state.update { s ->
-            val already = card != null && s.cancelledItems.any { it.id == card.id }
+            val already = s.cancelledItems.any { it.id == card.id }
             s.copy(
-                cancelledItems = if (card != null && !already) s.cancelledItems + card else s.cancelledItems,
+                cancelledItems = if (already) s.cancelledItems else s.cancelledItems + card,
                 // Убираем из активной доски сразу, чтобы блюдо не мигало в своей
                 // колонке до следующего refresh.
-                items = if (card != null) s.items.filterNot { it.id == card.id } else s.items,
+                items = s.items.filterNot { it.id == card.id },
                 cancelAlert = alert,
             )
         }

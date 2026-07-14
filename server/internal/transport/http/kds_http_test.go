@@ -49,8 +49,10 @@ func TestKDS_HTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	note := "без лука"
+	gramUnit := "g"
 	plovItem, kebabItem := uuid.NewString(), uuid.NewString()
-	if err := gdb.Create(&models.OrderItem{ID: plovItem, OrderID: &oid, MenuItemID: &plovID, Name: &plov, Qty: decimal.MustFromString("2"), Note: &note}).Error; err != nil {
+	// Плов — весовое блюдо (unit=g): qty=200 = 200 граммов, а не «×200».
+	if err := gdb.Create(&models.OrderItem{ID: plovItem, OrderID: &oid, MenuItemID: &plovID, Name: &plov, Qty: decimal.MustFromString("2"), Unit: &gramUnit, Note: &note}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := gdb.Create(&models.OrderItem{ID: kebabItem, OrderID: &oid, MenuItemID: &kebabID, Name: &kebab, Qty: decimal.MustFromString("1")}).Error; err != nil {
@@ -102,6 +104,10 @@ func TestKDS_HTTP(t *testing.T) {
 	// age_seconds присутствует и неотрицателен (блюдо только что создано → ~0).
 	if age, ok := plovCard["age_seconds"].(float64); !ok || age < 0 {
 		t.Errorf("age_seconds = %v (ok=%v), want number >= 0", plovCard["age_seconds"], ok)
+	}
+	// unit весового блюда доходит до кухни (для «200 г» вместо «×200»).
+	if plovCard["unit"] != "g" {
+		t.Errorf("unit = %v, want g", plovCard["unit"])
 	}
 
 	// ─── Фильтр по станции grill → только люля ───────────────────────────────

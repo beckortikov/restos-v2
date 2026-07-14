@@ -416,7 +416,7 @@ private fun DishCard(
                 Spacer(Modifier.width(8.dp))
                 Box(
                     Modifier.clip(RoundedCornerShape(8.dp)).background(accent).padding(horizontal = 10.dp, vertical = 3.dp),
-                ) { Text("×${item.qty}", color = KdsColors.OnSolid, fontSize = 20.sp, fontWeight = FontWeight.Black) }
+                ) { Text(qtyLabel(item), color = KdsColors.OnSolid, fontSize = 20.sp, fontWeight = FontWeight.Black) }
             }
             // Комментарий.
             if (!item.comment.isNullOrBlank()) {
@@ -458,6 +458,23 @@ private fun DishCard(
         }
     }
 }
+
+/**
+ * Количество на карточке. Весовое блюдо (unit g/kg) → «100 г» / «1.5 кг»
+ * (qty = вес), чтобы повар не читал это как «×100 порций». Штучное → «×2».
+ */
+private fun qtyLabel(item: KdsItemDto): String {
+    val q = trimQty(item.qty)
+    return when (item.unit?.lowercase()) {
+        "g" -> "$q г"
+        "kg" -> "$q кг"
+        else -> "×$q"
+    }
+}
+
+/** Убирает хвостовые нули у decimal-строки: "100.0000"→"100", "1.5000"→"1.5". */
+private fun trimQty(q: String): String =
+    if (q.contains('.')) q.trimEnd('0').trimEnd('.') else q
 
 private fun orderLabel(item: KdsItemDto): String {
     val place = when {

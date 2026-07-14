@@ -50,6 +50,9 @@ type KDSItem struct {
 	TableName     *string   `json:"table_name"`
 	Name          string    `json:"name"`
 	Qty           string    `json:"qty"`
+	// Unit — единица позиции: "g"/"kg" (весовое блюдо, qty = вес) или piece/пусто
+	// (штучное, qty = количество). Кухня по нему решает: «100 г» или «×100».
+	Unit          string    `json:"unit"`
 	Comment       *string   `json:"comment"`
 	Station       string    `json:"station"`
 	StationStatus string    `json:"station_status"`
@@ -67,6 +70,7 @@ type kdsRow struct {
 	OrderID       string
 	Name          *string
 	Qty           decimal.Decimal
+	Unit          *string
 	Comment       *string
 	StationStatus string
 	StatusAt      *time.Time
@@ -100,7 +104,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 
 	q := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
-		Select(`oi.id, oi.order_id, oi.name, oi.qty, oi.note AS comment,
+		Select(`oi.id, oi.order_id, oi.name, oi.qty, oi.unit, oi.note AS comment,
 			oi.station_status, oi.station_status_at AS status_at, oi.created_at,
 			COALESCE(mi.station, 'hot_kitchen') AS station,
 			o.order_number, o.type AS order_type,
@@ -148,6 +152,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 			TableName:     r.TableName,
 			Name:          name,
 			Qty:           r.Qty.String(),
+			Unit:          deref(r.Unit),
 			Comment:       r.Comment,
 			Station:       r.Station,
 			StationStatus: r.StationStatus,

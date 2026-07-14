@@ -2861,6 +2861,7 @@ components:
         table_name: { type: string, nullable: true }
         name: { type: string }
         qty: { type: string, description: "decimal" }
+        unit: { type: string, description: "g/kg = весовое (qty — вес); piece/пусто = штучное" }
         comment: { type: string, nullable: true }
         station: { type: string }
         station_status: { type: string, enum: [pending, cooking, ready, served] }

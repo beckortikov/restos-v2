@@ -14,6 +14,8 @@ data class KdsItemDto(
     @SerialName("table_name") val tableName: String? = null,
     val name: String = "",
     val qty: String = "1",
+    // "g"/"kg" — весовое блюдо (qty = вес), иначе штучное (qty = количество).
+    val unit: String? = null,
     val comment: String? = null,
     val station: String = "hot_kitchen",
     @SerialName("station_status") val stationStatus: String = "pending",
