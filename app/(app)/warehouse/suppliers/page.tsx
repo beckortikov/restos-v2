@@ -337,9 +337,14 @@ export default function SuppliersPage() {
           const isPaying = payingId === sup.id
 
           return (
-            <div key={sup.id} className={`bg-card rounded-xl border-2 transition-colors ${isOverLimit ? 'border-destructive/30' : 'border-border'}`}>
-              {/* Main row */}
-              <div className="p-4 md:p-5">
+            <div key={sup.id} className={`bg-card rounded-xl border-2 transition-colors ${isOverLimit ? 'border-destructive/30' : 'border-border hover:border-primary/40'}`}>
+              {/* Main row — клик по карточке открывает историю закупок поставщика.
+                  Кнопки/ссылки внутри гасят всплытие, чтобы не навигировать. */}
+              <div
+                onClick={() => navigate('/warehouse/suppliers/' + sup.id)}
+                title="Открыть историю закупок"
+                className="p-4 md:p-5 cursor-pointer"
+              >
                 <div className="flex flex-col md:flex-row md:items-start gap-4">
                   {/* Left: info */}
                   <div className="flex-1 min-w-0 space-y-2.5">
@@ -351,7 +356,7 @@ export default function SuppliersPage() {
                             <User className="size-3.5 shrink-0" />
                             {sup.contactPerson}
                           </span>
-                          <a href={`tel:${sup.phone}`} className="flex items-center gap-1.5 text-sm text-primary hover:underline">
+                          <a href={`tel:${sup.phone}`} onClick={e => e.stopPropagation()} className="flex items-center gap-1.5 text-sm text-primary hover:underline">
                             <Phone className="size-3.5 shrink-0" />
                             {sup.phone}
                           </a>
@@ -390,7 +395,7 @@ export default function SuppliersPage() {
 
                     {/* Actions */}
                     {isManager && (
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                         {sup.currentDebt > 0 && (
                           <button
                             onClick={() => { setPayingId(isPaying ? null : sup.id); setPayAmount(sup.currentDebt) }}
