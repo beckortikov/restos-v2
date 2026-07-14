@@ -240,6 +240,35 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/users/validate-pin", usersH.ValidatePIN)
 		})
 
+		// Восстановление из бэкапа ДО первичной инициализации (пустая база) —
+		// аварийный возврат данных без создания временного ресторана прямо с
+		// экрана «Инициализация». Гейт requireNotInitialized: как только ресторан
+		// существует, эти маршруты 409, и восстановление доступно только после
+		// логина (авторизованный /backup/*). Пока данных нет — защищать нечего,
+		// поэтому разрешаем без auth. Отдельная группа: свой 5-мин таймаут под
+		// pg_restore (публичная группа выше имеет 10 c — мало).
+		requireNotInitialized := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ok, err := bootstrapSvc.IsInitialized(r.Context())
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+					return
+				}
+				if ok {
+					writeJSON(w, http.StatusConflict, map[string]any{"error": "система уже инициализирована — восстановление доступно после входа"})
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}
+		api.Group(func(g chi.Router) {
+			g.Use(chimw.Timeout(5 * time.Minute))
+			g.Use(requireNotInitialized)
+			g.Get("/bootstrap/backups", backupH.List)
+			g.Post("/bootstrap/restore", backupH.RestoreUpload)
+			g.Post("/bootstrap/restore/{name}", backupH.RestoreExisting)
+		})
+
 		// Защищённые endpoints с обычным таймаутом.
 		api.Group(func(g chi.Router) {
 			g.Use(chimw.Timeout(30 * time.Second))
