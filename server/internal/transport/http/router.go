@@ -101,6 +101,7 @@ func NewRouter(deps Deps) http.Handler {
 	menuSvc := service.NewMenuService(rep)
 	tablesSvc := service.NewTablesService(rep)
 	stockSvc := service.NewStockService(rep)
+	warehouseSvc := service.NewWarehouseService(rep)
 	shiftsSvc := service.NewShiftsService(rep)
 	hub := deps.Hub
 	if hub == nil {
@@ -159,6 +160,7 @@ func NewRouter(deps Deps) http.Handler {
 	menuH := handlers.NewMenu(menuSvc)
 	tablesH := handlers.NewTables(tablesSvc)
 	stockH := handlers.NewStock(stockSvc)
+	warehouseH := handlers.NewWarehouse(warehouseSvc)
 	shiftsH := handlers.NewShifts(shiftsSvc)
 	ordersH := handlers.NewOrders(ordersSvc)
 	kdsH := handlers.NewKDS(kdsSvc)
@@ -252,6 +254,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/tables", tablesH.ListTables)
 
 			g.Get("/stock/ingredients", stockH.ListIngredients)
+			g.Get("/warehouses", warehouseH.List)
 			g.Get("/stock/ingredient-categories", stockReadsH.ListCategories)
 			g.Get("/stock/receipts", stockReadsH.ListReceipts)
 			g.Get("/stock/writeoffs", stockReadsH.ListWriteoffs)

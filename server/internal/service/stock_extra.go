@@ -107,8 +107,18 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 		}
 	}
 
+	isFood := true
+	if in.IsFood != nil {
+		isFood = *in.IsFood
+	}
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
+		// Склад по типу товара (мультисклад): новый товар сразу привязан.
+		wid, werr := resolveWarehouseID(tx, rid, isFood, false)
+		if werr != nil {
+			return werr
+		}
+		ing.WarehouseID = wid
 		if err := tx.Create(ing).Error; err != nil {
 			return err
 		}
@@ -123,6 +133,7 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 				Description:    &desc,
 				Qty:            initialQty,
 				Unit:           ing.Unit,
+				WarehouseID:    ing.WarehouseID,
 				RestaurantID:   &rid,
 				CreatedAt:      time.Now().UTC(),
 			}

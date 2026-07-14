@@ -326,6 +326,8 @@ paths:
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
 
   # ─── Stock ──────────────────────────────────────────────────────────────
+  /api/v1/warehouses:
+    get: { tags: [stock], summary: Склады (мультисклад), responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WarehousesList" } } } } } }
   /api/v1/stock/ingredients:
     get:
       tags: [stock]
@@ -3020,6 +3022,8 @@ components:
         zone_id: { type: string, format: uuid }
         status: { type: string, enum: [free, occupied, reserved, dirty] }
     TablesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Table" } } } }
+    Warehouse: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, kind: { type: string, enum: [products, purchased, supplies] }, restaurant_id: { type: string } } }
+    WarehousesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Warehouse" } } } }
     TableInput:
       type: object
       properties:

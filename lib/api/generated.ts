@@ -745,6 +745,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/warehouses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Склады (мультисклад) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WarehousesList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/ingredients": {
         parameters: {
             query?: never;
@@ -9954,6 +9990,17 @@ export interface components {
         };
         TablesList: {
             data?: components["schemas"]["Table"][];
+        };
+        Warehouse: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            kind?: "products" | "purchased" | "supplies";
+            restaurant_id?: string;
+        };
+        WarehousesList: {
+            data?: components["schemas"]["Warehouse"][];
         };
         TableInput: {
             name?: string;
