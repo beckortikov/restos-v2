@@ -74,9 +74,13 @@ export async function deleteIngredient(id: string): Promise<void> {
   logAction('ingredient.delete', 'ingredient', id)
 }
 
-export async function fetchStockMovements(): Promise<StockMovement[]> {
+export async function fetchStockMovements(opts?: { ingredientId?: string }): Promise<StockMovement[]> {
   // Append-only поток — ограничиваем «последними» 2000, но через курсор (не 200).
-  const rows = await fetchAllPages('/api/v1/stock/movements', {}, 2000)
+  // ingredient_id фильтрует движения на бэке (handlers/stock_extra.go) — для
+  // карточки движения конкретного товара (приход → продажа/списание).
+  const params: Record<string, string> = {}
+  if (opts?.ingredientId) params.ingredient_id = opts.ingredientId
+  const rows = await fetchAllPages('/api/v1/stock/movements', params, 2000)
   return rows.map(mapStockMovement) as StockMovement[]
 }
 
