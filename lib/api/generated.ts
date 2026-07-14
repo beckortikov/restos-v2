@@ -4835,6 +4835,57 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/suppliers/{id}/pay-debt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Гашение долга поставщику
+         * @description Атомарно: списывает `amount` со счёта `account_id`, уменьшает
+         *     `suppliers.current_debt` и создаёт financial_operation out
+         *     (category='supplier_payment', исключён из opex ОПиУ). Сумма клампится
+         *     к остатку долга (переплатить нельзя).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SupplierPayDebtInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Supplier"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reservations": {
         parameters: {
             query?: never;
@@ -9746,6 +9797,8 @@ export interface components {
             name?: string;
             /** @description decimal */
             qty?: string;
+            /** @description g/kg = весовое (qty — вес); piece/пусто = штучное */
+            unit?: string;
             comment?: string | null;
             station?: string;
             /** @enum {string} */
@@ -9835,6 +9888,15 @@ export interface components {
             unit_weight_unit?: string;
         };
         /**
+         * @description Себестоимость полуфабриката за единицу (для строк тех-карты с
+         *     `semi_type_id`). Источник — semi_finished_stock.price_per_unit
+         *     (yield п/ф уже зашит в цену). Используется в расчёте с/с блюда.
+         */
+        SemiPrice: {
+            price?: components["schemas"]["Decimal"];
+            unit?: string;
+        };
+        /**
          * @description Универсальный envelope для /menu/items. Поля `tech_card_lines`
          *     (per-item) и `ingredient_prices` (top-level) всегда присутствуют:
          *     пустые, если соответствующий `include` не задан.
@@ -9843,12 +9905,17 @@ export interface components {
          *     (одним batch-SELECT'ом, не N+1).
          *
          *     `?include=tech_cards,ingredient_prices` — дополнительно подгружает цены
-         *     ингредиентов из tech card lines в top-level `ingredient_prices`.
+         *     ингредиентов из tech card lines в top-level `ingredient_prices`, а также
+         *     себестоимость полуфабрикатов (по `semi_type_id`) в `semi_prices` —
+         *     нужна для корректного расчёта с/с блюд, собранных из п/ф.
          */
         MenuItemsList: {
             data?: components["schemas"]["MenuItemWithExtras"][];
             ingredient_prices?: {
                 [key: string]: components["schemas"]["IngredientPrice"];
+            };
+            semi_prices?: {
+                [key: string]: components["schemas"]["SemiPrice"];
             };
             next_cursor?: string;
         };
@@ -10053,7 +10120,15 @@ export interface components {
                 ingredient_id: string;
                 name: string;
                 qty: components["schemas"]["Decimal"];
+                unit?: string;
                 cost: components["schemas"]["Decimal"];
+                /**
+                 * @description Тип списываемого. ingredient (по умолчанию) → stock_movement по
+                 *     ingredient_id. semi → декремент semi_finished_stock.qty (id п/ф).
+                 *     batch → декремент menu_items.prepared_qty (id блюда).
+                 * @enum {string}
+                 */
+                kind?: "ingredient" | "semi" | "batch";
             }[];
         };
         StockWriteoff: {
@@ -10417,6 +10492,11 @@ export interface components {
             categories?: string[];
             payment_terms_days?: number;
             credit_limit?: components["schemas"]["Decimal"];
+        };
+        SupplierPayDebtInput: {
+            amount: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id: string;
         };
         SuppliersList: {
             data?: components["schemas"]["Supplier"][];
