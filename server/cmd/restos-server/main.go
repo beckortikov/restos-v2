@@ -83,25 +83,22 @@ func main() {
 		if err != nil {
 			log.Fatal().Err(err).Msg("pgsupervisor.New")
 		}
-		startErr := sup.Start(ctx)
-		if startErr != nil {
-			// v2.7.2: проверка на password mismatch. Embedded-postgres
-			// при auth fail обычно дает "password authentication failed"
-			// или зависает в start. Wipe data-dir и retry с keychain-pwd.
-			log.Warn().Err(startErr).Msg("embedded-postgres start failed — trying wipe & re-init")
+		// ⛔ НИКОГДА не удаляем pgdata автоматически при ошибке старта.
+		//
+		// Раньше здесь был «wipe & re-init»: при ЛЮБОЙ ошибке sup.Start()
+		// (включая ТРАНЗИТОРНУЮ — «process already listening on port 54330» от
+		// зомби-Postgres, пережившего авто-апдейт) выполнялся os.RemoveAll(pgdata)
+		// → полное УНИЧТОЖЕНИЕ базы кассы (инцидент 2026-07-14). Автоматическое
+		// удаление данных недопустимо ни при каких обстоятельствах.
+		//
+		// Теперь при ошибке — фатальный выход БЕЗ удаления. Electron перезапустит
+		// sidecar, а его killStaleSidecars/ensurePortFree освободят порт. Данные
+		// остаются нетронутыми. Реальный password-mismatch — редкость и требует
+		// РУЧНОГО вмешательства с бэкапом, а не тихого сноса базы.
+		if startErr := sup.Start(ctx); startErr != nil {
 			_ = sup.Stop()
-			dataDir := cfg.PGDataDir()
-			if rmErr := os.RemoveAll(dataDir); rmErr != nil {
-				log.Fatal().Err(rmErr).Str("dir", dataDir).Msg("failed to wipe stale pg-data dir")
-			}
-			log.Info().Str("dir", dataDir).Msg("pg-data dir wiped; re-initializing with keychain password")
-			sup, err = pgsupervisor.New(cfg)
-			if err != nil {
-				log.Fatal().Err(err).Msg("pgsupervisor.New (retry)")
-			}
-			if err := sup.Start(ctx); err != nil {
-				log.Fatal().Err(err).Msg("embedded-postgres start failed after wipe — manual intervention required")
-			}
+			log.Fatal().Err(startErr).
+				Msg("embedded-postgres не запустился — выход БЕЗ удаления данных; Electron перезапустит sidecar")
 		}
 		defer func() {
 			if err := sup.Stop(); err != nil {
