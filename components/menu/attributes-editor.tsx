@@ -179,8 +179,8 @@ export function ComboPricesEditor({ attrs, prices, onChange, showPurchase }: {
     <div className="space-y-1.5 pt-3 border-t border-border">
       <div className={`grid ${showPurchase ? 'grid-cols-[1fr_6rem_6rem]' : 'grid-cols-[1fr_7rem]'} gap-2 px-1`}>
         <span className="text-[10px] font-semibold text-muted-foreground">Вариант ({combos.length})</span>
-        <span className="text-[10px] font-semibold text-muted-foreground">Цена</span>
-        {showPurchase && <span className="text-[10px] font-semibold text-muted-foreground">Закупка</span>}
+        <span className="text-[10px] font-semibold text-muted-foreground">Цена продажи</span>
+        {showPurchase && <span className="text-[10px] font-semibold text-muted-foreground">Закупочная цена</span>}
       </div>
       {combos.map(c => {
         const p = prices[c.key] ?? { price: 0, purchase: 0 }
