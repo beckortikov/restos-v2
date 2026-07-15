@@ -1028,10 +1028,13 @@ export function OrderComposer(props: OrderComposerProps) {
   }, [menuItems, isPosHidden])
 
   // Категории + количество блюд (для главного экрана drill-down).
+  // Пустые категории (count 0) НЕ отбрасываем: их пользователь добавил намеренно
+  // в «Управление меню», и они должны быть видны в кассе (иначе только что
+  // созданная категория не появляется). Сортируем по числу блюд — populated
+  // впереди, пустые в конце (стабильно сохраняя порядок sortOrder меж собой).
   const categoriesWithCounts = useMemo(
     () => visibleCategories
       .map(cat => ({ name: cat, count: dishesByCategory.get(cat)?.length ?? 0 }))
-      .filter(x => x.count > 0)
       .sort((a, b) => b.count - a.count),
     [visibleCategories, dishesByCategory],
   )
