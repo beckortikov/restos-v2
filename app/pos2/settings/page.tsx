@@ -5,14 +5,14 @@ import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, C
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { usePosV2Flag } from '@/lib/pos-v2/flag'
-import { useMenuCols, MENU_COLS_OPTIONS, type MenuCols } from '@/lib/pos-v2/menu-cols'
+import { useMenuGrid, MENU_GRID_OPTIONS, menuGridLabel, sameGrid, type MenuGrid } from '@/lib/pos-v2/menu-grid'
 import type { PermissionKey } from '@/lib/types'
 
 export default function PosV2Settings() {
   const navigate = useNavigate()
   const { restaurant, user, canDo, logout } = useAuth()
   const [posV2On, setPosV2On] = usePosV2Flag()
-  const [menuCols, setMenuColsState] = useMenuCols()
+  const [menuGrid, setMenuGridState] = useMenuGrid()
 
   const linksAll: Array<{ icon: React.ElementType; label: string; sub: string; to: string; gate?: PermissionKey }> = [
     { icon: Printer, label: 'Принтеры', sub: 'Чеки и кухонные станции', to: '/settings/printers', gate: 'printers.manage' },
@@ -52,24 +52,25 @@ export default function PosV2Settings() {
               <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Новый интерфейс (бета)</div>
               <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{posV2On ? 'Включён на этой кассе' : 'Классический POS по умолчанию'}</div>
             </div>
-            <button onClick={() => { setPosV2On(!posV2On); toast.success(!posV2On ? 'Новый интерфейс включён' : 'Выключен') }} className="rounded-full shrink-0 transition-colors" style={{ width: '3.4rem', height: '2rem', background: posV2On ? 'var(--pv-brand)' : '#d8d3ca', padding: '3px', display: 'flex', justifyContent: posV2On ? 'flex-end' : 'flex-start', alignItems: 'center' }}>
-              <span className="rounded-full" style={{ width: '1.5rem', height: '1.5rem', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
+            <button onClick={() => { setPosV2On(!posV2On); toast.success(!posV2On ? 'Новый интерфейс включён' : 'Выключен') }} className="rounded-full shrink-0 transition-colors" style={{ width: '2.8rem', height: '1.6rem', background: posV2On ? 'var(--pv-brand)' : '#d8d3ca', padding: '0.2rem', display: 'flex', justifyContent: posV2On ? 'flex-end' : 'flex-start', alignItems: 'center' }}>
+              <span className="rounded-full" style={{ width: '1.2rem', height: '1.2rem', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
             </button>
           </div>
 
-          {/* Карточки блюд в ряд — размер плиток меню в ПОС подстраивается под экран
-              (меньше в ряд → крупнее). Настройка на устройстве. */}
+          {/* Карточки блюд — матрица (колонок × рядов) на экран. Меньше клеток →
+              крупнее карточки; ряды подгоняются под высоту, чтобы карточки были
+              квадратнее, а не «широкими и низкими». Настройка на устройстве. */}
           <div className="rounded-2xl flex items-center gap-3 flex-wrap" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)' }}>
             <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-brand-soft)', width: 'clamp(2.6rem,3.4vw,3.2rem)', height: 'clamp(2.6rem,3.4vw,3.2rem)' }}>
               <Grid3x3 style={{ width: '55%', height: '55%', color: 'var(--pv-brand)' }} />
             </div>
             <div className="min-w-0 flex-1">
-              <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Карточки блюд в ряд</div>
-              <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{menuCols === 'auto' ? 'Авто — по ширине экрана' : `${menuCols} в ряд · меньше → крупнее`}</div>
+              <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Карточки блюд (сетка)</div>
+              <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{menuGrid === 'auto' ? 'Авто — по ширине экрана' : `${menuGrid.cols} колонок × ${menuGrid.rows} рядов`}</div>
             </div>
             <div className="flex rounded-xl border shrink-0" style={{ borderColor: 'var(--pv-border)', padding: '3px', gap: '3px' }}>
-              {MENU_COLS_OPTIONS.map(opt => { const on = menuCols === opt; const label = opt === 'auto' ? 'Авто' : String(opt); return (
-                <button key={String(opt)} onClick={() => setMenuColsState(opt as MenuCols)} className="rounded-lg font-semibold active:scale-95 transition-transform" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: '0.45rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)', minWidth: '2.4rem' }}>{label}</button>
+              {MENU_GRID_OPTIONS.map(opt => { const on = sameGrid(menuGrid, opt); return (
+                <button key={menuGridLabel(opt)} onClick={() => setMenuGridState(opt as MenuGrid)} className="rounded-lg font-semibold active:scale-95 transition-transform" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)', minWidth: '2.4rem', whiteSpace: 'nowrap' }}>{menuGridLabel(opt)}</button>
               ) })}
             </div>
           </div>

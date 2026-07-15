@@ -5,6 +5,7 @@ import { LicenseGate } from '@/components/license-gate'
 import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 import { useInactivityTimer } from '@/hooks/use-inactivity-timer'
 import { PinLockScreen } from '@/components/pin-lock-screen'
+import { Toaster } from '@/components/ui/sonner'
 // Скоуп-токены нового интерфейса (только под `.pos-v2`).
 import '../../styles/pos-v2.css'
 
@@ -33,6 +34,14 @@ function LockGate({ children }: { children: React.ReactNode }) {
   const timeoutMs = (restaurant?.pinLockTimeoutMin ?? 5) * 60 * 1000
   const [locked, setLocked] = useState(false)
   useInactivityTimer(timeoutMs, () => { if (pinEnabled) setLocked(true) }, pinEnabled)
+
+  // Ручная блокировка из меню/лаунчера: кнопка шлёт 'pos-v2:lock-request'.
+  useEffect(() => {
+    if (!pinEnabled) return
+    const onLock = () => setLocked(true)
+    window.addEventListener('pos-v2:lock-request', onLock)
+    return () => window.removeEventListener('pos-v2:lock-request', onLock)
+  }, [pinEnabled])
 
   if (locked && pinEnabled && restaurant) {
     return (
@@ -71,6 +80,10 @@ export function PosV2Layout() {
                 гейт по настройке владельца onScreenKeyboardEnabled. Один инстанс
                 на весь новый POS. */}
             <OnScreenKeyboard />
+            {/* Тосты нового POS: без своего Toaster'а (pos2 — отдельный layout, не
+                под AppLayout) уведомления не показывались — напр. «Смена не открыта»
+                при оплате молчало. */}
+            <Toaster richColors position="top-center" />
           </div>
         </LockGate>
       </LicenseGate>

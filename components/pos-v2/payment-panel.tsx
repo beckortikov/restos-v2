@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft, Trash2, Plus, ReceiptText, Percent } from 'lucide-react'
 import { toast } from 'sonner'
 import { closeOrderWithPayment, printPreBill, fetchActiveShift } from '@/lib/queries'
@@ -26,6 +27,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
   // Контекст для превью чека слева от панели (имена стола/официанта/ресторана).
   previewCtx?: { restaurant?: Restaurant | null; tables?: Table[]; zones?: Zone[]; users?: User[]; currentUser?: { name?: string } | null }
 }) {
+  const navigate = useNavigate()
   const [serviceOn, setServiceOn] = useState(order.type === 'hall')
   const [discType, setDiscType] = useState<DiscountType>('none')
   const [discVal, setDiscVal] = useState('')
@@ -95,6 +97,17 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
     toast.error(`Оплата не прошла: ${humanizeError(e)}`)
   }
 
+  // Смена не открыта — заметное предупреждение с прямой кнопкой открытия смены,
+  // вместо «ничего не происходит» (тап по «Наличные/Безналичные» молча ничего
+  // не давал). Тост-экшен ведёт на экран смены нового POS.
+  function warnNoShift() {
+    toast.error('Смена не открыта', {
+      description: 'Откройте кассовую смену, чтобы принимать оплату.',
+      action: { label: 'Открыть смену', onClick: () => navigate('/pos2/shift') },
+      duration: 7000,
+    })
+  }
+
   // Наличные зачисляем на cash-счёт смены (если задан), иначе первый cash-счёт.
   function cashAccount(shift: unknown): { id?: string; name?: string } {
     const s = shift as { accountId?: string; accountName?: string }
@@ -111,7 +124,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
-      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      if (!shift) { warnNoShift(); return }
       const acc = method === 'cash' ? cashAccount(shift) : { id: chosenCard?.id, name: chosenCard?.name }
       const [dA, dT, dV] = discArgs()
       await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc.id, acc.name, sp, 0, payable, 0, dA, dT, dV, undefined, undefined, !printReceipt)
@@ -152,7 +165,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
-      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      if (!shift) { warnNoShift(); return }
       const [dA, dT, dV] = discArgs()
       await closeOrderWithPayment(order.id, parts[0].method, order.tableId || null, base, cogsOf(order), userId, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts, !printReceipt)
       toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: parts.map(p => `${p.method === 'cash' ? 'Нал' : 'Безнал'} ${formatCurrency(p.amount)}`).join(' + ') })
@@ -299,23 +312,29 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
             <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>К оплате</span>
             <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.2rem,1.7vw,1.6rem)' }}>{formatCurrency(payable)}</span>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <button disabled={paying} onClick={() => { setShowCardPicker(false); payFull('cash') }} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
-              <Banknote style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
-            </button>
-            {/* Безналичные: 1 счёт → сразу оплата; >1 → раскрываем выбор счёта ниже. */}
-            <button disabled={paying} onClick={() => { if (nonCash.length > 1) setShowCardPicker(v => !v); else payFull('card') }} aria-expanded={showCardPicker} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', boxShadow: showCardPicker ? 'inset 0 0 0 2px var(--pv-brand)' : 'none' }}>
-              <CreditCard style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Безналичные</span>
-            </button>
-          </div>
-          {/* Счёт для безнала — появляется только после тапа «Безналичные» (когда
-              счетов >1); тап по счёту сразу проводит безналичную оплату на него. */}
-          {showCardPicker && nonCash.length > 1 && (
-            <div style={{ marginTop: '0.75rem' }}>
-              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Счёт для безнала</div>
-              <div className="flex flex-wrap gap-2">
+          {!showCardPicker ? (
+            <div className="grid grid-cols-2 gap-3">
+              <button disabled={paying} onClick={() => payFull('cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
+                <Banknote style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
+              </button>
+              {/* Безналичные: 1 счёт → сразу оплата; >1 → показываем выбор счёта
+                  НА МЕСТЕ этих же кнопок (без роста высоты — модалка не «дёргается»). */}
+              <button disabled={paying} onClick={() => { if (nonCash.length > 1) setShowCardPicker(true); else payFull('card') }} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}>
+                <CreditCard style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Безналичные</span>
+              </button>
+            </div>
+          ) : (
+            // Выбор безнал-счёта заменяет пару кнопок на месте: тот же грид, тот же
+            // размер плиток → без прыжка высоты. Тап по счёту сразу проводит оплату.
+            <div className="flex flex-col" style={{ gap: '0.6rem' }}>
+              <button onClick={() => setShowCardPicker(false)} className="flex items-center gap-1.5 font-semibold self-start active:scale-95 transition-transform" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+                <ArrowLeft style={{ width: '1.1rem', height: '1.1rem' }} />Назад
+              </button>
+              <div className="grid grid-cols-2 gap-3">
                 {nonCash.map(a => (
-                  <button key={a.id} disabled={paying} onClick={() => payFull('card', a.id)} className="rounded-full font-semibold border active:scale-[0.97] transition-transform disabled:opacity-50" style={{ background: 'var(--pv-card)', color: 'var(--pv-text)', borderColor: 'var(--pv-border)', padding: '0.5rem 1rem', fontSize: 'var(--pv-ctl)' }}>{a.name}</button>
+                  <button key={a.id} disabled={paying} onClick={() => payFull('card', a.id)} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', border: '2px solid var(--pv-brand)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}>
+                    <CreditCard style={{ width: '1.7rem', height: '1.7rem' }} /><span className="font-bold text-center leading-tight" style={{ fontSize: 'clamp(0.95rem,1.2vw,1.1rem)' }}>{a.name}</span>
+                  </button>
                 ))}
               </div>
             </div>

@@ -2,8 +2,17 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 import path from 'path'
+import { readFileSync } from 'node:fs'
+
+// Версия ПОС — из desktop/package.json (единственный бампаемый источник).
+// Инжектим в бандл (__APP_VERSION__), чтобы версия показывалась и в Electron,
+// и в LAN-браузере (там window.restosDesktop нет).
+const appVersion: string = JSON.parse(
+  readFileSync(path.resolve(__dirname, 'desktop/package.json'), 'utf-8'),
+).version
 
 export default defineConfig({
+  define: { __APP_VERSION__: JSON.stringify(appVersion) },
   // Electron грузит index.html через file:// — относительные пути обязательны,
   // иначе `/assets/...` уйдёт в корень файловой системы.
   // Для web-сборки (если когда-то понадобится) можно переопределить через env.
