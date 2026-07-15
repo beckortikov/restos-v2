@@ -71,7 +71,13 @@ func MigrateUp(ctx context.Context, gdb *gorm.DB) error {
 	if err != nil {
 		return err
 	}
-	return migrateUp(ctx, sqlDB)
+	if err := migrateUp(ctx, sqlDB); err != nil {
+		return err
+	}
+	// Self-heal схемы ПОСЛЕ goose: до-гарантируем критичные drift-опасные
+	// объекты независимо от goose_db_version (см. selfheal.go — инцидент с
+	// пропавшей ingredients.warehouse_id при живом goose=36).
+	return EnsureCriticalSchema(ctx, gdb)
 }
 
 func migrateUp(ctx context.Context, sqlDB *sql.DB) error {
