@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft, Trash2, Plus, ReceiptText } from 'lucide-react'
+import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft, Trash2, Plus, ReceiptText, Percent } from 'lucide-react'
 import { toast } from 'sonner'
 import { closeOrderWithPayment, printPreBill, fetchActiveShift } from '@/lib/queries'
 import { V4Error } from '@/lib/api'
@@ -39,6 +39,9 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
   const [mixedShift, setMixedShift] = useState<{ accountId?: string; accountName?: string } | null>(null)
   const [paying, setPaying] = useState(false)
   const [printing, setPrinting] = useState(false)
+  // Выбор безналичного счёта раскрывается только по тапу на «Безналичные»
+  // (и только если счетов >1). Тап по чипу счёта сразу проводит оплату.
+  const [showCardPicker, setShowCardPicker] = useState(false)
   // Чек не всегда нужен (как в старом POS — закрытие без чека). Тумблер: по
   // умолчанию печатаем, но кассир может выключить → закрытие без печати чека.
   // Состояние СОХРАНЯЕТСЯ (localStorage): выключил раз — так и стоит, пока не включит.
@@ -98,14 +101,18 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
     return s.accountId ? { id: s.accountId, name: s.accountName } : { id: cashAcc?.id, name: cashAcc?.name }
   }
 
-  async function payFull(method: 'cash' | 'card') {
+  async function payFull(method: 'cash' | 'card', cardAccountId?: string) {
     if (payingRef.current) return
-    if (method === 'card' && !cardAcc) { toast.error('Нет безналичного счёта — заведите его в настройках'); return }
+    // Для безнала берём явно выбранный счёт (тап по чипу) или текущий по умолчанию.
+    const chosenCard = method === 'card'
+      ? (cardAccountId ? (nonCash.find(a => a.id === cardAccountId) ?? cardAcc) : cardAcc)
+      : undefined
+    if (method === 'card' && !chosenCard) { toast.error('Нет безналичного счёта — заведите его в настройках'); return }
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
-      const acc = method === 'cash' ? cashAccount(shift) : { id: cardAcc?.id, name: cardAcc?.name }
+      const acc = method === 'cash' ? cashAccount(shift) : { id: chosenCard?.id, name: chosenCard?.name }
       const [dA, dT, dV] = discArgs()
       await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc.id, acc.name, sp, 0, payable, 0, dA, dT, dV, undefined, undefined, !printReceipt)
       toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: printReceipt ? 'Чек отправлен на печать' : 'Без чека' })
@@ -165,8 +172,22 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
   return (
     <div className="flex items-stretch">
       {previewCtx && receiptPreview && (
-        <aside className="shrink-0 overflow-y-auto pv-noscroll flex justify-center border-r" style={{ width: 'clamp(15rem,21vw,19rem)', background: 'var(--pv-bg)', padding: 'clamp(0.8rem,1.2vw,1.1rem)', maxHeight: '82vh', borderColor: 'var(--pv-border)' }}>
-          <PrintReceipt data={receiptPreview} />
+        <aside className="shrink-0 overflow-y-auto pv-noscroll flex justify-center border-r" style={{ width: 'clamp(18rem,27vw,23rem)', background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1vw,1rem)', maxHeight: '82vh', borderColor: 'var(--pv-border)' }}>
+          <div className="flex flex-col" style={{ gap: 'clamp(0.7rem,1vw,1rem)', width: 'fit-content' }}>
+            <div style={{ zoom: 1.12 }}>
+              <PrintReceipt data={receiptPreview} />
+            </div>
+            {/* Печатать чек — тумблер под превью чека (чек не всегда нужен;
+                выкл → закрытие без печати). Состояние в localStorage. */}
+            <button onClick={() => setPrintReceipt(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={printReceipt} aria-label="Печатать чек">
+              <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+                <Printer style={{ width: '1.15rem', height: '1.15rem', color: printReceipt ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Печатать чек
+              </span>
+              <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: printReceipt ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
+                <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: printReceipt ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+              </span>
+            </button>
+          </div>
         </aside>
       )}
       <div className="flex-1 min-w-0" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
@@ -235,28 +256,23 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
             </div>
           )}
 
-          <button onClick={() => setPrintReceipt(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={printReceipt} aria-label="Печатать чек">
-            <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
-              <Printer style={{ width: '1.15rem', height: '1.15rem', color: printReceipt ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Печатать чек
-            </span>
-            <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: printReceipt ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
-              <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: printReceipt ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-            </span>
-          </button>
           <button disabled={!canContinue || paying} onClick={submitMixed} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: canContinue ? '0 6px 18px rgba(216,90,48,0.35)' : 'none' }}>
             <ReceiptText style={{ width: '1.3em', height: '1.3em' }} />Провести · {formatCurrency(payable)}
           </button>
         </div>
       ) : (
         <>
-          {/* Обслуживание */}
+          {/* Обслуживание — тумблер в едином стиле с «Печатать чек» (компактная
+              строка-карточка, а не голый переключатель). */}
           {order.type === 'hall' && servicePercent > 0 && (
-            <div className="flex items-center justify-between" style={{ marginBottom: '0.9rem' }}>
-              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Обслуживание {servicePercent}%</span>
-              <button onClick={() => setServiceOn(v => !v)} className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: serviceOn ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }} aria-pressed={serviceOn} aria-label="Обслуживание">
+            <button onClick={() => setServiceOn(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ marginBottom: '0.9rem', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={serviceOn} aria-label="Обслуживание">
+              <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+                <Percent style={{ width: '1.15rem', height: '1.15rem', color: serviceOn ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Обслуживание {servicePercent}%
+              </span>
+              <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: serviceOn ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
                 <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: serviceOn ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-              </button>
-            </div>
+              </span>
+            </button>
           )}
           {/* Скидка */}
           <div style={{ marginBottom: '0.9rem' }}>
@@ -283,34 +299,27 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
             <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>К оплате</span>
             <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.2rem,1.7vw,1.6rem)' }}>{formatCurrency(payable)}</span>
           </div>
-          {/* Выбор кошелька */}
-          {nonCash.length > 1 && (
-            <div style={{ marginBottom: '0.9rem' }}>
-              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Счёт для безнала</div>
-              <div className="flex flex-wrap gap-2">
-                {nonCash.map(a => { const on = a.id === cardAccId; return (
-                  <button key={a.id} onClick={() => setCardAccId(a.id)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.85rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{a.name}</button>
-                ) })}
-              </div>
-            </div>
-          )}
-          {/* Печатать чек — тумблер (чек не всегда нужен; выкл → закрытие без чека) */}
-          <button onClick={() => setPrintReceipt(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ marginBottom: '0.9rem', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={printReceipt} aria-label="Печатать чек">
-            <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
-              <Printer style={{ width: '1.15rem', height: '1.15rem', color: printReceipt ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Печатать чек
-            </span>
-            <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: printReceipt ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
-              <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: printReceipt ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
-            </span>
-          </button>
           <div className="grid grid-cols-2 gap-3">
-            <button disabled={paying} onClick={() => payFull('cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
+            <button disabled={paying} onClick={() => { setShowCardPicker(false); payFull('cash') }} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
               <Banknote style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
             </button>
-            <button disabled={paying} onClick={() => payFull('card')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}>
+            {/* Безналичные: 1 счёт → сразу оплата; >1 → раскрываем выбор счёта ниже. */}
+            <button disabled={paying} onClick={() => { if (nonCash.length > 1) setShowCardPicker(v => !v); else payFull('card') }} aria-expanded={showCardPicker} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', boxShadow: showCardPicker ? 'inset 0 0 0 2px var(--pv-brand)' : 'none' }}>
               <CreditCard style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Безналичные</span>
             </button>
           </div>
+          {/* Счёт для безнала — появляется только после тапа «Безналичные» (когда
+              счетов >1); тап по счёту сразу проводит безналичную оплату на него. */}
+          {showCardPicker && nonCash.length > 1 && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Счёт для безнала</div>
+              <div className="flex flex-wrap gap-2">
+                {nonCash.map(a => (
+                  <button key={a.id} disabled={paying} onClick={() => payFull('card', a.id)} className="rounded-full font-semibold border active:scale-[0.97] transition-transform disabled:opacity-50" style={{ background: 'var(--pv-card)', color: 'var(--pv-text)', borderColor: 'var(--pv-border)', padding: '0.5rem 1rem', fontSize: 'var(--pv-ctl)' }}>{a.name}</button>
+                ))}
+              </div>
+            </div>
+          )}
           {canMix && (
             <button disabled={paying} onClick={enterMixed} className="w-full flex items-center justify-center gap-2 rounded-2xl border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ marginTop: '0.75rem', padding: 'clamp(0.8rem,1.2vw,1rem)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)' }}>
               <SquareSplitHorizontal style={{ width: '1.25rem', height: '1.25rem' }} /><span className="font-semibold" style={{ fontSize: 'var(--pv-ctl)' }}>Смешанная (нал + безнал)</span>
