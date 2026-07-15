@@ -63,8 +63,10 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
   return items.map(r => mapMenuItem(r, techByItem.get(r.id as string) ?? [], ingredientPrices, semiPrices)) as MenuItem[]
 }
 
-export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
-  const purchased = (item as any).isPurchased === true
+export async function createMenuItem(
+  item: Omit<MenuItem, 'id'> & { purchasePrice?: number; purchaseUnit?: string; purchaseMinQty?: number },
+) {
+  const purchased = item.isPurchased === true
   const body: any = {
     name: item.name,
     category: item.category,
@@ -85,11 +87,11 @@ export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
   // Покупной товар: бэк сам создаёт складской ингредиент + 1:1 техкарту.
   if (purchased) {
     body.is_purchased = true
-    body.purchase_price = String((item as any).purchasePrice ?? item.cogs ?? 0)
-    body.purchase_unit = (item as any).purchaseUnit || 'piece'
-    body.purchase_min_qty = String((item as any).purchaseMinQty ?? 0)
+    body.purchase_price = String(item.purchasePrice ?? item.cogs ?? 0)
+    body.purchase_unit = item.purchaseUnit || 'piece'
+    body.purchase_min_qty = String(item.purchaseMinQty ?? 0)
   }
-  const data: any = await unwrap(api.POST('/api/v1/menu/items', { body: body as any }))
+  const data: any = await unwrap(api.POST('/api/v1/menu/items', { body }))
   const newId: string | undefined = data?.id
   const validTechLines = purchased ? [] : item.techCard.filter(l => l.ingredientId || l.semiId)
   if (validTechLines.length > 0 && newId) {
@@ -172,7 +174,7 @@ export async function createMenuCategory(name: string): Promise<MenuCategory> {
     nextOrder = rows.reduce((max, r) => Math.max(max, (r.sort_order as number) ?? 0), 0) + 1
   } catch {}
 
-  const created: any = await unwrap(api.POST('/api/v1/menu/categories', { body: { name, sort_order: nextOrder } as any }))
+  const created: any = await unwrap(api.POST('/api/v1/menu/categories', { body: { name, sort_order: nextOrder } }))
   return {
     id: (created?.id as string) ?? randomId(),
     name: (created?.name as string) ?? name,
@@ -193,7 +195,7 @@ export async function seedMenuCategories(_restaurantId: string): Promise<number>
   let count = 0
   for (let i = 0; i < SEED_MENU_CATEGORIES.length; i++) {
     try {
-      await unwrap(api.POST('/api/v1/menu/categories', { body: { name: SEED_MENU_CATEGORIES[i], sort_order: i } as any }))
+      await unwrap(api.POST('/api/v1/menu/categories', { body: { name: SEED_MENU_CATEGORIES[i], sort_order: i } }))
       count++
     } catch {}
   }
@@ -234,7 +236,7 @@ export async function fetchIngredientCategories(): Promise<string[]> {
 }
 
 export async function toggleMenuAvailability(id: string, isAvailable: boolean) {
-  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { is_available: isAvailable } as any }))
+  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { is_available: isAvailable } }))
 }
 
 export async function uploadDishImage(file: File): Promise<string> {
@@ -384,7 +386,7 @@ export async function syncMenuAttributes(
 }
 
 export async function updateMenuItemImage(id: string, imageUrl: string) {
-  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { image_url: imageUrl } as any }))
+  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { image_url: imageUrl } }))
 }
 
 export async function deleteMenuItem(id: string) {

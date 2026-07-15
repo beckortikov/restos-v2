@@ -16,8 +16,13 @@ import { join } from 'node:path'
 //     курсорная пагинация), где новые endpoint'ы шли по тому же `body … as any`
 //     паттерну (openapi-fetch типы не регенерятся). Трещотка сохранена: рост
 //     выше 148 снова красит CI. Следующий sweep — вниз.
+//   v3.16.72: 143 — sweep вниз. Факт давно был 152 (> 148), но vitest не в CI,
+//     поэтому дрейф не ловился. Снято 9 кастов в menu.ts: createMenuItem
+//     типизирован (purchase-поля в сигнатуре; isPurchased уже есть в MenuItem)
+//     + убраны редундантные body-касты (тело уже any / литерал совпадает с
+//     openapi-типом). Порог опущен до факта — рост выше 143 снова красный.
 
-const BUDGET_AS_ANY = 148
+const BUDGET_AS_ANY = 143
 
 describe('lib/queries TypeScript hygiene', () => {
   it(`as-any cast'ов не больше ${BUDGET_AS_ANY} (incremental hardening)`, () => {
