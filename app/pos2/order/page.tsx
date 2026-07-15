@@ -17,6 +17,7 @@ import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayT
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
+import { useMenuCols, menuColsTemplate } from '@/lib/pos-v2/menu-cols'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import { buildReceiptData } from '@/lib/receipt-data'
 import { PrintReceipt } from '@/components/print-receipt'
@@ -51,6 +52,7 @@ export default function PosV2Order() {
   const favSet = useMemo(() => new Set(favorites), [favorites])
 
   const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
+  const [menuCols] = useMenuCols()
   const [search, setSearch] = useState('')
   const deferred = useDeferredValue(search)
   const [activeCat, setActiveCat] = useState<string | null>(null)
@@ -645,12 +647,6 @@ export default function PosV2Order() {
               )
             })}
           </div>
-          {orderType === 'hall' && (
-            <button onClick={() => setTablesOpen(true)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
-              <MapPin style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
-              <span className="font-semibold whitespace-nowrap" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}</span>
-            </button>
-          )}
           <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1vw,1rem)' }}>
             <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" aria-label="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
@@ -685,7 +681,7 @@ export default function PosV2Order() {
           ) : dishes.length === 0 ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
           ) : (
-            <div style={{ display: 'grid', gap: 'clamp(0.4rem,0.7vw,0.7rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }}>
+            <div style={{ display: 'grid', gap: 'clamp(0.4rem,0.7vw,0.7rem)', gridTemplateColumns: menuColsTemplate(menuCols) }}>
               {dishes.map(m => {
                 const variants = variantsByParent.get(m.id)
                 // Продукт с вариантами стопится когда недоступен сам ИЛИ все
@@ -718,10 +714,17 @@ export default function PosV2Order() {
       {/* ── Right: cart ────────────────────────────────────────── */}
       <aside className="shrink-0 flex flex-col border-l" style={{ width: 'clamp(20rem, 26vw, 30rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }}>
         {/* Header */}
-        <div className="flex items-center justify-between shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>
-            {orderType === 'hall' && selectedTable ? `Стол ${selectedTable.number}` : 'Заказ'}{activeGroup && tableOrders.length > 1 ? ` · Группа ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}
-          </span>
+        <div className="flex items-center justify-between gap-2 shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+          {orderType === 'hall' ? (
+            // Выбор стола прямо в сайдбаре заказа (тап открывает пикер столов),
+            // слева от счётчика позиций. В зале стол выбирают здесь, а не в топбаре.
+            <button onClick={() => setTablesOpen(true)} className="flex items-center gap-1.5 rounded-xl border min-w-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.95rem)' }} aria-label="Выберите стол">
+              <MapPin style={{ width: 'clamp(1.05rem,1.35vw,1.35rem)', height: 'clamp(1.05rem,1.35vw,1.35rem)', color: 'var(--pv-brand)' }} className="shrink-0" />
+              <span className="font-bold truncate" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'clamp(1rem,1.35vw,1.25rem)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}{selectedTable && activeGroup && tableOrders.length > 1 ? ` · Гр. ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}</span>
+            </button>
+          ) : (
+            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>Заказ</span>
+          )}
           <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
         </div>
 
