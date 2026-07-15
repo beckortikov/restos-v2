@@ -124,15 +124,15 @@ function VariantBody({
 
       {attrs.map(attr => (
         <div key={attr.id}>
-          <label className="text-xs font-medium text-muted-foreground mb-1 block">{attr.name}</label>
-          <div className="flex flex-wrap gap-1.5">
+          <label className="text-xs font-medium text-muted-foreground mb-1.5 block">{attr.name}</label>
+          <div className="flex flex-wrap gap-2">
             {attr.values.map(val => {
               const on = sel[attr.id] === val.id
               return (
                 <button
                   key={val.id}
                   onClick={() => setSel(prev => ({ ...prev, [attr.id]: val.id }))}
-                  className={`px-3.5 py-2.5 rounded-xl text-sm font-semibold border-2 active:scale-95 transition-colors ${on
+                  className={`min-h-12 min-w-16 px-5 py-3 rounded-xl text-base font-semibold border-2 active:scale-95 transition-colors ${on
                     ? 'bg-primary text-primary-foreground border-primary'
                     : 'bg-background text-foreground border-border hover:border-muted-foreground/40'}`}
                 >
