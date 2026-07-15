@@ -127,6 +127,11 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 			menuByID[m.ID] = m
 		}
 
+		// Продукт с атрибутами — абстракция: продаются его варианты.
+		if err := validateNoAbstractProducts(tx, rid, menuIDs); err != nil {
+			return err
+		}
+
 		// v2.0.90 — stop-list backend-gate (БАГ #3). Если позиция в стопе и
 		// клиент не передал override_stop_list (или роль не достаточная) — 409.
 		if err := validateStopListForItems(ctx, tx, rid, in.Items, menuByID, in.OverrideStopList); err != nil {
@@ -348,6 +353,11 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		menuByID := make(map[string]models.MenuItem, len(menuItems))
 		for _, m := range menuItems {
 			menuByID[m.ID] = m
+		}
+
+		// Продукт с атрибутами — абстракция: продаются его варианты.
+		if err := validateNoAbstractProducts(tx, rid, menuIDs); err != nil {
+			return err
 		}
 
 		// v2.0.90 — stop-list backend-gate (БАГ #3).
@@ -990,6 +1000,26 @@ func validateStockForItems(
 		return apperrors.Wrap("VALIDATION", formatShortages(shortages), nil)
 	}
 	return apperrors.Wrap("INSUFFICIENT_STOCK", formatShortages(shortages), nil)
+}
+
+// validateNoAbstractProducts — продукт с живыми вариантами (атрибуты Размер/
+// Вкус/...) сам не продаётся: у него нет своей цены-комбинации и его техкарта —
+// лишь шаблон. Клиент обязан прислать menu_item_id конкретного варианта.
+func validateNoAbstractProducts(tx *gorm.DB, rid string, menuIDs []string) error {
+	if len(menuIDs) == 0 {
+		return nil
+	}
+	var parents []string
+	if err := tx.Model(&models.MenuItem{}).
+		Distinct("parent_id").
+		Where("restaurant_id = ? AND parent_id IN ? AND is_deleted = ?", rid, menuIDs, false).
+		Pluck("parent_id", &parents).Error; err != nil {
+		return err
+	}
+	if len(parents) > 0 {
+		return apperrors.Wrap("VALIDATION", "у товара есть варианты — выберите конкретный вариант", nil)
+	}
+	return nil
 }
 
 // validateStopListForItems — БАГ #3 backend-gate стоп-листа.

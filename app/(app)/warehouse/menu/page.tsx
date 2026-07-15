@@ -67,7 +67,30 @@ export default function MenuPage() {
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
-  const filtered = menuItems.filter((m) => {
+  // Варианты (parentId) скрыты из списка — они управляются из карточки
+  // продукта (Атрибуты и варианты). Показываем только продукты/блюда.
+  const products = menuItems.filter((m) => !m.parentId)
+  const variantCountByParent = new Map<string, number>()
+  const variantsByParent = new Map<string, MenuItem[]>()
+  for (const m of menuItems) {
+    if (m.parentId) {
+      variantCountByParent.set(m.parentId, (variantCountByParent.get(m.parentId) ?? 0) + 1)
+      variantsByParent.set(m.parentId, [...(variantsByParent.get(m.parentId) ?? []), m])
+    }
+  }
+
+  // Продукт с атрибутами не имеет своей цены (item.price всегда 0) — цену
+  // несут варианты. Показываем диапазон вместо буквального нуля.
+  function priceLabel(item: MenuItem): string {
+    const variants = variantsByParent.get(item.id)
+    if (!variants || variants.length === 0) return formatCurrency(item.price)
+    const prices = variants.map((v) => v.price)
+    const min = Math.min(...prices)
+    const max = Math.max(...prices)
+    return min === max ? formatCurrency(min) : `от ${formatCurrency(min)}`
+  }
+
+  const filtered = products.filter((m) => {
     const matchSearch = m.name.toLowerCase().includes(search.toLowerCase())
     const matchCat = category === 'all' || m.category === category
     const matchStation = station === 'all' || m.station === station
@@ -76,17 +99,17 @@ export default function MenuPage() {
 
   // Per-station counters for the station tab badges.
   const stationCounts: Record<MenuStation | 'all', number> = {
-    all: menuItems.length,
+    all: products.length,
     hot_kitchen: 0, cold_kitchen: 0, grill: 0, bar: 0, showcase: 0,
   }
-  for (const m of menuItems) stationCounts[m.station] = (stationCounts[m.station] ?? 0) + 1
+  for (const m of products) stationCounts[m.station] = (stationCounts[m.station] ?? 0) + 1
 
   return (
     <div className="h-full overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-5">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Меню и техкарты</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">{menuItems.length} позиций{stopList.length > 0 ? ` · ${stopList.length} в стоп-листе` : ''}</p>
+          <p className="text-muted-foreground text-sm mt-0.5">{products.length} позиций{stopList.length > 0 ? ` · ${stopList.length} в стоп-листе` : ''}</p>
         </div>
         {canEdit && (
           <button
@@ -105,7 +128,7 @@ export default function MenuPage() {
           className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-medium transition-colors ${tab === 'menu' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
         >
           <BookOpen className="size-3.5" />Меню
-          <span className="bg-muted px-1.5 py-0.5 rounded text-[10px] font-bold">{menuItems.length}</span>
+          <span className="bg-muted px-1.5 py-0.5 rounded text-[10px] font-bold">{products.length}</span>
         </button>
         <button
           onClick={() => setTab('stoplist')}
@@ -338,14 +361,19 @@ export default function MenuPage() {
 
               {/* Info */}
               <div className="p-3">
-                <p className="font-semibold text-foreground text-sm truncate">{item.name}</p>
+                <p className="font-semibold text-foreground text-sm truncate">
+                  {item.name}
+                  {(variantCountByParent.get(item.id) ?? 0) > 0 && (
+                    <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-primary/10 text-primary rounded font-medium align-middle">{variantCountByParent.get(item.id)} вар.</span>
+                  )}
+                </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {item.category}{item.cookTimeMin ? ` · ⏱ ${item.cookTimeMin} мин` : ''}
                   {item.station === 'bar' && <span className="ml-1 text-blue-600">· ☕ Бар</span>}
                   {item.station === 'showcase' && <span className="ml-1 text-amber-600">· 🥟 Витрина</span>}
                 </p>
                 <div className="flex items-center justify-between mt-2">
-                  <p className="text-base font-bold text-primary">{formatCurrency(item.price)}</p>
+                  <p className="text-base font-bold text-primary">{priceLabel(item)}</p>
                   <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${item.isAvailable ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
                     {item.isAvailable ? 'В наличии' : 'СТОП'}
                   </span>
@@ -368,7 +396,12 @@ export default function MenuPage() {
                 <div className="flex items-center gap-3">
                   <DishImage imageUrl={item.imageUrl} emoji={item.emoji} name={item.name} size="sm" />
                   <div>
-                    <p className="font-medium text-foreground text-sm">{item.name}</p>
+                    <p className="font-medium text-foreground text-sm">
+                      {item.name}
+                      {(variantCountByParent.get(item.id) ?? 0) > 0 && (
+                        <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-primary/10 text-primary rounded font-medium">{variantCountByParent.get(item.id)} вар.</span>
+                      )}
+                    </p>
                     <p className="text-xs text-muted-foreground">
                       {item.category} · {item.techCard.length} ингр.{item.cookTimeMin ? ` · ⏱ ${item.cookTimeMin} мин` : ''}
                       {item.isBatchCooking && <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">Заготовка · {item.preparedQty} порц.</span>}
@@ -377,8 +410,12 @@ export default function MenuPage() {
                 </div>
                 <div className="flex items-center gap-4">
                   <div className="text-right">
-                    <p className="text-sm font-semibold text-foreground">{formatCurrency(item.price)}</p>
-                    <p className="text-xs text-muted-foreground">с/с: {formatCurrency(item.cogs)} ({item.price > 0 ? dRound(dMul(dDiv(item.cogs, item.price), 100), 0) : 0}%)</p>
+                    <p className="text-sm font-semibold text-foreground">{priceLabel(item)}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {variantsByParent.has(item.id)
+                        ? 'с/с: по вариантам'
+                        : `с/с: ${formatCurrency(item.cogs)} (${item.price > 0 ? dRound(dMul(dDiv(item.cogs, item.price), 100), 0) : 0}%)`}
+                    </p>
                   </div>
                   {canEdit ? (
                     <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
@@ -425,9 +462,13 @@ export default function MenuPage() {
                     ))}
                   </div>
                   <div className="mt-3 pt-3 border-t border-border flex flex-wrap items-center gap-6 text-xs">
-                    <span className="text-muted-foreground">Цена продажи: <span className="font-semibold text-foreground">{formatCurrency(item.price)}</span></span>
-                    <span className="text-muted-foreground">Себестоимость: <span className="font-semibold text-foreground">{formatCurrency(item.cogs)}</span></span>
-                    <span className="text-muted-foreground">Маржа: <span className="font-semibold text-emerald-600">{item.price > 0 ? dRound(dMul(dDiv(dSub(item.price, item.cogs), item.price), 100), 0) : 0}%</span></span>
+                    <span className="text-muted-foreground">Цена продажи: <span className="font-semibold text-foreground">{priceLabel(item)}</span></span>
+                    {!variantsByParent.has(item.id) && (
+                      <>
+                        <span className="text-muted-foreground">Себестоимость: <span className="font-semibold text-foreground">{formatCurrency(item.cogs)}</span></span>
+                        <span className="text-muted-foreground">Маржа: <span className="font-semibold text-emerald-600">{item.price > 0 ? dRound(dMul(dDiv(dSub(item.price, item.cogs), item.price), 100), 0) : 0}%</span></span>
+                      </>
+                    )}
                     {canEdit && (
                       <button
                         onClick={(e) => { e.stopPropagation(); navigate(`/warehouse/menu/${item.id}`) }}

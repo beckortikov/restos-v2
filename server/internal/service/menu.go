@@ -25,6 +25,7 @@ type MenuItemsFilter struct {
 	OnlyAvailable           bool
 	IncludeTechCards        bool // подгрузить tech_card_lines для каждого блюда (batch-query)
 	IncludeIngredientPrices bool // подгрузить ingredients{price, unit, waste} из tech card lines
+	IncludeAttributes       bool // подгрузить атрибуты продуктов + value_ids вариантов
 	Page                    cursor.Page
 }
 
@@ -34,6 +35,10 @@ type MenuItemsFilter struct {
 type MenuItemWithExtras struct {
 	models.MenuItem
 	TechCardLines []models.TechCardLine `json:"tech_card_lines"`
+	// Attributes — атрибуты продукта-родителя (include=attributes).
+	Attributes []MenuAttributeWithValues `json:"attributes,omitempty"`
+	// VariantValueIDs — значения комбинации варианта (include=attributes).
+	VariantValueIDs []string `json:"variant_value_ids,omitempty"`
 }
 
 // IngredientPrice — компактный DTO для top-level карты ingredient_prices.
@@ -197,12 +202,81 @@ func (s *MenuService) ListItems(ctx context.Context, f MenuItemsFilter) (MenuIte
 		}
 	}
 
+	// Атрибуты продуктов + value_ids вариантов (3 batch-запроса).
+	attrsByItem := map[string][]MenuAttributeWithValues{}
+	valueIDsByItem := map[string][]string{}
+	if f.IncludeAttributes && len(trimmed) > 0 {
+		ids := make([]string, 0, len(trimmed))
+		for _, m := range trimmed {
+			ids = append(ids, m.ID)
+		}
+		scopedAttr, err := s.r.ForTenant(ctx)
+		if err != nil {
+			return MenuItemsResult{}, err
+		}
+		var attrs []models.MenuAttribute
+		if err := scopedAttr.Where("menu_item_id IN ?", ids).
+			Order("sort_order ASC, created_at ASC").Find(&attrs).Error; err != nil {
+			return MenuItemsResult{}, err
+		}
+		if len(attrs) > 0 {
+			attrIDs := make([]string, 0, len(attrs))
+			for _, a := range attrs {
+				attrIDs = append(attrIDs, a.ID)
+			}
+			scopedVal, err := s.r.ForTenant(ctx)
+			if err != nil {
+				return MenuItemsResult{}, err
+			}
+			var vals []models.MenuAttributeValue
+			if err := scopedVal.Where("attribute_id IN ?", attrIDs).
+				Order("sort_order ASC, created_at ASC").Find(&vals).Error; err != nil {
+				return MenuItemsResult{}, err
+			}
+			valsByAttr := map[string][]models.MenuAttributeValue{}
+			for _, v := range vals {
+				valsByAttr[v.AttributeID] = append(valsByAttr[v.AttributeID], v)
+			}
+			for _, a := range attrs {
+				vs := valsByAttr[a.ID]
+				if vs == nil {
+					vs = []models.MenuAttributeValue{}
+				}
+				attrsByItem[a.MenuItemID] = append(attrsByItem[a.MenuItemID], MenuAttributeWithValues{MenuAttribute: a, Values: vs})
+			}
+		}
+		variantIDs := make([]string, 0, len(trimmed))
+		for _, m := range trimmed {
+			if m.ParentID != nil {
+				variantIDs = append(variantIDs, m.ID)
+			}
+		}
+		if len(variantIDs) > 0 {
+			scopedLink, err := s.r.ForTenant(ctx)
+			if err != nil {
+				return MenuItemsResult{}, err
+			}
+			var links []models.MenuItemVariantValue
+			if err := scopedLink.Where("menu_item_id IN ?", variantIDs).Find(&links).Error; err != nil {
+				return MenuItemsResult{}, err
+			}
+			for _, l := range links {
+				valueIDsByItem[l.MenuItemID] = append(valueIDsByItem[l.MenuItemID], l.ValueID)
+			}
+		}
+	}
+
 	for _, m := range trimmed {
 		lines := linesByItem[m.ID]
 		if lines == nil {
 			lines = []models.TechCardLine{}
 		}
-		out.Items = append(out.Items, MenuItemWithExtras{MenuItem: m, TechCardLines: lines})
+		out.Items = append(out.Items, MenuItemWithExtras{
+			MenuItem:        m,
+			TechCardLines:   lines,
+			Attributes:      attrsByItem[m.ID],
+			VariantValueIDs: valueIDsByItem[m.ID],
+		})
 	}
 	return out, nil
 }

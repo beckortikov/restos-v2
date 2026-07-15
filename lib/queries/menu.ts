@@ -1,6 +1,6 @@
 import { api, unwrap, V4Error } from './_client'
 import { randomId } from '../random-id'
-import type { MenuItem } from '../types'
+import type { MenuItem, MenuAttribute } from '../types'
 import { logAction } from './audit'
 import { calcCogsFromTechCard } from './_mappers'
 
@@ -20,7 +20,9 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
   let cursor: string | undefined
   for (let guard = 0; guard < 200; guard++) {
     const query: { limit: number; include?: string; cursor?: string } = { limit: 200 }
-    if (includeTC) query.include = 'tech_cards,ingredient_prices'
+    // attributes — всегда: без них не сгруппировать варианты (parent_id +
+    // variant_value_ids) и не показать пикер комбинаций в POS.
+    query.include = includeTC ? 'tech_cards,ingredient_prices,attributes' : 'attributes'
     if (cursor) query.cursor = cursor
     const res: any = await unwrap(api.GET('/api/v1/menu/items', { params: { query: query as any } }))
     const page: Record<string, unknown>[] = res?.data ?? []
@@ -314,6 +316,73 @@ export async function updateMenuItem(id: string, data: Partial<{
   logAction('menu.edit', 'menu_item', id, data.name)
 }
 
+// ─── Атрибуты и варианты ────────────────────────────────────────────────────
+
+export interface ProductAttributesState {
+  attributes: MenuAttribute[]
+  variants: MenuItem[]
+}
+
+function mapAttributesState(res: Record<string, unknown>): ProductAttributesState {
+  const attrs = Array.isArray(res.attributes) ? (res.attributes as Record<string, unknown>[]) : []
+  const variants = Array.isArray(res.variants) ? (res.variants as Record<string, unknown>[]) : []
+  return {
+    attributes: attrs.map(a => ({
+      id: a.id as string,
+      name: (a.name as string) ?? '',
+      values: (Array.isArray(a.values) ? (a.values as Record<string, unknown>[]) : []).map(v => ({
+        id: v.id as string,
+        label: (v.label as string) ?? '',
+      })),
+    })),
+    variants: variants.map(v => ({
+      ...(mapMenuItem(v, [], new Map())),
+      variantValueIds: Array.isArray(v.value_ids) ? (v.value_ids as string[]) : [],
+    })),
+  }
+}
+
+export async function fetchMenuAttributes(productId: string): Promise<ProductAttributesState> {
+  const res = await unwrap(api.GET('/api/v1/menu/items/{id}/attributes', {
+    params: { path: { id: productId } },
+  }))
+  return mapAttributesState((res ?? {}) as Record<string, unknown>)
+}
+
+/**
+ * Декларативный sync атрибутов продукта. Порядок массивов = sort_order;
+ * элементы без id создаются, отсутствующие существующие — удаляются
+ * (их варианты архивируются, при повторном добавлении label — воскрешаются).
+ * combos — цены всех комбинаций (labels в порядке атрибутов).
+ */
+export async function syncMenuAttributes(
+  productId: string,
+  attributes: { id?: string; name: string; values: { id?: string; label: string }[] }[],
+  combos: { labels: string[]; price: number; purchasePrice?: number }[],
+): Promise<ProductAttributesState> {
+  const body = {
+    attributes: attributes.map(a => ({
+      id: a.id || undefined,
+      name: a.name,
+      values: a.values.map(v => ({
+        id: v.id || undefined,
+        label: v.label,
+      })),
+    })),
+    combos: combos.map(c => ({
+      labels: c.labels,
+      price: String(c.price),
+      purchase_price: String(c.purchasePrice ?? 0),
+    })),
+  }
+  const res = await unwrap(api.PUT('/api/v1/menu/items/{id}/attributes', {
+    params: { path: { id: productId } },
+    body,
+  }))
+  logAction('menu.attributes', 'menu_item', productId)
+  return mapAttributesState((res ?? {}) as Record<string, unknown>)
+}
+
 export async function updateMenuItemImage(id: string, imageUrl: string) {
   await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { image_url: imageUrl } as any }))
 }
@@ -376,7 +445,22 @@ function mapMenuItem(
     unitSize: Number(r.unit_size) || 1,
     saleStep: Number(r.sale_step) || 0,
     techCard: techLines.map(mapTechCardLine),
+    parentId: (r.parent_id as string | null) ?? null,
+    attributes: Array.isArray(r.attributes) ? (r.attributes as Record<string, unknown>[]).map(mapMenuAttribute) : undefined,
+    variantValueIds: Array.isArray(r.variant_value_ids) ? (r.variant_value_ids as string[]) : undefined,
   } as MenuItem
+}
+
+function mapMenuAttribute(a: Record<string, unknown>): MenuAttribute {
+  const values = Array.isArray(a.values) ? (a.values as Record<string, unknown>[]) : []
+  return {
+    id: a.id as string,
+    name: (a.name as string) ?? '',
+    values: values.map(v => ({
+      id: v.id as string,
+      label: (v.label as string) ?? '',
+    })),
+  }
 }
 
 function mapMenuCategory(c: Record<string, unknown>): MenuCategory {

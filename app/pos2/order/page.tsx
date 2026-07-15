@@ -293,11 +293,22 @@ export default function PosV2Order() {
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
   const currentCat = activeCat ?? visibleCats[0] ?? null
 
+  // Варианты (parentId) не показываются отдельными карточками: их продукт-
+  // родитель — одна карточка с пикером комбинаций (Размер/Вкус).
+  const variantsByParent = useMemo(() => {
+    const map = new Map<string, MenuItem[]>()
+    for (const m of menuItems) {
+      if (m.parentId) (map.get(m.parentId) ?? map.set(m.parentId, []).get(m.parentId)!).push(m)
+    }
+    return map
+  }, [menuItems])
+
   const dishes = useMemo(() => {
+    const base = menuItems.filter(m => !m.parentId)
     const q = deferred.trim().toLowerCase()
-    if (q) return menuItems.filter(m => m.name.toLowerCase().includes(q))
-    if (currentCat === '__fav__') return menuItems.filter(m => favSet.has(m.id))
-    return menuItems.filter(m => m.category === currentCat)
+    if (q) return base.filter(m => m.name.toLowerCase().includes(q))
+    if (currentCat === '__fav__') return base.filter(m => favSet.has(m.id))
+    return base.filter(m => m.category === currentCat)
   }, [menuItems, currentCat, deferred, favSet])
 
   const tablesByZone = useMemo(() => {
@@ -313,11 +324,39 @@ export default function PosV2Order() {
   const [wAmt, setWAmt] = useState('')
   const [wPortions, setWPortions] = useState(1)
 
+  // ── Variant picker (продукт с атрибутами Размер/Вкус) ────────
+  const [variantItem, setVariantItem] = useState<MenuItem | null>(null)
+  const [variantSel, setVariantSel] = useState<Record<string, string>>({}) // attrId → valueId
+
+  function openVariantPicker(m: MenuItem) {
+    const sel: Record<string, string> = {}
+    for (const a of m.attributes ?? []) {
+      if (a.values.length > 0) sel[a.id] = a.values[0].id
+    }
+    setVariantSel(sel)
+    setVariantItem(m)
+  }
+
+  // Резолв комбинации: вариант, чей набор value_ids совпадает с выбором.
+  const resolvedVariant = useMemo(() => {
+    if (!variantItem) return null
+    const selected = Object.values(variantSel).sort().join(',')
+    return (variantsByParent.get(variantItem.id) ?? []).find(v =>
+      [...(v.variantValueIds ?? [])].sort().join(',') === selected
+    ) ?? null
+  }, [variantItem, variantSel, variantsByParent])
+
   // Два источника стопа: legacy menu.is_available (owner вручную в админке) и
   // backend stop-list (stoppedIds — нехватка ингредиентов / override). Без права
   // — отказ с причиной; с правом — info-toast + флаг override ТОЛЬКО для реально
   // backend-стопнутых (иначе POST /orders вернёт 409 ITEM_STOPPED).
   function add(m: MenuItem) {
+    // Продукт с вариантами: карточка одна, конкретную комбинацию выбирают в
+    // пикере (variantItem) — в корзину попадает menu_item_id варианта.
+    if (variantsByParent.has(m.id)) {
+      openVariantPicker(m)
+      return
+    }
     const backendStopped = stoppedIds.has(m.id)
     const isStopped = m.isAvailable === false || backendStopped
     if (isStopped && !canOverrideStop) {
@@ -580,11 +619,12 @@ export default function PosV2Order() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (weightItem) setWeightItem(null)
+      else if (variantItem) setVariantItem(null)
       else if (tablesOpen) setTablesOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [weightItem, tablesOpen])
+  }, [weightItem, variantItem, tablesOpen])
 
   return (
     <div className="flex h-full w-full overflow-hidden">
@@ -647,8 +687,14 @@ export default function PosV2Order() {
           ) : (
             <div style={{ display: 'grid', gap: 'clamp(0.4rem,0.7vw,0.7rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }}>
               {dishes.map(m => {
-                const stopped = m.isAvailable === false || stoppedIds.has(m.id)
-                const weight = (m.unit ?? 'piece') !== 'piece'
+                const variants = variantsByParent.get(m.id)
+                // Продукт с вариантами стопится когда недоступен сам ИЛИ все
+                // его варианты в стопе; цена на карточке — «от минимальной».
+                const stopped = variants
+                  ? m.isAvailable === false || variants.every(v => v.isAvailable === false || stoppedIds.has(v.id))
+                  : m.isAvailable === false || stoppedIds.has(m.id)
+                const weight = !variants && (m.unit ?? 'piece') !== 'piece'
+                const minPrice = variants ? Math.min(...variants.map(v => v.price)) : m.price
                 return (
                   // Карточка блюда по дизайну restos.pen (DishTile): белая карточка
                   // (radius 16, тонкая рамка + мягкая тень), содержимое ПО ЦЕНТРУ —
@@ -658,7 +704,7 @@ export default function PosV2Order() {
                   <div key={m.id} className="relative">
                     <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: 'clamp(7rem,11vw,9.5rem)', opacity: stopped ? 0.6 : 1 }}>
                       <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.25vw,1.2rem)' }}>{m.name}</span>
-                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
                   </div>
@@ -874,6 +920,50 @@ export default function PosV2Order() {
               <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>{formatCurrency(wPreview)}</span>
             </div>
             <button onClick={addWeight} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Plus style={{ width: '1.3em', height: '1.3em' }} />Добавить
+            </button>
+          </div>
+        </PosModal>
+      )}
+
+      {/* ── Variant picker — выбор комбинации атрибутов (Размер/Вкус).
+             В корзину уходит menu_item_id конкретного варианта; стоп-лист и
+             override обрабатывает общий add(). ── */}
+      {variantItem && (
+        <PosModal open onClose={() => setVariantItem(null)} width="clamp(20rem,38vw,30rem)" title={variantItem.name}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
+            {(variantItem.attributes ?? []).map(attr => (
+              <div key={attr.id}>
+                <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>{attr.name}</div>
+                <div className="flex flex-wrap" style={{ gap: '0.5rem' }}>
+                  {attr.values.map(val => {
+                    const on = variantSel[attr.id] === val.id
+                    return (
+                      <button key={val.id} onClick={() => setVariantSel(prev => ({ ...prev, [attr.id]: val.id }))}
+                        className="rounded-xl font-semibold border active:scale-95 transition-transform"
+                        style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.8rem) clamp(0.9rem,1.3vw,1.2rem)', fontSize: 'var(--pv-ctl)' }}>
+                        {val.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 1rem' }}>
+              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Цена</span>
+              <span className="font-bold flex items-center gap-2" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>
+                {resolvedVariant ? formatCurrency(resolvedVariant.price) : '—'}
+                {resolvedVariant && (resolvedVariant.isAvailable === false || stoppedIds.has(resolvedVariant.id)) && (
+                  <span className="rounded-full font-bold" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>
+                )}
+              </span>
+            </div>
+            <button
+              onClick={() => { if (!resolvedVariant) return; const v = resolvedVariant; setVariantItem(null); add(v) }}
+              disabled={!resolvedVariant}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform disabled:opacity-50"
+              style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}
+            >
               <Plus style={{ width: '1.3em', height: '1.3em' }} />Добавить
             </button>
           </div>

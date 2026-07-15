@@ -34,6 +34,7 @@ type menuItemsEnvelope struct {
 func (h *MenuHandler) ListItems(w http.ResponseWriter, r *http.Request) {
 	includeTC := false
 	includeIP := false
+	includeAttrs := false
 	if inc := queryString(r, "include"); inc != "" {
 		for _, p := range strings.Split(inc, ",") {
 			switch strings.TrimSpace(p) {
@@ -41,6 +42,8 @@ func (h *MenuHandler) ListItems(w http.ResponseWriter, r *http.Request) {
 				includeTC = true
 			case "ingredient_prices":
 				includeIP = true
+			case "attributes":
+				includeAttrs = true
 			}
 		}
 	}
@@ -50,6 +53,7 @@ func (h *MenuHandler) ListItems(w http.ResponseWriter, r *http.Request) {
 		OnlyAvailable:           queryString(r, "available") == "true",
 		IncludeTechCards:        includeTC,
 		IncludeIngredientPrices: includeIP,
+		IncludeAttributes:       includeAttrs,
 		Page:                    parsePage(r),
 	})
 	if err != nil {
@@ -113,6 +117,34 @@ func (h *MenuHandler) DeleteItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// GetAttributes — GET /api/v1/menu/items/{id}/attributes.
+func (h *MenuHandler) GetAttributes(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	state, err := h.svc.GetAttributes(r.Context(), id)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, state)
+}
+
+// PutAttributes — PUT /api/v1/menu/items/{id}/attributes.
+// Декларативный sync атрибутов; генерирует/архивирует варианты.
+func (h *MenuHandler) PutAttributes(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var in service.SyncAttributesInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	state, err := h.svc.SyncAttributes(r.Context(), id, in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, state)
 }
 
 // CreateCategory — POST /api/v1/menu/categories.

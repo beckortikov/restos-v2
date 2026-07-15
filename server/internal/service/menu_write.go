@@ -297,6 +297,13 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 	if err := scoped2.Model(&mi).Updates(updates).Error; err != nil {
 		return nil, err
 	}
+	// Имя родителя входит в производные имена вариантов («Fanta 1 л») — пересчёт.
+	// Цены вариантов от родителя не зависят (Σ цен значений атрибутов).
+	if mi.ParentID == nil && in.Name != nil {
+		if err := s.recomputeVariants(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	// Перечитываем (через свежий scope) чтобы получить актуальные default-fields.
 	scoped3, _ := s.r.ForTenant(ctx)
 	var updated models.MenuItem
@@ -388,13 +395,14 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 
 // SoftDeleteItem ставит is_deleted=true. Hard delete недопустим:
 // у order_items стоит FK с RESTRICT (см. PRD 06).
+// Продукт с атрибутами архивируется вместе со своими вариантами.
 func (s *MenuService) SoftDeleteItem(ctx context.Context, id string) error {
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return err
 	}
 	res := scoped.Model(&models.MenuItem{}).
-		Where("id = ?", id).
+		Where("id = ? OR parent_id = ?", id, id).
 		Updates(map[string]any{
 			"is_deleted": true,
 			"updated_at": time.Now().UTC(),

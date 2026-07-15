@@ -160,6 +160,25 @@ export interface MenuItem {
   unit?: 'piece' | 'g' | 'kg'
   unitSize?: number // price is per N units (1шт | 100г | 1кг)
   saleStep?: number // minimum increment (50г for scales); 0 = any
+  // Товары с атрибутами (Размер/Вкус): продукт-родитель хранит attributes,
+  // сгенерированные варианты — parentId + variantValueIds (их комбинация).
+  // Варианты скрыты из списков UI; POS резолвит комбинацию → вариант.
+  parentId?: string | null
+  attributes?: MenuAttribute[]
+  variantValueIds?: string[]
+}
+
+// Значение атрибута — чистый лейбл: цена и закупка задаются per-комбинация
+// и живут на строке варианта (menu_items.price / cogs).
+export interface MenuAttributeValue {
+  id: string
+  label: string   // «1 л»
+}
+
+export interface MenuAttribute {
+  id: string
+  name: string         // «Размер»
+  values: MenuAttributeValue[]
 }
 
 export interface SemiRecipeLine {
