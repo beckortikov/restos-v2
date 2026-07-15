@@ -315,8 +315,9 @@ export interface paths {
                     /**
                      * @description CSV: `tech_cards` подгружает tech_card_lines для каждого блюда
                      *     (batch, не N+1); `ingredient_prices` дополнительно отдаёт
-                     *     top-level карту `ingredient_prices`.
-                     *     Пример: `?include=tech_cards,ingredient_prices`.
+                     *     top-level карту `ingredient_prices`; `attributes` — атрибуты
+                     *     продуктов (Размер/Вкус) и `variant_value_ids` вариантов.
+                     *     Пример: `?include=tech_cards,ingredient_prices,attributes`.
                      */
                     include?: string;
                 };
@@ -438,6 +439,84 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/api/v1/menu/items/{id}/attributes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Атрибуты продукта + варианты */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProductAttributesState"];
+                    };
+                };
+            };
+        };
+        /**
+         * Синхронизировать атрибуты продукта (Manager)
+         * @description Декларативный sync: атрибуты/значения приводятся к payload'у
+         *     (создание/переименование/удаление), затем из декартова произведения
+         *     значений генерируются варианты — обычные menu_items с parent_id.
+         *     Цены задаются per-комбинация (combos[]); значение атрибута — чистый
+         *     лейбл. Базовая цена продукта не участвует.
+         *     Лишние варианты архивируются (is_deleted); при повторном добавлении
+         *     значения с тем же label вариант воскрешается (сохраняя складской SKU).
+         *     Пустой массив attributes возвращает продукт в обычное блюдо.
+         *     Лимиты: ≤3 атрибутов, ≤10 значений на атрибут, ≤60 комбинаций.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SyncAttributesInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProductAttributesState"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/menu/items/import": {
@@ -9938,6 +10017,11 @@ export interface components {
             unit_size?: components["schemas"]["Decimal"];
             sale_step?: components["schemas"]["Decimal"];
             low_stock_threshold?: number;
+            /**
+             * Format: uuid
+             * @description Задан у сгенерированных вариантов; NULL у обычных блюд и продуктов.
+             */
+            parent_id?: string | null;
         };
         MenuItemInput: {
             name?: string;
@@ -9956,6 +10040,10 @@ export interface components {
              *     `?include=tech_cards`). Это уменьшает type-ветвление на фронте.
              */
             tech_card_lines?: components["schemas"]["TechCardLine"][];
+            /** @description Атрибуты продукта (только с `?include=attributes`). */
+            attributes?: components["schemas"]["MenuAttributeWithValues"][];
+            /** @description Значения комбинации варианта (только с `?include=attributes`). */
+            variant_value_ids?: string[];
         };
         IngredientPrice: {
             price?: components["schemas"]["Decimal"];
@@ -9995,6 +10083,54 @@ export interface components {
                 [key: string]: components["schemas"]["SemiPrice"];
             };
             next_cursor?: string;
+        };
+        MenuAttribute: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            menu_item_id?: string;
+            name?: string;
+            sort_order?: number;
+        };
+        MenuAttributeValue: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            attribute_id?: string;
+            label?: string;
+            sort_order?: number;
+        };
+        MenuAttributeWithValues: components["schemas"]["MenuAttribute"] & {
+            values?: components["schemas"]["MenuAttributeValue"][];
+        };
+        MenuVariant: components["schemas"]["MenuItem"] & {
+            value_ids?: string[];
+        };
+        ProductAttributesState: {
+            attributes?: components["schemas"]["MenuAttributeWithValues"][];
+            variants?: components["schemas"]["MenuVariant"][];
+        };
+        SyncAttributesInput: {
+            /** @description Порядок массива = sort_order. id опущен → создать. */
+            attributes: {
+                /** Format: uuid */
+                id?: string;
+                name: string;
+                values: {
+                    /** Format: uuid */
+                    id?: string;
+                    label: string;
+                }[];
+            }[];
+            /**
+             * @description Цены комбинаций: labels — лейблы значений в порядке атрибутов.
+             *     Каждая комбинация декартова произведения обязана получить цену > 0.
+             */
+            combos?: {
+                labels: string[];
+                price: components["schemas"]["Decimal"];
+                purchase_price?: components["schemas"]["Decimal"];
+            }[];
         };
         MenuCategory: {
             /** Format: uuid */

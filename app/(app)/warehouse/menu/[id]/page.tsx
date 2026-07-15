@@ -19,6 +19,7 @@ import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { humanizeError } from '@/lib/errors'
+import { AttributesEditor } from '@/components/menu/attributes-editor'
 
 interface MenuItemForm {
   name: string
@@ -171,6 +172,14 @@ export default function EditMenuItemPage() {
   const requireTechCard = techCardsEnabled && enforceStockCheck
 
   const [menuItem, setMenuItem] = useState<MenuItem | null>(null)
+  // У продукта с атрибутами нет собственной цены — её несут значения
+  // атрибутов (AttributesEditor сообщает через onHasAttributesChange).
+  const [hasAttributes, setHasAttributes] = useState(false)
+  // Атрибуты/цены вариантов сохраняются отдельной кнопкой («Сохранить
+  // варианты») — «Сохранить изменения» их не трогает. Без этого флага
+  // человек печатает цены, жмёт привычную верхнюю кнопку и молча теряет
+  // правки: форма уходит на /warehouse/menu, AttributesEditor размонтируется.
+  const [attrsDirty, setAttrsDirty] = useState(false)
   const [form, setForm] = useState<MenuItemForm>({
     name: '',
     category: '',
@@ -314,6 +323,13 @@ export default function EditMenuItemPage() {
 
   const handleSubmit = async () => {
     if (!menuItem || submitting) return
+    // Цены вариантов сохраняются отдельно (кнопка «Сохранить варианты» в
+    // блоке атрибутов). Эта кнопка их не отправляет — уйти со страницы сейчас
+    // значит молча потерять введённые цены.
+    if (attrsDirty) {
+      toast.error('Сначала сохраните варианты (кнопка «Сохранить варианты» в блоке атрибутов) — иначе введённые цены потеряются')
+      return
+    }
     setSubmitting(true)
     try {
       // Покупной товар целиком ведёт бэк: по is_purchased + purchase_* он сам
@@ -361,9 +377,13 @@ export default function EditMenuItemPage() {
   // Весовое сырьё (на развес) продаётся по весу и НЕ требует техкарты-рецепта.
   const isWeightItem = form.unit !== 'piece'
   const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
-  const canSubmit = !!form.name && !!form.category && form.price > 0 && (
+  // С атрибутами цена и закупка живут на значениях атрибутов.
+  const purchasedOk = hasAttributes
+    ? !!form.purchaseUnit
+    : (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
+  const canSubmit = !!form.name && !!form.category && (hasAttributes || form.price > 0) && (
     form.isPurchased
-      ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
+      ? purchasedOk
       : needTechCard
         ? realTechLines.length > 0 && realTechLinesValid
         : realTechLinesValid
@@ -372,8 +392,8 @@ export default function EditMenuItemPage() {
   const disabledReason = submitting ? ''
     : !form.name ? 'Укажите название'
     : !form.category ? 'Выберите категорию'
-    : !(form.price > 0) ? 'Укажите цену больше 0'
-    : form.isPurchased && !((form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit) ? 'Заполните закупочную цену и единицу'
+    : !hasAttributes && !(form.price > 0) ? 'Укажите цену больше 0'
+    : form.isPurchased && !purchasedOk ? (hasAttributes ? 'Выберите единицу закупки' : 'Заполните закупочную цену и единицу')
     : needTechCard && realTechLines.length === 0 ? 'Добавьте хотя бы один ингредиент в техкарту'
     : !realTechLinesValid ? 'Укажите количество (> 0) во всех строках техкарты'
     : ''
@@ -415,6 +435,11 @@ export default function EditMenuItemPage() {
         </div>
         {!canSubmit && disabledReason && (
           <div className="px-4 md:px-6 pb-2 -mt-1 text-xs font-medium text-amber-600">Нельзя сохранить: {disabledReason}</div>
+        )}
+        {attrsDirty && (
+          <div className="px-4 md:px-6 pb-2 -mt-1 text-xs font-medium text-amber-600">
+            Есть несохранённые цены вариантов — нажмите «Сохранить варианты» в блоке атрибутов, иначе они потеряются.
+          </div>
         )}
       </div>
 
@@ -463,18 +488,24 @@ export default function EditMenuItemPage() {
               </div>
             </div>
 
-            {/* Price & CookTime */}
+            {/* Price & CookTime. С атрибутами своей цены нет — цены на значениях. */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-muted-foreground mb-1 block">
                   {form.unit === 'g' ? 'Цена за 100г' : 'Цена продажи'}
                 </label>
-                <DecimalInput
-                  value={form.price}
-                  onChange={(v) => setForm((p) => ({ ...p, price: v }))}
-                  min={0}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
-                />
+                {hasAttributes ? (
+                  <div className="w-full px-3 py-2 text-xs bg-muted/30 border border-dashed border-border rounded-lg text-muted-foreground">
+                    Задаётся атрибутами →
+                  </div>
+                ) : (
+                  <DecimalInput
+                    value={form.price}
+                    onChange={(v) => setForm((p) => ({ ...p, price: v }))}
+                    min={0}
+                    className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
+                  />
+                )}
               </div>
               {!form.isPurchased ? (
                 <div>
@@ -556,7 +587,7 @@ export default function EditMenuItemPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station }))}
+                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
                   className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                 >
                   <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
@@ -642,13 +673,19 @@ export default function EditMenuItemPage() {
               <div className="grid grid-cols-3 gap-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 p-4 rounded-lg">
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-muted-foreground block">Цена закупки</label>
-                  <DecimalInput
-                    value={form.purchasePrice || 0}
-                    onChange={v => setForm(p => ({ ...p, purchasePrice: v, cogs: v }))}
-                    min={0}
-                    placeholder="0"
-                    className="w-full px-3 py-1.5 text-sm bg-background border border-border rounded-lg"
-                  />
+                  {hasAttributes ? (
+                    <div className="w-full px-3 py-1.5 text-xs bg-muted/30 border border-dashed border-border rounded-lg text-muted-foreground">
+                      Задаётся атрибутами ↓
+                    </div>
+                  ) : (
+                    <DecimalInput
+                      value={form.purchasePrice || 0}
+                      onChange={v => setForm(p => ({ ...p, purchasePrice: v, cogs: v }))}
+                      min={0}
+                      placeholder="0"
+                      className="w-full px-3 py-1.5 text-sm bg-background border border-border rounded-lg"
+                    />
+                  )}
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-muted-foreground block">Ед. измерения</label>
@@ -749,6 +786,16 @@ export default function EditMenuItemPage() {
               </button>
             </div>
           ) : null}
+
+          {/* Атрибуты (Размер/Вкус) — только у продукта-родителя, не у варианта. */}
+          {menuItem && !menuItem.parentId && (
+            <AttributesEditor
+              productId={menuItem.id}
+              isPurchased={form.isPurchased}
+              onHasAttributesChange={setHasAttributes}
+              onDirtyChange={setAttrsDirty}
+            />
+          )}
         </div>
       </div>
 

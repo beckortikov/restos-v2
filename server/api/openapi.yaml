@@ -193,8 +193,9 @@ paths:
           description: |
             CSV: `tech_cards` подгружает tech_card_lines для каждого блюда
             (batch, не N+1); `ingredient_prices` дополнительно отдаёт
-            top-level карту `ingredient_prices`.
-            Пример: `?include=tech_cards,ingredient_prices`.
+            top-level карту `ingredient_prices`; `attributes` — атрибуты
+            продуктов (Размер/Вкус) и `variant_value_ids` вариантов.
+            Пример: `?include=tech_cards,ingredient_prices,attributes`.
       responses:
         "200":
           description: OK
@@ -233,6 +234,40 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "204": { description: No content }
+
+  /api/v1/menu/items/{id}/attributes:
+    get:
+      tags: [menu]
+      summary: Атрибуты продукта + варианты
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProductAttributesState" } } }
+    put:
+      tags: [menu]
+      summary: Синхронизировать атрибуты продукта (Manager)
+      description: |
+        Декларативный sync: атрибуты/значения приводятся к payload'у
+        (создание/переименование/удаление), затем из декартова произведения
+        значений генерируются варианты — обычные menu_items с parent_id.
+        Цены задаются per-комбинация (combos[]); значение атрибута — чистый
+        лейбл. Базовая цена продукта не участвует.
+        Лишние варианты архивируются (is_deleted); при повторном добавлении
+        значения с тем же label вариант воскрешается (сохраняя складской SKU).
+        Пустой массив attributes возвращает продукт в обычное блюдо.
+        Лимиты: ≤3 атрибутов, ≤10 значений на атрибут, ≤60 комбинаций.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SyncAttributesInput" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProductAttributesState" } } }
 
   /api/v1/menu/items/import:
     post:
@@ -2940,6 +2975,11 @@ components:
         unit_size: { $ref: "#/components/schemas/Decimal" }
         sale_step: { $ref: "#/components/schemas/Decimal" }
         low_stock_threshold: { type: integer }
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Задан у сгенерированных вариантов; NULL у обычных блюд и продуктов.
     MenuItemInput:
       type: object
       properties:
@@ -2963,6 +3003,14 @@ components:
                 Всегда присутствует (пустой массив, если не запрошен через
                 `?include=tech_cards`). Это уменьшает type-ветвление на фронте.
               items: { $ref: "#/components/schemas/TechCardLine" }
+            attributes:
+              type: array
+              description: Атрибуты продукта (только с `?include=attributes`).
+              items: { $ref: "#/components/schemas/MenuAttributeWithValues" }
+            variant_value_ids:
+              type: array
+              description: Значения комбинации варианта (только с `?include=attributes`).
+              items: { type: string, format: uuid }
     IngredientPrice:
       type: object
       properties:
@@ -3005,6 +3053,81 @@ components:
           type: object
           additionalProperties: { $ref: "#/components/schemas/SemiPrice" }
         next_cursor: { type: string }
+
+    MenuAttribute:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        menu_item_id: { type: string, format: uuid }
+        name: { type: string }
+        sort_order: { type: integer }
+    MenuAttributeValue:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        attribute_id: { type: string, format: uuid }
+        label: { type: string }
+        sort_order: { type: integer }
+    MenuAttributeWithValues:
+      allOf:
+        - $ref: "#/components/schemas/MenuAttribute"
+        - type: object
+          properties:
+            values:
+              type: array
+              items: { $ref: "#/components/schemas/MenuAttributeValue" }
+    MenuVariant:
+      allOf:
+        - $ref: "#/components/schemas/MenuItem"
+        - type: object
+          properties:
+            value_ids:
+              type: array
+              items: { type: string, format: uuid }
+    ProductAttributesState:
+      type: object
+      properties:
+        attributes:
+          type: array
+          items: { $ref: "#/components/schemas/MenuAttributeWithValues" }
+        variants:
+          type: array
+          items: { $ref: "#/components/schemas/MenuVariant" }
+    SyncAttributesInput:
+      type: object
+      required: [attributes]
+      properties:
+        attributes:
+          type: array
+          description: Порядок массива = sort_order. id опущен → создать.
+          items:
+            type: object
+            required: [name, values]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              values:
+                type: array
+                items:
+                  type: object
+                  required: [label]
+                  properties:
+                    id: { type: string, format: uuid }
+                    label: { type: string }
+        combos:
+          type: array
+          description: |
+            Цены комбинаций: labels — лейблы значений в порядке атрибутов.
+            Каждая комбинация декартова произведения обязана получить цену > 0.
+          items:
+            type: object
+            required: [labels, price]
+            properties:
+              labels:
+                type: array
+                items: { type: string }
+              price: { $ref: "#/components/schemas/Decimal" }
+              purchase_price: { $ref: "#/components/schemas/Decimal" }
 
     MenuCategory:
       type: object

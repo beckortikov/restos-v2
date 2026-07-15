@@ -12,11 +12,13 @@ import {
   type SemiFinishedType,
   type MenuStation,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Layers } from 'lucide-react'
+import { AttributesForm, ComboPricesEditor, attrsValid, attrsComplete, combosCount, combosOf, buildCombosPayload, MAX_COMBOS, type AttrForm, type ComboPrices } from '@/components/menu/attributes-editor'
 
 interface MenuItemForm {
   name: string
@@ -188,6 +190,11 @@ export default function NewMenuItemPage() {
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  // Атрибуты (Размер/Вкус). Когда заданы — у товара нет собственной цены:
+  // цены задаются per-комбинация, бэк генерирует варианты после создания.
+  const [attrs, setAttrs] = useState<AttrForm[]>([])
+  const [comboPrices, setComboPrices] = useState<ComboPrices>({})
+  const hasAttrs = attrs.length > 0
 
   // Quick Create States
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
@@ -282,14 +289,28 @@ export default function NewMenuItemPage() {
     try {
       // Покупной товар целиком ведёт бэк: по is_purchased + purchase_* он сам
       // создаёт складской ингредиент (0 остаток) + 1:1 техкарту + станцию showcase.
-      await createMenuItemDb({
+      // С атрибутами собственная цена товару не нужна (цены — на значениях).
+      const created = await createMenuItemDb({
         ...form,
+        price: hasAttrs ? 0 : form.price,
         stopListOverride: false,
         station: form.station,
         preparedQty: 0,
         isBatchCooking: form.isBatchCooking ?? false,
       })
-      toast.success(form.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
+      if (hasAttrs && created?.id) {
+        const state = await syncMenuAttributes(
+          created.id,
+          attrs.map(a => ({
+            name: a.name.trim(),
+            values: a.values.map(v => ({ label: v.label.trim() })),
+          })),
+          buildCombosPayload(attrs, comboPrices),
+        )
+        toast.success(`Товар добавлен · вариантов: ${state.variants.length}`)
+      } else {
+        toast.success(form.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
+      }
       navigate('/warehouse/menu')
     } catch {
       toast.error('Ошибка при добавлении блюда')
@@ -305,9 +326,17 @@ export default function NewMenuItemPage() {
   const realTechLinesValid = realTechLines.every((l) => l.qty > 0)
   const isWeightItem = form.unit !== 'piece'
   const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
-  const canSubmit = !!form.name && !!form.category && form.price > 0 && (
+  // С атрибутами цена товара не задаётся — цены несут значения атрибутов
+  // (каждая комбинация должна получиться платной).
+  const attrsOk = attrsValid(attrs, comboPrices, form.isPurchased)
+  const priceOk = hasAttrs ? attrsOk : form.price > 0
+  // С атрибутами закупка тоже на значениях — от товара нужна только единица.
+  const purchasedOk = hasAttrs
+    ? !!form.purchaseUnit
+    : (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
+  const canSubmit = !!form.name && !!form.category && priceOk && (
     form.isPurchased
-      ? (form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit
+      ? purchasedOk
       : needTechCard
         ? realTechLines.length > 0 && realTechLinesValid
         : realTechLinesValid
@@ -315,8 +344,14 @@ export default function NewMenuItemPage() {
   const disabledReason = submitting ? ''
     : !form.name ? 'Укажите название'
     : !form.category ? 'Выберите категорию'
-    : !(form.price > 0) ? 'Укажите цену больше 0'
-    : form.isPurchased && !((form.purchasePrice ?? 0) > 0 && !!form.purchaseUnit) ? 'Заполните закупочную цену и единицу'
+    : hasAttrs && !attrsOk ? (
+        !attrsComplete(attrs) ? 'Заполните названия атрибутов и значений'
+        : combosCount(attrs) > MAX_COMBOS ? 'Слишком много комбинаций атрибутов'
+        : combosOf(attrs).some(c => !((comboPrices[c.key]?.price ?? 0) > 0)) ? 'Укажите цену (> 0) у каждого варианта'
+        : 'Укажите закупку (> 0) у каждого варианта'
+      )
+    : !hasAttrs && !(form.price > 0) ? 'Укажите цену больше 0'
+    : form.isPurchased && !purchasedOk ? (hasAttrs ? 'Выберите единицу закупки' : 'Заполните закупочную цену и единицу')
     : needTechCard && realTechLines.length === 0 ? 'Добавьте хотя бы один ингредиент в техкарту'
     : !realTechLinesValid ? 'Укажите количество (> 0) во всех строках техкарты'
     : ''
@@ -406,18 +441,24 @@ export default function NewMenuItemPage() {
               </div>
             </div>
 
-            {/* Price & CookTime */}
+            {/* Price & CookTime. С атрибутами своей цены нет — цены на значениях. */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-semibold text-muted-foreground mb-1 block">
                   {form.unit === 'g' ? 'Цена за 100г' : 'Цена продажи'}
                 </label>
-                <DecimalInput
-                  value={form.price}
-                  onChange={(v) => setForm((p) => ({ ...p, price: v }))}
-                  min={0}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
-                />
+                {hasAttrs ? (
+                  <div className="w-full px-3 py-2 text-xs bg-muted/30 border border-dashed border-border rounded-lg text-muted-foreground">
+                    Задаётся атрибутами →
+                  </div>
+                ) : (
+                  <DecimalInput
+                    value={form.price}
+                    onChange={(v) => setForm((p) => ({ ...p, price: v }))}
+                    min={0}
+                    className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
+                  />
+                )}
               </div>
               {!form.isPurchased ? (
                 <div>
@@ -501,7 +542,8 @@ export default function NewMenuItemPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station }))}
+                  // Дефолт единицы закупки «шт.» — чтобы пустой селект не блокировал сохранение.
+                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
                   className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                 >
                   <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
@@ -565,13 +607,19 @@ export default function NewMenuItemPage() {
               <div className="grid grid-cols-3 gap-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 p-4 rounded-lg">
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-muted-foreground block">Цена закупки</label>
-                  <DecimalInput
-                    value={form.purchasePrice || 0}
-                    onChange={v => setForm(p => ({ ...p, purchasePrice: v, cogs: v }))}
-                    min={0}
-                    placeholder="0"
-                    className="w-full px-3 py-1.5 text-sm bg-background border border-border rounded-lg"
-                  />
+                  {hasAttrs ? (
+                    <div className="w-full px-3 py-1.5 text-xs bg-muted/30 border border-dashed border-border rounded-lg text-muted-foreground">
+                      Задаётся атрибутами ↓
+                    </div>
+                  ) : (
+                    <DecimalInput
+                      value={form.purchasePrice || 0}
+                      onChange={v => setForm(p => ({ ...p, purchasePrice: v, cogs: v }))}
+                      min={0}
+                      placeholder="0"
+                      className="w-full px-3 py-1.5 text-sm bg-background border border-border rounded-lg"
+                    />
+                  )}
                 </div>
                 <div className="space-y-1">
                   <label className="text-[10px] font-semibold text-muted-foreground block">Ед. измерения</label>
@@ -672,6 +720,31 @@ export default function NewMenuItemPage() {
               </button>
             </div>
           ) : null}
+
+          {/* Атрибуты (Размер/Вкус): цены задаются на значениях, варианты
+              генерирует бэк сразу после создания товара. */}
+          <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
+            <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
+              <Layers className="size-4 text-primary" />
+              Атрибуты и варианты
+            </h2>
+            {!hasAttrs && (
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Один товар в нескольких размерах или вкусах? Добавьте атрибут
+                (например «Размер»: 1 л / 1.5 л) и укажите цену каждого значения —
+                система сама создаст варианты{form.isPurchased ? ' с отдельным складским учётом' : ''}.
+                На кассе будет одна карточка товара с выбором.
+              </p>
+            )}
+            <AttributesForm attrs={attrs} onChange={setAttrs} />
+            <ComboPricesEditor attrs={attrs} prices={comboPrices} onChange={setComboPrices} showPurchase={form.isPurchased} />
+            {hasAttrs && (
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Укажите цену каждого варианта{form.isPurchased ? ' и его закупку — у каждого будет свой складской товар' : ''}.
+                Варианты появятся после сохранения товара.
+              </p>
+            )}
+          </div>
         </div>
       </div>
 

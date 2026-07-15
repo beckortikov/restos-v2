@@ -13,6 +13,7 @@ func All() []any {
 		// menu
 		&MenuCategory{}, &CustomCategory{}, &MenuItem{},
 		&ModifierGroup{}, &Modifier{}, &TechCardLine{},
+		&MenuAttribute{}, &MenuAttributeValue{}, &MenuItemVariantValue{},
 		// orders
 		&Order{}, &OrderItem{}, &OrderItemModifier{},
 		&OrderVoid{}, &OrderSplit{},

@@ -277,6 +277,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/auth/logout", authH.Logout)
 
 			g.Get("/menu/items", menuH.ListItems)
+			g.Get("/menu/items/{id}/attributes", menuH.GetAttributes)
 			g.Get("/menu/categories", menuH.ListCategories)
 
 			g.Get("/zones", tablesH.ListZones)
@@ -513,6 +514,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/menu/items", menuH.CreateItem)
 			g.Patch("/menu/items/{id}", menuH.PatchItem)
 			g.Delete("/menu/items/{id}", menuH.DeleteItem)
+			g.Put("/menu/items/{id}/attributes", menuH.PutAttributes)
 			g.Post("/menu/categories", menuH.CreateCategory)
 			g.Patch("/menu/categories/{id}", menuH.PatchCategory)
 			g.Delete("/menu/categories/{id}", menuH.DeleteCategory)
