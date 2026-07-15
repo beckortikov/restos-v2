@@ -42,14 +42,14 @@ var kdsStatusSet = map[string]bool{"pending": true, "cooking": true, "ready": tr
 
 // KDSItem — блюдо на кухонной доске (одна карточка).
 type KDSItem struct {
-	ID            string    `json:"id"`
-	OrderID       string    `json:"order_id"`
-	OrderNumber   int       `json:"order_number"`
-	OrderType     string    `json:"order_type"`
-	TableNumber   *int      `json:"table_number"`
-	TableName     *string   `json:"table_name"`
-	Name          string    `json:"name"`
-	Qty           string    `json:"qty"`
+	ID          string  `json:"id"`
+	OrderID     string  `json:"order_id"`
+	OrderNumber int     `json:"order_number"`
+	OrderType   string  `json:"order_type"`
+	TableNumber *int    `json:"table_number"`
+	TableName   *string `json:"table_name"`
+	Name        string  `json:"name"`
+	Qty         string  `json:"qty"`
 	// Unit — единица позиции: "g"/"kg" (весовое блюдо, qty = вес) или piece/пусто
 	// (штучное, qty = количество). Кухня по нему решает: «100 г» или «×100».
 	Unit          string    `json:"unit"`

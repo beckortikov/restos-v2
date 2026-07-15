@@ -52,10 +52,10 @@ type MenuItem struct {
 	LowStockThreshold int             `gorm:"column:low_stock_threshold;not null;default:5" json:"low_stock_threshold"`
 	// ParentID — задан у сгенерированных вариантов (комбинаций атрибутов);
 	// NULL — обычное блюдо или продукт-родитель. Варианты скрыты из списков UI.
-	ParentID *string `gorm:"column:parent_id;type:uuid" json:"parent_id"`
-	RestaurantID      *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt         time.Time       `json:"created_at"`
-	UpdatedAt         time.Time       `json:"updated_at"`
+	ParentID     *string   `gorm:"column:parent_id;type:uuid" json:"parent_id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (MenuItem) TableName() string { return "menu_items" }
