@@ -576,9 +576,15 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 		Method string          `gorm:"column:method"`
 		Total  decimal.Decimal `gorm:"column:total"`
 	}
+	// 'refunded' (полный возврат) включаем НАРАВНЕ с 'closed': их валовая выручка
+	// и COGS должны считаться, а сам возврат вычитается отдельной строкой opex
+	// (category='refund'). Иначе полный возврат бил по прибыли дважды: выручка
+	// пропадала (статус 'refunded' выпадал) И возврат шёл в расход. Частичный
+	// возврат оставляет статус 'closed' и уже считался корректно — теперь оба
+	// пути согласованы.
 	q := scoped.Table("orders").
 		Select("COALESCE(payment_method, '') AS method, COALESCE(SUM(total_with_service), 0) AS total").
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("closed_at >= ?", *f.From)
 	}
@@ -605,7 +611,9 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	q2 := scoped2.Table("orders AS o").
 		Select("COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS total").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
+		// 'refunded' наравне с 'closed' — согласовано с revenue-запросом (см. выше):
+		// себестоимость возвращённого заказа остаётся реальной потерей.
+		Where("o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q2 = q2.Where("o.closed_at >= ?", *f.From)
 	}
@@ -657,7 +665,14 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	q3 := scoped3.Table("financial_operations").
 		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total").
 		Where("type = ?", "out").
-		Where("COALESCE(category, '') NOT IN ?", []string{"stock_purchase"})
+		// Переводы между счетами (activity='financial', категория «Перевод») — это
+		// НЕ операционный расход: деньги не покидают бизнес, встречный in-leg их
+		// возвращает на другой счёт. Раньше они попадали в opex и занижали прибыль
+		// на каждую инкассацию в банк.
+		Where("COALESCE(activity, '') <> ?", "financial").
+		// stock_purchase — это склад (станет COGS при продаже), а supplier_payment —
+		// гашение долга поставщику (обязательство, не расход). Обе — не opex.
+		Where("COALESCE(category, '') NOT IN ?", []string{"stock_purchase", "supplier_payment"})
 	if f.From != nil {
 		q3 = q3.Where("created_at >= ?", *f.From)
 	}
@@ -1134,6 +1149,39 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 			}
 		}
 	}
+	// Кап суммы: выплатить нельзя больше, чем НАЧИСЛЕНО официанту минус уже
+	// ВЫПЛАЧЕНО (по этой смене). Прежде единственным гейтом было «хватает денег
+	// на счёте» — можно было вывести сверх заработанного. Скоуп — по shift_id
+	// (source of truth начисления). Допуск 0.01 на округление.
+	if in.ShiftID != nil && *in.ShiftID != "" && in.WaiterID != nil && *in.WaiterID != "" && in.Amount != nil {
+		if payAmt, perr := decimal.FromString(*in.Amount); perr == nil {
+			accrual, aerr := s.AccrualByWaiter(ctx, nil, nil, *in.ShiftID)
+			payouts, err2 := s.PayoutByWaiter(ctx, nil, nil, *in.ShiftID)
+			if aerr == nil && err2 == nil {
+				accrued := decimal.Zero
+				for _, r := range accrual {
+					if r.WaiterID == *in.WaiterID {
+						accrued = r.AccruedAmount
+						break
+					}
+				}
+				paid := decimal.Zero
+				for _, r := range payouts {
+					if r.WaiterID == *in.WaiterID {
+						paid = r.PaidAmount
+						break
+					}
+				}
+				remaining := decimal.Sub(accrued, paid)
+				if decimal.Sub(payAmt, remaining).GreaterThan(decimal.MustFromString("0.01")) {
+					return nil, apperrors.Wrap("VALIDATION",
+						fmt.Sprintf("сумма выплаты %s превышает остаток к выплате %s (начислено %s − выплачено %s)",
+							payAmt.String(), remaining.String(), accrued.String(), paid.String()), nil)
+				}
+			}
+		}
+	}
+
 	cp := counterparty
 	return s.payout(ctx, payoutInput{
 		UserID:       in.WaiterID,
@@ -1209,6 +1257,12 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 		}
 		newBal := decimal.Normalize(decimal.Sub(acc.Balance, amount))
 		if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		// Наличная выплата (зарплата/обслуживание) со счёта открытой смены →
+		// зеркалим отток в кассовую смену (cash_out), иначе expected_cash в
+		// Z-отчёте покажет ложную недостачу. No-op для безнала/закрытой смены.
+		if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), amount, now); err != nil {
 			return err
 		}
 		op = models.FinancialOperation{

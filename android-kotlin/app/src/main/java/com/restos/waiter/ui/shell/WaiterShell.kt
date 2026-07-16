@@ -1,5 +1,7 @@
 package com.restos.waiter.ui.shell
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,7 +20,9 @@ import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Logout
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.RestaurantMenu
+import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.TableRestaurant
+import androidx.compose.material.icons.outlined.UnfoldMore
 import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -47,9 +51,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.waiter.data.preferences.CategoryLayout
 import com.restos.waiter.data.preferences.HomeScreen
 import com.restos.waiter.data.preferences.ViewMode
 import com.restos.waiter.ui.lan.NetworkStatusDot
+import com.restos.waiter.ui.update.AppUpdateSection
 
 enum class WaiterTab(val route: String, val title: String) {
     Tables("tables", "Столы"),
@@ -69,6 +75,7 @@ fun WaiterShell(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val viewMode by viewModel.viewMode.collectAsStateWithLifecycle()
     val homeScreen by viewModel.homeScreen.collectAsStateWithLifecycle()
+    val categoryLayout by viewModel.categoryLayout.collectAsStateWithLifecycle()
     val networkStatus by viewModel.networkStatus.collectAsStateWithLifecycle()
     var profileOpen by remember { mutableStateOf(false) }
 
@@ -142,8 +149,10 @@ fun WaiterShell(
                 showService = state.me?.user?.can("orders.service_charge") == true,
                 viewMode = viewMode,
                 homeScreen = homeScreen,
+                categoryLayout = categoryLayout,
                 onSetViewMode = viewModel::setViewMode,
                 onSetHomeScreen = viewModel::setHomeScreen,
+                onSetCategoryLayout = viewModel::setCategoryLayout,
                 onLogout = {
                     profileOpen = false
                     viewModel.logout(onLoggedOut)
@@ -182,13 +191,18 @@ private fun ProfileSheetContent(
     showService: Boolean,
     viewMode: ViewMode,
     homeScreen: HomeScreen,
+    categoryLayout: CategoryLayout,
     onSetViewMode: (ViewMode) -> Unit,
     onSetHomeScreen: (HomeScreen) -> Unit,
+    onSetCategoryLayout: (CategoryLayout) -> Unit,
     onLogout: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            // Профиль оброс секциями (настройки + обновление) — контент перерос
+            // высоту шита и «Выйти» внизу уезжала за экран. Делаем прокручиваемым.
+            .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
             .padding(bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -297,6 +311,29 @@ private fun ProfileSheetContent(
                     onClick = { onSetHomeScreen(HomeScreen.Menu) },
                 )
             }
+        }
+
+        SettingsSection(label = "Категории в меню") {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                SegmentedButton(
+                    label = "Раскрытие",
+                    icon = Icons.Outlined.UnfoldMore,
+                    active = categoryLayout == CategoryLayout.Expand,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onSetCategoryLayout(CategoryLayout.Expand) },
+                )
+                SegmentedButton(
+                    label = "Скролл",
+                    icon = Icons.Outlined.SwapHoriz,
+                    active = categoryLayout == CategoryLayout.Scroll,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onSetCategoryLayout(CategoryLayout.Scroll) },
+                )
+            }
+        }
+
+        SettingsSection(label = "Обновление приложения") {
+            AppUpdateSection()
         }
 
         TextButton(

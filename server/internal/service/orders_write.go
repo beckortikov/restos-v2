@@ -127,6 +127,11 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 			menuByID[m.ID] = m
 		}
 
+		// Продукт с атрибутами — абстракция: продаются его варианты.
+		if err := validateNoAbstractProducts(tx, rid, menuIDs); err != nil {
+			return err
+		}
+
 		// v2.0.90 — stop-list backend-gate (БАГ #3). Если позиция в стопе и
 		// клиент не передал override_stop_list (или роль не достаточная) — 409.
 		if err := validateStopListForItems(ctx, tx, rid, in.Items, menuByID, in.OverrideStopList); err != nil {
@@ -348,6 +353,11 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		menuByID := make(map[string]models.MenuItem, len(menuItems))
 		for _, m := range menuItems {
 			menuByID[m.ID] = m
+		}
+
+		// Продукт с атрибутами — абстракция: продаются его варианты.
+		if err := validateNoAbstractProducts(tx, rid, menuIDs); err != nil {
+			return err
 		}
 
 		// v2.0.90 — stop-list backend-gate (БАГ #3).
@@ -732,24 +742,17 @@ func buildOrderItem(
 		n := *it.Name
 		oi.Name = &n
 	}
-	if it.Price != nil {
-		d, err := decimal.FromString(*it.Price)
-		if err != nil {
-			return nil, decimal.Zero, apperrors.Wrap("VALIDATION", "bad price", err)
-		}
-		oi.Price = d
-	}
-	if it.Unit != nil {
-		u := *it.Unit
-		oi.Unit = &u
-	}
-	if it.UnitSize != nil {
-		d, err := decimal.FromString(*it.UnitSize)
-		if err != nil {
-			return nil, decimal.Zero, apperrors.Wrap("VALIDATION", "bad unit_size", err)
-		}
-		oi.UnitSize = d
-	}
+	// ЦЕНА, UNIT и UNIT_SIZE — всегда из МЕНЮ (mi.*), клиентские override НЕ
+	// применяются. Цена любой позиции фиксирована в меню: у весовой mi.Price и
+	// mi.UnitSize задают цену за вес, а кассир вручную вбивает только ВЕС — он
+	// приходит в qty, и сервер сам считает line_total = mi.Price × qty/unitSize
+	// (см. effectivePortions). Приём цены/порционирования с клиента был дырой:
+	// крафтом запроса можно было продать блюдо по любой цене либо занизить
+	// весовую через unit_size. Фронт и так шлёт меню-значения — поведение не
+	// меняется, закрыт лишь канал подмены. Свободной цены как отдельной фичи в
+	// системе нет; если появится — вернуть управляемый override здесь. Поля
+	// it.Price/it.Unit/it.UnitSize остаются в DTO для совместимости, но
+	// игнорируются.
 	if it.COGS != nil {
 		d, err := decimal.FromString(*it.COGS)
 		if err != nil {
@@ -997,6 +1000,26 @@ func validateStockForItems(
 		return apperrors.Wrap("VALIDATION", formatShortages(shortages), nil)
 	}
 	return apperrors.Wrap("INSUFFICIENT_STOCK", formatShortages(shortages), nil)
+}
+
+// validateNoAbstractProducts — продукт с живыми вариантами (атрибуты Размер/
+// Вкус/...) сам не продаётся: у него нет своей цены-комбинации и его техкарта —
+// лишь шаблон. Клиент обязан прислать menu_item_id конкретного варианта.
+func validateNoAbstractProducts(tx *gorm.DB, rid string, menuIDs []string) error {
+	if len(menuIDs) == 0 {
+		return nil
+	}
+	var parents []string
+	if err := tx.Model(&models.MenuItem{}).
+		Distinct("parent_id").
+		Where("restaurant_id = ? AND parent_id IN ? AND is_deleted = ?", rid, menuIDs, false).
+		Pluck("parent_id", &parents).Error; err != nil {
+		return err
+	}
+	if len(parents) > 0 {
+		return apperrors.Wrap("VALIDATION", "у товара есть варианты — выберите конкретный вариант", nil)
+	}
+	return nil
 }
 
 // validateStopListForItems — БАГ #3 backend-gate стоп-листа.
@@ -1263,9 +1286,11 @@ func itoa(n int) string {
 }
 
 // techCardCogs — себестоимость блюда по тех-карте: Σ (расход × цена ингредиента)
-// с конвертацией единиц (units.Convert) и учётом waste (1/(1-waste/100)).
-// Зеркало фронтового calcCogsFromTechCard (lib/queries/_mappers.ts). Semi-строки
-// не учитываются (как и на фронте). 0 — если тех-карты/цен нет.
+// + Σ (расход × себестоимость полуфабриката). С конвертацией единиц
+// (units.Convert/ConvertToStock) и учётом waste ингредиентов (1/(1-waste/100)).
+// Зеркало фронтового calcCogsFromTechCard (lib/queries/_mappers.ts). Полуфабрикаты
+// (semi_type_id) берутся по price_per_unit из semi_finished_stock — их yield уже
+// зашит в эту цену, поэтому waste к ним не применяется. 0 — если тех-карты/цен нет.
 func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
 	if mi.RestaurantID == nil {
 		return decimal.Zero
@@ -1275,43 +1300,74 @@ func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
 		Find(&lines).Error; err != nil {
 		return decimal.Zero
 	}
-	ids := make([]string, 0, len(lines))
+	ingIDs := make([]string, 0, len(lines))
+	semiIDs := make([]string, 0, len(lines))
 	for _, l := range lines {
 		if l.IngredientID != nil && *l.IngredientID != "" {
-			ids = append(ids, *l.IngredientID)
+			ingIDs = append(ingIDs, *l.IngredientID)
+		} else if l.SemiTypeID != nil && *l.SemiTypeID != "" {
+			semiIDs = append(semiIDs, *l.SemiTypeID)
 		}
 	}
-	if len(ids) == 0 {
+	if len(ingIDs) == 0 && len(semiIDs) == 0 {
 		return decimal.Zero
 	}
-	var ings []models.Ingredient
-	if err := tx.Where("id IN ?", ids).Find(&ings).Error; err != nil {
-		return decimal.Zero
+	byID := make(map[string]models.Ingredient, len(ingIDs))
+	if len(ingIDs) > 0 {
+		var ings []models.Ingredient
+		if err := tx.Where("id IN ?", ingIDs).Find(&ings).Error; err != nil {
+			return decimal.Zero
+		}
+		for _, i := range ings {
+			byID[i.ID] = i
+		}
 	}
-	byID := make(map[string]models.Ingredient, len(ings))
-	for _, i := range ings {
-		byID[i.ID] = i
+	// Себестоимость полуфабрикатов: price_per_unit + unit из semi_finished_stock
+	// (одна строка остатка на semi_type в ресторане). last-wins, если строк
+	// несколько.
+	type semiCost struct {
+		price decimal.Decimal
+		unit  string
+	}
+	semiByType := make(map[string]semiCost, len(semiIDs))
+	if len(semiIDs) > 0 {
+		var stocks []models.SemiFinishedStock
+		if err := tx.Where("restaurant_id = ? AND semi_type_id IN ?", *mi.RestaurantID, semiIDs).
+			Find(&stocks).Error; err == nil {
+			for _, s := range stocks {
+				if s.SemiTypeID != nil {
+					semiByType[*s.SemiTypeID] = semiCost{price: s.PricePerUnit, unit: deref(s.Unit)}
+				}
+			}
+		}
 	}
 	hundred := decimal.FromInt(100)
 	one := decimal.FromInt(1)
 	total := decimal.Zero
 	for _, l := range lines {
-		if l.IngredientID == nil {
-			continue
-		}
-		ing, ok := byID[*l.IngredientID]
-		if !ok {
-			continue
-		}
-		qty := l.Qty
-		if ing.WastePercent.IsPositive() {
-			divisor := decimal.Sub(one, decimal.DivRound(ing.WastePercent, hundred))
-			if divisor.IsPositive() {
-				qty = decimal.DivRound(qty, divisor)
+		switch {
+		case l.IngredientID != nil && *l.IngredientID != "":
+			ing, ok := byID[*l.IngredientID]
+			if !ok {
+				continue
 			}
+			qty := l.Qty
+			if ing.WastePercent.IsPositive() {
+				divisor := decimal.Sub(one, decimal.DivRound(ing.WastePercent, hundred))
+				if divisor.IsPositive() {
+					qty = decimal.DivRound(qty, divisor)
+				}
+			}
+			qtyStock := units.ConvertToStock(qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
+			total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
+		case l.SemiTypeID != nil && *l.SemiTypeID != "":
+			sc, ok := semiByType[*l.SemiTypeID]
+			if !ok || !sc.price.IsPositive() {
+				continue
+			}
+			qtyStock := units.Convert(l.Qty, deref(l.Unit), sc.unit)
+			total = decimal.Add(total, decimal.Mul(qtyStock, sc.price))
 		}
-		qtyStock := units.ConvertToStock(qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
-		total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
 	}
 	return decimal.Normalize(total)
 }

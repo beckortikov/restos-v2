@@ -71,6 +71,10 @@ const ME_DESC: Record<Exclude<EngineeringClass, ''>, string> = {
   dog: 'Мало продаж + низкая маржа',
 }
 
+// qty может быть дробным: у весовых блюд бэк нормализует к порциям (qty/unit_size),
+// поэтому 2.5 порц. — валидно. Целые показываем без хвоста.
+const fmtQty = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1))
+
 export default function AbcMenuPage() {
   const { canDo } = useAuth()
   const [report, setReport] = useState<ABCMenuReport | null>(null)
@@ -158,6 +162,7 @@ export default function AbcMenuPage() {
   const scatterData = items.map((item) => ({
     x: item.qty,
     y: item.margin,
+    z: item.revenue,
     name: item.name,
     abc: item.abc,
   }))
@@ -191,7 +196,7 @@ export default function AbcMenuPage() {
                 items.map(i => ({ ...i })),
                 [
                   { key: 'name', header: 'Блюдо' },
-                  { key: 'qty', header: 'Продано' },
+                  { key: 'qty', header: 'Продано (порц.)', format: (v) => Number(Number(v).toFixed(2)) },
                   { key: 'revenue', header: 'Выручка' },
                   { key: 'cogs', header: 'Себестоимость' },
                   { key: 'margin', header: 'Маржа %', format: (v) => Number(Number(v).toFixed(1)) },
@@ -259,16 +264,24 @@ export default function AbcMenuPage() {
         </div>
       )}
 
-      {/* Scatter chart: qty vs margin */}
+      {/* Scatter chart: qty vs margin — Boston Matrix с медианными осями */}
       <div className="bg-card rounded-xl border border-border p-5">
-        <h2 className="text-sm font-semibold text-foreground mb-1">Матрица: Объём продаж vs Маржинальность</h2>
-        <p className="text-xs text-muted-foreground mb-4">Размер точки = выручка</p>
+        <h2 className="text-sm font-semibold text-foreground mb-1">Матрица: Объём продаж × Маржинальность</h2>
+        <p className="text-xs text-muted-foreground mb-4">
+          Размер круга = выручка блюда. Пунктир — медианы продаж и маржи, они делят поле на 4 квадранта Menu Engineering.
+        </p>
         <AbcMenuScatter data={scatterData} />
-        <div className="flex items-center gap-4 mt-2 justify-center text-xs text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-3 justify-center text-xs text-muted-foreground">
           {(['A', 'B', 'C'] as ABCClass[]).map((cls) => (
             <span key={cls} className="flex items-center gap-1.5">
               <span className="size-2.5 rounded-full inline-block" style={{ backgroundColor: ABC_COLORS[cls] }} />
               Группа {cls}
+            </span>
+          ))}
+          <span className="text-border">|</span>
+          {(['star', 'workhorse', 'puzzle', 'dog'] as const).map((cls) => (
+            <span key={cls} className="flex items-center gap-1">
+              <span>{ME_EMOJI[cls]}</span>{ME_LABEL[cls]}
             </span>
           ))}
         </div>
@@ -292,7 +305,7 @@ export default function AbcMenuPage() {
                   <span className={`size-6 rounded font-bold text-xs flex items-center justify-center ${ABC_BG[item.abc]}`}>{item.abc}</span>
                 </td>
                 <td className="px-4 py-3 font-medium text-foreground">{item.name}</td>
-                <td className="px-4 py-3 text-foreground">{item.qty} порц.</td>
+                <td className="px-4 py-3 text-foreground tabular-nums">{fmtQty(item.qty)} порц.</td>
                 <td className="px-4 py-3 font-medium text-foreground">{formatCurrency(item.revenue)}</td>
                 <td className="px-4 py-3 text-muted-foreground">{item.share.toFixed(1)}%</td>
                 <td className="px-4 py-3">

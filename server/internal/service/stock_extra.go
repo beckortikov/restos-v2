@@ -107,8 +107,18 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 		}
 	}
 
+	isFood := true
+	if in.IsFood != nil {
+		isFood = *in.IsFood
+	}
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
+		// Склад по типу товара (мультисклад): новый товар сразу привязан.
+		wid, werr := resolveWarehouseID(tx, rid, isFood, false)
+		if werr != nil {
+			return werr
+		}
+		ing.WarehouseID = wid
 		if err := tx.Create(ing).Error; err != nil {
 			return err
 		}
@@ -123,6 +133,7 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 				Description:    &desc,
 				Qty:            initialQty,
 				Unit:           ing.Unit,
+				WarehouseID:    ing.WarehouseID,
 				RestaurantID:   &rid,
 				CreatedAt:      time.Now().UTC(),
 			}
@@ -516,6 +527,7 @@ func (s *StockReadsService) ListWriteoffsWithLines(ctx context.Context, f Writeo
 type MovementsFilter struct {
 	IngredientID string
 	Type         string
+	WarehouseID  string
 	From, To     *time.Time
 	Page         cursor.Page
 }
@@ -531,6 +543,9 @@ func (s *StockReadsService) ListMovements(ctx context.Context, f MovementsFilter
 	}
 	if f.Type != "" {
 		q = q.Where("type = ?", f.Type)
+	}
+	if f.WarehouseID != "" {
+		q = q.Where("warehouse_id = ?", f.WarehouseID)
 	}
 	if f.From != nil {
 		q = q.Where("created_at >= ?", *f.From)

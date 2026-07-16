@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/cursor"
@@ -648,6 +649,126 @@ func (s *SuppliersService) Delete(ctx context.Context, id string) error {
 		return apperrors.ErrNotFound
 	}
 	return nil
+}
+
+// SupplierPayDebtInput — тело POST /suppliers/{id}/pay-debt.
+type SupplierPayDebtInput struct {
+	Amount    string `json:"amount"`
+	AccountID string `json:"account_id"`
+}
+
+// RecomputeDebts пересчитывает current_debt ВСЕХ поставщиков из первоисточника:
+//
+//	current_debt = Σ(stock_receipts.debt_amount данного поставщика)
+//	             − Σ(оплат долга: financial_operations category='supplier_payment')
+//
+// Нужен, когда денормализованное поле разошлось с реальностью: миграция бэкфилла
+// (035) не отработала после восстановления из бэкапа / обновления со старой
+// версии, где её ещё не было. Это ручной само-ремонт «в один клик» — не полагаемся
+// на одноразовую миграцию. Каст обеих сторон к text — против дрейфа типов uuid/text.
+// GREATEST(0,…) — долг не уходит в минус. Возвращает число обновлённых строк.
+func (s *SuppliersService) RecomputeDebts(ctx context.Context) (int64, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	res := s.r.Raw().WithContext(ctx).Exec(`
+		UPDATE suppliers s SET
+		  current_debt = GREATEST(0,
+		    COALESCE((SELECT SUM(sr.debt_amount) FROM stock_receipts sr
+		              WHERE sr.supplier_id::text = s.id::text), 0)
+		    - COALESCE((SELECT SUM(fo.amount) FROM financial_operations fo
+		                WHERE fo.category = 'supplier_payment'
+		                  AND fo.counterparty = s.name
+		                  AND fo.restaurant_id::text = s.restaurant_id::text), 0)
+		  ),
+		  updated_at = now()
+		WHERE s.restaurant_id = ?`, rid)
+	if res.Error != nil {
+		return 0, res.Error
+	}
+	return res.RowsAffected, nil
+}
+
+// PayDebt — гашение долга поставщику. Атомарно: списывает сумму со счёта,
+// уменьшает supplier.current_debt, создаёт financial_operation out
+// category='supplier_payment'. Это гашение обязательства, а НЕ операционный
+// расход (расход признаётся как COGS при продаже товара), поэтому категория
+// исключена из opex ОПиУ. Переплатить долг нельзя (сумма клампится к остатку).
+func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPayDebtInput) (*models.Supplier, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	amount, err := decimal.FromString(in.Amount)
+	if err != nil || !decimal.IsPositive(amount) {
+		return nil, apperrors.Wrap("VALIDATION", "amount must be > 0", err)
+	}
+	if in.AccountID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	now := time.Now().UTC()
+	var out *models.Supplier
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var sup models.Supplier
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, id).First(&sup).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		if !decimal.IsPositive(sup.CurrentDebt) {
+			return apperrors.Wrap("CONFLICT", "no outstanding debt", nil)
+		}
+		pay := amount
+		if pay.GreaterThan(sup.CurrentDebt) {
+			pay = sup.CurrentDebt // не переплачиваем долг
+		}
+		var acc models.FinancialAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, in.AccountID).First(&acc).Error; err != nil {
+			return apperrors.Wrap("VALIDATION", "account not found", err)
+		}
+		newBal := decimal.Normalize(decimal.Sub(acc.Balance, pay))
+		if decimal.IsNegative(newBal) {
+			return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)
+		}
+		if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		sup.CurrentDebt = decimal.Normalize(decimal.Sub(sup.CurrentDebt, pay))
+		if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		opType := "out"
+		opCat := "supplier_payment"
+		opActivity := "operational"
+		opDate := now.Format("2006-01-02")
+		isAuto := true
+		desc := "Оплата долга поставщику"
+		if sup.Name != nil && *sup.Name != "" {
+			desc = "Оплата долга: " + *sup.Name
+		}
+		accID := in.AccountID
+		ridStr := rid
+		fo := &models.FinancialOperation{
+			ID: uuid.NewString(), Type: &opType, Amount: pay, Category: &opCat,
+			AccountID: &accID, AccountName: acc.Name, Activity: &opActivity, Date: &opDate,
+			Description: &desc, Counterparty: sup.Name, IsAuto: &isAuto,
+			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := tx.Create(fo).Error; err != nil {
+			return err
+		}
+		out = &sup
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // ─── Reservations ──────────────────────────────────────────────────────────

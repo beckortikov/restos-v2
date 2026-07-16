@@ -30,6 +30,9 @@ class KdsBoardViewModel @Inject constructor(
         val loading: Boolean = true,
         val error: String? = null,
         val items: List<KdsItemDto> = emptyList(),
+        // Момент (по монотонным часам планшета), когда пришёл текущий список.
+        // Возраст блюда = item.ageSeconds (серверный) + (сейчас - fetchedAtMs).
+        val fetchedAtMs: Long = 0,
         // Отменённые блюда — держим отдельно от активной доски, чтобы refresh()
         // (перечитывающий только items) их не стирал. Показываются красными
         // карточками сверху «Новых», пока повар не закроет вручную.
@@ -37,6 +40,9 @@ class KdsBoardViewModel @Inject constructor(
         val soundEnabled: Boolean = true,
         val soundId: Int = 0,
         val cancelAlert: String? = null,
+        // id блюд, по которым только что вызвали официанта — колокольчик зеленеет
+        // «Вызван» на несколько секунд.
+        val calledItems: Set<String> = emptySet(),
         val stations: List<String> = emptyList(),          // выбранные; пусто = все
         val availableStations: List<String> = emptyList(), // все станции ресторана (из API)
     )
@@ -97,8 +103,31 @@ class KdsBoardViewModel @Inject constructor(
             refresh()
             return
         }
+        // Вызов официанта — это событие ДЛЯ официанта, кухне доску обновлять не надо.
+        if (evt is ServerEvent.WaiterCalled) return
         // Новое блюдо — по дифу в refresh (надёжнее, чем гадать по типу события).
         refresh()
+    }
+
+    /**
+     * Повар нажал колокольчик — зовём официанта заказа на кухню. Оптимистично
+     * помечаем блюдо «Вызван» на 5с; при ошибке снимаем метку и показываем баннер.
+     */
+    fun callWaiter(item: KdsItemDto) {
+        _state.update { it.copy(calledItems = it.calledItems + item.id) }
+        viewModelScope.launch {
+            runCatching { repo.callWaiter(item.id) }
+                .onFailure {
+                    _state.update {
+                        it.copy(
+                            calledItems = it.calledItems - item.id,
+                            cancelAlert = "Не удалось вызвать официанта",
+                        )
+                    }
+                }
+            delay(5000)
+            _state.update { it.copy(calledItems = it.calledItems - item.id) }
+        }
     }
 
     /**
@@ -106,28 +135,17 @@ class KdsBoardViewModel @Inject constructor(
      * играем сигнал и показываем баннер с названием и номером заказа.
      */
     private fun handleVoided(evt: ServerEvent.ItemVoided) {
+        // Показываем отмену ТОЛЬКО если блюдо есть на ЭТОЙ доске (нужная станция).
+        // Событие order.item.voided broadcast'ится по всему ресторану, поэтому без
+        // этой проверки холодный цех сигналил бы об отмене ГОРЯЧЕГО блюда (и наоборот).
+        val itemId = evt.itemId ?: return
+        val onBoard = _state.value.items.firstOrNull { it.id == itemId } ?: return
+
         if (_state.value.soundEnabled) sounds.playCancel()
 
-        // Полные данные берём с доски (там есть станция/стол/кол-во); если блюдо
-        // уже ушло с доски — восстанавливаем из полей события.
-        val itemId = evt.itemId
-        val onBoard = itemId?.let { id -> _state.value.items.firstOrNull { it.id == id } }
-        val card = when {
-            onBoard != null -> onBoard.copy(cancelled = true, stationStatus = "pending")
-            itemId != null -> KdsItemDto(
-                id = itemId,
-                orderId = evt.orderId ?: "",
-                orderNumber = evt.orderNumber ?: 0,
-                name = evt.name ?: "Блюдо",
-                qty = evt.qty ?: "1",
-                stationStatus = "pending",
-                cancelled = true,
-            )
-            else -> null // без id карточку не построить — покажем только баннер
-        }
-
-        val name = onBoard?.name?.takeIf { it.isNotBlank() } ?: evt.name
-        val num = (onBoard?.orderNumber?.takeIf { it > 0 }) ?: evt.orderNumber?.takeIf { it > 0 }
+        val card = onBoard.copy(cancelled = true, stationStatus = "pending")
+        val name = onBoard.name.takeIf { it.isNotBlank() } ?: evt.name
+        val num = onBoard.orderNumber.takeIf { it > 0 } ?: evt.orderNumber?.takeIf { it > 0 }
         val alert = when {
             !name.isNullOrBlank() && num != null -> "Блюдо «$name» отменено · Заказ #$num"
             !name.isNullOrBlank() -> "Блюдо «$name» отменено"
@@ -135,12 +153,12 @@ class KdsBoardViewModel @Inject constructor(
         }
 
         _state.update { s ->
-            val already = card != null && s.cancelledItems.any { it.id == card.id }
+            val already = s.cancelledItems.any { it.id == card.id }
             s.copy(
-                cancelledItems = if (card != null && !already) s.cancelledItems + card else s.cancelledItems,
+                cancelledItems = if (already) s.cancelledItems else s.cancelledItems + card,
                 // Убираем из активной доски сразу, чтобы блюдо не мигало в своей
                 // колонке до следующего refresh.
-                items = if (card != null) s.items.filterNot { it.id == card.id } else s.items,
+                items = s.items.filterNot { it.id == card.id },
                 cancelAlert = alert,
             )
         }
@@ -161,7 +179,15 @@ class KdsBoardViewModel @Inject constructor(
                     val ring = loaded && added.isNotEmpty()
                     knownIds = newIds
                     loaded = true
-                    _state.update { it.copy(loading = false, error = null, items = list) }
+                    _state.update {
+                        it.copy(
+                            loading = false, error = null, items = list,
+                            // Те же часы, что тикают на экране (System.currentTimeMillis):
+                            // считаем ТОЛЬКО дельту с момента загрузки, поэтому кривой
+                            // абсолютный сдвиг часов планшета не важен.
+                            fetchedAtMs = System.currentTimeMillis(),
+                        )
+                    }
                     // Пришло новое блюдо на доску → сигнал (если звук вкл).
                     if (ring && _state.value.soundEnabled) sounds.playNew(_state.value.soundId)
                 }

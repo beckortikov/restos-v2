@@ -18,6 +18,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -107,6 +108,11 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		tip, err = decimal.FromString(in.TipAmount)
 		if err != nil {
 			return nil, nil, apperrors.Wrap("VALIDATION", "bad tip_amount", err)
+		}
+		// Отрицательные чаевые занижали total_with_service (а с ним и требуемую
+		// Σ payments) — работали как невалидируемая скидка в обход approval-гейта.
+		if decimal.IsNegative(tip) {
+			return nil, nil, apperrors.Wrap("VALIDATION", "tip_amount must be >= 0", nil)
 		}
 	}
 
@@ -367,18 +373,86 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				}).Error
 		}
 
-		if isMulti {
-			for _, p := range in.Payments {
-				amt, _ := decimal.FromString(p.Amount)
-				amtN := decimal.Normalize(amt)
-				acc := p.AccountID
+		// Идемпотентность выручки (ретрай/гонка двойного close): если по
+		// заказу уже есть revenue-FO — НЕ постим выручку/кредит счёта/агрегаты
+		// смены повторно. Склад ниже уже идемпотентен по тому же source_ref.
+		// Reopen сторнирует revenue-FO (reverseCloseFinancials), поэтому
+		// reopen→reclose сюда попадает с alreadyPosted=false и постит
+		// выручку заново — уже по новой сумме.
+		var revExisting int64
+		if err := tx.Model(&models.FinancialOperation{}).
+			Where("restaurant_id = ? AND source_ref = ? AND category = ?", rid, opSourceRef, opCat).
+			Count(&revExisting).Error; err != nil {
+			return err
+		}
+		alreadyPosted := revExisting > 0
+
+		if !alreadyPosted {
+			// Валидируем СУЩЕСТВОВАНИЕ счетов ДО кредита: creditAccount ниже — это
+			// UPDATE ... WHERE id=?, при несуществующем/пустом id молча меняет 0
+			// строк → revenue-FO создаётся, а баланс «Кассы» не растёт (расхождение
+			// ДДС↔Касса). Теперь несуществующий счёт → явная ошибка.
+			var accIDs []string
+			if isMulti {
+				for _, p := range in.Payments {
+					accIDs = append(accIDs, p.AccountID)
+				}
+			} else {
+				if in.AccountID == "" {
+					return apperrors.Wrap("VALIDATION", "account_id is required to post revenue", nil)
+				}
+				accIDs = append(accIDs, in.AccountID)
+			}
+			for _, aid := range accIDs {
+				var cnt int64
+				if err := tx.Model(&models.FinancialAccount{}).
+					Where("restaurant_id = ? AND id = ?", rid, aid).
+					Count(&cnt).Error; err != nil {
+					return err
+				}
+				if cnt == 0 {
+					return apperrors.Wrap("VALIDATION", "financial account not found: "+aid, nil)
+				}
+			}
+
+			if isMulti {
+				for _, p := range in.Payments {
+					amt, _ := decimal.FromString(p.Amount)
+					amtN := decimal.Normalize(amt)
+					acc := p.AccountID
+					finOp := &models.FinancialOperation{
+						ID:           uuid.NewString(),
+						Type:         &opType,
+						Amount:       amtN,
+						Category:     &opCat,
+						Activity:     &opActivity,
+						AccountID:    &acc,
+						Date:         &opDate,
+						Description:  &opDesc,
+						IsAuto:       &opAuto,
+						SourceRef:    &opSourceRef,
+						RestaurantID: &rid,
+						ShiftID:      &shiftID,
+						CreatedAt:    now,
+						UpdatedAt:    now,
+					}
+					if err := tx.Create(finOp).Error; err != nil {
+						return err
+					}
+					if err := creditAccount(acc, amtN); err != nil {
+						return err
+					}
+					applied = append(applied, payApplied{Method: p.Method, Amount: amtN})
+				}
+			} else {
+				opAccount := in.AccountID
 				finOp := &models.FinancialOperation{
 					ID:           uuid.NewString(),
 					Type:         &opType,
-					Amount:       amtN,
+					Amount:       order.TotalWithService,
 					Category:     &opCat,
 					Activity:     &opActivity,
-					AccountID:    &acc,
+					AccountID:    &opAccount,
 					Date:         &opDate,
 					Description:  &opDesc,
 					IsAuto:       &opAuto,
@@ -391,75 +465,50 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				if err := tx.Create(finOp).Error; err != nil {
 					return err
 				}
-				if err := creditAccount(acc, amtN); err != nil {
+				if err := creditAccount(opAccount, order.TotalWithService); err != nil {
 					return err
 				}
-				applied = append(applied, payApplied{Method: p.Method, Amount: amtN})
+				applied = append(applied, payApplied{Method: in.PaymentMethod, Amount: order.TotalWithService})
 			}
-		} else {
-			opAccount := in.AccountID
-			finOp := &models.FinancialOperation{
-				ID:           uuid.NewString(),
-				Type:         &opType,
-				Amount:       order.TotalWithService,
-				Category:     &opCat,
-				Activity:     &opActivity,
-				AccountID:    &opAccount,
-				Date:         &opDate,
-				Description:  &opDesc,
-				IsAuto:       &opAuto,
-				SourceRef:    &opSourceRef,
-				RestaurantID: &rid,
-				ShiftID:      &shiftID,
-				CreatedAt:    now,
-				UpdatedAt:    now,
-			}
-			if err := tx.Create(finOp).Error; err != nil {
-				return err
-			}
-			if err := creditAccount(opAccount, order.TotalWithService); err != nil {
-				return err
-			}
-			applied = append(applied, payApplied{Method: in.PaymentMethod, Amount: order.TotalWithService})
-		}
 
-		// 6. Stock deduct через tech_card_lines.
-		//
-		// Идемпотентность: смотрим, не было ли уже movements для этого заказа.
-		// description = "order:{id}" — наша конвенция.
-		var existing int64
-		if err := tx.Model(&models.StockMovement{}).
-			Where("restaurant_id = ? AND description = ?", rid, opSourceRef).
-			Count(&existing).Error; err != nil {
-			return err
-		}
-		if existing == 0 {
-			if err := s.deductStockForOrder(tx, rid, &order, opSourceRef, now); err != nil {
+			// 6. Stock deduct через tech_card_lines.
+			//
+			// Идемпотентность: смотрим, не было ли уже movements для этого заказа.
+			// description = "order:{id}" — наша конвенция.
+			var existing int64
+			if err := tx.Model(&models.StockMovement{}).
+				Where("restaurant_id = ? AND description = ?", rid, opSourceRef).
+				Count(&existing).Error; err != nil {
 				return err
 			}
-		}
-
-		// 7. Update shift aggregates (по каждому payment split-у отдельно).
-		for _, p := range applied {
-			switch p.Method {
-			case "cash":
-				shift.CashRevenue = decimal.Add(shift.CashRevenue, p.Amount)
-			case "card":
-				shift.CardRevenue = decimal.Add(shift.CardRevenue, p.Amount)
+			if existing == 0 {
+				if err := s.deductStockForOrder(tx, rid, &order, opSourceRef, now); err != nil {
+					return err
+				}
 			}
-		}
-		ordersCount := 1
-		if shift.OrdersCount != nil {
-			ordersCount = *shift.OrdersCount + 1
-		}
-		shift.OrdersCount = &ordersCount
-		// avg_check пересчитываем: (cash+card)/count
-		total := decimal.Add(shift.CashRevenue, shift.CardRevenue)
-		shift.AvgCheck = decimal.Normalize(decimal.DivRound(total, decimal.FromInt(int64(ordersCount))))
-		shift.UpdatedAt = now
-		if err := tx.Save(&shift).Error; err != nil {
-			return err
-		}
+
+			// 7. Update shift aggregates (по каждому payment split-у отдельно).
+			for _, p := range applied {
+				switch p.Method {
+				case "cash":
+					shift.CashRevenue = decimal.Add(shift.CashRevenue, p.Amount)
+				case "card":
+					shift.CardRevenue = decimal.Add(shift.CardRevenue, p.Amount)
+				}
+			}
+			ordersCount := 1
+			if shift.OrdersCount != nil {
+				ordersCount = *shift.OrdersCount + 1
+			}
+			shift.OrdersCount = &ordersCount
+			// avg_check пересчитываем: (cash+card)/count
+			total := decimal.Add(shift.CashRevenue, shift.CardRevenue)
+			shift.AvgCheck = decimal.Normalize(decimal.DivRound(total, decimal.FromInt(int64(ordersCount))))
+			shift.UpdatedAt = now
+			if err := tx.Save(&shift).Error; err != nil {
+				return err
+			}
+		} // end if !alreadyPosted — выручка/кредит/склад/агрегаты постятся ОДИН раз
 
 		// 8. Enqueue receipt print job (fire-and-forget: worker отправит после commit).
 		//    SkipReceipt — кассир явно выбрал «Закрыть без печати» в sidebar'е;
@@ -641,8 +690,11 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 					return err
 				}
 			case line.SemiTypeID != nil:
-				// Каскад: для каждого ингредиента в semi_recipe_lines.
-				if err := s.cascadeSemiDeduct(tx, restaurantID, *line.SemiTypeID, lineQty, sourceRef, now, 0); err != nil {
+				// iiko-модель: сперва расходуем ГОТОВУЮ заготовку со склада, а
+				// нехватку разузловываем в сырьё. Раньше всегда каскадили в сырьё
+				// (cascadeSemiDeduct), игнорируя остаток заготовки, — из-за чего при
+				// использовании предзаготовки (Prepare) сырьё списывалось дважды.
+				if err := s.deductSemiForSale(tx, restaurantID, *line.SemiTypeID, lineQty, deref(line.Unit), sourceRef, now); err != nil {
 					return err
 				}
 			}
@@ -700,6 +752,93 @@ func writeIngredientDeduct(
 // мы делим на yield/100, чтобы получить сырьё «до уварки»).
 //
 // depth — текущая глубина (защита от циклов: max 5).
+// deductSemiForSale — списание заготовки при продаже по модели iiko: сперва
+// расходуем ГОТОВЫЙ остаток semi_finished_stock (сырьё для него уже списано в
+// Prepare), а нехватку разузловываем в базовые ингредиенты (cascadeSemiDeduct,
+// «на лету»). Раньше при продаже ВСЕГДА каскадили в сырьё, игнорируя остаток
+// заготовки, — при использовании предзаготовки сырьё уходило дважды (баг C1).
+//
+// lineQty — потребность в единице тех-карты блюда (lineUnit); приводим к единице
+// заготовки. yield_percent при расходе готовой заготовки НЕ применяется (он уже
+// учтён при производстве); cascadeSemiDeduct применит его только к остатку-нехватке.
+func (s *OrdersService) deductSemiForSale(
+	tx *gorm.DB,
+	restaurantID, semiTypeID string,
+	lineQty decimal.Decimal,
+	lineUnit, sourceRef string,
+	now time.Time,
+) error {
+	var sft models.SemiFinishedType
+	if err := tx.Where("restaurant_id = ? AND id = ?", restaurantID, semiTypeID).
+		First(&sft).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // заготовка не настроена — не блокируем закрытие
+		}
+		return err
+	}
+	needed := units.Convert(lineQty, lineUnit, deref(sft.OutputUnit))
+	if !decimal.IsPositive(needed) {
+		return nil
+	}
+
+	// Готовый остаток заготовки (с блокировкой строки от гонок параллельных продаж).
+	var stock models.SemiFinishedStock
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("restaurant_id = ? AND semi_type_id = ?", restaurantID, semiTypeID).
+		First(&stock).Error
+	hasStock := err == nil
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	fromStock := decimal.Zero
+	if hasStock && decimal.IsPositive(stock.Qty) {
+		if stock.Qty.GreaterThanOrEqual(needed) {
+			fromStock = needed
+		} else {
+			fromStock = stock.Qty // частичная нехватка — берём сколько есть
+		}
+	}
+
+	// 1. Расход готовой заготовки со склада (сырьё уже списано при Prepare).
+	if decimal.IsPositive(fromStock) {
+		stock.Qty = decimal.Normalize(decimal.Sub(stock.Qty, fromStock))
+		stock.UpdatedAt = now
+		if err := tx.Save(&stock).Error; err != nil {
+			return err
+		}
+		// Маркер-движение (semi_out, без ингредиента — хук денорма его пропускает):
+		// 1) идемпотентность close считает движения по description=order:{id} —
+		//    без маркера блюдо ТОЛЬКО из заготовки не оставляло следа и могло
+		//    списаться повторно при reopen→reclose; 2) аудит расхода п/ф.
+		mvType := "semi_out"
+		desc := sourceRef
+		u := deref(sft.OutputUnit)
+		mv := &models.StockMovement{
+			ID:             uuid.NewString(),
+			Type:           &mvType,
+			Description:    &desc,
+			IngredientName: sft.Name,
+			Qty:            decimal.Normalize(fromStock).Neg(),
+			Unit:           &u,
+			RestaurantID:   &restaurantID,
+			CreatedAt:      now,
+		}
+		if err := tx.Create(mv).Error; err != nil {
+			return err
+		}
+	}
+
+	// 2. Нехватку разузловываем в сырьё (модель «на лету»); cascadeSemiDeduct сам
+	//    применит yield_percent к этому остатку.
+	if remainder := decimal.Sub(needed, fromStock); decimal.IsPositive(remainder) {
+		if err := s.cascadeSemiDeduct(tx, restaurantID, semiTypeID, remainder, sourceRef, now, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *OrdersService) cascadeSemiDeduct(
 	tx *gorm.DB,
 	restaurantID, semiTypeID string,
@@ -788,8 +927,9 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 	// Если не настроен — заказ всё равно закрываем (close_order не должен падать),
 	// просто кладём job без printer_id и worker сам резолвит / помечает failed.
 	var receiptP models.Printer
-	hasReceiptP := tx.Where("restaurant_id = ? AND kind = 'receipt' AND is_default = TRUE AND enabled = TRUE",
-		restaurantID).First(&receiptP).Error == nil
+	// Дефолтный чековый принтер, иначе единственный включённый (is_default DESC).
+	hasReceiptP := tx.Where("restaurant_id = ? AND kind = 'receipt' AND enabled = TRUE", restaurantID).
+		Order("is_default DESC, created_at ASC").First(&receiptP).Error == nil
 
 	// 2b. Догружаем стол/зону/официанта/кассира — без них чек шёл без шапки
 	// "Стол / Официант / Кассир" (баг v2.0.99).

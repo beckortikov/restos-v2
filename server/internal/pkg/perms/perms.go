@@ -17,8 +17,10 @@ var roleDefaults = map[string]map[string]bool{
 		"orders.service_charge": true,
 	},
 	"cashier": {
+		// orders.refund / orders.edit — выключены по умолчанию (чувствительные:
+		// возврат и переоткрытие закрытого). Выдаются вручную в матрице доступов.
 		"orders.create": true, "orders.close": true, "orders.void": true,
-		"orders.refund": true, "orders.reprint": true, "orders.view_others": true,
+		"orders.reprint": true, "orders.view_others": true,
 		"orders.service_charge": true,
 		"tables.reserve":        true, "shifts.manage": true, "pos.access": true,
 		"showcase.view": true, "customers.manage": true, "printers.manage": true,
@@ -40,7 +42,7 @@ var roleDefaults = map[string]map[string]bool{
 // lib/types.ts). Нужен для owner/manager (все права = true) в Effective.
 var AllPermissions = []string{
 	"orders.create", "orders.close", "orders.cancel", "orders.void",
-	"orders.refund", "orders.reprint", "orders.view_others", "orders.create_stopped",
+	"orders.refund", "orders.edit", "orders.reprint", "orders.view_others", "orders.create_stopped",
 	"orders.service_charge",
 	"kitchen.cooking", "tables.edit", "tables.reserve", "shifts.manage", "shifts.history", "pos.access", "showcase.view",
 	"inventory.view", "inventory.manage", "suppliers.manage",

@@ -104,6 +104,7 @@ func NewRouter(deps Deps) http.Handler {
 	menuSvc := service.NewMenuService(rep)
 	tablesSvc := service.NewTablesService(rep)
 	stockSvc := service.NewStockService(rep)
+	warehouseSvc := service.NewWarehouseService(rep)
 	shiftsSvc := service.NewShiftsService(rep)
 	hub := deps.Hub
 	if hub == nil {
@@ -166,6 +167,7 @@ func NewRouter(deps Deps) http.Handler {
 	networkH := handlers.NewNetwork(service.NewNetworkService(rep))
 	syncH := handlers.NewSync(service.NewSyncService(rep))
 	syncSettingsH := handlers.NewSyncSettings(service.NewSyncSettingsService(rep))
+	warehouseH := handlers.NewWarehouse(warehouseSvc)
 	shiftsH := handlers.NewShifts(shiftsSvc)
 	ordersH := handlers.NewOrders(ordersSvc)
 	kdsH := handlers.NewKDS(kdsSvc)
@@ -245,6 +247,35 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/users/validate-pin", usersH.ValidatePIN)
 		})
 
+		// Восстановление из бэкапа ДО первичной инициализации (пустая база) —
+		// аварийный возврат данных без создания временного ресторана прямо с
+		// экрана «Инициализация». Гейт requireNotInitialized: как только ресторан
+		// существует, эти маршруты 409, и восстановление доступно только после
+		// логина (авторизованный /backup/*). Пока данных нет — защищать нечего,
+		// поэтому разрешаем без auth. Отдельная группа: свой 5-мин таймаут под
+		// pg_restore (публичная группа выше имеет 10 c — мало).
+		requireNotInitialized := func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ok, err := bootstrapSvc.IsInitialized(r.Context())
+				if err != nil {
+					writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+					return
+				}
+				if ok {
+					writeJSON(w, http.StatusConflict, map[string]any{"error": "система уже инициализирована — восстановление доступно после входа"})
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		}
+		api.Group(func(g chi.Router) {
+			g.Use(chimw.Timeout(5 * time.Minute))
+			g.Use(requireNotInitialized)
+			g.Get("/bootstrap/backups", backupH.List)
+			g.Post("/bootstrap/restore", backupH.RestoreUpload)
+			g.Post("/bootstrap/restore/{name}", backupH.RestoreExisting)
+		})
+
 		// Защищённые endpoints с обычным таймаутом.
 		api.Group(func(g chi.Router) {
 			g.Use(chimw.Timeout(30 * time.Second))
@@ -255,12 +286,14 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/auth/logout", authH.Logout)
 
 			g.Get("/menu/items", menuH.ListItems)
+			g.Get("/menu/items/{id}/attributes", menuH.GetAttributes)
 			g.Get("/menu/categories", menuH.ListCategories)
 
 			g.Get("/zones", tablesH.ListZones)
 			g.Get("/tables", tablesH.ListTables)
 
 			g.Get("/stock/ingredients", stockH.ListIngredients)
+			g.Get("/warehouses", warehouseH.List)
 			g.Get("/stock/ingredient-categories", stockReadsH.ListCategories)
 			g.Get("/stock/receipts", stockReadsH.ListReceipts)
 			g.Get("/stock/writeoffs", stockReadsH.ListWriteoffs)
@@ -440,6 +473,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Use(middleware.Idempotency(idemSvc))
 
 			g.Post("/kds/items/{id}/status", kdsH.SetStatus)
+			g.Post("/kds/items/{id}/call-waiter", kdsH.CallWaiter)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)
@@ -506,6 +540,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/stock/inventory", inventoryH.Create)
 			g.Post("/stock/inventory/{id}/apply", inventoryH.Apply)
 			g.Post("/stock/ingredients", ingredientsWriteH.Create)
+			g.Post("/warehouses/transfer", warehouseH.Transfer)
 			g.Patch("/stock/ingredients/{id}", ingredientsWriteH.Patch)
 			g.Delete("/stock/ingredients/{id}", ingredientsWriteH.Delete)
 			g.Post("/supply-expenses", supplyExpensesH.Create)
@@ -513,6 +548,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/menu/items", menuH.CreateItem)
 			g.Patch("/menu/items/{id}", menuH.PatchItem)
 			g.Delete("/menu/items/{id}", menuH.DeleteItem)
+			g.Put("/menu/items/{id}/attributes", menuH.PutAttributes)
 			g.Post("/menu/categories", menuH.CreateCategory)
 			g.Patch("/menu/categories/{id}", menuH.PatchCategory)
 			g.Delete("/menu/categories/{id}", menuH.DeleteCategory)
@@ -538,7 +574,9 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/customers/{id}/stats", customersH.IncrementStats)
 			g.Delete("/customers/{id}", customersH.Delete)
 			g.Post("/suppliers", suppliersH.Create)
+			g.Post("/suppliers/recompute-debts", suppliersH.RecomputeDebts)
 			g.Patch("/suppliers/{id}", suppliersH.Patch)
+			g.Post("/suppliers/{id}/pay-debt", suppliersH.PayDebt)
 			g.Delete("/suppliers/{id}", suppliersH.Delete)
 			g.Post("/reservations", reservationsH.Create)
 			g.Patch("/reservations/{id}", reservationsH.Patch)

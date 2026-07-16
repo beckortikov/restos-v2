@@ -61,6 +61,18 @@ func (h *KDSHandler) SetStatus(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, item)
 }
 
+// CallWaiter — POST /api/v1/kds/items/{id}/call-waiter.
+// Повар зовёт официанта заказа на кухню. Возвращает {waiter_name}.
+func (h *KDSHandler) CallWaiter(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	name, err := h.svc.CallWaiter(r.Context(), id)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"waiter_name": name})
+}
+
 // csvParam читает CSV query-параметр в срез непустых значений.
 func csvParam(r *http.Request, key string) []string {
 	raw := strings.TrimSpace(r.URL.Query().Get(key))

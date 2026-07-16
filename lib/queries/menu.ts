@@ -1,6 +1,6 @@
 import { api, unwrap, V4Error } from './_client'
 import { randomId } from '../random-id'
-import type { MenuItem } from '../types'
+import type { MenuItem, MenuAttribute } from '../types'
 import { logAction } from './audit'
 import { calcCogsFromTechCard } from './_mappers'
 
@@ -16,10 +16,13 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
   // меню и из Склад→Меню. Идём по next_cursor, пока он не пуст.
   const items: Record<string, unknown>[] = []
   const ingredientPrices = new Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>()
+  const semiPrices = new Map<string, { price: number; unit: string }>()
   let cursor: string | undefined
   for (let guard = 0; guard < 200; guard++) {
     const query: { limit: number; include?: string; cursor?: string } = { limit: 200 }
-    if (includeTC) query.include = 'tech_cards,ingredient_prices'
+    // attributes — всегда: без них не сгруппировать варианты (parent_id +
+    // variant_value_ids) и не показать пикер комбинаций в POS.
+    query.include = includeTC ? 'tech_cards,ingredient_prices,attributes' : 'attributes'
     if (cursor) query.cursor = cursor
     const res: any = await unwrap(api.GET('/api/v1/menu/items', { params: { query: query as any } }))
     const page: Record<string, unknown>[] = res?.data ?? []
@@ -37,6 +40,10 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
           unitWeightUnit: (v?.unit_weight_unit as string) || '',
         })
       }
+      const spMap = (res?.semi_prices ?? {}) as Record<string, { price?: unknown; unit?: unknown }>
+      for (const [id, v] of Object.entries(spMap)) {
+        semiPrices.set(id, { price: Number(v?.price) || 0, unit: (v?.unit as string) || '' })
+      }
     }
     cursor = (res?.next_cursor as string) || undefined
     if (!cursor || page.length === 0) break
@@ -53,11 +60,13 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
     }
   }
 
-  return items.map(r => mapMenuItem(r, techByItem.get(r.id as string) ?? [], ingredientPrices)) as MenuItem[]
+  return items.map(r => mapMenuItem(r, techByItem.get(r.id as string) ?? [], ingredientPrices, semiPrices)) as MenuItem[]
 }
 
-export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
-  const purchased = (item as any).isPurchased === true
+export async function createMenuItem(
+  item: Omit<MenuItem, 'id'> & { purchasePrice?: number; purchaseUnit?: string; purchaseMinQty?: number },
+) {
+  const purchased = item.isPurchased === true
   const body: any = {
     name: item.name,
     category: item.category,
@@ -78,11 +87,11 @@ export async function createMenuItem(item: Omit<MenuItem, 'id'>) {
   // Покупной товар: бэк сам создаёт складской ингредиент + 1:1 техкарту.
   if (purchased) {
     body.is_purchased = true
-    body.purchase_price = String((item as any).purchasePrice ?? item.cogs ?? 0)
-    body.purchase_unit = (item as any).purchaseUnit || 'piece'
-    body.purchase_min_qty = String((item as any).purchaseMinQty ?? 0)
+    body.purchase_price = String(item.purchasePrice ?? item.cogs ?? 0)
+    body.purchase_unit = item.purchaseUnit || 'piece'
+    body.purchase_min_qty = String(item.purchaseMinQty ?? 0)
   }
-  const data: any = await unwrap(api.POST('/api/v1/menu/items', { body: body as any }))
+  const data: any = await unwrap(api.POST('/api/v1/menu/items', { body }))
   const newId: string | undefined = data?.id
   const validTechLines = purchased ? [] : item.techCard.filter(l => l.ingredientId || l.semiId)
   if (validTechLines.length > 0 && newId) {
@@ -165,7 +174,7 @@ export async function createMenuCategory(name: string): Promise<MenuCategory> {
     nextOrder = rows.reduce((max, r) => Math.max(max, (r.sort_order as number) ?? 0), 0) + 1
   } catch {}
 
-  const created: any = await unwrap(api.POST('/api/v1/menu/categories', { body: { name, sort_order: nextOrder } as any }))
+  const created: any = await unwrap(api.POST('/api/v1/menu/categories', { body: { name, sort_order: nextOrder } }))
   return {
     id: (created?.id as string) ?? randomId(),
     name: (created?.name as string) ?? name,
@@ -186,7 +195,7 @@ export async function seedMenuCategories(_restaurantId: string): Promise<number>
   let count = 0
   for (let i = 0; i < SEED_MENU_CATEGORIES.length; i++) {
     try {
-      await unwrap(api.POST('/api/v1/menu/categories', { body: { name: SEED_MENU_CATEGORIES[i], sort_order: i } as any }))
+      await unwrap(api.POST('/api/v1/menu/categories', { body: { name: SEED_MENU_CATEGORIES[i], sort_order: i } }))
       count++
     } catch {}
   }
@@ -227,7 +236,7 @@ export async function fetchIngredientCategories(): Promise<string[]> {
 }
 
 export async function toggleMenuAvailability(id: string, isAvailable: boolean) {
-  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { is_available: isAvailable } as any }))
+  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { is_available: isAvailable } }))
 }
 
 export async function uploadDishImage(file: File): Promise<string> {
@@ -309,8 +318,75 @@ export async function updateMenuItem(id: string, data: Partial<{
   logAction('menu.edit', 'menu_item', id, data.name)
 }
 
+// ─── Атрибуты и варианты ────────────────────────────────────────────────────
+
+export interface ProductAttributesState {
+  attributes: MenuAttribute[]
+  variants: MenuItem[]
+}
+
+function mapAttributesState(res: Record<string, unknown>): ProductAttributesState {
+  const attrs = Array.isArray(res.attributes) ? (res.attributes as Record<string, unknown>[]) : []
+  const variants = Array.isArray(res.variants) ? (res.variants as Record<string, unknown>[]) : []
+  return {
+    attributes: attrs.map(a => ({
+      id: a.id as string,
+      name: (a.name as string) ?? '',
+      values: (Array.isArray(a.values) ? (a.values as Record<string, unknown>[]) : []).map(v => ({
+        id: v.id as string,
+        label: (v.label as string) ?? '',
+      })),
+    })),
+    variants: variants.map(v => ({
+      ...(mapMenuItem(v, [], new Map())),
+      variantValueIds: Array.isArray(v.value_ids) ? (v.value_ids as string[]) : [],
+    })),
+  }
+}
+
+export async function fetchMenuAttributes(productId: string): Promise<ProductAttributesState> {
+  const res = await unwrap(api.GET('/api/v1/menu/items/{id}/attributes', {
+    params: { path: { id: productId } },
+  }))
+  return mapAttributesState((res ?? {}) as Record<string, unknown>)
+}
+
+/**
+ * Декларативный sync атрибутов продукта. Порядок массивов = sort_order;
+ * элементы без id создаются, отсутствующие существующие — удаляются
+ * (их варианты архивируются, при повторном добавлении label — воскрешаются).
+ * combos — цены всех комбинаций (labels в порядке атрибутов).
+ */
+export async function syncMenuAttributes(
+  productId: string,
+  attributes: { id?: string; name: string; values: { id?: string; label: string }[] }[],
+  combos: { labels: string[]; price: number; purchasePrice?: number }[],
+): Promise<ProductAttributesState> {
+  const body = {
+    attributes: attributes.map(a => ({
+      id: a.id || undefined,
+      name: a.name,
+      values: a.values.map(v => ({
+        id: v.id || undefined,
+        label: v.label,
+      })),
+    })),
+    combos: combos.map(c => ({
+      labels: c.labels,
+      price: String(c.price),
+      purchase_price: String(c.purchasePrice ?? 0),
+    })),
+  }
+  const res = await unwrap(api.PUT('/api/v1/menu/items/{id}/attributes', {
+    params: { path: { id: productId } },
+    body,
+  }))
+  logAction('menu.attributes', 'menu_item', productId)
+  return mapAttributesState((res ?? {}) as Record<string, unknown>)
+}
+
 export async function updateMenuItemImage(id: string, imageUrl: string) {
-  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { image_url: imageUrl } as any }))
+  await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: { image_url: imageUrl } }))
 }
 
 export async function deleteMenuItem(id: string) {
@@ -346,8 +422,9 @@ function mapMenuItem(
   r: Record<string, unknown>,
   techLines: Record<string, unknown>[],
   ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>,
+  semiPrices?: Map<string, { price: number; unit: string }>,
 ): MenuItem {
-  const autoCogs = techLines.length > 0 ? calcCogsFromTechCard(techLines, ingredientPrices) : 0
+  const autoCogs = techLines.length > 0 ? calcCogsFromTechCard(techLines, ingredientPrices, semiPrices) : 0
   const effectiveCogs = autoCogs > 0 ? autoCogs : (Number(r.cogs) || 0)
   return {
     id: r.id as string,
@@ -371,7 +448,22 @@ function mapMenuItem(
     saleStep: Number(r.sale_step) || 0,
     masterId: (r.master_id as string) ?? null,
     techCard: techLines.map(mapTechCardLine),
+    parentId: (r.parent_id as string | null) ?? null,
+    attributes: Array.isArray(r.attributes) ? (r.attributes as Record<string, unknown>[]).map(mapMenuAttribute) : undefined,
+    variantValueIds: Array.isArray(r.variant_value_ids) ? (r.variant_value_ids as string[]) : undefined,
   } as MenuItem
+}
+
+function mapMenuAttribute(a: Record<string, unknown>): MenuAttribute {
+  const values = Array.isArray(a.values) ? (a.values as Record<string, unknown>[]) : []
+  return {
+    id: a.id as string,
+    name: (a.name as string) ?? '',
+    values: values.map(v => ({
+      id: v.id as string,
+      label: (v.label as string) ?? '',
+    })),
+  }
 }
 
 function mapMenuCategory(c: Record<string, unknown>): MenuCategory {

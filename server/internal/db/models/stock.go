@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"gorm.io/datatypes"
+	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
@@ -29,15 +30,53 @@ type Ingredient struct {
 	// той же размерности, что и рецепт.
 	UnitWeightUnit *string `gorm:"column:unit_weight_unit" json:"unit_weight_unit"`
 	IsFood         *bool   `gorm:"column:is_food;default:true" json:"is_food"`
-	RestaurantID   *string `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	// NomenclatureID — связь с общим справочником сети (ADR-003, вариант 3B).
 	// NULL → одиночный ресторан / продукт не в сетевой номенклатуре.
-	NomenclatureID *string   `gorm:"column:nomenclature_id" json:"nomenclature_id,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	NomenclatureID *string `gorm:"column:nomenclature_id" json:"nomenclature_id,omitempty"`
+	// WarehouseID — склад, где целиком лежит товар (мультисклад, Фаза 1).
+	// Списание продажи/расхода идёт с этого склада; перемещение = смена значения.
+	WarehouseID  *string   `gorm:"column:warehouse_id;type:uuid;index" json:"warehouse_id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (Ingredient) TableName() string { return "ingredients" }
+
+// BeforeCreate — мультисклад: если склад явно не задан, привязываем товар по типу
+// (еда → «Продукты», не-еда → «Хозтовары»). Покупные товары получают склад
+// «Покупные товары» ЯВНО в местах создания (menu_write/menu_variants), поэтому
+// сюда они приходят уже с WarehouseID и хук их не трогает. Если складов ещё нет
+// (совсем новый ресторан) — оставляем NULL: self-heal на старте доразметит.
+// Единый вход для всех путей создания (import/seed/будущие) — не дублируем логику.
+func (i *Ingredient) BeforeCreate(tx *gorm.DB) error {
+	if i.WarehouseID != nil || i.RestaurantID == nil || *i.RestaurantID == "" {
+		return nil
+	}
+	kind := "products"
+	if i.IsFood != nil && !*i.IsFood {
+		kind = "supplies"
+	}
+	var w Warehouse
+	if err := tx.Session(&gorm.Session{NewDB: true}).
+		Where("restaurant_id = ? AND kind = ?", *i.RestaurantID, kind).First(&w).Error; err == nil {
+		i.WarehouseID = &w.ID
+	}
+	return nil
+}
+
+// Warehouse — склад (мультисклад, Фаза 1). Ровно 3 фиксированных на ресторан:
+// products «Продукты», purchased «Покупные товары», supplies «Хозтовары».
+type Warehouse struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name         *string   `json:"name"`
+	Kind         *string   `json:"kind"` // products | purchased | supplies
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (Warehouse) TableName() string { return "warehouses" }
 
 // StockMovement — append-only event-stream движений склада.
 // type: receipt | writeoff | order_deduct | inventory_correction | ...
@@ -50,8 +89,13 @@ type StockMovement struct {
 	Qty            decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"qty"`
 	Unit           *string         `json:"unit"`
 	BelowZero      *bool           `gorm:"column:below_zero;default:false" json:"below_zero"`
-	RestaurantID   *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt      time.Time       `json:"created_at"`
+	// Склад движения. Для type=transfer заполнены FromWarehouseID/ToWarehouseID;
+	// для остальных типов — WarehouseID (где произошло движение).
+	WarehouseID     *string   `gorm:"column:warehouse_id;type:uuid" json:"warehouse_id"`
+	FromWarehouseID *string   `gorm:"column:from_warehouse_id;type:uuid" json:"from_warehouse_id"`
+	ToWarehouseID   *string   `gorm:"column:to_warehouse_id;type:uuid" json:"to_warehouse_id"`
+	RestaurantID    *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt       time.Time `json:"created_at"`
 	// Колонка БД "timestamp" заполняется автоматически (DEFAULT now()).
 	// В Go-модели не маппим — колонка зарезервирована, плюс CreatedAt
 	// покрывает ту же информацию. Если потребуется чтение — добавить
@@ -59,6 +103,23 @@ type StockMovement struct {
 }
 
 func (StockMovement) TableName() string { return "stock_movements" }
+
+// BeforeCreate — централизованная привязка движения к складу (мультисклад, Ф1).
+// Если warehouse_id не задан явно, берём склад товара (ingredients.warehouse_id).
+// Так ВСЕ движения (продажа/приёмка/списание/инвентаризация/…) несут склад без
+// правки каждого места создания — минимум регрессии. Перемещение (type=transfer)
+// задаёт warehouse_id/from/to само → метод его не трогает (WarehouseID != nil).
+func (m *StockMovement) BeforeCreate(tx *gorm.DB) error {
+	if m.WarehouseID != nil || m.IngredientID == nil || *m.IngredientID == "" {
+		return nil
+	}
+	var ing Ingredient
+	if err := tx.Session(&gorm.Session{NewDB: true}).
+		Select("warehouse_id").Where("id = ?", *m.IngredientID).First(&ing).Error; err == nil {
+		m.WarehouseID = ing.WarehouseID
+	}
+	return nil
+}
 
 // Supplier — поставщик.
 type Supplier struct {

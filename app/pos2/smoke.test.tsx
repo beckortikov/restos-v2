@@ -105,7 +105,6 @@ import Launcher from './page'
 import OrderPage from './order/page'
 import PayPage from './pay/page'
 import TicketPage from './ticket/page'
-import HistoryPage from './history/page'
 import TablesPage from './tables/page'
 import ServicePage from './service/page'
 import ShiftPage from './shift/page'
@@ -120,7 +119,6 @@ const PAGES: [string, React.ComponentType, string][] = [
   ['новый заказ', OrderPage, '/pos2/order'],
   ['оплата', PayPage, '/pos2/pay'],
   ['тикет заказа', TicketPage, '/pos2/ticket?order=o1'],
-  ['история', HistoryPage, '/pos2/history'],
   ['карта зала', TablesPage, '/pos2/tables'],
   ['обслуживание', ServicePage, '/pos2/service'],
   ['смена', ShiftPage, '/pos2/shift'],

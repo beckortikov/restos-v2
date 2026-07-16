@@ -17,8 +17,8 @@ android {
         applicationId = "com.restos.kds"
         minSdk = 26
         targetSdk = 35
-        versionCode = 7
-        versionName = "0.1.6"
+        versionCode = 12
+        versionName = "0.1.11"
     }
 
     buildTypes {

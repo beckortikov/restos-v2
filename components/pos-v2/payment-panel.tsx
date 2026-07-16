@@ -1,7 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft, Trash2, Plus, ReceiptText } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft, Trash2, Plus, ReceiptText, Percent } from 'lucide-react'
 import { toast } from 'sonner'
 import { closeOrderWithPayment, printPreBill, fetchActiveShift } from '@/lib/queries'
 import { V4Error } from '@/lib/api'
@@ -9,19 +10,24 @@ import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dSub, dSum } from '@/lib/decimal'
 import { discountAmount, payable as calcPayable, type DiscountType } from '@/lib/pos-v2/pay'
-import type { Order, FinancialAccount, OrderPayment } from '@/lib/types'
+import { buildReceiptData } from '@/lib/receipt-data'
+import { PrintReceipt } from '@/components/print-receipt'
+import type { Order, FinancialAccount, OrderPayment, Restaurant, Table, Zone, User } from '@/lib/types'
 
 // Единая панель оплаты заказа (сайдбар зала + /pos2/pay). Нал / Безнал с выбором
 // счёта-кошелька / Смешанная (нал+безнал по счетам) / скидка / обслуживание /
 // пре-чек. Бэк пересчитывает суммы; клиент шлёт метод, account_id, servicePercent,
 // discountType/Value. payable = (subtotal − скидка) + сервис (зал).
-export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }: {
+export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, previewCtx }: {
   order: Order
   servicePercent: number
   accounts: FinancialAccount[]
   userId?: string
   onPaid: () => void
+  // Контекст для превью чека слева от панели (имена стола/официанта/ресторана).
+  previewCtx?: { restaurant?: Restaurant | null; tables?: Table[]; zones?: Zone[]; users?: User[]; currentUser?: { name?: string } | null }
 }) {
+  const navigate = useNavigate()
   const [serviceOn, setServiceOn] = useState(order.type === 'hall')
   const [discType, setDiscType] = useState<DiscountType>('none')
   const [discVal, setDiscVal] = useState('')
@@ -35,6 +41,16 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const [mixedShift, setMixedShift] = useState<{ accountId?: string; accountName?: string } | null>(null)
   const [paying, setPaying] = useState(false)
   const [printing, setPrinting] = useState(false)
+  // Выбор безналичного счёта раскрывается только по тапу на «Безналичные»
+  // (и только если счетов >1). Тап по чипу счёта сразу проводит оплату.
+  const [showCardPicker, setShowCardPicker] = useState(false)
+  // Чек не всегда нужен (как в старом POS — закрытие без чека). Тумблер: по
+  // умолчанию печатаем, но кассир может выключить → закрытие без печати чека.
+  // Состояние СОХРАНЯЕТСЯ (localStorage): выключил раз — так и стоит, пока не включит.
+  const [printReceipt, setPrintReceipt] = useState(() => {
+    try { return localStorage.getItem('pos-v2-print-receipt') !== '0' } catch { return true }
+  })
+  useEffect(() => { try { localStorage.setItem('pos-v2-print-receipt', printReceipt ? '1' : '0') } catch {} }, [printReceipt])
   const payingRef = useRef(false)
 
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
@@ -53,6 +69,12 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   const discAmt = useMemo(() => discountAmount(base, discType, discValNum), [base, discType, discValNum])
   const sp = (order.type === 'hall' && serviceOn) ? servicePercent : 0
   const payable = calcPayable(base, discAmt, sp)
+  // Превью чека — с ЖИВЫМИ скидкой/обслуживанием (итог совпадает с «К оплате»).
+  const receiptPreview = useMemo(() => previewCtx ? buildReceiptData(
+    order,
+    { restaurant: previewCtx.restaurant, tables: previewCtx.tables, zones: previewCtx.zones, users: previewCtx.users, currentUser: previewCtx.currentUser },
+    { isPreCheck: false, includeService: sp > 0, servicePercent: sp, discountAmount: discAmt > 0 ? discAmt : undefined },
+  ) : null, [previewCtx, order, sp, discAmt])
   const paidSum = useMemo(() => dSum(parts.map(p => p.amount)), [parts])
   const remaining = dSub(payable, paidSum)
   const canContinue = parts.length > 0 && Math.abs(remaining) <= 0.01
@@ -75,23 +97,38 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
     toast.error(`Оплата не прошла: ${humanizeError(e)}`)
   }
 
+  // Смена не открыта — заметное предупреждение с прямой кнопкой открытия смены,
+  // вместо «ничего не происходит» (тап по «Наличные/Безналичные» молча ничего
+  // не давал). Тост-экшен ведёт на экран смены нового POS.
+  function warnNoShift() {
+    toast.error('Смена не открыта', {
+      description: 'Откройте кассовую смену, чтобы принимать оплату.',
+      action: { label: 'Открыть смену', onClick: () => navigate('/pos2/shift') },
+      duration: 7000,
+    })
+  }
+
   // Наличные зачисляем на cash-счёт смены (если задан), иначе первый cash-счёт.
   function cashAccount(shift: unknown): { id?: string; name?: string } {
     const s = shift as { accountId?: string; accountName?: string }
     return s.accountId ? { id: s.accountId, name: s.accountName } : { id: cashAcc?.id, name: cashAcc?.name }
   }
 
-  async function payFull(method: 'cash' | 'card') {
+  async function payFull(method: 'cash' | 'card', cardAccountId?: string) {
     if (payingRef.current) return
-    if (method === 'card' && !cardAcc) { toast.error('Нет безналичного счёта — заведите его в настройках'); return }
+    // Для безнала берём явно выбранный счёт (тап по чипу) или текущий по умолчанию.
+    const chosenCard = method === 'card'
+      ? (cardAccountId ? (nonCash.find(a => a.id === cardAccountId) ?? cardAcc) : cardAcc)
+      : undefined
+    if (method === 'card' && !chosenCard) { toast.error('Нет безналичного счёта — заведите его в настройках'); return }
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
-      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
-      const acc = method === 'cash' ? cashAccount(shift) : { id: cardAcc?.id, name: cardAcc?.name }
+      if (!shift) { warnNoShift(); return }
+      const acc = method === 'cash' ? cashAccount(shift) : { id: chosenCard?.id, name: chosenCard?.name }
       const [dA, dT, dV] = discArgs()
-      await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc.id, acc.name, sp, 0, payable, 0, dA, dT, dV)
-      toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: 'Чек отправлен на печать' })
+      await closeOrderWithPayment(order.id, method, order.tableId || null, base, cogsOf(order), userId, acc.id, acc.name, sp, 0, payable, 0, dA, dT, dV, undefined, undefined, !printReceipt)
+      toast.success(`Оплачено · ${formatCurrency(payable)} · ${method === 'cash' ? 'Наличные' : 'Безналичные'}`, { description: printReceipt ? 'Чек отправлен на печать' : 'Без чека' })
       onPaid()
     } catch (e) { handleErr(e) }
     finally { payingRef.current = false; setPaying(false) }
@@ -128,9 +165,9 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
-      if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
+      if (!shift) { warnNoShift(); return }
       const [dA, dT, dV] = discArgs()
-      await closeOrderWithPayment(order.id, parts[0].method, order.tableId || null, base, cogsOf(order), userId, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts)
+      await closeOrderWithPayment(order.id, parts[0].method, order.tableId || null, base, cogsOf(order), userId, undefined, undefined, sp, 0, payable, 0, dA, dT, dV, undefined, parts, !printReceipt)
       toast.success(`Оплачено · ${formatCurrency(payable)}`, { description: parts.map(p => `${p.method === 'cash' ? 'Нал' : 'Безнал'} ${formatCurrency(p.amount)}`).join(' + ') })
       onPaid()
     } catch (e) { handleErr(e) }
@@ -146,7 +183,27 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
   }
 
   return (
-    <div style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
+    <div className="flex items-stretch">
+      {previewCtx && receiptPreview && (
+        <aside className="shrink-0 overflow-y-auto pv-noscroll flex justify-center border-r" style={{ width: 'clamp(18rem,27vw,23rem)', background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1vw,1rem)', maxHeight: '82vh', borderColor: 'var(--pv-border)' }}>
+          <div className="flex flex-col" style={{ gap: 'clamp(0.7rem,1vw,1rem)', width: 'fit-content' }}>
+            <div style={{ zoom: 1.12 }}>
+              <PrintReceipt data={receiptPreview} />
+            </div>
+            {/* Печатать чек — тумблер под превью чека (чек не всегда нужен;
+                выкл → закрытие без печати). Состояние в localStorage. */}
+            <button onClick={() => setPrintReceipt(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={printReceipt} aria-label="Печатать чек">
+              <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+                <Printer style={{ width: '1.15rem', height: '1.15rem', color: printReceipt ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Печатать чек
+              </span>
+              <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: printReceipt ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
+                <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: printReceipt ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+              </span>
+            </button>
+          </div>
+        </aside>
+      )}
+      <div className="flex-1 min-w-0" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)' }}>
       {mode === 'mixed' ? (
         <div className="flex flex-col" style={{ gap: '1rem' }}>
           <button onClick={() => setMode('pick')} className="flex items-center gap-1.5 font-semibold self-start" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><ArrowLeft style={{ width: '1.1rem', height: '1.1rem' }} />Назад</button>
@@ -218,14 +275,17 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
         </div>
       ) : (
         <>
-          {/* Обслуживание */}
+          {/* Обслуживание — тумблер в едином стиле с «Печатать чек» (компактная
+              строка-карточка, а не голый переключатель). */}
           {order.type === 'hall' && servicePercent > 0 && (
-            <div className="flex items-center justify-between" style={{ marginBottom: '0.9rem' }}>
-              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Обслуживание {servicePercent}%</span>
-              <button onClick={() => setServiceOn(v => !v)} className="rounded-full transition-colors" style={{ width: '3.2rem', height: '1.9rem', background: serviceOn ? 'var(--pv-brand)' : '#d8d3ca', padding: '3px', display: 'flex', justifyContent: serviceOn ? 'flex-end' : 'flex-start', alignItems: 'center' }}>
-                <span className="rounded-full" style={{ width: '1.4rem', height: '1.4rem', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
-              </button>
-            </div>
+            <button onClick={() => setServiceOn(v => !v)} className="w-full flex items-center justify-between rounded-xl border active:scale-[0.99] transition-transform" style={{ marginBottom: '0.9rem', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)', borderColor: 'var(--pv-border)', background: 'var(--pv-card)' }} aria-pressed={serviceOn} aria-label="Обслуживание">
+              <span className="flex items-center gap-2 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+                <Percent style={{ width: '1.15rem', height: '1.15rem', color: serviceOn ? 'var(--pv-brand)' : 'var(--pv-text-3)' }} />Обслуживание {servicePercent}%
+              </span>
+              <span className="rounded-full shrink-0" style={{ position: 'relative', width: '2.7rem', height: '1.5rem', background: serviceOn ? 'var(--pv-brand)' : 'var(--pv-border)', transition: 'background 0.15s' }}>
+                <span className="rounded-full" style={{ position: 'absolute', top: '0.15rem', left: serviceOn ? '1.35rem' : '0.15rem', width: '1.2rem', height: '1.2rem', background: '#fff', transition: 'left 0.15s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} />
+              </span>
+            </button>
           )}
           {/* Скидка */}
           <div style={{ marginBottom: '0.9rem' }}>
@@ -252,25 +312,33 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
             <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>К оплате</span>
             <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.2rem,1.7vw,1.6rem)' }}>{formatCurrency(payable)}</span>
           </div>
-          {/* Выбор кошелька */}
-          {nonCash.length > 1 && (
-            <div style={{ marginBottom: '0.9rem' }}>
-              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Счёт для безнала</div>
-              <div className="flex flex-wrap gap-2">
-                {nonCash.map(a => { const on = a.id === cardAccId; return (
-                  <button key={a.id} onClick={() => setCardAccId(a.id)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.85rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{a.name}</button>
-                ) })}
+          {!showCardPicker ? (
+            <div className="grid grid-cols-2 gap-3">
+              <button disabled={paying} onClick={() => payFull('cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
+                <Banknote style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
+              </button>
+              {/* Безналичные: 1 счёт → сразу оплата; >1 → показываем выбор счёта
+                  НА МЕСТЕ этих же кнопок (без роста высоты — модалка не «дёргается»). */}
+              <button disabled={paying} onClick={() => { if (nonCash.length > 1) setShowCardPicker(true); else payFull('card') }} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}>
+                <CreditCard style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Безналичные</span>
+              </button>
+            </div>
+          ) : (
+            // Выбор безнал-счёта заменяет пару кнопок на месте: тот же грид, тот же
+            // размер плиток → без прыжка высоты. Тап по счёту сразу проводит оплату.
+            <div className="flex flex-col" style={{ gap: '0.6rem' }}>
+              <button onClick={() => setShowCardPicker(false)} className="flex items-center gap-1.5 font-semibold self-start active:scale-95 transition-transform" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>
+                <ArrowLeft style={{ width: '1.1rem', height: '1.1rem' }} />Назад
+              </button>
+              <div className="grid grid-cols-2 gap-3">
+                {nonCash.map(a => (
+                  <button key={a.id} disabled={paying} onClick={() => payFull('card', a.id)} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', border: '2px solid var(--pv-brand)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}>
+                    <CreditCard style={{ width: '1.7rem', height: '1.7rem' }} /><span className="font-bold text-center leading-tight" style={{ fontSize: 'clamp(0.95rem,1.2vw,1.1rem)' }}>{a.name}</span>
+                  </button>
+                ))}
               </div>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3">
-            <button disabled={paying} onClick={() => payFull('cash')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)' }}>
-              <Banknote style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Наличные</span>
-            </button>
-            <button disabled={paying} onClick={() => payFull('card')} className="flex flex-col items-center justify-center gap-2 rounded-2xl disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)', background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)' }}>
-              <CreditCard style={{ width: '1.9rem', height: '1.9rem' }} /><span className="font-bold" style={{ fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>Безналичные</span>
-            </button>
-          </div>
           {canMix && (
             <button disabled={paying} onClick={enterMixed} className="w-full flex items-center justify-center gap-2 rounded-2xl border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ marginTop: '0.75rem', padding: 'clamp(0.8rem,1.2vw,1rem)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)' }}>
               <SquareSplitHorizontal style={{ width: '1.25rem', height: '1.25rem' }} /><span className="font-semibold" style={{ fontSize: 'var(--pv-ctl)' }}>Смешанная (нал + безнал)</span>
@@ -282,6 +350,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid }
         </>
       )}
       {paying && <div className="text-center" style={{ marginTop: '1rem', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Проводим оплату…</div>}
+      </div>
     </div>
   )
 }

@@ -23,7 +23,10 @@ export async function createSupplier(sup: Omit<Supplier, 'id'>) {
   return data
 }
 
-export async function updateSupplier(id: string, data: Partial<{ name: string; contact_person: string; phone: string; categories: string[]; payment_terms_days: number; credit_limit: number; current_debt: number }>) {
+// Примечание: current_debt НЕ редактируется вручную — он управляется приёмками
+// (кредит/частично → долг растёт) и paySupplierDebt (гашение). Раньше страница
+// пыталась слать current_debt сюда, но поле молча отбрасывалось (no-op).
+export async function updateSupplier(id: string, data: Partial<{ name: string; contact_person: string; phone: string; categories: string[]; payment_terms_days: number; credit_limit: number }>) {
   const body: Record<string, unknown> = {}
   if (data.name !== undefined) body.name = data.name
   if (data.contact_person !== undefined) body.contact_person = data.contact_person
@@ -33,6 +36,27 @@ export async function updateSupplier(id: string, data: Partial<{ name: string; c
   if (data.credit_limit !== undefined) body.credit_limit = String(data.credit_limit)
   await unwrap(api.PATCH('/api/v1/suppliers/{id}', { params: { path: { id } }, body: body as any }))
   logAction('supplier.edit', 'supplier', id)
+}
+
+// paySupplierDebt — гашение долга поставщику: атомарно списывает amount со счёта
+// accountId, уменьшает current_debt и создаёт financial_operation. Возвращает
+// обновлённого поставщика.
+export async function paySupplierDebt(id: string, amount: number, accountId: string): Promise<Supplier> {
+  const data: any = await unwrap(api.POST('/api/v1/suppliers/{id}/pay-debt', {
+    params: { path: { id } },
+    body: { amount: String(amount), account_id: accountId } as any,
+  }))
+  logAction('supplier.pay_debt', 'supplier', id)
+  return mapSupplier(data)
+}
+
+// recomputeSupplierDebts — пересчёт current_debt всех поставщиков из накладных
+// (Σ debt_amount − Σ оплат долга). Нужен, когда поле разошлось: бэкфилл-миграция
+// не отработала после восстановления/обновления. Возвращает число обновлённых.
+export async function recomputeSupplierDebts(): Promise<number> {
+  const data: any = await unwrap((api.POST as any)('/api/v1/suppliers/recompute-debts', { body: {} }))
+  logAction('supplier.recompute_debts', 'supplier', undefined)
+  return Number(data?.updated ?? 0)
 }
 
 export async function deleteSupplier(id: string) {

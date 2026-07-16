@@ -193,8 +193,9 @@ paths:
           description: |
             CSV: `tech_cards` подгружает tech_card_lines для каждого блюда
             (batch, не N+1); `ingredient_prices` дополнительно отдаёт
-            top-level карту `ingredient_prices`.
-            Пример: `?include=tech_cards,ingredient_prices`.
+            top-level карту `ingredient_prices`; `attributes` — атрибуты
+            продуктов (Размер/Вкус) и `variant_value_ids` вариантов.
+            Пример: `?include=tech_cards,ingredient_prices,attributes`.
       responses:
         "200":
           description: OK
@@ -233,6 +234,40 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses:
         "204": { description: No content }
+
+  /api/v1/menu/items/{id}/attributes:
+    get:
+      tags: [menu]
+      summary: Атрибуты продукта + варианты
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProductAttributesState" } } }
+    put:
+      tags: [menu]
+      summary: Синхронизировать атрибуты продукта (Manager)
+      description: |
+        Декларативный sync: атрибуты/значения приводятся к payload'у
+        (создание/переименование/удаление), затем из декартова произведения
+        значений генерируются варианты — обычные menu_items с parent_id.
+        Цены задаются per-комбинация (combos[]); значение атрибута — чистый
+        лейбл. Базовая цена продукта не участвует.
+        Лишние варианты архивируются (is_deleted); при повторном добавлении
+        значения с тем же label вариант воскрешается (сохраняя складской SKU).
+        Пустой массив attributes возвращает продукт в обычное блюдо.
+        Лимиты: ≤3 атрибутов, ≤10 значений на атрибут, ≤60 комбинаций.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/SyncAttributesInput" } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { $ref: "#/components/schemas/ProductAttributesState" } } }
 
   /api/v1/menu/items/import:
     post:
@@ -326,6 +361,15 @@ paths:
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Table" } } } } }
 
   # ─── Stock ──────────────────────────────────────────────────────────────
+  /api/v1/warehouses:
+    get: { tags: [stock], summary: Склады (мультисклад), responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WarehousesList" } } } } } }
+  /api/v1/warehouses/transfer:
+    post:
+      tags: [stock]
+      summary: Переместить товар на другой склад
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/WarehouseTransferInput" } } } }
+      responses: { "200": { description: OK } }
   /api/v1/stock/ingredients:
     get:
       tags: [stock]
@@ -379,6 +423,7 @@ paths:
         - $ref: "#/components/parameters/Cursor"
         - { in: query, name: ingredient_id, schema: { type: string, format: uuid } }
         - { in: query, name: type, schema: { type: string } }
+        - { in: query, name: warehouse_id, schema: { type: string, format: uuid }, description: "Фильтр движений по складу (мультисклад)" }
         - { in: query, name: from, schema: { type: string, format: date-time } }
         - { in: query, name: to, schema: { type: string, format: date-time } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockMovementsList" } } } } }
@@ -905,6 +950,28 @@ paths:
           content: { application/json: { schema: { $ref: "#/components/schemas/KDSItem" } } }
         "404": { $ref: "#/components/responses/Error" }
         "422": { $ref: "#/components/responses/Error" }
+
+  /api/v1/kds/items/{id}/call-waiter:
+    post:
+      tags: [kds]
+      summary: Вызвать официанта заказа на кухню
+      description: >
+        Повар нажал «колокольчик» на карточке блюда. Официанту, оформившему
+        заказ, уходит SSE-событие kds.waiter.called (уведомление «приходи на
+        кухню»). Ничего не пишется в БД. 422, если у заказа нет официанта.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  waiter_name: { type: string }
+        "400": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
 
   /api/v1/orders:
     get:
@@ -1854,6 +1921,19 @@ paths:
       tags: [admin]
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses: { "204": { description: No content } }
+
+  /api/v1/suppliers/{id}/pay-debt:
+    post:
+      tags: [admin]
+      summary: Гашение долга поставщику
+      description: |
+        Атомарно: списывает `amount` со счёта `account_id`, уменьшает
+        `suppliers.current_debt` и создаёт financial_operation out
+        (category='supplier_payment', исключён из opex ОПиУ). Сумма клампится
+        к остатку долга (переплатить нельзя).
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierPayDebtInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Supplier" } } } } }
 
   /api/v1/reservations:
     get:
@@ -3045,10 +3125,13 @@ components:
         table_name: { type: string, nullable: true }
         name: { type: string }
         qty: { type: string, description: "decimal" }
+        unit: { type: string, description: "g/kg = весовое (qty — вес); piece/пусто = штучное" }
         comment: { type: string, nullable: true }
         station: { type: string }
         station_status: { type: string, enum: [pending, cooking, ready, served] }
+        waiter_name: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
+        age_seconds: { type: integer, description: "Возраст блюда в секундах по часам сервера (для таймера кухни)" }
         status_at: { type: string, format: date-time, nullable: true }
 
     ErrorEnvelope:
@@ -3099,6 +3182,11 @@ components:
         unit_size: { $ref: "#/components/schemas/Decimal" }
         sale_step: { $ref: "#/components/schemas/Decimal" }
         low_stock_threshold: { type: integer }
+        parent_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Задан у сгенерированных вариантов; NULL у обычных блюд и продуктов.
     MenuItemInput:
       type: object
       properties:
@@ -3122,6 +3210,14 @@ components:
                 Всегда присутствует (пустой массив, если не запрошен через
                 `?include=tech_cards`). Это уменьшает type-ветвление на фронте.
               items: { $ref: "#/components/schemas/TechCardLine" }
+            attributes:
+              type: array
+              description: Атрибуты продукта (только с `?include=attributes`).
+              items: { $ref: "#/components/schemas/MenuAttributeWithValues" }
+            variant_value_ids:
+              type: array
+              description: Значения комбинации варианта (только с `?include=attributes`).
+              items: { type: string, format: uuid }
     IngredientPrice:
       type: object
       properties:
@@ -3130,6 +3226,15 @@ components:
         waste_percent: { $ref: "#/components/schemas/Decimal" }
         unit_weight: { $ref: "#/components/schemas/Decimal" }
         unit_weight_unit: { type: string }
+    SemiPrice:
+      type: object
+      description: |
+        Себестоимость полуфабриката за единицу (для строк тех-карты с
+        `semi_type_id`). Источник — semi_finished_stock.price_per_unit
+        (yield п/ф уже зашит в цену). Используется в расчёте с/с блюда.
+      properties:
+        price: { $ref: "#/components/schemas/Decimal" }
+        unit: { type: string }
     MenuItemsList:
       type: object
       description: |
@@ -3141,7 +3246,9 @@ components:
         (одним batch-SELECT'ом, не N+1).
 
         `?include=tech_cards,ingredient_prices` — дополнительно подгружает цены
-        ингредиентов из tech card lines в top-level `ingredient_prices`.
+        ингредиентов из tech card lines в top-level `ingredient_prices`, а также
+        себестоимость полуфабрикатов (по `semi_type_id`) в `semi_prices` —
+        нужна для корректного расчёта с/с блюд, собранных из п/ф.
       properties:
         data:
           type: array
@@ -3149,7 +3256,85 @@ components:
         ingredient_prices:
           type: object
           additionalProperties: { $ref: "#/components/schemas/IngredientPrice" }
+        semi_prices:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/SemiPrice" }
         next_cursor: { type: string }
+
+    MenuAttribute:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        menu_item_id: { type: string, format: uuid }
+        name: { type: string }
+        sort_order: { type: integer }
+    MenuAttributeValue:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        attribute_id: { type: string, format: uuid }
+        label: { type: string }
+        sort_order: { type: integer }
+    MenuAttributeWithValues:
+      allOf:
+        - $ref: "#/components/schemas/MenuAttribute"
+        - type: object
+          properties:
+            values:
+              type: array
+              items: { $ref: "#/components/schemas/MenuAttributeValue" }
+    MenuVariant:
+      allOf:
+        - $ref: "#/components/schemas/MenuItem"
+        - type: object
+          properties:
+            value_ids:
+              type: array
+              items: { type: string, format: uuid }
+    ProductAttributesState:
+      type: object
+      properties:
+        attributes:
+          type: array
+          items: { $ref: "#/components/schemas/MenuAttributeWithValues" }
+        variants:
+          type: array
+          items: { $ref: "#/components/schemas/MenuVariant" }
+    SyncAttributesInput:
+      type: object
+      required: [attributes]
+      properties:
+        attributes:
+          type: array
+          description: Порядок массива = sort_order. id опущен → создать.
+          items:
+            type: object
+            required: [name, values]
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: string }
+              values:
+                type: array
+                items:
+                  type: object
+                  required: [label]
+                  properties:
+                    id: { type: string, format: uuid }
+                    label: { type: string }
+        combos:
+          type: array
+          description: |
+            Цены комбинаций: labels — лейблы значений в порядке атрибутов.
+            Каждая комбинация декартова произведения обязана получить цену > 0.
+          items:
+            type: object
+            required: [labels, price]
+            properties:
+              labels:
+                type: array
+                items: { type: string }
+              price: { $ref: "#/components/schemas/Decimal" }
+              purchase_price: { $ref: "#/components/schemas/Decimal" }
 
     MenuCategory:
       type: object
@@ -3174,6 +3359,9 @@ components:
         zone_id: { type: string, format: uuid }
         status: { type: string, enum: [free, occupied, reserved, dirty] }
     TablesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Table" } } } }
+    Warehouse: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, kind: { type: string, enum: [products, purchased, supplies] }, restaurant_id: { type: string } } }
+    WarehousesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Warehouse" } } } }
+    WarehouseTransferInput: { type: object, required: [ingredient_id, to_warehouse_id], properties: { ingredient_id: { type: string, format: uuid }, to_warehouse_id: { type: string, format: uuid } } }
     TableInput:
       type: object
       properties:
@@ -3223,6 +3411,7 @@ components:
         qty: { $ref: "#/components/schemas/Decimal" }
         unit: { type: string }
         description: { type: string }
+        warehouse_id: { type: string, format: uuid, nullable: true, description: "Склад движения (мультисклад)" }
         created_at: { type: string, format: date-time }
     StockMovementsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockMovement" } }, next_cursor: { type: string } } }
     StockReceiptsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReceipt" } }, next_cursor: { type: string } } }
@@ -3443,7 +3632,15 @@ components:
               ingredient_id: { type: string, format: uuid }
               name: { type: string }
               qty: { $ref: "#/components/schemas/Decimal" }
+              unit: { type: string }
               cost: { $ref: "#/components/schemas/Decimal" }
+              kind:
+                type: string
+                enum: [ingredient, semi, batch]
+                description: |
+                  Тип списываемого. ingredient (по умолчанию) → stock_movement по
+                  ingredient_id. semi → декремент semi_finished_stock.qty (id п/ф).
+                  batch → декремент menu_items.prepared_qty (id блюда).
     StockWriteoff:
       type: object
       properties:
@@ -3774,6 +3971,12 @@ components:
         categories: { type: array, items: { type: string } }
         payment_terms_days: { type: integer }
         credit_limit: { $ref: "#/components/schemas/Decimal" }
+    SupplierPayDebtInput:
+      type: object
+      required: [amount, account_id]
+      properties:
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
     SuppliersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Supplier" } } } }
 
     Reservation:
@@ -4370,7 +4573,8 @@ components:
       type: object
       properties:
         available:     { type: boolean }
-        version:       { type: string }
+        version:       { type: string, description: "versionName из APK, напр. 0.2.16" }
+        version_code:  { type: integer, description: "versionCode из APK — для сравнения при LAN-автообновлении" }
         file_name:     { type: string }
         size_bytes:    { type: integer, format: int64 }
         uploaded_at:   { type: string, format: date-time, nullable: true }

@@ -38,7 +38,6 @@ const ShowQR = () => L(() => import('@/app/(app)/show-qr/page'))
 const PosV2Launcher = () => L(() => import('@/app/pos2/page'))
 const PosV2Order = () => L(() => import('@/app/pos2/order/page'))
 const PosV2Pay = () => L(() => import('@/app/pos2/pay/page'))
-const PosV2History = () => L(() => import('@/app/pos2/history/page'))
 const PosV2Tables = () => L(() => import('@/app/pos2/tables/page'))
 const PosV2Service = () => L(() => import('@/app/pos2/service/page'))
 const PosV2Shift = () => L(() => import('@/app/pos2/shift/page'))
@@ -102,6 +101,7 @@ const PeakHours = () => L(() => import('@/app/(app)/analytics/peak-hours/page'))
 const Forecast = () => L(() => import('@/app/(app)/analytics/forecast/page'))
 const Trends = () => L(() => import('@/app/(app)/analytics/trends/page'))
 const Weekday = () => L(() => import('@/app/(app)/analytics/weekday/page'))
+const SalesReport = () => L(() => import('@/app/(app)/analytics/sales-report/page'))
 
 // Settings
 const Settings = () => L(() => import('@/app/(app)/settings/page'))
@@ -201,6 +201,7 @@ export function AppRouter() {
         <Route path="/analytics/forecast" element={<Forecast />} />
         <Route path="/analytics/trends" element={<Trends />} />
         <Route path="/analytics/weekday" element={<Weekday />} />
+        <Route path="/analytics/sales-report" element={<SalesReport />} />
 
         {/* Settings */}
         <Route path="/settings" element={<Settings />} />
@@ -223,7 +224,6 @@ export function AppRouter() {
         <Route path="/pos2" element={<PosV2Launcher />} />
         <Route path="/pos2/order" element={<PosV2Order />} />
         <Route path="/pos2/pay" element={<PosV2Pay />} />
-        <Route path="/pos2/history" element={<PosV2History />} />
         <Route path="/pos2/tables" element={<PosV2Tables />} />
         <Route path="/pos2/service" element={<PosV2Service />} />
         <Route path="/pos2/shift" element={<PosV2Shift />} />

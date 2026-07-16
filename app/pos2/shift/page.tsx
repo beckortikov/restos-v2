@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, TrendingDown, AlertTriangle, Ban, Check } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Wallet, ArrowDownToLine, ArrowUpFromLine, ReceiptText, Lock, X, Printer, FileSpreadsheet, HandCoins, History, TrendingUp, AlertTriangle, Ban, Check, Calculator, Users, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import {
@@ -11,10 +11,10 @@ import {
   printShiftX, printShiftZ, printShiftService, fetchShiftZReport, type ShiftZReport, fetchShifts,
   fetchOrders, cancelOrder, patchShiftAccount,
   fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchUsers, payServiceCharge,
+  deleteShiftExpense,
 } from '@/lib/queries'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
-import { deltaPct } from '@/lib/pos-v2/report'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import { PinSection } from '@/components/pos-v2/pin-section'
 import { dSum, dAdd, dSub } from '@/lib/decimal'
@@ -47,10 +47,16 @@ export default function PosV2Shift() {
   const [zr, setZr] = useState<ShiftZReport | null>(null)
   const [histOpen, setHistOpen] = useState(false)
   const [hist, setHist] = useState<CashShift[] | null>(null)
+  // Разбивка прошлой смены (Z-отчёт по тапу в истории).
+  const [histZShift, setHistZShift] = useState<CashShift | null>(null)
+  const [histZ, setHistZ] = useState<ShiftZReport | null>(null)
+  const [histZLoading, setHistZLoading] = useState(false)
   // Обслуживание официантов — встроено в смену (по дизайну restos.pen).
   const [svcRows, setSvcRows] = useState<SvcRow[]>([])
   const [svcPayingId, setSvcPayingId] = useState<string | null>(null)
   const svcPayRef = useRef(false)
+  // Вкладки левой колонки (дизайн restos.pen): Сводка / Официанты / Обслуживание / Операции.
+  const [tab, setTab] = useState<'summary' | 'waiters' | 'service' | 'ops'>('summary')
   const busyRef = useRef(false)
 
   const cashAccounts = useMemo(() => accounts.filter(a => a.type === 'cash'), [accounts])
@@ -132,11 +138,28 @@ export default function PosV2Shift() {
     } catch (e) { toast.error(`Не удалось выплатить: ${humanizeError(e)}`) }
     finally { svcPayRef.current = false; setSvcPayingId(null) }
   }
+  async function deleteExpense(opId: string) {
+    if (busyRef.current) return
+    if (typeof window !== 'undefined' && !window.confirm('Удалить этот расход? Баланс счёта смены откорректируется.')) return
+    busyRef.current = true; setBusy(true)
+    try { await deleteShiftExpense(opId); toast.success('Расход удалён'); await load() }
+    catch (e) { toast.error(humanizeError(e)) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+  const guests = zr?.guestsCount ?? 0
+  const perGuest = guests > 0 ? curRevenue / guests : 0
+  const expenseOps = ops.filter(o => o.type === 'cash_out' && !!o.category)
 
   async function openHistory() {
     setHistOpen(true)
     if (hist) return
     try { setHist(await fetchShifts(30)) } catch (e) { toast.error(humanizeError(e)); setHist([]) }
+  }
+  // Полная разбивка прошлой смены (тот же zreport-эндпоинт, что и у текущей).
+  async function openHistZ(s: CashShift) {
+    setHistZShift(s); setHistZ(null); setHistZLoading(true)
+    try { setHistZ(await fetchShiftZReport(s.id)) } catch (e) { toast.error(humanizeError(e)) }
+    finally { setHistZLoading(false) }
   }
 
   async function report(kind: 'x' | 'z' | 'service') {
@@ -152,20 +175,6 @@ export default function PosV2Shift() {
     if (!shift) return
     try { await exportShiftToXlsx(shift); toast.success('Excel сформирован') }
     catch (e) { toast.error(`Экспорт не удался: ${humanizeError(e)}`) }
-  }
-
-  function breakdownCard(title: string, rows: [string, string][]) {
-    return (
-      <div key={title} className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)' }}>
-        <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', marginBottom: '0.6rem' }}>{title}</div>
-        {rows.length === 0 ? <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>—</div> : rows.map(([l, v], i) => (
-          <div key={i} className="flex items-center justify-between" style={{ padding: '0.25rem 0' }}>
-            <span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginRight: '0.5rem' }}>{l}</span>
-            <span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{v}</span>
-          </div>
-        ))}
-      </div>
-    )
   }
 
   async function doOpen() {
@@ -329,108 +338,157 @@ export default function PosV2Shift() {
                 )}
               </div>
             )}
-            {/* KPIs — 4 карточки (дизайн): Наличные в кассе / Выручка / Заказов / Ср.чек */}
+            {/* KPIs — 4 карточки (дизайн): Выручка / Средний чек / Заказов / Гостей */}
             <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(11rem,16vw,15rem), 1fr))' }}>
-              <div className="rounded-2xl" style={{ background: 'var(--pv-free-soft)', border: '1px solid var(--pv-free-border)', padding: 'clamp(0.9rem,1.4vw,1.4rem)' }}>
-                <div style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Наличные в кассе</div>
-                <div className="font-bold" style={{ color: 'var(--pv-free-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)', margin: '0.15rem 0' }}>{formatCurrency(expected)}</div>
-                <div className="truncate" style={{ color: 'var(--pv-free-text)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)', opacity: 0.8 }}>ожидается сейчас</div>
-              </div>
               {([
-                ['Выручка', formatCurrency(curRevenue), `Нал ${formatCurrency(rev.cashRevenue)} · Безнал ${formatCurrency(rev.cardRevenue)}`, deltaPct(curRevenue, prev?.revenue ?? 0)],
-                ['Заказов', String(rev.ordersCount), 'закрыто', deltaPct(rev.ordersCount, prev?.ordersCount ?? 0)],
-                ['Средний чек', formatCurrency(rev.avgCheck), 'на заказ', deltaPct(rev.avgCheck, prev?.avgCheck ?? 0)],
-              ] as [string, string, string, number | null][]).map(([l, v, s, d]) => (
-                <div key={l} className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.4rem)' }}>
-                  <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{l}</div>
-                  <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)', margin: '0.15rem 0' }}>{v}</div>
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{s}</span>
-                    {d != null && (
-                      <span className="flex items-center gap-0.5 rounded-full shrink-0 font-semibold" style={{ background: d >= 0 ? 'var(--pv-free-soft)' : 'var(--pv-occ-soft)', color: d >= 0 ? 'var(--pv-free-text)' : 'var(--pv-occ-text)', padding: '0.1rem 0.45rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>
-                        {d >= 0 ? <TrendingUp style={{ width: '0.75rem', height: '0.75rem' }} /> : <TrendingDown style={{ width: '0.75rem', height: '0.75rem' }} />}{Math.abs(d).toFixed(0)}%
-                      </span>
-                    )}
+                ['Выручка', formatCurrency(curRevenue), `Нал ${formatCurrency(rev.cashRevenue)} · Безнал ${formatCurrency(rev.cardRevenue)}`, TrendingUp, '#D85A30', '#FBEBE4'],
+                ['Средний чек', formatCurrency(rev.avgCheck), prev ? `Пред. смена ${formatCurrency(prev.avgCheck)}` : '— к прошлой смене', Calculator, '#8A5E18', '#FBF0DA'],
+                ['Заказов', String(rev.ordersCount), prev ? `Пред. смена ${prev.ordersCount}` : '— к прошлой смене', ReceiptText, '#1F6B3E', '#EAF7EF'],
+                ['Гостей', String(guests), guests > 0 ? `Ср. ${formatCurrency(perGuest)} / гость` : 'нет данных', Users, '#2F4E9E', '#E9EFFB'],
+              ] as [string, string, string, React.ElementType, string, string][]).map(([l, v, s, Icon, ic, bg]) => (
+                <div key={l} className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.4rem)', gap: '0.45rem', boxShadow: '0 2px 8px rgba(0,0,0,0.04)' }}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{l}</span>
+                    <span className="rounded-xl flex items-center justify-center shrink-0" style={{ background: bg, width: '2.2rem', height: '2.2rem' }}><Icon style={{ width: '1.1rem', height: '1.1rem', color: ic }} /></span>
                   </div>
+                  <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.35rem,2vw,1.9rem)' }}>{v}</div>
+                  <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{s}</div>
                 </div>
               ))}
             </div>
-            {prev && (
-              <div className="rounded-xl flex items-center flex-wrap" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: '0.6rem 1rem', gap: '0.3rem 1.2rem', color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
-                <span>Прошлая смена{prev.closedAt ? ` (${new Date(prev.closedAt).toLocaleDateString('ru', { day: '2-digit', month: 'short' })})` : ''}:</span>
-                <span>Выручка <b style={{ color: 'var(--pv-text-2)' }}>{formatCurrency(prev.revenue)}</b></span>
-                <span>Заказов <b style={{ color: 'var(--pv-text-2)' }}>{prev.ordersCount}</b></span>
-                <span>Ср. чек <b style={{ color: 'var(--pv-text-2)' }}>{formatCurrency(prev.avgCheck)}</b></span>
-              </div>
-            )}
-
-            {/* Тело: слева разбивки, справа касса + действия (дизайн — 2 колонки) */}
+            {/* Тело: слева вкладки-аналитика, справа касса + действия + расходы */}
             <div className="flex flex-wrap" style={{ gap: 'var(--pv-gap)', alignItems: 'flex-start' }}>
-              <div className="flex-1 grid content-start" style={{ minWidth: 'clamp(15rem,38vw,28rem)', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fit, minmax(clamp(13rem,17vw,17rem), 1fr))' }}>
-                {zr ? (
+              <div className="flex-1 flex flex-col" style={{ minWidth: 'clamp(15rem,40vw,30rem)', gap: 'var(--pv-gap)' }}>
+                {/* Вкладки */}
+                <div className="flex items-center flex-wrap rounded-2xl" style={{ background: 'var(--pv-bg)', padding: '5px', gap: '4px' }}>
+                  {([['summary', 'Сводка', null], ['waiters', 'Официанты', zr?.salesByWaiter.length || null], ['service', 'Обслуживание', svcRows.filter(r => r.toPay > 0).length || null], ['ops', 'Операции', ops.length || null]] as const).map(([t, l, badge]) => { const on = tab === t; return (
+                    <button key={t} onClick={() => setTab(t)} className="flex items-center gap-2 rounded-xl font-semibold" style={{ background: on ? 'var(--pv-card)' : 'transparent', color: on ? 'var(--pv-brand)' : 'var(--pv-text-2)', boxShadow: on ? '0 2px 6px rgba(0,0,0,0.08)' : 'none', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.8rem,1.2vw,1.1rem)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>
+                      {l}{badge ? <span className="rounded-md font-bold" style={{ background: on ? 'var(--pv-brand-soft)' : 'var(--pv-card)', color: on ? 'var(--pv-brand)' : 'var(--pv-text-3)', padding: '0.05rem 0.4rem', fontSize: '0.65rem' }}>{badge}</span> : null}
+                    </button>
+                  ) })}
+                </div>
+                {!zr ? (
+                  <div className="rounded-2xl flex items-center justify-center text-center" style={{ background: 'var(--pv-card)', border: '1px dashed var(--pv-border)', padding: '2.5rem', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Аналитика появится после продаж.</div>
+                ) : tab === 'summary' ? (
                   <>
-                    {breakdownCard('Выручка по способам', zr.revenueByMethod.map(r => [r.accountName || (r.paymentMethod === 'cash' ? 'Наличные' : 'Безнал'), formatCurrency(r.total)] as [string, string]))}
-                    {breakdownCard('Официанты', zr.salesByWaiter.map(w => [`${w.name} (${w.ordersCount})`, formatCurrency(w.total)] as [string, string]))}
-                    {breakdownCard('По типу заказа', zr.salesByOrderType.map(r => [r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type, formatCurrency(r.total)] as [string, string]))}
-                    {breakdownCard('Продажи по категориям', zr.salesByCategory.slice(0, 8).map(r => [`${r.name} (${r.qty})`, formatCurrency(r.total)] as [string, string]))}
-                    {breakdownCard('Проданные блюда', zr.salesByItem.slice(0, 10).map(r => [`${r.name} ×${r.qty}`, formatCurrency(r.total)] as [string, string]))}
+                    {/* Оплата по способам */}
+                    <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: '0.9rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>Оплата по способам</div>
+                      {zr.revenueByMethod.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Нет продаж</span> : zr.revenueByMethod.map((r, i) => { const pct = curRevenue > 0 ? Math.round(r.total / curRevenue * 100) : 0; const cash = r.paymentMethod === 'cash'; return (
+                        <div key={i} className="flex flex-col" style={{ gap: '0.35rem' }}>
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{r.accountName || (cash ? 'Наличные' : 'Безналичные')} · {pct}%</span>
+                            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span>
+                          </div>
+                          <div className="rounded-full overflow-hidden" style={{ background: 'var(--pv-bg)', height: '0.5rem' }}><div style={{ width: `${pct}%`, height: '100%', background: cash ? 'var(--pv-free-dot)' : 'var(--pv-brand)' }} /></div>
+                        </div>
+                      ) })}
+                      <div style={{ height: '1px', background: 'var(--pv-border)' }} />
+                      <div className="flex items-center justify-between"><span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Выручка</span><span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(curRevenue)}</span></div>
+                      <div className="flex items-center justify-between"><span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Расход</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(zr.expensesTotal)}</span></div>
+                      <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.3vw,1.1rem)' }}>Итог</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.4vw,1.25rem)' }}>{formatCurrency(curRevenue - zr.expensesTotal)}</span></div>
+                    </div>
+                    {/* Категории + блюда */}
+                    <div className="flex flex-wrap" style={{ gap: 'var(--pv-gap)' }}>
+                      <div className="flex-1 rounded-2xl flex flex-col" style={{ minWidth: '13rem', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: '0.65rem' }}>
+                        <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>Продажи по категориям</div>
+                        {zr.salesByCategory.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>—</span> : zr.salesByCategory.slice(0, 8).map((r, i) => (
+                          <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{r.name} · {r.qty}</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                        ))}
+                      </div>
+                      <div className="flex-1 rounded-2xl flex flex-col" style={{ minWidth: '13rem', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: '0.65rem' }}>
+                        <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>Проданные блюда</div>
+                        {zr.salesByItem.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>—</span> : zr.salesByItem.slice(0, 8).map((r, i) => (
+                          <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{r.name} ×{r.qty}</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                        ))}
+                      </div>
+                    </div>
+                    {/* По типу заказа */}
+                    <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: '0.6rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>По типу заказа</div>
+                      {zr.salesByOrderType.map((r, i) => (
+                        <div key={i} className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type} · {r.ordersCount}</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                      ))}
+                    </div>
                   </>
+                ) : tab === 'waiters' ? (
+                  <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: '0.6rem' }}>
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>Продажи по официантам</div>
+                    {zr.salesByWaiter.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Нет данных</span> : zr.salesByWaiter.map((w, i) => (
+                      <div key={i} className="flex items-center gap-3 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 0.8rem' }}>
+                        <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', width: '2.3rem', height: '2.3rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{svcInitials(w.name)}</div>
+                        <div className="flex-1 min-w-0"><div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{w.name}</div><div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{w.ordersCount} зак. · ср. {formatCurrency(w.avgCheck)}</div></div>
+                        <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(w.total)}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : tab === 'service' ? (
+                  <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: '0.6rem' }}>
+                    <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>Обслуживание официантов</span>{svcToPay > 0 && <span className="rounded-full font-bold" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.2rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>к выплате {formatCurrency(svcToPay)}</span>}</div>
+                    {svcRows.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Нет начислений в этой смене</span> : svcRows.map(r => (
+                      <div key={r.waiterId} className="flex items-center gap-3 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 0.8rem' }}>
+                        <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', width: '2.4rem', height: '2.4rem', fontSize: 'var(--pv-ctl)' }}>{svcInitials(r.waiterName)}</div>
+                        <div className="flex-1 min-w-0"><div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{r.waiterName}</div><div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{r.ordersCount} зак. · нач. {formatCurrency(r.accrued)} · вып. {formatCurrency(r.paid)}</div></div>
+                        {r.toPay > 0 ? (
+                          <button disabled={svcPayingId === r.waiterId} onClick={() => payService(r)} className="flex items-center gap-1.5 rounded-xl font-bold text-white shrink-0 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand)', padding: '0.5rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}><HandCoins style={{ width: '1rem', height: '1rem' }} />{svcPayingId === r.waiterId ? 'Выплата…' : `Выплатить ${formatCurrency(r.toPay)}`}</button>
+                        ) : (
+                          <span className="flex items-center gap-1 rounded-xl shrink-0" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><Check style={{ width: '1rem', height: '1rem' }} />Выплачено</span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 ) : (
-                  <div className="rounded-2xl flex items-center justify-center text-center" style={{ background: 'var(--pv-card)', border: '1px dashed var(--pv-border)', padding: '2rem', color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', minHeight: '10rem', gridColumn: '1 / -1' }}>Разбивки (способы оплаты, официанты, категории, блюда) появятся после продаж.</div>
+                  <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: '0.5rem' }}>
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>Операции смены</div>
+                    {ops.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Операций пока нет</span> : ops.map(o => { const out = o.type === 'cash_out'; const label = o.type === 'cash_in' ? 'Внесение' : o.category ? `Расход · ${o.category}` : 'Изъятие'; return (
+                      <div key={o.id} className="flex items-center gap-3 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.55rem 0.8rem' }}>
+                        <div className="flex-1 min-w-0"><div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{label}</div>{o.description && <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{o.description}</div>}</div>
+                        <span className="font-bold shrink-0" style={{ color: out ? 'var(--pv-occ-text)' : 'var(--pv-free-text)', fontSize: 'var(--pv-ctl)' }}>{out ? '−' : '+'}{formatCurrency(Number(o.amount))}</span>
+                      </div>
+                    ) })}
+                  </div>
                 )}
               </div>
               <div className="shrink-0 flex flex-col" style={{ width: 'clamp(19rem,29vw,25rem)', gap: 'var(--pv-gap)' }}>
-                {/* Движение по кассе */}
-                <div className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
-                  <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', marginBottom: '0.8rem' }}>Движение по кассе</div>
-                  {([['Начальный размен', openingBalance, ''], ['Наличная выручка', rev.cashRevenue, '+'], ['Внесения', cashIn, '+'], ['Изъятия', withdraw, '−'], ['Расходы', expenses, '−']] as const).map(([l, v, sign]) => (
-                    <div key={l} className="flex items-center justify-between" style={{ padding: '0.4rem 0' }}>
-                      <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{l}</span>
-                      <span className="font-semibold" style={{ color: sign === '−' ? 'var(--pv-occ-text)' : sign === '+' ? 'var(--pv-free-text)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{sign}{formatCurrency(v)}</span>
-                    </div>
-                  ))}
-                  <div style={{ height: '1px', background: 'var(--pv-border)', margin: '0.6rem 0' }} />
-                  <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-brand-soft)', padding: '0.7rem 1rem' }}>
-                    <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Ожидается в кассе</span>
-                    <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.2rem,1.7vw,1.6rem)' }}>{formatCurrency(expected)}</span>
+                {/* Касса — 2×2 движение + Ожидается */}
+                <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '0.85rem' }}>
+                  <div className="flex items-center gap-2"><Wallet style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-brand)' }} /><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.4vw,1.25rem)' }}>Касса</span></div>
+                  <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
+                    {([['Нач. остаток', openingBalance, 'var(--pv-text)', ''], ['Внесения', cashIn, 'var(--pv-free-text)', '+'], ['Изъятия', withdraw, '#e8890c', '−'], ['Расходы', expenses, 'var(--pv-occ-text)', '−']] as const).map(([l, v, color, sign]) => (
+                      <div key={l} className="rounded-xl flex flex-col" style={{ background: 'var(--pv-bg)', padding: '0.65rem 0.75rem', gap: '0.2rem' }}>
+                        <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{l}</span>
+                        <span className="font-bold" style={{ color, fontSize: 'clamp(0.95rem,1.35vw,1.15rem)' }}>{sign}{formatCurrency(v)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ height: '1px', background: 'var(--pv-border)' }} />
+                  <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-brand-soft)', padding: '0.8rem 1rem' }}>
+                    <span className="font-semibold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>Ожидается в кассе</span>
+                    <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.25rem,1.8vw,1.7rem)' }}>{formatCurrency(expected)}</span>
                   </div>
                 </div>
-                {/* Действия */}
+                {/* Действия — высокие вертикальные */}
                 <div className="grid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.6rem' }}>
-                  {([['cash_in', 'Внести', ArrowDownToLine, '#17a45e'], ['cash_out', 'Изъять', ArrowUpFromLine, '#e8890c'], ['expense', 'Расход', ReceiptText, '#e0245a']] as const).map(([a, l, Icon, color]) => (
-                    <button key={a} onClick={() => openAction(a)} className="flex flex-col items-center justify-center gap-1.5 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: color, padding: 'clamp(0.85rem,1.3vw,1.15rem) 0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>
-                      <Icon style={{ width: '1.5em', height: '1.5em' }} />{l}
+                  {([['cash_in', 'Внесение', ArrowDownToLine, '#17a45e'], ['cash_out', 'Изъятие', ArrowUpFromLine, '#e8890c'], ['expense', 'Расход', ReceiptText, '#e0245a']] as const).map(([a, l, Icon, color]) => (
+                    <button key={a} onClick={() => openAction(a)} className="flex flex-col items-center justify-center gap-1.5 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: color, padding: 'clamp(1rem,1.6vw,1.4rem) 0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.02rem)', boxShadow: `0 4px 12px ${color}44` }}>
+                      <Icon style={{ width: '1.6em', height: '1.6em' }} />{l}
                     </button>
                   ))}
                 </div>
-                {/* Обслуживание официантов — выплаты (дизайн: в правой колонке смены) */}
-                <div className="rounded-2xl" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.4rem)' }}>
-                  <div className="flex items-center justify-between" style={{ marginBottom: '0.7rem' }}>
-                    <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Обслуживание</span>
-                    {svcToPay > 0 && <span className="rounded-full font-bold" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.2rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>к выплате {formatCurrency(svcToPay)}</span>}
+                {/* Расходы из смены — список + удаление */}
+                <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '0.6rem' }}>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.35vw,1.15rem)' }}>Расходы из смены</span>
+                    {expenses > 0 && <span className="rounded-lg font-bold" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.15rem 0.6rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Итого {formatCurrency(expenses)}</span>}
                   </div>
-                  {svcRows.length === 0 ? (
-                    <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '0.6rem 0', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Нет начислений в этой смене</div>
-                  ) : (
-                    <div className="flex flex-col" style={{ gap: '0.5rem' }}>
-                      {svcRows.map(r => (
-                        <div key={r.waiterId} className="flex items-center gap-2.5 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.55rem 0.7rem' }}>
-                          <div className="rounded-full flex items-center justify-center font-bold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', width: '2.2rem', height: '2.2rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{svcInitials(r.waiterName)}</div>
-                          <div className="min-w-0 flex-1">
-                            <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{r.waiterName}</div>
-                            <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>нач. {formatCurrency(r.accrued)} · вып. {formatCurrency(r.paid)}</div>
-                          </div>
-                          {r.toPay > 0 ? (
-                            <button disabled={svcPayingId === r.waiterId} onClick={() => payService(r)} className="flex items-center gap-1.5 rounded-lg font-bold text-white shrink-0 disabled:opacity-50 active:scale-95 transition-transform" style={{ background: 'var(--pv-brand)', padding: '0.45rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
-                              <HandCoins style={{ width: '0.95rem', height: '0.95rem' }} />{svcPayingId === r.waiterId ? '…' : formatCurrency(r.toPay)}
-                            </button>
-                          ) : (
-                            <span className="flex items-center gap-1 rounded-lg shrink-0" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.4rem 0.6rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}><Check style={{ width: '0.9rem', height: '0.9rem' }} />Выплачено</span>
-                          )}
-                        </div>
-                      ))}
+                  {expenseOps.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Расходов пока нет</span> : expenseOps.map(o => (
+                    <div key={o.id} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.55rem 0.7rem' }}>
+                      <div className="rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--pv-occ-soft)', width: '2rem', height: '2rem' }}><ReceiptText style={{ width: '1rem', height: '1rem', color: 'var(--pv-occ-text)' }} /></div>
+                      <div className="flex-1 min-w-0"><div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{o.category}</div>{o.description && <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{o.description}</div>}</div>
+                      <span className="font-bold shrink-0" style={{ color: 'var(--pv-occ-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>−{formatCurrency(Number(o.amount))}</span>
+                      <button onClick={() => deleteExpense(o.id)} disabled={busy} className="shrink-0 disabled:opacity-40" style={{ padding: '0.2rem' }} aria-label="Удалить расход"><Trash2 style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>
                     </div>
-                  )}
+                  ))}
                 </div>
               </div>
             </div>
@@ -518,7 +576,7 @@ export default function PosV2Shift() {
                     const disc = (s.closingBalance != null && s.expectedCash != null) ? dSub(s.closingBalance, s.expectedCash) : null
                     const isOpen = s.status !== 'closed'
                     return (
-                      <div key={s.id} className="rounded-2xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }}>
+                      <button key={s.id} onClick={() => openHistZ(s)} className="w-full text-left rounded-2xl active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }} title="Открыть разбивку смены">
                         <div className="flex items-center justify-between" style={{ gap: '0.5rem' }}>
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{new Date(s.openedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{s.closedAt ? ` — ${new Date(s.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
@@ -532,11 +590,80 @@ export default function PosV2Shift() {
                           <span>Ср. чек {formatCurrency(s.avgCheck)}</span>
                           {disc != null && <span style={{ color: disc === 0 ? 'var(--pv-text-3)' : 'var(--pv-occ-text)' }}>Расхождение {disc > 0 ? '+' : ''}{formatCurrency(disc)}</span>}
                         </div>
-                      </div>
+                      </button>
                     )
                   })}
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Разбивка прошлой смены (Z-отчёт по тапу в истории) */}
+      {histZShift && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setHistZShift(null)}>
+          <div className="rounded-3xl overflow-hidden flex flex-col" style={{ background: 'var(--pv-card)', width: 'clamp(22rem,56vw,44rem)', maxHeight: '88vh', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+              <div className="min-w-0">
+                <div className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Разбивка смены</div>
+                <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{new Date(histZShift.openedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{histZShift.closedAt ? ` — ${new Date(histZShift.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : ''}</div>
+              </div>
+              <button onClick={() => setHistZShift(null)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.8rem,1.4vw,1.2rem)', display: 'flex', flexDirection: 'column', gap: 'var(--pv-gap)' }}>
+              {histZLoading || !histZ ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
+              ) : (() => {
+                const rev = histZ.cashRevenue + histZ.cardRevenue
+                return (<>
+                  <div className="grid grid-cols-3" style={{ gap: 'var(--pv-gap)' }}>
+                    {([['Выручка', formatCurrency(rev)], ['Заказов', String(histZ.ordersCount)], ['Средний чек', formatCurrency(histZ.avgCheck)]] as const).map(([l, v]) => (
+                      <div key={l} className="rounded-2xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1.1vw,1rem)' }}>
+                        <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{l}</div>
+                        <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.3rem)' }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.6rem' }}>
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Оплата по способам</div>
+                    {histZ.revenueByMethod.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Нет продаж</span> : histZ.revenueByMethod.map((r, i) => { const cash = r.paymentMethod === 'cash'; return (
+                      <div key={i} className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{r.accountName || (cash ? 'Наличные' : 'Безналичные')}</span><span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                    ) })}
+                    <div style={{ height: '1px', background: 'var(--pv-border)' }} />
+                    <div className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Расход</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(histZ.expensesTotal)}</span></div>
+                    <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Итог</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>{formatCurrency(rev - histZ.expensesTotal)}</span></div>
+                  </div>
+                  <div className="flex flex-wrap" style={{ gap: 'var(--pv-gap)' }}>
+                    <div className="flex-1 rounded-2xl flex flex-col" style={{ minWidth: '12rem', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>По категориям</div>
+                      {histZ.salesByCategory.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>—</span> : histZ.salesByCategory.map((r, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{r.name} · {r.qty}</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                      ))}
+                    </div>
+                    <div className="flex-1 rounded-2xl flex flex-col" style={{ minWidth: '12rem', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Проданные блюда</div>
+                      {histZ.salesByItem.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>—</span> : histZ.salesByItem.map((r, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{r.name} ×{r.qty}</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                    <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>По типу заказа</div>
+                    {histZ.salesByOrderType.map((r, i) => (
+                      <div key={i} className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{r.type === 'hall' ? 'В зале' : r.type === 'takeaway' ? 'С собой' : r.type === 'delivery' ? 'Доставка' : r.type} · {r.ordersCount}</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(r.total)}</span></div>
+                    ))}
+                  </div>
+                  {histZ.salesByWaiter.length > 0 && (
+                    <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>
+                      <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>По официантам</div>
+                      {histZ.salesByWaiter.map((w, i) => (
+                        <div key={i} className="flex items-center justify-between gap-2"><span className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{w.name} · {w.ordersCount} зак.</span><span className="font-semibold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(w.total)}</span></div>
+                      ))}
+                    </div>
+                  )}
+                </>)
+              })()}
             </div>
           </div>
         </div>

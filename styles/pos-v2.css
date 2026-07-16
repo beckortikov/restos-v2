@@ -103,6 +103,59 @@
   min-height: 0;
 }
 
+/* Горизонтальные ленты (категории, зоны-табы): скролл работает свайпом/колесом,
+   но полоса прокрутки внизу не показывается — она мешает и ломает высоту. */
+.pos-v2 .pv-noscroll {
+  scrollbar-width: none;      /* Firefox */
+  -ms-overflow-style: none;   /* IE/Edge */
+}
+.pos-v2 .pv-noscroll::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;              /* WebKit (Chrome/Electron) */
+}
+
+/* Тач-скролл сетки блюд: полоса ВИЗУАЛЬНО тонкая (thumb ~8px), но общая ширина
+   дорожки ~16px — комфортно двигать пальцем на тач-кассе. Плавная инерция на
+   тач через touch-action/overscroll. */
+.pos-v2 .pv-scroll {
+  scrollbar-width: thin;                      /* Firefox: тонкая */
+  scrollbar-color: var(--pv-border) transparent;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+.pos-v2 .pv-scroll::-webkit-scrollbar {
+  width: 16px;                                /* широкая зона захвата пальцем */
+}
+.pos-v2 .pv-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.pos-v2 .pv-scroll::-webkit-scrollbar-thumb {
+  background: var(--pv-border);
+  border-radius: 999px;
+  /* прозрачная рамка «съедает» ширину визуально → тонкий thumb, но касание по всей дорожке */
+  border: 4px solid transparent;
+  background-clip: content-box;
+  min-height: 40px;                           /* палец легко попадает */
+}
+.pos-v2 .pv-scroll::-webkit-scrollbar-thumb:hover,
+.pos-v2 .pv-scroll::-webkit-scrollbar-thumb:active {
+  background: var(--pv-text-3);
+  background-clip: content-box;
+}
+
+/* Боковой выезжающий drawer (как «Заказы» в старом POS — Sheet слева). */
+@keyframes pv-slide-in-left {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(0); }
+}
+.pos-v2 .pv-drawer-left { animation: pv-slide-in-left 0.2s ease-out; }
+@keyframes pv-slide-in-right {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+.pos-v2 .pv-drawer-right { animation: pv-slide-in-right 0.2s ease-out; }
+
 /* ── Уважение к prefers-reduced-motion (WCAG 2.3.3) ──────────────── */
 @media (prefers-reduced-motion: reduce) {
   .pos-v2 *,

@@ -1,9 +1,9 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
-import { SquareSplitHorizontal, ArrowRightLeft, Trash2, Users, ChevronRight, UserCog, Receipt, CheckCircle2, Check } from 'lucide-react'
+import { SquareSplitHorizontal, ArrowRightLeft, Trash2, Users, ChevronRight, UserCog, Check } from 'lucide-react'
 import { toast } from 'sonner'
-import { splitOrderEqual, splitOrderByItems, transferOrder, cancelOrder, updateOrderStatus, updateTableStatus, assignWaiter, fetchUsers } from '@/lib/queries'
+import { splitOrderEqual, splitOrderByItems, transferOrder, cancelOrder, assignWaiter, fetchUsers } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
@@ -39,7 +39,7 @@ export function OrderExtras({ order, tables, servicePercent, open, onClose, onCh
   if (!open) return null
   const sp = order.type === 'hall' ? servicePercent : 0
   const freeTables = tables.filter(t => t.status === 'free' && t.id !== order.tableId)
-  // Назначение официанта / запрос счёта — только для зальных заказов (нужен стол).
+  // Назначение официанта — только для зальных заказов (нужен стол).
   const isHall = order.type === 'hall' && !!order.tableId
   const curWaiter = waiters.find(w => w.id === order.waiterId)
 
@@ -78,17 +78,6 @@ export function OrderExtras({ order, tables, servicePercent, open, onClose, onCh
     await assignWaiter(order.tableId!, waiterId)
     toast.success(waiterId ? 'Официант назначен' : 'Официант снят'); reset(); onChanged()
   })
-  // Запрос счёта: order-level bill_requested в v4 не имеет эндпоинта — флипаем
-  // статус СТОЛА (updateTableStatus), он и красит плитку «Счёт» на карте.
-  const doRequestBill = () => run(async () => {
-    await updateTableStatus(order.tableId!, 'bill_requested')
-    toast.success('Счёт запрошен'); reset(); onChanged()
-  })
-  const doServed = () => run(async () => {
-    await updateOrderStatus(order.id, 'served')
-    toast.success('Отмечено «подано»'); reset(); onChanged()
-  })
-
   const title = view === 'menu' ? 'Действия с заказом'
     : view === 'split' ? 'Разделить счёт'
     : view === 'transfer' ? 'Перенести на стол'
@@ -108,24 +97,6 @@ export function OrderExtras({ order, tables, servicePercent, open, onClose, onCh
                   <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{curWaiter ? curWaiter.name : 'не назначен'}</div>
                 </div>
                 <ChevronRight style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-text-3)' }} />
-              </button>
-            )}
-            {isHall && order.status !== 'bill_requested' && (
-              <button disabled={busy} onClick={doRequestBill} className="flex items-center gap-3 rounded-2xl text-left disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
-                <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-bill-soft)', width: '2.6rem', height: '2.6rem' }}><Receipt style={{ width: '1.35rem', height: '1.35rem', color: 'var(--pv-bill-text)' }} /></div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Запросить счёт</div>
-                  <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Стол → «Счёт» на карте зала</div>
-                </div>
-              </button>
-            )}
-            {order.status !== 'served' && order.status !== 'done' && (
-              <button disabled={busy} onClick={doServed} className="flex items-center gap-3 rounded-2xl text-left disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
-                <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-free-soft)', width: '2.6rem', height: '2.6rem' }}><CheckCircle2 style={{ width: '1.35rem', height: '1.35rem', color: 'var(--pv-free-text)' }} /></div>
-                <div className="flex-1 min-w-0">
-                  <div className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Отметить «подано»</div>
-                  <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Заказ подан гостю</div>
-                </div>
               </button>
             )}
             {([

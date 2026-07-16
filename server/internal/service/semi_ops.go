@@ -92,7 +92,12 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 		}
 
 		// 3. Списываем ингредиенты по рецепту: каждая строка × qty.
+		// Параллельно копим стоимость произведённой партии (Σ расход×цена) — из неё
+		// считаем себестоимость единицы п/ф (price_per_unit), которая нужна для
+		// с/с блюд на п/ф, оценки склада и списаний п/ф. Раньше price_per_unit не
+		// проставлялся вовсе → оставался 0, и всё это считалось с нулевой с/с п/ф.
 		mvType := "semi_out"
+		producedCost := decimal.Zero
 		for _, l := range lines {
 			if l.IngredientID == nil {
 				continue
@@ -100,6 +105,7 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 			ingID := *l.IngredientID
 			conv := convByID[ingID]
 			stockQty := conv.toStock(decimal.Mul(l.QtyPerUnit, qty), deref(l.Unit))
+			producedCost = decimal.Add(producedCost, decimal.Mul(stockQty, conv.pricePerUnit))
 			deduct := decimal.Normalize(stockQty).Neg()
 			unit := l.Unit
 			if conv.unit != "" {
@@ -122,6 +128,12 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 			}
 		}
 
+		// Себестоимость единицы этой партии = стоимость партии / произведённое кол-во.
+		batchUnitCost := decimal.Zero
+		if decimal.IsPositive(qty) {
+			batchUnitCost = decimal.DivRound(producedCost, qty)
+		}
+
 		// 4. Инкремент SemiFinishedStock — берём с lock или создаём.
 		var stock models.SemiFinishedStock
 		err = tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -135,6 +147,7 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 				Name:           st.Name,
 				Qty:            decimal.Normalize(qty),
 				Unit:           st.OutputUnit,
+				PricePerUnit:   decimal.Normalize(batchUnitCost),
 				LastProducedAt: &now,
 				RestaurantID:   &rid,
 				CreatedAt:      now,
@@ -146,7 +159,15 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 		} else if err != nil {
 			return err
 		} else {
-			stock.Qty = decimal.Normalize(decimal.Add(stock.Qty, qty))
+			// Скользящая средняя себестоимость: (старый остаток×старая цена +
+			// стоимость новой партии) / новый остаток. Так с/с п/ф отражает
+			// смешение партий разной стоимости (как у ингредиентов на приёмке).
+			newQty := decimal.Add(stock.Qty, qty)
+			if decimal.IsPositive(newQty) {
+				oldValue := decimal.Mul(stock.Qty, stock.PricePerUnit)
+				stock.PricePerUnit = decimal.Normalize(decimal.DivRound(decimal.Add(oldValue, producedCost), newQty))
+			}
+			stock.Qty = decimal.Normalize(newQty)
 			stock.LastProducedAt = &now
 			stock.UpdatedAt = now
 			if err := tx.Save(&stock).Error; err != nil {

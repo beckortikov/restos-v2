@@ -16,6 +16,9 @@ interface KdsApi {
     @POST("api/v1/kds/items/{id}/status")
     suspend fun setStatus(@Path("id") id: String, @Body body: SetStatusRequest): KdsItemDto
 
+    @POST("api/v1/kds/items/{id}/call-waiter")
+    suspend fun callWaiter(@Path("id") id: String): CallWaiterResponse
+
     @GET("api/v1/kds/stations")
     suspend fun stations(): StationsResponse
 }

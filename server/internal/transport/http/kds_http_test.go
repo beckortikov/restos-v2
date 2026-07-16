@@ -49,8 +49,10 @@ func TestKDS_HTTP(t *testing.T) {
 		t.Fatal(err)
 	}
 	note := "без лука"
+	gramUnit := "g"
 	plovItem, kebabItem := uuid.NewString(), uuid.NewString()
-	if err := gdb.Create(&models.OrderItem{ID: plovItem, OrderID: &oid, MenuItemID: &plovID, Name: &plov, Qty: decimal.MustFromString("2"), Note: &note}).Error; err != nil {
+	// Плов — весовое блюдо (unit=g): qty=200 = 200 граммов, а не «×200».
+	if err := gdb.Create(&models.OrderItem{ID: plovItem, OrderID: &oid, MenuItemID: &plovID, Name: &plov, Qty: decimal.MustFromString("2"), Unit: &gramUnit, Note: &note}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := gdb.Create(&models.OrderItem{ID: kebabItem, OrderID: &oid, MenuItemID: &kebabID, Name: &kebab, Qty: decimal.MustFromString("1")}).Error; err != nil {
@@ -99,6 +101,14 @@ func TestKDS_HTTP(t *testing.T) {
 	if plovCard["qty"] != "2" {
 		t.Errorf("qty = %v, want 2", plovCard["qty"])
 	}
+	// age_seconds присутствует и неотрицателен (блюдо только что создано → ~0).
+	if age, ok := plovCard["age_seconds"].(float64); !ok || age < 0 {
+		t.Errorf("age_seconds = %v (ok=%v), want number >= 0", plovCard["age_seconds"], ok)
+	}
+	// unit весового блюда доходит до кухни (для «200 г» вместо «×200»).
+	if plovCard["unit"] != "g" {
+		t.Errorf("unit = %v, want g", plovCard["unit"])
+	}
 
 	// ─── Фильтр по станции grill → только люля ───────────────────────────────
 	grillOnly := list(t, "?stations=grill")
@@ -131,6 +141,65 @@ func TestKDS_HTTP(t *testing.T) {
 	afterCancel := list(t, "")
 	if len(afterCancel) != 1 || afterCancel[0]["id"] != plovItem {
 		t.Fatalf("after cancel = %+v, want [plov]", afterCancel)
+	}
+}
+
+// TestKDS_CallWaiter — колокольчик «позвать официанта»: 200 + имя, когда у
+// заказа есть официант; 422, когда официанта нет.
+func TestKDS_CallWaiter(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	waiterID := uuid.NewString()
+	wname, wrole := "Диляра", "waiter"
+	if err := gdb.Create(&models.User{ID: waiterID, Name: &wname, Role: &wrole, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	st, typ := "new", "hall"
+	dish := "Салат Домашний большой"
+
+	// Заказ С официантом.
+	oid := uuid.NewString()
+	if err := gdb.Create(&models.Order{ID: oid, RestaurantID: &f.rid, Status: &st, Type: &typ, OrderNumber: 58, WaiterID: &waiterID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	itemID := uuid.NewString()
+	if err := gdb.Create(&models.OrderItem{ID: itemID, OrderID: &oid, Name: &dish, Qty: decimal.MustFromString("1")}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	tok := f.login(t)
+
+	code, body := postJSON(t, f.srv.URL+fmt.Sprintf("/api/v1/kds/items/%s/call-waiter", itemID), tok, map[string]any{})
+	if code != 200 {
+		t.Fatalf("call-waiter: %d %s", code, body)
+	}
+	var out struct {
+		WaiterName string `json:"waiter_name"`
+	}
+	_ = json.Unmarshal(body, &out)
+	if out.WaiterName != wname {
+		t.Errorf("waiter_name = %q, want %q", out.WaiterName, wname)
+	}
+
+	// Заказ БЕЗ официанта → 422.
+	oid2 := uuid.NewString()
+	if err := gdb.Create(&models.Order{ID: oid2, RestaurantID: &f.rid, Status: &st, Type: &typ, OrderNumber: 59}).Error; err != nil {
+		t.Fatal(err)
+	}
+	item2 := uuid.NewString()
+	if err := gdb.Create(&models.OrderItem{ID: item2, OrderID: &oid2, Name: &dish, Qty: decimal.MustFromString("1")}).Error; err != nil {
+		t.Fatal(err)
+	}
+	code2, body2 := postJSON(t, f.srv.URL+fmt.Sprintf("/api/v1/kds/items/%s/call-waiter", item2), tok, map[string]any{})
+	if code2 != 400 {
+		t.Errorf("no-waiter call = %d %s, want 400", code2, body2)
 	}
 }
 

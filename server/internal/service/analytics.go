@@ -91,7 +91,7 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 	q := scoped.Table("order_items AS oi").
 		Select(`oi.menu_item_id AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
-		        COALESCE(SUM(oi.qty), 0) AS qty,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END), 0) AS qty,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS revenue,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").

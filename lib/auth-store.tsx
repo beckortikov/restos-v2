@@ -8,6 +8,7 @@ import {
   type User, type UserRole, type UserPermissions, type Restaurant, type PermissionKey,
 } from '@/lib/types'
 import { api, unwrap, setV4Token, clearV4Token, getV4Token, getV4RestaurantId, clearV4RestaurantId, v4ErrorMessage } from '@/lib/api'
+import { mapRestaurantRow } from '@/lib/queries/_mappers'
 import * as Sentry from '@sentry/react'
 import { queryClient } from '@/lib/query-client'
 
@@ -306,24 +307,10 @@ function mapResponseUser(row: any): Partial<User> {
   } as Partial<User>
 }
 
+// Единый маппер из lib/queries/_mappers — свой локальный дубликат уже дважды
+// терял поля (tech_cards_enabled → false; pin_lock_enabled вообще не мапился,
+// из-за чего фоновый рефетч ресторана стирал флаг и PIN-автоблокировка POS
+// молча выключалась).
 function mapResponseRestaurant(row: any): Restaurant {
-  return {
-    id: row.id,
-    name: row.name,
-    slug: row.slug || '',
-    logoUrl: row.logo_url,
-    address: row.address,
-    phone: row.phone,
-    currency: row.currency || 'UZS',
-    servicePercent: Number(row.service_percent || 0),
-    timezone: row.timezone || 'Asia/Tashkent',
-    enforceStockCheck: !!row.enforce_stock_check,
-    // Дефолт техкарт — true (как в БД `default:true` и lib/queries/_mappers).
-    // Раньше тут был `!!row.tech_cards_enabled` → null/undefined давал false,
-    // расходясь с настройками (react-query маппер) и бэком.
-    techCardsEnabled: row.tech_cards_enabled ?? true,
-    // Экранная клавиатура — default false. Нужна в restaurant контексте, т.к.
-    // OnScreenKeyboard гейтится по useAuth().restaurant?.onScreenKeyboardEnabled.
-    onScreenKeyboardEnabled: row.on_screen_keyboard_enabled ?? false,
-  } as Restaurant
+  return mapRestaurantRow(row)
 }

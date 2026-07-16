@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/restos/restos-v4/server/internal/pkg/apkmeta"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 )
 
@@ -42,16 +43,18 @@ func (s *WaiterAppService) metaPath() string {
 
 // waiterAppMeta — метаданные загрузки (рядом с APK).
 type waiterAppMeta struct {
-	Version    string    `json:"version"`
-	FileName   string    `json:"file_name"`
-	SizeBytes  int64     `json:"size_bytes"`
-	UploadedAt time.Time `json:"uploaded_at"`
+	Version     string    `json:"version"`      // versionName из APK
+	VersionCode int       `json:"version_code"` // versionCode из APK (для сравнения)
+	FileName    string    `json:"file_name"`
+	SizeBytes   int64     `json:"size_bytes"`
+	UploadedAt  time.Time `json:"uploaded_at"`
 }
 
-// WaiterAppInfo — состояние APK для UI кассы.
+// WaiterAppInfo — состояние APK для UI кассы и автообновления официанта.
 type WaiterAppInfo struct {
 	Available    bool       `json:"available"`
-	Version      string     `json:"version"`
+	Version      string     `json:"version"`      // versionName, напр. "0.2.16"
+	VersionCode  int        `json:"version_code"` // versionCode, напр. 18
 	FileName     string     `json:"file_name"`
 	SizeBytes    int64      `json:"size_bytes"`
 	UploadedAt   *time.Time `json:"uploaded_at"`
@@ -77,6 +80,7 @@ func (s *WaiterAppService) Info() (*WaiterAppInfo, error) {
 		var m waiterAppMeta
 		if json.Unmarshal(b, &m) == nil {
 			info.Version = m.Version
+			info.VersionCode = m.VersionCode
 			info.FileName = m.FileName
 			if m.SizeBytes > 0 {
 				info.SizeBytes = m.SizeBytes
@@ -84,6 +88,16 @@ func (s *WaiterAppService) Info() (*WaiterAppInfo, error) {
 			if !m.UploadedAt.IsZero() {
 				t := m.UploadedAt
 				info.UploadedAt = &t
+			}
+		}
+	}
+	// APK загружен до этой доработки (нет version_code в meta) — парсим на лету,
+	// чтобы автообновление корректно сравнивало версии.
+	if info.VersionCode == 0 {
+		if pm, perr := apkmeta.Read(s.apkPath); perr == nil {
+			info.VersionCode = pm.VersionCode
+			if info.Version == "" {
+				info.Version = pm.VersionName
 			}
 		}
 	}
@@ -120,7 +134,16 @@ func (s *WaiterAppService) Save(src io.Reader, version, fileName string, now tim
 		_ = os.Remove(tmp)
 		return nil, err
 	}
-	meta := waiterAppMeta{Version: version, FileName: fileName, SizeBytes: n, UploadedAt: now.UTC()}
+	// Версию берём из самого APK (AndroidManifest.xml) — форма загрузки её не
+	// передаёт. Если распарсить не удалось, оставляем то, что пришло в запросе.
+	versionCode := 0
+	if pm, perr := apkmeta.Read(s.apkPath); perr == nil {
+		versionCode = pm.VersionCode
+		if pm.VersionName != "" {
+			version = pm.VersionName
+		}
+	}
+	meta := waiterAppMeta{Version: version, VersionCode: versionCode, FileName: fileName, SizeBytes: n, UploadedAt: now.UTC()}
 	if b, err := json.Marshal(meta); err == nil {
 		_ = os.WriteFile(s.metaPath(), b, 0o644)
 	}

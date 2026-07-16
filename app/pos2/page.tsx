@@ -3,12 +3,15 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Utensils, LayoutGrid, ReceiptText, Wallet, ChefHat,
-  History, Settings, LogOut, OctagonX, ClipboardList, PackageCheck, CookingPot,
+  Utensils, LayoutGrid, Wallet, ChefHat,
+  Settings, LogOut, OctagonX, PackageCheck, CookingPot, Lock,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 import { fetchActiveShift } from '@/lib/queries'
 import { FailedPrintsButton } from '@/components/order/failed-prints-button'
+
+// Вшивается Vite (define в vite.config.ts) из desktop/package.json.
+declare const __APP_VERSION__: string
 
 // Плитки ведут ТОЛЬКО на экраны /pos2/*. Плитка «Кухня (KDS)» убрана — она вела
 // на старый POS (/operations/kitchen), из-за чего кассир проваливался в старый
@@ -26,13 +29,10 @@ const TILES: Array<{
 }> = [
   { icon: Utensils, label: 'Новый заказ', sub: 'Меню и оплата', to: '/pos2/order', req: '/operations/pos', primary: true },
   { icon: LayoutGrid, label: 'Карта зала', sub: 'Столы и брони', to: '/pos2/tables', req: '/operations/table-map' },
-  { icon: ClipboardList, label: 'Активные заказы', sub: 'Все / зал / с собой / закрытые', to: '/pos2/orders', req: '/operations/orders' },
-  { icon: ReceiptText, label: 'Заказы к оплате', sub: 'Оплатить открытые', to: '/pos2/pay', req: '/operations/pos' },
   { icon: Wallet, label: 'Кассовая смена', sub: 'Выручка · движение · обслуживание', to: '/pos2/shift', req: '/operations/shifts' },
   { icon: OctagonX, label: 'Стоп-лист', sub: 'Стоп/возврат блюд', to: '/pos2/stop', req: '/warehouse/menu' },
   { icon: PackageCheck, label: 'Витрина', sub: 'Списания и полуфабрикаты', to: '/pos2/showcase', req: '/operations/showcase' },
   { icon: CookingPot, label: 'Заготовки', sub: 'Приготовление партий', to: '/pos2/batch', req: '/operations/batch-cooking' },
-  { icon: History, label: 'История', sub: 'Оплаты и возвраты', to: '/pos2/history', req: '/operations/orders' },
   { icon: Settings, label: 'Настройки', sub: 'Интерфейс, принтеры, меню', to: '/pos2/settings', req: '/cashier/settings' },
 ]
 
@@ -43,6 +43,13 @@ export default function PosV2Launcher() {
   // правам (hasAccess мапит /pos2-плитку на старый маршрут). owner/manager → всё.
   const tiles = TILES.filter(t => hasAccess(t.req))
   const initial = (user?.name || 'К').trim().charAt(0).toUpperCase()
+  // Версия ПОС: в Electron — из preload (актуальная у бинаря), иначе — вшитая при
+  // сборке (__APP_VERSION__ из desktop/package.json), чтобы показывалась и в LAN-браузере.
+  const posVersion = (typeof window !== 'undefined'
+    ? (window as unknown as { restosDesktop?: { version?: string } }).restosDesktop?.version
+    : undefined) ?? __APP_VERSION__
+  // Ручная блокировка экрана доступна только при включённом PIN-локе.
+  const pinLockEnabled = restaurant?.pinLockEnabled ?? false
   // Реальный статус смены вместо захардкоженного «Смена открыта» (вводил в
   // заблуждение — показывался всегда). null = ещё грузим, не показываем бейдж.
   const [shiftOpen, setShiftOpen] = useState<boolean | null>(null)
@@ -82,7 +89,7 @@ export default function PosV2Launcher() {
               className="truncate hidden sm:block"
               style={{ color: 'var(--pv-text-3)', fontSize: 'clamp(0.7rem,0.95vw,0.9rem)' }}
             >
-              Терминал кассира · новый интерфейс
+              {`Терминал кассира · v${posVersion}`}
             </div>
           </div>
         </div>
@@ -115,6 +122,19 @@ export default function PosV2Launcher() {
               {user?.name || 'Кассир'}
             </span>
           </div>
+          {/* Блокировка экрана PIN'ом — вручную из меню (виден при включённом
+              PIN-локе). Шлёт событие, LockGate в PosV2Layout ставит блок. */}
+          {pinLockEnabled && (
+            <button
+              onClick={() => window.dispatchEvent(new Event('pos-v2:lock-request'))}
+              className="flex items-center justify-center rounded-xl border transition-transform active:scale-95 shrink-0"
+              style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', width: 'clamp(2.4rem,3.2vw,3rem)', height: 'clamp(2.4rem,3.2vw,3rem)' }}
+              title="Заблокировать экран (PIN)"
+              aria-label="Заблокировать экран"
+            >
+              <Lock style={{ width: 'clamp(1.05rem,1.4vw,1.25rem)', height: 'clamp(1.05rem,1.4vw,1.25rem)' }} />
+            </button>
+          )}
           <button
             onClick={() => navigate('/operations/pos')}
             className="flex items-center gap-2 rounded-xl transition-transform active:scale-95 shrink-0"

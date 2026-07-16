@@ -161,6 +161,25 @@ export interface MenuItem {
   unitSize?: number // price is per N units (1шт | 100г | 1кг)
   saleStep?: number // minimum increment (50г for scales); 0 = any
   masterId?: string | null // сетевое меню (ADR-004): !=null → блюдо из мастера сети
+  // Товары с атрибутами (Размер/Вкус): продукт-родитель хранит attributes,
+  // сгенерированные варианты — parentId + variantValueIds (их комбинация).
+  // Варианты скрыты из списков UI; POS резолвит комбинацию → вариант.
+  parentId?: string | null
+  attributes?: MenuAttribute[]
+  variantValueIds?: string[]
+}
+
+// Значение атрибута — чистый лейбл: цена и закупка задаются per-комбинация
+// и живут на строке варианта (menu_items.price / cogs).
+export interface MenuAttributeValue {
+  id: string
+  label: string   // «1 л»
+}
+
+export interface MenuAttribute {
+  id: string
+  name: string         // «Размер»
+  values: MenuAttributeValue[]
 }
 
 export interface SemiRecipeLine {
@@ -232,6 +251,14 @@ export interface Ingredient {
   unitWeightUnit?: string // единица фактора (г/мл)
   isFood: boolean // true = продукт, false = хозтовар
   nomenclatureId?: string | null // multi-branch: привязка к сетевому каталогу (ADR-003)
+  warehouseId?: string // склад, где лежит товар (мультисклад)
+}
+
+// Warehouse — склад (мультисклад). 3 фиксированных: products/purchased/supplies.
+export interface Warehouse {
+  id: string
+  name: string
+  kind: 'products' | 'purchased' | 'supplies'
 }
 
 export interface OrderItem {
@@ -399,6 +426,7 @@ export interface StockMovement {
   unit: string
   timestamp: string
   belowZero?: boolean
+  warehouseId?: string
 }
 
 export interface FinancialAccount {
@@ -742,6 +770,7 @@ export const TEST_PASSWORD = '1234'
 export const ALL_PERMISSIONS = [
   'orders.create', 'orders.close', 'orders.cancel', 'orders.void',
   'orders.refund',
+  'orders.edit',
   'orders.reprint',
   'orders.view_others',
   'orders.create_stopped',
@@ -771,7 +800,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'orders.close': 'Закрытие / оплата заказов',
   'orders.cancel': 'Отмена заказов',
   'orders.void': 'Отмена позиций (void)',
-  'orders.refund': 'Возврат заказа',
+  'orders.refund': 'Возврат закрытого заказа',
+  'orders.edit': 'Редактирование заказа (переоткрытие закрытого)',
   'orders.reprint': 'Повторная печать чека (копия)',
   'orders.view_others': 'Просмотр и дозаказ к чужим заказам',
   'orders.create_stopped': 'Пробивать стоп-блюда (отметка в чеке)',
@@ -803,7 +833,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 export const PERMISSION_GROUPS: { label: string; keys: PermissionKey[] }[] = [
-  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'pos.access', 'showcase.view'] },
+  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.edit', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'pos.access', 'showcase.view'] },
   { label: 'Склад', keys: ['inventory.view', 'inventory.manage', 'suppliers.manage', 'menu.view', 'menu.edit', 'menu.view_cost', 'writeoffs.create'] },
   { label: 'Финансы', keys: ['finance.view', 'finance.manage', 'payroll.manage'] },
   { label: 'Аналитика и клиенты', keys: ['analytics.view', 'customers.manage'] },
@@ -858,7 +888,8 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
     nav: [],
     actions: {
       'orders.create': true, 'orders.close': true, 'orders.void': true,
-      'orders.refund': true,
+      // orders.refund / orders.edit — выключены по умолчанию; выдаются в матрице
+      // доступов вручную (возврат и переоткрытие закрытого — чувствительные).
       'orders.reprint': true,
       'orders.view_others': true,
       'orders.service_charge': true,

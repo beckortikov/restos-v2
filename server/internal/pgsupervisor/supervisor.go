@@ -3,7 +3,10 @@ package pgsupervisor
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
+	"path/filepath"
+	"time"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
 	"github.com/rs/zerolog/log"
@@ -41,9 +44,36 @@ func New(cfg *config.Config) (*Supervisor, error) {
 		DataPath(cfg.PGDataDir()).
 		RuntimePath(cfg.PGRuntimeDir()).
 		BinariesPath(cfg.PGRuntimeDir()).
+		// Дефолт embedded-postgres — 15 с. Этого мало для ХОЛОДНОГО старта после
+		// авто-апдейта: WAL-recovery после нечистого выключения (форс-килл старого
+		// PG при апдейте), скан бинаря антивирусом, холодный дисковый кэш — легко
+		// превышают 15 с → «backend не запустился». Даём 90 с.
+		StartTimeout(90 * time.Second).
 		Logger(newPGLogger()))
 
 	return &Supervisor{cfg: cfg, pg: pg}, nil
+}
+
+// clearStaleLock удаляет устаревший pgdata/postmaster.pid, ОСТАВШИЙСЯ от
+// нечистого выключения (после авто-апдейта старый PG форс-килят, lock остаётся).
+// Такой lock заставляет pg_ctl отказать в старте или зависнуть. Удаляем ТОЛЬКО
+// если порт PG молчит (значит живого PG нет) — чтобы не убить реально
+// работающий сервер. Безопасно при любом способе запуска (dev/electron).
+func (s *Supervisor) clearStaleLock() {
+	lock := filepath.Join(s.cfg.PGDataDir(), "postmaster.pid")
+	if _, err := os.Stat(lock); err != nil {
+		return // lock-файла нет — чистить нечего
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", s.cfg.PGPort)
+	if c, err := net.DialTimeout("tcp", addr, 500*time.Millisecond); err == nil {
+		_ = c.Close()
+		return // порт отвечает → PG жив, lock НЕ трогаем
+	}
+	if err := os.Remove(lock); err != nil {
+		log.Warn().Err(err).Str("lock", lock).Msg("не удалось удалить устаревший postmaster.pid")
+		return
+	}
+	log.Info().Msg("удалён устаревший postmaster.pid (восстановление после нечистого выключения)")
 }
 
 // Start блокирующе инициализирует и запускает Postgres.
@@ -54,6 +84,10 @@ func (s *Supervisor) Start(ctx context.Context) error {
 		Uint32("port", s.cfg.PGPort).
 		Str("version", s.cfg.PGVersion).
 		Msg("starting embedded-postgres")
+
+	// Чистим устаревший lock ДО старта — иначе pg_ctl может зависнуть/отказать
+	// после нечистого выключения (типичный сценарий после авто-апдейта).
+	s.clearStaleLock()
 
 	if err := s.pg.Start(); err != nil {
 		return fmt.Errorf("embedded-postgres start: %w", err)

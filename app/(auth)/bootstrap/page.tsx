@@ -1,9 +1,19 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { UtensilsCrossed, AlertCircle, CheckCircle2, ArrowRight } from 'lucide-react'
-import { api, unwrap, setV4RestaurantId, setV4Token, v4ErrorMessage } from '@/lib/api'
+import { UtensilsCrossed, AlertCircle, CheckCircle2, ArrowRight, DatabaseBackup, RotateCcw, Upload, Loader2, Clock } from 'lucide-react'
+import { api, unwrap, setV4RestaurantId, setV4Token, v4ErrorMessage, getBaseURL } from '@/lib/api'
+
+type SetupBackup = { name: string; size_bytes: number; created_at: string; tier: string }
+
+function fmtBk(iso: string): string {
+  try { return new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch { return iso }
+}
+function fmtBkSize(b: number): string {
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} КБ`
+  return `${(b / 1024 / 1024).toFixed(1)} МБ`
+}
 
 type Mode = 'check' | 'init' | 'connect' | 'done'
 
@@ -25,6 +35,14 @@ export default function BootstrapPage() {
   const [restaurants, setRestaurants] = useState<{ id: string; name: string }[]>([])
   const [manual, setManual] = useState(false)
 
+  // Восстановление из бэкапа прямо здесь (без создания временного ресторана).
+  const [backups, setBackups] = useState<SetupBackup[]>([])
+  const [showRestore, setShowRestore] = useState(false)
+  const [restoring, setRestoring] = useState(false)
+  const [didRestore, setDidRestore] = useState(false)
+  const [selectedBk, setSelectedBk] = useState('')
+  const restoreFileRef = useRef<HTMLInputElement>(null)
+
   useEffect(() => {
     let cancel = false
     ;(async () => {
@@ -36,6 +54,18 @@ export default function BootstrapPage() {
         // Предвыбираем единственный ресторан — владельцу останется только «Войти».
         if (list.length === 1) setRestId(list[0].id)
         setMode(s.initialized ? 'connect' : 'init')
+        // Пустая база → подтягиваем доступные бэкапы для аварийного восстановления.
+        if (!s.initialized) {
+          try {
+            const res = await fetch(getBaseURL() + '/api/v1/bootstrap/backups')
+            if (res.ok) {
+              const body = await res.json()
+              const files: SetupBackup[] = Array.isArray(body?.data) ? body.data : []
+              files.sort((a, b) => (a.created_at < b.created_at ? 1 : -1)) // свежие сверху
+              if (!cancel) { setBackups(files); if (files[0]) setSelectedBk(files[0].name) }
+            }
+          } catch { /* нет бэкапов — не критично */ }
+        }
       } catch (e) {
         if (cancel) return
         setError('Не удаётся связаться с сервером: ' + v4ErrorMessage(e))
@@ -44,6 +74,46 @@ export default function BootstrapPage() {
     })()
     return () => { cancel = true }
   }, [])
+
+  async function restoreExisting() {
+    if (!selectedBk || restoring) return
+    if (!confirm('Восстановить базу из этой копии? Текущая (пустая) база будет заменена данными из бэкапа.')) return
+    setRestoring(true); setError('')
+    try {
+      const res = await fetch(getBaseURL() + `/api/v1/bootstrap/restore/${encodeURIComponent(selectedBk)}`, { method: 'POST' })
+      if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+      finishRestore()
+    } catch (e) {
+      setError('Не удалось восстановить: ' + (e instanceof Error ? e.message : String(e)))
+      setRestoring(false)
+    }
+  }
+
+  async function restoreFromFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0]
+    if (!f) return
+    if (!f.name.endsWith('.dump')) { setError('Нужен файл .dump'); return }
+    if (!confirm(`Восстановить базу из файла «${f.name}»?`)) return
+    setRestoring(true); setError('')
+    try {
+      const fd = new FormData(); fd.append('file', f)
+      const res = await fetch(getBaseURL() + '/api/v1/bootstrap/restore', { method: 'POST', body: fd })
+      if (!res.ok) throw new Error((await res.text()).slice(0, 300))
+      finishRestore()
+    } catch (err) {
+      setError('Не удалось восстановить: ' + (err instanceof Error ? err.message : String(err)))
+      setRestoring(false)
+    }
+  }
+
+  function finishRestore() {
+    // База заменена. Перезапускаем страницу: bootstrap/status теперь вернёт
+    // initialized=true → появится экран входа. Владелец войдёт СТАРЫМ PIN.
+    setRestoring(false)
+    setDidRestore(true)
+    setMode('done')
+    setTimeout(() => { window.location.reload() }, 1500)
+  }
 
   async function runInit(e: React.FormEvent) {
     e.preventDefault()
@@ -184,6 +254,84 @@ export default function BootstrapPage() {
           </form>
         )}
 
+        {/* Аварийное восстановление из бэкапа — для случая, когда база пуста
+            (сброс/переустановка), а данные есть в резервной копии. Без создания
+            временного ресторана. */}
+        {mode === 'init' && !restoring && (
+          <div className="mt-4">
+            {!showRestore ? (
+              <button
+                onClick={() => setShowRestore(true)}
+                className="w-full flex items-center justify-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors py-2"
+              >
+                <DatabaseBackup className="size-4" />
+                Уже пользовались RestOS? Восстановить из резервной копии
+              </button>
+            ) : (
+              <div className="bg-card rounded-2xl border border-border p-5 space-y-3 shadow-sm">
+                <div className="flex items-center gap-2">
+                  <DatabaseBackup className="size-5 text-primary" />
+                  <h2 className="text-sm font-semibold">Восстановление из резервной копии</h2>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Вернёт всю базу (меню, заказы, официантов, лицензию) из бэкапа. Текущая пустая база будет заменена.
+                </p>
+
+                {backups.length > 0 && (
+                  <div className="space-y-2">
+                    <label className="block text-xs font-medium text-muted-foreground">Копии на этой кассе</label>
+                    <select
+                      value={selectedBk}
+                      onChange={e => setSelectedBk(e.target.value)}
+                      className="w-full px-3 py-2.5 bg-background border border-input rounded-xl text-sm"
+                    >
+                      {backups.map(b => (
+                        <option key={b.name} value={b.name}>{fmtBk(b.created_at)} · {fmtBkSize(b.size_bytes)} · {b.name}</option>
+                      ))}
+                    </select>
+                    <button
+                      onClick={restoreExisting}
+                      disabled={!selectedBk}
+                      className="w-full flex items-center justify-center gap-2 bg-primary text-primary-foreground py-2.5 rounded-xl text-sm font-semibold hover:bg-primary/90 disabled:opacity-60 transition-colors"
+                    >
+                      <RotateCcw className="size-4" />
+                      Восстановить выбранную
+                    </button>
+                  </div>
+                )}
+
+                <div className={backups.length > 0 ? 'border-t border-border pt-3' : ''}>
+                  <button
+                    onClick={() => restoreFileRef.current?.click()}
+                    className="w-full flex items-center justify-center gap-2 bg-card border border-border py-2.5 rounded-xl text-sm font-medium hover:bg-muted transition-colors"
+                  >
+                    <Upload className="size-4" />
+                    Восстановить из файла (.dump)
+                  </button>
+                  <input ref={restoreFileRef} type="file" accept=".dump" onChange={restoreFromFile} className="hidden" />
+                  <p className="text-[11px] text-muted-foreground mt-1.5">
+                    Файлы бэкапов — в папке «RestOS-Backups» на Рабочем столе (или на флешке).
+                  </p>
+                </div>
+
+                <button onClick={() => setShowRestore(false)} className="text-xs text-muted-foreground hover:text-foreground w-full text-center">
+                  ← Скрыть
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {restoring && (
+          <div className="bg-card rounded-2xl border border-border p-8 flex flex-col items-center gap-3 shadow-sm">
+            <Loader2 className="size-10 text-primary animate-spin" />
+            <p className="text-base font-semibold">Восстановление базы…</p>
+            <p className="text-sm text-muted-foreground text-center flex items-center gap-1.5">
+              <Clock className="size-4" /> Не закрывайте кассу. Это может занять до минуты.
+            </p>
+          </div>
+        )}
+
         {mode === 'connect' && (
           <form onSubmit={saveExistingRestaurantId} className="bg-card rounded-2xl border border-border p-6 space-y-4 shadow-sm">
             {restaurants.length > 0 && !manual ? (
@@ -249,8 +397,8 @@ export default function BootstrapPage() {
         {mode === 'done' && (
           <div className="bg-card rounded-2xl border border-border p-8 flex flex-col items-center gap-3 shadow-sm">
             <CheckCircle2 className="size-14 text-primary" />
-            <p className="text-lg font-semibold">Готово!</p>
-            <p className="text-sm text-muted-foreground">Открываем dashboard…</p>
+            <p className="text-lg font-semibold">{didRestore ? 'База восстановлена!' : 'Готово!'}</p>
+            <p className="text-sm text-muted-foreground">{didRestore ? 'Открываем вход — войдите старым PIN владельца…' : 'Открываем dashboard…'}</p>
           </div>
         )}
       </div>

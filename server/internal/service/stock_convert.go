@@ -12,9 +12,10 @@ import (
 // веса/объёма. Нужна, чтобы привести рецептурный расход (тех-карта в г/мл) к
 // складской единице (шт/кг/...) в точках списания. См. units.ConvertToStock.
 type ingStockConv struct {
-	unit       string
-	unitWeight decimal.Decimal
-	weightUnit string
+	unit         string
+	unitWeight   decimal.Decimal
+	weightUnit   string
+	pricePerUnit decimal.Decimal // цена за складскую единицу — для расчёта с/с (напр. semi.Prepare)
 }
 
 // toStock переводит qty из рецептурной единицы recipeUnit в складскую единицу
@@ -32,15 +33,16 @@ func loadIngStockConv(tx *gorm.DB, ingredientIDs []string) (map[string]ingStockC
 		return out, nil
 	}
 	var ings []models.Ingredient
-	if err := tx.Select("id, unit, unit_weight, unit_weight_unit").
+	if err := tx.Select("id, unit, unit_weight, unit_weight_unit, price_per_unit").
 		Where("id IN ?", ingredientIDs).Find(&ings).Error; err != nil {
 		return nil, err
 	}
 	for _, i := range ings {
 		out[i.ID] = ingStockConv{
-			unit:       deref(i.Unit),
-			unitWeight: i.UnitWeight,
-			weightUnit: deref(i.UnitWeightUnit),
+			unit:         deref(i.Unit),
+			unitWeight:   i.UnitWeight,
+			weightUnit:   deref(i.UnitWeightUnit),
+			pricePerUnit: i.PricePerUnit,
 		}
 	}
 	return out, nil

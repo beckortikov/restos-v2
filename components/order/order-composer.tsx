@@ -13,6 +13,7 @@ import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, cal
 import { dMul, dDiv, dSum, dRound, dAdd } from '@/lib/decimal'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { WeightInputSheet } from '@/components/dialogs/weight-input-sheet'
+import { VariantPickerSheet } from '@/components/dialogs/variant-picker-sheet'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
@@ -359,6 +360,8 @@ export function OrderComposer(props: OrderComposerProps) {
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
   const [weightItem, setWeightItem] = useState<MenuItem | null>(null)
   const [weightValue, setWeightValue] = useState<number>(0)
+  // Продукт с атрибутами, для которого открыт пикер вариантов.
+  const [variantProduct, setVariantProduct] = useState<MenuItem | null>(null)
 
   const [orderType, setOrderType] = useState<OrderType>(newProps?.initialOrderType ?? 'hall')
   const [selectedTableId, setSelectedTableId] = useState<string>(newProps?.initialTableId ?? '')
@@ -574,15 +577,36 @@ export function OrderComposer(props: OrderComposerProps) {
   // это убирает лаг 300–800мс при наборе поискового запроса на мобильном.
   const deferredSearch = useDeferredValue(search)
 
+  // Варианты (parentId) продукта с атрибутами: не показываются отдельными
+  // плитками — их продукт-родитель одна плитка с пикером комбинаций.
+  const variantsByParent = useMemo(() => {
+    const map = new Map<string, MenuItem[]>()
+    for (const m of menuItems) {
+      if (m.parentId) (map.get(m.parentId) ?? map.set(m.parentId, []).get(m.parentId)!).push(m)
+    }
+    return map
+  }, [menuItems])
+
   // Единый предикат «прятать из меню ПОС»: заготовка без готовых порций ИЛИ
   // (нет права create_stopped и блюдо в стопе/недоступно). Применяется во ВСЕХ
   // представлениях меню (сетка drill-down, поиск, избранное, частые), иначе
   // стоп-блюда «вылезали» в одном из них.
-  const isPosHidden = useCallback((item: MenuItem) => {
+  const isPosHiddenLeaf = useCallback((item: MenuItem) => {
     if (item.isBatchCooking && (item.preparedQty ?? 0) <= 0) return true
     if (!canOrderStopped && (!item.isAvailable || stoppedIds.has(item.id))) return true
     return false
   }, [canOrderStopped, stoppedIds])
+
+  const isPosHidden = useCallback((item: MenuItem) => {
+    if (item.parentId) return true // вариант — не самостоятельная плитка
+    const variants = variantsByParent.get(item.id)
+    if (variants && variants.length > 0) {
+      // Продукт с вариантами: скрыт когда выключен сам или скрыты все варианты.
+      if (!item.isAvailable) return true
+      return variants.every(isPosHiddenLeaf)
+    }
+    return isPosHiddenLeaf(item)
+  }, [variantsByParent, isPosHiddenLeaf])
 
   const availableMenu = useMemo(() => {
     const q = deferredSearch.trim().toLowerCase()
@@ -643,7 +667,20 @@ export function OrderComposer(props: OrderComposerProps) {
   const selectedTable = tables.find(t => t.id === selectedTableId)
 
   // Cart ops ----------------------------------------------------------------
+  // Ценник плитки: у продукта с вариантами — «от минимальной» цены вариантов.
+  const tilePriceLabel = useCallback((item: MenuItem) => {
+    const variants = variantsByParent.get(item.id)
+    if (variants && variants.length > 0) return `от ${formatCurrencyCompact(Math.min(...variants.map(v => v.price)))}`
+    return formatPriceLabel(item.price, item.unit, item.unitSize)
+  }, [variantsByParent])
+
   const addToCart = useCallback((item: MenuItem) => {
+    // Продукт с вариантами: открываем пикер комбинации — в корзину попадает
+    // menu_item_id конкретного варианта (у него свой price/склад/техкарта).
+    if (variantsByParent.has(item.id)) {
+      setVariantProduct(item)
+      return
+    }
     // Stop-list gating. Два источника блокировки:
     //   1) legacy `!item.isAvailable` — owner вручную пометил в menu admin;
     //   2) backend stop-list (`stoppedIds`) — computed-on-read из shortage
@@ -692,7 +729,7 @@ export function OrderComposer(props: OrderComposerProps) {
     // Auto-clear search so the waiter can immediately type the next dish
     // without manually deleting the previous query.
     setSearch('')
-  }, [canOrderStopped, stoppedIds, stopReasons])
+  }, [canOrderStopped, stoppedIds, stopReasons, variantsByParent])
 
   const confirmWeight = useCallback((portionQty: number = 1) => {
     if (!weightItem || weightValue <= 0) return
@@ -991,10 +1028,13 @@ export function OrderComposer(props: OrderComposerProps) {
   }, [menuItems, isPosHidden])
 
   // Категории + количество блюд (для главного экрана drill-down).
+  // Пустые категории (count 0) НЕ отбрасываем: их пользователь добавил намеренно
+  // в «Управление меню», и они должны быть видны в кассе (иначе только что
+  // созданная категория не появляется). Сортируем по числу блюд — populated
+  // впереди, пустые в конце (стабильно сохраняя порядок sortOrder меж собой).
   const categoriesWithCounts = useMemo(
     () => visibleCategories
       .map(cat => ({ name: cat, count: dishesByCategory.get(cat)?.length ?? 0 }))
-      .filter(x => x.count > 0)
       .sort((a, b) => b.count - a.count),
     [visibleCategories, dishesByCategory],
   )
@@ -1101,14 +1141,14 @@ export function OrderComposer(props: OrderComposerProps) {
                         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
                         <div className="absolute bottom-0 left-0 right-0 p-3">
                           <p className="text-sm font-bold text-white leading-tight line-clamp-2">{item.name}</p>
-                          <p className="text-sm font-bold text-amber-300 mt-0.5">{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>
+                          <p className="text-sm font-bold text-amber-300 mt-0.5">{tilePriceLabel(item)}</p>
                         </div>
                       </>
                     ) : (
                       <div className="absolute inset-0 flex flex-col items-center justify-center p-3 text-center">
                         {item.emoji && <span className="text-2xl mb-1">{item.emoji}</span>}
                         <p className="text-sm font-bold text-foreground leading-snug line-clamp-2">{item.name}</p>
-                        <p className="text-base font-bold text-primary mt-1">{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>
+                        <p className="text-base font-bold text-primary mt-1">{tilePriceLabel(item)}</p>
                       </div>
                     )}
                     {!isStopped && renderBatchBadge(item)}
@@ -1155,7 +1195,7 @@ export function OrderComposer(props: OrderComposerProps) {
                           >Стоп</span>
                         )}
                       </div>
-                      <p className={`text-xs font-bold ${isStopped ? 'text-muted-foreground' : 'text-primary'}`}>{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>
+                      <p className={`text-xs font-bold ${isStopped ? 'text-muted-foreground' : 'text-primary'}`}>{tilePriceLabel(item)}</p>
                     </div>
                   </button>
                   {inCart ? (
@@ -1835,13 +1875,19 @@ export function OrderComposer(props: OrderComposerProps) {
                       <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent" />
                       <div className="absolute bottom-0 left-0 right-0 p-2">
                         <p className="text-[11px] font-bold text-white leading-tight line-clamp-2">{item.name}</p>
-                        <p className="text-xs font-bold text-amber-300 mt-0.5">{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>
+                        <p className="text-xs font-bold text-amber-300 mt-0.5">{tilePriceLabel(item)}</p>
                       </div>
                     </>
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center p-2 text-center">
                       <p className="text-sm font-bold text-foreground leading-snug line-clamp-3">{item.name}</p>
-                      {item.price > 0 && <p className="text-sm font-bold text-primary mt-1">{formatPriceLabel(item.price, item.unit, item.unitSize)}</p>}
+                      {/* Абстрактный продукт с атрибутами: item.price всегда 0
+                          (цена — на вариантах), но tilePriceLabel уже считает
+                          «от X» по вариантам — гейтить по item.price нельзя,
+                          иначе плитка молча теряет ценник. */}
+                      {(item.price > 0 || variantsByParent.has(item.id)) && (
+                        <p className="text-sm font-bold text-primary mt-1">{tilePriceLabel(item)}</p>
+                      )}
                     </div>
                   )}
                   {renderBatchBadge(item)}
@@ -2177,6 +2223,14 @@ export function OrderComposer(props: OrderComposerProps) {
         onChange={setWeightValue}
         onClose={() => { setWeightItem(null); setWeightValue(0) }}
         onConfirm={confirmWeight}
+        nested
+      />
+      <VariantPickerSheet
+        product={variantProduct}
+        variants={variantProduct ? (variantsByParent.get(variantProduct.id) ?? []) : []}
+        stoppedIds={stoppedIds}
+        onClose={() => setVariantProduct(null)}
+        onSelect={(v) => { setVariantProduct(null); addToCart(v) }}
         nested
       />
 

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/audit"
@@ -60,6 +61,12 @@ type WriteoffLine struct {
 	Qty          string  `json:"qty"`
 	Unit         *string `json:"unit,omitempty"`
 	Cost         string  `json:"cost"`
+	// Kind — тип списываемого: "ingredient" (по умолчанию), "semi"
+	// (полуфабрикат → semi_finished_stock), "batch" (готовое blюдо →
+	// menu_items.prepared_qty). Раньше поля не было: строки semi/batch писались
+	// как ingredient-движение с чужим id → хук денорма находил 0 строк, остаток
+	// не уменьшался (тихий no-op). IngredientID для semi/batch несёт их id.
+	Kind string `json:"kind,omitempty"`
 }
 
 // WithPublisher (как в других сервисах).
@@ -248,10 +255,13 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			if ing != nil && decimal.IsPositive(stockQty) {
 				denom := decimal.Add(ing.Qty, stockQty)
 				var newPrice decimal.Decimal
-				if decimal.IsPositive(denom) {
+				if decimal.IsPositive(denom) && !decimal.IsNegative(ing.Qty) {
 					newPrice = decimal.DivRound(decimal.Add(decimal.Mul(ing.Qty, ing.PricePerUnit), pl.line), denom)
 				} else {
-					// Остаток был отрицательным/нулевым — берём цену прихода.
+					// Остаток был отрицательным/нулевым — историческая стоимость
+					// невалидна (напр. ушёл в минус при выключенном контроле остатков),
+					// поэтому смешивать нельзя: берём чистую цену прихода. Без проверки
+					// ing.Qty<0 средневзвешенная давала отрицательную с/с (−5*100+200)/5.
 					newPrice = decimal.DivRound(pl.line, stockQty)
 				}
 				newPrice = decimal.Normalize(newPrice)
@@ -265,20 +275,18 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				ing.PricePerUnit = newPrice
 			}
 		}
-		// Атомарный финоп (v2.0.87): если AccountID указан И paid=true (default),
-		// создаём financial_operation type="out" category="stock_purchase" с
-		// source_ref="receipt:<id>". UNIQUE INDEX по (restaurant_id, source_ref)
-		// для префикса "receipt:" обеспечивает идемпотентность на DB-уровне.
-		paidFlag := true
-		if in.Paid != nil {
-			paidFlag = *in.Paid
-		}
-		if in.AccountID != nil && *in.AccountID != "" && paidFlag && decimal.IsPositive(totalAmount) {
+		// Атомарный финоп (v2.0.87): списываем со счёта ОПЛАЧЕННУЮ СЕЙЧАС часть
+		// (`paid`: для 'paid' = total, 'partial' = paid_amount, 'credit' = 0).
+		// Раньше гейт был на `in.Paid` (bool) и списывался ВЕСЬ total: частичная
+		// оплата не списывала ничего (paid=false), а при in.Paid+partial могла
+		// переплатить. Теперь драйвер — рассчитанная сумма `paid`.
+		// source_ref="receipt:<id>" + UNIQUE(restaurant_id, source_ref) → идемпотентность.
+		if in.AccountID != nil && *in.AccountID != "" && decimal.IsPositive(paid) {
 			var acc models.FinancialAccount
 			if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
 				return apperrors.Wrap("VALIDATION", "account not found", err)
 			}
-			newBal := decimal.Normalize(decimal.Sub(acc.Balance, totalAmount))
+			newBal := decimal.Normalize(decimal.Sub(acc.Balance, paid))
 			if decimal.IsNegative(newBal) {
 				return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)
 			}
@@ -300,7 +308,7 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			finOp := &models.FinancialOperation{
 				ID:           uuid.NewString(),
 				Type:         &opType,
-				Amount:       totalAmount,
+				Amount:       paid,
 				Category:     &opCat,
 				AccountID:    &accID,
 				AccountName:  acc.Name,
@@ -315,6 +323,22 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				UpdatedAt:    now,
 			}
 			if err := tx.Create(finOp).Error; err != nil {
+				return err
+			}
+		}
+
+		// Неоплаченная часть → долг поставщику (авто-обязательство: баланс читает
+		// Σ suppliers.current_debt). Раньше долг нигде не начислялся, из-за чего
+		// кредитные/частичные приёмки занижали пассивы и завышали капитал на
+		// сумму долга. Начисляем только при известном поставщике.
+		if in.SupplierID != nil && *in.SupplierID != "" && decimal.IsPositive(debt) {
+			var sup models.Supplier
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *in.SupplierID).First(&sup).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "supplier not found", err)
+			}
+			sup.CurrentDebt = decimal.Normalize(decimal.Add(sup.CurrentDebt, debt))
+			if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
 				return err
 			}
 		}
@@ -412,21 +436,48 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 			if err := tx.Create(wl).Error; err != nil {
 				return err
 			}
-			mvType := "writeoff"
-			desc := "writeoff:" + writeoffID
-			mv := &models.StockMovement{
-				ID:             uuid.NewString(),
-				Type:           &mvType,
-				IngredientID:   &pl.in.IngredientID,
-				IngredientName: &pl.in.Name,
-				Description:    &desc,
-				Qty:            pl.qty.Neg(),
-				Unit:           pl.in.Unit,
-				RestaurantID:   &rid,
-				CreatedAt:      now,
-			}
-			if err := tx.Create(mv).Error; err != nil {
-				return err
+			// Уменьшаем фактический остаток по типу позиции. GREATEST(0, …) не даёт
+			// уйти в минус; RowsAffected=0 → id не найден (иначе был бы тихий no-op).
+			switch pl.in.Kind {
+			case "semi":
+				res := tx.Model(&models.SemiFinishedStock{}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).
+					Updates(map[string]any{"qty": gorm.Expr("GREATEST(0, qty - ?)", pl.qty), "updated_at": now})
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected == 0 {
+					return apperrors.Wrap("VALIDATION", "semi stock not found: "+pl.in.IngredientID, nil)
+				}
+			case "batch":
+				res := tx.Model(&models.MenuItem{}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).
+					Updates(map[string]any{"prepared_qty": gorm.Expr("GREATEST(0, prepared_qty - ?)", int(pl.qty.IntPart())), "updated_at": now})
+				if res.Error != nil {
+					return res.Error
+				}
+				if res.RowsAffected == 0 {
+					return apperrors.Wrap("VALIDATION", "batch menu item not found: "+pl.in.IngredientID, nil)
+				}
+			default:
+				// Ингредиент: stock_movement type='writeoff' → хук денормализует
+				// ingredients.qty (единственный корректный путь для сырья).
+				mvType := "writeoff"
+				desc := "writeoff:" + writeoffID
+				mv := &models.StockMovement{
+					ID:             uuid.NewString(),
+					Type:           &mvType,
+					IngredientID:   &pl.in.IngredientID,
+					IngredientName: &pl.in.Name,
+					Description:    &desc,
+					Qty:            pl.qty.Neg(),
+					Unit:           pl.in.Unit,
+					RestaurantID:   &rid,
+					CreatedAt:      now,
+				}
+				if err := tx.Create(mv).Error; err != nil {
+					return err
+				}
 			}
 		}
 		created = w

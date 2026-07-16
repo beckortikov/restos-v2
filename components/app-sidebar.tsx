@@ -43,6 +43,7 @@ import {
   PackagePlus,
   Bug,
   HandCoins,
+  Receipt,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -277,6 +278,7 @@ const NAV: NavItem[] = [
     label: 'Аналитика',
     icon: BarChart3,
     children: [
+      { label: 'Продажи', href: '/analytics/sales-report', icon: Receipt },
       { label: 'Динамика', href: '/analytics/trends', icon: LineChart },
       { label: 'Дни недели', href: '/analytics/weekday', icon: CalendarDays },
       { label: 'ABC — Меню', href: '/analytics/abc-menu', icon: BarChart3 },

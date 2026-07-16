@@ -147,6 +147,7 @@ func (h *StockReadsHandler) ListMovements(w http.ResponseWriter, r *http.Request
 	rows, next, err := h.svc.ListMovements(r.Context(), service.MovementsFilter{
 		IngredientID: queryString(r, "ingredient_id"),
 		Type:         queryString(r, "type"),
+		WarehouseID:  queryString(r, "warehouse_id"),
 		From:         from, To: to,
 		Page: parsePage(r),
 	})

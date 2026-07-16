@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -8,9 +8,22 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { UNITS, type Ingredient } from '@/lib/types'
-import { fetchIngredientCategories } from '@/lib/queries'
+import { UNITS, type Ingredient, type StockMovement, type StockMovementType } from '@/lib/types'
+import { fetchIngredientCategories, fetchStockMovements } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { formatTime, formatNum } from '@/lib/helpers'
+import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, History } from 'lucide-react'
+
+// Стиль движений — как в «Истории движений» (warehouse/history), чтобы карточка
+// товара читалась одинаково с общей историей.
+const MOVE_META: Record<StockMovementType, { label: string; color: string; bg: string; Icon: React.ElementType }> = {
+  in:    { label: 'Приход',         color: 'text-emerald-600', bg: 'bg-emerald-100 dark:bg-emerald-950/40', Icon: ArrowDownToLine },
+  out:   { label: 'Расход',         color: 'text-destructive', bg: 'bg-red-100 dark:bg-red-950/40',         Icon: ArrowUpFromLine },
+  batch: { label: 'Приготовление',  color: 'text-purple-600',  bg: 'bg-purple-100 dark:bg-purple-950/40',   Icon: CookingPot },
+  semi:  { label: 'Производство',   color: 'text-blue-600',    bg: 'bg-blue-100 dark:bg-blue-950/40',       Icon: FlaskConical },
+  audit: { label: 'Инвентаризация', color: 'text-amber-600',   bg: 'bg-amber-100 dark:bg-amber-950/40',     Icon: ClipboardCheck },
+  adj:   { label: 'Корректировка',  color: 'text-muted-foreground', bg: 'bg-muted',                         Icon: SlidersHorizontal },
+}
 
 interface IngredientForm {
   name: string
@@ -58,7 +71,29 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
 
   const [categories, setCategories] = useState<string[]>([])
   const [dataLoaded, setDataLoaded] = useState(false)
+  const [movements, setMovements] = useState<StockMovement[]>([])
+  const [loadingMovements, setLoadingMovements] = useState(false)
   const isEditing = !!ingredient
+
+  // Движения товара (приход → расход/продажа) — грузим при открытии карточки
+  // существующего товара. Для нового (create) движений ещё нет.
+  useEffect(() => {
+    if (!open || !ingredient?.id) { setMovements([]); return }
+    setLoadingMovements(true)
+    fetchStockMovements({ ingredientId: ingredient.id })
+      .then(setMovements)
+      .catch(() => setMovements([]))
+      .finally(() => setLoadingMovements(false))
+  }, [open, ingredient?.id])
+
+  const moveSummary = useMemo(() => {
+    let received = 0, consumed = 0
+    for (const m of movements) {
+      if (m.qty > 0) received += m.qty
+      else consumed += -m.qty
+    }
+    return { received, consumed }
+  }, [movements])
 
   const DEFAULT_FOOD_CATEGORIES = [
     'Мясо', 'Птица', 'Рыба', 'Морепродукты',
@@ -270,6 +305,58 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
             </div>
           )}
         </div>
+
+        {isEditing && (
+          <div className="mt-4 border-t border-border pt-4">
+            <div className="flex items-center justify-between gap-2 mb-2.5">
+              <div className="flex items-center gap-2">
+                <History className="size-4 text-primary" />
+                <h3 className="text-sm font-bold text-foreground">Движение товара</h3>
+              </div>
+              {movements.length > 0 && (
+                <div className="flex items-center gap-3 text-[11px]">
+                  <span className="text-muted-foreground">Приход <span className="font-bold text-emerald-600 tabular-nums">+{formatNum(moveSummary.received)}</span></span>
+                  <span className="text-muted-foreground">Расход <span className="font-bold text-destructive tabular-nums">−{formatNum(moveSummary.consumed)}</span></span>
+                </div>
+              )}
+            </div>
+
+            {loadingMovements ? (
+              <div className="py-6 flex items-center justify-center">
+                <div className="size-5 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+              </div>
+            ) : movements.length === 0 ? (
+              <p className="py-6 text-center text-xs text-muted-foreground">Движений по товару пока нет</p>
+            ) : (
+              <div className="max-h-56 overflow-y-auto rounded-lg border border-border divide-y divide-border/60">
+                {movements.map((m) => {
+                  const meta = MOVE_META[m.type] ?? MOVE_META.adj
+                  const Icon = meta.Icon
+                  return (
+                    <div key={m.id} className="flex items-center gap-3 px-3 py-2 hover:bg-muted/30 transition-colors">
+                      <div className={`size-7 rounded-lg flex items-center justify-center shrink-0 ${meta.bg}`}>
+                        <Icon className={`size-3.5 ${meta.color}`} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${meta.bg} ${meta.color}`}>{meta.label}</span>
+                          {m.belowZero && <span className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-destructive/10 text-destructive">ниже 0</span>}
+                        </div>
+                        {m.description && <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{m.description}</p>}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className={`text-sm font-semibold tabular-nums ${m.qty > 0 ? 'text-emerald-600' : 'text-destructive'}`}>
+                          {m.qty > 0 ? '+' : ''}{formatNum(m.qty)} {m.unit}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">{formatTime(m.timestamp)}</p>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
 
         <DialogFooter className="flex-col sm:flex-row gap-2">
           {isEditing && onDelete && (

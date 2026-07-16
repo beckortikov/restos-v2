@@ -4,9 +4,9 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
-import { type Supplier } from '@/lib/types'
-import { fetchSuppliers, updateSupplier, deleteSupplier } from '@/lib/queries'
-import { Phone, User, AlertTriangle, Plus, Search, Pencil, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users } from 'lucide-react'
+import { type Supplier, type FinancialAccount } from '@/lib/types'
+import { fetchSuppliers, deleteSupplier, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
+import { Phone, User, AlertTriangle, Plus, Search, Pencil, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
 
@@ -24,16 +24,40 @@ export default function SuppliersPage() {
   // Pay debt
   const [payingId, setPayingId] = useState<string | null>(null)
   const [payAmount, setPayAmount] = useState(0)
+  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  const [payAccountId, setPayAccountId] = useState<string>('')
+  const [recomputing, setRecomputing] = useState(false)
 
   const reload = async () => {
     const data = await fetchSuppliers()
     setSuppliers(data)
   }
 
+  async function handleRecompute() {
+    if (recomputing) return
+    setRecomputing(true)
+    try {
+      await recomputeSupplierDebts()
+      await reload()
+      toast.success('Долги пересчитаны из накладных')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка пересчёта')
+    } finally {
+      setRecomputing(false)
+    }
+  }
+
   useEffect(() => {
     fetchSuppliers()
       .then(data => { setSuppliers(data); setLoading(false) })
       .catch(() => setLoading(false))
+    fetchFinancialAccounts()
+      .then(accs => {
+        setAccounts(accs)
+        const cash = accs.find(a => a.type === 'cash') ?? accs[0]
+        if (cash) setPayAccountId(cash.id)
+      })
+      .catch(() => {})
   }, [])
 
   // Stats
@@ -98,15 +122,18 @@ export default function SuppliersPage() {
     if (!payingId || payAmount <= 0) return
     const sup = suppliers.find(s => s.id === payingId)
     if (!sup) return
-    const newDebt = Math.max(0, sup.currentDebt - payAmount)
+    if (!payAccountId) { toast.error('Выберите счёт для оплаты'); return }
     try {
-      await updateSupplier(payingId, { current_debt: newDebt })
-      toast.success(`Оплачено ${formatCurrency(payAmount)}`)
+      // Атомарно на бэке: списание со счёта + уменьшение долга + финоп.
+      // Раньше слался current_debt в updateSupplier — молча игнорировался (no-op),
+      // деньги со счёта не списывались.
+      await paySupplierDebt(payingId, payAmount, payAccountId)
+      toast.success(`Оплачено ${formatCurrency(payAmount)} · ${sup.name}`)
       setPayingId(null)
       setPayAmount(0)
       await reload()
-    } catch {
-      toast.error('Ошибка оплаты')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Ошибка оплаты')
     }
   }
 
@@ -130,13 +157,24 @@ export default function SuppliersPage() {
           </p>
         </div>
         {isManager && (
-          <button
-            onClick={() => navigate('/warehouse/suppliers/new')}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
-          >
-            <Plus className="size-4" />
-            Добавить
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            <button
+              onClick={handleRecompute}
+              disabled={recomputing}
+              title="Пересчитать долги поставщикам из накладных (если в отчёте 0, а по накладным долг есть)"
+              className="flex items-center gap-2 bg-card border border-border text-foreground px-3 py-2.5 rounded-xl text-sm font-medium hover:bg-muted disabled:opacity-60 transition-colors justify-center"
+            >
+              <RefreshCw className={`size-4 ${recomputing ? 'animate-spin' : ''}`} />
+              {recomputing ? 'Считаем…' : 'Пересчитать долги'}
+            </button>
+            <button
+              onClick={() => navigate('/warehouse/suppliers/new')}
+              className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors flex-1 sm:flex-none justify-center"
+            >
+              <Plus className="size-4" />
+              Добавить
+            </button>
+          </div>
         )}
       </div>
 
@@ -299,9 +337,14 @@ export default function SuppliersPage() {
           const isPaying = payingId === sup.id
 
           return (
-            <div key={sup.id} className={`bg-card rounded-xl border-2 transition-colors ${isOverLimit ? 'border-destructive/30' : 'border-border'}`}>
-              {/* Main row */}
-              <div className="p-4 md:p-5">
+            <div key={sup.id} className={`bg-card rounded-xl border-2 transition-colors ${isOverLimit ? 'border-destructive/30' : 'border-border hover:border-primary/40'}`}>
+              {/* Main row — клик по карточке открывает историю закупок поставщика.
+                  Кнопки/ссылки внутри гасят всплытие, чтобы не навигировать. */}
+              <div
+                onClick={() => navigate('/warehouse/suppliers/' + sup.id)}
+                title="Открыть историю закупок"
+                className="p-4 md:p-5 cursor-pointer"
+              >
                 <div className="flex flex-col md:flex-row md:items-start gap-4">
                   {/* Left: info */}
                   <div className="flex-1 min-w-0 space-y-2.5">
@@ -313,7 +356,7 @@ export default function SuppliersPage() {
                             <User className="size-3.5 shrink-0" />
                             {sup.contactPerson}
                           </span>
-                          <a href={`tel:${sup.phone}`} className="flex items-center gap-1.5 text-sm text-primary hover:underline">
+                          <a href={`tel:${sup.phone}`} onClick={e => e.stopPropagation()} className="flex items-center gap-1.5 text-sm text-primary hover:underline">
                             <Phone className="size-3.5 shrink-0" />
                             {sup.phone}
                           </a>
@@ -352,7 +395,7 @@ export default function SuppliersPage() {
 
                     {/* Actions */}
                     {isManager && (
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                         {sup.currentDebt > 0 && (
                           <button
                             onClick={() => { setPayingId(isPaying ? null : sup.id); setPayAmount(sup.currentDebt) }}
@@ -399,6 +442,21 @@ export default function SuppliersPage() {
                 <div className="px-4 md:px-5 pb-4 md:pb-5">
                   <div className="bg-muted/50 rounded-xl p-4 space-y-3">
                     <p className="text-sm font-medium text-foreground">Оплата поставщику: {sup.name}</p>
+                    <div>
+                      <label className="text-xs text-muted-foreground block mb-1">Счёт списания</label>
+                      <select
+                        value={payAccountId}
+                        onChange={e => setPayAccountId(e.target.value)}
+                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      >
+                        {accounts.length === 0 && <option value="">Нет счетов</option>}
+                        {accounts.map(a => (
+                          <option key={a.id} value={a.id}>
+                            {a.name} · {formatCurrency(a.balance)}{a.type === 'cash' ? '' : a.type === 'bank' ? ' (банк)' : ` (${a.type})`}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                       <div className="flex-1">
                         <DecimalInput
@@ -418,7 +476,7 @@ export default function SuppliersPage() {
                         </button>
                         <button
                           onClick={handlePayDebt}
-                          disabled={payAmount <= 0 || payAmount > sup.currentDebt}
+                          disabled={payAmount <= 0 || payAmount > sup.currentDebt || !payAccountId}
                           className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
                         >
                           Оплатить

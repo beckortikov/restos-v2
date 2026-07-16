@@ -1,17 +1,19 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
-import { type Ingredient } from '@/lib/types'
-import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient, deleteIngredient } from '@/lib/queries'
+import { type Ingredient, type Warehouse } from '@/lib/types'
+import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient, deleteIngredient, fetchWarehouses, transferWarehouse } from '@/lib/queries'
 import { queryKeys } from '@/lib/query-client'
 import { humanizeError } from '@/lib/errors'
 
-import { Search, AlertTriangle, TrendingDown, Package, Plus, Trash2, X, Check } from 'lucide-react'
+import { Search, AlertTriangle, TrendingDown, Package, Plus, Trash2, X, Check, ArrowRightLeft } from 'lucide-react'
 import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 
 function StockLevel({ qty, minQty }: { qty: number; minQty: number }) {
@@ -32,7 +34,13 @@ function StockLevel({ qty, minQty }: { qty: number; minQty: number }) {
 // Virtualized table for ingredients lists > 50 rows. Uses a CSS grid layout to
 // mirror the columns of the original <table> while keeping rows as absolutely
 // positioned divs so @tanstack/react-virtual can place them.
-function VirtualIngredientsTable({ items, onEdit, selectMode, selectedIds, onToggleSelect }: { items: Ingredient[]; onEdit: (ing: Ingredient) => void; selectMode: boolean; selectedIds: Set<string>; onToggleSelect: (id: string) => void }) {
+const WAREHOUSE_BADGE: Record<string, string> = {
+  products: 'bg-emerald-100 text-emerald-700',
+  purchased: 'bg-blue-100 text-blue-700',
+  supplies: 'bg-zinc-200 text-zinc-700',
+}
+
+function VirtualIngredientsTable({ items, onEdit, onMove, warehouseById, selectMode, selectedIds, onToggleSelect }: { items: Ingredient[]; onEdit: (ing: Ingredient) => void; onMove: (ing: Ingredient) => void; warehouseById: Map<string, Warehouse>; selectMode: boolean; selectedIds: Set<string>; onToggleSelect: (id: string) => void }) {
   const parentRef = useRef<HTMLDivElement>(null)
   const rowVirtualizer = useVirtualizer({
     count: items.length,
@@ -70,6 +78,16 @@ function VirtualIngredientsTable({ items, onEdit, selectMode, selectedIds, onTog
                     {ing.qty < ing.minQty && <AlertTriangle className="size-3.5 text-amber-500 shrink-0" />}
                     <span className="font-medium text-foreground">{ing.name}</span>
                   </div>
+                  {ing.warehouseId && warehouseById.get(ing.warehouseId) && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onMove(ing) }}
+                      className={`mt-1 inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded transition-opacity hover:opacity-70 ${WAREHOUSE_BADGE[warehouseById.get(ing.warehouseId)!.kind] ?? 'bg-muted text-muted-foreground'}`}
+                      title="Переместить на другой склад"
+                    >
+                      <ArrowRightLeft className="size-2.5" />
+                      {warehouseById.get(ing.warehouseId)!.name}
+                    </button>
+                  )}
                 </div>
                 <div className="px-4 py-3">
                   <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{ing.category}</span>
@@ -94,11 +112,19 @@ function VirtualIngredientsTable({ items, onEdit, selectMode, selectedIds, onTog
   )
 }
 
+type WhKind = 'products' | 'purchased' | 'supplies'
+const WH_TABS: { kind: WhKind; label: string }[] = [
+  { kind: 'products', label: 'Продукты' },
+  { kind: 'purchased', label: 'Покупные товары' },
+  { kind: 'supplies', label: 'Хозтовары' },
+]
+
 export default function InventoryPage() {
   const { canDo } = useAuth()
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
-  const [tab, setTab] = useState<'food' | 'supplies'>('food')
+  const [whKind, setWhKind] = useState<WhKind>('products')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingIngredient, setEditingIngredient] = useState<Ingredient | undefined>(undefined)
   // Мультивыбор для удаления.
@@ -121,10 +147,33 @@ export default function InventoryPage() {
     queryFn: fetchIngredientCategories,
     staleTime: 5 * 60_000,
   })
+  const { data: warehouses = [] } = useQuery({
+    queryKey: ['warehouses'],
+    queryFn: fetchWarehouses,
+    staleTime: 10 * 60_000,
+  })
+  const warehouseById = useMemo(() => new Map(warehouses.map(w => [w.id, w])), [warehouses])
+  const [moveTarget, setMoveTarget] = useState<Ingredient | null>(null)
+  const [moving, setMoving] = useState(false)
   const loading = ingredientsQuery.isLoading
   const reloadStock = () => {
     qc.invalidateQueries({ queryKey: queryKeys.stock.ingredients })
     qc.invalidateQueries({ queryKey: CATS_KEY })
+  }
+
+  async function doMove(toWarehouseId: string) {
+    if (!moveTarget || moving) return
+    setMoving(true)
+    try {
+      await transferWarehouse(moveTarget.id, toWarehouseId)
+      toast.success(`«${moveTarget.name}» перемещён`)
+      setMoveTarget(null)
+      qc.invalidateQueries({ queryKey: queryKeys.stock.ingredients })
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось переместить'))
+    } finally {
+      setMoving(false)
+    }
   }
 
   async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; unitWeight?: number; unitWeightUnit?: string; isFood?: boolean }) {
@@ -174,7 +223,7 @@ export default function InventoryPage() {
   }
 
   function openCreateDialog() {
-    // Pre-set a "fake" ingredient to pass isFood based on active tab
+    // Новый ингредиент; is_food по активному складу — через defaultIsFood ниже.
     setEditingIngredient(undefined)
     setDialogOpen(true)
   }
@@ -221,7 +270,17 @@ export default function InventoryPage() {
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
-  const tabItems = ingredients.filter(i => tab === 'food' ? i.isFood !== false : i.isFood === false)
+  // Склад товара: по warehouse_id (мультисклад). Не размеченные (legacy NULL) —
+  // фоллбэк по is_food, чтобы ничего не пропало из списка.
+  const kindOf = (i: Ingredient): WhKind => {
+    const k = i.warehouseId ? warehouseById.get(i.warehouseId)?.kind : undefined
+    if (k === 'products' || k === 'purchased' || k === 'supplies') return k
+    return i.isFood === false ? 'supplies' : 'products'
+  }
+  const countByKind: Record<WhKind, number> = { products: 0, purchased: 0, supplies: 0 }
+  for (const i of ingredients) countByKind[kindOf(i)]++
+
+  const tabItems = ingredients.filter(i => kindOf(i) === whKind)
   const tabCategories = [...new Set(tabItems.map(i => i.category))].sort()
 
   const filtered = tabItems.filter((i) => {
@@ -232,7 +291,6 @@ export default function InventoryPage() {
 
   const lowCount = tabItems.filter((i) => i.qty < i.minQty).length
   const totalValue = tabItems.reduce((s, i) => s + i.qty * i.pricePerUnit, 0)
-  const suppliesCount = ingredients.filter(i => i.isFood === false).length
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -241,7 +299,7 @@ export default function InventoryPage() {
         <div>
           <h1 className="text-xl font-bold text-foreground">Остатки на складе</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
-            {ingredients.length} позиций · Стоимость: {formatCurrency(totalValue)}
+            {tabItems.length} позиций · Стоимость: {formatCurrency(totalValue)}
             {lowCount > 0 && <span className="text-amber-600 ml-2">· {lowCount} ниже нормы</span>}
           </p>
         </div>
@@ -274,31 +332,29 @@ export default function InventoryPage() {
                 <Trash2 className="size-4" /> Удалить
               </button>
               <button
-                onClick={openCreateDialog}
+                onClick={() => whKind === 'purchased' ? navigate('/warehouse/menu/new') : openCreateDialog()}
                 className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex-1 sm:flex-none justify-center"
               >
                 <Plus className="size-4" />
-                {tab === 'food' ? 'Добавить ингредиент' : 'Добавить хозтовар'}
+                {whKind === 'purchased' ? 'Покупной товар' : whKind === 'supplies' ? 'Добавить хозтовар' : 'Добавить ингредиент'}
               </button>
             </div>
           )
         )}
       </div>
 
-      {/* Tab switcher */}
-      <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit">
-        <button
-          onClick={() => { setTab('food'); setCategory('all') }}
-          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === 'food' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-        >
-          Продукты
-        </button>
-        <button
-          onClick={() => { setTab('supplies'); setCategory('all') }}
-          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === 'supplies' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-        >
-          Хозтовары {suppliesCount > 0 && <span className="ml-1 text-xs text-muted-foreground">({suppliesCount})</span>}
-        </button>
+      {/* Переключатель складов (мультисклад): у каждого свой список и своя сумма */}
+      <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit flex-wrap">
+        {WH_TABS.map(t => (
+          <button
+            key={t.kind}
+            onClick={() => { setWhKind(t.kind); setCategory('all') }}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${whKind === t.kind ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t.label}
+            {countByKind[t.kind] > 0 && <span className="ml-1 text-xs text-muted-foreground">({countByKind[t.kind]})</span>}
+          </button>
+        ))}
       </div>
 
       {/* Summary cards */}
@@ -365,7 +421,7 @@ export default function InventoryPage() {
 
       {/* Table */}
       {filtered.length > 50 ? (
-        <VirtualIngredientsTable items={filtered} onEdit={openEditDialog} selectMode={selectMode} selectedIds={selectedIds} onToggleSelect={toggleSelect} />
+        <VirtualIngredientsTable items={filtered} onEdit={openEditDialog} onMove={setMoveTarget} warehouseById={warehouseById} selectMode={selectMode} selectedIds={selectedIds} onToggleSelect={toggleSelect} />
       ) : (
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
@@ -422,9 +478,37 @@ export default function InventoryPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         ingredient={editingIngredient}
-        defaultIsFood={tab === 'food'}
+        defaultIsFood={whKind !== 'supplies'}
         onSubmit={handleIngredientSubmit}
       />
+
+      <Dialog open={!!moveTarget} onOpenChange={(o) => { if (!o) setMoveTarget(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Переместить «{moveTarget?.name}»</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground mb-1">Выберите склад назначения:</p>
+          <div className="space-y-2">
+            {warehouses.map(w => {
+              const current = moveTarget?.warehouseId === w.id
+              return (
+                <button
+                  key={w.id}
+                  disabled={current || moving}
+                  onClick={() => doMove(w.id)}
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-sm transition-colors ${current ? 'border-border bg-muted/50 text-muted-foreground cursor-default' : 'border-border hover:bg-muted text-foreground'}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className={`inline-block size-2 rounded-full ${w.kind === 'products' ? 'bg-emerald-500' : w.kind === 'purchased' ? 'bg-blue-500' : 'bg-zinc-400'}`} />
+                    {w.name}
+                  </span>
+                  {current && <span className="text-xs">текущий</span>}
+                </button>
+              )
+            })}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

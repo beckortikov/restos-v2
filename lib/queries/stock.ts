@@ -2,7 +2,7 @@ import { api, unwrap } from './_client'
 import { fetchAllPages } from './_paginate'
 import { dMul, dSub, dSum } from '../decimal'
 import type {
-  Ingredient, StockReceipt, StockMovement, StockWriteoff, WriteoffReason, ReceiptPaymentType,
+  Ingredient, StockReceipt, StockMovement, StockWriteoff, WriteoffReason, ReceiptPaymentType, Warehouse,
 } from '../types'
 import { logAction } from './audit'
 
@@ -30,6 +30,21 @@ export async function fetchIngredients(): Promise<Ingredient[]> {
   // Курсор: бэк капит limit до 200, одностраничный запрос терял ингредиенты >200.
   const rows = await fetchAllPages('/api/v1/stock/ingredients')
   return rows.map(mapIngredient) as Ingredient[]
+}
+
+// fetchWarehouses — 3 фиксированных склада ресторана (мультисклад).
+export async function fetchWarehouses(): Promise<Warehouse[]> {
+  const res: any = await unwrap(api.GET('/api/v1/warehouses'))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : []
+  return rows.map(r => ({ id: r.id, name: r.name, kind: r.kind }))
+}
+
+// transferWarehouse — переместить товар ЦЕЛИКОМ на другой склад.
+export async function transferWarehouse(ingredientId: string, toWarehouseId: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/warehouses/transfer', {
+    body: { ingredient_id: ingredientId, to_warehouse_id: toWarehouseId } as any,
+  }))
+  logAction('warehouse.transfer', 'ingredient', ingredientId, 'Перемещение между складами')
 }
 
 export async function createIngredient(data: { name: string; category: string; qty: number; min_qty: number; unit: string; price_per_unit: number; waste_percent?: number; unit_weight?: number; unit_weight_unit?: string; is_food?: boolean }) {
@@ -74,14 +89,23 @@ export async function deleteIngredient(id: string): Promise<void> {
   logAction('ingredient.delete', 'ingredient', id)
 }
 
-export async function fetchStockMovements(): Promise<StockMovement[]> {
+export async function fetchStockMovements(opts?: { ingredientId?: string; warehouseId?: string }): Promise<StockMovement[]> {
   // Append-only поток — ограничиваем «последними» 2000, но через курсор (не 200).
-  const rows = await fetchAllPages('/api/v1/stock/movements', {}, 2000)
+  // ingredient_id / warehouse_id фильтруют движения на бэке
+  // (handlers/stock_extra.go) — для карточки товара и для отчёта по складу.
+  const params: Record<string, string> = {}
+  if (opts?.ingredientId) params.ingredient_id = opts.ingredientId
+  if (opts?.warehouseId) params.warehouse_id = opts.warehouseId
+  const rows = await fetchAllPages('/api/v1/stock/movements', params, 2000)
   return rows.map(mapStockMovement) as StockMovement[]
 }
 
-export async function fetchReceipts(): Promise<StockReceipt[]> {
-  const rows = await fetchAllPages('/api/v1/stock/receipts', { include: 'lines' }, 2000)
+export async function fetchReceipts(opts?: { supplierId?: string }): Promise<StockReceipt[]> {
+  const params: Record<string, string> = { include: 'lines' }
+  // supplier_id фильтрует накладные на бэке (handlers/stock_extra.go) — для
+  // истории закупок конкретного поставщика.
+  if (opts?.supplierId) params.supplier_id = opts.supplierId
+  const rows = await fetchAllPages('/api/v1/stock/receipts', params, 2000)
   return rows.map(mapStockReceipt) as StockReceipt[]
 }
 
@@ -147,7 +171,7 @@ export async function fetchWriteoffs(): Promise<StockWriteoff[]> {
 export async function createWriteoff(data: {
   reason: WriteoffReason
   description?: string
-  lines: { ingredientId: string; name: string; qty: number; unit: string; pricePerUnit: number }[]
+  lines: { ingredientId: string; name: string; qty: number; unit: string; pricePerUnit: number; kind?: 'ingredient' | 'semi' | 'batch' }[]
   createdBy?: string
 }) {
   const totalCost = dSum(data.lines.map(l => dMul(l.qty, l.pricePerUnit)))
@@ -161,6 +185,8 @@ export async function createWriteoff(data: {
         qty: String(l.qty),
         unit: l.unit,
         cost: String(dMul(l.qty, l.pricePerUnit)),
+        // kind: ingredient/semi/batch — бэк выбирает, какой остаток уменьшать.
+        kind: l.kind || 'ingredient',
       })),
     } as any,
   }))
@@ -318,6 +344,7 @@ function mapIngredient(r: Record<string, unknown>): Ingredient {
     unitWeightUnit: (r.unit_weight_unit as string) ?? '',
     isFood: r.is_food !== false,
     nomenclatureId: (r.nomenclature_id as string) ?? null,
+    warehouseId: (r.warehouse_id as string) ?? undefined,
   } as Ingredient
 }
 
@@ -349,6 +376,7 @@ function mapStockMovement(r: Record<string, unknown>): StockMovement {
     unit: (r.unit as string) ?? '',
     timestamp: (r.created_at as string) ?? '',
     belowZero: (r.below_zero as boolean | null) ?? undefined,
+    warehouseId: (r.warehouse_id as string | null) ?? undefined,
   } as StockMovement
 }
 

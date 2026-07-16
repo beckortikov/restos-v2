@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { lazy, Suspense } from 'react'
 import { Link } from 'react-router-dom'
 import { formatCurrency, getTimeSince, calcLineCogs, calcLineTotal } from '@/lib/helpers'
+import { DateRangePicker } from '@/components/ui/date-range-picker'
 import {
   PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip,
   ResponsiveContainer,
@@ -196,6 +197,10 @@ export default function DashboardPage() {
   const [users, setUsers] = useState<User[]>([])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [loading, setLoading] = useState(true)
+  // Выбранный период (по умолчанию — сегодня: from === to). Все показатели
+  // считаются за него фильтром по дате из уже загруженных заказов/операций.
+  const [dateFrom, setDateFrom] = useState<string>(today())
+  const [dateTo, setDateTo] = useState<string>(today())
 
   useEffect(() => {
     Promise.all([
@@ -222,10 +227,17 @@ export default function DashboardPage() {
   }, [loading])
 
   // ─── Calculations (must be before any early return for hooks) ──────────────
-  const todayStr = today()
+  // inRange — попадает ли дата (YYYY-MM-DD или ISO-timestamp) в выбранный период.
+  const inRange = (d?: string | null): boolean => {
+    if (!d) return false
+    const day = d.slice(0, 10)
+    return day >= dateFrom && day <= dateTo
+  }
+  // «Сегодня» (один день = сегодня) — режим реального времени + лейблы «сегодня».
+  const isToday = dateFrom === dateTo && dateTo === today()
 
   // Revenue
-  const todayOrders = useMemo(() => orders.filter(o => o.status === 'done' && o.closedAt?.startsWith(todayStr)), [orders, todayStr])
+  const todayOrders = useMemo(() => orders.filter(o => o.status === 'done' && inRange(o.closedAt)), [orders, dateFrom, dateTo])
   // Выручка = total_with_service (товар − скидка + сервис + чай) — то, что реально
   // пришло в кассу (см. close_order: финоп revenue и баланс счёта идут на эту сумму).
   // Сервис начисляется на чек целиком, поэтому корректно входит и в выручку, и в
@@ -233,7 +245,7 @@ export default function DashboardPage() {
   // там база item-level (сервис не привязан к конкретному блюду).
   const orderRevenue = (o: typeof todayOrders[number]) => o.totalWithService ?? o.total
   const todayRevenue = useMemo(() => todayOrders.reduce((s, o) => s + orderRevenue(o), 0), [todayOrders])
-  const todayOrdersCount = useMemo(() => orders.filter(o => o.createdAt?.startsWith(todayStr)).length, [orders, todayStr])
+  const todayOrdersCount = useMemo(() => orders.filter(o => inRange(o.createdAt)).length, [orders, dateFrom, dateTo])
   const avgCheck = todayOrders.length > 0 ? todayRevenue / todayOrders.length : 0
 
   // COGS & margin
@@ -258,8 +270,25 @@ export default function DashboardPage() {
 
   // Today's expenses
   const todayExpenses = useMemo(() => operations
-    .filter(o => o.type === 'out' && o.date === todayStr)
-    .reduce((s, o) => s + o.amount, 0), [operations, todayStr])
+    .filter(o => o.type === 'out' && inRange(o.date))
+    .reduce((s, o) => s + o.amount, 0), [operations, dateFrom, dateTo])
+
+  // Разбивка выручки по способам оплаты (нал/безнал/перевод) за выбранный день.
+  // Для смешанной оплаты — по частям payments[]; иначе весь чек на paymentMethod
+  // (по умолчанию cash). Это «продажи кассы» из запроса аналитики за день.
+  const paymentBreakdown = useMemo(() => {
+    const acc = { cash: 0, card: 0, transfer: 0 } as Record<'cash' | 'card' | 'transfer', number>
+    todayOrders.forEach(o => {
+      if (o.payments && o.payments.length > 0) {
+        o.payments.forEach(p => { if (acc[p.method] !== undefined) acc[p.method] += p.amount })
+      } else {
+        const m = (o.paymentMethod ?? 'cash') as 'cash' | 'card' | 'transfer'
+        if (acc[m] !== undefined) acc[m] += orderRevenue(o)
+      }
+    })
+    return acc
+  }, [todayOrders])
+  const paymentTotal = paymentBreakdown.cash + paymentBreakdown.card + paymentBreakdown.transfer
 
   // Top dishes today
   const topDishes = useMemo(() => {
@@ -271,6 +300,21 @@ export default function DashboardPage() {
     }))
     return Object.values(dishSales).sort((a, b) => b.revenue - a.revenue).slice(0, 5)
   }, [todayOrders])
+
+  // Продажи по категориям меню за день. Категория берётся из menuItems по
+  // menuItemId (в OrderItem её нет). Item-level база (calcLineTotal), без сервиса.
+  const categorySales = useMemo(() => {
+    const menuCat = new Map(menuItems.map(m => [m.id, m.category || 'Без категории']))
+    const cat: Record<string, { name: string; qty: number; revenue: number }> = {}
+    todayOrders.forEach(o => o.items.forEach(i => {
+      const name = menuCat.get(i.menuItemId) || 'Без категории'
+      if (!cat[name]) cat[name] = { name, qty: 0, revenue: 0 }
+      cat[name].qty += i.unit && i.unit !== 'piece' ? i.qty / (i.unitSize && i.unitSize > 0 ? i.unitSize : 1) : i.qty
+      cat[name].revenue += calcLineTotal(i.price, i.qty, i.unit, i.unitSize)
+    }))
+    return Object.values(cat).sort((a, b) => b.revenue - a.revenue)
+  }, [todayOrders, menuItems])
+  const categoryTotal = useMemo(() => categorySales.reduce((s, c) => s + c.revenue, 0), [categorySales])
 
   // Hourly revenue (chart 1)
   const hourlyRevenue = useMemo(() => {
@@ -296,12 +340,12 @@ export default function DashboardPage() {
 
   // Orders by type (chart 3)
   const ordersByType = useMemo(() => {
-    const todayAll = orders.filter(o => o.createdAt?.startsWith(todayStr))
+    const todayAll = orders.filter(o => inRange(o.createdAt))
     const labels: Record<string, string> = { hall: 'Зал', delivery: 'Доставка', takeaway: 'Самовывоз' }
     const counts: Record<string, number> = { hall: 0, delivery: 0, takeaway: 0 }
     todayAll.forEach(o => { if (counts[o.type] !== undefined) counts[o.type]++ })
     return Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => ({ name: labels[k], value: v }))
-  }, [orders, todayStr])
+  }, [orders, dateFrom, dateTo])
   const TYPE_COLORS = ['#e87c4f', '#4f9ee8', '#5cb85c']
 
   // Waiter performance today
@@ -320,7 +364,9 @@ export default function DashboardPage() {
   const recentOps = operations.slice(0, 6)
 
   // Current date display
-  const dateStr = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })
+  const dateStr = isToday
+    ? new Date(dateTo + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })
+    : `${new Date(dateFrom + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })} — ${new Date(dateTo + 'T00:00:00').toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })}`
 
   if (loading) return (
     <div className="p-6 flex items-center justify-center h-64">
@@ -336,16 +382,31 @@ export default function DashboardPage() {
           <h1 className="text-xl font-bold text-foreground">Дашборд</h1>
           <p className="text-muted-foreground text-sm mt-0.5 capitalize">{dateStr}</p>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <CircleDot className="size-3 text-emerald-500 animate-pulse" />
-          Реальное время · обновление 30 сек
+        <div className="flex items-center gap-2">
+          <DateRangePicker
+            from={dateFrom}
+            to={dateTo}
+            maxDate={today()}
+            onChange={r => { setDateFrom(r.from); setDateTo(r.to) }}
+          />
+          {!isToday && <button onClick={() => { setDateFrom(today()); setDateTo(today()) }} className="rounded-lg border border-border bg-card px-3 py-1.5 text-sm text-foreground hover:bg-muted">Сегодня</button>}
+          {isToday && (
+            <span className="flex items-center gap-1.5 text-xs text-muted-foreground whitespace-nowrap">
+              <CircleDot className="size-3 text-emerald-500 animate-pulse" />Реальное время
+            </span>
+          )}
         </div>
       </div>
+      {!isToday && (
+        <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          Показатели за <b className="text-foreground">{dateStr}</b>. Оперативные блоки (касса, остатки, активные заказы) — всегда текущие.
+        </div>
+      )}
 
       {/* ═══ KPI Row ═══ */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2.5 md:gap-3">
         <KpiCard
-          label="Выручка сегодня"
+          label={isToday ? "Выручка сегодня" : "Выручка за период"}
           value={formatCurrency(todayRevenue)}
           sub={`${todayOrders.length} закрытых заказов`}
           icon={TrendingUp}
@@ -353,7 +414,7 @@ export default function DashboardPage() {
           href="/finance/cashflow"
         />
         <KpiCard
-          label="Заказов сегодня"
+          label={isToday ? "Заказов сегодня" : "Заказов за период"}
           value={String(todayOrdersCount)}
           sub={`${activeOrders.length} активных сейчас`}
           icon={ShoppingBag}
@@ -377,7 +438,7 @@ export default function DashboardPage() {
           href="/finance/accounts"
         />
         <KpiCard
-          label="Расходы сегодня"
+          label={isToday ? "Расходы сегодня" : "Расходы за период"}
           value={formatCurrency(todayExpenses)}
           sub={`Чистый: ${formatCurrency(todayRevenue - todayExpenses)}`}
           icon={Banknote}
@@ -386,14 +447,14 @@ export default function DashboardPage() {
         />
       </div>
 
-      {/* ═══ Alerts ═══ */}
+      {/* ═══ Требует внимания — компактный баннер на всю ширину ═══ */}
       {(lowStock.length > 0 || longCooking.length > 0 || overdueSuppliers.length > 0 || billRequested.length > 0) && (
-        <div className="bg-card rounded-xl border border-border p-4">
-          <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+        <div className="bg-card rounded-xl border border-amber-200/70 dark:border-amber-900/40 p-3.5 md:p-4">
+          <h2 className="text-sm font-semibold text-foreground mb-2.5 flex items-center gap-2">
             <AlertTriangle className="size-4 text-amber-500" />
             Требует внимания
           </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div className="flex flex-wrap gap-2">
             {lowStock.length > 0 && (
               <AlertItem
                 icon={Package}
@@ -586,6 +647,40 @@ export default function DashboardPage() {
 
         {/* RIGHT: Finance sidebar */}
         <div className="space-y-4">
+          {/* Способы оплаты */}
+          <div className="bg-card rounded-xl border border-border p-4">
+            <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+              <CreditCard className="size-4 text-primary" />
+              Способы оплаты{isToday ? '' : ' за период'}
+            </h2>
+            <div className="space-y-2">
+              {([
+                { key: 'cash', label: 'Наличные', icon: Banknote, color: 'text-emerald-600 bg-emerald-500/10' },
+                { key: 'card', label: 'Карта', icon: CreditCard, color: 'text-blue-600 bg-blue-500/10' },
+                { key: 'transfer', label: 'Перевод', icon: ArrowRight, color: 'text-violet-600 bg-violet-500/10' },
+              ] as const).map(({ key, label, icon: Icon, color }) => {
+                const val = paymentBreakdown[key]
+                const pct = paymentTotal > 0 ? Math.round(val / paymentTotal * 100) : 0
+                return (
+                  <div key={key} className="flex items-center gap-2.5">
+                    <div className={`size-7 rounded-md flex items-center justify-center shrink-0 ${color}`}>
+                      <Icon className="size-3.5" />
+                    </div>
+                    <span className="text-xs font-medium text-muted-foreground flex-1 min-w-0 truncate">{label}</span>
+                    <div className="text-right shrink-0">
+                      <p className="text-sm font-bold text-foreground tabular-nums leading-none">{formatCurrency(val)}</p>
+                      <p className="text-[10px] text-muted-foreground tabular-nums mt-0.5">{pct}%</p>
+                    </div>
+                  </div>
+                )
+              })}
+              <div className="border-t border-border pt-2 mt-1 flex items-center justify-between">
+                <span className="text-xs font-semibold text-foreground">Итого</span>
+                <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(paymentTotal)}</span>
+              </div>
+            </div>
+          </div>
+
           {/* Accounts */}
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-3">
@@ -619,7 +714,7 @@ export default function DashboardPage() {
           {/* Top dishes today */}
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold text-foreground">🔥 Топ блюда сегодня</h2>
+              <h2 className="text-sm font-semibold text-foreground">🔥 Топ блюда{isToday ? " сегодня" : " за период"}</h2>
               <Link to="/analytics/abc-menu" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
                 ABC <ArrowRight className="size-3" />
               </Link>
@@ -644,12 +739,42 @@ export default function DashboardPage() {
             )}
           </div>
 
+          {/* Категории за день */}
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                <BarChart3 className="size-4 text-muted-foreground" />
+                Категории{isToday ? " сегодня" : " за период"}
+              </h2>
+            </div>
+            {categorySales.length === 0 ? (
+              <p className="text-muted-foreground text-xs text-center py-4">Нет продаж</p>
+            ) : (
+              <div className="space-y-2.5">
+                {categorySales.slice(0, 6).map(c => {
+                  const pct = categoryTotal > 0 ? Math.round(c.revenue / categoryTotal * 100) : 0
+                  return (
+                    <div key={c.name}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm truncate min-w-0">{c.name}</span>
+                        <span className="text-sm font-medium shrink-0 ml-2 tabular-nums">{formatCurrency(c.revenue)}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Waiter ranking */}
           <div className="bg-card rounded-xl border border-border p-4">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
                 <UsersIcon className="size-4 text-muted-foreground" />
-                Официанты сегодня
+                Официанты{isToday ? " сегодня" : " за период"}
               </h2>
             </div>
             {topWaiters.length === 0 ? (

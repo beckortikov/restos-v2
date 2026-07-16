@@ -48,6 +48,18 @@ sealed interface ServerEvent {
         val orderNumber: Int?,
     ) : ServerEvent
 
+    /**
+     * Повар вызвал официанта на кухню (kds.waiter.called). Официант фильтрует
+     * по своему waiterId и показывает уведомление «приходи на кухню».
+     */
+    data class WaiterCalled(
+        val waiterId: String?,
+        val orderNumber: Int?,
+        val tableNumber: Int?,
+        val tableName: String?,
+        val name: String?,
+    ) : ServerEvent
+
     /** Любое другое событие — для логирования / будущих фич. */
     data class Other(val type: String) : ServerEvent
 }

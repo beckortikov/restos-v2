@@ -157,6 +157,16 @@ private class Listener(
                     orderNumber = p.string("order_number")?.toIntOrNull(),
                 )
             }
+            "kds.waiter.called" -> {
+                val p = parseJson(data)
+                ServerEvent.WaiterCalled(
+                    waiterId = p.string("waiter_id")?.takeIf { it.isNotBlank() },
+                    orderNumber = p.string("order_number")?.toIntOrNull(),
+                    tableNumber = p.string("table_number")?.toIntOrNull(),
+                    tableName = p.string("table_name")?.takeIf { it.isNotBlank() },
+                    name = p.string("name")?.takeIf { it.isNotBlank() },
+                )
+            }
             "order.item.voided" -> {
                 val p = parseJson(data)
                 ServerEvent.ItemVoided(

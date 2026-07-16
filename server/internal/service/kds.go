@@ -42,20 +42,27 @@ var kdsStatusSet = map[string]bool{"pending": true, "cooking": true, "ready": tr
 
 // KDSItem — блюдо на кухонной доске (одна карточка).
 type KDSItem struct {
-	ID            string     `json:"id"`
-	OrderID       string     `json:"order_id"`
-	OrderNumber   int        `json:"order_number"`
-	OrderType     string     `json:"order_type"`
-	TableNumber   *int       `json:"table_number"`
-	TableName     *string    `json:"table_name"`
-	Name          string     `json:"name"`
-	Qty           string     `json:"qty"`
-	Comment       *string    `json:"comment"`
-	Station       string     `json:"station"`
-	StationStatus string     `json:"station_status"`
-	WaiterName    *string    `json:"waiter_name"`
-	CreatedAt     time.Time  `json:"created_at"`
-	StatusAt      *time.Time `json:"status_at"`
+	ID          string  `json:"id"`
+	OrderID     string  `json:"order_id"`
+	OrderNumber int     `json:"order_number"`
+	OrderType   string  `json:"order_type"`
+	TableNumber *int    `json:"table_number"`
+	TableName   *string `json:"table_name"`
+	Name        string  `json:"name"`
+	Qty         string  `json:"qty"`
+	// Unit — единица позиции: "g"/"kg" (весовое блюдо, qty = вес) или piece/пусто
+	// (штучное, qty = количество). Кухня по нему решает: «100 г» или «×100».
+	Unit          string    `json:"unit"`
+	Comment       *string   `json:"comment"`
+	Station       string    `json:"station"`
+	StationStatus string    `json:"station_status"`
+	WaiterName    *string   `json:"waiter_name"`
+	CreatedAt     time.Time `json:"created_at"`
+	// AgeSeconds — сколько секунд назад создано блюдо, по ЧАСАМ СЕРВЕРА. Кухонный
+	// планшет считает «сколько прошло» от него, а не от своих часов (которые
+	// часто выставлены криво → таймер застревал на «0 мин»).
+	AgeSeconds int64      `json:"age_seconds"`
+	StatusAt   *time.Time `json:"status_at"`
 }
 
 type kdsRow struct {
@@ -63,6 +70,7 @@ type kdsRow struct {
 	OrderID       string
 	Name          *string
 	Qty           decimal.Decimal
+	Unit          *string
 	Comment       *string
 	StationStatus string
 	StatusAt      *time.Time
@@ -96,7 +104,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 
 	q := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
-		Select(`oi.id, oi.order_id, oi.name, oi.qty, oi.note AS comment,
+		Select(`oi.id, oi.order_id, oi.name, oi.qty, oi.unit, oi.note AS comment,
 			oi.station_status, oi.station_status_at AS status_at, oi.created_at,
 			COALESCE(mi.station, 'hot_kitchen') AS station,
 			o.order_number, o.type AS order_type,
@@ -121,6 +129,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 	}
 
 	out := make([]KDSItem, 0, len(rows))
+	nowUTC := time.Now()
 	for _, r := range rows {
 		name := ""
 		if r.Name != nil {
@@ -129,6 +138,10 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 		orderType := "hall"
 		if r.OrderType != nil && *r.OrderType != "" {
 			orderType = *r.OrderType
+		}
+		ageSeconds := int64(nowUTC.Sub(r.CreatedAt).Seconds())
+		if ageSeconds < 0 {
+			ageSeconds = 0
 		}
 		out = append(out, KDSItem{
 			ID:            r.ID,
@@ -139,11 +152,13 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 			TableName:     r.TableName,
 			Name:          name,
 			Qty:           r.Qty.String(),
+			Unit:          deref(r.Unit),
 			Comment:       r.Comment,
 			Station:       r.Station,
 			StationStatus: r.StationStatus,
 			WaiterName:    r.WaiterName,
 			CreatedAt:     r.CreatedAt,
+			AgeSeconds:    ageSeconds,
 			StatusAt:      r.StatusAt,
 		})
 	}
@@ -168,6 +183,71 @@ func (s *KDSService) ListStations(ctx context.Context) ([]string, error) {
 		return nil, err
 	}
 	return stations, nil
+}
+
+// CallWaiter — повар нажал «колокольчик» на карточке блюда: шлём официанту,
+// оформившему заказ, уведомление «приходи на кухню». Ничего не пишем в БД —
+// это fire-and-forget сигнал по SSE (kds.waiter.called), официант фильтрует по
+// своему waiter_id (как уведомления о готовности).
+//
+// Возвращает имя официанта (для подтверждения на кухне) или ошибку, если у
+// заказа нет официанта (некому звонить).
+func (s *KDSService) CallWaiter(ctx context.Context, itemID string) (string, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	var row struct {
+		WaiterID    *string `gorm:"column:waiter_id"`
+		WaiterName  *string `gorm:"column:waiter_name"`
+		OrderNumber int     `gorm:"column:order_number"`
+		OrderType   *string `gorm:"column:order_type"`
+		TableNumber *int    `gorm:"column:table_number"`
+		TableName   *string `gorm:"column:table_name"`
+		DishName    *string `gorm:"column:dish_name"`
+	}
+	err = s.r.Raw().WithContext(ctx).
+		Table("order_items AS oi").
+		Select(`o.waiter_id AS waiter_id, u.name AS waiter_name,
+			o.order_number, o.type AS order_type,
+			t.number AS table_number, t.name AS table_name,
+			oi.name AS dish_name`).
+		Joins("JOIN orders o ON o.id = oi.order_id").
+		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id").
+		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
+		Where("oi.id = ? AND o.restaurant_id = ?", itemID, rid).
+		// Take, а не First: First навешивает ORDER BY по «первичному ключу»
+		// целевой структуры (oi.waiter_id — такой колонки нет), падает 42703.
+		Take(&row).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return "", apperrors.Wrap("NOT_FOUND", "order item not found", nil)
+		}
+		return "", err
+	}
+	if row.WaiterID == nil || *row.WaiterID == "" {
+		return "", apperrors.Wrap("VALIDATION", "у заказа нет официанта", nil)
+	}
+
+	waiterName := ""
+	if row.WaiterName != nil {
+		waiterName = *row.WaiterName
+	}
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventKDSWaiterCalled, map[string]any{
+			"waiter_id":    *row.WaiterID,
+			"waiter_name":  waiterName,
+			"order_number": row.OrderNumber,
+			"order_type":   deref(row.OrderType),
+			"table_number": row.TableNumber,
+			"table_name":   deref(row.TableName),
+			"name":         deref(row.DishName),
+		})
+		s.pub.Flush(ctx, rid, buf)
+	}
+	return waiterName, nil
 }
 
 // SetItemStatus переводит одну позицию в указанный статус (кнопка на карточке:

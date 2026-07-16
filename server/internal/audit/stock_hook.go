@@ -54,6 +54,12 @@ func stockAfterCreate(tx *gorm.DB) {
 		if m.IngredientID == nil || *m.IngredientID == "" {
 			continue
 		}
+		// transfer — перемещение товара целиком между складами: меняет только
+		// warehouse_id товара, общий остаток тот же. Денормализовать нельзя,
+		// иначе qty задвоится (остаток transfer-сервис не трогает).
+		if m.Type != nil && *m.Type == "transfer" {
+			continue
+		}
 		key := *m.IngredientID
 		if existing, ok := deltas[key]; ok {
 			deltas[key] = decimal.Add(existing, m.Qty)

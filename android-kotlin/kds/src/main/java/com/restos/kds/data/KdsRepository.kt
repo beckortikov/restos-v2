@@ -16,5 +16,9 @@ class KdsRepository @Inject constructor(
     suspend fun setStatus(id: String, status: String): KdsItemDto =
         api.setStatus(id, SetStatusRequest(status))
 
+    /** Вызвать официанта заказа на кухню. Возвращает имя официанта. */
+    suspend fun callWaiter(id: String): String =
+        api.callWaiter(id).waiterName
+
     suspend fun stations(): List<String> = api.stations().data
 }

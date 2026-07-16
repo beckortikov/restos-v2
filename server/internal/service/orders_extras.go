@@ -609,13 +609,25 @@ func (s *OrdersService) CreateVoid(ctx context.Context, in CreateVoidInput) (*mo
 			return err
 		}
 
+		// Защита от произвольной item_price: для уменьшения total берём СЕРВЕРНУЮ
+		// цену совпадающей позиции заказа (по имени), а не клиентскую item_price.
+		// Иначе крафтом запроса можно было занизить total на любую сумму.
+		var oi models.OrderItem
+		matched := tx.Where("order_id = ? AND name = ? AND cancelled_at IS NULL", oid, itemName).
+			Order("created_at ASC").First(&oi).Error == nil
+		if matched {
+			v.ItemPrice = oi.Price // audit-запись — серверная цена, не клиентская
+		}
+
 		if err := tx.Create(v).Error; err != nil {
 			return err
 		}
 
+		// total уменьшаем ТОЛЬКО если позиция реально есть на открытом заказе —
+		// нельзя «списать» несуществующую позицию и произвольно занизить сумму.
 		mutable := order.Status == nil || (*order.Status != "closed" && *order.Status != "cancelled")
-		if mutable {
-			lineTotal := decimal.Normalize(decimal.Mul(price, decimal.FromInt(int64(qty))))
+		if mutable && matched {
+			lineTotal := decimal.Normalize(decimal.Mul(oi.Price, decimal.FromInt(int64(qty))))
 			newTotal := decimal.Sub(order.Total, lineTotal)
 			if decimal.IsNegative(newTotal) {
 				newTotal = decimal.Zero
@@ -1118,11 +1130,22 @@ type ReopenOrderInput struct {
 }
 
 // Reopen — закрытый заказ возвращается в "served".
-// FinancialOperation и stock_movements ОСТАЮТСЯ (audit trail). При следующем
-// /close создастся дубль revenue — это намеренно (legacy-поведение Node).
+//
+// Финансовый след закрытия СТОРНИРУЕТСЯ (v3.16.31): revenue-FO удаляются,
+// балансы счетов возвращаются, агрегаты смены (cash/card_revenue,
+// orders_count, avg_check) уменьшаются. Иначе смена продолжала показывать
+// выручку по заказу, который больше не закрыт, а повторный /close после
+// редактирования не постил новую сумму (idempotency по source_ref).
+// stock_movements остаются — блюда физически приготовлены; повторный /close
+// не спишет склад второй раз (идемпотентность по description=order:{id}).
 func (s *OrdersService) Reopen(ctx context.Context, orderID string, in ReopenOrderInput) (*models.Order, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
+		return nil, err
+	}
+	// Переоткрытие закрытого = редактирование заказа — по праву orders.edit
+	// (по умолчанию выключено; выдаётся в матрице доступов).
+	if err := s.requirePerm(ctx, "orders.edit"); err != nil {
 		return nil, err
 	}
 	var out *models.Order
@@ -1141,6 +1164,26 @@ func (s *OrdersService) Reopen(ctx context.Context, orderID string, in ReopenOrd
 			return apperrors.Wrap("CONFLICT", "only closed orders can be reopened", nil)
 		}
 		now := time.Now().UTC()
+
+		// Заказы, оплаченные РАЗДЕЛЕНИЕМ счёта (split), переоткрывать нельзя:
+		// reverseCloseFinancials сторнирует только order-level revenue-FO
+		// (source_ref='order:'), а split-платежи идут как 'split:' → сторно бы
+		// ничего не вернул, и повторное закрытие дублировало бы выручку двойным
+		// кредитом на счёт. Для таких заказов — только возврат (refund).
+		var paidSplits int64
+		if err := tx.Model(&models.OrderSplit{}).
+			Where("restaurant_id = ? AND order_id = ? AND paid_at IS NOT NULL", rid, orderID).
+			Count(&paidSplits).Error; err != nil {
+			return err
+		}
+		if paidSplits > 0 {
+			return apperrors.Wrap("CONFLICT", "заказ оплачен разделением счёта — переоткрытие недоступно, оформите возврат", nil)
+		}
+
+		if err := s.reverseCloseFinancials(tx, rid, &order, now); err != nil {
+			return err
+		}
+
 		served := "served"
 		order.Status = &served
 		order.ClosedAt = nil
@@ -1160,6 +1203,127 @@ func (s *OrdersService) Reopen(ctx context.Context, orderID string, in ReopenOrd
 		s.pub.Flush(ctx, rid, buf)
 	}
 	return out, nil
+}
+
+// reverseCloseFinancials — сторно финансового следа Close при reopen:
+// удаляет revenue-FO заказа (source_ref=order:{id}), возвращает балансы
+// счетов и уменьшает агрегаты смены, в которую выручка была запощена.
+// После этого повторный /close пройдёт check alreadyPosted и запостит
+// выручку заново — уже по новой сумме.
+func (s *OrdersService) reverseCloseFinancials(tx *gorm.DB, rid string, order *models.Order, now time.Time) error {
+	opSourceRef := "order:" + order.ID
+	var revOps []models.FinancialOperation
+	if err := tx.Where("restaurant_id = ? AND source_ref = ? AND category = ?", rid, opSourceRef, "revenue").
+		Find(&revOps).Error; err != nil {
+		return err
+	}
+	if len(revOps) == 0 {
+		return nil
+	}
+
+	// 1. Дебетуем счета — зеркало creditAccount из Close.
+	for _, op := range revOps {
+		if op.AccountID == nil || *op.AccountID == "" {
+			continue
+		}
+		if err := tx.Model(&models.FinancialAccount{}).
+			Where("restaurant_id = ? AND id = ?", rid, *op.AccountID).
+			Updates(map[string]any{
+				"balance":    gorm.Expr("balance - ?", op.Amount),
+				"updated_at": now,
+			}).Error; err != nil {
+			return err
+		}
+	}
+
+	// 2. Агрегаты смены, куда выручка была запощена (FO.ShiftID, не текущая).
+	shiftID := ""
+	if revOps[0].ShiftID != nil {
+		shiftID = *revOps[0].ShiftID
+	}
+	if shiftID == "" && order.ShiftID != nil {
+		shiftID = *order.ShiftID
+	}
+	if shiftID != "" {
+		var shift models.CashShift
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, shiftID).
+			First(&shift).Error
+		switch {
+		case err == nil:
+			// Метод платежа per-сумма: payments JSON (split), иначе
+			// order.payment_method на всю сумму revenue-FO. Симметрично
+			// тому, как Close инкрементил агрегаты.
+			type pay struct {
+				Method string
+				Amount decimal.Decimal
+			}
+			var pays []pay
+			if len(order.Payments) > 0 {
+				var arr []struct {
+					Method string `json:"method"`
+					Amount string `json:"amount"`
+				}
+				if jsonUnmarshal(order.Payments, &arr) == nil {
+					for _, p := range arr {
+						if a, perr := decimal.FromString(p.Amount); perr == nil {
+							pays = append(pays, pay{Method: p.Method, Amount: decimal.Normalize(a)})
+						}
+					}
+				}
+			}
+			if len(pays) == 0 {
+				m := ""
+				if order.PaymentMethod != nil {
+					m = *order.PaymentMethod
+				}
+				total := decimal.Zero
+				for _, op := range revOps {
+					total = decimal.Add(total, op.Amount)
+				}
+				pays = append(pays, pay{Method: m, Amount: total})
+			}
+			for _, p := range pays {
+				switch p.Method {
+				case "cash":
+					shift.CashRevenue = decimal.Normalize(decimal.Sub(shift.CashRevenue, p.Amount))
+				case "card":
+					shift.CardRevenue = decimal.Normalize(decimal.Sub(shift.CardRevenue, p.Amount))
+				}
+			}
+			cnt := 0
+			if shift.OrdersCount != nil {
+				cnt = *shift.OrdersCount
+			}
+			if cnt > 0 {
+				cnt--
+			}
+			shift.OrdersCount = &cnt
+			if cnt > 0 {
+				total := decimal.Add(shift.CashRevenue, shift.CardRevenue)
+				shift.AvgCheck = decimal.Normalize(decimal.DivRound(total, decimal.FromInt(int64(cnt))))
+			} else {
+				shift.AvgCheck = decimal.Zero
+			}
+			shift.UpdatedAt = now
+			if err := tx.Save(&shift).Error; err != nil {
+				return err
+			}
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			// Смена удалена — сторнируем только FO и балансы.
+		default:
+			return err
+		}
+	}
+
+	// 3. Удаляем revenue-FO (через хуки — попадает в audit_log). После этого
+	// alreadyPosted-check в Close снова false → выручка запостится заново.
+	for i := range revOps {
+		if err := tx.Delete(&revOps[i]).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // MoveTableInput — body POST /orders/{id}/table.

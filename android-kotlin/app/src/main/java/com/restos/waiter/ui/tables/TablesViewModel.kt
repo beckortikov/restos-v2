@@ -74,6 +74,9 @@ class TablesViewModel @Inject constructor(
                     // Повар снял позицию (void) → сумма/состав заказа изменились,
                     // на карточке стола это видно → перечитываем столы.
                     is ServerEvent.ItemVoided -> refresh()
+                    // Вызов официанта на кухню — обрабатывает WaiterAlertService
+                    // (уведомление), на карту столов не влияет.
+                    is ServerEvent.WaiterCalled -> Unit
                     is ServerEvent.Other -> Unit
                 }
             }

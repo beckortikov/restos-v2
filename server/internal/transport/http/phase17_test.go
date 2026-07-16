@@ -19,7 +19,10 @@ import (
 // ═════════════════════════════════════════════════════════════════════════
 
 // Verify that passing `price` in items[] overrides server-resolved price.
-func TestPhase17_CreateOrder_PriceOverride(t *testing.T) {
+// Политика override цены (v3.16.6): у ОБЫЧНОГО штучного блюда с фикс-ценой
+// клиентская цена ИГНОРИРУЕТСЯ — берётся меню-цена. Защита от продажи блюда по
+// произвольной цене крафтом запроса. Override ИМЕНИ при этом продолжает работать.
+func TestPhase17_CreateOrder_PriceOverride_PieceIgnored(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	_, menuItemID, _, _ := seedForWrite(t, f)
@@ -34,10 +37,10 @@ func TestPhase17_CreateOrder_PriceOverride(t *testing.T) {
 	}
 	var created models.Order
 	_ = json.Unmarshal(b, &created)
-	if !created.Total.Equal(decimal.MustFromString("999.99")) {
-		t.Errorf("total = %s, want 999.99 (override applied)", created.Total.String())
+	// price override игнорируется → total = меню-цена 25 (seedForWrite).
+	if !created.Total.Equal(decimal.MustFromString("25")) {
+		t.Errorf("total = %s, want 25 (price override must be ignored on fixed-price piece item)", created.Total.String())
 	}
-	// Verify item price saved.
 	_, gb := f.get(t, fmt.Sprintf("/api/v1/orders/%s", created.ID), tok)
 	var detail struct {
 		Items []models.OrderItem `json:"items"`
@@ -46,11 +49,61 @@ func TestPhase17_CreateOrder_PriceOverride(t *testing.T) {
 	if len(detail.Items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(detail.Items))
 	}
-	if !detail.Items[0].Price.Equal(decimal.MustFromString("999.99")) {
-		t.Errorf("item price = %s, want 999.99", detail.Items[0].Price.String())
+	if !detail.Items[0].Price.Equal(decimal.MustFromString("25")) {
+		t.Errorf("item price = %s, want 25 (override ignored)", detail.Items[0].Price.String())
 	}
+	// override имени по-прежнему применяется.
 	if detail.Items[0].Name == nil || *detail.Items[0].Name != "Custom Item" {
 		t.Errorf("item name = %v, want 'Custom Item'", detail.Items[0].Name)
+	}
+}
+
+// У ВЕСОВОГО блюда цена тоже фиксирована в меню — клиентский override цены
+// ИГНОРИРУЕТСЯ. Вручную кассир вбивает только ВЕС (qty), а сервер сам считает
+// total = mi.Price × qty/unitSize.
+func TestPhase17_CreateOrder_PriceOverride_WeightIgnored(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, _ := seedForWrite(t, f)
+
+	// Весовое блюдо: 100 с. за 1 кг.
+	wName := "Meat by weight"
+	wUnit := "kg"
+	weightID := uuid.NewString()
+	if err := gdb.Create(&models.MenuItem{
+		ID: weightID, Name: &wName, Unit: &wUnit,
+		Price:        decimal.MustFromString("100"),
+		UnitSize:     decimal.MustFromString("1"),
+		RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// qty = 0.5 кг (вес). Попытка override цены на 37.50 должна игнорироваться.
+	r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{
+			{"menu_item_id": weightID, "qty": "0.5", "price": "37.50"},
+		},
+	})
+	if r.StatusCode != 201 {
+		t.Fatalf("create: %d %s", r.StatusCode, b)
+	}
+	var created models.Order
+	_ = json.Unmarshal(b, &created)
+	// total = 100 × 0.5/1 = 50 (меню-цена × вес; override 37.50 не влияет).
+	if !created.Total.Equal(decimal.MustFromString("50")) {
+		t.Errorf("total = %s, want 50 (menu price × weight; price override must be ignored)", created.Total.String())
+	}
+	_, gb := f.get(t, fmt.Sprintf("/api/v1/orders/%s", created.ID), tok)
+	var detail struct {
+		Items []models.OrderItem `json:"items"`
+	}
+	_ = json.Unmarshal(gb, &detail)
+	if len(detail.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(detail.Items))
+	}
+	if !detail.Items[0].Price.Equal(decimal.MustFromString("100")) {
+		t.Errorf("item price = %s, want 100 (menu price, override ignored)", detail.Items[0].Price.String())
 	}
 }
 

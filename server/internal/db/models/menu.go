@@ -50,13 +50,16 @@ type MenuItem struct {
 	SaleStep          decimal.Decimal `gorm:"column:sale_step;type:numeric(14,4);default:0" json:"sale_step"`
 	IsDeleted         bool            `gorm:"column:is_deleted;not null;default:false" json:"is_deleted"`
 	LowStockThreshold int             `gorm:"column:low_stock_threshold;not null;default:5" json:"low_stock_threshold"`
-	RestaurantID      *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	// MasterID — связь с мастер-меню сети (ADR-004). NULL → локальное блюдо
 	// филиала. Наследуемые поля тянутся из мастера, локальные (price/is_available/
 	// оформление) остаются у филиала.
-	MasterID  *string   `gorm:"column:master_id;type:uuid" json:"master_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	MasterID *string `gorm:"column:master_id;type:uuid" json:"master_id,omitempty"`
+	// ParentID — задан у сгенерированных вариантов (комбинаций атрибутов);
+	// NULL — обычное блюдо или продукт-родитель. Варианты скрыты из списков UI.
+	ParentID     *string   `gorm:"column:parent_id;type:uuid" json:"parent_id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (MenuItem) TableName() string { return "menu_items" }
@@ -104,6 +107,45 @@ type Modifier struct {
 }
 
 func (Modifier) TableName() string { return "modifiers" }
+
+// MenuAttribute — атрибут продукта («Размер», «Вкус»). Живёт на продукте-
+// родителе; из декартова произведения значений сервис генерирует варианты.
+type MenuAttribute struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	MenuItemID   string    `gorm:"column:menu_item_id;type:uuid;not null;index" json:"menu_item_id"`
+	Name         string    `gorm:"not null" json:"name"`
+	SortOrder    int       `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (MenuAttribute) TableName() string { return "menu_attributes" }
+
+// MenuAttributeValue — значение атрибута («1 л») — чистый лейбл. Цена и
+// закупка живут на комбинации (строка варианта menu_items).
+type MenuAttributeValue struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	AttributeID  string    `gorm:"column:attribute_id;type:uuid;not null;index" json:"attribute_id"`
+	Label        string    `gorm:"not null" json:"label"`
+	SortOrder    int       `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (MenuAttributeValue) TableName() string { return "menu_attribute_values" }
+
+// MenuItemVariantValue — связка «вариант ↔ выбранное значение атрибута».
+type MenuItemVariantValue struct {
+	MenuItemID   string    `gorm:"column:menu_item_id;type:uuid;primaryKey" json:"menu_item_id"`
+	ValueID      string    `gorm:"column:value_id;type:uuid;primaryKey" json:"value_id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (MenuItemVariantValue) TableName() string { return "menu_item_variant_values" }
 
 // TechCardLine — строка тех. карты (блюдо → ингредиент или полуфабрикат).
 type TechCardLine struct {

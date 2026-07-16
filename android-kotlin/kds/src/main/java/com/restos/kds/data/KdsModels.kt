@@ -14,11 +14,18 @@ data class KdsItemDto(
     @SerialName("table_name") val tableName: String? = null,
     val name: String = "",
     val qty: String = "1",
+    // "g"/"kg" — весовое блюдо (qty = вес), иначе штучное (qty = количество).
+    val unit: String? = null,
     val comment: String? = null,
     val station: String = "hot_kitchen",
     @SerialName("station_status") val stationStatus: String = "pending",
     @SerialName("waiter_name") val waiterName: String? = null,
     @SerialName("created_at") val createdAt: String = "",
+    // Возраст блюда в секундах по часам СЕРВЕРА на момент выборки. Кухня считает
+    // «сколько прошло» от него + время с момента загрузки — не завися от часов
+    // планшета (они часто выставлены криво → таймер застревал на «0 мин»).
+    // null = старая касса без этого поля → фолбэк на created_at + часы планшета.
+    @SerialName("age_seconds") val ageSeconds: Long? = null,
     @SerialName("status_at") val statusAt: String? = null,
     /**
      * Клиентский флаг: блюдо отменено. Сервер его не присылает (default=false);
@@ -33,6 +40,9 @@ data class KdsListResponse(val data: List<KdsItemDto> = emptyList())
 
 @Serializable
 data class SetStatusRequest(val status: String)
+
+@Serializable
+data class CallWaiterResponse(@SerialName("waiter_name") val waiterName: String = "")
 
 @Serializable
 data class StationsResponse(val data: List<String> = emptyList())

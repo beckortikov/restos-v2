@@ -117,15 +117,17 @@ fun OrderDetailScreen(
                 },
                 title = { OrderTitle(state.order) },
                 actions = {
-                    if (state.order?.let { OrderStatus.isFresh(it.status) } == true &&
-                        state.order?.table != null
-                    ) {
-                        IconButton(onClick = viewModel::openTransferTable) {
-                            Icon(
-                                Icons.Outlined.Place,
-                                contentDescription = "Перенести на другой стол",
-                            )
-                        }
+                    val o = state.order
+                    if (o != null && OrderStatus.isFresh(o.status)) {
+                        OrderOverflowMenu(
+                            hasTable = o.table != null,
+                            canCancel = state.canCancel,
+                            busy = state.busy,
+                            onPrintPreBill = viewModel::printPreBill,
+                            onAssignWaiter = viewModel::openAssignWaiter,
+                            onTransferTable = viewModel::openTransferTable,
+                            onCancelOrder = viewModel::openCancelOrder,
+                        )
                     }
                 },
             )
@@ -134,16 +136,12 @@ fun OrderDetailScreen(
             val o = state.order
             when {
                 o == null -> Unit
-                OrderStatus.isFresh(o.status) -> BottomActions(
+                OrderStatus.isFresh(o.status) -> AddItemsBar(
                     order = o,
                     busy = state.busy,
-                    canCancel = state.canCancel,
-                    onPrintPreBill = viewModel::printPreBill,
                     onAddItems = {
                         state.order?.let { ord -> onAddItems(ord.id, ord.table) }
                     },
-                    onCancelOrder = viewModel::openCancelOrder,
-                    onAssignWaiter = viewModel::openAssignWaiter,
                 )
                 o.status == OrderStatus.BILL_REQUESTED ->
                     BillRequestedBanner()
@@ -965,41 +963,20 @@ private fun TotalsBlock(order: OrderDto) {
     }
 }
 
+/** Нижняя панель — только «Добавить». Остальные действия ушли в ⋮ топ-бара. */
 @Composable
-private fun BottomActions(
+private fun AddItemsBar(
     order: OrderDto,
     busy: Boolean,
-    canCancel: Boolean,
-    onPrintPreBill: () -> Unit,
     onAddItems: () -> Unit,
-    onCancelOrder: () -> Unit,
-    onAssignWaiter: () -> Unit,
 ) {
     Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 8.dp) {
-        Column(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // 1) Печать пре-чека — голубая outlined-кнопка во всю ширину
-            OutlinedButton(
-                onClick = onPrintPreBill,
-                enabled = !busy && OrderStatus.isFresh(order.status),
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    contentColor = Color(0xFF1D4ED8),
-                ),
-                border = androidx.compose.foundation.BorderStroke(
-                    1.dp, Color(0xFFBFDBFE),
-                ),
-            ) {
-                Icon(Icons.Outlined.Receipt, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Печать пре-чека", fontWeight = FontWeight.SemiBold)
-            }
-            // 2) «+ Добавить» (filled) во всю ширину
             Button(
                 onClick = onAddItems,
                 enabled = !busy && OrderStatus.isFresh(order.status),
@@ -1009,38 +986,63 @@ private fun BottomActions(
                 Spacer(Modifier.width(6.dp))
                 Text("Добавить", fontWeight = FontWeight.SemiBold)
             }
-            // 3) Передать другому официанту — всегда видимая. Если других нет —
-            //    диалог сам скажет «нет других официантов».
-            Button(
-                onClick = onAssignWaiter,
-                enabled = !busy && OrderStatus.isFresh(order.status),
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFEF3C7),
-                    contentColor = Color(0xFF92400E),
-                ),
-            ) {
-                Icon(Icons.Outlined.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Передать другому официанту", fontWeight = FontWeight.SemiBold)
+        }
+    }
+}
+
+/**
+ * ⋮ в правом верхнем углу: печать пре-чека, передача официанту, перенос стола
+ * (и отмена заказа при праве orders.cancel). Раньше это были 3 ряда кнопок снизу.
+ */
+@Composable
+private fun OrderOverflowMenu(
+    hasTable: Boolean,
+    canCancel: Boolean,
+    busy: Boolean,
+    onPrintPreBill: () -> Unit,
+    onAssignWaiter: () -> Unit,
+    onTransferTable: () -> Unit,
+    onCancelOrder: () -> Unit,
+) {
+    val open = remember { androidx.compose.runtime.mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { open.value = true }) {
+            Icon(Icons.Outlined.MoreVert, contentDescription = "Ещё")
+        }
+        DropdownMenu(expanded = open.value, onDismissRequest = { open.value = false }) {
+            DropdownMenuItem(
+                text = { Text("Печать пре-чека") },
+                enabled = !busy,
+                leadingIcon = { Icon(Icons.Outlined.Receipt, contentDescription = null) },
+                onClick = { open.value = false; onPrintPreBill() },
+            )
+            DropdownMenuItem(
+                text = { Text("Передать другому официанту") },
+                enabled = !busy,
+                leadingIcon = { Icon(Icons.Outlined.SwapHoriz, contentDescription = null) },
+                onClick = { open.value = false; onAssignWaiter() },
+            )
+            if (hasTable) {
+                DropdownMenuItem(
+                    text = { Text("Перенести стол") },
+                    enabled = !busy,
+                    leadingIcon = { Icon(Icons.Outlined.Place, contentDescription = null) },
+                    onClick = { open.value = false; onTransferTable() },
+                )
             }
-            // 4) Отменить заказ — только при праве orders.cancel (матрица доступов).
             if (canCancel) {
-                OutlinedButton(
-                    onClick = onCancelOrder,
-                    enabled = !busy && OrderStatus.isFresh(order.status),
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error,
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(
-                        1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f),
-                    ),
-                ) {
-                    Icon(Icons.Outlined.Block, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Отменить заказ", fontWeight = FontWeight.SemiBold)
-                }
+                DropdownMenuItem(
+                    text = { Text("Отменить заказ", color = MaterialTheme.colorScheme.error) },
+                    enabled = !busy,
+                    leadingIcon = {
+                        Icon(
+                            Icons.Outlined.Block,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                        )
+                    },
+                    onClick = { open.value = false; onCancelOrder() },
+                )
             }
         }
     }

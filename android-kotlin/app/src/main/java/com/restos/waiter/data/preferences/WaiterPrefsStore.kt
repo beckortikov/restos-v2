@@ -16,6 +16,10 @@ enum class ViewMode { List, Grid }
 enum class HomeScreen { Tables, Menu }
 enum class TablesTab { Mine, All }
 
+/** Как показываются чипы категорий в меню композера: раскрытие (кнопка «Ещё»
+ *  + 3 строки) или горизонтальный скролл в один ряд. Официант выбирает сам. */
+enum class CategoryLayout { Expand, Scroll }
+
 @Singleton
 class WaiterPrefsStore @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -32,6 +36,10 @@ class WaiterPrefsStore @Inject constructor(
         if (prefs[KEY_TABLES_TAB] == "all") TablesTab.All else TablesTab.Mine
     }
 
+    val categoryLayout: Flow<CategoryLayout> = context.waiterPrefsDataStore.data.map { prefs ->
+        if (prefs[KEY_CATEGORY_LAYOUT] == "scroll") CategoryLayout.Scroll else CategoryLayout.Expand
+    }
+
     suspend fun setViewMode(mode: ViewMode) {
         context.waiterPrefsDataStore.edit { it[KEY_VIEW_MODE] = mode.name.lowercase() }
     }
@@ -44,9 +52,14 @@ class WaiterPrefsStore @Inject constructor(
         context.waiterPrefsDataStore.edit { it[KEY_TABLES_TAB] = tab.name.lowercase() }
     }
 
+    suspend fun setCategoryLayout(mode: CategoryLayout) {
+        context.waiterPrefsDataStore.edit { it[KEY_CATEGORY_LAYOUT] = mode.name.lowercase() }
+    }
+
     private companion object {
         val KEY_VIEW_MODE = stringPreferencesKey("view_mode")
         val KEY_HOME_SCREEN = stringPreferencesKey("home_screen")
         val KEY_TABLES_TAB = stringPreferencesKey("tables_tab")
+        val KEY_CATEGORY_LAYOUT = stringPreferencesKey("category_layout")
     }
 }

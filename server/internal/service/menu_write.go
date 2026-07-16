@@ -167,9 +167,16 @@ func (s *MenuService) CreateItem(ctx context.Context, in MenuItemInput) (*models
 		mi.COGS = price
 		txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {
 			tx := tr.Raw().WithContext(ctx)
+			// Мультисклад: покупной товар сразу привязываем к складу «Покупные
+			// товары» (не ждём self-heal на рестарте).
+			wid, werr := resolveWarehouseID(tx, rid, false, true)
+			if werr != nil {
+				return werr
+			}
 			ing := &models.Ingredient{
 				ID: uuid.NewString(), Name: mi.Name, Category: mi.Category,
-				Qty: decimal.Zero, MinQty: minQty, Unit: &unit, PricePerUnit: price, RestaurantID: &rid,
+				Qty: decimal.Zero, MinQty: minQty, Unit: &unit, PricePerUnit: price,
+				WarehouseID: wid, RestaurantID: &rid,
 			}
 			if err := tx.Create(ing).Error; err != nil {
 				return err
@@ -297,6 +304,13 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 	if err := scoped2.Model(&mi).Updates(updates).Error; err != nil {
 		return nil, err
 	}
+	// Имя родителя входит в производные имена вариантов («Fanta 1 л») — пересчёт.
+	// Цены вариантов от родителя не зависят (Σ цен значений атрибутов).
+	if mi.ParentID == nil && in.Name != nil {
+		if err := s.recomputeVariants(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	// Перечитываем (через свежий scope) чтобы получить актуальные default-fields.
 	scoped3, _ := s.r.ForTenant(ctx)
 	var updated models.MenuItem
@@ -340,13 +354,21 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 		if err := tx.Where("menu_item_id = ?", mi.ID).Find(&lines).Error; err != nil {
 			return err
 		}
+		// Мультисклад: складской ингредиент покупного товара живёт на складе
+		// «Покупные товары» — привязываем и при реюзе, и при конвертации.
+		wid, werr := resolveWarehouseID(tx, rid, false, true)
+		if werr != nil {
+			return werr
+		}
 		var ingID string
 		if mi.IsPurchased && len(lines) == 1 && lines[0].IngredientID != nil {
 			// Уже покупной — реюзаем выделенный ингредиент.
 			ingID = *lines[0].IngredientID
-			if err := tx.Model(&models.Ingredient{}).Where("id = ?", ingID).Updates(map[string]any{
-				"name": name, "price_per_unit": price, "min_qty": minQty, "unit": unit,
-			}).Error; err != nil {
+			upd := map[string]any{"name": name, "price_per_unit": price, "min_qty": minQty, "unit": unit}
+			if wid != nil {
+				upd["warehouse_id"] = *wid
+			}
+			if err := tx.Model(&models.Ingredient{}).Where("id = ?", ingID).Updates(upd).Error; err != nil {
 				return err
 			}
 		} else {
@@ -355,7 +377,8 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 			nm := name
 			ing := &models.Ingredient{
 				ID: uuid.NewString(), Name: &nm, Category: mi.Category,
-				Qty: decimal.Zero, MinQty: minQty, Unit: &unit, PricePerUnit: price, RestaurantID: &rid,
+				Qty: decimal.Zero, MinQty: minQty, Unit: &unit, PricePerUnit: price,
+				WarehouseID: wid, RestaurantID: &rid,
 			}
 			if err := tx.Create(ing).Error; err != nil {
 				return err
@@ -388,13 +411,14 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 
 // SoftDeleteItem ставит is_deleted=true. Hard delete недопустим:
 // у order_items стоит FK с RESTRICT (см. PRD 06).
+// Продукт с атрибутами архивируется вместе со своими вариантами.
 func (s *MenuService) SoftDeleteItem(ctx context.Context, id string) error {
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return err
 	}
 	res := scoped.Model(&models.MenuItem{}).
-		Where("id = ?", id).
+		Where("id = ? OR parent_id = ?", id, id).
 		Updates(map[string]any{
 			"is_deleted": true,
 			"updated_at": time.Now().UTC(),

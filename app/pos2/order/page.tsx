@@ -4,23 +4,27 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2,
+  ChevronUp, ChevronDown,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { useFavorites, toggleFavorite } from '@/lib/pos-favorites'
+import { useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList } from '@/lib/queries'
-import { formatCurrency } from '@/lib/helpers'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder } from '@/lib/queries'
+import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, startOfToday, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
+import { useMenuGrid, menuGridStyle } from '@/lib/pos-v2/menu-grid'
 import { PosModal } from '@/components/pos-v2/pos-modal'
+import { buildReceiptData } from '@/lib/receipt-data'
+import { PrintReceipt } from '@/components/print-receipt'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
-import type { MenuItem, TableStatus, Order, FinancialAccount, OrderSplit } from '@/lib/types'
+import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit } from '@/lib/types'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -30,6 +34,13 @@ const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; lab
   bill_requested: { soft: 'var(--pv-bill-soft)', dot: 'var(--pv-bill-dot)', text: 'var(--pv-bill-text)', label: 'Счёт' },
 }
 const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
+const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни', 'Некачественно', 'Другое']
+// Печать требует настроенного чекового принтера (бэк: «no default receipt
+// printer configured»). Показываем понятную подсказку вместо сырой ошибки.
+function printerErr(e: unknown): string {
+  const msg = humanizeError(e)
+  return /printer|принтер/i.test(msg) ? 'Не настроен чековый принтер — Настройки → Принтеры' : `Не удалось: ${msg}`
+}
 
 // Phase 2 + критичный блок: заказ на реальных данных. Зал/такаут, гости, стоп-лист
 // override (менеджер), весовые позиции (вес × порции). Логику не переписываем.
@@ -42,12 +53,44 @@ export default function PosV2Order() {
   const favSet = useMemo(() => new Set(favorites), [favorites])
 
   const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
+  const [menuGrid] = useMenuGrid()
+  // Высота области сетки блюд — чтобы в матричном режиме (N×M) подогнать высоту
+  // рядов под экран (карточки квадратнее, а не «широкие и низкие»).
+  const gridScrollRef = useRef<HTMLDivElement>(null)
+  const [gridAreaH, setGridAreaH] = useState(0)
+  // Крупные кнопки-стрелки для прокрутки блюд (тач: нативный скролл мелкий).
+  // Дизаблим на краях, прячем целиком, если контент помещается без скролла.
+  const [canScrollUp, setCanScrollUp] = useState(false)
+  const [canScrollDown, setCanScrollDown] = useState(false)
+  const updateScrollBtns = useCallback(() => {
+    const el = gridScrollRef.current
+    if (!el) return
+    const { scrollTop, scrollHeight, clientHeight } = el
+    setCanScrollUp(scrollTop > 4)
+    setCanScrollDown(scrollTop + clientHeight < scrollHeight - 4)
+  }, [])
+  useEffect(() => {
+    const el = gridScrollRef.current
+    if (!el) return
+    const ro = new ResizeObserver(() => { setGridAreaH(el.clientHeight); updateScrollBtns() })
+    ro.observe(el)
+    setGridAreaH(el.clientHeight)
+    updateScrollBtns()
+    return () => ro.disconnect()
+  }, [updateScrollBtns])
+  function scrollDishes(dir: 1 | -1) {
+    const el = gridScrollRef.current
+    if (!el) return
+    el.scrollBy({ top: dir * el.clientHeight * 0.85, behavior: 'smooth' })
+  }
   const [search, setSearch] = useState('')
   const deferred = useDeferredValue(search)
   const [activeCat, setActiveCat] = useState<string | null>(null)
   const [cart, setCart] = useState<CartLine[]>([])
   const [selectedTableId, setSelectedTableId] = useState<string>('')
   const [tablesOpen, setTablesOpen] = useState(false)
+  // Активная зона-таб в пикере столов (иначе при многих столах не помещается).
+  const [pickerZone, setPickerZone] = useState<string | null>(null)
   const [guests, setGuests] = useState(1)
   // Единый сайдбар: занятый стол раскрывается на месте — вкладки групп + содержимое.
   const [tableOrders, setTableOrders] = useState<Order[]>([])
@@ -63,6 +106,28 @@ export default function PosV2Order() {
   const [payTarget, setPayTarget] = useState<Order | null>(null)
   const [extrasOpen, setExtrasOpen] = useState(false)
   const [splits, setSplits] = useState<OrderSplit[]>([])
+  // Отмена отдельной позиции уже отправленного заказа (как в старом POS/тикете).
+  const [cancelItem, setCancelItem] = useState<OrderItem | null>(null)
+  const [itemReason, setItemReason] = useState(ITEM_REASONS[0])
+  const [itemBusy, setItemBusy] = useState(false)
+  const itemBusyRef = useRef(false)
+  // Пре-чек: превью на экране + печать (превью работает и без принтера).
+  const [preBill, setPreBill] = useState<Order | null>(null)
+  const [printingPre, setPrintingPre] = useState(false)
+  // Заказы прямо в ПОС (модалка вместо перехода на /pos2/orders): активные +
+  // закрытые; закрытый → просмотр + печать чека.
+  const [ordersOpen, setOrdersOpen] = useState(false)
+  const [ordersTab, setOrdersTab] = useState<'active' | 'closed'>('active')
+  const [ordersList, setOrdersList] = useState<Order[]>([])
+  const [ordersLoading, setOrdersLoading] = useState(false)
+  const [ordersSearch, setOrdersSearch] = useState('')
+  const [viewReceipt, setViewReceipt] = useState<Order | null>(null)
+  const [reprinting, setReprinting] = useState(false)
+  // Возврат/редактирование закрытого заказа (по правам orders.refund / orders.edit).
+  const [refundTarget, setRefundTarget] = useState<Order | null>(null)
+  const [refundReason, setRefundReason] = useState('')
+  const [refundAmt, setRefundAmt] = useState('')
+  const [refundBusy, setRefundBusy] = useState(false)
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -126,19 +191,26 @@ export default function PosV2Order() {
   const initedRef = useRef(false)
   useEffect(() => {
     if (initedRef.current || loading) return
-    initedRef.current = true
     const orderParam = searchParams.get('order')
     const tableParam = searchParams.get('table')
     if (orderParam) {
+      initedRef.current = true
       fetchOrders({ ids: [orderParam], slim: false }).then(os => {
         const o = os[0]; if (!o) return
         if (o.tableId) { setOrderType('hall'); setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
         else { setOrderType('takeaway'); setTableOrders([o]); setActiveGroupId(o.id) }
       }).catch(() => {})
     } else if (tableParam) {
+      // tables грузятся ОТДЕЛЬНО от loading (loading завязан только на menuItems,
+      // см. use-order-data), поэтому в момент loading=false стол может ещё не
+      // подъехать. Ждём, пока он появится в tables — иначе loadTableOrders не
+      // найдёт currentOrderIds и сайдбар останется пустым (баг: тап по столу с
+      // экрана «Столы» открывал ПОС с пустым сайдбаром вместо заказа стола).
+      if (!tables.some(t => t.id === tableParam)) return
+      initedRef.current = true
       setOrderType('hall'); setSelectedTableId(tableParam); loadTableOrders(tableParam)
     }
-  }, [loading, searchParams, loadTableOrders])
+  }, [loading, searchParams, tables, loadTableOrders])
 
   // Как только SSE обновил tables (стол реально занят) — снимаем оптимистичную метку.
   useEffect(() => {
@@ -154,8 +226,12 @@ export default function PosV2Order() {
   // Переключение типа заказа (после mount): такаут → грузим открытые «С собой»,
   // зал → сбрасываем контекст (стол выбирается заново).
   const typeInitRef = useRef(true)
+  // Когда тип переключается ради загрузки конкретного заказа из модалки «Заказы»,
+  // сброс контекста не нужен (иначе он затрёт выбранный стол/группу).
+  const skipTypeResetRef = useRef(false)
   useEffect(() => {
     if (typeInitRef.current) { typeInitRef.current = false; return }
+    if (skipTypeResetRef.current) { skipTypeResetRef.current = false; return }
     setCart([]); setActiveGroupId(null)
     if (orderType === 'takeaway') { setSelectedTableId(''); loadTakeaway() }
     else { setSelectedTableId(''); setTableOrders([]) }
@@ -188,12 +264,47 @@ export default function PosV2Order() {
     else await loadTakeaway(activeGroupId ?? undefined)
   }
 
+  // Отмена одной позиции. Бэк сам пересчитывает total и, если это была последняя
+  // живая позиция, закрывает заказ (allCancelled) — тогда снимаем активную группу.
+  async function doCancelItem() {
+    if (itemBusyRef.current || !cancelItem?.id) return
+    itemBusyRef.current = true; setItemBusy(true)
+    try {
+      const res = await cancelOrderItem(cancelItem.id, itemReason, user?.id, activeGroup?.id)
+      toast.success('Позиция отменена')
+      setCancelItem(null)
+      if (res.allCancelled) { toast.info('Все позиции отменены — заказ закрыт'); setActiveGroupId(null) }
+      await reloadContext()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { itemBusyRef.current = false; setItemBusy(false) }
+  }
+
+  // Убрать ОДНУ штуку из отправленной позиции (qty×N → qty×(N−1)) без отмены всей
+  // позиции. Для штучных с qty>1; у весовых «одну штуку» смысла нет — там корзина.
+  async function decOrderItem(i: OrderItem) {
+    if (itemBusyRef.current || !i.id) return
+    itemBusyRef.current = true; setItemBusy(true)
+    try {
+      const res = await cancelOrderItemPartial(i.id, 1, 'Корректировка количества', user?.id, activeGroup?.id)
+      toast.success('Убрана 1 шт.')
+      if (res.allCancelled) { setActiveGroupId(null) }
+      await reloadContext()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { itemBusyRef.current = false; setItemBusy(false) }
+  }
+
   async function paySplitNow(s: OrderSplit, method: 'cash' | 'card') {
     if (payingRef.current || !activeGroup) return
-    const acc = method === 'cash' ? (accounts.find(a => a.type === 'cash') ?? accounts[0]) : (accounts.find(a => a.type !== 'cash') ?? accounts[0])
-    if (!acc) { toast.error('Нет счёта для оплаты'); return }
     payingRef.current = true; setPaying(true)
     try {
+      // Нал по сплиту — на СЧЁТ СМЕНЫ (как полная оплата closeOrderWithPayment),
+      // иначе нал по сплитам и по полной оплате лёг бы на разные счета.
+      const shift = method === 'cash' ? await fetchActiveShift().catch(() => null) : null
+      const sAcc = shift as { accountId?: string; accountName?: string } | null
+      const acc = method === 'cash'
+        ? (sAcc?.accountId ? { id: sAcc.accountId, name: sAcc.accountName } : (accounts.find(a => a.type === 'cash') ?? accounts[0]))
+        : (accounts.find(a => a.type !== 'cash') ?? accounts[0])
+      if (!acc?.id) { toast.error('Нет счёта для оплаты'); return }
       await paySplit(s.id, method, acc.id, acc.name ?? '', user?.id)
       toast.success(`Часть ${s.splitNumber} оплачена · ${formatCurrency(s.total)}`)
       const remaining = splits.filter(x => x.id !== s.id && x.status !== 'paid')
@@ -214,12 +325,25 @@ export default function PosV2Order() {
   const visibleCats = useMemo(() => categories.filter(c => c && !c.toLowerCase().includes('полуфабрикат')), [categories])
   const currentCat = activeCat ?? visibleCats[0] ?? null
 
+  // Варианты (parentId) не показываются отдельными карточками: их продукт-
+  // родитель — одна карточка с пикером комбинаций (Размер/Вкус).
+  const variantsByParent = useMemo(() => {
+    const map = new Map<string, MenuItem[]>()
+    for (const m of menuItems) {
+      if (m.parentId) (map.get(m.parentId) ?? map.set(m.parentId, []).get(m.parentId)!).push(m)
+    }
+    return map
+  }, [menuItems])
+
   const dishes = useMemo(() => {
+    const base = menuItems.filter(m => !m.parentId)
     const q = deferred.trim().toLowerCase()
-    if (q) return menuItems.filter(m => m.name.toLowerCase().includes(q))
-    if (currentCat === '__fav__') return menuItems.filter(m => favSet.has(m.id))
-    return menuItems.filter(m => m.category === currentCat)
+    if (q) return base.filter(m => m.name.toLowerCase().includes(q))
+    if (currentCat === '__fav__') return base.filter(m => favSet.has(m.id))
+    return base.filter(m => m.category === currentCat)
   }, [menuItems, currentCat, deferred, favSet])
+  // Пересчёт стрелок прокрутки при смене категории/поиска/сетки (меняется высота контента).
+  useEffect(() => { updateScrollBtns() }, [dishes, gridAreaH, menuGrid, updateScrollBtns])
 
   const tablesByZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
@@ -234,11 +358,39 @@ export default function PosV2Order() {
   const [wAmt, setWAmt] = useState('')
   const [wPortions, setWPortions] = useState(1)
 
+  // ── Variant picker (продукт с атрибутами Размер/Вкус) ────────
+  const [variantItem, setVariantItem] = useState<MenuItem | null>(null)
+  const [variantSel, setVariantSel] = useState<Record<string, string>>({}) // attrId → valueId
+
+  function openVariantPicker(m: MenuItem) {
+    const sel: Record<string, string> = {}
+    for (const a of m.attributes ?? []) {
+      if (a.values.length > 0) sel[a.id] = a.values[0].id
+    }
+    setVariantSel(sel)
+    setVariantItem(m)
+  }
+
+  // Резолв комбинации: вариант, чей набор value_ids совпадает с выбором.
+  const resolvedVariant = useMemo(() => {
+    if (!variantItem) return null
+    const selected = Object.values(variantSel).sort().join(',')
+    return (variantsByParent.get(variantItem.id) ?? []).find(v =>
+      [...(v.variantValueIds ?? [])].sort().join(',') === selected
+    ) ?? null
+  }, [variantItem, variantSel, variantsByParent])
+
   // Два источника стопа: legacy menu.is_available (owner вручную в админке) и
   // backend stop-list (stoppedIds — нехватка ингредиентов / override). Без права
   // — отказ с причиной; с правом — info-toast + флаг override ТОЛЬКО для реально
   // backend-стопнутых (иначе POST /orders вернёт 409 ITEM_STOPPED).
   function add(m: MenuItem) {
+    // Продукт с вариантами: карточка одна, конкретную комбинацию выбирают в
+    // пикере (variantItem) — в корзину попадает menu_item_id варианта.
+    if (variantsByParent.has(m.id)) {
+      openVariantPicker(m)
+      return
+    }
     const backendStopped = stoppedIds.has(m.id)
     const isStopped = m.isAvailable === false || backendStopped
     if (isStopped && !canOverrideStop) {
@@ -329,8 +481,10 @@ export default function PosV2Order() {
   }
 
   // Выбор стола из пикера — раскрываем его контекст (группы + содержимое) в сайдбаре.
+  // Корзину НЕ чистим: если набрали блюда до выбора стола, они остаются и уходят
+  // на выбранный стол (баг: раньше setCart([]) стирал набранное при выборе стола).
   function selectTable(tableId: string) {
-    setSelectedTableId(tableId); setCart([]); setGuests(1); setTablesOpen(false)
+    setSelectedTableId(tableId); setTablesOpen(false)
     loadTableOrders(tableId)
   }
   // Переключение вкладки группы. null = новая группа на том же столе.
@@ -382,9 +536,113 @@ export default function PosV2Order() {
     catch (e) { toast.error(humanizeError(e)); setTableOrders(prev => prev.map(o => o.id === gid ? { ...o, guestsCount: cur } : o)) }
   }
 
-  async function doPreBill(id: string) {
-    try { await printPreBill(id); toast.success('Пре-чек отправлен на печать') }
-    catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+  // Пре-чек: открываем ПРЕВЬЮ на экране (как в старом POS) — оно работает и без
+  // принтера. Печать — из превью.
+  function doPreBill(id: string) {
+    const o = tableOrders.find(x => x.id === id) ?? (activeGroup && activeGroup.id === id ? activeGroup : null)
+    if (o) setPreBill(o)
+  }
+  async function doPrintPreBill() {
+    if (!preBill || printingPre) return
+    setPrintingPre(true)
+    try { await printPreBill(preBill.id); toast.success('Пре-чек отправлен на печать') }
+    catch (e) { toast.error(printerErr(e)) }
+    finally { setPrintingPre(false) }
+  }
+  const preBillReceipt = useMemo(() => preBill ? buildReceiptData(
+    preBill,
+    { restaurant, tables, zones, currentUser: user },
+    { isPreCheck: true, includeService: preBill.type === 'hall', servicePercent: restaurant?.servicePercent ?? 0 },
+  ) : null, [preBill, restaurant, tables, zones, user])
+
+  // ── Заказы модалкой прямо в ПОС ──────────────────────────────────────────
+  async function openOrders() {
+    setOrdersOpen(true); setOrdersLoading(true); setOrdersSearch('')
+    try {
+      // Раньше скоуп был строго по текущей кассовой смене (fetchOrders({ shiftId })).
+      // Из-за этого открытые заказы ЗАЛА не попадали в список: их пробивает
+      // официант (Kotlin APK, без кассовой смены) или они остались с прошлой
+      // смены — их shift_id ≠ текущей смене. Виден был только «С собой» (его
+      // пробивает касса в текущей смене). Скоуп по ДАТЕ (сегодня, любой тип и
+      // смена) + добор открытых заказов занятых столов (currentOrderIds) на
+      // случай заказа, открытого до полуночи — чтобы ни один открытый заказ
+      // не потерялся. Заголовок «Заказы за сегодня» этому и соответствует.
+      const strandedIds = Array.from(new Set(tables.flatMap(t => t.currentOrderIds ?? []).filter(Boolean)))
+      const [today, stranded] = await Promise.all([
+        fetchOrders({ from: startOfToday(), to: endOfDay(new Date()), slim: false }).catch(() => [] as Order[]),
+        strandedIds.length ? fetchOrders({ ids: strandedIds, slim: false }).catch(() => [] as Order[]) : Promise.resolve([] as Order[]),
+      ])
+      const byId = new Map<string, Order>()
+      for (const o of [...today, ...stranded]) byId.set(o.id, o)
+      setOrdersList(Array.from(byId.values()))
+    } finally { setOrdersLoading(false) }
+  }
+  function tapOrder(o: Order) {
+    if (o.status === 'done') { setViewReceipt(o); return } // закрытый → чек
+    if (o.status === 'cancelled') return
+    // активный → грузим в сайдбар (без ухода с экрана)
+    setOrdersOpen(false)
+    const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && o.tableId) ? 'hall' : 'takeaway'
+    if (nextType !== orderType) skipTypeResetRef.current = true
+    setOrderType(nextType)
+    if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+    else { loadTakeaway(o.id) }
+  }
+  async function doReprintReceipt() {
+    if (!viewReceipt || reprinting) return
+    setReprinting(true)
+    try { await reprintOrderReceipt(viewReceipt.id); toast.success('Чек отправлен на печать') }
+    catch (e) { toast.error(printerErr(e)) }
+    finally { setReprinting(false) }
+  }
+  const closedReceipt = useMemo(() => viewReceipt ? buildReceiptData(
+    viewReceipt,
+    { restaurant, tables, zones, currentUser: user },
+    {
+      isPreCheck: false,
+      includeService: (viewReceipt.serviceAmount ?? 0) > 0 || (viewReceipt.servicePercent ?? 0) > 0,
+      servicePercent: viewReceipt.servicePercent,
+      discountAmount: viewReceipt.discountAmount,
+      tipAmount: viewReceipt.tipAmount,
+      paymentMethod: viewReceipt.paymentMethod,
+      payments: viewReceipt.payments,
+    },
+  ) : null, [viewReceipt, restaurant, tables, zones, user])
+
+  // Права на действия с закрытым заказом (по умолчанию выключены в матрице).
+  const canRefund = canDo('orders.refund')
+  const canEditClosed = canDo('orders.edit')
+  const remainingRefund = (o: Order) => Math.max(0, ((o.totalWithService ?? o.total) || 0) - (o.refundedTotal ?? 0))
+
+  // «Редактировать» закрытый заказ = переоткрыть и загрузить в сайдбар ПОС.
+  async function doEditClosed(o: Order) {
+    try {
+      await reopenOrder(o.id)
+      toast.success('Заказ переоткрыт для редактирования')
+      setViewReceipt(null); setOrdersOpen(false)
+      const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && o.tableId) ? 'hall' : 'takeaway'
+      if (nextType !== orderType) skipTypeResetRef.current = true
+      setOrderType(nextType)
+      if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+      else { loadTakeaway(o.id) }
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+  }
+  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))) }
+  async function doRefund() {
+    if (!refundTarget || refundBusy) return
+    const rem = remainingRefund(refundTarget)
+    const amt = Math.max(0, parseFloat(refundAmt.replace(',', '.').replace(/\s/g, '')) || 0)
+    if (amt <= 0) { toast.error('Укажите сумму возврата'); return }
+    if (amt > rem + 0.01) { toast.error(`Больше остатка (${formatCurrency(rem)}) нельзя`); return }
+    if (!refundReason.trim()) { toast.error('Укажите причину возврата'); return }
+    setRefundBusy(true)
+    try {
+      await refundOrder(refundTarget.id, refundReason.trim(), amt)
+      toast.success(`Возврат ${formatCurrency(amt)}`)
+      setRefundTarget(null); setViewReceipt(null)
+      await openOrders()
+    } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
+    finally { setRefundBusy(false) }
   }
 
   const busy = paying || sending || adding || tableLoading
@@ -395,20 +653,21 @@ export default function PosV2Order() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
       if (weightItem) setWeightItem(null)
+      else if (variantItem) setVariantItem(null)
       else if (tablesOpen) setTablesOpen(false)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [weightItem, tablesOpen])
+  }, [weightItem, variantItem, tablesOpen])
 
   return (
     <div className="flex h-full w-full overflow-hidden">
       {/* ── Left: menu ─────────────────────────────────────────── */}
       <div className="flex-1 min-w-0 flex flex-col" style={{ padding: 'var(--pv-gap) 0 0 var(--pv-pad-x)' }}>
         <div className="flex items-center shrink-0" style={{ gap: 'var(--pv-gap)', paddingRight: 'var(--pv-gap)' }}>
-          <button onClick={() => navigate(orderType === 'hall' ? '/pos2/tables' : '/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
+          <button onClick={() => navigate('/pos2')} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
             <LayoutGrid style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
-            <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{orderType === 'hall' ? 'Столы' : 'Меню'}</span>
+            <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
           </button>
           <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
             {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
@@ -420,64 +679,79 @@ export default function PosV2Order() {
               )
             })}
           </div>
-          {orderType === 'hall' && (
-            <button onClick={() => setTablesOpen(true)} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }}>
-              <MapPin style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
-              <span className="font-semibold whitespace-nowrap" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}</span>
-            </button>
-          )}
           <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1vw,1rem)' }}>
             <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" aria-label="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
           </div>
+          {/* Заказы прямо из ПОС (как раздел «Заказы» в старом POS): активные +
+              закрытые, просмотр и печать чека закрытого заказа. */}
+          <button onClick={openOrders} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }} title="Заказы: активные и закрытые, печать чека">
+            <ClipboardList style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
+            <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Заказы</span>
+          </button>
         </div>
 
         {/* Категории видны ВСЕГДА (раньше прятались при любом тексте в поиске —
             даже одна буква убирала все категории). Тап по категории очищает поиск. */}
-        <div className="flex items-center overflow-x-auto shrink-0" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', padding: 'var(--pv-gap) var(--pv-gap) 0 0' }}>
+        {/* Категории переносятся на второй ряд (flex-wrap), а не скроллятся
+            горизонтально — все категории видны сразу. Интервалы уменьшены. */}
+        <div className="flex flex-wrap items-center shrink-0" style={{ gap: 'clamp(0.3rem,0.5vw,0.5rem)', padding: 'var(--pv-gap) var(--pv-gap) clamp(0.35rem,0.6vw,0.55rem) 0' }}>
           {favorites.length > 0 && (
-            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>
-              <Star style={{ width: '0.95rem', height: '0.95rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
+            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>
+              <Star style={{ width: '1rem', height: '1rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
             </button>
           )}
           {visibleCats.map(c => {
             const on = c === currentCat && !deferred.trim()
-            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
+            return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
           })}
         </div>
 
-        <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'var(--pv-gap) var(--pv-gap) var(--pv-pad-x) 0' }}>
+        <div className="relative flex-1 min-h-0">
+          <div ref={gridScrollRef} onScroll={updateScrollBtns} className="h-full overflow-y-auto pv-noscroll" style={{ padding: 'clamp(0.4rem,0.7vw,0.7rem) clamp(0.4rem,0.7vw,0.7rem) clamp(0.5rem,1vw,1rem) 0' }}>
           {loading ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка меню…</div>
           ) : dishes.length === 0 ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
           ) : (
-            <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }}>
+            <div style={menuGridStyle(menuGrid, gridAreaH)}>
               {dishes.map(m => {
-                const stopped = m.isAvailable === false || stoppedIds.has(m.id)
-                const weight = (m.unit ?? 'piece') !== 'piece'
-                const fav = favSet.has(m.id)
+                const variants = variantsByParent.get(m.id)
+                // Продукт с вариантами стопится когда недоступен сам ИЛИ все
+                // его варианты в стопе; цена на карточке — «от минимальной».
+                const stopped = variants
+                  ? m.isAvailable === false || variants.every(v => v.isAvailable === false || stoppedIds.has(v.id))
+                  : m.isAvailable === false || stoppedIds.has(m.id)
+                const weight = !variants && (m.unit ?? 'piece') !== 'piece'
+                const minPrice = variants ? Math.min(...variants.map(v => v.price)) : m.price
                 return (
                   // Карточка блюда по дизайну restos.pen (DishTile): белая карточка
                   // (radius 16, тонкая рамка + мягкая тень), содержимое ПО ЦЕНТРУ —
                   // название и цена-«пилюля» (brand-soft фон, бренд-текст). БЕЗ
-                  // эмодзи-плейсхолдера (на Windows он рендерился «квадратом» и не по
-                  // дизайну). Тумблеры избранное/часто — соседи-кнопки в углу (не
-                  // вложены в <button>, WCAG 2.1.1 / 4.1.2).
+                  // эмодзи-плейсхолдера и БЕЗ звёздочки-избранного на карточке.
+                  // Цена — без ,00 (formatCurrencyCompact): «300 с.», не «300,00 с.».
                   <div key={m.id} className="relative">
-                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrency(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: 'clamp(7rem,11vw,9.5rem)', opacity: stopped ? 0.6 : 1 }}>
+                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: menuGrid === 'auto' ? 'clamp(7rem,11vw,9.5rem)' : 0, height: menuGrid === 'auto' ? undefined : '100%', opacity: stopped ? 0.6 : 1 }}>
                       <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.25vw,1.2rem)' }}>{m.name}</span>
-                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{formatCurrency(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
-                    {restaurantId && (
-                      <button type="button" className="pv-mini rounded-lg absolute" aria-label={fav ? `Убрать «${m.name}» из избранного` : `Добавить «${m.name}» в избранное`} aria-pressed={fav} onClick={(e) => { e.stopPropagation(); toggleFavorite(restaurantId, m.id) }} style={{ top: '0.4rem', left: '0.4rem', background: 'transparent', padding: '0.2rem', lineHeight: 0 }}>
-                        <Star style={{ width: '1.05rem', height: '1.05rem', color: fav ? '#e8a33a' : 'var(--pv-text-3)', fill: fav ? '#e8a33a' : 'transparent' }} />
-                      </button>
-                    )}
                   </div>
                 )
               })}
+            </div>
+          )}
+          </div>
+          {/* Крупные стрелки прокрутки блюд (тач-дружелюбно; появляются только при
+              переполнении, гаснут на краях). Дизайн pv-card + бренд-стрелка. */}
+          {(canScrollUp || canScrollDown) && (
+            <div className="absolute z-10 flex flex-col pointer-events-none" style={{ right: 'clamp(0.6rem,1vw,1rem)', bottom: 'clamp(1rem,2vw,1.75rem)', gap: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
+              <button onClick={() => scrollDishes(-1)} disabled={!canScrollUp} aria-label="Прокрутить блюда вверх" className="pointer-events-auto flex items-center justify-center rounded-2xl border active:scale-90 transition-all disabled:opacity-25" style={{ width: 'clamp(3.5rem,4.6vw,4.5rem)', height: 'clamp(3.5rem,4.6vw,4.5rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-brand)', boxShadow: '0 8px 22px rgba(0,0,0,0.14)' }}>
+                <ChevronUp style={{ width: '52%', height: '52%' }} strokeWidth={2.75} />
+              </button>
+              <button onClick={() => scrollDishes(1)} disabled={!canScrollDown} aria-label="Прокрутить блюда вниз" className="pointer-events-auto flex items-center justify-center rounded-2xl border active:scale-90 transition-all disabled:opacity-25" style={{ width: 'clamp(3.5rem,4.6vw,4.5rem)', height: 'clamp(3.5rem,4.6vw,4.5rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-brand)', boxShadow: '0 8px 22px rgba(0,0,0,0.14)' }}>
+                <ChevronDown style={{ width: '52%', height: '52%' }} strokeWidth={2.75} />
+              </button>
             </div>
           )}
         </div>
@@ -486,10 +760,17 @@ export default function PosV2Order() {
       {/* ── Right: cart ────────────────────────────────────────── */}
       <aside className="shrink-0 flex flex-col border-l" style={{ width: 'clamp(20rem, 26vw, 30rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }}>
         {/* Header */}
-        <div className="flex items-center justify-between shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>
-            {orderType === 'hall' && selectedTable ? `Стол ${selectedTable.number}` : 'Заказ'}{activeGroup && tableOrders.length > 1 ? ` · Группа ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}
-          </span>
+        <div className="flex items-center justify-between gap-2 shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
+          {orderType === 'hall' ? (
+            // Выбор стола прямо в сайдбаре заказа (тап открывает пикер столов),
+            // слева от счётчика позиций. В зале стол выбирают здесь, а не в топбаре.
+            <button onClick={() => setTablesOpen(true)} className="flex items-center gap-1.5 rounded-xl border min-w-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.95rem)' }} aria-label="Выберите стол">
+              <MapPin style={{ width: 'clamp(1.05rem,1.35vw,1.35rem)', height: 'clamp(1.05rem,1.35vw,1.35rem)', color: 'var(--pv-brand)' }} className="shrink-0" />
+              <span className="font-bold truncate" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'clamp(1rem,1.35vw,1.25rem)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}{selectedTable && activeGroup && tableOrders.length > 1 ? ` · Гр. ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}</span>
+            </button>
+          ) : (
+            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>Заказ</span>
+          )}
           <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
         </div>
 
@@ -555,12 +836,21 @@ export default function PosV2Order() {
               <div className="font-semibold shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Уже заказано</div>
               {(activeGroup.items ?? []).map((i, idx) => { const c = !!i.cancelledAt; return (
                 <div key={i.id ?? idx} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.7rem)', opacity: c ? 0.5 : 1 }}>
-                  <span style={{ fontSize: '1.2rem' }}>{i.emoji || '🍽️'}</span>
                   <div className="flex-1 min-w-0">
                     <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', textDecoration: c ? 'line-through' : 'none' }}>{i.name}</div>
                     <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)' }}>{formatCurrency(i.price)} × {i.qty}{c ? ' · отменено' : ''}{i.note ? ` · 💬 ${i.note}` : ''}</div>
                   </div>
-                  <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(i.price * i.qty)}</span>
+                  <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcLineTotal(i.price, i.qty, i.unit, i.unitSize))}</span>
+                  {!c && i.id && (i.unit ?? 'piece') === 'piece' && i.qty > 1 && (
+                    <button disabled={itemBusy} onClick={() => decOrderItem(i)} className="rounded-xl flex items-center justify-center shrink-0 border disabled:opacity-50 active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }} aria-label={`Убрать одну «${i.name}»`} title="Убрать 1 шт.">
+                      <Minus style={{ width: '1.15rem', height: '1.15rem', color: 'var(--pv-text-2)' }} />
+                    </button>
+                  )}
+                  {!c && i.id && (
+                    <button onClick={() => { setCancelItem(i); setItemReason(ITEM_REASONS[0]) }} className="rounded-xl flex items-center justify-center shrink-0 border active:scale-90 transition-transform" style={{ width: '2.3rem', height: '2.3rem', background: 'var(--pv-card)', borderColor: 'var(--pv-occ-soft)' }} aria-label={`Отменить «${i.name}»`} title="Отменить всю позицию">
+                      <Trash2 style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-occ-text)' }} />
+                    </button>
+                  )}
                 </div>
               ) })}
               <div className="text-center shrink-0" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.12rem)', marginTop: '0.3rem' }}>Тапайте блюда слева — дозаказ в эту группу</div>
@@ -685,11 +975,55 @@ export default function PosV2Order() {
         </PosModal>
       )}
 
+      {/* ── Variant picker — выбор комбинации атрибутов (Размер/Вкус).
+             В корзину уходит menu_item_id конкретного варианта; стоп-лист и
+             override обрабатывает общий add(). ── */}
+      {variantItem && (
+        <PosModal open onClose={() => setVariantItem(null)} width="clamp(20rem,38vw,30rem)" title={variantItem.name}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '0.9rem' }}>
+            {(variantItem.attributes ?? []).map(attr => (
+              <div key={attr.id}>
+                <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.4rem' }}>{attr.name}</div>
+                <div className="flex flex-wrap" style={{ gap: '0.5rem' }}>
+                  {attr.values.map(val => {
+                    const on = variantSel[attr.id] === val.id
+                    return (
+                      <button key={val.id} onClick={() => setVariantSel(prev => ({ ...prev, [attr.id]: val.id }))}
+                        className="rounded-xl font-semibold border active:scale-95 transition-transform"
+                        style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.8rem) clamp(0.9rem,1.3vw,1.2rem)', fontSize: 'var(--pv-ctl)' }}>
+                        {val.label}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+            ))}
+            <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 1rem' }}>
+              <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Цена</span>
+              <span className="font-bold flex items-center gap-2" style={{ color: 'var(--pv-brand)', fontSize: 'clamp(1.1rem,1.5vw,1.35rem)' }}>
+                {resolvedVariant ? formatCurrency(resolvedVariant.price) : '—'}
+                {resolvedVariant && (resolvedVariant.isAvailable === false || stoppedIds.has(resolvedVariant.id)) && (
+                  <span className="rounded-full font-bold" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>
+                )}
+              </span>
+            </div>
+            <button
+              onClick={() => { if (!resolvedVariant) return; const v = resolvedVariant; setVariantItem(null); add(v) }}
+              disabled={!resolvedVariant}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform disabled:opacity-50"
+              style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}
+            >
+              <Plus style={{ width: '1.3em', height: '1.3em' }} />Добавить
+            </button>
+          </div>
+        </PosModal>
+      )}
+
       {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}
       {payTarget && (
-        <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,42vw,34rem)"
+        <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,64vw,52rem)"
           title={`Оплата · ${payTarget.type === 'hall' ? `Стол ${selectedTable?.number ?? ''}` : `С собой #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
-          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} />
+          <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} previewCtx={{ restaurant, tables, zones, currentUser: user }} />
         </PosModal>
       )}
 
@@ -706,6 +1040,166 @@ export default function PosV2Order() {
         />
       )}
 
+      {/* Отмена отдельной позиции — причина + подтверждение */}
+      {cancelItem && (
+        <PosModal open onClose={() => { if (!itemBusy) setCancelItem(null) }} dismissable={!itemBusy} width="clamp(20rem,42vw,32rem)" title={`Отмена: ${cancelItem.name}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.2rem,1.8vw,1.6rem)', gap: '1rem' }}>
+            <div className="flex flex-wrap gap-2">
+              {ITEM_REASONS.map(r => { const on = r === itemReason; return <button key={r} onClick={() => setItemReason(r)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{r}</button> })}
+            </div>
+            <button disabled={itemBusy} onClick={doCancelItem} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Trash2 style={{ width: '1.3em', height: '1.3em' }} />{itemBusy ? 'Отмена…' : 'Отменить позицию'}
+            </button>
+          </div>
+        </PosModal>
+      )}
+
+      {/* Пре-чек — превью на экране + печать (превью работает и без принтера) */}
+      {preBill && (
+        <PosModal open onClose={() => { if (!printingPre) setPreBill(null) }} dismissable={!printingPre} width="clamp(20rem,42vw,30rem)" title="Пре-чек">
+          <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '1rem' }}>
+            <div className="overflow-y-auto flex justify-center" style={{ maxHeight: '58vh', background: 'var(--pv-bg)', borderRadius: 'var(--pv-radius)', padding: '0.8rem' }}>
+              {preBillReceipt ? <PrintReceipt data={preBillReceipt} /> : <span style={{ color: 'var(--pv-text-3)' }}>Нет данных</span>}
+            </div>
+            <button disabled={printingPre} onClick={doPrintPreBill} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Printer style={{ width: '1.3em', height: '1.3em' }} />{printingPre ? 'Печать…' : 'Печать пре-чека'}
+            </button>
+          </div>
+        </PosModal>
+      )}
+
+      {/* Заказы прямо в ПОС: активные + закрытые (закрытый → чек + печать) */}
+      {ordersOpen && (
+        <div className="fixed inset-0 z-50" onClick={() => setOrdersOpen(false)}>
+          <div className="absolute inset-0" style={{ background: 'rgba(26,26,26,0.4)' }} />
+          {/* Боковой drawer СПРАВА — поверх сайдбара «Заказ»: плотный список строк
+              для открытых и закрытых, с фильтром-счётчиком и поиском. */}
+          <div role="dialog" aria-modal="true" aria-label="Заказы за сегодня" className="absolute inset-y-0 right-0 flex flex-col pv-drawer-right" style={{ width: 'clamp(20rem,34vw,32rem)', background: 'var(--pv-card)', boxShadow: '0 0 60px rgba(0,0,0,0.35)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(0.9rem,1.4vw,1.3rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Заказы за сегодня</span>
+              <button onClick={() => setOrdersOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }} aria-label="Закрыть"><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            {(() => {
+              const q = ordersSearch.trim().toLowerCase()
+              const tNum = (o: Order) => o.tableId ? (tables.find(t => t.id === o.tableId)?.number ?? '') : ''
+              const matchQ = (o: Order) => !q || String(o.orderNumber ?? '').includes(q) || String(tNum(o)).includes(q)
+              const openOrders = ordersList.filter(o => o.status !== 'done' && o.status !== 'cancelled')
+              const closedOrders = ordersList.filter(o => o.status === 'done' || o.status === 'cancelled')
+              const rows = (ordersTab === 'closed' ? closedOrders : openOrders).filter(matchQ).slice().sort((a, b) => {
+                const ka = ordersTab === 'closed' ? (a.closedAt ?? a.createdAt) : a.createdAt
+                const kb = ordersTab === 'closed' ? (b.closedAt ?? b.createdAt) : b.createdAt
+                return String(kb).localeCompare(String(ka))
+              })
+              return (
+                <>
+                  <div className="flex flex-col shrink-0 border-b" style={{ padding: 'clamp(0.7rem,1vw,1rem)', gap: 'clamp(0.5rem,0.8vw,0.7rem)', borderColor: 'var(--pv-border)' }}>
+                    <div className="grid grid-cols-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '3px', gap: '3px' }}>
+                      {([['active', 'Открытые', openOrders.length], ['closed', 'Закрытые', closedOrders.length]] as const).map(([t, l, cnt]) => { const on = ordersTab === t; return (
+                        <button key={t} onClick={() => setOrdersTab(t)} className="rounded-lg font-semibold" style={{ background: on ? 'var(--pv-card)' : 'transparent', color: on ? 'var(--pv-brand)' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.7rem)', fontSize: 'var(--pv-ctl)', boxShadow: on ? '0 1px 3px rgba(0,0,0,0.1)' : 'none' }}>{l} · {cnt}</button>
+                      ) })}
+                    </div>
+                    <div className="flex items-center gap-2 rounded-xl border" style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', padding: 'clamp(0.5rem,0.8vw,0.7rem) clamp(0.7rem,1vw,1rem)' }}>
+                      <Search style={{ width: '1.1rem', height: '1.1rem', color: 'var(--pv-text-3)' }} className="shrink-0" />
+                      <input value={ordersSearch} onChange={e => setOrdersSearch(e.target.value)} inputMode="numeric" placeholder="№ заказа или стол" aria-label="Поиск заказа" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+                      {ordersSearch && <button onClick={() => setOrdersSearch('')} className="shrink-0"><X style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>}
+                    </div>
+                  </div>
+                  <div className="flex-1 min-h-0 overflow-y-auto pv-noscroll" style={{ padding: 'clamp(0.6rem,1vw,0.9rem)' }}>
+                    {ordersLoading && ordersList.length === 0 ? (
+                      <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
+                    ) : rows.length === 0 ? (
+                      <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>{q ? 'Ничего не найдено' : (ordersTab === 'closed' ? 'Нет закрытых заказов' : 'Нет открытых заказов')}</div>
+                    ) : (
+                      <div className="flex flex-col" style={{ gap: '0.4rem' }}>
+                        {rows.map(o => {
+                          const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
+                          const n = (o.items ?? []).filter(i => !i.cancelledAt).length
+                          const isClosed = o.status === 'done' || o.status === 'cancelled'
+                          const time = isClosed ? (o.closedAt ? ` · закрыт ${new Date(o.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : '') : ` · ${getTimeSince(o.createdAt)}`
+                          const badge = o.status === 'cancelled' ? 'Отменён' : o.status === 'done' ? 'Оплачен' : o.status === 'cooking' ? 'Готовится' : o.status === 'ready' ? 'Готов' : o.status === 'served' ? 'Подан' : o.status === 'bill_requested' ? 'Счёт' : 'Открыт'
+                          const bt = o.status === 'cancelled' ? { bg: 'var(--pv-bg)', c: 'var(--pv-text-3)' } : o.status === 'done' ? { bg: 'var(--pv-free-soft)', c: 'var(--pv-free-text)' } : o.status === 'bill_requested' ? { bg: 'var(--pv-bill-soft)', c: 'var(--pv-bill-text)' } : { bg: 'var(--pv-brand-soft)', c: 'var(--pv-brand)' }
+                          return (
+                            <button key={o.id} onClick={() => tapOrder(o)} className="w-full text-left rounded-xl border active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.95vw,0.85rem)' }}>
+                              <div className="flex items-baseline justify-between gap-2" style={{ marginBottom: '0.25rem' }}>
+                                <span className="font-bold tabular-nums" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>№{o.orderNumber ?? '—'}</span>
+                                <span className="rounded-full font-semibold shrink-0" style={{ background: bt.bg, color: bt.c, padding: '0.1rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{badge}</span>
+                              </div>
+                              <div className="flex items-baseline justify-between gap-2">
+                                <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{loc} · {n} поз{time}</span>
+                                <span className="font-bold tabular-nums whitespace-nowrap" style={{ color: o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</span>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* Чек закрытого заказа — просмотр + печать (из модалки «Заказы») */}
+      {viewReceipt && (
+        <PosModal open onClose={() => { if (!reprinting) setViewReceipt(null) }} dismissable={!reprinting} width="clamp(20rem,42vw,30rem)" title={`Чек · №${viewReceipt.orderNumber ?? '—'}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '1rem' }}>
+            <div className="overflow-y-auto flex justify-center" style={{ maxHeight: '58vh', background: 'var(--pv-bg)', borderRadius: 'var(--pv-radius)', padding: '0.8rem' }}>
+              {closedReceipt ? <PrintReceipt data={closedReceipt} /> : <span style={{ color: 'var(--pv-text-3)' }}>Нет данных</span>}
+            </div>
+            <button disabled={reprinting} onClick={doReprintReceipt} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Printer style={{ width: '1.3em', height: '1.3em' }} />{reprinting ? 'Печать…' : 'Печать чека'}
+            </button>
+            {/* Редактирование / возврат закрытого — только по правам (матрица доступов). */}
+            {viewReceipt.status === 'done' && (canEditClosed || (canRefund && remainingRefund(viewReceipt) > 0)) && (
+              <div className="flex gap-2">
+                {canEditClosed && (
+                  <button onClick={() => doEditClosed(viewReceipt)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-semibold border active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <Pencil style={{ width: '1.15em', height: '1.15em' }} />Редактировать
+                  </button>
+                )}
+                {canRefund && remainingRefund(viewReceipt) > 0 && (
+                  <button onClick={() => openRefund(viewReceipt)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-semibold border active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-occ-dot)', color: 'var(--pv-occ-text)', padding: 'clamp(0.75rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
+                    <Undo2 style={{ width: '1.15em', height: '1.15em' }} />Возврат
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </PosModal>
+      )}
+
+      {/* Возврат закрытого заказа (по праву orders.refund) */}
+      {refundTarget && (
+        <PosModal open onClose={() => { if (!refundBusy) setRefundTarget(null) }} dismissable={!refundBusy} width="clamp(20rem,42vw,30rem)" title={`Возврат · №${refundTarget.orderNumber ?? '—'}`}>
+          <div className="flex flex-col" style={{ padding: 'clamp(1.1rem,1.7vw,1.5rem)', gap: '0.9rem' }}>
+            <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.6rem 0.9rem' }}>
+              <span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Остаток к возврату</span>
+              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(remainingRefund(refundTarget))}</span>
+            </div>
+            <div>
+              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.35rem' }}>Сумма возврата</div>
+              <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-border)', padding: '0.55rem 0.9rem' }}>
+                <input inputMode="decimal" value={refundAmt} onChange={e => setRefundAmt(e.target.value)} className="flex-1 min-w-0 bg-transparent outline-none font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
+                <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>с.</span>
+              </div>
+            </div>
+            <div>
+              <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.35rem' }}>Причина</div>
+              <div className="flex flex-wrap gap-2">
+                {['Жалоба гостя', 'Ошибка кассира', 'Некачественно', 'Другое'].map(r => { const on = r === refundReason; return (
+                  <button key={r} onClick={() => setRefundReason(r)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.4rem 0.9rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{r}</button>
+                ) })}
+              </div>
+            </div>
+            <button disabled={refundBusy} onClick={doRefund} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-occ-dot)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+              <Undo2 style={{ width: '1.3em', height: '1.3em' }} />{refundBusy ? 'Возврат…' : 'Оформить возврат'}
+            </button>
+          </div>
+        </PosModal>
+      )}
+
       {/* ── Table picker overlay (hall) ────────────────────────── */}
       {tablesOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center" style={{ background: 'rgba(26,26,26,0.5)' }} onClick={() => setTablesOpen(false)}>
@@ -714,35 +1208,48 @@ export default function PosV2Order() {
               <span className="font-bold" style={{ fontSize: 'clamp(1.1rem,1.6vw,1.4rem)', color: 'var(--pv-text)' }}>Выберите стол</span>
               <button onClick={() => setTablesOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }}><X style={{ color: 'var(--pv-text-2)' }} /></button>
             </div>
-            <div className="flex-1 overflow-y-auto" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col" style={{ padding: 'clamp(1rem,1.6vw,1.5rem)' }}>
               {tables.length === 0 ? (
                 <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Столы не заведены</div>
-              ) : tablesByZone.map(group => (
-                <div key={group.zone} style={{ marginBottom: '1.25rem' }}>
-                  <div className="font-semibold" style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)', marginBottom: '0.6rem' }}>{group.zone}</div>
-                  <div style={{ display: 'grid', gap: 'clamp(0.6rem,1vw,0.9rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(6.5rem,10vw,8.5rem), 1fr))' }}>
-                    {group.tables.map(t => {
-                      const optOcc = justOccupied.has(t.id) && (t.currentOrderIds?.length ?? 0) === 0
-                      const st = optOcc ? STATUS.occupied : (STATUS[t.status] ?? STATUS.free)
-                      const sel = t.id === selectedTableId
-                      const groupsN = Math.max(t.currentOrderIds?.length ?? 0, optOcc ? 1 : 0)
-                      return (
-                        <button key={t.id} onClick={() => selectTable(t.id)} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
-                          {groupsN >= 2 && <span className="absolute rounded-full font-bold flex items-center justify-center" style={{ top: '0.35rem', right: '0.35rem', background: sel ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: sel ? 'var(--pv-brand)' : '#fff', minWidth: '1.3rem', height: '1.3rem', fontSize: '0.7rem' }}>{groupsN}</span>}
-                          <span className="font-bold" style={{ color: sel ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.6vw,1.5rem)' }}>№{t.number}</span>
-                          <div className="flex items-center gap-1.5">
-                            <span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: sel ? 'rgba(255,255,255,0.9)' : st.dot }} />
-                            <span className="font-medium" style={{ color: sel ? 'rgba(255,255,255,0.9)' : st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{sel ? 'Выбран' : st.label}</span>
-                          </div>
-                          <div className="flex items-center gap-1" style={{ color: sel ? 'rgba(255,255,255,0.75)' : 'var(--pv-text-3)' }}>
-                            <Users style={{ width: '0.8rem', height: '0.8rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ))}
+              ) : (() => {
+                // Зоны — табы (а не стопкой), иначе при многих столах не помещается.
+                const activeZone = (pickerZone && tablesByZone.some(g => g.zone === pickerZone)) ? pickerZone : tablesByZone[0]?.zone
+                const activeTables = tablesByZone.find(g => g.zone === activeZone)?.tables ?? []
+                return (
+                  <>
+                    {tablesByZone.length > 1 && (
+                      <div className="flex items-center overflow-x-auto shrink-0 pv-noscroll" style={{ gap: 'clamp(0.4rem,0.7vw,0.6rem)', marginBottom: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
+                        {tablesByZone.map(g => { const on = g.zone === activeZone; return (
+                          <button key={g.zone} onClick={() => setPickerZone(g.zone)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{g.zone}</button>
+                        ) })}
+                      </div>
+                    )}
+                    <div className="flex-1 min-h-0 overflow-y-auto">
+                      <div style={{ display: 'grid', gap: 'clamp(0.6rem,1vw,0.9rem)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(6.5rem,10vw,8.5rem), 1fr))' }}>
+                        {activeTables.map(t => {
+                          const optOcc = justOccupied.has(t.id) && (t.currentOrderIds?.length ?? 0) === 0
+                          const st = optOcc ? STATUS.occupied : (STATUS[t.status] ?? STATUS.free)
+                          const sel = t.id === selectedTableId
+                          const groupsN = Math.max(t.currentOrderIds?.length ?? 0, optOcc ? 1 : 0)
+                          return (
+                            <button key={t.id} onClick={() => selectTable(t.id)} className="relative flex flex-col items-center justify-center rounded-2xl active:scale-[0.97] transition-transform" style={{ background: sel ? 'var(--pv-brand)' : st.soft, border: `2px solid ${sel ? 'var(--pv-brand)' : 'transparent'}`, padding: 'clamp(0.8rem,1.3vw,1.2rem)', gap: '0.35rem', minHeight: 'clamp(5rem,7vw,6.5rem)' }}>
+                              {groupsN >= 2 && <span className="absolute rounded-full font-bold flex items-center justify-center" style={{ top: '0.35rem', right: '0.35rem', background: sel ? 'rgba(255,255,255,0.9)' : 'var(--pv-brand)', color: sel ? 'var(--pv-brand)' : '#fff', minWidth: '1.3rem', height: '1.3rem', fontSize: '0.7rem' }}>{groupsN}</span>}
+                              <span className="font-bold" style={{ color: sel ? '#fff' : 'var(--pv-text)', fontSize: 'clamp(1.1rem,1.6vw,1.5rem)' }}>№{t.number}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: sel ? 'rgba(255,255,255,0.9)' : st.dot }} />
+                                <span className="font-medium" style={{ color: sel ? 'rgba(255,255,255,0.9)' : st.text, fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{sel ? 'Выбран' : st.label}</span>
+                              </div>
+                              <div className="flex items-center gap-1" style={{ color: sel ? 'rgba(255,255,255,0.75)' : 'var(--pv-text-3)' }}>
+                                <Users style={{ width: '0.8rem', height: '0.8rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{t.capacity}</span>
+                              </div>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  </>
+                )
+              })()}
             </div>
           </div>
         </div>

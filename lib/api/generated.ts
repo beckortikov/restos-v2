@@ -315,8 +315,9 @@ export interface paths {
                     /**
                      * @description CSV: `tech_cards` подгружает tech_card_lines для каждого блюда
                      *     (batch, не N+1); `ingredient_prices` дополнительно отдаёт
-                     *     top-level карту `ingredient_prices`.
-                     *     Пример: `?include=tech_cards,ingredient_prices`.
+                     *     top-level карту `ingredient_prices`; `attributes` — атрибуты
+                     *     продуктов (Размер/Вкус) и `variant_value_ids` вариантов.
+                     *     Пример: `?include=tech_cards,ingredient_prices,attributes`.
                      */
                     include?: string;
                 };
@@ -438,6 +439,84 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/api/v1/menu/items/{id}/attributes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Атрибуты продукта + варианты */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProductAttributesState"];
+                    };
+                };
+            };
+        };
+        /**
+         * Синхронизировать атрибуты продукта (Manager)
+         * @description Декларативный sync: атрибуты/значения приводятся к payload'у
+         *     (создание/переименование/удаление), затем из декартова произведения
+         *     значений генерируются варианты — обычные menu_items с parent_id.
+         *     Цены задаются per-комбинация (combos[]); значение атрибута — чистый
+         *     лейбл. Базовая цена продукта не участвует.
+         *     Лишние варианты архивируются (is_deleted); при повторном добавлении
+         *     значения с тем же label вариант воскрешается (сохраняя складской SKU).
+         *     Пустой массив attributes возвращает продукт в обычное блюдо.
+         *     Лимиты: ≤3 атрибутов, ≤10 значений на атрибут, ≤60 комбинаций.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SyncAttributesInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ProductAttributesState"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/menu/items/import": {
@@ -745,6 +824,83 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/warehouses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Склады (мультисклад) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WarehousesList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/warehouses/transfer": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Переместить товар на другой склад */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["WarehouseTransferInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/ingredients": {
         parameters: {
             query?: never;
@@ -936,6 +1092,8 @@ export interface paths {
                     cursor?: components["parameters"]["Cursor"];
                     ingredient_id?: string;
                     type?: string;
+                    /** @description Фильтр движений по складу (мультисклад) */
+                    warehouse_id?: string;
                     from?: string;
                     to?: string;
                 };
@@ -2593,6 +2751,51 @@ export interface paths {
                 };
                 404: components["responses"]["Error"];
                 422: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kds/items/{id}/call-waiter": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Вызвать официанта заказа на кухню
+         * @description Повар нажал «колокольчик» на карточке блюда. Официанту, оформившему заказ, уходит SSE-событие kds.waiter.called (уведомление «приходи на кухню»). Ничего не пишется в БД. 422, если у заказа нет официанта.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            waiter_name?: string;
+                        };
+                    };
+                };
+                400: components["responses"]["Error"];
+                404: components["responses"]["Error"];
             };
         };
         delete?: never;
@@ -5484,6 +5687,57 @@ export interface paths {
                 };
             };
         };
+        trace?: never;
+    };
+    "/api/v1/suppliers/{id}/pay-debt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Гашение долга поставщику
+         * @description Атомарно: списывает `amount` со счёта `account_id`, уменьшает
+         *     `suppliers.current_debt` и создаёт financial_operation out
+         *     (category='supplier_payment', исключён из opex ОПиУ). Сумма клампится
+         *     к остатку долга (переплатить нельзя).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SupplierPayDebtInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Supplier"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/reservations": {
@@ -10397,12 +10651,17 @@ export interface components {
             name?: string;
             /** @description decimal */
             qty?: string;
+            /** @description g/kg = весовое (qty — вес); piece/пусто = штучное */
+            unit?: string;
             comment?: string | null;
             station?: string;
             /** @enum {string} */
             station_status?: "pending" | "cooking" | "ready" | "served";
+            waiter_name?: string | null;
             /** Format: date-time */
             created_at?: string;
+            /** @description Возраст блюда в секундах по часам сервера (для таймера кухни) */
+            age_seconds?: number;
             /** Format: date-time */
             status_at?: string | null;
         };
@@ -10456,6 +10715,11 @@ export interface components {
             unit_size?: components["schemas"]["Decimal"];
             sale_step?: components["schemas"]["Decimal"];
             low_stock_threshold?: number;
+            /**
+             * Format: uuid
+             * @description Задан у сгенерированных вариантов; NULL у обычных блюд и продуктов.
+             */
+            parent_id?: string | null;
         };
         MenuItemInput: {
             name?: string;
@@ -10474,6 +10738,10 @@ export interface components {
              *     `?include=tech_cards`). Это уменьшает type-ветвление на фронте.
              */
             tech_card_lines?: components["schemas"]["TechCardLine"][];
+            /** @description Атрибуты продукта (только с `?include=attributes`). */
+            attributes?: components["schemas"]["MenuAttributeWithValues"][];
+            /** @description Значения комбинации варианта (только с `?include=attributes`). */
+            variant_value_ids?: string[];
         };
         IngredientPrice: {
             price?: components["schemas"]["Decimal"];
@@ -10481,6 +10749,15 @@ export interface components {
             waste_percent?: components["schemas"]["Decimal"];
             unit_weight?: components["schemas"]["Decimal"];
             unit_weight_unit?: string;
+        };
+        /**
+         * @description Себестоимость полуфабриката за единицу (для строк тех-карты с
+         *     `semi_type_id`). Источник — semi_finished_stock.price_per_unit
+         *     (yield п/ф уже зашит в цену). Используется в расчёте с/с блюда.
+         */
+        SemiPrice: {
+            price?: components["schemas"]["Decimal"];
+            unit?: string;
         };
         /**
          * @description Универсальный envelope для /menu/items. Поля `tech_card_lines`
@@ -10491,14 +10768,67 @@ export interface components {
          *     (одним batch-SELECT'ом, не N+1).
          *
          *     `?include=tech_cards,ingredient_prices` — дополнительно подгружает цены
-         *     ингредиентов из tech card lines в top-level `ingredient_prices`.
+         *     ингредиентов из tech card lines в top-level `ingredient_prices`, а также
+         *     себестоимость полуфабрикатов (по `semi_type_id`) в `semi_prices` —
+         *     нужна для корректного расчёта с/с блюд, собранных из п/ф.
          */
         MenuItemsList: {
             data?: components["schemas"]["MenuItemWithExtras"][];
             ingredient_prices?: {
                 [key: string]: components["schemas"]["IngredientPrice"];
             };
+            semi_prices?: {
+                [key: string]: components["schemas"]["SemiPrice"];
+            };
             next_cursor?: string;
+        };
+        MenuAttribute: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            menu_item_id?: string;
+            name?: string;
+            sort_order?: number;
+        };
+        MenuAttributeValue: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            attribute_id?: string;
+            label?: string;
+            sort_order?: number;
+        };
+        MenuAttributeWithValues: components["schemas"]["MenuAttribute"] & {
+            values?: components["schemas"]["MenuAttributeValue"][];
+        };
+        MenuVariant: components["schemas"]["MenuItem"] & {
+            value_ids?: string[];
+        };
+        ProductAttributesState: {
+            attributes?: components["schemas"]["MenuAttributeWithValues"][];
+            variants?: components["schemas"]["MenuVariant"][];
+        };
+        SyncAttributesInput: {
+            /** @description Порядок массива = sort_order. id опущен → создать. */
+            attributes: {
+                /** Format: uuid */
+                id?: string;
+                name: string;
+                values: {
+                    /** Format: uuid */
+                    id?: string;
+                    label: string;
+                }[];
+            }[];
+            /**
+             * @description Цены комбинаций: labels — лейблы значений в порядке атрибутов.
+             *     Каждая комбинация декартова произведения обязана получить цену > 0.
+             */
+            combos?: {
+                labels: string[];
+                price: components["schemas"]["Decimal"];
+                purchase_price?: components["schemas"]["Decimal"];
+            }[];
         };
         MenuCategory: {
             /** Format: uuid */
@@ -10535,6 +10865,23 @@ export interface components {
         };
         TablesList: {
             data?: components["schemas"]["Table"][];
+        };
+        Warehouse: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            kind?: "products" | "purchased" | "supplies";
+            restaurant_id?: string;
+        };
+        WarehousesList: {
+            data?: components["schemas"]["Warehouse"][];
+        };
+        WarehouseTransferInput: {
+            /** Format: uuid */
+            ingredient_id: string;
+            /** Format: uuid */
+            to_warehouse_id: string;
         };
         TableInput: {
             name?: string;
@@ -10589,6 +10936,11 @@ export interface components {
             qty?: components["schemas"]["Decimal"];
             unit?: string;
             description?: string;
+            /**
+             * Format: uuid
+             * @description Склад движения (мультисклад)
+             */
+            warehouse_id?: string | null;
             /** Format: date-time */
             created_at?: string;
         };
@@ -10826,7 +11178,15 @@ export interface components {
                 ingredient_id: string;
                 name: string;
                 qty: components["schemas"]["Decimal"];
+                unit?: string;
                 cost: components["schemas"]["Decimal"];
+                /**
+                 * @description Тип списываемого. ingredient (по умолчанию) → stock_movement по
+                 *     ingredient_id. semi → декремент semi_finished_stock.qty (id п/ф).
+                 *     batch → декремент menu_items.prepared_qty (id блюда).
+                 * @enum {string}
+                 */
+                kind?: "ingredient" | "semi" | "batch";
             }[];
         };
         StockWriteoff: {
@@ -11190,6 +11550,11 @@ export interface components {
             categories?: string[];
             payment_terms_days?: number;
             credit_limit?: components["schemas"]["Decimal"];
+        };
+        SupplierPayDebtInput: {
+            amount: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id: string;
         };
         SuppliersList: {
             data?: components["schemas"]["Supplier"][];
@@ -11834,7 +12199,10 @@ export interface components {
         };
         WaiterAppInfo: {
             available?: boolean;
+            /** @description versionName из APK, напр. 0.2.16 */
             version?: string;
+            /** @description versionCode из APK — для сравнения при LAN-автообновлении */
+            version_code?: number;
             file_name?: string;
             /** Format: int64 */
             size_bytes?: number;
