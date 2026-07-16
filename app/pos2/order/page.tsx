@@ -708,7 +708,7 @@ export default function PosV2Order() {
         </div>
 
         <div className="relative flex-1 min-h-0">
-          <div ref={gridScrollRef} onScroll={updateScrollBtns} className="h-full overflow-y-auto pv-scroll" style={{ padding: 'clamp(0.4rem,0.7vw,0.7rem) clamp(0.4rem,0.7vw,0.7rem) clamp(0.5rem,1vw,1rem) 0' }}>
+          <div ref={gridScrollRef} onScroll={updateScrollBtns} className="h-full overflow-y-auto pv-noscroll" style={{ padding: 'clamp(0.4rem,0.7vw,0.7rem) clamp(0.4rem,0.7vw,0.7rem) clamp(0.5rem,1vw,1rem) 0' }}>
           {loading ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка меню…</div>
           ) : dishes.length === 0 ? (
