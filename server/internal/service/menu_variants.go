@@ -720,10 +720,15 @@ func (s *MenuService) createVariant(tx *gorm.DB, rid string, product *models.Men
 			Update("cogs", purchasePrice).Error; err != nil {
 			return "", err
 		}
+		// Мультисклад: складской товар варианта покупного блюда → «Покупные товары».
+		wid, werr := resolveWarehouseID(tx, rid, false, true)
+		if werr != nil {
+			return "", werr
+		}
 		ing := &models.Ingredient{
 			ID: uuid.NewString(), Name: &nm, Category: product.Category,
 			Qty: decimal.Zero, MinQty: minQty, Unit: &unit, PricePerUnit: purchasePrice,
-			RestaurantID: &rid,
+			WarehouseID: wid, RestaurantID: &rid,
 		}
 		if err := tx.Create(ing).Error; err != nil {
 			return "", err

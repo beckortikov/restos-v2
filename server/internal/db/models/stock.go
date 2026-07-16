@@ -40,6 +40,28 @@ type Ingredient struct {
 
 func (Ingredient) TableName() string { return "ingredients" }
 
+// BeforeCreate — мультисклад: если склад явно не задан, привязываем товар по типу
+// (еда → «Продукты», не-еда → «Хозтовары»). Покупные товары получают склад
+// «Покупные товары» ЯВНО в местах создания (menu_write/menu_variants), поэтому
+// сюда они приходят уже с WarehouseID и хук их не трогает. Если складов ещё нет
+// (совсем новый ресторан) — оставляем NULL: self-heal на старте доразметит.
+// Единый вход для всех путей создания (import/seed/будущие) — не дублируем логику.
+func (i *Ingredient) BeforeCreate(tx *gorm.DB) error {
+	if i.WarehouseID != nil || i.RestaurantID == nil || *i.RestaurantID == "" {
+		return nil
+	}
+	kind := "products"
+	if i.IsFood != nil && !*i.IsFood {
+		kind = "supplies"
+	}
+	var w Warehouse
+	if err := tx.Session(&gorm.Session{NewDB: true}).
+		Where("restaurant_id = ? AND kind = ?", *i.RestaurantID, kind).First(&w).Error; err == nil {
+		i.WarehouseID = &w.ID
+	}
+	return nil
+}
+
 // Warehouse — склад (мультисклад, Фаза 1). Ровно 3 фиксированных на ресторан:
 // products «Продукты», purchased «Покупные товары», supplies «Хозтовары».
 type Warehouse struct {
