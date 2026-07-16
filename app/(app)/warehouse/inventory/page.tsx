@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
@@ -111,11 +112,19 @@ function VirtualIngredientsTable({ items, onEdit, onMove, warehouseById, selectM
   )
 }
 
+type WhKind = 'products' | 'purchased' | 'supplies'
+const WH_TABS: { kind: WhKind; label: string }[] = [
+  { kind: 'products', label: 'Продукты' },
+  { kind: 'purchased', label: 'Покупные товары' },
+  { kind: 'supplies', label: 'Хозтовары' },
+]
+
 export default function InventoryPage() {
   const { canDo } = useAuth()
+  const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
-  const [tab, setTab] = useState<'food' | 'supplies'>('food')
+  const [whKind, setWhKind] = useState<WhKind>('products')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingIngredient, setEditingIngredient] = useState<Ingredient | undefined>(undefined)
   // Мультивыбор для удаления.
@@ -214,7 +223,7 @@ export default function InventoryPage() {
   }
 
   function openCreateDialog() {
-    // Pre-set a "fake" ingredient to pass isFood based on active tab
+    // Новый ингредиент; is_food по активному складу — через defaultIsFood ниже.
     setEditingIngredient(undefined)
     setDialogOpen(true)
   }
@@ -261,7 +270,17 @@ export default function InventoryPage() {
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
-  const tabItems = ingredients.filter(i => tab === 'food' ? i.isFood !== false : i.isFood === false)
+  // Склад товара: по warehouse_id (мультисклад). Не размеченные (legacy NULL) —
+  // фоллбэк по is_food, чтобы ничего не пропало из списка.
+  const kindOf = (i: Ingredient): WhKind => {
+    const k = i.warehouseId ? warehouseById.get(i.warehouseId)?.kind : undefined
+    if (k === 'products' || k === 'purchased' || k === 'supplies') return k
+    return i.isFood === false ? 'supplies' : 'products'
+  }
+  const countByKind: Record<WhKind, number> = { products: 0, purchased: 0, supplies: 0 }
+  for (const i of ingredients) countByKind[kindOf(i)]++
+
+  const tabItems = ingredients.filter(i => kindOf(i) === whKind)
   const tabCategories = [...new Set(tabItems.map(i => i.category))].sort()
 
   const filtered = tabItems.filter((i) => {
@@ -272,7 +291,6 @@ export default function InventoryPage() {
 
   const lowCount = tabItems.filter((i) => i.qty < i.minQty).length
   const totalValue = tabItems.reduce((s, i) => s + i.qty * i.pricePerUnit, 0)
-  const suppliesCount = ingredients.filter(i => i.isFood === false).length
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -281,7 +299,7 @@ export default function InventoryPage() {
         <div>
           <h1 className="text-xl font-bold text-foreground">Остатки на складе</h1>
           <p className="text-muted-foreground text-sm mt-0.5">
-            {ingredients.length} позиций · Стоимость: {formatCurrency(totalValue)}
+            {tabItems.length} позиций · Стоимость: {formatCurrency(totalValue)}
             {lowCount > 0 && <span className="text-amber-600 ml-2">· {lowCount} ниже нормы</span>}
           </p>
         </div>
@@ -314,31 +332,29 @@ export default function InventoryPage() {
                 <Trash2 className="size-4" /> Удалить
               </button>
               <button
-                onClick={openCreateDialog}
+                onClick={() => whKind === 'purchased' ? navigate('/warehouse/menu/new') : openCreateDialog()}
                 className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex-1 sm:flex-none justify-center"
               >
                 <Plus className="size-4" />
-                {tab === 'food' ? 'Добавить ингредиент' : 'Добавить хозтовар'}
+                {whKind === 'purchased' ? 'Покупной товар' : whKind === 'supplies' ? 'Добавить хозтовар' : 'Добавить ингредиент'}
               </button>
             </div>
           )
         )}
       </div>
 
-      {/* Tab switcher */}
-      <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit">
-        <button
-          onClick={() => { setTab('food'); setCategory('all') }}
-          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === 'food' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-        >
-          Продукты
-        </button>
-        <button
-          onClick={() => { setTab('supplies'); setCategory('all') }}
-          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === 'supplies' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
-        >
-          Хозтовары {suppliesCount > 0 && <span className="ml-1 text-xs text-muted-foreground">({suppliesCount})</span>}
-        </button>
+      {/* Переключатель складов (мультисклад): у каждого свой список и своя сумма */}
+      <div className="flex gap-1 bg-muted rounded-lg p-1 w-fit flex-wrap">
+        {WH_TABS.map(t => (
+          <button
+            key={t.kind}
+            onClick={() => { setWhKind(t.kind); setCategory('all') }}
+            className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${whKind === t.kind ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {t.label}
+            {countByKind[t.kind] > 0 && <span className="ml-1 text-xs text-muted-foreground">({countByKind[t.kind]})</span>}
+          </button>
+        ))}
       </div>
 
       {/* Summary cards */}
@@ -462,7 +478,7 @@ export default function InventoryPage() {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         ingredient={editingIngredient}
-        defaultIsFood={tab === 'food'}
+        defaultIsFood={whKind !== 'supplies'}
         onSubmit={handleIngredientSubmit}
       />
 
