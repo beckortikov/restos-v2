@@ -4,6 +4,7 @@ package http_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
 // Мультисклад: товар при создании сразу попадает на СВОЙ склад —
@@ -202,5 +204,117 @@ func TestWarehouseMovements_FilterByWarehouse(t *testing.T) {
 	}
 	if sup[food.ID] {
 		t.Error("склад «Хозтовары»: просочилось движение продукта")
+	}
+}
+
+// End-to-end: покупной товар лежит на складе «Покупные товары» (новая
+// маршрутизация) → продажа отражается в финансах КОРРЕКТНО (revenue-финоперация
+// на сумму продажи) и списывает остаток именно с этого склада. Гарантия, что
+// привязка к складу не ломает финучёт.
+func TestWarehouse_PurchasedSale_FinanceCorrect(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, err := db.Open(testDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if s, e := gdb.DB(); e == nil {
+			_ = s.Close()
+		}
+	})
+
+	// Счёт «Касса» + открытая смена.
+	accID := uuid.NewString()
+	accName, accType := "Касса", "cash"
+	if err := gdb.Create(&models.FinancialAccount{
+		ID: accID, Name: &accName, Type: &accType, RestaurantID: &f.rid, Balance: decimal.Zero,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	r, b := f.post(t, "/api/v1/shifts", tok, uuid.NewString(), map[string]any{"opening_balance": "0", "account_id": accID})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("open shift %d: %s", r.StatusCode, b)
+	}
+	var shift models.CashShift
+	_ = json.Unmarshal(b, &shift)
+
+	// Покупной товар: цена 25, закупка 10 → его ингредиент на складе 'purchased'.
+	r, b = f.post(t, "/api/v1/menu/items", tok, uuid.NewString(), map[string]any{
+		"name": "Сок-FIN", "category": "Напитки", "price": "25",
+		"is_purchased": true, "purchase_price": "10", "purchase_unit": "шт", "purchase_min_qty": "0",
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create purchased %d: %s", r.StatusCode, b)
+	}
+	var mi struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(b, &mi)
+
+	// Backing-ингредиент + подтверждаем склад 'purchased'; кладём остаток 5.
+	var line models.TechCardLine
+	if err := gdb.Where("menu_item_id = ?", mi.ID).First(&line).Error; err != nil {
+		t.Fatal(err)
+	}
+	ingID := *line.IngredientID
+	var ing models.Ingredient
+	if err := gdb.Where("id = ?", ingID).First(&ing).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ing.WarehouseID == nil {
+		t.Fatal("покупной ингредиент без склада")
+	}
+	purchasedWH := *ing.WarehouseID
+	var w models.Warehouse
+	if err := gdb.Where("id = ?", purchasedWH).First(&w).Error; err != nil {
+		t.Fatal(err)
+	}
+	if w.Kind == nil || *w.Kind != "purchased" {
+		t.Fatalf("склад покупного = %v, ожидали 'purchased'", w.Kind)
+	}
+	if err := gdb.Model(&models.Ingredient{}).Where("id = ?", ingID).Update("qty", decimal.MustFromString("5")).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Заказ на 1 порцию + закрытие (нал, счёт, смена).
+	r, b = f.post(t, "/api/v1/orders", tok, uuid.NewString(),
+		map[string]any{"items": []map[string]any{{"menu_item_id": mi.ID, "qty": "1"}}})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create order %d: %s", r.StatusCode, b)
+	}
+	var ord models.Order
+	_ = json.Unmarshal(b, &ord)
+	r, b = f.post(t, fmt.Sprintf("/api/v1/orders/%s/close", ord.ID), tok, uuid.NewString(),
+		map[string]any{"payment_method": "cash", "account_id": accID, "shift_id": shift.ID})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("close order %d: %s", r.StatusCode, b)
+	}
+
+	// (1) revenue-финоперация на сумму продажи (25) — отражение в ДДС/ОПиУ.
+	var rev models.FinancialOperation
+	if err := gdb.Where("restaurant_id = ? AND source_ref = ? AND type = ? AND category = ?",
+		f.rid, "order:"+ord.ID, "in", "revenue").First(&rev).Error; err != nil {
+		t.Fatalf("нет revenue-финоперации для продажи покупного: %v", err)
+	}
+	if !rev.Amount.Equal(decimal.MustFromString("25")) {
+		t.Errorf("revenue amount = %s, ожидали 25", decimal.Normalize(rev.Amount).String())
+	}
+
+	// (2) остаток покупного списался со склада: 5 → 4.
+	if err := gdb.Where("id = ?", ingID).First(&ing).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !ing.Qty.Equal(decimal.MustFromString("4")) {
+		t.Errorf("остаток покупного = %s, ожидали 4 (продажа списала 1)", decimal.Normalize(ing.Qty).String())
+	}
+
+	// (3) движение списания продажи ушло именно со склада «Покупные товары».
+	var mv models.StockMovement
+	if err := gdb.Where("ingredient_id = ? AND qty < 0", ingID).Order("created_at desc").First(&mv).Error; err != nil {
+		t.Fatalf("нет движения списания продажи: %v", err)
+	}
+	if mv.WarehouseID == nil || *mv.WarehouseID != purchasedWH {
+		t.Errorf("движение списания warehouse_id=%v, ожидали склад 'purchased' %s", mv.WarehouseID, purchasedWH)
 	}
 }
