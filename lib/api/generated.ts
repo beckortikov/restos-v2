@@ -1092,6 +1092,8 @@ export interface paths {
                     cursor?: components["parameters"]["Cursor"];
                     ingredient_id?: string;
                     type?: string;
+                    /** @description Фильтр движений по складу (мультисклад) */
+                    warehouse_id?: string;
                     from?: string;
                     to?: string;
                 };
@@ -10238,6 +10240,11 @@ export interface components {
             qty?: components["schemas"]["Decimal"];
             unit?: string;
             description?: string;
+            /**
+             * Format: uuid
+             * @description Склад движения (мультисклад)
+             */
+            warehouse_id?: string | null;
             /** Format: date-time */
             created_at?: string;
         };

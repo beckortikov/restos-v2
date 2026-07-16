@@ -112,3 +112,95 @@ func TestWarehouseRouting_OnCreate(t *testing.T) {
 		t.Errorf("хук (не-еда): склад %q, ожидали 'supplies'", k)
 	}
 }
+
+// У каждого склада свой отчёт движений: GET /stock/movements?warehouse_id=X
+// возвращает только движения этого склада.
+func TestWarehouseMovements_FilterByWarehouse(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, err := db.Open(testDSN())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if s, e := gdb.DB(); e == nil {
+			_ = s.Close()
+		}
+	})
+
+	// Продукт с qty>0 → приходное движение на складе «Продукты».
+	rf, bf := f.post(t, "/api/v1/stock/ingredients", tok, uuid.NewString(), map[string]any{
+		"name": "Мука-MV", "category": "Бакалея", "qty": "10", "min_qty": "0",
+		"unit": "кг", "price_per_unit": "5", "is_food": true,
+	})
+	if rf.StatusCode != http.StatusCreated {
+		t.Fatalf("создать продукт: %d %s", rf.StatusCode, bf)
+	}
+	var food struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(bf, &food)
+
+	// Хозтовар с qty>0 → движение на складе «Хозтовары».
+	rs, bs := f.post(t, "/api/v1/stock/ingredients", tok, uuid.NewString(), map[string]any{
+		"name": "Салфетки-MV", "category": "Хоз", "qty": "20", "min_qty": "0",
+		"unit": "шт", "price_per_unit": "1", "is_food": false,
+	})
+	if rs.StatusCode != http.StatusCreated {
+		t.Fatalf("создать хозтовар: %d %s", rs.StatusCode, bs)
+	}
+	var supply struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(bs, &supply)
+
+	whID := func(kind string) string {
+		var w models.Warehouse
+		if err := gdb.Where("restaurant_id = ? AND kind = ?", f.rid, kind).First(&w).Error; err != nil {
+			t.Fatal(err)
+		}
+		return w.ID
+	}
+	prodWH, supWH := whID("products"), whID("supplies")
+
+	// ingredientIDs — id ингредиентов в движениях склада + проверка, что каждое
+	// движение действительно на этом складе.
+	ingredientIDs := func(t *testing.T, warehouseID string) map[string]bool {
+		t.Helper()
+		_, body := f.get(t, "/api/v1/stock/movements?warehouse_id="+warehouseID, tok)
+		var env struct {
+			Data []struct {
+				IngredientID *string `json:"ingredient_id"`
+				WarehouseID  *string `json:"warehouse_id"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &env); err != nil {
+			t.Fatal(err)
+		}
+		ids := map[string]bool{}
+		for _, d := range env.Data {
+			if d.WarehouseID == nil || *d.WarehouseID != warehouseID {
+				t.Errorf("движение просочилось: warehouse_id=%v, фильтр=%s", d.WarehouseID, warehouseID)
+			}
+			if d.IngredientID != nil {
+				ids[*d.IngredientID] = true
+			}
+		}
+		return ids
+	}
+
+	prod := ingredientIDs(t, prodWH)
+	if !prod[food.ID] {
+		t.Error("склад «Продукты»: нет движения продукта")
+	}
+	if prod[supply.ID] {
+		t.Error("склад «Продукты»: просочилось движение хозтовара")
+	}
+	sup := ingredientIDs(t, supWH)
+	if !sup[supply.ID] {
+		t.Error("склад «Хозтовары»: нет движения хозтовара")
+	}
+	if sup[food.ID] {
+		t.Error("склад «Хозтовары»: просочилось движение продукта")
+	}
+}

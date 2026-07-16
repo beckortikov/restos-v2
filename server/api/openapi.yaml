@@ -423,6 +423,7 @@ paths:
         - $ref: "#/components/parameters/Cursor"
         - { in: query, name: ingredient_id, schema: { type: string, format: uuid } }
         - { in: query, name: type, schema: { type: string } }
+        - { in: query, name: warehouse_id, schema: { type: string, format: uuid }, description: "Фильтр движений по складу (мультисклад)" }
         - { in: query, name: from, schema: { type: string, format: date-time } }
         - { in: query, name: to, schema: { type: string, format: date-time } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockMovementsList" } } } } }
@@ -3204,6 +3205,7 @@ components:
         qty: { $ref: "#/components/schemas/Decimal" }
         unit: { type: string }
         description: { type: string }
+        warehouse_id: { type: string, format: uuid, nullable: true, description: "Склад движения (мультисклад)" }
         created_at: { type: string, format: date-time }
     StockMovementsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockMovement" } }, next_cursor: { type: string } } }
     StockReceiptsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReceipt" } }, next_cursor: { type: string } } }

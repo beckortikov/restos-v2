@@ -527,6 +527,7 @@ func (s *StockReadsService) ListWriteoffsWithLines(ctx context.Context, f Writeo
 type MovementsFilter struct {
 	IngredientID string
 	Type         string
+	WarehouseID  string
 	From, To     *time.Time
 	Page         cursor.Page
 }
@@ -542,6 +543,9 @@ func (s *StockReadsService) ListMovements(ctx context.Context, f MovementsFilter
 	}
 	if f.Type != "" {
 		q = q.Where("type = ?", f.Type)
+	}
+	if f.WarehouseID != "" {
+		q = q.Where("warehouse_id = ?", f.WarehouseID)
 	}
 	if f.From != nil {
 		q = q.Where("created_at >= ?", *f.From)

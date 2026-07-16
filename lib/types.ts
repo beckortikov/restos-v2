@@ -424,6 +424,7 @@ export interface StockMovement {
   unit: string
   timestamp: string
   belowZero?: boolean
+  warehouseId?: string
 }
 
 export interface FinancialAccount {

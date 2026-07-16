@@ -89,12 +89,13 @@ export async function deleteIngredient(id: string): Promise<void> {
   logAction('ingredient.delete', 'ingredient', id)
 }
 
-export async function fetchStockMovements(opts?: { ingredientId?: string }): Promise<StockMovement[]> {
+export async function fetchStockMovements(opts?: { ingredientId?: string; warehouseId?: string }): Promise<StockMovement[]> {
   // Append-only поток — ограничиваем «последними» 2000, но через курсор (не 200).
-  // ingredient_id фильтрует движения на бэке (handlers/stock_extra.go) — для
-  // карточки движения конкретного товара (приход → продажа/списание).
+  // ingredient_id / warehouse_id фильтруют движения на бэке
+  // (handlers/stock_extra.go) — для карточки товара и для отчёта по складу.
   const params: Record<string, string> = {}
   if (opts?.ingredientId) params.ingredient_id = opts.ingredientId
+  if (opts?.warehouseId) params.warehouse_id = opts.warehouseId
   const rows = await fetchAllPages('/api/v1/stock/movements', params, 2000)
   return rows.map(mapStockMovement) as StockMovement[]
 }
@@ -374,6 +375,7 @@ function mapStockMovement(r: Record<string, unknown>): StockMovement {
     unit: (r.unit as string) ?? '',
     timestamp: (r.created_at as string) ?? '',
     belowZero: (r.below_zero as boolean | null) ?? undefined,
+    warehouseId: (r.warehouse_id as string | null) ?? undefined,
   } as StockMovement
 }
 
