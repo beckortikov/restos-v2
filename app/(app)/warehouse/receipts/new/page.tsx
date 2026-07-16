@@ -11,6 +11,7 @@ import {
   Trash2,
   Package,
   Box,
+  ShoppingCart,
   CheckCircle,
   X,
 } from 'lucide-react'
@@ -31,8 +32,9 @@ import {
   type Supplier,
   type Ingredient,
   type FinancialAccount,
+  type Warehouse,
 } from '@/lib/types'
-import { fetchSuppliers, fetchIngredients, createReceipt, createSupplier, createIngredient, fetchFinancialAccounts } from '@/lib/queries'
+import { fetchSuppliers, fetchIngredients, createReceipt, createSupplier, createIngredient, fetchFinancialAccounts, fetchWarehouses } from '@/lib/queries'
 import {
   Dialog,
   DialogContent,
@@ -49,7 +51,7 @@ interface ReceiptLineForm {
   pricePerUnit: number
 }
 
-type CategoryFilter = 'all' | 'food' | 'nonfood'
+type CategoryFilter = 'all' | 'products' | 'purchased' | 'supplies'
 
 // ─── Supplier combobox (same UX as legacy dialog) ──────────────────────────
 // ─── Supplier combobox (same UX as legacy dialog) ──────────────────────────
@@ -179,6 +181,7 @@ export default function NewReceiptPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [loading, setLoading] = useState(true)
 
   const [supplierId, setSupplierId] = useState('')
@@ -204,11 +207,12 @@ export default function NewReceiptPage() {
   const [creatingIngredient, setCreatingIngredient] = useState(false)
 
   useEffect(() => {
-    Promise.all([fetchSuppliers(), fetchIngredients(), fetchFinancialAccounts()])
-      .then(([s, i, accs]) => {
+    Promise.all([fetchSuppliers(), fetchIngredients(), fetchFinancialAccounts(), fetchWarehouses()])
+      .then(([s, i, accs, whs]) => {
         setSuppliers(s)
         setIngredients(i)
         setAccounts(accs)
+        setWarehouses(whs)
         const defaultAcc = accs.find((a) => a.type === 'cash')?.id || accs[0]?.id || ''
         setAccountId(defaultAcc)
         setLoading(false)
@@ -227,18 +231,31 @@ export default function NewReceiptPage() {
         ? total
         : Math.max(0, dSub(total, paidAmount))
 
+  const warehouseById = useMemo(() => new Map(warehouses.map((w) => [w.id, w])), [warehouses])
+  // Склад товара: по warehouse_id (мультисклад). Не размеченные (legacy NULL) —
+  // фоллбэк по is_food, чтобы товар не пропал из списка.
+  const kindOf = (ing: Ingredient): 'products' | 'purchased' | 'supplies' => {
+    const k = ing.warehouseId ? warehouseById.get(ing.warehouseId)?.kind : undefined
+    if (k === 'products' || k === 'purchased' || k === 'supplies') return k
+    return ing.isFood === false ? 'supplies' : 'products'
+  }
+
   const filteredIngredients = useMemo(() => {
     const q = search.trim().toLowerCase()
     return ingredients.filter((ing) => {
-      if (filter === 'food' && ing.isFood === false) return false
-      if (filter === 'nonfood' && ing.isFood !== false) return false
+      if (filter !== 'all' && kindOf(ing) !== filter) return false
       if (q && !ing.name.toLowerCase().includes(q)) return false
       return true
     })
-  }, [ingredients, filter, search])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredients, filter, search, warehouseById])
 
-  const foodCount = ingredients.filter((i) => i.isFood !== false).length
-  const nonFoodCount = ingredients.filter((i) => i.isFood === false).length
+  const countByKind = useMemo(() => {
+    const c: Record<'products' | 'purchased' | 'supplies', number> = { products: 0, purchased: 0, supplies: 0 }
+    for (const i of ingredients) c[kindOf(i)]++
+    return c
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredients, warehouseById])
 
   function addOrIncrementIngredient(ing: Ingredient) {
     setLines((prev) => {
@@ -424,8 +441,9 @@ export default function NewReceiptPage() {
               {(
                 [
                   { v: 'all', label: 'Все', count: ingredients.length, icon: null },
-                  { v: 'food', label: 'Продукты', count: foodCount, icon: Package },
-                  { v: 'nonfood', label: 'Хозтовары', count: nonFoodCount, icon: Box },
+                  { v: 'products', label: 'Продукты', count: countByKind.products, icon: Package },
+                  { v: 'purchased', label: 'Покупные товары', count: countByKind.purchased, icon: ShoppingCart },
+                  { v: 'supplies', label: 'Хозтовары', count: countByKind.supplies, icon: Box },
                 ] as { v: CategoryFilter; label: string; count: number; icon: typeof Package | null }[]
               ).map((t) => {
                 const active = filter === t.v
