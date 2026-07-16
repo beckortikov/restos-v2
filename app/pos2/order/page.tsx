@@ -5,6 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
   UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2,
+  ChevronUp, ChevronDown,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
@@ -57,14 +58,31 @@ export default function PosV2Order() {
   // рядов под экран (карточки квадратнее, а не «широкие и низкие»).
   const gridScrollRef = useRef<HTMLDivElement>(null)
   const [gridAreaH, setGridAreaH] = useState(0)
+  // Крупные кнопки-стрелки для прокрутки блюд (тач: нативный скролл мелкий).
+  // Дизаблим на краях, прячем целиком, если контент помещается без скролла.
+  const [canScrollUp, setCanScrollUp] = useState(false)
+  const [canScrollDown, setCanScrollDown] = useState(false)
+  const updateScrollBtns = useCallback(() => {
+    const el = gridScrollRef.current
+    if (!el) return
+    const { scrollTop, scrollHeight, clientHeight } = el
+    setCanScrollUp(scrollTop > 4)
+    setCanScrollDown(scrollTop + clientHeight < scrollHeight - 4)
+  }, [])
   useEffect(() => {
     const el = gridScrollRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => setGridAreaH(el.clientHeight))
+    const ro = new ResizeObserver(() => { setGridAreaH(el.clientHeight); updateScrollBtns() })
     ro.observe(el)
     setGridAreaH(el.clientHeight)
+    updateScrollBtns()
     return () => ro.disconnect()
-  }, [])
+  }, [updateScrollBtns])
+  function scrollDishes(dir: 1 | -1) {
+    const el = gridScrollRef.current
+    if (!el) return
+    el.scrollBy({ top: dir * el.clientHeight * 0.85, behavior: 'smooth' })
+  }
   const [search, setSearch] = useState('')
   const deferred = useDeferredValue(search)
   const [activeCat, setActiveCat] = useState<string | null>(null)
@@ -324,6 +342,8 @@ export default function PosV2Order() {
     if (currentCat === '__fav__') return base.filter(m => favSet.has(m.id))
     return base.filter(m => m.category === currentCat)
   }, [menuItems, currentCat, deferred, favSet])
+  // Пересчёт стрелок прокрутки при смене категории/поиска/сетки (меняется высота контента).
+  useEffect(() => { updateScrollBtns() }, [dishes, gridAreaH, menuGrid, updateScrollBtns])
 
   const tablesByZone = useMemo(() => {
     const zoneName = (z: string) => zones.find(zz => zz.id === z)?.name ?? z ?? 'Зал'
@@ -687,7 +707,8 @@ export default function PosV2Order() {
           })}
         </div>
 
-        <div ref={gridScrollRef} className="flex-1 min-h-0 overflow-y-auto pv-scroll" style={{ padding: 'clamp(0.4rem,0.7vw,0.7rem) clamp(0.4rem,0.7vw,0.7rem) clamp(0.5rem,1vw,1rem) 0' }}>
+        <div className="relative flex-1 min-h-0">
+          <div ref={gridScrollRef} onScroll={updateScrollBtns} className="h-full overflow-y-auto pv-scroll" style={{ padding: 'clamp(0.4rem,0.7vw,0.7rem) clamp(0.4rem,0.7vw,0.7rem) clamp(0.5rem,1vw,1rem) 0' }}>
           {loading ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка меню…</div>
           ) : dishes.length === 0 ? (
@@ -718,6 +739,19 @@ export default function PosV2Order() {
                   </div>
                 )
               })}
+            </div>
+          )}
+          </div>
+          {/* Крупные стрелки прокрутки блюд (тач-дружелюбно; появляются только при
+              переполнении, гаснут на краях). Дизайн pv-card + бренд-стрелка. */}
+          {(canScrollUp || canScrollDown) && (
+            <div className="absolute z-10 flex flex-col pointer-events-none" style={{ right: 'clamp(0.6rem,1vw,1rem)', bottom: 'clamp(1rem,2vw,1.75rem)', gap: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
+              <button onClick={() => scrollDishes(-1)} disabled={!canScrollUp} aria-label="Прокрутить блюда вверх" className="pointer-events-auto flex items-center justify-center rounded-2xl border active:scale-90 transition-all disabled:opacity-25" style={{ width: 'clamp(3.5rem,4.6vw,4.5rem)', height: 'clamp(3.5rem,4.6vw,4.5rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-brand)', boxShadow: '0 8px 22px rgba(0,0,0,0.14)' }}>
+                <ChevronUp style={{ width: '52%', height: '52%' }} strokeWidth={2.75} />
+              </button>
+              <button onClick={() => scrollDishes(1)} disabled={!canScrollDown} aria-label="Прокрутить блюда вниз" className="pointer-events-auto flex items-center justify-center rounded-2xl border active:scale-90 transition-all disabled:opacity-25" style={{ width: 'clamp(3.5rem,4.6vw,4.5rem)', height: 'clamp(3.5rem,4.6vw,4.5rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-brand)', boxShadow: '0 8px 22px rgba(0,0,0,0.14)' }}>
+                <ChevronDown style={{ width: '52%', height: '52%' }} strokeWidth={2.75} />
+              </button>
             </div>
           )}
         </div>
