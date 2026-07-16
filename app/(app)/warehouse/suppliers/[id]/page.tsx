@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
 import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { formatCurrency } from '@/lib/helpers'
@@ -77,6 +77,7 @@ export default function EditSupplierPage() {
   const [form, setForm] = useState<SupplierForm>(emptyForm)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [editing, setEditing] = useState(false) // просмотр по умолчанию, edit — по кнопке
   const [catSearch, setCatSearch] = useState('')
   const [ingredientCategories, setIngredientCategories] = useState<string[]>([])
   const [receipts, setReceipts] = useState<StockReceipt[]>([])
@@ -132,6 +133,18 @@ export default function EditSupplierPage() {
     }))
   }
 
+  const resetForm = () => {
+    if (!supplier) return
+    setForm({
+      name: supplier.name,
+      contactPerson: supplier.contactPerson,
+      phone: supplier.phone,
+      categories: supplier.categories,
+      paymentTermsDays: supplier.paymentTermsDays,
+      creditLimit: supplier.creditLimit,
+    })
+  }
+
   const handleSubmit = async () => {
     if (!supplier || !form.name.trim() || !form.contactPerson.trim() || !form.phone.trim() || form.categories.length === 0 || saving) return
     setSaving(true)
@@ -144,8 +157,18 @@ export default function EditSupplierPage() {
         payment_terms_days: form.paymentTermsDays,
         credit_limit: form.creditLimit,
       })
+      // Обновляем локально и возвращаемся в просмотр (не уходим со страницы).
+      setSupplier({
+        ...supplier,
+        name: form.name,
+        contactPerson: form.contactPerson,
+        phone: form.phone,
+        categories: form.categories,
+        paymentTermsDays: form.paymentTermsDays,
+        creditLimit: form.creditLimit,
+      })
+      setEditing(false)
       toast.success('Поставщик обновлён')
-      navigate('/warehouse/suppliers')
     } catch (e) {
       toast.error('Ошибка обновления поставщика')
     } finally {
@@ -189,21 +212,81 @@ export default function EditSupplierPage() {
             <span>Назад</span>
           </button>
           <h1 className="flex-1 text-base md:text-lg font-bold text-foreground truncate">
-            Редактирование: <span className="text-primary">{supplier?.name}</span>
+            {editing && <span className="text-muted-foreground font-medium">Редактирование: </span>}
+            <span className="text-primary">{supplier?.name}</span>
           </h1>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit || saving}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <CheckCircle className="size-4" />
-            {saving ? 'Сохранение...' : 'Сохранить изменения'}
-          </button>
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { setEditing(false); resetForm() }}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-foreground bg-card border border-border hover:bg-muted transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!canSubmit || saving}
+                className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <CheckCircle className="size-4" />
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+            >
+              <Pencil className="size-4" />
+              Редактировать
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Body */}
+      {/* Body — просмотр (сводка read-only) ИЛИ редактирование (форма) */}
+      {!editing && (
+        <div className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
+          <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
+              <div className="flex items-center gap-2 text-sm">
+                <User className="size-4 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground">Контакт:</span>
+                <span className="font-medium text-foreground">{supplier?.contactPerson || '—'}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Phone className="size-4 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground">Телефон:</span>
+                {supplier?.phone
+                  ? <a href={`tel:${supplier.phone}`} className="font-medium text-primary hover:underline">{supplier.phone}</a>
+                  : <span className="font-medium text-foreground">—</span>}
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Landmark className="size-4 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground">Отсрочка:</span>
+                <span className="font-medium text-foreground">{supplier?.paymentTermsDays ? `${supplier.paymentTermsDays} дн.` : 'без отсрочки'}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">Наш долг:</span>
+                <span className={`font-bold ${(supplier?.currentDebt ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600'}`}>{formatCurrency(supplier?.currentDebt ?? 0)}</span>
+                {(supplier?.creditLimit ?? 0) > 0 && <span className="text-xs text-muted-foreground">из {formatCurrency(supplier!.creditLimit)}</span>}
+              </div>
+            </div>
+            {(supplier?.categories?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-3 border-t border-border/60">
+                <Tag className="size-4 text-muted-foreground shrink-0" />
+                {supplier!.categories.map(c => (
+                  <span key={c} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-md font-medium">{c}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {editing && (
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
         {/* Left Column - Contact Info & Terms */}
         <div className="lg:col-span-6 space-y-6">
@@ -393,6 +476,7 @@ export default function EditSupplierPage() {
           </div>
         </div>
       </div>
+      )}
 
       {/* История закупок — накладные этого поставщика */}
       <div className="max-w-7xl mx-auto w-full px-4 md:px-6 pb-8">

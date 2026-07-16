@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { type Supplier, type FinancialAccount } from '@/lib/types'
 import { fetchSuppliers, deleteSupplier, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
-import { Phone, User, AlertTriangle, Plus, Search, Pencil, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
+import { Phone, User, AlertTriangle, Plus, Search, Eye, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
 
@@ -407,10 +407,10 @@ export default function SuppliersPage() {
                         )}
                         <button
                           onClick={() => navigate('/warehouse/suppliers/' + sup.id)}
-                          title="Редактировать"
+                          title="Открыть — история закупок"
                           className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
                         >
-                          <Pencil className="size-4" />
+                          <Eye className="size-4" />
                         </button>
                         <button
                           onClick={() => handleDelete(sup)}
