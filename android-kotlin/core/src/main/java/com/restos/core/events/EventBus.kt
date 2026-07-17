@@ -60,6 +60,16 @@ sealed interface ServerEvent {
         val name: String?,
     ) : ServerEvent
 
+    /**
+     * Блюдо поставили/сняли со стоп-листа (обычно повар с кухни). Официант
+     * перечитывает меню: стоп-блюда из него уходят.
+     */
+    data class StopListUpdated(
+        val menuItemId: String?,
+        val name: String?,
+        val stopped: Boolean,
+    ) : ServerEvent
+
     /** Любое другое событие — для логирования / будущих фич. */
     data class Other(val type: String) : ServerEvent
 }

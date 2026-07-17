@@ -77,6 +77,8 @@ class TablesViewModel @Inject constructor(
                     // Вызов официанта на кухню — обрабатывает WaiterAlertService
                     // (уведомление), на карту столов не влияет.
                     is ServerEvent.WaiterCalled -> Unit
+                    // Стоп-лист — про меню, на карту столов не влияет.
+                    is ServerEvent.StopListUpdated -> Unit
                     is ServerEvent.Other -> Unit
                 }
             }

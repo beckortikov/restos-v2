@@ -18,9 +18,18 @@ import (
 // Логика: блюдо в стопе если:
 //  1. menu_items.stop_list_override = true, ИЛИ
 //  2. его tech_card_line ссылается на ингредиент с qty <= min_qty.
-type StopListService struct{ r *repo.Repo }
+type StopListService struct {
+	r   *repo.Repo
+	pub *EventPublisher
+}
 
 func NewStopListService(r *repo.Repo) *StopListService { return &StopListService{r: r} }
+
+// WithPublisher — fluent setter (как в OrdersService/KDSService).
+func (s *StopListService) WithPublisher(pub *EventPublisher) *StopListService {
+	s.pub = pub
+	return s
+}
 
 // StopListIngredient — недостающий ингредиент в строке стоп-листа.
 type StopListIngredient struct {
@@ -268,6 +277,25 @@ func (s *StopListService) SetOverride(ctx context.Context, menuItemID string, in
 	var out models.MenuItem
 	if err := scoped3.Where("id = ?", menuItemID).First(&out).Error; err != nil {
 		return nil, err
+	}
+
+	// Стоп с кухни должен долетать до кассы и официанта сразу, а не «до
+	// следующего запроса меню»: касса инвалидирует кэш menu_items, официант
+	// перечитывает меню (стоп-блюда уходят из списка).
+	if s.pub != nil {
+		if rid, rerr := tenant.MustRestaurantID(ctx); rerr == nil {
+			name := ""
+			if out.Name != nil {
+				name = *out.Name
+			}
+			buf := NewBuffer()
+			buf.Add(EventStopListUpdated, map[string]any{
+				"menu_item_id": menuItemID,
+				"name":         name,
+				"stopped":      in.Override,
+			})
+			s.pub.Flush(ctx, rid, buf)
+		}
 	}
 	return &out, nil
 }

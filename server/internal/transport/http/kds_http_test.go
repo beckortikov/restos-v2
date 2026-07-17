@@ -256,6 +256,60 @@ func TestKDS_StopList_BlocksOrder(t *testing.T) {
 	}
 }
 
+// TestKDS_StopList_EmitsSSE — стоп с кухни долетает до кассы/официанта сразу:
+// override → SSE stop_list.updated с menu_item_id и stopped (иначе меню на кассе
+// обновилось бы только при следующем перезапросе).
+func TestKDS_StopList_EmitsSSE(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	name := "Плов"
+	miID := uuid.NewString()
+	if err := gdb.Create(&models.MenuItem{
+		ID: miID, Name: &name, Price: decimal.MustFromString("20"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	gotCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		data, err := readSSEUntilEvent(t, f.srv.URL, tok, "stop_list.updated", 4*time.Second)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		gotCh <- data
+	}()
+	// Даём SSE подписаться до публикации события.
+	time.Sleep(200 * time.Millisecond)
+
+	if r, b := f.post(t, "/api/v1/stop-list/"+miID+"/override", tok, uuid.NewString(),
+		map[string]any{"override": true}); r.StatusCode != http.StatusOK {
+		t.Fatalf("поставить стоп: %d %s", r.StatusCode, b)
+	}
+
+	select {
+	case data := <-gotCh:
+		if !strings.Contains(data, miID) {
+			t.Errorf("в payload нет menu_item_id %s: %s", miID, data)
+		}
+		if !strings.Contains(data, `"stopped":true`) {
+			t.Errorf("в payload нет stopped:true: %s", data)
+		}
+	case err := <-errCh:
+		t.Fatalf("SSE: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("не дождались события stop_list.updated")
+	}
+}
+
 // postJSON — POST с Bearer + Idempotency-Key (write-эндпоинты его требуют).
 func postJSON(t *testing.T, url, token string, body any) (int, []byte) {
 	t.Helper()

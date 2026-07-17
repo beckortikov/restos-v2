@@ -73,6 +73,9 @@ export const EVENT_FANOUT: Record<string, string[]> = {
   'shift.closed':      ['cash_shifts'],
   'stock.movement':    ['ingredients', 'stock_movements'],
   'license.updated':   ['license'],
+  // Повар поставил/снял стоп с кухни — меню кассы должно обновиться сразу,
+  // иначе стоп-блюдо видно до следующего перезапроса.
+  'stop_list.updated': ['menu_items'],
 }
 
 function fanout(eventType: string) {

@@ -157,6 +157,14 @@ private class Listener(
                     orderNumber = p.string("order_number")?.toIntOrNull(),
                 )
             }
+            "stop_list.updated" -> {
+                val p = parseJson(data)
+                ServerEvent.StopListUpdated(
+                    menuItemId = p.string("menu_item_id")?.takeIf { it.isNotBlank() },
+                    name = p.string("name")?.takeIf { it.isNotBlank() },
+                    stopped = p.string("stopped") == "true",
+                )
+            }
             "kds.waiter.called" -> {
                 val p = parseJson(data)
                 ServerEvent.WaiterCalled(

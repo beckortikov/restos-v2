@@ -42,6 +42,7 @@ const (
 	EventOrderItemVoided = "order.item.voided"
 	EventKDSItemUpdated  = "kds.item.updated"  // per-dish статус на кухне сменился (KDS)
 	EventKDSWaiterCalled = "kds.waiter.called" // повар вызвал официанта к кухне (KDS → официант)
+	EventStopListUpdated = "stop_list.updated" // блюдо поставили/сняли со стопа (кухня → касса/официант)
 	EventTableUpdated    = "table.updated"
 	EventStockMovement   = "stock.movement"
 	EventShiftOpened     = "shift.opened"

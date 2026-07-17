@@ -151,7 +151,7 @@ func NewRouter(deps Deps) http.Handler {
 	trendsSvc := service.NewTrendsService(reportsSvc, finReportsSvc)
 	waiterAppSvc := service.NewWaiterAppService(deps.WaiterAPKPath)
 	salarySvc := service.NewSalaryService(rep)
-	stopListSvc := service.NewStopListService(rep)
+	stopListSvc := service.NewStopListService(rep).WithPublisher(pub)
 	insightsSvc := service.NewInsightsService(rep, analyticsSvc, stopListSvc)
 	batchSvc := service.NewBatchCookingService(rep)
 	auditReadsSvc := service.NewAuditReadsService(rep)
