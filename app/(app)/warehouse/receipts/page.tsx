@@ -7,11 +7,12 @@ import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul } from '@/lib/decimal'
 import { type StockReceipt, type Supplier } from '@/lib/types'
 import { fetchReceipts, fetchSuppliers, confirmReceiptFull, fetchFinancialAccounts } from '@/lib/queries'
-import { Plus, CheckCircle, Clock, CreditCard } from 'lucide-react'
+import { Plus, CheckCircle, Clock, CreditCard, Undo2 } from 'lucide-react'
 import { type FinancialAccount } from '@/lib/types'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
+import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
 import { toast } from 'sonner'
 
 const PAYMENT_LABELS: Record<string, { label: string; color: string }> = {
@@ -31,6 +32,7 @@ export default function ReceiptsPage() {
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState('')
   const [confirming, setConfirming] = useState(false)
+  const [returnFor, setReturnFor] = useState<StockReceipt | null>(null)
 
   useEffect(() => {
     Promise.all([fetchReceipts(), fetchSuppliers()])
@@ -163,7 +165,18 @@ export default function ReceiptsPage() {
                   {expanded === r.id && (
                     <tr key={`${r.id}-exp`} className="bg-muted/20">
                       <td colSpan={10} className="px-6 py-4">
-                        <p className="text-xs font-semibold text-muted-foreground mb-2">Позиции накладной ({r.lines.length}):</p>
+                        <div className="flex items-center justify-between gap-3 mb-2 max-w-3xl">
+                          <p className="text-xs font-semibold text-muted-foreground">Позиции накладной ({r.lines.length}):</p>
+                          {canDo('inventory.manage') && (
+                            <button
+                              onClick={() => setReturnFor(r)}
+                              className="flex items-center gap-1.5 text-xs font-medium text-foreground bg-card border border-border px-2.5 py-1.5 rounded-lg hover:bg-muted transition-colors"
+                            >
+                              <Undo2 className="size-3.5" />
+                              Возврат
+                            </button>
+                          )}
+                        </div>
                         <div className="overflow-hidden rounded-lg border border-border bg-card max-w-3xl">
                           <table className="w-full text-sm">
                             <thead>
@@ -245,6 +258,14 @@ export default function ReceiptsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Возврат поставщику — склад и деньги/долг назад */}
+      <CreateReturnDialog
+        receipt={returnFor}
+        open={!!returnFor}
+        onOpenChange={(v) => { if (!v) setReturnFor(null) }}
+        onSuccess={() => { fetchReceipts().then(setReceipts).catch(() => {}) }}
+      />
     </div>
   )
 }

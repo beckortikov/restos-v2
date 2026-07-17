@@ -370,6 +370,11 @@ export interface Supplier {
 }
 
 export interface ReceiptLine {
+  // id строки нужен для возврата поставщику (receipt_line_id): возврат
+  // привязан к строке, а не к накладной — одна номенклатура может быть в
+  // накладной дважды по разным ценам. Отсутствует у ещё не сохранённых строк
+  // (форма создания накладной).
+  id?: string
   ingredientId: string
   name: string
   qty: number
@@ -675,6 +680,48 @@ export interface CashShiftOperation {
 }
 
 // ─── Writeoffs ───────────────────────────────────────────────────────────────
+
+// Возврат поставщику — не списание: списание наш убыток и бьёт по прибыли,
+// возврат это сторно закупки (товар уехал назад, деньги/долг вернулись).
+// Поэтому и причин меньше: «дегустация» вернуть поставщику нельзя.
+export type ReturnReason = 'spoilage' | 'breakage' | 'expired' | 'other'
+
+export const RETURN_REASON_LABELS: Record<ReturnReason, string> = {
+  spoilage: 'Порча',
+  breakage: 'Бой',
+  expired: 'Просрочка',
+  other: 'Другое',
+}
+
+// debt — уменьшить долг поставщику (накладная в долг);
+// money — деньги вернулись на счёт (накладная оплачена).
+export type RefundType = 'debt' | 'money'
+
+export interface StockReturnLine {
+  id: string
+  receiptLineId: string
+  ingredientId: string
+  name: string
+  qty: number
+  unit: string
+  pricePerUnit: number
+}
+
+export interface StockReturn {
+  id: string
+  receiptId: string
+  supplierId: string
+  supplierName: string
+  date: string
+  reason: ReturnReason
+  note?: string
+  totalAmount: number
+  refundType: RefundType
+  accountId?: string
+  createdBy?: string
+  createdAt: string
+  lines: StockReturnLine[]
+}
 
 export type WriteoffReason = 'spoilage' | 'breakage' | 'tasting' | 'expired' | 'other'
 

@@ -33,6 +33,7 @@ import {
   LogOut,
   Building2,
   Trash2,
+  Undo2,
   Monitor,
   Printer,
   Shield,
@@ -243,6 +244,7 @@ const NAV: NavItem[] = [
     children: [
       { label: 'Остатки', href: '/warehouse/inventory', icon: Package },
       { label: 'Накладные', href: '/warehouse/receipts', icon: ScrollText },
+      { label: 'Возвраты', href: '/warehouse/returns', icon: Undo2 },
       { label: 'Полуфабрикаты', href: '/warehouse/semi', icon: FlaskConical },
       { label: 'Меню / Техкарты', href: '/warehouse/menu', icon: BookOpen },
       { label: 'Поставщики', href: '/warehouse/suppliers', icon: Truck },

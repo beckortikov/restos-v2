@@ -64,6 +64,7 @@ const MenuNew = () => L(() => import('@/app/(app)/warehouse/menu/new/page'))
 const MenuEdit = () => L(() => import('@/app/(app)/warehouse/menu/[id]/page'))
 const Receipts = () => L(() => import('@/app/(app)/warehouse/receipts/page'))
 const ReceiptsNew = () => L(() => import('@/app/(app)/warehouse/receipts/new/page'))
+const Returns = () => L(() => import('@/app/(app)/warehouse/returns/page'))
 const Semi = () => L(() => import('@/app/(app)/warehouse/semi/page'))
 const Suppliers = () => L(() => import('@/app/(app)/warehouse/suppliers/page'))
 const SuppliersNew = () => L(() => import('@/app/(app)/warehouse/suppliers/new/page'))
@@ -159,6 +160,7 @@ export function AppRouter() {
         <Route path="/warehouse/menu/:id" element={<MenuEdit />} />
         <Route path="/warehouse/receipts" element={<Receipts />} />
         <Route path="/warehouse/receipts/new" element={<ReceiptsNew />} />
+        <Route path="/warehouse/returns" element={<Returns />} />
         <Route path="/warehouse/semi" element={<Semi />} />
         <Route path="/warehouse/suppliers" element={<Suppliers />} />
         <Route path="/warehouse/suppliers/new" element={<SuppliersNew />} />

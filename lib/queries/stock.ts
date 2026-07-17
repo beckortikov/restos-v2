@@ -3,6 +3,7 @@ import { fetchAllPages } from './_paginate'
 import { dMul, dSub, dSum } from '../decimal'
 import type {
   Ingredient, StockReceipt, StockMovement, StockWriteoff, WriteoffReason, ReceiptPaymentType, Warehouse,
+  StockReturn, ReturnReason, RefundType,
 } from '../types'
 import { logAction } from './audit'
 
@@ -161,6 +162,42 @@ export async function confirmReceiptFull(receiptId: string, confirmedBy: string,
   logAction('receipt.confirm', 'receipt', receiptId, 'Накладная подтверждена')
   await checkAndUpdateStopList()
   return result
+}
+
+export async function fetchStockReturns(opts?: { supplierId?: string; receiptId?: string }): Promise<StockReturn[]> {
+  const params: Record<string, string> = { include: 'lines' }
+  if (opts?.supplierId) params.supplier_id = opts.supplierId
+  if (opts?.receiptId) params.receipt_id = opts.receiptId
+  const rows = await fetchAllPages('/api/v1/stock/returns', params, 2000)
+  return rows.map(mapStockReturn)
+}
+
+// createStockReturn — возврат поставщику. Шлём только receipt_line_id + qty:
+// цену/название/единицу бэк берёт из строки накладной (поставщик отдаёт ровно
+// ту сумму, что взял, а не текущую средневзвешенную с/с склада).
+export async function createStockReturn(input: {
+  receiptId: string
+  reason: ReturnReason
+  refundType: RefundType
+  accountId?: string
+  note?: string
+  lines: { receiptLineId: string; qty: number }[]
+}) {
+  // Тело без каста: ReturnInput описан в openapi.yaml целиком, поэтому
+  // сгенерённые типы точны и оно типизируется само (бюджет — в _debt.test.ts).
+  const data = await unwrap(api.POST('/api/v1/stock/returns', {
+    body: {
+      receipt_id: input.receiptId,
+      reason: input.reason,
+      refund_type: input.refundType,
+      account_id: input.refundType === 'money' ? input.accountId : undefined,
+      note: input.note || undefined,
+      lines: input.lines.map(l => ({ receipt_line_id: l.receiptLineId, qty: String(l.qty) })),
+    },
+  }))
+  logAction('stock.return', 'return', data?.id, 'Возврат поставщику')
+  await checkAndUpdateStopList()
+  return data
 }
 
 export async function fetchWriteoffs(): Promise<StockWriteoff[]> {
@@ -381,6 +418,7 @@ function mapStockMovement(r: Record<string, unknown>): StockMovement {
 
 function mapStockReceiptLine(l: Record<string, unknown>) {
   return {
+    id: (l.id as string) ?? undefined,
     ingredientId: (l.ingredient_id as string) ?? '',
     name: (l.name as string) ?? '',
     qty: Number(l.qty ?? 0),
@@ -406,6 +444,33 @@ function mapStockReceipt(r: Record<string, unknown>): StockReceipt {
     confirmedBy: (r.confirmed_by as string | null) ?? undefined,
     lines: linesRaw.map(mapStockReceiptLine),
   } as StockReceipt
+}
+
+function mapStockReturn(r: Record<string, unknown>): StockReturn {
+  const linesRaw: Record<string, unknown>[] = Array.isArray(r.lines) ? (r.lines as Record<string, unknown>[]) : []
+  return {
+    id: r.id as string,
+    receiptId: (r.receipt_id as string) ?? '',
+    supplierId: (r.supplier_id as string | null) ?? '',
+    supplierName: (r.supplier_name as string | null) ?? '',
+    date: (r.date as string) ?? '',
+    reason: (r.reason as ReturnReason) ?? 'other',
+    note: (r.note as string | null) ?? undefined,
+    totalAmount: Number(r.total_amount ?? 0),
+    refundType: (r.refund_type as RefundType) ?? 'debt',
+    accountId: (r.account_id as string | null) ?? undefined,
+    createdBy: (r.created_by as string | null) ?? undefined,
+    createdAt: (r.created_at as string) ?? '',
+    lines: linesRaw.map(l => ({
+      id: (l.id as string) ?? '',
+      receiptLineId: (l.receipt_line_id as string) ?? '',
+      ingredientId: (l.ingredient_id as string | null) ?? '',
+      name: (l.name as string | null) ?? '',
+      qty: Number(l.qty ?? 0),
+      unit: (l.unit as string | null) ?? '',
+      pricePerUnit: Number(l.price_per_unit ?? 0),
+    })),
+  }
 }
 
 function mapStockWriteoffLine(l: Record<string, unknown>) {
