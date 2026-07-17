@@ -90,10 +90,10 @@ func (Modifier) TableName() string { return "modifiers" }
 // MenuAttribute — атрибут продукта («Размер», «Вкус»). Живёт на продукте-
 // родителе; из декартова произведения значений сервис генерирует варианты.
 type MenuAttribute struct {
-	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	MenuItemID   string    `gorm:"column:menu_item_id;type:uuid;not null;index" json:"menu_item_id"`
-	Name         string    `gorm:"not null" json:"name"`
-	SortOrder    int       `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	ID         string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	MenuItemID string `gorm:"column:menu_item_id;type:uuid;not null;index" json:"menu_item_id"`
+	Name       string `gorm:"not null" json:"name"`
+	SortOrder  int    `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
 	// SizeScaleID — если задан, значения атрибута зеркалятся из этой шкалы
 	// (см. syncAttributeDefs в menu_variants.go) вместо ручного ввода.
 	SizeScaleID  *string   `gorm:"column:size_scale_id;type:uuid" json:"size_scale_id"`

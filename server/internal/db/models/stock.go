@@ -208,10 +208,10 @@ type SemiFinishedType struct {
 	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
 	// «Тесто-30» → значение «30» шкалы пиццы), используется UI тех. карты
 	// для подсказки правильного полуфабриката под размер варианта.
-	SizeScaleValueID *string         `gorm:"column:size_scale_value_id;type:uuid" json:"size_scale_value_id"`
-	RestaurantID     *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	SizeScaleValueID *string   `gorm:"column:size_scale_value_id;type:uuid" json:"size_scale_value_id"`
+	RestaurantID     *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (SemiFinishedType) TableName() string { return "semi_finished_types" }
