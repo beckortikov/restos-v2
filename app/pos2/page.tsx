@@ -11,7 +11,10 @@ import { fetchActiveShift } from '@/lib/queries'
 import { FailedPrintsButton } from '@/components/order/failed-prints-button'
 
 // Вшивается Vite (define в vite.config.ts) из desktop/package.json.
+// typeof-guard обязателен: в контекстах без define (vitest, SSR-подобные прогоны)
+// голая ссылка падает с ReferenceError и роняет весь лаунчер.
 declare const __APP_VERSION__: string
+const BUILD_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''
 
 // Плитки ведут ТОЛЬКО на экраны /pos2/*. Плитка «Кухня (KDS)» убрана — она вела
 // на старый POS (/operations/kitchen), из-за чего кассир проваливался в старый
@@ -47,7 +50,7 @@ export default function PosV2Launcher() {
   // сборке (__APP_VERSION__ из desktop/package.json), чтобы показывалась и в LAN-браузере.
   const posVersion = (typeof window !== 'undefined'
     ? (window as unknown as { restosDesktop?: { version?: string } }).restosDesktop?.version
-    : undefined) ?? __APP_VERSION__
+    : undefined) ?? BUILD_VERSION
   // Ручная блокировка экрана доступна только при включённом PIN-локе.
   const pinLockEnabled = restaurant?.pinLockEnabled ?? false
   // Реальный статус смены вместо захардкоженного «Смена открыта» (вводил в
@@ -89,7 +92,7 @@ export default function PosV2Launcher() {
               className="truncate hidden sm:block"
               style={{ color: 'var(--pv-text-3)', fontSize: 'clamp(0.7rem,0.95vw,0.9rem)' }}
             >
-              {`Терминал кассира · v${posVersion}`}
+              {posVersion ? `Терминал кассира · v${posVersion}` : 'Терминал кассира · новый интерфейс'}
             </div>
           </div>
         </div>

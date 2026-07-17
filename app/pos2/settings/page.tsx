@@ -1,18 +1,40 @@
 'use client'
 
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store, QrCode, Smartphone, Grid3x3 } from 'lucide-react'
+import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store, QrCode, Smartphone, Grid3x3, UtensilsCrossed } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
+import { updateRestaurant as updateRestaurantQuery } from '@/lib/queries'
 import { usePosV2Flag } from '@/lib/pos-v2/flag'
 import { useMenuGrid, MENU_GRID_OPTIONS, menuGridLabel, sameGrid, type MenuGrid } from '@/lib/pos-v2/menu-grid'
 import type { PermissionKey } from '@/lib/types'
 
 export default function PosV2Settings() {
   const navigate = useNavigate()
-  const { restaurant, user, canDo, logout } = useAuth()
+  const { restaurant, user, canDo, canAccessRoles, logout, updateRestaurant: updateAuthRestaurant } = useAuth()
   const [posV2On, setPosV2On] = usePosV2Flag()
   const [menuGrid, setMenuGridState] = useMenuGrid()
+  // Режим обслуживания — настройка РЕСТОРАНА (не кассы), поэтому только
+  // владелец/менеджер: кассир не должен переключать столы/фастфуд всему залу.
+  const canEditMode = canAccessRoles(['owner', 'manager'])
+  const [savingMode, setSavingMode] = useState(false)
+  const tablesEnabled = restaurant?.tablesEnabled ?? true
+  const kitchenOnPay = restaurant?.kitchenOnPay ?? false
+
+  async function saveMode(patch: { tablesEnabled?: boolean; kitchenOnPay?: boolean }) {
+    if (!restaurant || savingMode) return
+    setSavingMode(true)
+    try {
+      await updateRestaurantQuery(restaurant.id, patch)
+      updateAuthRestaurant({ ...restaurant, ...patch })
+      toast.success('Сохранено')
+    } catch {
+      toast.error('Не удалось сохранить')
+    } finally {
+      setSavingMode(false)
+    }
+  }
 
   const linksAll: Array<{ icon: React.ElementType; label: string; sub: string; to: string; gate?: PermissionKey }> = [
     { icon: Printer, label: 'Принтеры', sub: 'Чеки и кухонные станции', to: '/settings/printers', gate: 'printers.manage' },
@@ -74,6 +96,43 @@ export default function PosV2Settings() {
               ) })}
             </div>
           </div>
+
+          {/* Режим обслуживания — настройка РЕСТОРАНА (одна на все кассы), поэтому
+              видна только владельцу/менеджеру. Кассир её не переключает. */}
+          {canEditMode && (
+            <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)', gap: 'clamp(0.8rem,1.2vw,1.1rem)' }}>
+              <div className="flex items-center gap-3">
+                <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-brand-soft)', width: 'clamp(2.6rem,3.4vw,3.2rem)', height: 'clamp(2.6rem,3.4vw,3.2rem)' }}>
+                  <UtensilsCrossed style={{ width: '55%', height: '55%', color: 'var(--pv-brand)' }} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Режим обслуживания</div>
+                  <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Настройка ресторана — действует на всех кассах</div>
+                </div>
+              </div>
+              {([
+                { key: 'tablesEnabled' as const, on: tablesEnabled, title: 'Столы в зале', sub: tablesEnabled ? 'Классический зал: заказ на стол' : 'Фастфуд: «Зал» без стола, по номеру' },
+                { key: 'kitchenOnPay' as const, on: kitchenOnPay, title: 'Кухня после оплаты', sub: kitchenOnPay ? 'Фастфуд: бегунок на кухню после оплаты' : 'Классика: «Отправить» → кухня сразу' },
+              ]).map(row => (
+                <div key={row.key} className="flex items-center gap-3 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1vw,0.9rem)' }}>
+                  <div className="min-w-0 flex-1">
+                    <div className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{row.title}</div>
+                    <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{row.sub}</div>
+                  </div>
+                  <button
+                    disabled={savingMode}
+                    onClick={() => saveMode({ [row.key]: !row.on })}
+                    aria-pressed={row.on}
+                    aria-label={row.title}
+                    className="rounded-full shrink-0 transition-colors disabled:opacity-50"
+                    style={{ width: '2.8rem', height: '1.6rem', background: row.on ? 'var(--pv-brand)' : '#d8d3ca', padding: '0.2rem', display: 'flex', justifyContent: row.on ? 'flex-end' : 'flex-start', alignItems: 'center' }}
+                  >
+                    <span className="rounded-full" style={{ width: '1.2rem', height: '1.2rem', background: '#fff', boxShadow: '0 1px 3px rgba(0,0,0,0.25)' }} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
 
           {/* Ресторан */}
           <div className="rounded-2xl flex items-center gap-3" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)' }}>
