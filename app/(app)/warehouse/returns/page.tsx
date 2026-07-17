@@ -7,6 +7,9 @@ import { type StockReturn, RETURN_REASON_LABELS } from '@/lib/types'
 import { fetchStockReturns, cancelStockReturn } from '@/lib/queries'
 import { useAuth } from '@/lib/auth-store'
 import { Undo2, Wallet, Receipt, RotateCcw } from 'lucide-react'
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from '@/components/ui/dialog'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 
@@ -21,18 +24,23 @@ export default function ReturnsPage() {
   const [returns, setReturns] = useState<StockReturn[]>([])
   const [loading, setLoading] = useState(true)
   const [cancelling, setCancelling] = useState<string | null>(null)
+  // Подтверждение обязательно: строка таблицы кликабельна (раскрывает позиции),
+  // кнопка стоит в её конце — промах мимо строки проводил бы финансовую
+  // операцию с первого тапа.
+  const [confirmFor, setConfirmFor] = useState<StockReturn | null>(null)
 
-  // Сторно: товар назад на склад, деньги/долг откатываются. Документ остаётся в
-  // истории зачёркнутым — так видно и ошибку, и её исправление.
+  // Отмена возврата: товар назад на склад, деньги/долг откатываются. Документ
+  // остаётся в истории зачёркнутым — так видно и ошибку, и её исправление.
   async function handleCancel(r: StockReturn) {
     setCancelling(r.id)
+    setConfirmFor(null)
     try {
       await cancelStockReturn(r.id)
       setReturns(await fetchStockReturns())
       toast.success(
         r.refundType === 'debt'
-          ? `Возврат отменён. Долг восстановлен на ${formatCurrency(r.totalAmount)}`
-          : `Возврат отменён. ${formatCurrency(r.totalAmount)} списаны обратно поставщику`,
+          ? `Возврат отменён. Товар вернулся на склад, долг вырос на ${formatCurrency(r.totalAmount)}`
+          : `Возврат отменён. Товар вернулся на склад, ${formatCurrency(r.totalAmount)} списаны со счёта`,
       )
     } catch (e) {
       toast.error(humanizeError(e))
@@ -130,12 +138,12 @@ export default function ReturnsPage() {
                             <span className="text-xs text-muted-foreground">Отменён</span>
                           ) : canDo('inventory.manage') ? (
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleCancel(r) }}
+                              onClick={(e) => { e.stopPropagation(); setConfirmFor(r) }}
                               disabled={cancelling === r.id}
                               className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-destructive disabled:opacity-50 whitespace-nowrap transition-colors"
                             >
                               <RotateCcw className="size-3.5" />
-                              {cancelling === r.id ? 'Отмена…' : 'Сторно'}
+                              {cancelling === r.id ? 'Отменяем…' : 'Отменить'}
                             </button>
                           ) : null}
                         </td>
@@ -186,6 +194,61 @@ export default function ReturnsPage() {
           </div>
         </div>
       )}
+
+      {/* Подтверждение отмены: объясняем механику словами, а не термином
+          «сторно» — на складе сидят люди, принимающие мешки, а не бухгалтеры. */}
+      <Dialog open={!!confirmFor} onOpenChange={(v) => { if (!v) setConfirmFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="size-4" />
+              Отменить возврат?
+            </DialogTitle>
+          </DialogHeader>
+          {confirmFor && (
+            <div className="space-y-3 py-1 text-sm">
+              <p className="text-muted-foreground">
+                Возврат поставщику <strong className="text-foreground">{confirmFor.supplierName || '—'}</strong>
+                {' '}от {confirmFor.date} на{' '}
+                <strong className="text-foreground">{formatCurrency(confirmFor.totalAmount)}</strong>.
+              </p>
+              <div className="rounded-lg border border-border bg-muted/40 p-3 space-y-1.5 text-xs">
+                <p className="flex items-start gap-2">
+                  <span className="text-muted-foreground shrink-0">Товар:</span>
+                  <span className="text-foreground">вернётся на склад</span>
+                </p>
+                <p className="flex items-start gap-2">
+                  <span className="text-muted-foreground shrink-0">Деньги:</span>
+                  <span className="text-foreground">
+                    {confirmFor.refundType === 'debt'
+                      ? <>долг поставщику вырастет обратно на {formatCurrency(confirmFor.totalAmount)}</>
+                      : <>{formatCurrency(confirmFor.totalAmount)} спишутся со счёта обратно поставщику</>}
+                  </span>
+                </p>
+                <p className="flex items-start gap-2">
+                  <span className="text-muted-foreground shrink-0">Документ:</span>
+                  <span className="text-foreground">останется в истории отменённым</span>
+                </p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <button
+              onClick={() => setConfirmFor(null)}
+              className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+            >
+              Не отменять
+            </button>
+            <button
+              onClick={() => confirmFor && handleCancel(confirmFor)}
+              className="px-4 py-2 text-sm font-medium text-white bg-destructive rounded-lg hover:bg-destructive/90 flex items-center gap-2"
+            >
+              <RotateCcw className="size-4" />
+              Отменить возврат
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

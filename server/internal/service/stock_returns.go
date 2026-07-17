@@ -313,12 +313,26 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				continue
 			}
 			ing := ingByID[ingID]
+			// Товар удалён из справочника, а строка накладной осталась (она хранит
+			// снимок). Удаление списывает остаток в убыток (см. Delete в
+			// stock_extra.go), поэтому вернуть такой товар поставщику = получить за
+			// него деньги ВТОРОЙ раз, уже после того как он списан. Движение склада
+			// при этом было бы холостым: хук не нашёл бы строку ingredients и молча
+			// обновил ноль записей — деньги ушли бы, склад не шелохнулся.
+			//
+			// Раньше сюда проваливались все проверки ниже: они написаны через
+			// `ing != nil`, а у удалённого товара ing == nil — guard'ы просто
+			// выключались. Отбиваем явно.
+			if ing == nil {
+				return apperrors.Wrap("CONFLICT",
+					"товар удалён со склада — возврат по нему невозможен: "+deref(pl.rl.Name), nil)
+			}
 
 			// Конвертация в единицу склада — зеркало приёмки: приход 20000 г при
 			// складе в кг лёг движением +20, возврат 3000 г обязан лечь −3.
 			// Иначе ingredients.qty уедет на три порядка.
 			stockUnit := ""
-			if ing != nil && ing.Unit != nil {
+			if ing.Unit != nil {
 				stockUnit = *ing.Unit
 			}
 			stockQty := units.Convert(pl.qty, deref(pl.rl.Unit), stockUnit)
@@ -332,7 +346,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			// осталось 2, а вернуть «по накладной» разрешал все 20 и выдавал за
 			// них деньги. Списание в минус уходить может (там расход мог быть не
 			// проведён), но возврат — это физическое перемещение, его не подделать.
-			if ing != nil && stockQty.GreaterThan(ing.Qty) {
+			if stockQty.GreaterThan(ing.Qty) {
 				return apperrors.Wrap("CONFLICT",
 					"на складе недостаточно товара для возврата: "+deref(pl.rl.Name)+", остаток "+ing.Qty.String(), nil)
 			}
@@ -352,9 +366,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				RestaurantID:   &rid,
 				CreatedAt:      now,
 			}
-			if ing != nil {
-				mv.WarehouseID = ing.WarehouseID
-			}
+			mv.WarehouseID = ing.WarehouseID
 			if err := tx.Create(mv).Error; err != nil {
 				return err
 			}
@@ -379,7 +391,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			//
 			// ret_cost — в единицах накладной, инвариант к конвертации (та же
 			// логика, что в приёмке: сумма денег от единиц не зависит).
-			if ing != nil && decimal.IsPositive(stockQty) {
+			if decimal.IsPositive(stockQty) {
 				denom := decimal.Sub(ing.Qty, stockQty)
 				num := decimal.Sub(decimal.Mul(ing.Qty, ing.PricePerUnit), pl.cost)
 				// denom ≤ 0 — вернули весь остаток, цена бессмысленна (следующая

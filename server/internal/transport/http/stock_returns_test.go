@@ -900,3 +900,87 @@ func TestReceiptLines_AvailableToReturn(t *testing.T) {
 		}
 	})
 }
+
+// TestStockReturn_DeletedIngredient — по удалённому товару возврат невозможен,
+// и форма показывает «доступно 0», а не всё принятое количество.
+//
+// Регрессия ревью 17.07.2026: удаление товара списывает его остаток в убыток
+// (Delete в stock_extra.go), но строка накладной остаётся — она хранит снимок.
+// Guard остатка был написан через `ing != nil`, а у удалённого товара ing == nil,
+// поэтому проверка молча выключалась: движение склада уходило в никуда (хук не
+// находил строку ingredients и обновлял ноль записей), а деньги шли. Итог —
+// получить деньги за товар, который уже списан в убыток. Через UI это было
+// достижимо: available_to_return тоже пропускал ограничение и рисовал «20».
+func TestStockReturn_DeletedIngredient(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+	ing := seedReturnIngredient(t, gdb, f.rid, "Товар-на-удаление", "kg")
+
+	r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+		"lines": []map[string]any{{
+			"ingredient_id": ing.ID, "name": "Товар-на-удаление", "qty": "20", "unit": "kg", "price_per_unit": "10",
+		}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("receipt: %d %s", r.StatusCode, b)
+	}
+	var receipt models.StockReceipt
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	lineID := receiptLineID(t, gdb, receipt.ID, ing.ID)
+
+	// Удаляем товар — бэк списывает остаток в убыток.
+	rd, bd := f.del(t, "/api/v1/stock/ingredients/"+ing.ID, tok, uuid.NewString())
+	if rd.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete ingredient: %d %s", rd.StatusCode, bd)
+	}
+
+	var accBefore models.FinancialAccount
+	gdb.First(&accBefore, "id = ?", accountID)
+
+	r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+		"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "20"}},
+	})
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("возврат удалённого товара: %d %s, want 409 "+
+			"(товар уже списан в убыток — деньги за него взялись бы из воздуха)", r.StatusCode, b)
+	}
+	var accAfter models.FinancialAccount
+	gdb.First(&accAfter, "id = ?", accountID)
+	if !accAfter.Balance.Equal(accBefore.Balance) {
+		t.Errorf("баланс изменился на отбитом возврате: %s → %s", accBefore.Balance, accAfter.Balance)
+	}
+
+	// Форма обязана показывать 0, иначе кладовщик упрётся в 409 на ровном месте.
+	rl, bl := f.get(t, "/api/v1/stock/receipts?include=lines&limit=200", tok)
+	if rl.StatusCode != http.StatusOK {
+		t.Fatalf("list: %d %s", rl.StatusCode, bl)
+	}
+	var out struct {
+		Data []struct {
+			ID    string `json:"id"`
+			Lines []struct {
+				ID        string          `json:"id"`
+				Available decimal.Decimal `json:"available_to_return"`
+			} `json:"lines"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(bl, &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, rc := range out.Data {
+		if rc.ID != receipt.ID {
+			continue
+		}
+		for _, l := range rc.Lines {
+			if l.ID == lineID && !l.Available.Equal(decimal.Zero) {
+				t.Errorf("доступно к возврату = %s, want 0 (товар удалён)", l.Available)
+			}
+		}
+	}
+}

@@ -548,13 +548,19 @@ func (s *StockReadsService) availableToReturn(ctx context.Context, lines []model
 			unreturned = decimal.Zero
 		}
 		res := unreturned
-		if ing, ok := ings[deref(l.IngredientID)]; ok {
-			// Остаток склада → в единицы накладной: иначе сравниваем килограммы
-			// с граммами (накладная в г при складе в кг занижала доступное в 1000 раз).
-			onHand := units.Convert(ing.Qty, deref(ing.Unit), deref(l.Unit))
-			if onHand.LessThan(res) {
-				res = onHand
-			}
+		ing, ok := ings[deref(l.IngredientID)]
+		if !ok {
+			// Товар удалён из справочника (удаление списывает остаток в убыток).
+			// Вернуть его поставщику нельзя — CreateReturn отбивает такую строку,
+			// и форма обязана показывать 0, а не всё принятое количество.
+			out[l.ID] = decimal.Zero
+			continue
+		}
+		// Остаток склада → в единицы накладной: иначе сравниваем килограммы
+		// с граммами (накладная в г при складе в кг занижала доступное в 1000 раз).
+		onHand := units.Convert(ing.Qty, deref(ing.Unit), deref(l.Unit))
+		if onHand.LessThan(res) {
+			res = onHand
 		}
 		if decimal.IsNegative(res) {
 			res = decimal.Zero
