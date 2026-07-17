@@ -40,12 +40,18 @@ type BatchBlocker struct {
 }
 
 // BatchIngredient — строка тех-карты с остатком (для превью «будет списано»).
+// Строка ссылается ЛИБО на ингредиент (IngredientID), ЛИБО на полуфабрикат
+// (SemiTypeID) — ровно как TechCardLine; до v3.16.9x полуфабрикатные строки
+// тут молча пропускались (см. MaxPortions/Produce), из-за чего заготовка
+// (например тесто для пиццы) не влияла на «максимум порций» и не списывалась
+// при Produce — баг найден на пицце с размерами, где тесто идёт полуфабрикатом.
 type BatchIngredient struct {
-	IngredientID        string          `json:"ingredient_id"`
+	IngredientID        string          `json:"ingredient_id,omitempty"`
+	SemiTypeID          string          `json:"semi_type_id,omitempty"`
 	Name                string          `json:"name"`
-	Unit                string          `json:"unit"`                   // единица склада (кг, л, шт)
+	Unit                string          `json:"unit"`                   // единица склада (кг, л, шт) / выхода п/ф
 	RecipeUnit          string          `json:"recipe_unit"`            // единица расхода в тех-карте (г, мл)
-	StockQty            decimal.Decimal `json:"stock_qty"`              // остаток на складе (в единице склада)
+	StockQty            decimal.Decimal `json:"stock_qty"`              // остаток на складе / готовой заготовки
 	RecipeQtyPerPortion decimal.Decimal `json:"recipe_qty_per_portion"` // расход на 1 порцию (в единице тех-карты)
 	// StockQtyPerPortion — расход на 1 порцию, приведённый к единице склада
 	// (units.ConvertToStock): 35 г при «1 шт = 340 г» → 0.1029 шт. Именно эта
@@ -105,9 +111,13 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 	}
 
 	ingIDs := make([]string, 0, len(lines))
+	semiIDs := make([]string, 0, len(lines))
 	for _, l := range lines {
 		if l.IngredientID != nil {
 			ingIDs = append(ingIDs, *l.IngredientID)
+		}
+		if l.SemiTypeID != nil {
+			semiIDs = append(semiIDs, *l.SemiTypeID)
 		}
 	}
 	var ings []models.Ingredient
@@ -119,6 +129,35 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 	ingByID := make(map[string]models.Ingredient, len(ings))
 	for _, i := range ings {
 		ingByID[i.ID] = i
+	}
+
+	// Полуфабрикатные строки (тесто, соус...) — тот же расчёт «сколько порций
+	// потянет остаток», но источник остатка semi_finished_stock, а не ingredients.
+	// Каскад в сырьё (как при продаже, deductSemiForSale) тут НЕ моделируется —
+	// превью консервативно считает только готовую заготовку доступной.
+	var sfts []models.SemiFinishedType
+	var semiStocks []models.SemiFinishedStock
+	if len(semiIDs) > 0 {
+		if err := s.r.Raw().WithContext(ctx).
+			Where("restaurant_id = ? AND id IN ?", rid, semiIDs).
+			Find(&sfts).Error; err != nil {
+			return nil, err
+		}
+		if err := s.r.Raw().WithContext(ctx).
+			Where("restaurant_id = ? AND semi_type_id IN ?", rid, semiIDs).
+			Find(&semiStocks).Error; err != nil {
+			return nil, err
+		}
+	}
+	sftByID := make(map[string]models.SemiFinishedType, len(sfts))
+	for _, t := range sfts {
+		sftByID[t.ID] = t
+	}
+	semiStockByType := make(map[string]models.SemiFinishedStock, len(semiStocks))
+	for _, st := range semiStocks {
+		if st.SemiTypeID != nil {
+			semiStockByType[*st.SemiTypeID] = st
+		}
 	}
 
 	maxPortions := math.MaxInt32
@@ -162,6 +201,52 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 				IngredientID: ing.ID,
 				Name:         name,
 				Have:         ing.Qty,
+				Need:         needPerPortion,
+			})
+		}
+		if possible < maxPortions {
+			maxPortions = possible
+		}
+	}
+	for _, l := range lines {
+		if l.SemiTypeID == nil || l.Qty.IsZero() {
+			continue
+		}
+		sft, ok := sftByID[*l.SemiTypeID]
+		if !ok {
+			continue
+		}
+		name := ""
+		if sft.Name != nil {
+			name = *sft.Name
+		}
+		stockQty := decimal.Zero
+		if st, ok := semiStockByType[*l.SemiTypeID]; ok {
+			stockQty = st.Qty
+		}
+		needPerPortion := units.Convert(l.Qty, deref(l.Unit), deref(sft.OutputUnit))
+		var possible int
+		ratio := decimal.DivRound(stockQty, needPerPortion).IntPart()
+		if ratio > math.MaxInt32 {
+			possible = math.MaxInt32
+		} else {
+			possible = int(ratio)
+		}
+		out.Ingredients = append(out.Ingredients, BatchIngredient{
+			SemiTypeID:          sft.ID,
+			Name:                name,
+			Unit:                deref(sft.OutputUnit),
+			RecipeUnit:          deref(l.Unit),
+			StockQty:            stockQty,
+			RecipeQtyPerPortion: l.Qty,
+			StockQtyPerPortion:  needPerPortion,
+			PossiblePortions:    possible,
+		})
+		if possible < 1 {
+			out.Blockers = append(out.Blockers, BatchBlocker{
+				IngredientID: sft.ID,
+				Name:         name,
+				Have:         stockQty,
 				Need:         needPerPortion,
 			})
 		}
@@ -266,6 +351,19 @@ func (s *BatchCookingService) Produce(ctx context.Context, menuItemID string, in
 				CreatedAt:      now,
 			}
 			if err := tx.Create(mv).Error; err != nil {
+				return err
+			}
+		}
+		// Полуфабрикатные строки (тесто, соус...) — тот же путь списания, что и
+		// при продаже (deductSemiForSale): сперва готовая заготовка со склада,
+		// нехватка каскадом в сырьё. Раньше эти строки тут молча пропускались —
+		// заготовка никогда не списывалась при партионной готовке.
+		for _, l := range lines {
+			if l.SemiTypeID == nil || *l.SemiTypeID == "" {
+				continue
+			}
+			lineQtyTotal := decimal.Mul(l.Qty, qtyDec)
+			if err := deductSemiForSale(tx, rid, *l.SemiTypeID, lineQtyTotal, deref(l.Unit), desc, now); err != nil {
 				return err
 			}
 		}

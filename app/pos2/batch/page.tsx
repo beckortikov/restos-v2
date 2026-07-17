@@ -185,7 +185,7 @@ export default function PosV2Batch() {
                   <div className="font-medium" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)', marginBottom: '0.4rem' }}>Будет списано:</div>
                   <div className="flex flex-col rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.5rem 0.8rem', gap: '0.25rem' }}>
                     {calc.ingredients.map(g => (
-                      <div key={g.ingredientId} className="flex items-center justify-between" style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
+                      <div key={g.ingredientId ?? g.semiTypeId} className="flex items-center justify-between" style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
                         <span className="truncate" style={{ color: g.isBottleneck ? 'var(--pv-occ-text)' : 'var(--pv-text-2)', marginRight: '0.5rem' }}>{g.name}{g.isBottleneck ? ' · лимит' : ''}</span>
                         <span className="shrink-0" style={{ color: 'var(--pv-text-3)' }}>{(g.stockQtyPerPortion * qty).toFixed(2)} {g.unit} / {g.stockQty} {g.unit}</span>
                       </div>

@@ -76,7 +76,8 @@ export async function fetchBatchCookingLogs(menuItemId?: string): Promise<import
 
 function mapBatchIngredient(b: Record<string, unknown>) {
   return {
-    ingredientId: (b.ingredient_id as string) ?? '',
+    ingredientId: (b.ingredient_id as string | undefined) || undefined,
+    semiTypeId: (b.semi_type_id as string | undefined) || undefined,
     name: (b.name as string) ?? '',
     unit: (b.unit as string) ?? '',
     recipeUnit: (b.recipe_unit as string) ?? '',

@@ -14,6 +14,10 @@ import { humanizeError } from '@/lib/errors'
 export interface AttrValueForm {
   id?: string
   label: string
+  // Если значение зеркалит шкалу размеров — id соответствующего SizeScaleValue
+  // (для подсказки «эта заготовка — этого размера» до сохранения на бэке,
+  // когда ни у значения, ни у варианта ещё нет собственного id).
+  sizeScaleValueId?: string
 }
 export interface AttrForm {
   id?: string
@@ -27,7 +31,7 @@ export interface AttrForm {
 
 /** Значения атрибута из выбранной шкалы (лейбл = title, иначе code). */
 function valuesFromScale(scale: SizeScale): AttrValueForm[] {
-  return scale.values.map(v => ({ label: v.title || v.code }))
+  return scale.values.map(v => ({ label: v.title || v.code, sizeScaleValueId: v.id }))
 }
 
 // Цены комбинаций: ключ — лейблы в порядке атрибутов через \x1f.
@@ -41,18 +45,32 @@ export function comboKeyOf(labels: string[]): string {
   return labels.map(l => l.trim()).join('\x1f')
 }
 
+/**
+ * Ключ комбинации по НАБОРУ лейблов (сортированный, не по порядку атрибутов).
+ * Бэк возвращает variantValueIds отсортированными (не в порядке атрибутов) —
+ * поэтому сопоставлять локальную комбинацию созданному варианту после
+ * PUT /attributes нужно по множеству лейблов, а не по comboKeyOf-порядку.
+ */
+export function comboLabelSetKey(labels: string[]): string {
+  return [...labels].map(l => l.trim()).sort().join('\x1f')
+}
+
 /** Комбинации (декартово произведение заполненных значений) в порядке атрибутов. */
-export function combosOf(attrs: AttrForm[]): { key: string; labels: string[]; title: string }[] {
+export function combosOf(attrs: AttrForm[]): { key: string; labels: string[]; title: string; sizeScaleValueIds: string[] }[] {
   if (attrs.length === 0) return []
-  let acc: string[][] = [[]]
+  let acc: AttrValueForm[][] = [[]]
   for (const a of attrs) {
-    const labels = a.values.map(v => v.label.trim()).filter(Boolean)
-    if (labels.length === 0) return []
-    const next: string[][] = []
-    for (const c of acc) for (const l of labels) next.push([...c, l])
+    const values = a.values.filter(v => v.label.trim())
+    if (values.length === 0) return []
+    const next: AttrValueForm[][] = []
+    for (const c of acc) for (const v of values) next.push([...c, v])
     acc = next
   }
-  return acc.map(labels => ({ key: comboKeyOf(labels), labels, title: labels.join(' · ') }))
+  return acc.map(combo => {
+    const labels = combo.map(v => v.label.trim())
+    const sizeScaleValueIds = combo.map(v => v.sizeScaleValueId).filter((x): x is string => !!x)
+    return { key: comboKeyOf(labels), labels, title: labels.join(' · '), sizeScaleValueIds }
+  })
 }
 
 export function combosCount(attrs: AttrForm[]): number {

@@ -254,7 +254,10 @@ export interface BatchPortionCalc {
   maxPortions: number
   hasRecipe: boolean
   ingredients: {
-    ingredientId: string
+    // Строка ссылается ЛИБО на ингредиент, ЛИБО на полуфабрикат (тесто,
+    // соус...) — ровно как TechCardLine. Ровно одно из двух задано.
+    ingredientId?: string
+    semiTypeId?: string
     name: string
     unit: string
     recipeUnit: string

@@ -12,13 +12,14 @@ import {
   type SemiFinishedType,
   type MenuStation,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes, replaceTechCardLines } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Layers } from 'lucide-react'
-import { AttributesForm, ComboPricesEditor, attrsValid, attrsComplete, combosCount, combosOf, buildCombosPayload, MAX_COMBOS, type AttrForm, type ComboPrices } from '@/components/menu/attributes-editor'
+import { AttributesForm, ComboPricesEditor, attrsValid, attrsComplete, combosCount, combosOf, comboLabelSetKey, buildCombosPayload, MAX_COMBOS, type AttrForm, type ComboPrices } from '@/components/menu/attributes-editor'
+import { TechCardLinesEditor, emptyTechLine as emptyVariantTechLine } from '@/components/menu/tech-card-lines-editor'
 
 interface MenuItemForm {
   name: string
@@ -195,11 +196,25 @@ export default function NewMenuItemPage() {
   const [attrs, setAttrs] = useState<AttrForm[]>([])
   const [comboPrices, setComboPrices] = useState<ComboPrices>({})
   const hasAttrs = attrs.length > 0
+  const combos = hasAttrs ? combosOf(attrs) : []
+  // Техкарта КАЖДОЙ комбинации атрибутов, введённая ДО первого сохранения
+  // товара (варианты ещё не существуют на бэке — храним локально по ключу
+  // комбинации, разносим по реальным вариантам в handleSubmit после sync).
+  const [techCardsByCombo, setTechCardsByCombo] = useState<Record<string, TechCardLine[]>>({})
+  const [selectedComboKey, setSelectedComboKey] = useState('')
+  const activeComboKey = combos.some(c => c.key === selectedComboKey) ? selectedComboKey : (combos[0]?.key ?? '')
+  const activeCombo = combos.find(c => c.key === activeComboKey)
+  const activeComboMatchingSemiIds = activeCombo && activeCombo.sizeScaleValueIds.length > 0
+    ? new Set(activeCombo.sizeScaleValueIds)
+    : undefined
 
   // Quick Create States
   const [quickCreateOpen, setQuickCreateOpen] = useState(false)
   const [quickCreateName, setQuickCreateName] = useState('')
   const [quickCreateTargetIndex, setQuickCreateTargetIndex] = useState<number | null>(null)
+  // Аналог quickCreateTargetIndex, но для техкарты варианта (per-combo);
+  // ровно один из двух target-ов задан, когда открыт диалог quick-create.
+  const [quickCreateComboTarget, setQuickCreateComboTarget] = useState<{ comboKey: string; index: number } | null>(null)
   const [newIngUnit, setNewIngUnit] = useState('кг')
   const [newIngCategory, setNewIngCategory] = useState('Продукты')
   const [newIngPrice, setNewIngPrice] = useState(0)
@@ -252,7 +267,8 @@ export default function NewMenuItemPage() {
 
   const handleQuickCreateIngredient = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (creatingIngredient || !quickCreateName.trim() || quickCreateTargetIndex === null) return
+    if (creatingIngredient || !quickCreateName.trim()) return
+    if (quickCreateTargetIndex === null && !quickCreateComboTarget) return
     setCreatingIngredient(true)
     try {
       const ing = await createIngredient({
@@ -266,9 +282,20 @@ export default function NewMenuItemPage() {
       })
       if (ing) {
         setIngredients((prev) => [...prev, ing])
-        selectIngredient(quickCreateTargetIndex, ing.id, ing)
+        if (quickCreateComboTarget) {
+          const { comboKey, index } = quickCreateComboTarget
+          setTechCardsByCombo(prev => {
+            const lines = [...(prev[comboKey] ?? [])]
+            lines[index] = { ...lines[index], ingredientId: ing.id, semiId: undefined, name: ing.name, unit: ing.unit }
+            return { ...prev, [comboKey]: lines }
+          })
+        } else if (quickCreateTargetIndex !== null) {
+          selectIngredient(quickCreateTargetIndex, ing.id, ing)
+        }
         setQuickCreateOpen(false)
         setQuickCreateName('')
+        setQuickCreateTargetIndex(null)
+        setQuickCreateComboTarget(null)
         setNewIngUnit('кг')
         setNewIngCategory('Продукты')
         setNewIngPrice(0)
@@ -308,6 +335,23 @@ export default function NewMenuItemPage() {
           })),
           buildCombosPayload(attrs, comboPrices),
         )
+        // Разносим локально введённые техкарты по только что созданным
+        // вариантам. Матчим по НАБОРУ лейблов (comboLabelSetKey), а не по id —
+        // у локальных значений до сохранения нет реального id варианта, а
+        // variantValueIds от бэка отсортированы, не в порядке атрибутов.
+        const labelById = new Map<string, string>()
+        for (const a of state.attributes) for (const v of a.values) labelById.set(v.id, v.label)
+        const savePromises: Promise<void>[] = []
+        for (const variant of state.variants) {
+          const labels = (variant.variantValueIds ?? [])
+            .map(id => labelById.get(id))
+            .filter((x): x is string => !!x)
+          const key = comboLabelSetKey(labels)
+          const localCombo = combos.find(c => comboLabelSetKey(c.labels) === key)
+          const lines = localCombo ? (techCardsByCombo[localCombo.key] ?? []).filter(l => l.ingredientId || l.semiId) : []
+          if (lines.length > 0) savePromises.push(replaceTechCardLines(variant.id, lines))
+        }
+        if (savePromises.length > 0) await Promise.all(savePromises)
         toast.success(`Товар добавлен · вариантов: ${state.variants.length}`)
       } else {
         toast.success(form.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
@@ -327,6 +371,11 @@ export default function NewMenuItemPage() {
   const realTechLinesValid = realTechLines.every((l) => l.qty > 0)
   const isWeightItem = form.unit !== 'piece'
   const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
+  // Техкарты по вариантам (per-combo) — та же проверка полноты/валидности,
+  // что и у обычной техкарты, но по каждой комбинации атрибутов отдельно.
+  const comboTechCardLines = (key: string) => (techCardsByCombo[key] ?? []).filter(l => l.ingredientId || l.semiId)
+  const comboTechCardsComplete = combos.every(c => comboTechCardLines(c.key).length > 0)
+  const comboTechCardsValid = combos.every(c => comboTechCardLines(c.key).every(l => l.qty > 0))
   // С атрибутами цена товара не задаётся — цены несут значения атрибутов
   // (каждая комбинация должна получиться платной).
   const attrsOk = attrsValid(attrs, comboPrices, form.isPurchased)
@@ -338,9 +387,11 @@ export default function NewMenuItemPage() {
   const canSubmit = !!form.name && !!form.category && priceOk && (
     form.isPurchased
       ? purchasedOk
-      : needTechCard
-        ? realTechLines.length > 0 && realTechLinesValid
-        : realTechLinesValid
+      : hasAttrs
+        ? (!needTechCard || comboTechCardsComplete) && comboTechCardsValid
+        : needTechCard
+          ? realTechLines.length > 0 && realTechLinesValid
+          : realTechLinesValid
   )
   const disabledReason = submitting ? ''
     : !form.name ? 'Укажите название'
@@ -353,8 +404,10 @@ export default function NewMenuItemPage() {
       )
     : !hasAttrs && !(form.price > 0) ? 'Укажите цену больше 0'
     : form.isPurchased && !purchasedOk ? (hasAttrs ? 'Выберите единицу закупки' : 'Заполните закупочную цену и единицу')
-    : needTechCard && realTechLines.length === 0 ? 'Добавьте хотя бы один ингредиент в техкарту'
-    : !realTechLinesValid ? 'Укажите количество (> 0) во всех строках техкарты'
+    : hasAttrs && needTechCard && !comboTechCardsComplete ? 'Добавьте хотя бы один ингредиент в техкарту каждого варианта'
+    : hasAttrs && !comboTechCardsValid ? 'Укажите количество (> 0) во всех строках техкарты вариантов'
+    : !hasAttrs && needTechCard && realTechLines.length === 0 ? 'Добавьте хотя бы один ингредиент в техкарту'
+    : !hasAttrs && !realTechLinesValid ? 'Укажите количество (> 0) во всех строках техкарты'
     : ''
 
   if (loading) {
@@ -648,8 +701,9 @@ export default function NewMenuItemPage() {
                 Система автоматически создаст ингредиент на складе с аналогичным названием и привяжет его к этому товару. Приход этого товара будет осуществляться через накладные.
               </p>
             </div>
-          ) : techCardsEnabled ? (
-            /* Tech Card */
+          ) : techCardsEnabled && !hasAttrs ? (
+            /* Tech Card — только без атрибутов; с атрибутами техкарта
+               задаётся отдельно по каждой комбинации ниже (не дважды). */
             <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-sm font-bold text-foreground">Техкарта и ингредиенты</h2>
@@ -675,6 +729,7 @@ export default function NewMenuItemPage() {
                         onQuickCreate={(name) => {
                           setQuickCreateName(name)
                           setQuickCreateTargetIndex(i)
+                          setQuickCreateComboTarget(null)
                           setQuickCreateOpen(true)
                         }}
                       />
@@ -746,6 +801,51 @@ export default function NewMenuItemPage() {
               </p>
             )}
           </div>
+
+          {/* Техкарты по вариантам — заполняются ДО сохранения (варианты ещё
+              не существуют на бэке): один раз, отдельно на каждую комбинацию
+              атрибутов, без промежуточной «общей» техкарты товара. */}
+          {!form.isPurchased && techCardsEnabled && hasAttrs && combos.length > 0 && (
+            <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-sm font-bold text-foreground">Техкарты по вариантам</h2>
+                <span className="text-xs text-muted-foreground font-semibold bg-muted px-2.5 py-1 rounded-full">
+                  Ингредиентов: {comboTechCardLines(activeComboKey).length}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                У каждого размера/вкуса — своя техкарта: граммовки не масштабируются
+                линейно, задайте их отдельно для каждого варианта.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {combos.map(c => (
+                  <button
+                    key={c.key}
+                    type="button"
+                    onClick={() => setSelectedComboKey(c.key)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${activeComboKey === c.key
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-muted/30 border-border text-foreground hover:bg-muted'}`}
+                  >
+                    {c.title}
+                  </button>
+                ))}
+              </div>
+              <TechCardLinesEditor
+                lines={techCardsByCombo[activeComboKey] ?? [{ ...emptyVariantTechLine }]}
+                onChange={next => setTechCardsByCombo(prev => ({ ...prev, [activeComboKey]: next }))}
+                ingredients={ingredients}
+                semiTypes={semiTypes}
+                matchingSemiIds={activeComboMatchingSemiIds}
+                onQuickCreate={(name, idx) => {
+                  setQuickCreateName(name)
+                  setQuickCreateComboTarget({ comboKey: activeComboKey, index: idx })
+                  setQuickCreateTargetIndex(null)
+                  setQuickCreateOpen(true)
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
 
