@@ -107,6 +107,20 @@ func (h *LiabilitiesHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	}
 	respond.JSON(w, http.StatusOK, out)
 }
+func (h *LiabilitiesHandler) Pay(w http.ResponseWriter, r *http.Request) {
+	var in service.LiabilityPayInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.Pay(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *LiabilitiesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
 		respond.Error(w, err)

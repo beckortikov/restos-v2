@@ -408,7 +408,13 @@ func (s *BatchCookingService) adjustPrepared(ctx context.Context, rid, menuItemI
 			return err
 		}
 
-		logQty := -delta // qty в логе — абсолютная величина списания
+		// #25: журнал фиксирует ФАКТИЧЕСКИ снятое (cur − newQty), а не запрошенное.
+		// При списании сверх остатка запрошенное обрезалось нулём, а лог писал
+		// полный запрос → журнал производства расходился с реальностью.
+		logQty := cur - newQty // абсолютная величина фактического движения
+		if logQty < 0 {
+			logQty = -logQty
+		}
 		reason := logType
 		preparedBy := actor.UserName
 		preparedByID := actor.UserID

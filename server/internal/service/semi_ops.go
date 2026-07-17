@@ -98,13 +98,21 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 		// проставлялся вовсе → оставался 0, и всё это считалось с нулевой с/с п/ф.
 		mvType := "semi_out"
 		producedCost := decimal.Zero
+		// #19: сырьё списываем с учётом выхода (yield). Чтобы получить qty единиц
+		// готового п/ф при выходе 70%, нужно qty×100/70 сырья — ровно как считает
+		// каскад продажи. Раньше Prepare игнорировал yield: сырьё списывалось
+		// меньше, себестоимость единицы п/ф занижалась, COGS блюд на нём — тоже.
+		recipeQty := qty
+		if st.YieldPercent.IsPositive() && !st.YieldPercent.Equal(decimal.FromInt(100)) {
+			recipeQty = decimal.Mul(qty, decimal.DivRound(decimal.FromInt(100), st.YieldPercent))
+		}
 		for _, l := range lines {
 			if l.IngredientID == nil {
 				continue
 			}
 			ingID := *l.IngredientID
 			conv := convByID[ingID]
-			stockQty := conv.toStock(decimal.Mul(l.QtyPerUnit, qty), deref(l.Unit))
+			stockQty := conv.toStock(decimal.Mul(l.QtyPerUnit, recipeQty), deref(l.Unit))
 			producedCost = decimal.Add(producedCost, decimal.Mul(stockQty, conv.pricePerUnit))
 			deduct := decimal.Normalize(stockQty).Neg()
 			unit := l.Unit
@@ -215,10 +223,32 @@ func (s *SemiFinishedService) Consume(ctx context.Context, in SemiConsumeInput) 
 			return err
 		}
 		now := time.Now().UTC()
-		stock.Qty = decimal.Normalize(decimal.Sub(stock.Qty, qty))
+		// #24: пол на нуле — остаток п/ф не уходит в минус без контроля. Раньше
+		// Consume вычитал напрямую и допускал −N. Снимаем не больше, чем есть.
+		removed := qty
+		if removed.GreaterThan(stock.Qty) {
+			removed = stock.Qty
+		}
+		if decimal.IsNegative(removed) {
+			removed = decimal.Zero
+		}
+		stock.Qty = decimal.Normalize(decimal.Sub(stock.Qty, removed))
 		stock.UpdatedAt = now
 		if err := tx.Save(&stock).Error; err != nil {
 			return err
+		}
+		// #24: аудит-движение расхода п/ф (semi_out без ingredient_id — денорм-хук
+		// его пропускает, но в истории склада расход виден). Docstring это и обещал.
+		if decimal.IsPositive(removed) {
+			mvType := "semi_out"
+			desc := "semi_consume:" + in.SemiTypeID
+			nm := stock.Name
+			if err := tx.Create(&models.StockMovement{
+				ID: uuid.NewString(), Type: &mvType, IngredientName: nm, Description: &desc,
+				Qty: removed.Neg(), Unit: stock.Unit, RestaurantID: &rid, CreatedAt: now,
+			}).Error; err != nil {
+				return err
+			}
 		}
 		out = &stock
 		return nil

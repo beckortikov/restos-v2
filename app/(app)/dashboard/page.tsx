@@ -243,7 +243,10 @@ export default function DashboardPage() {
   // Сервис начисляется на чек целиком, поэтому корректно входит и в выручку, и в
   // средний чек, и в разбивки по чеку (часы/официанты). Donut по блюдам — отдельно,
   // там база item-level (сервис не привязан к конкретному блюду).
-  const orderRevenue = (o: typeof todayOrders[number]) => o.totalWithService ?? o.total
+  // #15: вычитаем возвраты. Полный возврат мапится в статус 'done' и несёт
+  // refundedTotal — без вычитания «Выручка сегодня» завышалась на всю сумму
+  // возвращённых заказов (ОПиУ-эндпоинт это уже учитывает, а дашборд считал сам).
+  const orderRevenue = (o: typeof todayOrders[number]) => (o.totalWithService ?? o.total) - (o.refundedTotal ?? 0)
   const todayRevenue = useMemo(() => todayOrders.reduce((s, o) => s + orderRevenue(o), 0), [todayOrders])
   const todayOrdersCount = useMemo(() => orders.filter(o => inRange(o.createdAt)).length, [orders, dateFrom, dateTo])
   const avgCheck = todayOrders.length > 0 ? todayRevenue / todayOrders.length : 0

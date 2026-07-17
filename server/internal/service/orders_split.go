@@ -241,6 +241,23 @@ func (s *OrdersService) Split(ctx context.Context, orderID string, in SplitInput
 			}
 		}
 
+		// #4: сервисный сбор на каждую часть. Раньше сплиты несли только subtotal,
+		// и оплата разделением обходила сервис (выручка занижалась, а официанту он
+		// всё равно начислялся). Берём order.service_percent (снапшот дефолта
+		// ресторана), только для зала. pct×каждый subtotal = pct×total (линейно).
+		svcPct := order.ServicePercent
+		if order.Type != nil && *order.Type != "hall" {
+			svcPct = decimal.Zero
+		}
+		if svcPct.IsPositive() {
+			for i := range splits {
+				amt := decimal.Normalize(decimal.Percent(splits[i].Subtotal, svcPct))
+				splits[i].ServicePercent = svcPct
+				splits[i].ServiceAmount = amt
+				splits[i].Total = decimal.Normalize(decimal.Add(splits[i].Subtotal, amt))
+			}
+		}
+
 		// 3. Insert splits и обновляем order.
 		for i := range splits {
 			if err := tx.Create(&splits[i]).Error; err != nil {

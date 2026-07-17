@@ -103,7 +103,7 @@ func (s *ReportsService) computePnL(ctx context.Context, f PeriodFilter) (*PnL, 
 	}
 	q := scoped.Table("orders").
 		Select("to_char(closed_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("closed_at >= ?", *f.From)
 	}
@@ -133,7 +133,7 @@ func (s *ReportsService) computePnL(ctx context.Context, f PeriodFilter) (*PnL, 
 	q2 := scoped2.Table("orders AS o").
 		Select("to_char(o.closed_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
+		Where("o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q2 = q2.Where("o.closed_at >= ?", *f.From)
 	}

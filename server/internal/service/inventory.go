@@ -200,6 +200,27 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 		now := time.Now().UTC()
 		desc := "inventory:" + checkID
 		mvType := "inventory_correction"
+		// #22: цены ингредиентов — для стоимостной проводки недостачи/излишка.
+		priceByID := map[string]decimal.Decimal{}
+		{
+			ids := make([]string, 0, len(lines))
+			for _, l := range lines {
+				if !l.Diff.IsZero() {
+					ids = append(ids, l.IngredientID)
+				}
+			}
+			if len(ids) > 0 {
+				var ings []models.Ingredient
+				if err := tx.Select("id, price_per_unit").Where("id IN ?", ids).Find(&ings).Error; err != nil {
+					return err
+				}
+				for _, i := range ings {
+					priceByID[i.ID] = i.PricePerUnit
+				}
+			}
+		}
+		shortfallValue := decimal.Zero // стоимость недостачи (diff<0)
+		overageValue := decimal.Zero   // стоимость излишка (diff>0)
 		for _, l := range lines {
 			if l.Diff.IsZero() {
 				continue
@@ -220,6 +241,36 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 				CreatedAt:      now,
 			}
 			if err := tx.Create(mv).Error; err != nil {
+				return err
+			}
+			val := decimal.Mul(l.Diff, priceByID[ingID])
+			if decimal.IsNegative(l.Diff) {
+				shortfallValue = decimal.Add(shortfallValue, val.Neg())
+			} else {
+				overageValue = decimal.Add(overageValue, val)
+			}
+		}
+		// #22: недостача — убыток (stock_writeoff, попадает в ОПиУ строкой
+		// «Списания»); излишек — прочий доход (взнос капитала). Раньше стоимость
+		// расхождения нигде не фиксировалась — убыток тихо испарялся, виден был
+		// только как падение оценки склада между снимками.
+		if decimal.IsPositive(shortfallValue) {
+			reason := "inventory_shortage"
+			note := "Недостача по инвентаризации " + checkID
+			if err := tx.Create(&models.StockWriteoff{
+				ID: uuid.NewString(), Reason: &reason, Description: &note,
+				TotalCost: decimal.Normalize(shortfallValue), RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		if decimal.IsPositive(overageValue) {
+			name := "Излишек по инвентаризации"
+			cat := "inventory_overage"
+			if err := tx.Create(&models.EquityEntry{
+				ID: uuid.NewString(), Name: &name, Category: &cat, Amount: decimal.Normalize(overageValue),
+				RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			}).Error; err != nil {
 				return err
 			}
 		}

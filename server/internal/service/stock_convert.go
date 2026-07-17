@@ -16,6 +16,7 @@ type ingStockConv struct {
 	unitWeight   decimal.Decimal
 	weightUnit   string
 	pricePerUnit decimal.Decimal // цена за складскую единицу — для расчёта с/с (напр. semi.Prepare)
+	wastePercent decimal.Decimal // % отходов при очистке — списываем брутто (#18)
 }
 
 // toStock переводит qty из рецептурной единицы recipeUnit в складскую единицу
@@ -23,6 +24,24 @@ type ingStockConv struct {
 // (qty без изменений для несводимых пар).
 func (c ingStockConv) toStock(qty decimal.Decimal, recipeUnit string) decimal.Decimal {
 	return units.ConvertToStock(qty, recipeUnit, c.unit, c.unitWeight, c.weightUnit)
+}
+
+// convertible сообщает, есть ли РЕАЛЬНЫЙ путь привести recipeUnit к складской
+// единице: одна размерность напрямую, либо через per-unit фактор (unit_weight).
+// Если нет — ConvertToStock молча вернёт qty как есть (напр. «200 г» → «200 шт»),
+// что при списании катастрофа. Вызывающий код (#20) использует это, чтобы не
+// списывать дикое число. Неизвестный склад (unit=="") — старое поведение.
+func (c ingStockConv) convertible(recipeUnit string) bool {
+	if c.unit == "" {
+		return true
+	}
+	if units.Convertible(recipeUnit, c.unit) {
+		return true
+	}
+	if c.unitWeight.IsPositive() && units.Convertible(recipeUnit, c.weightUnit) {
+		return true
+	}
+	return false
 }
 
 // loadIngStockConv загружает складские единицы + факторы для набора ингредиентов
@@ -33,7 +52,7 @@ func loadIngStockConv(tx *gorm.DB, ingredientIDs []string) (map[string]ingStockC
 		return out, nil
 	}
 	var ings []models.Ingredient
-	if err := tx.Select("id, unit, unit_weight, unit_weight_unit, price_per_unit").
+	if err := tx.Select("id, unit, unit_weight, unit_weight_unit, price_per_unit, waste_percent").
 		Where("id IN ?", ingredientIDs).Find(&ings).Error; err != nil {
 		return nil, err
 	}
@@ -43,6 +62,7 @@ func loadIngStockConv(tx *gorm.DB, ingredientIDs []string) (map[string]ingStockC
 			unitWeight:   i.UnitWeight,
 			weightUnit:   deref(i.UnitWeightUnit),
 			pricePerUnit: i.PricePerUnit,
+			wastePercent: i.WastePercent,
 		}
 	}
 	return out, nil

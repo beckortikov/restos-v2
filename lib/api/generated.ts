@@ -6368,6 +6368,67 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/liabilities/{id}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Погашение обязательства — списывает деньги со счёта, создаёт проводку.
+         * @description Списывает amount со счёта account_id, создаёт financial_operation (type=out, category=liability_payment — гашение пассива, НЕ opex ОПиУ), уменьшает remaining_amount. Переплатить нельзя (клампится к остатку). Прямой PATCH paid_amount запрещён — так обязательство уменьшалось без списания со счёта, и капитал рос из воздуха.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        amount: components["schemas"]["Decimal"];
+                        /** Format: uuid */
+                        account_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Liability"];
+                    };
+                };
+                /** @description Обязательство погашено или недостаточно средств */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/equity": {
         parameters: {
             query?: never;

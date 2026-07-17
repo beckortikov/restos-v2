@@ -1995,6 +1995,31 @@ paths:
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses: { "204": { description: No content } }
 
+  /api/v1/liabilities/{id}/pay:
+    post:
+      tags: [finance]
+      summary: Погашение обязательства — списывает деньги со счёта, создаёт проводку.
+      description: >
+        Списывает amount со счёта account_id, создаёт financial_operation
+        (type=out, category=liability_payment — гашение пассива, НЕ opex ОПиУ),
+        уменьшает remaining_amount. Переплатить нельзя (клампится к остатку).
+        Прямой PATCH paid_amount запрещён — так обязательство уменьшалось без
+        списания со счёта, и капитал рос из воздуха.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, account_id]
+              properties:
+                amount: { $ref: "#/components/schemas/Decimal" }
+                account_id: { type: string, format: uuid }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Liability" } } } }
+        "409": { description: Обязательство погашено или недостаточно средств, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
   # ─── Finance: Equity ────────────────────────────────────────────────────
   /api/v1/equity:
     get:

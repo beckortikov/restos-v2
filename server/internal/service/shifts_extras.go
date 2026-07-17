@@ -191,6 +191,12 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		if op.ShiftID == nil {
 			return apperrors.ErrNotFound
 		}
+		// #28: авто-зеркало (отражение оттока со счёта — зарплата/возврат/ручной
+		// расход) удалять нельзя: деньги со счёта уже ушли, а удаление подняло бы
+		// expected_cash → фантомный излишек.
+		if op.Category != nil && *op.Category == autoMirrorCategory {
+			return apperrors.Wrap("CONFLICT", "нельзя удалить авто-операцию смены (отражение расхода со счёта)", nil)
+		}
 		var shift models.CashShift
 		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *op.ShiftID).
 			First(&shift).Error; err != nil {

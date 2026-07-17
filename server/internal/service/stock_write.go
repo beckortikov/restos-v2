@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -449,43 +450,81 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 		if err := tx.Create(w).Error; err != nil {
 			return err
 		}
+		// #21: для semi/batch фактически снятое может быть МЕНЬШЕ запрошенного
+		// (остаток кончился). Раньше строка и стоимость писались на полный
+		// запрошенный объём → фантомные единицы в стоимостных книгах. Теперь
+		// пишем фактически снятое, а header total_cost пересчитываем.
+		actualTotal := decimal.Zero
 		for _, pl := range parsed {
+			actualQty := pl.qty
+			actualCost := pl.cost
+			switch pl.in.Kind {
+			case "semi":
+				var stock models.SemiFinishedStock
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).First(&stock).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return apperrors.Wrap("VALIDATION", "semi stock not found: "+pl.in.IngredientID, nil)
+					}
+					return err
+				}
+				if actualQty.GreaterThan(stock.Qty) {
+					actualQty = stock.Qty
+					if decimal.IsNegative(actualQty) {
+						actualQty = decimal.Zero
+					}
+				}
+				if decimal.IsPositive(pl.qty) {
+					actualCost = decimal.Normalize(decimal.DivRound(decimal.Mul(pl.cost, actualQty), pl.qty))
+				}
+			case "batch":
+				var mi models.MenuItem
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).First(&mi).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return apperrors.Wrap("VALIDATION", "batch menu item not found: "+pl.in.IngredientID, nil)
+					}
+					return err
+				}
+				prepared := decimal.Zero
+				if mi.PreparedQty != nil {
+					prepared = decimal.FromInt(int64(*mi.PreparedQty))
+				}
+				if actualQty.GreaterThan(prepared) {
+					actualQty = prepared
+				}
+				if decimal.IsPositive(pl.qty) {
+					actualCost = decimal.Normalize(decimal.DivRound(decimal.Mul(pl.cost, actualQty), pl.qty))
+				}
+			}
+			actualTotal = decimal.Add(actualTotal, actualCost)
+
 			lineID := uuid.NewString()
 			wl := &models.StockWriteoffLine{
 				ID:           lineID,
 				WriteoffID:   &writeoffID,
 				IngredientID: &pl.in.IngredientID,
 				Name:         &pl.in.Name,
-				Qty:          pl.qty,
+				Qty:          decimal.Normalize(actualQty),
 				Unit:         pl.in.Unit,
-				Cost:         pl.cost,
+				Cost:         actualCost,
 				UpdatedAt:    now,
 			}
 			if err := tx.Create(wl).Error; err != nil {
 				return err
 			}
-			// Уменьшаем фактический остаток по типу позиции. GREATEST(0, …) не даёт
-			// уйти в минус; RowsAffected=0 → id не найден (иначе был бы тихий no-op).
 			switch pl.in.Kind {
 			case "semi":
-				res := tx.Model(&models.SemiFinishedStock{}).
+				if err := tx.Model(&models.SemiFinishedStock{}).
 					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).
-					Updates(map[string]any{"qty": gorm.Expr("GREATEST(0, qty - ?)", pl.qty), "updated_at": now})
-				if res.Error != nil {
-					return res.Error
-				}
-				if res.RowsAffected == 0 {
-					return apperrors.Wrap("VALIDATION", "semi stock not found: "+pl.in.IngredientID, nil)
+					Updates(map[string]any{"qty": gorm.Expr("qty - ?", actualQty), "updated_at": now}).Error; err != nil {
+					return err
 				}
 			case "batch":
-				res := tx.Model(&models.MenuItem{}).
+				if err := tx.Model(&models.MenuItem{}).
 					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).
-					Updates(map[string]any{"prepared_qty": gorm.Expr("GREATEST(0, prepared_qty - ?)", int(pl.qty.IntPart())), "updated_at": now})
-				if res.Error != nil {
-					return res.Error
-				}
-				if res.RowsAffected == 0 {
-					return apperrors.Wrap("VALIDATION", "batch menu item not found: "+pl.in.IngredientID, nil)
+					Updates(map[string]any{"prepared_qty": gorm.Expr("prepared_qty - ?", int(actualQty.IntPart())), "updated_at": now}).Error; err != nil {
+					return err
 				}
 			default:
 				// Ингредиент: stock_movement type='writeoff' → хук денормализует
@@ -507,6 +546,12 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 					return err
 				}
 			}
+		}
+		if !actualTotal.Equal(totalCost) {
+			if err := tx.Model(w).Update("total_cost", decimal.Normalize(actualTotal)).Error; err != nil {
+				return err
+			}
+			w.TotalCost = decimal.Normalize(actualTotal)
 		}
 		created = w
 		return nil

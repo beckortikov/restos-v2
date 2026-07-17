@@ -255,7 +255,7 @@ func TestFinancialEdgeCases(t *testing.T) {
 			t.Fatalf("close did not increment shift cash_revenue (still %s)", shiftBefore.CashRevenue.String())
 		}
 		var movesAfterClose int64
-		gdb.Model(&models.StockMovement{}).Where("description = ?", "order:"+ord.ID).Count(&movesAfterClose)
+		gdb.Model(&models.StockMovement{}).Where("description LIKE ?", "order:"+ord.ID+"%").Count(&movesAfterClose)
 
 		// Reopen.
 		rr, rb := f.post(t, fmt.Sprintf("/api/v1/orders/%s/reopen", ord.ID), tok, uuid.NewString(), nil)
@@ -304,7 +304,7 @@ func TestFinancialEdgeCases(t *testing.T) {
 
 		// Склад НЕ возвращается на reopen — блюда приготовлены.
 		var movesAfterReopen int64
-		gdb.Model(&models.StockMovement{}).Where("description = ?", "order:"+ord.ID).Count(&movesAfterReopen)
+		gdb.Model(&models.StockMovement{}).Where("description LIKE ?", "order:"+ord.ID+"%").Count(&movesAfterReopen)
 		if movesAfterReopen != movesAfterClose {
 			t.Errorf("MISMATCH: reopen must keep stock movements (%d), got %d", movesAfterClose, movesAfterReopen)
 		}
@@ -335,7 +335,7 @@ func TestFinancialEdgeCases(t *testing.T) {
 		}
 		// Склад не списан второй раз.
 		var movesAfterReclose int64
-		gdb.Model(&models.StockMovement{}).Where("description = ?", "order:"+ord.ID).Count(&movesAfterReclose)
+		gdb.Model(&models.StockMovement{}).Where("description LIKE ?", "order:"+ord.ID+"%").Count(&movesAfterReclose)
 		if movesAfterReclose != movesAfterClose {
 			t.Errorf("DOUBLE DEDUCT: reclose must not deduct stock again (%d), got %d", movesAfterClose, movesAfterReclose)
 		}

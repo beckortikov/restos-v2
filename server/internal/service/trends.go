@@ -114,7 +114,9 @@ func (s *TrendsService) dailyAgg(ctx context.Context, from, to time.Time) (map[s
 	if err != nil {
 		return nil, err
 	}
-	cf, err := s.finance.Cashflow(ctx, f)
+	// #12: расходы — операционный opex по дням (тот же фильтр, что в ОПиУ), а не
+	// валовой ДДС-отток. Иначе переводы/инкассации/закупки раздували график.
+	opexByDay, err := s.finance.OpexByDay(ctx, f)
 	if err != nil {
 		return nil, err
 	}
@@ -122,13 +124,13 @@ func (s *TrendsService) dailyAgg(ctx context.Context, from, to time.Time) (map[s
 	for day, pl := range byDay {
 		out[day] = &dayAgg{revenue: pl.Revenue, orders: pl.OrdersCount, expenses: decimal.Zero}
 	}
-	for _, d := range cf.ByDay {
-		a := out[d.Date]
+	for day, exp := range opexByDay {
+		a := out[day]
 		if a == nil {
 			a = &dayAgg{revenue: decimal.Zero, expenses: decimal.Zero}
-			out[d.Date] = a
+			out[day] = a
 		}
-		a.expenses = d.Out
+		a.expenses = exp
 	}
 	return out, nil
 }

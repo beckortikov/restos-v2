@@ -558,6 +558,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/assets/{id}", assetsH.Delete)
 			g.Post("/liabilities", liabilitiesH.Create)
 			g.Patch("/liabilities/{id}", liabilitiesH.Patch)
+			g.Post("/liabilities/{id}/pay", liabilitiesH.Pay)
 			g.Delete("/liabilities/{id}", liabilitiesH.Delete)
 			g.Post("/equity", equityH.Create)
 			g.Patch("/equity/{id}", equityH.Patch)

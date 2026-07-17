@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -177,9 +178,15 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			return apperrors.Wrap("CONFLICT", "order already closed", nil)
 		}
 
-		// 2. Validate shift.
+		// 2. Validate shift ПОД FOR UPDATE. Ниже read-modify-write агрегатов смены
+		// (CashRevenue/CardRevenue/OrdersCount) через tx.Save — без замка два
+		// параллельных close РАЗНЫХ заказов одной смены читают одинаковый
+		// CashRevenue, второй Save затирает первый (lost update) → заниженный
+		// expected_cash → ложная недостача кассира. PaySplit/reverse смену уже
+		// блокируют — здесь забыли (#1).
 		var shift models.CashShift
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, in.ShiftID).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, in.ShiftID).
 			First(&shift).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.Wrap("VALIDATION", "shift not found", nil)
@@ -188,6 +195,19 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		}
 		if shift.Status == nil || *shift.Status != "open" {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
+		}
+
+		// #2: нельзя оплатить «весь счёт» поверх созданных сплитов — иначе выручка
+		// задваивается (order-level revenue + split-платежи на ту же сумму).
+		// Разделённый заказ оплачивается только через /splits/{id}/pay; чтобы
+		// закрыть целиком — сперва отменить разделение (CancelSplits удаляет строки).
+		var splitCount int64
+		if err := tx.Model(&models.OrderSplit{}).
+			Where("order_id = ?", order.ID).Count(&splitCount).Error; err != nil {
+			return err
+		}
+		if splitCount > 0 {
+			return apperrors.Wrap("CONFLICT", "заказ разделён на счета — оплатите по частям или отмените разделение", nil)
 		}
 
 		// 3 + 4. Mutate order.
@@ -471,20 +491,11 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				applied = append(applied, payApplied{Method: in.PaymentMethod, Amount: order.TotalWithService})
 			}
 
-			// 6. Stock deduct через tech_card_lines.
-			//
-			// Идемпотентность: смотрим, не было ли уже movements для этого заказа.
-			// description = "order:{id}" — наша конвенция.
-			var existing int64
-			if err := tx.Model(&models.StockMovement{}).
-				Where("restaurant_id = ? AND description = ?", rid, opSourceRef).
-				Count(&existing).Error; err != nil {
+			// 6. Stock deduct через tech_card_lines. Идемпотентность (per-item)
+			// живёт внутри deductStockForOrder — повторный close/reopen списывает
+			// только ещё не списанные позиции (#5/#6).
+			if err := s.deductStockForOrder(tx, rid, &order, opSourceRef, now); err != nil {
 				return err
-			}
-			if existing == 0 {
-				if err := s.deductStockForOrder(tx, rid, &order, opSourceRef, now); err != nil {
-					return err
-				}
 			}
 
 			// 7. Update shift aggregates (по каждому payment split-у отдельно).
@@ -672,6 +683,31 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 		return err
 	}
 
+	// #5/#6: per-item идемпотентность. Раньше было «есть любое движение заказа →
+	// пропустить ВСЁ»: reopen+добавить позицию+reclose не списывал новую позицию,
+	// а batch-заготовка (движений не пишет) списывалась повторно. Теперь метим
+	// каждое движение позиции суффиксом ":<item_id>" и пропускаем только уже
+	// списанные позиции; batch пишет маркер-движение ради той же идемпотентности.
+	deductedItems := make(map[string]bool)
+	{
+		var descs []string
+		if err := tx.Model(&models.StockMovement{}).
+			Where("restaurant_id = ? AND description LIKE ?", restaurantID, sourceRef+"%").
+			Distinct("description").Pluck("description", &descs).Error; err != nil {
+			return err
+		}
+		for _, d := range descs {
+			if d == sourceRef {
+				// Заказ закрыт ДО перехода на per-item (старый формат «order:{id}» без
+				// суффикса) — сохраняем прежнюю семантику «весь заказ уже списан».
+				return nil
+			}
+			if strings.HasPrefix(d, sourceRef+":") {
+				deductedItems[strings.TrimPrefix(d, sourceRef+":")] = true
+			}
+		}
+	}
+
 	// 3. Для каждой позиции × tech_card_line — создаём StockMovement (qty<0 = списание).
 	//    v2.0.90 — semi-finished каскадно разворачиваются до базовых ингредиентов
 	//    через semi_recipe_lines (см. MISSING #4).
@@ -679,6 +715,10 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 		if it.MenuItemID == nil {
 			continue
 		}
+		if deductedItems[it.ID] {
+			continue // позиция уже списана при прошлом закрытии
+		}
+		itemRef := sourceRef + ":" + it.ID
 
 		// Заготовка: уменьшаем prepared_qty на число порций (cap на 0), сырьё
 		// НЕ списываем (иначе двойное списание). Идемпотентность обеспечена
@@ -696,6 +736,15 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 				}).Error; err != nil {
 				return err
 			}
+			// Маркер-движение (qty=0, без ingredient_id — денорм-хук его пропустит):
+			// нужен, чтобы reopen+reclose не списал prepared_qty второй раз (#6).
+			mType := "batch_sale"
+			if err := tx.Create(&models.StockMovement{
+				ID: uuid.NewString(), Type: &mType, Description: &itemRef,
+				Qty: decimal.Zero, RestaurantID: &restaurantID, CreatedAt: now,
+			}).Error; err != nil {
+				return err
+			}
 			continue
 		}
 
@@ -704,7 +753,7 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 			lineQty := decimal.Mul(line.Qty, effectivePortions(it.Unit, it.Qty, it.UnitSize))
 			switch {
 			case line.IngredientID != nil:
-				if err := writeIngredientDeduct(tx, restaurantID, *line.IngredientID, line.Name, convByID[*line.IngredientID], deref(line.Unit), lineQty, sourceRef, now); err != nil {
+				if err := writeIngredientDeduct(tx, restaurantID, *line.IngredientID, line.Name, convByID[*line.IngredientID], deref(line.Unit), lineQty, itemRef, now); err != nil {
 					return err
 				}
 			case line.SemiTypeID != nil:
@@ -712,7 +761,7 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 				// нехватку разузловываем в сырьё. Раньше всегда каскадили в сырьё
 				// (cascadeSemiDeduct), игнорируя остаток заготовки, — из-за чего при
 				// использовании предзаготовки (Prepare) сырьё списывалось дважды.
-				if err := s.deductSemiForSale(tx, restaurantID, *line.SemiTypeID, lineQty, deref(line.Unit), sourceRef, now); err != nil {
+				if err := s.deductSemiForSale(tx, restaurantID, *line.SemiTypeID, lineQty, deref(line.Unit), itemRef, now); err != nil {
 					return err
 				}
 			}
@@ -736,6 +785,25 @@ func writeIngredientDeduct(
 	sourceRef string,
 	now time.Time,
 ) error {
+	// #20: несводимые единицы без фактора веса (тех-карта «200 г» при складе
+	// «шт», unit_weight не задан) — ConvertToStock молча вернул бы 200 и списал
+	// «200 штук» за порцию. Это мисконфигурация тех-карты: не списываем дикое
+	// число (пропускаем строку, лог), вместо того чтобы обнулить склад.
+	if !conv.convertible(recipeUnit) {
+		log.Warn().Str("ingredient", ingredientID).Str("recipe_unit", recipeUnit).
+			Str("stock_unit", conv.unit).Msg("tech-card unit not convertible to stock unit — skipping deduction")
+		return nil
+	}
+	// #18: списываем БРУТТО — с учётом отходов при очистке (waste_percent), ровно
+	// как COGS считает qty/(1−waste). Раньше waste был в COGS и в проверке
+	// остатка, но не в фактическом списании → склад копил фантомный остаток, за
+	// который COGS уже «заплатил» (всплывало недостачей при инвентаризации).
+	if conv.wastePercent.IsPositive() {
+		divisor := decimal.Sub(decimal.FromInt(1), decimal.DivRound(conv.wastePercent, decimal.FromInt(100)))
+		if divisor.IsPositive() {
+			qty = decimal.DivRound(qty, divisor)
+		}
+	}
 	stockQty := conv.toStock(qty, recipeUnit)
 	deduct := decimal.Normalize(stockQty).Neg()
 	desc := sourceRef

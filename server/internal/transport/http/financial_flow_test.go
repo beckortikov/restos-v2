@@ -331,7 +331,7 @@ func TestFinancialFlow_Full(t *testing.T) {
 		// ИЛИ 5 movements по -0.2 — зависит от реализации (см. write_test
 		// был 3 movements при qty=3, значит per-portion).
 		var movs []models.StockMovement
-		gdb.Where("restaurant_id = ? AND description = ?", f.rid, "order:"+orderID).Find(&movs)
+		gdb.Where("restaurant_id = ? AND description LIKE ?", f.rid, "order:"+orderID+"%").Find(&movs)
 		totalDeducted := decimal.Zero
 		for _, m := range movs {
 			totalDeducted = decimal.Add(totalDeducted, m.Qty)
@@ -435,8 +435,8 @@ func TestFinancialFlow_Full(t *testing.T) {
 		if !sh.CashRevenue.Equal(decimal.MustFromString("275")) {
 			t.Errorf("MISMATCH cash_revenue at close = %s, want 275", sh.CashRevenue.String())
 		}
-		if sh.ExpectedCash == nil || !sh.ExpectedCash.Equal(decimal.MustFromString("375")) {
-			t.Errorf("MISMATCH expected_cash = %v, want 375", sh.ExpectedCash)
+		if sh.ExpectedCash == nil || !sh.ExpectedCash.Equal(decimal.MustFromString("325")) {
+			t.Errorf("MISMATCH expected_cash = %v, want 325 (#27: наличный бонус зеркалится в смену)", sh.ExpectedCash)
 		}
 	})
 
