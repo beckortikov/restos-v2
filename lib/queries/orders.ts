@@ -658,10 +658,15 @@ export async function fetchVoidsForOrders(orderIds: string[]): Promise<Map<strin
 
 // ─── Refund / Reprint ──────────────────────────────────────────────────────
 
-export async function refundOrder(orderId: string, reason: string, amount?: number): Promise<void> {
+export async function refundOrder(orderId: string, reason: string, amount?: number, idempotencyKey?: string): Promise<void> {
   const body: any = { reason }
   if (amount != null) body.amount = String(amount)
+  // #3: частичный возврат не идемпотентен на бэке (source_ref с unixnano всегда
+  // новый). Middleware дедупит по Idempotency-Key, но генерит новый на каждый
+  // fetch — поэтому сетевой ретрай удваивал возврат. Стабильный ключ на попытку
+  // (диалог генерит один) → повтор получает кэшированный ответ первого.
   await unwrap(api.POST('/api/v1/orders/{id}/refund' as any, {
+    ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
     params: { path: { id: orderId } as any },
     body: body as any,
   } as any))

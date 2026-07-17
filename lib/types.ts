@@ -15,7 +15,7 @@ export type TableStatus = 'free' | 'occupied' | 'reserved' | 'bill_requested'
 export type OrderStatus = 'new' | 'cooking' | 'ready' | 'served' | 'bill_requested' | 'done' | 'cancelled'
 export type OrderType = 'hall' | 'delivery' | 'takeaway'
 export type PaymentMethod = 'cash' | 'card' | 'transfer'
-export type StockMovementType = 'in' | 'out' | 'semi' | 'audit' | 'adj' | 'batch'
+export type StockMovementType = 'in' | 'out' | 'semi' | 'audit' | 'adj' | 'batch' | 'return'
 export type FinancialActivity = 'operational' | 'investment' | 'financial'
 export type FinancialOperationType = 'in' | 'out' | 'transfer'
 export type ReceiptPaymentType = 'paid' | 'credit' | 'partial'
@@ -404,6 +404,11 @@ export interface ReceiptLine {
   // накладной дважды по разным ценам. Отсутствует у ещё не сохранённых строк
   // (форма создания накладной).
   id?: string
+  // Сколько ещё можно вернуть по этой строке, в единицах накладной. Считает
+  // бэк (min(принято − неотменённые возвраты, остаток склада)) — клиенту это
+  // считать нельзя: он не знает про отменённые возвраты и путает единицы
+  // склада с единицами накладной. Есть только при ?include=lines.
+  availableToReturn?: number
   ingredientId: string
   name: string
   qty: number
@@ -748,6 +753,10 @@ export interface StockReturn {
   refundType: RefundType
   accountId?: string
   createdBy?: string
+  // Сторно: товар вернулся на склад, деньги/долг откатились. Документ остаётся
+  // в истории, но перестаёт считаться возвращённым.
+  cancelledAt?: string
+  cancelledBy?: string
   createdAt: string
   lines: StockReturnLine[]
 }

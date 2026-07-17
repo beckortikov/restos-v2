@@ -138,6 +138,7 @@ export default function PosV2Order() {
   const [refundReason, setRefundReason] = useState('')
   const [refundAmt, setRefundAmt] = useState('')
   const [refundBusy, setRefundBusy] = useState(false)
+  const refundKeyRef = useRef('') // #3: стабильный Idempotency-Key на попытку возврата
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -641,7 +642,7 @@ export default function PosV2Order() {
       else { loadQueue(nextType, o.id) }
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
   }
-  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))) }
+  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))); refundKeyRef.current = crypto.randomUUID() }
   async function doRefund() {
     if (!refundTarget || refundBusy) return
     const rem = remainingRefund(refundTarget)
@@ -651,7 +652,7 @@ export default function PosV2Order() {
     if (!refundReason.trim()) { toast.error('Укажите причину возврата'); return }
     setRefundBusy(true)
     try {
-      await refundOrder(refundTarget.id, refundReason.trim(), amt)
+      await refundOrder(refundTarget.id, refundReason.trim(), amt, refundKeyRef.current)
       toast.success(`Возврат ${formatCurrency(amt)}`)
       setRefundTarget(null); setViewReceipt(null)
       await openOrders()

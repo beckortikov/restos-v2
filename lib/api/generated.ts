@@ -1365,51 +1365,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/stock/receipts/{id}/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Подтвердить приёмку. Для credit — создаст Liability, при account_id — FinancialOperation. */
-        post: {
-            parameters: {
-                query?: never;
-                header?: {
-                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
-                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
-                };
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ConfirmReceiptInput"];
-                };
-            };
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["StockReceipt"];
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/stock/returns": {
         parameters: {
             query?: never;
@@ -1474,7 +1429,60 @@ export interface paths {
                         "application/json": components["schemas"]["StockReturn"];
                     };
                 };
-                /** @description Возврат больше, чем пришло по строке накладной; либо refund_type=debt при отсутствующем/меньшем долге (нужен refund_type=money). */
+                /** @description Возврат больше, чем пришло по строке накладной; больше фактического остатка на складе; либо refund_type не соответствует остатку долга (debt при погашенном долге / money при непогашенном). */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/returns/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Сторно возврата — товар назад на склад, деньги/долг откатываются.
+         * @description Строка не удаляется (документы append-only): проставляется cancelled_at, а компенсация проводится отдельными движениями склада и встречной финоперацией — история читается целиком. Отменённый возврат перестаёт считаться в guard'е «нельзя вернуть больше, чем пришло»: товар вернулся, значит его снова можно возвращать. Склад принимает товар по формуле приёмки (средневзвешенная вперёд) — для входящего товара это корректно.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReturn"];
+                    };
+                };
+                /** @description Возврат уже отменён; либо на счёте не хватает денег вернуть их поставщику. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -6489,6 +6497,67 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/liabilities/{id}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Погашение обязательства — списывает деньги со счёта, создаёт проводку.
+         * @description Списывает amount со счёта account_id, создаёт financial_operation (type=out, category=liability_payment — гашение пассива, НЕ opex ОПиУ), уменьшает remaining_amount. Переплатить нельзя (клампится к остатку). Прямой PATCH paid_amount запрещён — так обязательство уменьшалось без списания со счёта, и капитал рос из воздуха.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        amount: components["schemas"]["Decimal"];
+                        /** Format: uuid */
+                        account_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Liability"];
+                    };
+                };
+                /** @description Обязательство погашено или недостаточно средств */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/equity": {
         parameters: {
             query?: never;
@@ -10526,12 +10595,6 @@ export interface components {
             data?: components["schemas"]["StockWriteoff"][];
             next_cursor?: string;
         };
-        ConfirmReceiptInput: {
-            /** Format: uuid */
-            account_id?: string;
-            /** @enum {string} */
-            payment_type?: "paid" | "credit";
-        };
         InventoryChecksList: {
             data?: components["schemas"]["InventoryCheck"][];
             next_cursor?: string;
@@ -10614,6 +10677,18 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+            /** @description Только при ?include=lines. */
+            lines?: {
+                /** Format: uuid */
+                id?: string;
+                ingredient_id?: string | null;
+                name?: string | null;
+                qty?: components["schemas"]["Decimal"];
+                unit?: string | null;
+                price_per_unit?: components["schemas"]["Decimal"];
+                /** @description Сколько ещё можно вернуть поставщику по этой строке, В ЕДИНИЦАХ НАКЛАДНОЙ. Считает бэк по тому же правилу, что guard в POST /stock/returns: min(принято − Σ неотменённых возвратов, фактический остаток товара). Клиенту считать это самому нельзя: он не знает про отменённые возвраты и путает единицы склада с единицами накладной. */
+                available_to_return?: components["schemas"]["Decimal"];
+            }[];
         };
         /** @description Возврат поставщику испорченного/битого товара. Зеркало приёмки: склад −qty (stock_movements type=return_supplier), откат средневзвешенной себестоимости, возврат денег/долга. Не путать со списанием: списание — наш убыток и бьёт по прибыли, возврат — сторно закупки. */
         ReturnInput: {
@@ -10628,7 +10703,7 @@ export interface components {
             reason: "spoilage" | "breakage" | "expired" | "other";
             note?: string;
             /**
-             * @description debt — накладная в долг: уменьшаются stock_receipts.debt_amount и suppliers.current_debt (обе: RecomputeDebts считает current_debt как Σ debt_amount − Σ оплат). 409, если долга нет или он меньше суммы возврата — тогда нужен money. money — накладная оплачена: financial_accounts.balance += сумма и financial_operation (type=in, category=stock_purchase, source_ref=return:<id>). Категория stock_purchase, а не доход: возврат схлопывается с закупкой, ОПиУ не показывает фейковую выручку.
+             * @description Ветки взаимоисключающие, выбор диктует остаток долга поставщику debtRoom = min(receipt.debt_amount, supplier.current_debt). debt — долг есть (debtRoom > 0): уменьшаются обе стороны — stock_receipts.debt_amount и suppliers.current_debt (RecomputeDebts считает current_debt как Σ debt_amount − Σ оплат, поэтому тронуть надо обе). 409, если гасить нечего или сумма больше debtRoom (смешанный случай — оформить двумя возвратами: на debtRoom в долг, остаток деньгами). money — долга нет: financial_accounts.balance += сумма и financial_operation (type=in, category=stock_purchase). 409, если по накладной есть непогашенный долг — иначе получили бы деньги за неоплаченный товар и остались должны. Категория stock_purchase, а не доход: возврат схлопывается с закупкой, ОПиУ не показывает фейковую выручку. Идемпотентность — на Idempotency-Key, не на source_ref.
              * @enum {string}
              */
             refund_type: "debt" | "money";
@@ -10664,6 +10739,12 @@ export interface components {
             /** Format: uuid */
             account_id?: string | null;
             created_by?: string | null;
+            /**
+             * Format: date-time
+             * @description Сторно: товар вернулся на склад, деньги/долг откатились
+             */
+            cancelled_at?: string | null;
+            cancelled_by?: string | null;
             /** Format: date-time */
             created_at?: string;
         };

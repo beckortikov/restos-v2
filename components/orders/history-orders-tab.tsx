@@ -4,7 +4,7 @@
 // типу, кассиру, официанту. Без SSE-realtime (это исторические данные).
 // Cursor-based pagination через next_cursor.
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Search, FileDown, Loader2, Printer, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -93,6 +93,7 @@ export function HistoryOrdersTab() {
   const [refundReason, setRefundReason] = useState<string>(REFUND_REASONS[0])
   const [refundAmount, setRefundAmount] = useState<string>('')
   const [refundSubmitting, setRefundSubmitting] = useState(false)
+  const refundKeyRef = useRef('') // #3: стабильный Idempotency-Key на попытку возврата
   const [reprintingId, setReprintingId] = useState<string | null>(null)
 
   // Initial static data
@@ -205,6 +206,7 @@ export function HistoryOrdersTab() {
 
   const openRefundDialog = useCallback((o: Order) => {
     setRefundOrderObj(o)
+    refundKeyRef.current = crypto.randomUUID()
     setRefundReason(REFUND_REASONS[0])
     setRefundAmount(String(orderRemainingRefund(o).toFixed(2)))
   }, [orderRemainingRefund])
@@ -215,7 +217,7 @@ export function HistoryOrdersTab() {
     if (!Number.isFinite(amt) || amt <= 0) { toast.error('Введите сумму возврата > 0'); return }
     setRefundSubmitting(true)
     try {
-      await refundOrder(refundOrderObj.id, refundReason, amt)
+      await refundOrder(refundOrderObj.id, refundReason, amt, refundKeyRef.current)
       toast.success('Возврат проведён')
       setRefundOrderObj(null)
       await load()

@@ -325,12 +325,17 @@ type StockReturn struct {
 	Note         *string         `json:"note"`
 	TotalAmount  decimal.Decimal `gorm:"column:total_amount;type:numeric(14,4);not null;default:0" json:"total_amount"`
 	// RefundType: debt — уменьшили долг поставщику; money — вернули деньги на счёт.
-	RefundType   string    `gorm:"column:refund_type;not null;default:'debt'" json:"refund_type"`
-	AccountID    *string   `gorm:"column:account_id" json:"account_id"`
-	CreatedBy    *string   `gorm:"column:created_by" json:"created_by"`
-	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	RefundType string  `gorm:"column:refund_type;not null;default:'debt'" json:"refund_type"`
+	AccountID  *string `gorm:"column:account_id" json:"account_id"`
+	CreatedBy  *string `gorm:"column:created_by" json:"created_by"`
+	// CancelledAt — сторно: товар вернулся на склад, деньги/долг откатились.
+	// Строка не удаляется (append-only), но перестаёт считаться в guard'е
+	// «нельзя вернуть больше, чем пришло».
+	CancelledAt  *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`
+	CancelledBy  *string    `gorm:"column:cancelled_by" json:"cancelled_by"`
+	RestaurantID *string    `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
 }
 
 func (StockReturn) TableName() string { return "stock_returns" }
@@ -347,8 +352,14 @@ type StockReturnLine struct {
 	Qty           decimal.Decimal `gorm:"type:numeric(14,4);not null;default:0" json:"qty"`
 	Unit          *string         `json:"unit"`
 	PricePerUnit  decimal.Decimal `gorm:"column:price_per_unit;type:numeric(14,4);not null;default:0" json:"price_per_unit"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	// CostRolledBack — откатывал ли возврат средневзвешенную себестоимость по
+	// этой строке. Нужен сторно, чтобы зеркалить возврат, а не двигать цену в
+	// свою сторону: иначе цикл «возврат + сторно» завышает стоимость запасов
+	// (см. миграцию 045). Решение принимается по каждому ингредиенту отдельно,
+	// поэтому флаг на строке, а не на документе.
+	CostRolledBack bool      `gorm:"column:cost_rolled_back;not null;default:false" json:"cost_rolled_back"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (StockReturnLine) TableName() string { return "stock_return_lines" }

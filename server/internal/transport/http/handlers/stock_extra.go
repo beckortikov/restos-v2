@@ -198,23 +198,6 @@ func (h *StockReadsHandler) ListCategories(w http.ResponseWriter, r *http.Reques
 	respond.JSON(w, http.StatusOK, makeList[string](rows, ""))
 }
 
-// ─── Receipt confirm (on existing StockHandler/svc) ────────────────────────
-// Прицеплено к существующему StockHandler для DRY.
-
-func (h *StockHandler) ConfirmReceipt(w http.ResponseWriter, r *http.Request) {
-	var in service.ConfirmReceiptInput
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		respond.BadRequest(w, "invalid JSON body")
-		return
-	}
-	receipt, err := h.svc.ConfirmReceipt(r.Context(), chi.URLParam(r, "id"), in)
-	if err != nil {
-		respond.Error(w, err)
-		return
-	}
-	respond.JSON(w, http.StatusOK, receipt)
-}
-
 // ─── Inventory reads ───────────────────────────────────────────────────────
 
 type InventoryReadsHandler struct {

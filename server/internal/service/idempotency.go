@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 )
@@ -39,6 +40,73 @@ type Cached struct {
 
 // ErrConflict возвращается, если ключ уже использован для ДРУГОГО запроса.
 var ErrConflict = errors.New("idempotency: key reused for different request")
+
+// ErrInProgress — операция под этим ключом ещё выполняется ИЛИ упала после
+// коммита (осталась pending-строка). Повтор НЕ выполняем — иначе двойное
+// списание. Клиент должен опросить состояние, а не повторять мутацию (#26).
+var ErrInProgress = errors.New("idempotency: operation in progress")
+
+// Reserve атомарно резервирует ключ ДО выполнения операции: INSERT строки с
+// response_status=0 (pending) через ON CONFLICT DO NOTHING. Так ключ занят
+// раньше, чем деньги двинулись, и краш между коммитом и записью ответа больше
+// не открывает окно для повторного исполнения (#26).
+//
+// reserved=true → ключ наш, выполняем и потом Complete.
+// cached!=nil    → операция уже завершена, вернуть кэш.
+// ErrConflict    → тот же ключ, другой запрос.
+// ErrInProgress  → pending-строка (в процессе / упала после коммита).
+func (s *IdempotencyService) Reserve(ctx context.Context, key, method, path string, requestBody []byte, restaurantID, userID *string) (bool, *Cached, error) {
+	if key == "" {
+		return true, nil, nil
+	}
+	now := time.Now().UTC()
+	hash := hashRequest(method, path, requestBody)
+	row := models.IdempotencyKey{
+		Key: key, Method: method, Path: path, RequestHash: hash,
+		ResponseStatus: 0, ResponseBody: nil, RestaurantID: restaurantID, UserID: userID,
+		CreatedAt: now, ExpiresAt: now.Add(CacheTTL),
+	}
+	res := s.db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).
+		Clauses(clause.OnConflict{DoNothing: true}).Create(&row)
+	if res.Error != nil {
+		return false, nil, res.Error
+	}
+	if res.RowsAffected == 1 {
+		return true, nil, nil // зарезервировали
+	}
+	// Строка уже есть — читаем её состояние.
+	var existing models.IdempotencyKey
+	if err := s.db.WithContext(ctx).Where("key = ?", key).First(&existing).Error; err != nil {
+		return false, nil, err
+	}
+	if existing.RequestHash != hash {
+		return false, nil, ErrConflict
+	}
+	if existing.ResponseStatus == 0 {
+		return false, nil, ErrInProgress
+	}
+	return false, &Cached{Status: existing.ResponseStatus, Body: existing.ResponseBody}, nil
+}
+
+// Complete обновляет зарезервированную строку реальным ответом (после хендлера).
+func (s *IdempotencyService) Complete(ctx context.Context, key string, status int, respBody []byte) error {
+	if key == "" {
+		return nil
+	}
+	return s.db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).
+		Model(&models.IdempotencyKey{}).Where("key = ?", key).
+		Updates(map[string]any{"response_status": status, "response_body": respBody}).Error
+}
+
+// Release удаляет pending-резерв, если хендлер ответил НЕ 2xx (ошибка/валидация)
+// — чтобы клиент мог исправить запрос и повторить с тем же ключом.
+func (s *IdempotencyService) Release(ctx context.Context, key string) error {
+	if key == "" {
+		return nil
+	}
+	return s.db.WithContext(ctx).Session(&gorm.Session{SkipHooks: true}).
+		Where("key = ? AND response_status = 0", key).Delete(&models.IdempotencyKey{}).Error
+}
 
 // Lookup проверяет, есть ли кэш под ключ + хэш запроса.
 //   - ok=true → запрос уже выполнялся, body вернуть как есть.

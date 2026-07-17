@@ -1,7 +1,7 @@
 -- +goose Up
 -- +goose StatementBegin
 --
--- 043_size_scales — переиспользуемые шкалы размеров («25/30/35»).
+-- 046_size_scales — переиспользуемые шкалы размеров («25/30/35»).
 --
 -- Отдельно от menu_attributes: значения атрибута сегодня заводятся с нуля
 -- на каждом продукте (свободный текст), поэтому ничего не гарантирует, что
@@ -9,7 +9,7 @@
 -- же размер. Шкала — общий справочник значений, на который продукт (через
 -- menu_attributes.size_scale_id) и полуфабрикат (semi_finished_types.
 -- size_scale_value_id) ссылаются, вместо того чтобы каждый раз перепечатывать
--- одинаковые лейблы. См. 044_size_scale_links.sql для самих связей.
+-- одинаковые лейблы. См. 047_size_scale_links.sql для самих связей.
 --
 CREATE TABLE IF NOT EXISTS size_scales (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

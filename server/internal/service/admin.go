@@ -660,12 +660,23 @@ type SupplierPayDebtInput struct {
 // RecomputeDebts пересчитывает current_debt ВСЕХ поставщиков из первоисточника:
 //
 //	current_debt = Σ(stock_receipts.debt_amount данного поставщика)
-//	             − Σ(оплат долга: financial_operations category='supplier_payment')
+//
+// debt_amount — ОСТАТОК долга накладной: PayDebt раскладывает оплату по
+// накладным (allocateDebtPayment), возврат уменьшает её же. Поэтому вычитать
+// оплаты отдельно больше не нужно.
+//
+// До v3.16.89 формула была «Σ debt_amount − Σ оплат (category='supplier_payment'
+// по counterparty)», а debt_amount оставался НАЧИСЛЕННЫМ навсегда. Из-за этого
+// экран «Накладные» завышал «Задолженность», карточка поставщика показывала два
+// разных долга рядом, а сверка оплат ломалась при переименовании поставщика
+// (matching шёл по counterparty = имени). Миграция 043 разложила прошлые оплаты
+// по накладным, так что суммарный долг поставщика не изменился — изменилось
+// только его распределение.
 //
 // Нужен, когда денормализованное поле разошлось с реальностью: миграция бэкфилла
-// (035) не отработала после восстановления из бэкапа / обновления со старой
-// версии, где её ещё не было. Это ручной само-ремонт «в один клик» — не полагаемся
-// на одноразовую миграцию. Каст обеих сторон к text — против дрейфа типов uuid/text.
+// не отработала после восстановления из бэкапа / обновления со старой версии.
+// Это ручной само-ремонт «в один клик» — не полагаемся на одноразовую миграцию.
+// Каст обеих сторон к text — против дрейфа типов uuid/text.
 // GREATEST(0,…) — долг не уходит в минус. Возвращает число обновлённых строк.
 func (s *SuppliersService) RecomputeDebts(ctx context.Context) (int64, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
@@ -677,10 +688,6 @@ func (s *SuppliersService) RecomputeDebts(ctx context.Context) (int64, error) {
 		  current_debt = GREATEST(0,
 		    COALESCE((SELECT SUM(sr.debt_amount) FROM stock_receipts sr
 		              WHERE sr.supplier_id::text = s.id::text), 0)
-		    - COALESCE((SELECT SUM(fo.amount) FROM financial_operations fo
-		                WHERE fo.category = 'supplier_payment'
-		                  AND fo.counterparty = s.name
-		                  AND fo.restaurant_id::text = s.restaurant_id::text), 0)
 		  ),
 		  updated_at = now()
 		WHERE s.restaurant_id = ?`, rid)
@@ -690,12 +697,58 @@ func (s *SuppliersService) RecomputeDebts(ctx context.Context) (int64, error) {
 	return res.RowsAffected, nil
 }
 
+// allocateDebtPayment раскладывает оплату долга по накладным поставщика FIFO
+// (старые сначала), уменьшая stock_receipts.debt_amount.
+//
+// Зачем: до этого оплата уменьшала только suppliers.current_debt, а накладная
+// помнила начисленный долг вечно. «Сколько ещё должны по этой накладной» было
+// неизвестно в принципе, и все экраны, показывавшие debt_amount как долг, врали.
+// FIFO — самая честная раскладка без привязки платежа к накладной в UI: гасим
+// то, что просрочено раньше.
+func allocateDebtPayment(tx *gorm.DB, rid, supplierID string, amount decimal.Decimal, now time.Time) error {
+	if !decimal.IsPositive(amount) {
+		return nil
+	}
+	var receipts []models.StockReceipt
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("restaurant_id = ? AND supplier_id = ? AND debt_amount > 0", rid, supplierID).
+		Order("created_at, id").Find(&receipts).Error; err != nil {
+		return err
+	}
+	left := amount
+	for i := range receipts {
+		if !decimal.IsPositive(left) {
+			break
+		}
+		cut := receipts[i].DebtAmount
+		if left.LessThan(cut) {
+			cut = left
+		}
+		if err := tx.Model(&receipts[i]).Updates(map[string]any{
+			"debt_amount": decimal.Normalize(decimal.Sub(receipts[i].DebtAmount, cut)),
+			"updated_at":  now,
+		}).Error; err != nil {
+			return err
+		}
+		left = decimal.Sub(left, cut)
+	}
+	return nil
+}
+
 // PayDebt — гашение долга поставщику. Атомарно: списывает сумму со счёта,
 // уменьшает supplier.current_debt, создаёт financial_operation out
 // category='supplier_payment'. Это гашение обязательства, а НЕ операционный
 // расход (расход признаётся как COGS при продаже товара), поэтому категория
 // исключена из opex ОПиУ. Переплатить долг нельзя (сумма клампится к остатку).
 func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPayDebtInput) (*models.Supplier, error) {
+	// Гашение долга списывает деньги со счёта — серверная проверка обязательна.
+	// Экран поставщика гейта canDo не имеет (закрыт навигацией), поэтому берём
+	// оба права, которыми эту операцию делают в жизни: кладовщик ведёт
+	// поставщиков, бухгалтер — деньги. Одного suppliers.manage мало: он есть у
+	// кладовщика, но не у бухгалтера, и тот перестал бы платить по долгам.
+	if !hasPermFor(ctx, s.r, "suppliers.manage") && !hasPermFor(ctx, s.r, "finance.manage") {
+		return nil, apperrors.Wrap("FORBIDDEN", "недостаточно прав для гашения долга поставщику", nil)
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -725,6 +778,13 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 		pay := amount
 		if pay.GreaterThan(sup.CurrentDebt) {
 			pay = sup.CurrentDebt // не переплачиваем долг
+		}
+		// Порядок замков (см. orders_perms.go): поставщик → накладные → счёт.
+		// Раскладку делаем ДО блокировки счёта: раньше было наоборот, и получался
+		// AB-BA с возвратом (он берёт накладную и тянется к поставщику) — одновременные
+		// «оплатить долг» и «возврат» вешали друг друга насмерть.
+		if err := allocateDebtPayment(tx, rid, sup.ID, pay, now); err != nil {
+			return err
 		}
 		var acc models.FinancialAccount
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).

@@ -234,16 +234,25 @@ func TestPhase9_AssetsLiabilitiesEquityBudget(t *testing.T) {
 		t.Errorf("assets list: %d", len(assetEnv.Data))
 	}
 
-	// Patch liability — paid_amount → remaining пересчитывается.
-	patchPath := fmt.Sprintf("/api/v1/liabilities/%s", liab.ID)
-	pr, pb := f.patch(t, patchPath, tok, uuid.NewString(), map[string]any{"paid_amount": "50000"})
+	// Погашение обязательства — через /pay (со списанием со счёта). Прямой PATCH
+	// paid_amount запрещён (#9): иначе долг уменьшался мимо кассы. Изначально
+	// remaining=80000; платим 30000 → remaining 50000.
+	ar, ab := f.post(t, "/api/v1/finance/accounts", tok, uuid.NewString(),
+		map[string]any{"name": "Loan pay acc", "type": "bank", "balance": "100000"})
+	if ar.StatusCode != 200 && ar.StatusCode != 201 {
+		t.Fatalf("create pay account %d: %s", ar.StatusCode, ab)
+	}
+	var payAccModel models.FinancialAccount
+	_ = json.Unmarshal(ab, &payAccModel)
+	pr, pb := f.post(t, fmt.Sprintf("/api/v1/liabilities/%s/pay", liab.ID), tok, uuid.NewString(),
+		map[string]any{"amount": "30000", "account_id": payAccModel.ID})
 	if pr.StatusCode != 200 {
-		t.Fatalf("patch %d: %s", pr.StatusCode, pb)
+		t.Fatalf("pay %d: %s", pr.StatusCode, pb)
 	}
 	var patched models.Liability
 	_ = json.Unmarshal(pb, &patched)
 	if patched.RemainingAmount.String() != "50000" {
-		t.Errorf("remaining after patch = %s, want 50000", patched.RemainingAmount.String())
+		t.Errorf("remaining after pay = %s, want 50000", patched.RemainingAmount.String())
 	}
 
 	// Delete asset.

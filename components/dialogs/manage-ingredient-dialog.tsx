@@ -12,13 +12,14 @@ import { UNITS, type Ingredient, type StockMovement, type StockMovementType } fr
 import { fetchIngredientCategories, fetchStockMovements } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { formatTime, formatNum } from '@/lib/helpers'
-import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, History } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, History, Undo2 } from 'lucide-react'
 
 // Стиль движений — как в «Истории движений» (warehouse/history), чтобы карточка
 // товара читалась одинаково с общей историей.
 const MOVE_META: Record<StockMovementType, { label: string; color: string; bg: string; Icon: React.ElementType }> = {
   in:    { label: 'Приход',         color: 'text-emerald-600', bg: 'bg-emerald-100 dark:bg-emerald-950/40', Icon: ArrowDownToLine },
   out:   { label: 'Расход',         color: 'text-destructive', bg: 'bg-red-100 dark:bg-red-950/40',         Icon: ArrowUpFromLine },
+  return: { label: 'Возврат',       color: 'text-orange-600',  bg: 'bg-orange-100 dark:bg-orange-950/40',   Icon: Undo2 },
   batch: { label: 'Приготовление',  color: 'text-purple-600',  bg: 'bg-purple-100 dark:bg-purple-950/40',   Icon: CookingPot },
   semi:  { label: 'Производство',   color: 'text-blue-600',    bg: 'bg-blue-100 dark:bg-blue-950/40',       Icon: FlaskConical },
   audit: { label: 'Инвентаризация', color: 'text-amber-600',   bg: 'bg-amber-100 dark:bg-amber-950/40',     Icon: ClipboardCheck },

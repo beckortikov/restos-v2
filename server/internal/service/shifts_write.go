@@ -500,14 +500,23 @@ func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc strin
 	}
 	t := "cash_out"
 	d := desc
+	// #28: помечаем авто-зеркало — его нельзя удалять из смены как обычное
+	// изъятие (иначе expected_cash поднимется, а деньги со счёта уже ушли).
+	autoCat := autoMirrorCategory
 	op := &models.CashShiftOperation{
 		ID:          uuid.NewString(),
 		ShiftID:     &shift.ID,
 		Type:        &t,
 		Amount:      decimal.Normalize(amount),
 		Description: &d,
+		Category:    &autoCat,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
 	return tx.Create(op).Error
 }
+
+// autoMirrorCategory — метка авто-зеркал cash_out (зарплата/возврат/ручной
+// расход наличными). Такие операции создаёт система как отражение оттока со
+// счёта; удалять их вручную нельзя (см. DeleteOperation).
+const autoMirrorCategory = "__auto_mirror__"
