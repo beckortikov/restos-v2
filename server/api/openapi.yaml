@@ -461,17 +461,6 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptInput" } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
 
-  /api/v1/stock/receipts/{id}/confirm:
-    post:
-      tags: [stock]
-      summary: Подтвердить приёмку. Для credit — создаст Liability, при account_id — FinancialOperation.
-      parameters:
-        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmReceiptInput" } } }
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
 
   /api/v1/stock/returns:
     get:
@@ -500,6 +489,26 @@ paths:
             Возврат больше, чем пришло по строке накладной; больше фактического
             остатка на складе; либо refund_type не соответствует остатку долга
             (debt при погашенном долге / money при непогашенном).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/stock/returns/{id}/cancel:
+    post:
+      tags: [stock]
+      summary: Сторно возврата — товар назад на склад, деньги/долг откатываются.
+      description: >
+        Строка не удаляется (документы append-only): проставляется cancelled_at,
+        а компенсация проводится отдельными движениями склада и встречной
+        финоперацией — история читается целиком. Отменённый возврат перестаёт
+        считаться в guard'е «нельзя вернуть больше, чем пришло»: товар вернулся,
+        значит его снова можно возвращать. Склад принимает товар по формуле
+        приёмки (средневзвешенная вперёд) — для входящего товара это корректно.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReturn" } } } }
+        "409":
+          description: Возврат уже отменён; либо на счёте не хватает денег вернуть их поставщику.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/stock/writeoffs:
@@ -3240,11 +3249,6 @@ components:
     StockReceiptsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReceipt" } }, next_cursor: { type: string } } }
     StockReturnsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReturn" } }, next_cursor: { type: string } } }
     StockWriteoffsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockWriteoff" } }, next_cursor: { type: string } } }
-    ConfirmReceiptInput:
-      type: object
-      properties:
-        account_id: { type: string, format: uuid }
-        payment_type: { type: string, enum: [paid, credit] }
     InventoryChecksList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/InventoryCheck" } }, next_cursor: { type: string } } }
     InventoryCheckLine:
       type: object
@@ -3394,6 +3398,8 @@ components:
         refund_type: { type: string, enum: [debt, money] }
         account_id: { type: string, format: uuid, nullable: true }
         created_by: { type: string, nullable: true }
+        cancelled_at: { type: string, format: date-time, nullable: true, description: "Сторно: товар вернулся на склад, деньги/долг откатились" }
+        cancelled_by: { type: string, nullable: true }
         created_at: { type: string, format: date-time }
 
     WriteoffInput:

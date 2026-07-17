@@ -42,6 +42,10 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
+  // Один ключ на сессию диалога: два клика по «Провести возврат» уйдут с ним же,
+  // и бэк вернёт кэшированный ответ первого вместо второго возврата. Флаг saving
+  // закрывает гонку только в пределах рендера, ключ — на уровне сети.
+  const [idemKey, setIdemKey] = useState('')
 
   // Сколько долга этот возврат реально может погасить. Зеркалит бэк:
   // debtRoom = min(receipt.debt_amount, supplier.current_debt). Одного
@@ -57,6 +61,7 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
     setQtyByLine({})
     setNote('')
     setReason('spoilage')
+    setIdemKey(crypto.randomUUID())
     setLoading(true)
     Promise.all([
       fetchStockReturns({ receiptId: receipt.id }),
@@ -122,6 +127,7 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
         accountId: refundType === 'money' ? accountId : undefined,
         note: note.trim() || undefined,
         lines: selected.map(r => ({ receiptLineId: r.line.id as string, qty: r.qty })),
+        idempotencyKey: idemKey,
       })
       toast.success(
         refundType === 'debt'

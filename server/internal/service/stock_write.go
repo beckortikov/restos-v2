@@ -140,6 +140,13 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 		paid = totalAmount
 		debt = decimal.Zero
 	}
+	// Долг без поставщика предъявить некому: ниже current_debt начисляется только
+	// при известном supplier_id, поэтому такой долг оставался невидимым для
+	// пассивов, а возврат по такой накладной попадал в тупик — гасить не на кого,
+	// а деньгами нельзя (за товар не платили). Запрещаем на входе.
+	if decimal.IsPositive(debt) && (in.SupplierID == nil || *in.SupplierID == "") {
+		return nil, apperrors.Wrap("VALIDATION", "накладная в долг требует поставщика: долг не на кого записать", nil)
+	}
 
 	var created *models.StockReceipt
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -283,7 +290,14 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 		// source_ref="receipt:<id>" + UNIQUE(restaurant_id, source_ref) → идемпотентность.
 		if in.AccountID != nil && *in.AccountID != "" && decimal.IsPositive(paid) {
 			var acc models.FinancialAccount
-			if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
+			// FOR UPDATE обязателен: ниже read-modify-write абсолютного баланса.
+			// Без блокировки две параллельные операции по одному счёту читают
+			// одинаковый старый баланс и вторая затирает первую — деньги пропадают.
+			// Приёмка была единственным местом в финансах без этой блокировки
+			// (ср. PayDebt, возврат, finance.go), и возврат добавил ей конкурента
+			// за тот же balance.
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
 				return apperrors.Wrap("VALIDATION", "account not found", err)
 			}
 			newBal := decimal.Normalize(decimal.Sub(acc.Balance, paid))

@@ -719,6 +719,10 @@ export interface StockReturn {
   refundType: RefundType
   accountId?: string
   createdBy?: string
+  // Сторно: товар вернулся на склад, деньги/долг откатились. Документ остаётся
+  // в истории, но перестаёт считаться возвращённым.
+  cancelledAt?: string
+  cancelledBy?: string
   createdAt: string
   lines: StockReturnLine[]
 }

@@ -140,30 +140,6 @@ export async function createReceipt(receipt: Omit<StockReceipt, 'id'>) {
   return data
 }
 
-export async function confirmReceipt(id: string, confirmedBy: string) {
-  // confirmed_by резолвится бэком из session token — не отправляем.
-  void confirmedBy
-  await unwrap(api.POST('/api/v1/stock/receipts/{id}/confirm', {
-    params: { path: { id } },
-    body: {} as any,
-  }))
-  logAction('receipt.confirm', 'receipt', id)
-}
-
-export async function confirmReceiptFull(receiptId: string, confirmedBy: string, accountId?: string) {
-  const result = await unwrap(api.POST('/api/v1/stock/receipts/{id}/confirm', {
-    params: { path: { id: receiptId } },
-    body: {
-      confirmed_by: confirmedBy,
-      account_id: accountId,
-      payment_type: accountId ? 'paid' : 'credit',
-    } as any,
-  }))
-  logAction('receipt.confirm', 'receipt', receiptId, 'Накладная подтверждена')
-  await checkAndUpdateStopList()
-  return result
-}
-
 export async function fetchStockReturns(opts?: { supplierId?: string; receiptId?: string }): Promise<StockReturn[]> {
   const params: Record<string, string> = { include: 'lines' }
   if (opts?.supplierId) params.supplier_id = opts.supplierId
@@ -182,10 +158,16 @@ export async function createStockReturn(input: {
   accountId?: string
   note?: string
   lines: { receiptLineId: string; qty: number }[]
+  // idempotencyKey — стабильный ключ операции. Middleware (lib/api/v4-typed.ts)
+  // генерит свой на КАЖДЫЙ fetch, поэтому от двойного клика он не спасает: два
+  // клика = два ключа = два возврата. Форма передаёт один ключ на попытку
+  // проведения, и второй клик получает кэшированный ответ первого.
+  idempotencyKey?: string
 }) {
   // Тело без каста: ReturnInput описан в openapi.yaml целиком, поэтому
   // сгенерённые типы точны и оно типизируется само (бюджет — в _debt.test.ts).
   const data = await unwrap(api.POST('/api/v1/stock/returns', {
+    ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
     body: {
       receipt_id: input.receiptId,
       reason: input.reason,
@@ -198,6 +180,14 @@ export async function createStockReturn(input: {
   logAction('stock.return', 'return', data?.id, 'Возврат поставщику')
   await checkAndUpdateStopList()
   return data
+}
+
+// cancelStockReturn — сторно возврата: товар назад на склад, деньги/долг
+// откатываются. Документ не удаляется, помечается отменённым.
+export async function cancelStockReturn(id: string) {
+  await unwrap(api.POST('/api/v1/stock/returns/{id}/cancel', { params: { path: { id } } }))
+  logAction('stock.return_cancel', 'return', id, 'Сторно возврата поставщику')
+  await checkAndUpdateStopList()
 }
 
 export async function fetchWriteoffs(): Promise<StockWriteoff[]> {
@@ -461,6 +451,8 @@ function mapStockReturn(r: Record<string, unknown>): StockReturn {
     refundType: (r.refund_type as RefundType) ?? 'debt',
     accountId: (r.account_id as string | null) ?? undefined,
     createdBy: (r.created_by as string | null) ?? undefined,
+    cancelledAt: (r.cancelled_at as string | null) ?? undefined,
+    cancelledBy: (r.cancelled_by as string | null) ?? undefined,
     createdAt: (r.created_at as string) ?? '',
     lines: linesRaw.map(l => ({
       id: (l.id as string) ?? '',

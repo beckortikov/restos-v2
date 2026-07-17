@@ -124,6 +124,10 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 		// Уже возвращённое по каждой строке — база guard'а. stock_return_lines не
 		// имеет restaurant_id; receipt_line_id IN ids (строки уже отскоупленной
 		// накладной) — единственный безопасный фильтр, как в ListReceiptsWithLines.
+		//
+		// Отменённые возвраты не считаем: товар по ним приехал назад на склад,
+		// значит его снова можно вернуть. Иначе ошибочный возврат навсегда
+		// «съедал» количество, и после сторно вернуть товар было бы нечем.
 		returned := make(map[string]decimal.Decimal, len(rLines))
 		if len(ids) > 0 {
 			var rows []struct {
@@ -131,9 +135,11 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				Qty           decimal.Decimal `gorm:"column:qty"`
 			}
 			if err := tx.Model(&models.StockReturnLine{}).
-				Select("receipt_line_id, COALESCE(SUM(qty), 0) AS qty").
-				Where("receipt_line_id IN ?", ids).
-				Group("receipt_line_id").Scan(&rows).Error; err != nil {
+				Joins("JOIN stock_returns sr ON sr.id = stock_return_lines.return_id").
+				Select("stock_return_lines.receipt_line_id AS receipt_line_id, COALESCE(SUM(stock_return_lines.qty), 0) AS qty").
+				Where("stock_return_lines.receipt_line_id IN ?", ids).
+				Where("sr.cancelled_at IS NULL").
+				Group("stock_return_lines.receipt_line_id").Scan(&rows).Error; err != nil {
 				return err
 			}
 			for _, row := range rows {
@@ -492,6 +498,243 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 		s.pub.Flush(ctx, rid, buf)
 	}
 	return created, nil
+}
+
+// CancelReturn — сторно возврата: товар приезжает назад на склад, деньги/долг
+// откатываются. Строку не удаляем (документы append-only) — помечаем
+// cancelled_at, а компенсацию проводим отдельными движениями, чтобы история
+// читалась целиком.
+//
+// Склад отдаём обратно по формуле ПРИЁМКИ (средневзвешенная вперёд), а не
+// «обратным откатом»: товар физически входит на склад по цене накладной — это
+// ровно приёмка. Если исходный возврат цену откатывал (расхода не было), сторно
+// вернёт её как было; если не откатывал (расход был) — цена сместится к цене
+// накладной, что для входящего товара корректно.
+func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.StockReturn, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	actor, _ := audit.ActorFromContext(ctx)
+	now := time.Now().UTC()
+
+	var out *models.StockReturn
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+
+		var ret models.StockReturn
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, id).First(&ret).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		if ret.CancelledAt != nil {
+			return apperrors.Wrap("CONFLICT", "возврат уже отменён", nil)
+		}
+
+		var lines []models.StockReturnLine
+		if err := tx.Where("return_id = ?", ret.ID).Find(&lines).Error; err != nil {
+			return err
+		}
+
+		// Ингредиенты под замком — read-modify-write цены, как в приёмке.
+		ingByID := make(map[string]*models.Ingredient)
+		{
+			ids := make([]string, 0, len(lines))
+			seen := make(map[string]struct{})
+			for i := range lines {
+				id := deref(lines[i].IngredientID)
+				if id == "" {
+					continue
+				}
+				if _, ok := seen[id]; !ok {
+					seen[id] = struct{}{}
+					ids = append(ids, id)
+				}
+			}
+			if len(ids) > 0 {
+				var ings []models.Ingredient
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("restaurant_id = ? AND id IN ?", rid, ids).Find(&ings).Error; err != nil {
+					return err
+				}
+				for i := range ings {
+					ingByID[ings[i].ID] = &ings[i]
+				}
+			}
+		}
+
+		for i := range lines {
+			l := &lines[i]
+			ingID := deref(l.IngredientID)
+			if ingID == "" {
+				continue
+			}
+			ing := ingByID[ingID]
+			stockUnit := ""
+			if ing != nil && ing.Unit != nil {
+				stockUnit = *ing.Unit
+			}
+			stockQty := units.Convert(l.Qty, deref(l.Unit), stockUnit)
+			mvUnit := l.Unit
+			if stockUnit != "" {
+				mvUnit = &stockUnit
+			}
+
+			// Компенсирующее движение +qty. Тип тот же (return_supplier), знак
+			// обратный — в истории склада видно и возврат, и его сторно.
+			mvType := "return_supplier"
+			desc := "return_cancel:" + ret.ID
+			mv := &models.StockMovement{
+				ID:             uuid.NewString(),
+				Type:           &mvType,
+				IngredientID:   &ingID,
+				IngredientName: l.Name,
+				Description:    &desc,
+				Qty:            stockQty,
+				Unit:           mvUnit,
+				RestaurantID:   &rid,
+				CreatedAt:      now,
+			}
+			if ing != nil {
+				mv.WarehouseID = ing.WarehouseID
+			}
+			if err := tx.Create(mv).Error; err != nil {
+				return err
+			}
+
+			// Средневзвешенная вперёд — формула приёмки.
+			if ing != nil && decimal.IsPositive(stockQty) {
+				cost := decimal.Mul(l.Qty, l.PricePerUnit)
+				denom := decimal.Add(ing.Qty, stockQty)
+				var newPrice decimal.Decimal
+				if decimal.IsPositive(denom) && !decimal.IsNegative(ing.Qty) {
+					newPrice = decimal.DivRound(decimal.Add(decimal.Mul(ing.Qty, ing.PricePerUnit), cost), denom)
+				} else {
+					// Остаток был отрицательным/нулевым — историческая стоимость
+					// невалидна, берём чистую цену накладной (как в CreateReceipt).
+					newPrice = decimal.DivRound(cost, stockQty)
+				}
+				newPrice = decimal.Normalize(newPrice)
+				if err := tx.Model(&models.Ingredient{}).
+					Where("restaurant_id = ? AND id = ?", rid, ingID).
+					Update("price_per_unit", newPrice).Error; err != nil {
+					return err
+				}
+				ing.Qty = denom
+				ing.PricePerUnit = newPrice
+			}
+		}
+
+		// Деньги — зеркало того, что сделал возврат.
+		switch ret.RefundType {
+		case "debt":
+			// Долг возвращается на место: и накладной, и поставщику.
+			var receipt models.StockReceipt
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, ret.ReceiptID).First(&receipt).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&receipt).Updates(map[string]any{
+				"debt_amount": decimal.Normalize(decimal.Add(receipt.DebtAmount, ret.TotalAmount)),
+				"updated_at":  now,
+			}).Error; err != nil {
+				return err
+			}
+			if ret.SupplierID != nil && *ret.SupplierID != "" {
+				var sup models.Supplier
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("restaurant_id = ? AND id = ?", rid, *ret.SupplierID).First(&sup).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&sup).Updates(map[string]any{
+					"current_debt": decimal.Normalize(decimal.Add(sup.CurrentDebt, ret.TotalAmount)),
+					"updated_at":   now,
+				}).Error; err != nil {
+					return err
+				}
+			}
+		case "money":
+			// Деньги уходят обратно поставщику: снимаем со счёта встречной
+			// проводкой out/stock_purchase — она схлопнется с приходом возврата,
+			// и в ДДС период сойдётся в ноль.
+			if ret.AccountID == nil || *ret.AccountID == "" {
+				return apperrors.Wrap("CONFLICT", "у возврата не указан счёт — сторно невозможно", nil)
+			}
+			var acc models.FinancialAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *ret.AccountID).First(&acc).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "account not found", err)
+			}
+			newBal := decimal.Normalize(decimal.Sub(acc.Balance, ret.TotalAmount))
+			if decimal.IsNegative(newBal) {
+				return apperrors.Wrap("CONFLICT", "на счёте недостаточно денег, чтобы отменить возврат", nil)
+			}
+			if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			opType := "out"
+			opCat := "stock_purchase"
+			opActivity := "operational"
+			opDate := now.Format("2006-01-02")
+			opSrc := "return_cancel:" + ret.ID
+			isAuto := true
+			opDesc := "Отмена возврата"
+			if ret.SupplierName != nil && *ret.SupplierName != "" {
+				opDesc = "Отмена возврата: " + *ret.SupplierName
+			}
+			accID := *ret.AccountID
+			ridStr := rid
+			if err := tx.Create(&models.FinancialOperation{
+				ID:           uuid.NewString(),
+				Type:         &opType,
+				Amount:       ret.TotalAmount,
+				Category:     &opCat,
+				AccountID:    &accID,
+				AccountName:  acc.Name,
+				Activity:     &opActivity,
+				Date:         &opDate,
+				Description:  &opDesc,
+				Counterparty: ret.SupplierName,
+				IsAuto:       &isAuto,
+				SourceRef:    &opSrc,
+				RestaurantID: &ridStr,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		cancelledBy := actor.UserID
+		if err := tx.Model(&ret).Updates(map[string]any{
+			"cancelled_at": now,
+			"cancelled_by": cancelledBy,
+			"updated_at":   now,
+		}).Error; err != nil {
+			return err
+		}
+		ret.CancelledAt = &now
+		ret.CancelledBy = &cancelledBy
+		out = &ret
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventStockMovement, map[string]any{
+			"kind":         "return_cancel",
+			"return_id":    out.ID,
+			"receipt_id":   out.ReceiptID,
+			"total_amount": out.TotalAmount.String(),
+		})
+		s.pub.Flush(ctx, rid, buf)
+	}
+	return out, nil
 }
 
 // ReturnsFilter — фильтры GET /api/v1/stock/returns.

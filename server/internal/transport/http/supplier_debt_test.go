@@ -169,3 +169,83 @@ func TestPayDebt_AllocatesFIFO(t *testing.T) {
 		t.Errorf("supplier.current_debt = %s, want 460 (Σ долгов накладных)", got)
 	}
 }
+
+// TestSupplyExpense_AllowNegativeFlag — флаг «📦 Хозтовары: разрешить минус»
+// наконец работает. До v3.16.90 он писался в настройках и НИГДЕ не читался:
+// тумблер обещал владельцу контроль, которого не было.
+//
+// Default true → у тех, кто его не трогал, поведение не меняется.
+func TestSupplyExpense_AllowNegativeFlag(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, _ := seedForWrite(t, f)
+
+	soap := seedReturnIngredient(t, gdb, f.rid, "Мыло", "kg")
+	// Кладём 2 кг через движение (прямой UPDATE qty запрещён).
+	mvType := "receipt"
+	if err := gdb.Create(&models.StockMovement{
+		ID: uuid.NewString(), Type: &mvType, IngredientID: &soap.ID,
+		Qty: decimal.MustFromString("2"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	issue := func(qty string) int {
+		r, _ := f.post(t, "/api/v1/supply-expenses", tok, uuid.NewString(), map[string]any{
+			"ingredient_id": soap.ID, "qty": qty, "unit": "kg", "reason": "cleaning",
+		})
+		return r.StatusCode
+	}
+
+	// Флаг включён (default) — минус разрешён, поведение как раньше.
+	if code := issue("5"); code != http.StatusCreated {
+		t.Fatalf("выдача 5 при остатке 2 с разрешённым минусом: %d, want 201", code)
+	}
+	if got := ingQty(t, gdb, soap.ID); !got.Equal(decimal.MustFromString("-3")) {
+		t.Errorf("остаток = %s, want -3 (минус разрешён)", got)
+	}
+
+	// Выключаем флаг — выдача сверх остатка должна отбиваться.
+	if err := gdb.Model(&models.Restaurant{}).Where("id = ?", f.rid).
+		Update("supply_allow_negative", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if code := issue("1"); code != http.StatusConflict {
+		t.Errorf("выдача 1 при остатке -3 с запрещённым минусом: %d, want 409 "+
+			"(флаг снова ничего не делает)", code)
+	}
+	if got := ingQty(t, gdb, soap.ID); !got.Equal(decimal.MustFromString("-3")) {
+		t.Errorf("остаток изменился на отбитой выдаче: %s", got)
+	}
+}
+
+// TestCreateReceipt_CreditRequiresSupplier — накладная в долг без поставщика
+// создавала долг, который некому предъявить: current_debt начисляется только при
+// известном supplier_id, поэтому долг был невидим для пассивов, а возврат по
+// такой накладной попадал в тупик (гасить не на кого, деньгами нельзя).
+func TestCreateReceipt_CreditRequiresSupplier(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, _ := seedForWrite(t, f)
+	ing := seedReturnIngredient(t, gdb, f.rid, "Товар-без-поставщика", "kg")
+
+	line := []map[string]any{{
+		"ingredient_id": ing.ID, "name": "Товар-без-поставщика",
+		"qty": "10", "unit": "kg", "price_per_unit": "5",
+	}}
+
+	// В долг без поставщика — отбой.
+	r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "credit", "supplier_name": "Просто текст", "lines": line,
+	})
+	if r.StatusCode != http.StatusBadRequest {
+		t.Errorf("кредитная накладная без supplier_id: %d %s, want 400", r.StatusCode, b)
+	}
+
+	// Оплаченная без поставщика — можно: долга нет, предъявлять нечего.
+	if r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "paid", "supplier_name": "Просто текст", "lines": line,
+	}); r.StatusCode != http.StatusCreated {
+		t.Errorf("оплаченная накладная без поставщика: %d %s, want 201", r.StatusCode, b)
+	}
+}

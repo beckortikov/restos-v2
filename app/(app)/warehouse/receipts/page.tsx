@@ -6,14 +6,9 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul } from '@/lib/decimal'
 import { type StockReceipt, type Supplier } from '@/lib/types'
-import { fetchReceipts, fetchSuppliers, confirmReceiptFull, fetchFinancialAccounts } from '@/lib/queries'
+import { fetchReceipts, fetchSuppliers } from '@/lib/queries'
 import { Plus, CheckCircle, Clock, CreditCard, Undo2 } from 'lucide-react'
-import { type FinancialAccount } from '@/lib/types'
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
-} from '@/components/ui/dialog'
 import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
-import { toast } from 'sonner'
 
 const PAYMENT_LABELS: Record<string, { label: string; color: string }> = {
   paid: { label: 'Оплачено', color: 'bg-emerald-100 text-emerald-700' },
@@ -22,16 +17,12 @@ const PAYMENT_LABELS: Record<string, { label: string; color: string }> = {
 }
 
 export default function ReceiptsPage() {
-  const { user, canDo } = useAuth()
+  const { canDo } = useAuth()
   const navigate = useNavigate()
   const [expanded, setExpanded] = useState<string | null>(null)
   const [receipts, setReceipts] = useState<StockReceipt[]>([])
   const [, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
-  const [confirmDialog, setConfirmDialog] = useState<{ open: boolean; receiptId: string; receiptTotal: number }>({ open: false, receiptId: '', receiptTotal: 0 })
-  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
-  const [selectedAccountId, setSelectedAccountId] = useState('')
-  const [confirming, setConfirming] = useState(false)
   const [returnFor, setReturnFor] = useState<StockReceipt | null>(null)
 
   useEffect(() => {
@@ -40,31 +31,6 @@ export default function ReceiptsPage() {
       .catch(() => setLoading(false))
   }, [])
 
-  async function openConfirmDialog(receiptId: string) {
-    const receipt = receipts.find(r => r.id === receiptId)
-    if (!receipt) return
-    try {
-      const accs = await fetchFinancialAccounts()
-      setAccounts(accs)
-      setSelectedAccountId(accs.find(a => a.type === 'cash')?.id || accs[0]?.id || '')
-    } catch {}
-    setConfirmDialog({ open: true, receiptId, receiptTotal: receipt.totalAmount })
-  }
-
-  async function handleConfirmReceipt() {
-    setConfirming(true)
-    try {
-      await confirmReceiptFull(confirmDialog.receiptId, user?.id || '', selectedAccountId || undefined)
-      const updated = await fetchReceipts()
-      setReceipts(updated)
-      setConfirmDialog({ open: false, receiptId: '', receiptTotal: 0 })
-      toast.success('Накладная подтверждена. Склад обновлён.')
-    } catch {
-      toast.error('Ошибка при подтверждении накладной')
-    } finally {
-      setConfirming(false)
-    }
-  }
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
@@ -109,7 +75,7 @@ export default function ReceiptsPage() {
         <table className="w-full text-sm min-w-[600px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              {['#', 'Дата', 'Поставщик', 'Оплата', 'Сумма', 'Оплачено', 'Долг', 'Срок', 'Статус', ''].map((h) => (
+              {['#', 'Дата', 'Поставщик', 'Оплата', 'Сумма', 'Оплачено', 'Долг', 'Срок'].map((h) => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
               ))}
             </tr>
@@ -142,29 +108,10 @@ export default function ReceiptsPage() {
                         <span className={isOverdue ? 'text-destructive font-semibold' : 'text-foreground'}>{r.dueDate}</span>
                       ) : <span className="text-muted-foreground">—</span>}
                     </td>
-                    <td className="px-4 py-3">
-                      {r.confirmedAt ? (
-                        <span className="flex items-center gap-1 text-xs text-emerald-600">
-                          <CheckCircle className="size-3.5" />Проведено
-                        </span>
-                      ) : (
-                        <span className="text-xs text-amber-600">Черновик</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3">
-                      {!r.confirmedAt && canDo('inventory.manage') && (
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openConfirmDialog(r.id) }}
-                          className="text-xs text-primary hover:underline whitespace-nowrap"
-                        >
-                          Подтвердить
-                        </button>
-                      )}
-                    </td>
                   </tr>
                   {expanded === r.id && (
                     <tr key={`${r.id}-exp`} className="bg-muted/20">
-                      <td colSpan={10} className="px-6 py-4">
+                      <td colSpan={8} className="px-6 py-4">
                         <div className="flex items-center justify-between gap-3 mb-2 max-w-3xl">
                           <p className="text-xs font-semibold text-muted-foreground">Позиции накладной ({r.lines.length}):</p>
                           {canDo('inventory.manage') && (
@@ -220,44 +167,6 @@ export default function ReceiptsPage() {
         </div>
       </div>
 
-      {/* Confirm receipt dialog — choose account */}
-      <Dialog open={confirmDialog.open} onOpenChange={(v) => setConfirmDialog(p => ({ ...p, open: v }))}>
-        <DialogContent className="sm:max-w-md rounded-xl">
-          <DialogHeader>
-            <DialogTitle>Подтверждение накладной</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <p className="text-sm text-muted-foreground">
-              Сумма: <strong className="text-foreground">{formatCurrency(confirmDialog.receiptTotal)}</strong>
-            </p>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium text-foreground">Списать со счёта</label>
-              <select
-                value={selectedAccountId}
-                onChange={(e) => setSelectedAccountId(e.target.value)}
-                className="w-full px-3 py-2.5 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-              >
-                {accounts.map(a => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} ({a.type === 'cash' ? 'Наличные' : 'Банк'}) — {formatCurrency(a.balance)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <DialogFooter>
-            <button onClick={() => setConfirmDialog(p => ({ ...p, open: false }))}
-              className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted">
-              Отмена
-            </button>
-            <button onClick={handleConfirmReceipt} disabled={!selectedAccountId || confirming}
-              className="px-4 py-2 text-sm font-medium text-white bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2">
-              <CheckCircle className="size-4" />
-              {confirming ? 'Подтверждение...' : 'Подтвердить и списать'}
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Возврат поставщику — склад и деньги/долг назад */}
       <CreateReturnDialog

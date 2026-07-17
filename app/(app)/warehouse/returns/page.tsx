@@ -4,8 +4,11 @@ import React, { useState, useEffect } from 'react'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSum } from '@/lib/decimal'
 import { type StockReturn, RETURN_REASON_LABELS } from '@/lib/types'
-import { fetchStockReturns } from '@/lib/queries'
-import { Undo2, Wallet, Receipt } from 'lucide-react'
+import { fetchStockReturns, cancelStockReturn } from '@/lib/queries'
+import { useAuth } from '@/lib/auth-store'
+import { Undo2, Wallet, Receipt, RotateCcw } from 'lucide-react'
+import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 
 const REFUND_LABELS: Record<string, { label: string; color: string }> = {
   debt: { label: 'Уменьшен долг', color: 'bg-amber-100 text-amber-700' },
@@ -13,9 +16,30 @@ const REFUND_LABELS: Record<string, { label: string; color: string }> = {
 }
 
 export default function ReturnsPage() {
+  const { canDo } = useAuth()
   const [expanded, setExpanded] = useState<string | null>(null)
   const [returns, setReturns] = useState<StockReturn[]>([])
   const [loading, setLoading] = useState(true)
+  const [cancelling, setCancelling] = useState<string | null>(null)
+
+  // Сторно: товар назад на склад, деньги/долг откатываются. Документ остаётся в
+  // истории зачёркнутым — так видно и ошибку, и её исправление.
+  async function handleCancel(r: StockReturn) {
+    setCancelling(r.id)
+    try {
+      await cancelStockReturn(r.id)
+      setReturns(await fetchStockReturns())
+      toast.success(
+        r.refundType === 'debt'
+          ? `Возврат отменён. Долг восстановлен на ${formatCurrency(r.totalAmount)}`
+          : `Возврат отменён. ${formatCurrency(r.totalAmount)} списаны обратно поставщику`,
+      )
+    } catch (e) {
+      toast.error(humanizeError(e))
+    } finally {
+      setCancelling(null)
+    }
+  }
 
   useEffect(() => {
     fetchStockReturns()
@@ -31,9 +55,11 @@ export default function ReturnsPage() {
     )
   }
 
-  const total = dSum(returns.map(r => r.totalAmount))
-  const byMoney = dSum(returns.filter(r => r.refundType === 'money').map(r => r.totalAmount))
-  const byDebt = dSum(returns.filter(r => r.refundType === 'debt').map(r => r.totalAmount))
+  // Итоги — только по действующим: у отменённых товар и деньги вернулись назад.
+  const active = returns.filter(r => !r.cancelledAt)
+  const total = dSum(active.map(r => r.totalAmount))
+  const byMoney = dSum(active.filter(r => r.refundType === 'money').map(r => r.totalAmount))
+  const byDebt = dSum(active.filter(r => r.refundType === 'debt').map(r => r.totalAmount))
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -47,7 +73,7 @@ export default function ReturnsPage() {
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
-          { label: 'Всего возвратов', value: String(returns.length), icon: Undo2, color: 'text-primary' },
+          { label: 'Всего возвратов', value: String(active.length), icon: Undo2, color: 'text-primary' },
           { label: 'Вернули деньгами', value: formatCurrency(byMoney), icon: Wallet, color: 'text-emerald-600' },
           { label: 'Уменьшили долг', value: formatCurrency(byDebt), icon: Receipt, color: 'text-amber-600' },
         ].map((stat) => (
@@ -75,7 +101,7 @@ export default function ReturnsPage() {
             <table className="w-full text-sm min-w-[600px]">
               <thead>
                 <tr className="border-b border-border bg-muted/40">
-                  {['Дата', 'Поставщик', 'Причина', 'Куда деньги', 'Позиций', 'Сумма'].map((h) => (
+                  {['Дата', 'Поставщик', 'Причина', 'Куда деньги', 'Позиций', 'Сумма', ''].map((h) => (
                     <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                   ))}
                 </tr>
@@ -87,7 +113,9 @@ export default function ReturnsPage() {
                     <React.Fragment key={r.id}>
                       <tr
                         onClick={() => setExpanded(expanded === r.id ? null : r.id)}
-                        className="border-b border-border hover:bg-muted/30 cursor-pointer transition-colors"
+                        className={`border-b border-border hover:bg-muted/30 cursor-pointer transition-colors ${
+                          r.cancelledAt ? 'opacity-50 line-through' : ''
+                        }`}
                       >
                         <td className="px-4 py-3 text-foreground">{r.date}</td>
                         <td className="px-4 py-3 font-medium text-foreground">{r.supplierName || '—'}</td>
@@ -97,10 +125,24 @@ export default function ReturnsPage() {
                         </td>
                         <td className="px-4 py-3 tabular-nums text-muted-foreground">{r.lines.length}</td>
                         <td className="px-4 py-3 font-semibold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</td>
+                        <td className="px-4 py-3">
+                          {r.cancelledAt ? (
+                            <span className="text-xs text-muted-foreground">Отменён</span>
+                          ) : canDo('inventory.manage') ? (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleCancel(r) }}
+                              disabled={cancelling === r.id}
+                              className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-destructive disabled:opacity-50 whitespace-nowrap transition-colors"
+                            >
+                              <RotateCcw className="size-3.5" />
+                              {cancelling === r.id ? 'Отмена…' : 'Сторно'}
+                            </button>
+                          ) : null}
+                        </td>
                       </tr>
                       {expanded === r.id && (
                         <tr className="bg-muted/20">
-                          <td colSpan={6} className="px-6 py-4">
+                          <td colSpan={7} className="px-6 py-4">
                             {r.note && <p className="text-xs text-muted-foreground mb-2">Комментарий: {r.note}</p>}
                             <div className="overflow-hidden rounded-lg border border-border bg-card max-w-3xl">
                               <table className="w-full text-sm">
@@ -137,6 +179,7 @@ export default function ReturnsPage() {
                 <tr className="bg-muted/20 border-t border-border">
                   <td colSpan={5} className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase tracking-wider">Итого</td>
                   <td className="px-4 py-3 font-bold text-foreground tabular-nums">{formatCurrency(total)}</td>
+                  <td />
                 </tr>
               </tfoot>
             </table>

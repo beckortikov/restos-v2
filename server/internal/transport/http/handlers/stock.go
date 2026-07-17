@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
@@ -59,6 +61,16 @@ func (h *StockHandler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusCreated, ret)
+}
+
+// CancelReturn — POST /api/v1/stock/returns/{id}/cancel.
+func (h *StockHandler) CancelReturn(w http.ResponseWriter, r *http.Request) {
+	ret, err := h.svc.CancelReturn(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, ret)
 }
 
 // OpeningBalance — POST /api/v1/stock/opening-balance.

@@ -1236,51 +1236,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/stock/receipts/{id}/confirm": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Подтвердить приёмку. Для credit — создаст Liability, при account_id — FinancialOperation. */
-        post: {
-            parameters: {
-                query?: never;
-                header?: {
-                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
-                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
-                };
-                path: {
-                    id: string;
-                };
-                cookie?: never;
-            };
-            requestBody: {
-                content: {
-                    "application/json": components["schemas"]["ConfirmReceiptInput"];
-                };
-            };
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content: {
-                        "application/json": components["schemas"]["StockReceipt"];
-                    };
-                };
-            };
-        };
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/v1/stock/returns": {
         parameters: {
             query?: never;
@@ -1346,6 +1301,59 @@ export interface paths {
                     };
                 };
                 /** @description Возврат больше, чем пришло по строке накладной; больше фактического остатка на складе; либо refund_type не соответствует остатку долга (debt при погашенном долге / money при непогашенном). */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/returns/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Сторно возврата — товар назад на склад, деньги/долг откатываются.
+         * @description Строка не удаляется (документы append-only): проставляется cancelled_at, а компенсация проводится отдельными движениями склада и встречной финоперацией — история читается целиком. Отменённый возврат перестаёт считаться в guard'е «нельзя вернуть больше, чем пришло»: товар вернулся, значит его снова можно возвращать. Склад принимает товар по формуле приёмки (средневзвешенная вперёд) — для входящего товара это корректно.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReturn"];
+                    };
+                };
+                /** @description Возврат уже отменён; либо на счёте не хватает денег вернуть их поставщику. */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -10345,12 +10353,6 @@ export interface components {
             data?: components["schemas"]["StockWriteoff"][];
             next_cursor?: string;
         };
-        ConfirmReceiptInput: {
-            /** Format: uuid */
-            account_id?: string;
-            /** @enum {string} */
-            payment_type?: "paid" | "credit";
-        };
         InventoryChecksList: {
             data?: components["schemas"]["InventoryCheck"][];
             next_cursor?: string;
@@ -10483,6 +10485,12 @@ export interface components {
             /** Format: uuid */
             account_id?: string | null;
             created_by?: string | null;
+            /**
+             * Format: date-time
+             * @description Сторно: товар вернулся на склад, деньги/долг откатились
+             */
+            cancelled_at?: string | null;
+            cancelled_by?: string | null;
             /** Format: date-time */
             created_at?: string;
         };

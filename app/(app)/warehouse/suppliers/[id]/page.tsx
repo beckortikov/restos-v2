@@ -2,13 +2,13 @@
 
 import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil } from 'lucide-react'
-import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts } from '@/lib/queries'
+import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2 } from 'lucide-react'
+import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { formatCurrency } from '@/lib/helpers'
 import { dMul } from '@/lib/decimal'
 import { toast } from 'sonner'
-import type { Supplier, StockReceipt } from '@/lib/types'
+import type { Supplier, StockReceipt, StockReturn } from '@/lib/types'
 
 const PAY_BADGE: Record<string, { label: string; cls: string }> = {
   paid: { label: 'Оплачено', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' },
@@ -83,9 +83,19 @@ export default function EditSupplierPage() {
   const [receipts, setReceipts] = useState<StockReceipt[]>([])
   const [loadingReceipts, setLoadingReceipts] = useState(true)
   const [expandedReceipt, setExpandedReceipt] = useState<string | null>(null)
+  const [returns, setReturns] = useState<StockReturn[]>([])
 
   const totalPurchased = useMemo(() => receipts.reduce((s, r) => s + r.totalAmount, 0), [receipts])
   const totalDebt = useMemo(() => receipts.reduce((s, r) => s + r.debtAmount, 0), [receipts])
+  // Действующие возвраты этого поставщика. Без них непонятно, почему долг
+  // уменьшился или откуда приход денег — накладная просто «похудела».
+  const activeReturns = useMemo(() => returns.filter(r => !r.cancelledAt), [returns])
+  const totalReturned = useMemo(() => activeReturns.reduce((s, r) => s + r.totalAmount, 0), [activeReturns])
+  const returnsByReceipt = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of activeReturns) m.set(r.receiptId, (m.get(r.receiptId) ?? 0) + r.totalAmount)
+    return m
+  }, [activeReturns])
   const sortedReceipts = useMemo(
     () => [...receipts].sort((a, b) => (b.date || '').localeCompare(a.date || '')),
     [receipts],
@@ -94,9 +104,9 @@ export default function EditSupplierPage() {
   useEffect(() => {
     if (!id) return
     setLoadingReceipts(true)
-    fetchReceipts({ supplierId: id })
-      .then(setReceipts)
-      .catch(() => setReceipts([]))
+    Promise.all([fetchReceipts({ supplierId: id }), fetchStockReturns({ supplierId: id })])
+      .then(([rc, rt]) => { setReceipts(rc); setReturns(rt) })
+      .catch(() => { setReceipts([]); setReturns([]) })
       .finally(() => setLoadingReceipts(false))
   }, [id])
 
@@ -490,6 +500,9 @@ export default function EditSupplierPage() {
               <div className="flex items-center gap-4 text-xs">
                 <span className="text-muted-foreground">Накладных: <span className="font-bold text-foreground tabular-nums">{receipts.length}</span></span>
                 <span className="text-muted-foreground">Закуплено: <span className="font-bold text-foreground tabular-nums">{formatCurrency(totalPurchased)}</span></span>
+                {totalReturned > 0.005 && (
+                  <span className="text-muted-foreground">Возвращено: <span className="font-bold text-orange-600 dark:text-orange-400 tabular-nums">{formatCurrency(totalReturned)}</span></span>
+                )}
                 {totalDebt > 0.005 && (
                   <span className="text-muted-foreground">Долг: <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatCurrency(totalDebt)}</span></span>
                 )}
@@ -514,6 +527,7 @@ export default function EditSupplierPage() {
                     <th className="text-left font-semibold py-2 pr-3">Оплата</th>
                     <th className="text-right font-semibold py-2 pr-3">Сумма</th>
                     <th className="text-right font-semibold py-2 pr-3">Оплачено</th>
+                    <th className="text-right font-semibold py-2 pr-3">Возврат</th>
                     <th className="text-right font-semibold py-2">Долг</th>
                   </tr>
                 </thead>
@@ -546,6 +560,14 @@ export default function EditSupplierPage() {
                         </td>
                         <td className="py-2.5 pr-3 text-right font-semibold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</td>
                         <td className="py-2.5 pr-3 text-right text-muted-foreground tabular-nums">{formatCurrency(r.paidAmount)}</td>
+                        <td className="py-2.5 pr-3 text-right tabular-nums">
+                          {(returnsByReceipt.get(r.id) ?? 0) > 0.005 ? (
+                            <span className="inline-flex items-center gap-1 text-orange-600 dark:text-orange-400 font-medium">
+                              <Undo2 className="size-3" />
+                              {formatCurrency(returnsByReceipt.get(r.id) ?? 0)}
+                            </span>
+                          ) : <span className="text-muted-foreground">—</span>}
+                        </td>
                         <td className="py-2.5 text-right tabular-nums font-medium">
                           {r.debtAmount > 0.005
                             ? <span className="text-rose-600 dark:text-rose-400">{formatCurrency(r.debtAmount)}</span>
@@ -554,7 +576,7 @@ export default function EditSupplierPage() {
                       </tr>
                       {open && (
                         <tr className="bg-muted/20">
-                          <td colSpan={5} className="px-3 pb-3 pt-1">
+                          <td colSpan={6} className="px-3 pb-3 pt-1">
                             <div className="rounded-lg border border-border/60 overflow-hidden">
                               <table className="w-full text-xs">
                                 <thead>

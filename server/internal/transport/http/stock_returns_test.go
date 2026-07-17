@@ -558,3 +558,103 @@ func TestStockReturn_Guards(t *testing.T) {
 		t.Errorf("qty после возврата всех 10 = %s, want 0", got)
 	}
 }
+
+// TestStockReturn_Cancel — сторно возврата: товар назад на склад, деньги назад
+// поставщику, себестоимость на место, и количество снова доступно к возврату.
+//
+// До v3.16.90 отменить возврат было нечем — только руками в БД. Для документа,
+// который двигает и склад, и деньги, это самая вероятная ошибка оператора.
+func TestStockReturn_Cancel(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+	ing := seedReturnIngredient(t, gdb, f.rid, "Сторно-товар", "kg")
+
+	r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+		"lines": []map[string]any{{
+			"ingredient_id": ing.ID, "name": "Сторно-товар", "qty": "20", "unit": "kg", "price_per_unit": "10",
+		}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("receipt: %d %s", r.StatusCode, b)
+	}
+	var receipt models.StockReceipt
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	lineID := receiptLineID(t, gdb, receipt.ID, ing.ID)
+
+	var accBefore models.FinancialAccount
+	gdb.First(&accBefore, "id = ?", accountID)
+
+	// Возврат 5 кг деньгами = 50.
+	r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+		"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "5"}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("return: %d %s", r.StatusCode, b)
+	}
+	var ret models.StockReturn
+	if err := json.Unmarshal(b, &ret); err != nil {
+		t.Fatal(err)
+	}
+	if got := ingQty(t, gdb, ing.ID); !got.Equal(decimal.MustFromString("15")) {
+		t.Fatalf("предусловие: qty после возврата = %s, want 15", got)
+	}
+
+	// Сторно.
+	r, b = f.post(t, "/api/v1/stock/returns/"+ret.ID+"/cancel", tok, uuid.NewString(), map[string]any{})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("cancel: %d %s", r.StatusCode, b)
+	}
+
+	// Склад вернулся: 15 + 5 = 20.
+	if got := ingQty(t, gdb, ing.ID); !got.Equal(decimal.MustFromString("20")) {
+		t.Errorf("qty после сторно = %s, want 20", got)
+	}
+	// Себестоимость на месте: партия одна, цена 10.
+	var after models.Ingredient
+	gdb.First(&after, "id = ?", ing.ID)
+	if !after.PricePerUnit.Equal(decimal.MustFromString("10")) {
+		t.Errorf("с/с после сторно = %s, want 10", after.PricePerUnit)
+	}
+	// Деньги ушли обратно поставщику — баланс как до возврата.
+	var accAfter models.FinancialAccount
+	gdb.First(&accAfter, "id = ?", accountID)
+	if !accAfter.Balance.Equal(accBefore.Balance) {
+		t.Errorf("баланс после сторно = %s, want %s (как до возврата)", accAfter.Balance, accBefore.Balance)
+	}
+	// Встречная проводка создана и схлопывает приход возврата.
+	var op models.FinancialOperation
+	if err := gdb.Where("source_ref = ?", "return_cancel:"+ret.ID).First(&op).Error; err != nil {
+		t.Fatalf("встречная проводка не создана: %v", err)
+	}
+	if op.Type == nil || *op.Type != "out" {
+		t.Errorf("finop сторно type = %v, want out", op.Type)
+	}
+	// Помечен отменённым.
+	var retAfter models.StockReturn
+	gdb.First(&retAfter, "id = ?", ret.ID)
+	if retAfter.CancelledAt == nil {
+		t.Error("cancelled_at не проставлен")
+	}
+	// Повторное сторно — 409.
+	if r, _ := f.post(t, "/api/v1/stock/returns/"+ret.ID+"/cancel", tok, uuid.NewString(),
+		map[string]any{}); r.StatusCode != http.StatusConflict {
+		t.Errorf("повторное сторно: %d, want 409", r.StatusCode)
+	}
+
+	// Главное: количество снова доступно к возврату. Без исключения отменённых
+	// из guard'а ошибочный возврат навсегда «съел» бы 5 кг из накладной.
+	r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+		"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "20"}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("возврат всех 20 после сторно: %d %s, want 201 "+
+			"(отменённый возврат всё ещё считается в guard'е)", r.StatusCode, b)
+	}
+}

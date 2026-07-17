@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -19,6 +20,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -583,134 +585,6 @@ func (s *StockReadsService) ListCategories(ctx context.Context) ([]string, error
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Receipt confirm
-// ═══════════════════════════════════════════════════════════════════════════
-
-type ConfirmReceiptInput struct {
-	AccountID   *string `json:"account_id,omitempty"`
-	PaymentType *string `json:"payment_type,omitempty"`
-}
-
-// ConfirmReceipt — POST /api/v1/stock/receipts/{id}/confirm.
-//
-// - Если payment_type == "credit" и есть supplier — создаёт Liability на сумму долга.
-// - Если account_id указан — создаёт FinancialOperation (type=expense, category=stock_receipt).
-// - Обновляет confirmed_at/by если ещё нет, и сохраняет payment_type.
-func (s *StockService) ConfirmReceipt(ctx context.Context, id string, in ConfirmReceiptInput) (*models.StockReceipt, error) {
-	rid, err := tenant.MustRestaurantID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	actor, _ := audit.ActorFromContext(ctx)
-	now := time.Now().UTC()
-
-	var result *models.StockReceipt
-	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
-		tx := tr.Raw().WithContext(ctx)
-		var receipt models.StockReceipt
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, id).First(&receipt).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return apperrors.ErrNotFound
-			}
-			return err
-		}
-		updates := map[string]any{"updated_at": now}
-		if in.PaymentType != nil && *in.PaymentType != "" {
-			updates["payment_type"] = *in.PaymentType
-			if *in.PaymentType == "paid" {
-				updates["paid_amount"] = receipt.TotalAmount
-				updates["debt_amount"] = decimal.Zero
-			}
-		}
-		if receipt.ConfirmedAt == nil {
-			updates["confirmed_at"] = now
-			updates["confirmed_by"] = actor.UserID
-		}
-		if err := tx.Model(&receipt).Updates(updates).Error; err != nil {
-			return err
-		}
-		// Эффективный payment_type для side-effects.
-		effPT := ""
-		if in.PaymentType != nil {
-			effPT = *in.PaymentType
-		} else if receipt.PaymentType != nil {
-			effPT = *receipt.PaymentType
-		}
-
-		// Liability для credit.
-		if effPT == "credit" && decimal.IsPositive(receipt.TotalAmount) {
-			name := "Долг поставщику"
-			if receipt.SupplierName != nil && *receipt.SupplierName != "" {
-				name = "Долг: " + *receipt.SupplierName
-			}
-			category := "supplier_debt"
-			ridStr := rid
-			ref := "stock_receipt:" + receipt.ID
-			lia := &models.Liability{
-				ID:              uuid.NewString(),
-				Name:            &name,
-				Category:        &category,
-				TotalAmount:     receipt.TotalAmount,
-				PaidAmount:      decimal.Zero,
-				RemainingAmount: receipt.TotalAmount,
-				Creditor:        receipt.SupplierName,
-				DueDate:         receipt.DueDate,
-				Note:            &ref,
-				RestaurantID:    &ridStr,
-				CreatedAt:       now,
-				UpdatedAt:       now,
-			}
-			if err := tx.Create(lia).Error; err != nil {
-				return err
-			}
-		}
-
-		// FinancialOperation если account_id указан (оплачено наличкой/со счёта).
-		if in.AccountID != nil && *in.AccountID != "" && decimal.IsPositive(receipt.TotalAmount) {
-			opType := "expense"
-			category := "stock_receipt"
-			activity := "operational"
-			date := now.Format("2006-01-02")
-			desc := "stock_receipt:" + receipt.ID
-			ridStr := rid
-			accID := *in.AccountID
-			isAuto := true
-			op := &models.FinancialOperation{
-				ID:           uuid.NewString(),
-				Type:         &opType,
-				Amount:       receipt.TotalAmount,
-				Category:     &category,
-				AccountID:    &accID,
-				Activity:     &activity,
-				Date:         &date,
-				Description:  &desc,
-				Counterparty: receipt.SupplierName,
-				IsAuto:       &isAuto,
-				SourceRef:    &desc,
-				RestaurantID: &ridStr,
-				CreatedAt:    now,
-				UpdatedAt:    now,
-			}
-			if err := tx.Create(op).Error; err != nil {
-				return err
-			}
-		}
-
-		// Reload.
-		var refreshed models.StockReceipt
-		if err := tx.Where("id = ?", id).First(&refreshed).Error; err != nil {
-			return err
-		}
-		result = &refreshed
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // Inventory reads
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -891,6 +765,36 @@ func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInpu
 
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
+
+		// Флаг ресторана «📦 Хозтовары: разрешить минус». Выключен → выдать
+		// больше, чем на складе, нельзя. До v3.16.90 флаг НИГДЕ не читался: он
+		// писался в настройках и молча ничего не делал, то есть тумблер обещал
+		// владельцу контроль, которого не было. Default true — у тех, кто его не
+		// трогал, поведение не меняется; проверка включается только тем, кто
+		// осознанно выключил.
+		//
+		// Читаем остаток под замком в транзакции: без FOR UPDATE две параллельные
+		// выдачи прочитают один остаток и обе пройдут проверку.
+		var allowNeg bool
+		if err := tx.Model(&models.Restaurant{}).
+			Select("COALESCE(supply_allow_negative, true)").
+			Where("id = ?", rid).Scan(&allowNeg).Error; err != nil {
+			return err
+		}
+		if !allowNeg {
+			var locked models.Ingredient
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *in.IngredientID).
+				First(&locked).Error; err != nil {
+				return err
+			}
+			stockQty := units.Convert(qty, deref(unit), deref(locked.Unit))
+			if stockQty.GreaterThan(locked.Qty) {
+				return apperrors.Wrap("CONFLICT",
+					"на складе недостаточно: "+ingName+", остаток "+locked.Qty.String(), nil)
+			}
+		}
+
 		if err := tx.Create(exp).Error; err != nil {
 			return err
 		}
