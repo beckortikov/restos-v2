@@ -78,6 +78,10 @@ export default function SettingsPage() {
   const [pinLockTimeoutMin, setPinLockTimeoutMin] = useState(5)
   const [supplyAllowNegative, setSupplyAllowNegative] = useState(true)
   const [onScreenKeyboardEnabled, setOnScreenKeyboardEnabled] = useState(false)
+  // Режим обслуживания (041): столы в зале / кухня на оплате (фастфуд) + дефолт нового POS.
+  const [tablesEnabled, setTablesEnabled] = useState(true)
+  const [kitchenOnPay, setKitchenOnPay] = useState(false)
+  const [posV2Default, setPosV2Default] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -102,6 +106,9 @@ export default function SettingsPage() {
           setPinLockTimeoutMin(r.pinLockTimeoutMin ?? 5)
           setSupplyAllowNegative(r.supplyAllowNegative ?? true)
           setOnScreenKeyboardEnabled(r.onScreenKeyboardEnabled ?? false)
+          setTablesEnabled(r.tablesEnabled ?? true)
+          setKitchenOnPay(r.kitchenOnPay ?? false)
+          setPosV2Default(r.posV2Default ?? false)
         }
       })
       .catch(e => console.error('Failed to load restaurant:', e))
@@ -136,9 +143,9 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled })
+      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, kitchenOnPay, posV2Default })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled }
+      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, kitchenOnPay, posV2Default }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -153,7 +160,7 @@ export default function SettingsPage() {
         tags: { component: 'settings.save' },
         extra: {
           restaurantId: rest.id,
-          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled },
+          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, kitchenOnPay, posV2Default },
         },
       })
     } finally {
@@ -175,6 +182,9 @@ export default function SettingsPage() {
     setPinLockTimeoutMin(rest.pinLockTimeoutMin ?? 5)
     setSupplyAllowNegative(rest.supplyAllowNegative ?? true)
     setOnScreenKeyboardEnabled(rest.onScreenKeyboardEnabled ?? false)
+    setTablesEnabled(rest.tablesEnabled ?? true)
+    setKitchenOnPay(rest.kitchenOnPay ?? false)
+    setPosV2Default(rest.posV2Default ?? false)
   }
 
   return (
@@ -361,6 +371,12 @@ export default function SettingsPage() {
               hint="Виртуальная клавиатура (iiko-style) при вводе на POS, смене и карте зала. Нужна на тач-терминалах без физической клавиатуры."
               checked={onScreenKeyboardEnabled}
               onChange={() => setOnScreenKeyboardEnabled(!onScreenKeyboardEnabled)}
+            />
+            <ToggleRow
+              title="✨ Новый POS по умолчанию"
+              hint="Кассы открывают новый интерфейс (POS 2) без ручного включения на каждой. Касса может переопределить локально в своих настройках."
+              checked={posV2Default}
+              onChange={() => setPosV2Default(!posV2Default)}
             />
           </Card>
         </div>

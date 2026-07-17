@@ -10785,6 +10785,9 @@ export interface components {
             pin_lock_timeout_min?: number;
             supply_allow_negative?: boolean;
             on_screen_keyboard_enabled?: boolean;
+            tables_enabled?: boolean;
+            kitchen_on_pay?: boolean;
+            pos_v2_default?: boolean;
             /** Format: date-time */
             license_expires_at?: string;
             is_blocked?: boolean;
@@ -10805,6 +10808,9 @@ export interface components {
             pin_lock_timeout_min?: number;
             supply_allow_negative?: boolean;
             on_screen_keyboard_enabled?: boolean;
+            tables_enabled?: boolean;
+            kitchen_on_pay?: boolean;
+            pos_v2_default?: boolean;
         };
         BootstrapInput: {
             restaurant_name: string;

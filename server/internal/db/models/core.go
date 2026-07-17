@@ -46,9 +46,15 @@ type Restaurant struct {
 	PinLockTimeoutMin *int       `gorm:"column:pin_lock_timeout_min;default:5" json:"pin_lock_timeout_min"`
 	// OnScreenKeyboardEnabled — экранная клавиатура (iiko-style) на POS/смене/зале.
 	// Default false: нужна только на тач-терминалах без физической клавиатуры.
-	OnScreenKeyboardEnabled *bool     `gorm:"column:on_screen_keyboard_enabled;default:false" json:"on_screen_keyboard_enabled"`
-	CreatedAt               time.Time `json:"created_at"`
-	UpdatedAt               time.Time `json:"updated_at"`
+	OnScreenKeyboardEnabled *bool `gorm:"column:on_screen_keyboard_enabled;default:false" json:"on_screen_keyboard_enabled"`
+	// Режим обслуживания (041). TablesEnabled=false → фастфуд «в зал по номеру»
+	// без столов. KitchenOnPay=true → кухонный бегунок печатается на оплате.
+	// PosV2Default=true → новый POS по умолчанию на кассах.
+	TablesEnabled *bool     `gorm:"column:tables_enabled;not null;default:true" json:"tables_enabled"`
+	KitchenOnPay  *bool     `gorm:"column:kitchen_on_pay;not null;default:false" json:"kitchen_on_pay"`
+	PosV2Default  *bool     `gorm:"column:pos_v2_default;not null;default:false" json:"pos_v2_default"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (Restaurant) TableName() string { return "restaurants" }

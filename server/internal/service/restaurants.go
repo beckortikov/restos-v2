@@ -40,6 +40,9 @@ type RestaurantCreateInput struct {
 	PinLockTimeoutMin  *int    `json:"pin_lock_timeout_min,omitempty"`
 	SupplyAllowNeg     *bool   `json:"supply_allow_negative,omitempty"`
 	OnScreenKbdEnabled *bool   `json:"on_screen_keyboard_enabled,omitempty"`
+	TablesEnabled      *bool   `json:"tables_enabled,omitempty"`
+	KitchenOnPay       *bool   `json:"kitchen_on_pay,omitempty"`
+	PosV2Default       *bool   `json:"pos_v2_default,omitempty"`
 }
 
 func (s *RestaurantsService) List(ctx context.Context) ([]models.Restaurant, error) {
@@ -90,6 +93,9 @@ func (s *RestaurantsService) Create(ctx context.Context, in RestaurantCreateInpu
 		PinLockEnabled:          in.PinLockEnabled,
 		PinLockTimeoutMin:       in.PinLockTimeoutMin,
 		OnScreenKeyboardEnabled: in.OnScreenKbdEnabled,
+		TablesEnabled:           in.TablesEnabled,
+		KitchenOnPay:            in.KitchenOnPay,
+		PosV2Default:            in.PosV2Default,
 		CreatedAt:               now,
 		UpdatedAt:               now,
 	}
@@ -171,6 +177,15 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 	}
 	if in.OnScreenKbdEnabled != nil {
 		updates["on_screen_keyboard_enabled"] = *in.OnScreenKbdEnabled
+	}
+	if in.TablesEnabled != nil {
+		updates["tables_enabled"] = *in.TablesEnabled
+	}
+	if in.KitchenOnPay != nil {
+		updates["kitchen_on_pay"] = *in.KitchenOnPay
+	}
+	if in.PosV2Default != nil {
+		updates["pos_v2_default"] = *in.PosV2Default
 	}
 	if err := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
 		Where("id = ?", id).Updates(updates).Error; err != nil {

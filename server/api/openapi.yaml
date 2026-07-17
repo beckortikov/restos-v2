@@ -3704,6 +3704,9 @@ components:
         pin_lock_timeout_min: { type: integer }
         supply_allow_negative: { type: boolean }
         on_screen_keyboard_enabled: { type: boolean }
+        tables_enabled: { type: boolean }
+        kitchen_on_pay: { type: boolean }
+        pos_v2_default: { type: boolean }
         license_expires_at: { type: string, format: date-time }
         is_blocked: { type: boolean }
     RestaurantInput:
@@ -3724,6 +3727,9 @@ components:
         pin_lock_timeout_min: { type: integer }
         supply_allow_negative: { type: boolean }
         on_screen_keyboard_enabled: { type: boolean }
+        tables_enabled: { type: boolean }
+        kitchen_on_pay: { type: boolean }
+        pos_v2_default: { type: boolean }
 
     # ─── Bootstrap ──
     BootstrapInput:

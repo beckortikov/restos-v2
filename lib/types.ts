@@ -45,6 +45,12 @@ export interface Restaurant {
   // Экранная клавиатура (iiko-style) на POS/смене/зале. Default false —
   // включается в настройках владельца для тач-терминалов без физ. клавиатуры.
   onScreenKeyboardEnabled?: boolean
+  // Режим обслуживания (041). tablesEnabled=false → фастфуд «в зал по номеру»
+  // без столов. kitchenOnPay=true → кухонный бегунок на оплате (не на «Отправить»).
+  // posV2Default=true → новый POS по умолчанию на кассах ресторана.
+  tablesEnabled?: boolean
+  kitchenOnPay?: boolean
+  posV2Default?: boolean
   // Разрешает хозтоварам (is_food=false) уходить в реальный минус. Когда false —
   // createSupplyExpense блокирует выдачу если qty > остаток.
   supplyAllowNegative?: boolean
