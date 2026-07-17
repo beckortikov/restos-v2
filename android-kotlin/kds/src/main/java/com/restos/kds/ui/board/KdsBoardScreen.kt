@@ -81,6 +81,11 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
     var fullscreen by remember { mutableStateOf(false) }
     ImmersiveEffect(fullscreen)
 
+    var showStopList by remember { mutableStateOf(false) }
+    if (showStopList) {
+        com.restos.kds.ui.stoplist.KdsStopListDialog(onDismiss = { showStopList = false })
+    }
+
     var showConfig by remember { mutableStateOf(false) }
     if (showConfig) {
         StationConfigDialog(
@@ -100,6 +105,7 @@ fun KdsBoardScreen(vm: KdsBoardViewModel = hiltViewModel()) {
                 TopBar(
                     count = state.items.size + state.cancelledItems.size, nowMs = now,
                     soundOn = state.soundEnabled, onToggleSound = vm::toggleSound,
+                    onStopList = { showStopList = true },
                     onConfig = { showConfig = true },
                     onFullscreen = { fullscreen = true },
                 )
@@ -177,6 +183,7 @@ private fun TopBar(
     nowMs: Long,
     soundOn: Boolean,
     onToggleSound: () -> Unit,
+    onStopList: () -> Unit,
     onConfig: () -> Unit,
     onFullscreen: () -> Unit,
 ) {
@@ -207,6 +214,14 @@ private fun TopBar(
             fontSize = 22.sp,
             modifier = Modifier.clip(RoundedCornerShape(10.dp)).clickable { onToggleSound() }.padding(4.dp),
         )
+        Spacer(Modifier.width(12.dp))
+        // Стоп-лист — повар отмечает, что закончилось (касса/официант не пробьют).
+        Box(
+            Modifier.clip(RoundedCornerShape(10.dp)).background(KdsColors.ColBg)
+                .clickable { onStopList() }.padding(horizontal = 12.dp, vertical = 6.dp),
+        ) {
+            Text("СТОП-ЛИСТ", color = KdsColors.TextHi, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
         Spacer(Modifier.width(12.dp))
         Text(
             "⚙",

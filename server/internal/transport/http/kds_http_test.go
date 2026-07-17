@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -200,6 +201,58 @@ func TestKDS_CallWaiter(t *testing.T) {
 	code2, body2 := postJSON(t, f.srv.URL+fmt.Sprintf("/api/v1/kds/items/%s/call-waiter", item2), tok, map[string]any{})
 	if code2 != 400 {
 		t.Errorf("no-waiter call = %d %s, want 400", code2, body2)
+	}
+}
+
+// TestKDS_StopList_BlocksOrder — сквозная гарантия фичи «повар жмёт СТОП»:
+// кухня ставит stop_list_override → касса/официант НЕ могут пробить блюдо
+// (409 ITEM_STOPPED); повар снял стоп → заказ снова проходит.
+func TestKDS_StopList_BlocksOrder(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	name := "Салат Домашний"
+	miID := uuid.NewString()
+	if err := gdb.Create(&models.MenuItem{
+		ID: miID, Name: &name, Price: decimal.MustFromString("20"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	order := map[string]any{"items": []map[string]any{{"menu_item_id": miID, "qty": "1"}}}
+
+	// До стопа заказ проходит.
+	if r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(), order); r.StatusCode != http.StatusCreated {
+		t.Fatalf("до стопа заказ должен проходить: %d %s", r.StatusCode, b)
+	}
+
+	// Повар на кухне: «закончилось».
+	if r, b := f.post(t, "/api/v1/stop-list/"+miID+"/override", tok, uuid.NewString(),
+		map[string]any{"override": true}); r.StatusCode != http.StatusOK {
+		t.Fatalf("поставить стоп: %d %s", r.StatusCode, b)
+	}
+
+	// Кассир/официант больше не пробьёт.
+	r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(), order)
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("после стопа заказ должен отклоняться 409, получили %d: %s", r.StatusCode, b)
+	}
+	if !strings.Contains(string(b), "ITEM_STOPPED") {
+		t.Errorf("ожидали код ITEM_STOPPED, получили: %s", b)
+	}
+
+	// Повар снял стоп — снова можно пробивать.
+	if rr, bb := f.post(t, "/api/v1/stop-list/"+miID+"/override", tok, uuid.NewString(),
+		map[string]any{"override": false}); rr.StatusCode != http.StatusOK {
+		t.Fatalf("снять стоп: %d %s", rr.StatusCode, bb)
+	}
+	if rr, bb := f.post(t, "/api/v1/orders", tok, uuid.NewString(), order); rr.StatusCode != http.StatusCreated {
+		t.Fatalf("после снятия стопа заказ должен проходить: %d %s", rr.StatusCode, bb)
 	}
 }
 
