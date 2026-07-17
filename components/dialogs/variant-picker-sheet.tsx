@@ -33,6 +33,9 @@ interface VariantPickerSheetProps {
   onSelect: (variant: MenuItem) => void
   /** If rendered inside another vaul drawer, set true to use NestedRoot. */
   nested?: boolean
+  /** id уже выбранного варианта (например при смене размера в строке чека) —
+   *  открывает пикер с этим выбором вместо первого значения каждого атрибута. */
+  initialVariantId?: string
 }
 
 /**
@@ -40,13 +43,13 @@ interface VariantPickerSheetProps {
  * резолвит выбор в конкретный вариант (menu_item) и отдаёт его onSelect.
  */
 export function VariantPickerSheet({
-  product, variants, stoppedIds, onClose, onSelect, nested = false,
+  product, variants, stoppedIds, onClose, onSelect, nested = false, initialVariantId,
 }: VariantPickerSheetProps) {
   const isMobile = useIsMobile()
   const open = !!product
 
   const body = product ? (
-    <VariantBody product={product} variants={variants} stoppedIds={stoppedIds} onClose={onClose} onSelect={onSelect} />
+    <VariantBody product={product} variants={variants} stoppedIds={stoppedIds} onClose={onClose} onSelect={onSelect} initialVariantId={initialVariantId} />
   ) : null
 
   if (isMobile) {
@@ -87,18 +90,25 @@ export function VariantPickerSheet({
 }
 
 function VariantBody({
-  product, variants, stoppedIds, onClose, onSelect,
+  product, variants, stoppedIds, onClose, onSelect, initialVariantId,
 }: {
   product: MenuItem
   variants: MenuItem[]
   stoppedIds?: Set<string>
   onClose: () => void
   onSelect: (variant: MenuItem) => void
+  initialVariantId?: string
 }) {
   const attrs = product.attributes ?? []
   const [sel, setSel] = React.useState<Record<string, string>>(() => {
+    const initialVariant = initialVariantId ? variants.find(v => v.id === initialVariantId) : undefined
+    const initialValueIds = new Set(initialVariant?.variantValueIds ?? [])
     const init: Record<string, string> = {}
-    for (const a of attrs) if (a.values.length > 0) init[a.id] = a.values[0].id
+    for (const a of attrs) {
+      if (a.values.length === 0) continue
+      const preselected = a.values.find(v => initialValueIds.has(v.id))
+      init[a.id] = preselected?.id ?? a.values[0].id
+    }
     return init
   })
 
@@ -161,7 +171,7 @@ function VariantBody({
           onClick={() => { if (resolved) onSelect(resolved) }}
           disabled={!resolved}
           className="flex-[2] px-3 py-3 text-sm font-semibold text-primary-foreground bg-primary rounded-xl disabled:opacity-50 active:scale-95"
-        >Добавить{resolved ? ` · ${formatCurrency(resolved.price)}` : ''}</button>
+        >{initialVariantId ? 'Изменить' : 'Добавить'}{resolved ? ` · ${formatCurrency(resolved.price)}` : ''}</button>
       </div>
     </div>
   )

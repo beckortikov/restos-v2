@@ -15,12 +15,13 @@ export async function fetchSemiStock(): Promise<SemiFinishedStock[]> {
   return rows.map(mapSemiStock) as SemiFinishedStock[]
 }
 
-export async function createSemiType(name: string, outputUnit: string, recipe: { ingredientId: string; name: string; qtyPerUnit: number; unit: string }[], yieldPercent = 100) {
+export async function createSemiType(name: string, outputUnit: string, recipe: { ingredientId: string; name: string; qtyPerUnit: number; unit: string }[], yieldPercent = 100, sizeScaleValueId?: string) {
   const data: any = await unwrap(api.POST('/api/v1/semi/types', {
     body: {
       name,
       output_unit: outputUnit,
       yield_percent: String(yieldPercent),
+      size_scale_value_id: sizeScaleValueId || undefined,
       recipe: recipe.map(l => ({
         ingredient_id: l.ingredientId,
         name: l.name,
@@ -30,6 +31,19 @@ export async function createSemiType(name: string, outputUnit: string, recipe: {
     } as any,
   }))
   logAction('semi.create', 'semi', data?.id as string | undefined, name)
+  return data
+}
+
+// updateSemiType — частичный patch (например привязка/отвязка заготовки к
+// значению шкалы размеров). sizeScaleValueId: '' — явная отвязка (SET NULL).
+export async function updateSemiType(id: string, patch: { name?: string; outputUnit?: string; yieldPercent?: number; sizeScaleValueId?: string }) {
+  const body: { name?: string; output_unit?: string; yield_percent?: string; size_scale_value_id?: string } = {}
+  if (patch.name !== undefined) body.name = patch.name
+  if (patch.outputUnit !== undefined) body.output_unit = patch.outputUnit
+  if (patch.yieldPercent !== undefined) body.yield_percent = String(patch.yieldPercent)
+  if (patch.sizeScaleValueId !== undefined) body.size_scale_value_id = patch.sizeScaleValueId
+  const data: any = await unwrap(api.PATCH('/api/v1/semi/types/{id}', { params: { path: { id } }, body }))
+  logAction('semi.edit', 'semi', id)
   return data
 }
 
@@ -65,6 +79,7 @@ function mapSemiType(r: Record<string, unknown>): SemiFinishedType {
     outputUnit: (r.output_unit as string) ?? '',
     yieldPercent: Number(r.yield_percent ?? 100) || 100,
     recipe: recipeRaw.map(mapSemiRecipeLine),
+    sizeScaleValueId: (r.size_scale_value_id as string | null) ?? undefined,
   } as SemiFinishedType
 }
 

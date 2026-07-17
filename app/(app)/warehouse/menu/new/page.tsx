@@ -303,6 +303,7 @@ export default function NewMenuItemPage() {
           created.id,
           attrs.map(a => ({
             name: a.name.trim(),
+            sizeScaleId: a.sizeScaleId,
             values: a.values.map(v => ({ label: v.label.trim() })),
           })),
           buildCombosPayload(attrs, comboPrices),

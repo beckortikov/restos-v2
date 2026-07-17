@@ -553,3 +553,150 @@ func TestMenuAttributes_TenantIsolation(t *testing.T) {
 		t.Fatalf("ожидали 404 при PUT на чужой ресторан, получили %d %s", r2.StatusCode, b2)
 	}
 }
+
+// createSizeScale — вспомогательная шкала размеров для scale-linked сценариев.
+func createSizeScale(t *testing.T, f *e2eFixture, tok, name string, codes ...string) sizeScaleDTO {
+	t.Helper()
+	values := make([]map[string]any, 0, len(codes))
+	for i, c := range codes {
+		values = append(values, map[string]any{"code": c, "sort_order": i})
+	}
+	r, b := f.post(t, "/api/v1/size-scales", tok, uuid.NewString(), map[string]any{"name": name, "values": values})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create size scale: %d %s", r.StatusCode, b)
+	}
+	var scale sizeScaleDTO
+	if err := json.Unmarshal(b, &scale); err != nil {
+		t.Fatal(err)
+	}
+	return scale
+}
+
+// TestMenuAttributes_ScaleLinkedAttributeDerivesValues — атрибут с
+// size_scale_id (и пустым values) должен породить значения/варианты из
+// значений шкалы, не из тела запроса — ключевой сценарий шкал размеров пиццы.
+func TestMenuAttributes_ScaleLinkedAttributeDerivesValues(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	scale := createSizeScale(t, f, tok, "Пиццы 25/30/35", "25", "30", "35")
+	product := createAttrProduct(t, f, tok, "Пепперони", nil)
+	pid := product["id"].(string)
+
+	payload := map[string]any{
+		"attributes": []map[string]any{
+			{"name": "Размер", "size_scale_id": scale.ID, "values": []map[string]any{}},
+		},
+		"combos": []map[string]any{
+			{"labels": []string{"25"}, "price": "50"},
+			{"labels": []string{"30"}, "price": "65"},
+			{"labels": []string{"35"}, "price": "80"},
+		},
+	}
+	r, b := f.put(t, "/api/v1/menu/items/"+pid+"/attributes", tok, uuid.NewString(), payload)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("PUT attributes (scale-linked): %d %s", r.StatusCode, b)
+	}
+	var state attributesState
+	if err := json.Unmarshal(b, &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Attributes) != 1 || len(state.Attributes[0].Values) != 3 {
+		t.Fatalf("ожидали 1 атрибут с 3 значениями из шкалы, получили %+v", state.Attributes)
+	}
+	if len(state.Variants) != 3 {
+		t.Fatalf("ожидали 3 варианта (по значению шкалы), получили %d: %+v", len(state.Variants), state.Variants)
+	}
+	byName := map[string]string{}
+	for _, v := range state.Variants {
+		byName[v.Name] = v.Price
+	}
+	want := map[string]string{"Пепперони 25": "50", "Пепперони 30": "65", "Пепперони 35": "80"}
+	for name, price := range want {
+		got, ok := byName[name]
+		if !ok {
+			t.Fatalf("не найден вариант %q среди %+v", name, byName)
+		}
+		if !decimal.MustFromString(got).Equal(decimal.MustFromString(price)) {
+			t.Errorf("%s: ожидали цену %s, получили %s", name, price, got)
+		}
+	}
+}
+
+// TestMenuAttributes_ScaleLinkedAttributeSyncsOnScaleValueRename — переименование
+// значения шкалы (25 → «Маленькая 25 см») подхватывается при следующем PUT
+// /attributes того же продукта (мирroring, не статичная копия на момент линковки).
+func TestMenuAttributes_ScaleLinkedAttributeSyncsOnScaleValueRename(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	scale := createSizeScale(t, f, tok, "Пиццы 25/30", "25", "30")
+	product := createAttrProduct(t, f, tok, "Маргарита", nil)
+	pid := product["id"].(string)
+
+	create := map[string]any{
+		"attributes": []map[string]any{{"name": "Размер", "size_scale_id": scale.ID, "values": []map[string]any{}}},
+		"combos": []map[string]any{
+			{"labels": []string{"25"}, "price": "40"},
+			{"labels": []string{"30"}, "price": "55"},
+		},
+	}
+	r, b := f.put(t, "/api/v1/menu/items/"+pid+"/attributes", tok, uuid.NewString(), create)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("initial PUT: %d %s", r.StatusCode, b)
+	}
+
+	// Переименовываем значение «25» шкалы в «Маленькая 25 см».
+	rp, bp := f.patch(t, "/api/v1/size-scales/"+scale.ID, tok, uuid.NewString(), map[string]any{
+		"values": []map[string]any{
+			{"code": "25", "title": "Маленькая 25 см", "sort_order": 0},
+			{"code": "30", "sort_order": 1},
+		},
+	})
+	if rp.StatusCode != http.StatusOK {
+		t.Fatalf("patch scale: %d %s", rp.StatusCode, bp)
+	}
+
+	// Ре-синк того же атрибута (без изменений combos) должен подхватить новый лейбл.
+	resync := map[string]any{
+		"attributes": []map[string]any{{"name": "Размер", "size_scale_id": scale.ID, "values": []map[string]any{}}},
+		"combos": []map[string]any{
+			{"labels": []string{"Маленькая 25 см"}, "price": "40"},
+			{"labels": []string{"30"}, "price": "55"},
+		},
+	}
+	r2, b2 := f.put(t, "/api/v1/menu/items/"+pid+"/attributes", tok, uuid.NewString(), resync)
+	if r2.StatusCode != http.StatusOK {
+		t.Fatalf("resync PUT: %d %s", r2.StatusCode, b2)
+	}
+	var state attributesState
+	_ = json.Unmarshal(b2, &state)
+	byName := map[string]bool{}
+	for _, v := range state.Variants {
+		byName[v.Name] = true
+	}
+	if !byName["Маргарита Маленькая 25 см"] {
+		t.Fatalf("ожидали вариант с обновлённым лейблом «Маргарита Маленькая 25 см», получили %+v", state.Variants)
+	}
+	if byName["Маргарита 25"] {
+		t.Fatalf("старый лейбл «Маргарита 25» не должен остаться живым вариантом: %+v", state.Variants)
+	}
+}
+
+// TestMenuAttributes_ScaleLinkedRejectsExplicitValues — атрибут не может
+// одновременно ссылаться на шкалу и приносить свои values (неоднозначность
+// источника истины).
+func TestMenuAttributes_ScaleLinkedRejectsExplicitValues(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	scale := createSizeScale(t, f, tok, "Пиццы 25/30", "25", "30")
+	product := createAttrProduct(t, f, tok, "Гавайская", nil)
+	pid := product["id"].(string)
+
+	r, b := f.put(t, "/api/v1/menu/items/"+pid+"/attributes", tok, uuid.NewString(), map[string]any{
+		"attributes": []map[string]any{
+			{"name": "Размер", "size_scale_id": scale.ID, "values": []map[string]any{{"label": "25"}}},
+		},
+	})
+	if r.StatusCode != http.StatusBadRequest {
+		t.Fatalf("ожидали 400 (values + size_scale_id несовместимы), получили %d %s", r.StatusCode, b)
+	}
+}

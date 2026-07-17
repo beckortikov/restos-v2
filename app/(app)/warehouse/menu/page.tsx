@@ -8,11 +8,12 @@ import { dDiv, dMul, dRound, dSub } from '@/lib/decimal'
 import { type MenuItem, type MenuStation, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
 import { fetchMenuItems, toggleMenuAvailability, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
 import { type MenuCategory } from '@/lib/queries'
-import { Search, ChevronDown, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X } from 'lucide-react'
+import { Search, ChevronDown, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X, Ruler } from 'lucide-react'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useDataSync } from '@/hooks/use-data-sync'
+import { ManageSizeScalesDialog } from '@/components/dialogs/manage-size-scales-dialog'
 
 export default function MenuPage() {
   const navigate = useNavigate()
@@ -28,6 +29,7 @@ export default function MenuPage() {
   const [menuCategoriesFull, setMenuCategoriesFull] = useState<MenuCategory[]>([])
   const [addCatOpen, setAddCatOpen] = useState(false)
   const [newCatName, setNewCatName] = useState('')
+  const [sizeScalesOpen, setSizeScalesOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'menu' | 'stoplist'>('menu')
   const [stopList, setStopList] = useState<{ menuItemId: string; menuItemName: string; emoji: string; category: string; ingredients: { name: string; qty: number; minQty: number; unit: string }[]; manual?: boolean; unavailable?: boolean }[]>([])
@@ -343,8 +345,19 @@ export default function MenuPage() {
               </button>
             )
           )}
+          {canEdit && (
+            <button
+              onClick={() => setSizeScalesOpen(true)}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
+              title="Шкалы размеров (25/30/35 см и т.п.)"
+            >
+              <Ruler className="size-3.5" />
+              Шкалы размеров
+            </button>
+          )}
         </div>
       </div>
+      <ManageSizeScalesDialog open={sizeScalesOpen} onOpenChange={setSizeScalesOpen} />
 
       {/* Card Grid view for waiter/cook/cashier */}
       {!canSeeFinancials && (

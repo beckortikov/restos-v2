@@ -334,6 +334,29 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses: { "204": { description: No content } }
 
+  # ─── Size scales (переиспользуемые шкалы размеров: «25/30/35») ──────────
+  /api/v1/size-scales:
+    get:
+      tags: [menu]
+      summary: Шкалы размеров + их значения
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScalesList" } } } } }
+    post:
+      tags: [menu]
+      summary: Создать шкалу размеров (Manager)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleWithValues" } } } } }
+  /api/v1/size-scales/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleWithValues" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
   # ─── Floor ──────────────────────────────────────────────────────────────
   /api/v1/zones:
     get: { tags: [floor], summary: Зоны зала, responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ZonesList" } } } } } }
@@ -3090,6 +3113,7 @@ components:
         menu_item_id: { type: string, format: uuid }
         name: { type: string }
         sort_order: { type: integer }
+        size_scale_id: { type: string, format: uuid, nullable: true, description: "Если задан — значения зеркалятся из шкалы размеров, а не вводятся вручную." }
     MenuAttributeValue:
       type: object
       properties:
@@ -3097,6 +3121,7 @@ components:
         attribute_id: { type: string, format: uuid }
         label: { type: string }
         sort_order: { type: integer }
+        size_scale_value_id: { type: string, format: uuid, nullable: true, description: "Какое значение шкалы (SizeScaleValue) зеркалит эта строка." }
     MenuAttributeWithValues:
       allOf:
         - $ref: "#/components/schemas/MenuAttribute"
@@ -3135,6 +3160,7 @@ components:
             properties:
               id: { type: string, format: uuid }
               name: { type: string }
+              size_scale_id: { type: string, format: uuid, description: "Если задан — values должен быть пустым: значения зеркалятся из шкалы размеров." }
               values:
                 type: array
                 items:
@@ -3162,6 +3188,48 @@ components:
       type: object
       properties: { id: { type: string, format: uuid }, name: { type: string }, sort_order: { type: integer } }
     MenuCategoriesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/MenuCategory" } } } }
+
+    SizeScale:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SizeScaleValue:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        size_scale_id: { type: string, format: uuid }
+        code: { type: string }
+        title: { type: string, nullable: true }
+        sort_order: { type: integer }
+        is_default: { type: boolean }
+    SizeScaleWithValues:
+      allOf:
+        - $ref: "#/components/schemas/SizeScale"
+        - type: object
+          properties:
+            values:
+              type: array
+              items: { $ref: "#/components/schemas/SizeScaleValue" }
+    SizeScaleInput:
+      type: object
+      properties:
+        name: { type: string }
+        values:
+          type: array
+          description: Если передан — полностью заменяет текущие значения шкалы (delete+recreate).
+          items:
+            type: object
+            required: [code]
+            properties:
+              id: { type: string, format: uuid }
+              code: { type: string }
+              title: { type: string }
+              sort_order: { type: integer }
+              is_default: { type: boolean }
+    SizeScalesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SizeScaleWithValues" } } } }
 
     # ─── Floor ──
     Zone: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, sort_order: { type: integer } } }
@@ -4030,6 +4098,7 @@ components:
         name: { type: string }
         output_unit: { type: string }
         yield_percent: { $ref: "#/components/schemas/Decimal" }
+        size_scale_value_id: { type: string, format: uuid, nullable: true, description: "Тег «это заготовка вот этого размера» (например «Тесто-30» → значение «30»)." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     SemiTypeInput:
@@ -4038,6 +4107,7 @@ components:
         name: { type: string }
         output_unit: { type: string }
         yield_percent: { $ref: "#/components/schemas/Decimal" }
+        size_scale_value_id: { type: string, format: uuid }
     SemiTypesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SemiFinishedType" } }, next_cursor: { type: string } } }
 
     SemiFinishedStock:

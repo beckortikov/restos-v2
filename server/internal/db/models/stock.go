@@ -205,9 +205,13 @@ type SemiFinishedType struct {
 	Name         *string         `json:"name"`
 	OutputUnit   *string         `gorm:"column:output_unit;default:'кг'" json:"output_unit"`
 	YieldPercent decimal.Decimal `gorm:"column:yield_percent;type:numeric(14,4);default:100" json:"yield_percent"`
-	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
+	// «Тесто-30» → значение «30» шкалы пиццы), используется UI тех. карты
+	// для подсказки правильного полуфабриката под размер варианта.
+	SizeScaleValueID *string         `gorm:"column:size_scale_value_id;type:uuid" json:"size_scale_value_id"`
+	RestaurantID     *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
 }
 
 func (SemiFinishedType) TableName() string { return "semi_finished_types" }

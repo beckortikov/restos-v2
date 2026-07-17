@@ -179,12 +179,35 @@ export interface MenuItem {
 export interface MenuAttributeValue {
   id: string
   label: string   // «1 л»
+  sizeScaleValueId?: string | null // если атрибут scale-linked — какое значение шкалы это зеркалит
 }
 
 export interface MenuAttribute {
   id: string
   name: string         // «Размер»
   values: MenuAttributeValue[]
+  // Если задан — values зеркалятся из этой шкалы размеров, а не вводятся
+  // вручную (см. components/menu/attributes-editor.tsx).
+  sizeScaleId?: string | null
+}
+
+// SizeScale — переиспользуемая шкала размеров («Пиццы 25/30/35»). Продукт
+// (через MenuAttribute.sizeScaleId) и заготовка (через
+// SemiFinishedType.sizeScaleValueId) ссылаются на неё вместо того, чтобы
+// заводить одинаковые значения размера с нуля на каждой карточке.
+export interface SizeScaleValue {
+  id: string
+  sizeScaleId: string
+  code: string        // «25»
+  title?: string       // «Маленькая» (опционально)
+  sortOrder: number
+  isDefault: boolean
+}
+
+export interface SizeScale {
+  id: string
+  name: string
+  values: SizeScaleValue[]
 }
 
 export interface SemiRecipeLine {
@@ -200,6 +223,9 @@ export interface SemiFinishedType {
   outputUnit: string
   yieldPercent: number // 70 = из 1кг сырья получается 0.7кг готового
   recipe: SemiRecipeLine[]
+  // Тег «это заготовка вот этого размера» (например «Тесто-30» → значение
+  // «30» шкалы пиццы) — подсказывает нужную заготовку в редакторе тех. карты.
+  sizeScaleValueId?: string | null
 }
 
 export interface SemiFinishedStock {

@@ -697,6 +697,135 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/size-scales": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Шкалы размеров + их значения */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SizeScalesList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Создать шкалу размеров (Manager) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SizeScaleInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SizeScaleWithValues"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/size-scales/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SizeScaleInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SizeScaleWithValues"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/v1/zones": {
         parameters: {
             query?: never;
@@ -10174,6 +10303,11 @@ export interface components {
             menu_item_id?: string;
             name?: string;
             sort_order?: number;
+            /**
+             * Format: uuid
+             * @description Если задан — значения зеркалятся из шкалы размеров, а не вводятся вручную.
+             */
+            size_scale_id?: string | null;
         };
         MenuAttributeValue: {
             /** Format: uuid */
@@ -10182,6 +10316,11 @@ export interface components {
             attribute_id?: string;
             label?: string;
             sort_order?: number;
+            /**
+             * Format: uuid
+             * @description Какое значение шкалы (SizeScaleValue) зеркалит эта строка.
+             */
+            size_scale_value_id?: string | null;
         };
         MenuAttributeWithValues: components["schemas"]["MenuAttribute"] & {
             values?: components["schemas"]["MenuAttributeValue"][];
@@ -10199,6 +10338,11 @@ export interface components {
                 /** Format: uuid */
                 id?: string;
                 name: string;
+                /**
+                 * Format: uuid
+                 * @description Если задан — values должен быть пустым: значения зеркалятся из шкалы размеров.
+                 */
+                size_scale_id?: string;
                 values: {
                     /** Format: uuid */
                     id?: string;
@@ -10223,6 +10367,43 @@ export interface components {
         };
         MenuCategoriesList: {
             data?: components["schemas"]["MenuCategory"][];
+        };
+        SizeScale: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        SizeScaleValue: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            size_scale_id?: string;
+            code?: string;
+            title?: string | null;
+            sort_order?: number;
+            is_default?: boolean;
+        };
+        SizeScaleWithValues: components["schemas"]["SizeScale"] & {
+            values?: components["schemas"]["SizeScaleValue"][];
+        };
+        SizeScaleInput: {
+            name?: string;
+            /** @description Если передан — полностью заменяет текущие значения шкалы (delete+recreate). */
+            values?: {
+                /** Format: uuid */
+                id?: string;
+                code: string;
+                title?: string;
+                sort_order?: number;
+                is_default?: boolean;
+            }[];
+        };
+        SizeScalesList: {
+            data?: components["schemas"]["SizeScaleWithValues"][];
         };
         Zone: {
             /** Format: uuid */
@@ -11195,6 +11376,11 @@ export interface components {
             name?: string;
             output_unit?: string;
             yield_percent?: components["schemas"]["Decimal"];
+            /**
+             * Format: uuid
+             * @description Тег «это заготовка вот этого размера» (например «Тесто-30» → значение «30»).
+             */
+            size_scale_value_id?: string | null;
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
@@ -11204,6 +11390,8 @@ export interface components {
             name?: string;
             output_unit?: string;
             yield_percent?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            size_scale_value_id?: string;
         };
         SemiTypesList: {
             data?: components["schemas"]["SemiFinishedType"][];

@@ -14,6 +14,7 @@ func All() []any {
 		&MenuCategory{}, &CustomCategory{}, &MenuItem{},
 		&ModifierGroup{}, &Modifier{}, &TechCardLine{},
 		&MenuAttribute{}, &MenuAttributeValue{}, &MenuItemVariantValue{},
+		&SizeScale{}, &SizeScaleValue{},
 		// orders
 		&Order{}, &OrderItem{}, &OrderItemModifier{},
 		&OrderVoid{}, &OrderSplit{},
