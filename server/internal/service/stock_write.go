@@ -82,6 +82,9 @@ func (s *StockService) WithPublisher(pub *EventPublisher) *StockService {
 //
 // Всё в одной транзакции. Идемпотентность middleware — на уровне HTTP.
 func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*models.StockReceipt, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -176,10 +179,24 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			return err
 		}
 
+		// Счёт — под замком и ДО ингредиентов: канонический порядок замков
+		// (см. orders_perms.go) — поставщик → накладная → счёт → ингредиенты.
+		// Сам списываем баланс ниже, но замок обязан быть взят здесь.
+		var acc *models.FinancialAccount
+		if in.AccountID != nil && *in.AccountID != "" && decimal.IsPositive(paid) {
+			var a models.FinancialAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&a).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "account not found", err)
+			}
+			acc = &a
+		}
+
 		// Подгружаем (с блокировкой строк) ингредиенты позиций: нужны единица
 		// склада + текущие qty/price для конвертации прихода и средневзвешенной
 		// себестоимости. Lock защищает read-modify-write цены от потери при
-		// параллельных приёмках того же ингредиента.
+		// параллельных приёмках того же ингредиента. Порядок id ASC — без него
+		// две приёмки с пересекающимися позициями возьмут замки в разном порядке.
 		ingByID := make(map[string]*models.Ingredient)
 		{
 			ids := make([]string, 0, len(parsedLines))
@@ -197,7 +214,7 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				var ings []models.Ingredient
 				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Where("restaurant_id = ? AND id IN ?", rid, ids).
-					Find(&ings).Error; err != nil {
+					Order("id").Find(&ings).Error; err != nil {
 					return err
 				}
 				for i := range ings {
@@ -288,23 +305,17 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 		// оплата не списывала ничего (paid=false), а при in.Paid+partial могла
 		// переплатить. Теперь драйвер — рассчитанная сумма `paid`.
 		// source_ref="receipt:<id>" + UNIQUE(restaurant_id, source_ref) → идемпотентность.
-		if in.AccountID != nil && *in.AccountID != "" && decimal.IsPositive(paid) {
-			var acc models.FinancialAccount
-			// FOR UPDATE обязателен: ниже read-modify-write абсолютного баланса.
-			// Без блокировки две параллельные операции по одному счёту читают
-			// одинаковый старый баланс и вторая затирает первую — деньги пропадают.
-			// Приёмка была единственным местом в финансах без этой блокировки
-			// (ср. PayDebt, возврат, finance.go), и возврат добавил ей конкурента
-			// за тот же balance.
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
-				return apperrors.Wrap("VALIDATION", "account not found", err)
-			}
+		// FOR UPDATE взят выше: ниже read-modify-write абсолютного баланса. Без
+		// блокировки две параллельные операции по одному счёту читают одинаковый
+		// старый баланс и вторая затирает первую — деньги пропадают. Приёмка была
+		// единственным местом в финансах без этой блокировки (ср. PayDebt,
+		// возврат, finance.go), и возврат добавил ей конкурента за тот же balance.
+		if acc != nil {
 			newBal := decimal.Normalize(decimal.Sub(acc.Balance, paid))
 			if decimal.IsNegative(newBal) {
 				return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)
 			}
-			if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+			if err := tx.Model(acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
 				return err
 			}
 			opType := "out"
@@ -379,6 +390,9 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 // CreateWriteoff списывает товар. Создаёт stock_writeoffs + lines +
 // stock_movements (qty < 0).
 func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*models.StockWriteoff, error) {
+	if err := requirePermFor(ctx, s.r, "writeoffs.create"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err

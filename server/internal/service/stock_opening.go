@@ -38,6 +38,9 @@ type OpeningBalanceResult struct {
 }
 
 func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInput) (*OpeningBalanceResult, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err

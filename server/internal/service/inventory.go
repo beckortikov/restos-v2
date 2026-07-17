@@ -47,6 +47,9 @@ type InventoryLineInput struct {
 
 // Create — создаёт draft инвентаризации со снапшотом system_qty.
 func (s *InventoryService) Create(ctx context.Context, in InventoryCheckInput) (*models.InventoryCheck, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	ridStr, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -166,6 +169,9 @@ func (s *InventoryService) Create(ctx context.Context, in InventoryCheckInput) (
 //
 // Status переходит draft → applied (нельзя дважды).
 func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.InventoryCheck, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	ridStr, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err

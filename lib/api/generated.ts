@@ -10435,6 +10435,18 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+            /** @description Только при ?include=lines. */
+            lines?: {
+                /** Format: uuid */
+                id?: string;
+                ingredient_id?: string | null;
+                name?: string | null;
+                qty?: components["schemas"]["Decimal"];
+                unit?: string | null;
+                price_per_unit?: components["schemas"]["Decimal"];
+                /** @description Сколько ещё можно вернуть поставщику по этой строке, В ЕДИНИЦАХ НАКЛАДНОЙ. Считает бэк по тому же правилу, что guard в POST /stock/returns: min(принято − Σ неотменённых возвратов, фактический остаток товара). Клиенту считать это самому нельзя: он не знает про отменённые возвраты и путает единицы склада с единицами накладной. */
+                available_to_return?: components["schemas"]["Decimal"];
+            }[];
         };
         /** @description Возврат поставщику испорченного/битого товара. Зеркало приёмки: склад −qty (stock_movements type=return_supplier), откат средневзвешенной себестоимости, возврат денег/долга. Не путать со списанием: списание — наш убыток и бьёт по прибыли, возврат — сторно закупки. */
         ReturnInput: {

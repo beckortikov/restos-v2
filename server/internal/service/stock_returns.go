@@ -61,6 +61,9 @@ var returnReasons = map[string]struct{}{
 //   - откат средневзвешенной себестоимости;
 //   - деньги: уменьшение долга ЛИБО возврат на счёт + financial_operation.
 func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*models.StockReturn, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -97,6 +100,29 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 
+		// Порядок замков — канонический (см. orders_perms.go): поставщик, затем
+		// накладная. Поставщика надо узнать из накладной, поэтому сначала читаем
+		// её БЕЗ замка — только ради supplier_id, — а под замком перечитываем.
+		var peek models.StockReceipt
+		if err := tx.Select("id", "supplier_id").
+			Where("restaurant_id = ? AND id = ?", rid, in.ReceiptID).First(&peek).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		// Долг поставщика решает обе денежные ветки (см. ниже), а замок на нём
+		// обязан быть взят первым.
+		var sup *models.Supplier
+		if peek.SupplierID != nil && *peek.SupplierID != "" {
+			var s models.Supplier
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *peek.SupplierID).First(&s).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "supplier not found", err)
+			}
+			sup = &s
+		}
+
 		// Накладная под замком: два параллельных возврата по одной накладной не
 		// должны оба проскочить guard «Σ ≤ пришло» и не должны потерять одно из
 		// уменьшений долга (read-modify-write debt_amount).
@@ -107,6 +133,20 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				return apperrors.ErrNotFound
 			}
 			return err
+		}
+
+		// Счёт — под замком и ДО ингредиентов (канонический порядок замков,
+		// см. orders_perms.go). Списываем ниже, но приёмка берёт счёт раньше
+		// ингредиентов, и обратный порядок здесь дал бы с ней AB-BA: приёмка
+		// держит счёт и тянется к товару, возврат держит товар и тянется к счёту.
+		var acc *models.FinancialAccount
+		if in.RefundType == "money" {
+			var a models.FinancialAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&a).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "account not found", err)
+			}
+			acc = &a
 		}
 
 		// Строки накладной — источник цены/названия/единицы.
@@ -223,7 +263,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				var ings []models.Ingredient
 				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 					Where("restaurant_id = ? AND id IN ?", rid, ingIDs).
-					Find(&ings).Error; err != nil {
+					Order("id").Find(&ings).Error; err != nil {
 					return err
 				}
 				for i := range ings {
@@ -252,7 +292,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 		}
 
 		for _, pl := range parsedLines {
-			if err := tx.Create(&models.StockReturnLine{
+			line := &models.StockReturnLine{
 				ID:            uuid.NewString(),
 				ReturnID:      returnID,
 				ReceiptLineID: pl.rl.ID,
@@ -263,11 +303,13 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				PricePerUnit:  pl.rl.PricePerUnit,
 				CreatedAt:     now,
 				UpdatedAt:     now,
-			}).Error; err != nil {
-				return err
 			}
 			ingID := deref(pl.rl.IngredientID)
 			if ingID == "" {
+				// Ингредиента нет — двигать нечего, но строку сохраняем.
+				if err := tx.Create(line).Error; err != nil {
+					return err
+				}
 				continue
 			}
 			ing := ingByID[ingID]
@@ -352,9 +394,17 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 						return err
 					}
 					ing.PricePerUnit = newPrice
+					// Запоминаем на строке: сторно обязано сделать ровно обратное,
+					// иначе цикл «возврат + сторно» завышает стоимость запасов
+					// (см. миграцию 045).
+					line.CostRolledBack = true
 				}
 				// In-memory qty для следующих строк того же ингредиента.
 				ing.Qty = denom
+			}
+
+			if err := tx.Create(line).Error; err != nil {
+				return err
 			}
 		}
 
@@ -365,15 +415,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 		// гасить нечего → деньги вернулись живыми. Без этого правила ветка money
 		// выдавала деньги за неоплаченный товар, оставляя долг висеть (получали
 		// и товар назад, и деньги, и долг — тройная выгода из воздуха).
-		var sup *models.Supplier
-		if receipt.SupplierID != nil && *receipt.SupplierID != "" {
-			var s models.Supplier
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("restaurant_id = ? AND id = ?", rid, *receipt.SupplierID).First(&s).Error; err != nil {
-				return apperrors.Wrap("VALIDATION", "supplier not found", err)
-			}
-			sup = &s
-		}
+		// sup уже под замком — взят в начале транзакции по каноническому порядку.
 		// debtRoom = min(receipt.debt_amount, supplier.current_debt).
 		// С v3.16.89 debt_amount — ОСТАТОК долга накладной (PayDebt раскладывает
 		// оплату по накладным), а current_debt = Σ debt_amount, так что меньшее —
@@ -436,12 +478,8 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			// попадает, да и returnID новый на каждый вызов — коллизии не будет
 			// в принципе. От повторной отправки защищает Idempotency-Key middleware
 			// (см. миграцию 013, там это сказано прямым текстом).
-			var acc models.FinancialAccount
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
-				return apperrors.Wrap("VALIDATION", "account not found", err)
-			}
-			if err := tx.Model(&acc).Updates(map[string]any{
+			// acc уже под замком — взят выше по каноническому порядку.
+			if err := tx.Model(acc).Updates(map[string]any{
 				"balance":    decimal.Normalize(decimal.Add(acc.Balance, totalAmount)),
 				"updated_at": now,
 			}).Error; err != nil {
@@ -511,6 +549,9 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 // вернёт её как было; если не откатывал (расход был) — цена сместится к цене
 // накладной, что для входящего товара корректно.
 func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.StockReturn, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -539,6 +580,37 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 			return err
 		}
 
+		// Канонический порядок замков (см. orders_perms.go): возврат → поставщик
+		// → накладная → счёт → ингредиенты. Берём денежные замки ЗДЕСЬ, до
+		// ингредиентов, хотя используем их ниже: порядок важнее локальности,
+		// иначе дедлок с PayDebt и CreateReturn.
+		var sup *models.Supplier
+		if ret.SupplierID != nil && *ret.SupplierID != "" {
+			var s models.Supplier
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *ret.SupplierID).First(&s).Error; err != nil {
+				return err
+			}
+			sup = &s
+		}
+		var receipt models.StockReceipt
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, ret.ReceiptID).First(&receipt).Error; err != nil {
+			return err
+		}
+		var acc *models.FinancialAccount
+		if ret.RefundType == "money" {
+			if ret.AccountID == nil || *ret.AccountID == "" {
+				return apperrors.Wrap("CONFLICT", "у возврата не указан счёт — сторно невозможно", nil)
+			}
+			var a models.FinancialAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *ret.AccountID).First(&a).Error; err != nil {
+				return apperrors.Wrap("VALIDATION", "account not found", err)
+			}
+			acc = &a
+		}
+
 		// Ингредиенты под замком — read-modify-write цены, как в приёмке.
 		ingByID := make(map[string]*models.Ingredient)
 		{
@@ -557,7 +629,7 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 			if len(ids) > 0 {
 				var ings []models.Ingredient
 				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-					Where("restaurant_id = ? AND id IN ?", rid, ids).Find(&ings).Error; err != nil {
+					Where("restaurant_id = ? AND id IN ?", rid, ids).Order("id").Find(&ings).Error; err != nil {
 					return err
 				}
 				for i := range ings {
@@ -605,8 +677,13 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 				return err
 			}
 
-			// Средневзвешенная вперёд — формула приёмки.
-			if ing != nil && decimal.IsPositive(stockQty) {
+			// Цену трогаем ТОЛЬКО если возврат её откатывал — сторно обязано быть
+			// зеркалом, а не самостоятельным решением. Возврат откатывает цену
+			// лишь когда с момента приёмки не было расхода; если он цену не
+			// трогал, а сторно применит формулу приёмки, цикл «возврат + сторно»
+			// вернёт не исходное состояние, а завышенную стоимость запасов:
+			// 225 → 75 → 275, и 50 уедет в COGS (см. миграцию 045).
+			if ing != nil && decimal.IsPositive(stockQty) && l.CostRolledBack {
 				cost := decimal.Mul(l.Qty, l.PricePerUnit)
 				denom := decimal.Add(ing.Qty, stockQty)
 				var newPrice decimal.Decimal
@@ -623,33 +700,27 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 					Update("price_per_unit", newPrice).Error; err != nil {
 					return err
 				}
-				ing.Qty = denom
 				ing.PricePerUnit = newPrice
+			}
+			// Количество возвращается всегда — оно физически приехало назад.
+			if ing != nil {
+				ing.Qty = decimal.Add(ing.Qty, stockQty)
 			}
 		}
 
-		// Деньги — зеркало того, что сделал возврат.
+		// Деньги — зеркало того, что сделал возврат. Все замки уже взяты выше
+		// в каноническом порядке.
 		switch ret.RefundType {
 		case "debt":
 			// Долг возвращается на место: и накладной, и поставщику.
-			var receipt models.StockReceipt
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("restaurant_id = ? AND id = ?", rid, ret.ReceiptID).First(&receipt).Error; err != nil {
-				return err
-			}
 			if err := tx.Model(&receipt).Updates(map[string]any{
 				"debt_amount": decimal.Normalize(decimal.Add(receipt.DebtAmount, ret.TotalAmount)),
 				"updated_at":  now,
 			}).Error; err != nil {
 				return err
 			}
-			if ret.SupplierID != nil && *ret.SupplierID != "" {
-				var sup models.Supplier
-				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-					Where("restaurant_id = ? AND id = ?", rid, *ret.SupplierID).First(&sup).Error; err != nil {
-					return err
-				}
-				if err := tx.Model(&sup).Updates(map[string]any{
+			if sup != nil {
+				if err := tx.Model(sup).Updates(map[string]any{
 					"current_debt": decimal.Normalize(decimal.Add(sup.CurrentDebt, ret.TotalAmount)),
 					"updated_at":   now,
 				}).Error; err != nil {
@@ -660,19 +731,13 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 			// Деньги уходят обратно поставщику: снимаем со счёта встречной
 			// проводкой out/stock_purchase — она схлопнется с приходом возврата,
 			// и в ДДС период сойдётся в ноль.
-			if ret.AccountID == nil || *ret.AccountID == "" {
-				return apperrors.Wrap("CONFLICT", "у возврата не указан счёт — сторно невозможно", nil)
-			}
-			var acc models.FinancialAccount
-			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("restaurant_id = ? AND id = ?", rid, *ret.AccountID).First(&acc).Error; err != nil {
-				return apperrors.Wrap("VALIDATION", "account not found", err)
-			}
 			newBal := decimal.Normalize(decimal.Sub(acc.Balance, ret.TotalAmount))
 			if decimal.IsNegative(newBal) {
 				return apperrors.Wrap("CONFLICT", "на счёте недостаточно денег, чтобы отменить возврат", nil)
 			}
-			if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+			// acc — уже указатель (взят под замком выше): &acc дал бы GORM
+			// двойной указатель — компилируется, падает в рантайме.
+			if err := tx.Model(acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
 				return err
 			}
 			opType := "out"

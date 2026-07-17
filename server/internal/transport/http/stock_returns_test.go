@@ -658,3 +658,245 @@ func TestStockReturn_Cancel(t *testing.T) {
 			"(отменённый возврат всё ещё считается в guard'е)", r.StatusCode, b)
 	}
 }
+
+// TestStockReturn_CancelMirrorsCost — цикл «возврат + сторно» обязан вернуть
+// склад ровно в исходное состояние, а не завысить стоимость запасов.
+//
+// Регрессия ревью 17.07.2026: возврат откатывал цену только без расхода, а
+// сторно ВСЕГДА применяло формулу приёмки. Асимметрия давала 225 → 75 → 274.9995
+// (цена 18.3333 из ниоткуда) — и это уезжало в COGS всех блюд. Ошибся кладовщик,
+// отменил — а след в себестоимости оставался, и увидеть его было неоткуда.
+// Теперь возврат пишет на строку cost_rolled_back, и сторно его зеркалит.
+func TestStockReturn_CancelMirrorsCost(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+
+	mkReceipt := func(ingID, name, qty, price string) models.StockReceipt {
+		r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+			"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+			"lines": []map[string]any{{
+				"ingredient_id": ingID, "name": name, "qty": qty, "unit": "kg", "price_per_unit": price,
+			}},
+		})
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("receipt: %d %s", r.StatusCode, b)
+		}
+		var rc models.StockReceipt
+		if err := json.Unmarshal(b, &rc); err != nil {
+			t.Fatal(err)
+		}
+		return rc
+	}
+	returnAll := func(rc models.StockReceipt, ingID, qty string) models.StockReturn {
+		r, b := f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+			"receipt_id": rc.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+			"lines": []map[string]any{{"receipt_line_id": receiptLineID(t, gdb, rc.ID, ingID), "qty": qty}},
+		})
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("return: %d %s", r.StatusCode, b)
+		}
+		var ret models.StockReturn
+		if err := json.Unmarshal(b, &ret); err != nil {
+			t.Fatal(err)
+		}
+		return ret
+	}
+	cancel := func(id string) {
+		if r, b := f.post(t, "/api/v1/stock/returns/"+id+"/cancel", tok, uuid.NewString(),
+			map[string]any{}); r.StatusCode != http.StatusOK {
+			t.Fatalf("cancel: %d %s", r.StatusCode, b)
+		}
+	}
+	priceOf := func(id string) decimal.Decimal {
+		var i models.Ingredient
+		gdb.First(&i, "id = ?", id)
+		return i.PricePerUnit
+	}
+
+	t.Run("был расход — цену не трогает ни возврат, ни сторно", func(t *testing.T) {
+		ing := seedReturnIngredient(t, gdb, f.rid, "Мясо-зеркало", "kg")
+		mkReceipt(ing.ID, "Мясо-зеркало", "10", "10")
+		r2 := mkReceipt(ing.ID, "Мясо-зеркало", "10", "20") // с/с 15
+		if r, b := f.post(t, "/api/v1/stock/writeoffs", tok, uuid.NewString(), map[string]any{
+			"reason": "spoilage",
+			"lines":  []map[string]any{{"ingredient_id": ing.ID, "name": "Мясо-зеркало", "qty": "5", "unit": "kg", "cost": "75"}},
+		}); r.StatusCode != http.StatusCreated {
+			t.Fatalf("writeoff: %d %s", r.StatusCode, b)
+		}
+		// Исходное: qty=15, price=15 → стоимость 225.
+		ret := returnAll(r2, ing.ID, "10")
+		cancel(ret.ID)
+
+		if got := ingQty(t, gdb, ing.ID); !got.Equal(decimal.MustFromString("15")) {
+			t.Errorf("qty после цикла = %s, want 15", got)
+		}
+		if got := priceOf(ing.ID); !got.Equal(decimal.MustFromString("15")) {
+			t.Errorf("с/с после цикла = %s, want 15. Если 18.3333 — вернулась регрессия: "+
+				"сторно применило формулу приёмки к возврату, который цену не трогал", got)
+		}
+	})
+
+	t.Run("расхода не было — возврат откатил, сторно вернуло как было", func(t *testing.T) {
+		ing := seedReturnIngredient(t, gdb, f.rid, "Мясо-зеркало-2", "kg")
+		mkReceipt(ing.ID, "Мясо-зеркало-2", "10", "10")
+		r2 := mkReceipt(ing.ID, "Мясо-зеркало-2", "10", "20") // с/с 15
+		if got := priceOf(ing.ID); !got.Equal(decimal.MustFromString("15")) {
+			t.Fatalf("предусловие: с/с = %s, want 15", got)
+		}
+		ret := returnAll(r2, ing.ID, "10")
+		// Расхода не было → возврат обязан откатить с/с к цене первой партии.
+		if got := priceOf(ing.ID); !got.Equal(decimal.MustFromString("10")) {
+			t.Fatalf("с/с после возврата = %s, want 10 (откат)", got)
+		}
+		cancel(ret.ID)
+		if got := priceOf(ing.ID); !got.Equal(decimal.MustFromString("15")) {
+			t.Errorf("с/с после сторно = %s, want 15 (откат отменён — операции взаимно обратны)", got)
+		}
+		if got := ingQty(t, gdb, ing.ID); !got.Equal(decimal.MustFromString("20")) {
+			t.Errorf("qty после цикла = %s, want 20", got)
+		}
+	})
+}
+
+// TestReceiptLines_AvailableToReturn — бэк отдаёт «доступно к возврату» готовым
+// полем, в единицах накладной, с учётом отменённых возвратов и остатка склада.
+//
+// Регрессия ревью 17.07.2026: считал клиент и ошибался дважды — не вычитал
+// отменённые возвраты (после сторно занижал доступное и блокировал то, что бэк
+// принимает) и сравнивал остаток в единицах СКЛАДА с принятым в единицах
+// НАКЛАДНОЙ (накладная в граммах при складе в кг → «20» вместо 20000).
+func TestReceiptLines_AvailableToReturn(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+
+	availOf := func(receiptID, lineID string) decimal.Decimal {
+		r, b := f.get(t, "/api/v1/stock/receipts?include=lines&limit=200", tok)
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("list receipts: %d %s", r.StatusCode, b)
+		}
+		var out struct {
+			Data []struct {
+				ID    string `json:"id"`
+				Lines []struct {
+					ID        string          `json:"id"`
+					Available decimal.Decimal `json:"available_to_return"`
+				} `json:"lines"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(b, &out); err != nil {
+			t.Fatal(err)
+		}
+		for _, rc := range out.Data {
+			if rc.ID != receiptID {
+				continue
+			}
+			for _, l := range rc.Lines {
+				if l.ID == lineID {
+					return l.Available
+				}
+			}
+		}
+		t.Fatalf("строка %s не найдена в накладной %s", lineID, receiptID)
+		return decimal.Zero
+	}
+
+	t.Run("единицы накладной, а не склада", func(t *testing.T) {
+		// Склад в кг, накладная в граммах: 20000 г = 20 кг.
+		ing := seedReturnIngredient(t, gdb, f.rid, "Специи", "kg")
+		r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+			"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+			"lines": []map[string]any{{
+				"ingredient_id": ing.ID, "name": "Специи", "qty": "20000", "unit": "g", "price_per_unit": "0.01",
+			}},
+		})
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("receipt: %d %s", r.StatusCode, b)
+		}
+		var rc models.StockReceipt
+		if err := json.Unmarshal(b, &rc); err != nil {
+			t.Fatal(err)
+		}
+		if got := ingQty(t, gdb, ing.ID); !got.Equal(decimal.MustFromString("20")) {
+			t.Fatalf("предусловие: остаток = %s кг, want 20", got)
+		}
+		got := availOf(rc.ID, receiptLineID(t, gdb, rc.ID, ing.ID))
+		if !got.Equal(decimal.MustFromString("20000")) {
+			t.Errorf("доступно = %s, want 20000 (граммы накладной). "+
+				"Если 20 — остаток склада в кг сравнили с принятым в граммах", got)
+		}
+	})
+
+	t.Run("отменённый возврат снова доступен", func(t *testing.T) {
+		ing := seedReturnIngredient(t, gdb, f.rid, "Крупа", "kg")
+		r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+			"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+			"lines": []map[string]any{{
+				"ingredient_id": ing.ID, "name": "Крупа", "qty": "20", "unit": "kg", "price_per_unit": "10",
+			}},
+		})
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("receipt: %d %s", r.StatusCode, b)
+		}
+		var rc models.StockReceipt
+		if err := json.Unmarshal(b, &rc); err != nil {
+			t.Fatal(err)
+		}
+		lineID := receiptLineID(t, gdb, rc.ID, ing.ID)
+		if got := availOf(rc.ID, lineID); !got.Equal(decimal.MustFromString("20")) {
+			t.Fatalf("доступно до возврата = %s, want 20", got)
+		}
+
+		r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+			"receipt_id": rc.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+			"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "5"}},
+		})
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("return: %d %s", r.StatusCode, b)
+		}
+		var ret models.StockReturn
+		if err := json.Unmarshal(b, &ret); err != nil {
+			t.Fatal(err)
+		}
+		if got := availOf(rc.ID, lineID); !got.Equal(decimal.MustFromString("15")) {
+			t.Errorf("доступно после возврата 5 = %s, want 15", got)
+		}
+
+		if r, b := f.post(t, "/api/v1/stock/returns/"+ret.ID+"/cancel", tok, uuid.NewString(),
+			map[string]any{}); r.StatusCode != http.StatusOK {
+			t.Fatalf("cancel: %d %s", r.StatusCode, b)
+		}
+		if got := availOf(rc.ID, lineID); !got.Equal(decimal.MustFromString("20")) {
+			t.Errorf("доступно после сторно = %s, want 20 (товар вернулся — снова можно вернуть)", got)
+		}
+	})
+
+	t.Run("ограничено фактическим остатком", func(t *testing.T) {
+		ing := seedReturnIngredient(t, gdb, f.rid, "Масло", "kg")
+		r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+			"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+			"lines": []map[string]any{{
+				"ingredient_id": ing.ID, "name": "Масло", "qty": "20", "unit": "kg", "price_per_unit": "10",
+			}},
+		})
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("receipt: %d %s", r.StatusCode, b)
+		}
+		var rc models.StockReceipt
+		if err := json.Unmarshal(b, &rc); err != nil {
+			t.Fatal(err)
+		}
+		if r, b := f.post(t, "/api/v1/stock/writeoffs", tok, uuid.NewString(), map[string]any{
+			"reason": "spoilage",
+			"lines":  []map[string]any{{"ingredient_id": ing.ID, "name": "Масло", "qty": "18", "unit": "kg", "cost": "180"}},
+		}); r.StatusCode != http.StatusCreated {
+			t.Fatalf("writeoff: %d %s", r.StatusCode, b)
+		}
+		if got := availOf(rc.ID, receiptLineID(t, gdb, rc.ID, ing.ID)); !got.Equal(decimal.MustFromString("2")) {
+			t.Errorf("доступно = %s, want 2 (приняли 20, съели 18 — вернуть можно только остаток)", got)
+		}
+	})
+}

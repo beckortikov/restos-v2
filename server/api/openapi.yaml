@@ -3331,6 +3331,27 @@ components:
         total_amount: { $ref: "#/components/schemas/Decimal" }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         debt_amount: { $ref: "#/components/schemas/Decimal" }
+        lines:
+          type: array
+          description: "Только при ?include=lines."
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              ingredient_id: { type: string, nullable: true }
+              name: { type: string, nullable: true }
+              qty: { $ref: "#/components/schemas/Decimal" }
+              unit: { type: string, nullable: true }
+              price_per_unit: { $ref: "#/components/schemas/Decimal" }
+              available_to_return:
+                $ref: "#/components/schemas/Decimal"
+                description: >
+                  Сколько ещё можно вернуть поставщику по этой строке, В ЕДИНИЦАХ
+                  НАКЛАДНОЙ. Считает бэк по тому же правилу, что guard в
+                  POST /stock/returns: min(принято − Σ неотменённых возвратов,
+                  фактический остаток товара). Клиенту считать это самому нельзя:
+                  он не знает про отменённые возвраты и путает единицы склада с
+                  единицами накладной.
 
     ReturnInput:
       type: object

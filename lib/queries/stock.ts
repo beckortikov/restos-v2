@@ -410,6 +410,7 @@ function mapStockMovement(r: Record<string, unknown>): StockMovement {
 function mapStockReceiptLine(l: Record<string, unknown>) {
   return {
     id: (l.id as string) ?? undefined,
+    availableToReturn: l.available_to_return != null ? Number(l.available_to_return) : undefined,
     ingredientId: (l.ingredient_id as string) ?? '',
     name: (l.name as string) ?? '',
     qty: Number(l.qty ?? 0),

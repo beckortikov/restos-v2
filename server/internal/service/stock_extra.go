@@ -380,10 +380,24 @@ type ReceiptsFilter struct {
 	IncludeLines bool
 }
 
+// ReceiptLineWithAvailable — строка накладной + сколько по ней ещё можно
+// вернуть поставщику, В ЕДИНИЦАХ НАКЛАДНОЙ (в них же клиент вводит количество).
+//
+// Считает бэк, а не клиент. Диалог возврата считал это сам и ошибался дважды:
+// не вычитал отменённые возвраты (после сторно занижал доступное и блокировал
+// то, что бэк принимает) и сравнивал остаток склада в единицах СКЛАДА с
+// принятым в единицах НАКЛАДНОЙ (накладная в граммах при складе в кг → «20»
+// вместо 20000). Плюс ради этого он тянул на клиент весь справочник товаров.
+// Правило одно и живёт там же, где guard в CreateReturn.
+type ReceiptLineWithAvailable struct {
+	models.StockReceiptLine
+	Available decimal.Decimal `json:"available_to_return"`
+}
+
 // ReceiptWithLines — DTO для GET /stock/receipts?include=lines.
 type ReceiptWithLines struct {
 	*models.StockReceipt
-	Lines []models.StockReceiptLine `json:"lines"`
+	Lines []ReceiptLineWithAvailable `json:"lines"`
 }
 
 // WriteoffWithLines — аналог для writeoffs.
@@ -440,23 +454,114 @@ func (s *StockReadsService) ListReceiptsWithLines(ctx context.Context, f Receipt
 		Where("receipt_id IN ?", ids).Find(&lines).Error; err != nil {
 		return nil, "", err
 	}
-	byReceipt := make(map[string][]models.StockReceiptLine, len(rows))
+
+	// available_to_return по каждой строке — то же правило, что в guard'е
+	// CreateReturn: min(принято − уже возвращённое, фактический остаток).
+	avail, err := s.availableToReturn(ctx, lines)
+	if err != nil {
+		return nil, "", err
+	}
+
+	byReceipt := make(map[string][]ReceiptLineWithAvailable, len(rows))
 	for _, l := range lines {
 		if l.ReceiptID == nil {
 			continue
 		}
-		byReceipt[*l.ReceiptID] = append(byReceipt[*l.ReceiptID], l)
+		byReceipt[*l.ReceiptID] = append(byReceipt[*l.ReceiptID],
+			ReceiptLineWithAvailable{StockReceiptLine: l, Available: avail[l.ID]})
 	}
 	out := make([]ReceiptWithLines, len(rows))
 	for i := range rows {
 		r := rows[i]
 		ls := byReceipt[r.ID]
 		if ls == nil {
-			ls = []models.StockReceiptLine{}
+			ls = []ReceiptLineWithAvailable{}
 		}
 		out[i] = ReceiptWithLines{StockReceipt: &r, Lines: ls}
 	}
 	return out, next, nil
+}
+
+// availableToReturn — сколько ещё можно вернуть по каждой строке накладной,
+// в единицах накладной. Зеркалит guard'ы CreateReturn:
+//   - «нельзя вернуть больше, чем пришло»: принято − Σ НЕотменённых возвратов;
+//   - «нельзя вернуть то, чего нет на складе»: фактический остаток товара,
+//     переведённый из единиц склада в единицы накладной.
+//
+// Два батч-запроса на всю страницу, без N+1.
+func (s *StockReadsService) availableToReturn(ctx context.Context, lines []models.StockReceiptLine) (map[string]decimal.Decimal, error) {
+	out := make(map[string]decimal.Decimal, len(lines))
+	if len(lines) == 0 {
+		return out, nil
+	}
+	lineIDs := make([]string, 0, len(lines))
+	ingIDs := make([]string, 0, len(lines))
+	seenIng := make(map[string]struct{})
+	for i := range lines {
+		lineIDs = append(lineIDs, lines[i].ID)
+		if id := deref(lines[i].IngredientID); id != "" {
+			if _, ok := seenIng[id]; !ok {
+				seenIng[id] = struct{}{}
+				ingIDs = append(ingIDs, id)
+			}
+		}
+	}
+
+	// Уже возвращённое (отменённые не считаем — товар по ним приехал назад).
+	returned := make(map[string]decimal.Decimal, len(lines))
+	var retRows []struct {
+		ReceiptLineID string          `gorm:"column:receipt_line_id"`
+		Qty           decimal.Decimal `gorm:"column:qty"`
+	}
+	if err := s.r.Raw().WithContext(ctx).Model(&models.StockReturnLine{}).
+		Joins("JOIN stock_returns sr ON sr.id = stock_return_lines.return_id").
+		Select("stock_return_lines.receipt_line_id AS receipt_line_id, COALESCE(SUM(stock_return_lines.qty), 0) AS qty").
+		Where("stock_return_lines.receipt_line_id IN ?", lineIDs).
+		Where("sr.cancelled_at IS NULL").
+		Group("stock_return_lines.receipt_line_id").Scan(&retRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range retRows {
+		returned[r.ReceiptLineID] = r.Qty
+	}
+
+	// Остатки товаров — через ForTenant (кросс-ресторанной утечки быть не должно).
+	ings := make(map[string]models.Ingredient, len(ingIDs))
+	if len(ingIDs) > 0 {
+		scoped, err := s.r.ForTenant(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var rows []models.Ingredient
+		if err := scoped.Where("id IN ?", ingIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, i := range rows {
+			ings[i.ID] = i
+		}
+	}
+
+	for i := range lines {
+		l := lines[i]
+		unreturned := decimal.Sub(l.Qty, returned[l.ID])
+		if decimal.IsNegative(unreturned) {
+			unreturned = decimal.Zero
+		}
+		res := unreturned
+		if ing, ok := ings[deref(l.IngredientID)]; ok {
+			// Остаток склада → в единицы накладной: иначе сравниваем килограммы
+			// с граммами (накладная в г при складе в кг занижала доступное в 1000 раз).
+			onHand := units.Convert(ing.Qty, deref(ing.Unit), deref(l.Unit))
+			if onHand.LessThan(res) {
+				res = onHand
+			}
+		}
+		if decimal.IsNegative(res) {
+			res = decimal.Zero
+		}
+		out[l.ID] = decimal.Normalize(res)
+	}
+	return out, nil
 }
 
 type WriteoffsFilter struct {
@@ -714,6 +819,9 @@ func (s *SupplyExpensesService) List(ctx context.Context, f SupplyExpensesFilter
 
 // Create — POST /api/v1/supply-expenses. Создаёт запись и StockMovement -qty.
 func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInput) (*models.SupplyExpense, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err

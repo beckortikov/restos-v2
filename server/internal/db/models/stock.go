@@ -348,8 +348,14 @@ type StockReturnLine struct {
 	Qty           decimal.Decimal `gorm:"type:numeric(14,4);not null;default:0" json:"qty"`
 	Unit          *string         `json:"unit"`
 	PricePerUnit  decimal.Decimal `gorm:"column:price_per_unit;type:numeric(14,4);not null;default:0" json:"price_per_unit"`
-	CreatedAt     time.Time       `json:"created_at"`
-	UpdatedAt     time.Time       `json:"updated_at"`
+	// CostRolledBack — откатывал ли возврат средневзвешенную себестоимость по
+	// этой строке. Нужен сторно, чтобы зеркалить возврат, а не двигать цену в
+	// свою сторону: иначе цикл «возврат + сторно» завышает стоимость запасов
+	// (см. миграцию 045). Решение принимается по каждому ингредиенту отдельно,
+	// поэтому флаг на строке, а не на документе.
+	CostRolledBack bool      `gorm:"column:cost_rolled_back;not null;default:false" json:"cost_rolled_back"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (StockReturnLine) TableName() string { return "stock_return_lines" }

@@ -741,6 +741,14 @@ func allocateDebtPayment(tx *gorm.DB, rid, supplierID string, amount decimal.Dec
 // расход (расход признаётся как COGS при продаже товара), поэтому категория
 // исключена из opex ОПиУ. Переплатить долг нельзя (сумма клампится к остатку).
 func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPayDebtInput) (*models.Supplier, error) {
+	// Гашение долга списывает деньги со счёта — серверная проверка обязательна.
+	// Экран поставщика гейта canDo не имеет (закрыт навигацией), поэтому берём
+	// оба права, которыми эту операцию делают в жизни: кладовщик ведёт
+	// поставщиков, бухгалтер — деньги. Одного suppliers.manage мало: он есть у
+	// кладовщика, но не у бухгалтера, и тот перестал бы платить по долгам.
+	if !hasPermFor(ctx, s.r, "suppliers.manage") && !hasPermFor(ctx, s.r, "finance.manage") {
+		return nil, apperrors.Wrap("FORBIDDEN", "недостаточно прав для гашения долга поставщику", nil)
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -771,6 +779,13 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 		if pay.GreaterThan(sup.CurrentDebt) {
 			pay = sup.CurrentDebt // не переплачиваем долг
 		}
+		// Порядок замков (см. orders_perms.go): поставщик → накладные → счёт.
+		// Раскладку делаем ДО блокировки счёта: раньше было наоборот, и получался
+		// AB-BA с возвратом (он берёт накладную и тянется к поставщику) — одновременные
+		// «оплатить долг» и «возврат» вешали друг друга насмерть.
+		if err := allocateDebtPayment(tx, rid, sup.ID, pay, now); err != nil {
+			return err
+		}
 		var acc models.FinancialAccount
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("restaurant_id = ? AND id = ?", rid, in.AccountID).First(&acc).Error; err != nil {
@@ -785,12 +800,6 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 		}
 		sup.CurrentDebt = decimal.Normalize(decimal.Sub(sup.CurrentDebt, pay))
 		if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
-			return err
-		}
-		// Раскладываем оплату по накладным, иначе они помнят начисленный долг
-		// вечно: current_debt показывал бы 0, а Σ receipts.debt_amount — весь
-		// начисленный долг. Эти два числа стояли рядом в карточке поставщика.
-		if err := allocateDebtPayment(tx, rid, sup.ID, pay, now); err != nil {
 			return err
 		}
 		opType := "out"

@@ -4,9 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
-import {
-  fetchStockReturns, createStockReturn, fetchFinancialAccounts, fetchSuppliers, fetchIngredients,
-} from '@/lib/queries'
+import { createStockReturn, fetchFinancialAccounts, fetchSuppliers } from '@/lib/queries'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSub, dSum } from '@/lib/decimal'
 import {
@@ -32,8 +30,6 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
 }) {
   // qty по id строки накладной; 0/пусто — строка не возвращается.
   const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({})
-  const [returnedByLine, setReturnedByLine] = useState<Record<string, number>>({})
-  const [stockByIngredient, setStockByIngredient] = useState<Record<string, number>>({})
   const [supplierDebt, setSupplierDebt] = useState(0)
   const [reason, setReason] = useState<ReturnReason>('spoilage')
   const [refundType, setRefundType] = useState<RefundType>('debt')
@@ -63,27 +59,12 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
     setReason('spoilage')
     setIdemKey(crypto.randomUUID())
     setLoading(true)
-    Promise.all([
-      fetchStockReturns({ receiptId: receipt.id }),
-      fetchFinancialAccounts(),
-      fetchSuppliers(),
-      fetchIngredients(),
-    ])
-      .then(([returns, accs, suppliers, ingredients]) => {
-        const sums: Record<string, number> = {}
-        for (const r of returns) {
-          for (const l of r.lines) {
-            sums[l.receiptLineId] = dSum([sums[l.receiptLineId] ?? 0, l.qty])
-          }
-        }
-        setReturnedByLine(sums)
+    Promise.all([fetchFinancialAccounts(), fetchSuppliers()])
+      .then(([accs, suppliers]) => {
         setAccounts(accs)
         const debt = suppliers.find(s => s.id === receipt.supplierId)?.currentDebt ?? 0
         setSupplierDebt(debt)
         setRefundType(Math.min(receipt.debtAmount, debt) > 0 ? 'debt' : 'money')
-        const stock: Record<string, number> = {}
-        for (const i of ingredients) stock[i.id] = i.qty
-        setStockByIngredient(stock)
         // Какой счёт оплачивал накладную — неизвестно: у stock_receipts нет
         // account_id, оплата живёт отдельной финоперацией. Берём наличный.
         setAccountId(accs.find(a => a.type === 'cash')?.id || accs[0]?.id || '')
@@ -95,23 +76,19 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
   const rows = useMemo(() => {
     if (!receipt) return []
     return receipt.lines.map(line => {
-      // Доступно — меньшее из «не возвращённого по накладной» и фактического
-      // остатка: товар физически уезжает поставщику, вернуть больше, чем лежит
-      // на складе, нельзя (бэк это тоже проверяет).
-      const unreturned = dSub(line.qty, returnedByLine[line.id ?? ''] ?? 0)
-      const onHand = stockByIngredient[line.ingredientId] ?? 0
-      const available = Math.min(unreturned, onHand)
+      // «Доступно» считает бэк (available_to_return): min(принято − неотменённые
+      // возвраты, остаток склада), уже в единицах накладной. Клиент это считал
+      // сам и ошибался — не знал про отменённые возвраты и путал единицы.
+      const available = line.availableToReturn ?? line.qty
       const raw = qtyByLine[line.id ?? ''] ?? ''
       const qty = Number(raw.replace(',', '.')) || 0
-      return { line, available, unreturned, onHand, raw, qty, over: qty > available }
+      return { line, available, raw, qty, over: qty > available }
     })
-  }, [receipt, returnedByLine, stockByIngredient, qtyByLine])
+  }, [receipt, qtyByLine])
 
   const selected = rows.filter(r => r.qty > 0)
   const total = dSum(selected.map(r => dMul(r.qty, r.line.pricePerUnit)))
   const anyOver = rows.some(r => r.over)
-  // Не хватает остатка (а не «уже вернули») — показываем отдельно: причина иная.
-  const shortStock = rows.some(r => r.over && r.onHand < r.unreturned)
   const overDebt = refundType === 'debt' && total > debtRoom
   const canSubmit = selected.length > 0 && !anyOver && !overDebt && !saving &&
     (refundType === 'money' ? !!accountId && !hasDebt : hasDebt)
@@ -213,9 +190,8 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
               {anyOver && (
                 <p className="flex items-center gap-1.5 text-xs text-destructive">
                   <AlertTriangle className="size-3.5 shrink-0" />
-                  {shortStock
-                    ? 'Нельзя вернуть больше, чем сейчас на складе — товар уезжает поставщику'
-                    : 'Нельзя вернуть больше, чем пришло по накладной'}
+                  Нельзя вернуть больше доступного: столько либо не приходило по
+                  накладной, либо уже нет на складе
                 </p>
               )}
 
