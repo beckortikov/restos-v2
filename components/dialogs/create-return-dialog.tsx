@@ -4,7 +4,9 @@ import { useState, useEffect, useMemo } from 'react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
-import { fetchStockReturns, createStockReturn, fetchFinancialAccounts } from '@/lib/queries'
+import {
+  fetchStockReturns, createStockReturn, fetchFinancialAccounts, fetchSuppliers, fetchIngredients,
+} from '@/lib/queries'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSub, dSum } from '@/lib/decimal'
 import {
@@ -31,6 +33,8 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
   // qty по id строки накладной; 0/пусто — строка не возвращается.
   const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({})
   const [returnedByLine, setReturnedByLine] = useState<Record<string, number>>({})
+  const [stockByIngredient, setStockByIngredient] = useState<Record<string, number>>({})
+  const [supplierDebt, setSupplierDebt] = useState(0)
   const [reason, setReason] = useState<ReturnReason>('spoilage')
   const [refundType, setRefundType] = useState<RefundType>('debt')
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
@@ -39,21 +43,28 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(false)
 
-  const hasDebt = (receipt?.debtAmount ?? 0) > 0
+  // Сколько долга этот возврат реально может погасить. Зеркалит бэк:
+  // debtRoom = min(receipt.debt_amount, supplier.current_debt). Одного
+  // receipt.debtAmount мало — это долг, НАЧИСЛЕННЫЙ накладной, и «Оплатить долг»
+  // его не уменьшает (оплаты живут отдельными финопами). У погашенной кредитной
+  // накладной он навсегда остаётся ненулевым, и форма предлагала гасить
+  // несуществующий долг — бэк такой возврат отбивал.
+  const debtRoom = Math.min(receipt?.debtAmount ?? 0, supplierDebt)
+  const hasDebt = debtRoom > 0
 
   useEffect(() => {
     if (!open || !receipt) return
     setQtyByLine({})
     setNote('')
     setReason('spoilage')
-    // Долг есть → по умолчанию гасим долг; накладная оплачена → деньги назад.
-    setRefundType(hasDebt ? 'debt' : 'money')
     setLoading(true)
     Promise.all([
       fetchStockReturns({ receiptId: receipt.id }),
       fetchFinancialAccounts(),
+      fetchSuppliers(),
+      fetchIngredients(),
     ])
-      .then(([returns, accs]) => {
+      .then(([returns, accs, suppliers, ingredients]) => {
         const sums: Record<string, number> = {}
         for (const r of returns) {
           for (const l of r.lines) {
@@ -62,8 +73,15 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
         }
         setReturnedByLine(sums)
         setAccounts(accs)
-        // Подставляем счёт накладной, иначе первый наличный.
-        setAccountId(receipt.accountId || accs.find(a => a.type === 'cash')?.id || accs[0]?.id || '')
+        const debt = suppliers.find(s => s.id === receipt.supplierId)?.currentDebt ?? 0
+        setSupplierDebt(debt)
+        setRefundType(Math.min(receipt.debtAmount, debt) > 0 ? 'debt' : 'money')
+        const stock: Record<string, number> = {}
+        for (const i of ingredients) stock[i.id] = i.qty
+        setStockByIngredient(stock)
+        // Какой счёт оплачивал накладную — неизвестно: у stock_receipts нет
+        // account_id, оплата живёт отдельной финоперацией. Берём наличный.
+        setAccountId(accs.find(a => a.type === 'cash')?.id || accs[0]?.id || '')
       })
       .catch(() => toast.error('Не удалось загрузить данные по накладной'))
       .finally(() => setLoading(false))
@@ -72,21 +90,26 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
   const rows = useMemo(() => {
     if (!receipt) return []
     return receipt.lines.map(line => {
-      const available = dSub(line.qty, returnedByLine[line.id ?? ''] ?? 0)
+      // Доступно — меньшее из «не возвращённого по накладной» и фактического
+      // остатка: товар физически уезжает поставщику, вернуть больше, чем лежит
+      // на складе, нельзя (бэк это тоже проверяет).
+      const unreturned = dSub(line.qty, returnedByLine[line.id ?? ''] ?? 0)
+      const onHand = stockByIngredient[line.ingredientId] ?? 0
+      const available = Math.min(unreturned, onHand)
       const raw = qtyByLine[line.id ?? ''] ?? ''
       const qty = Number(raw.replace(',', '.')) || 0
-      return { line, available, raw, qty, over: qty > available }
+      return { line, available, unreturned, onHand, raw, qty, over: qty > available }
     })
-  }, [receipt, returnedByLine, qtyByLine])
+  }, [receipt, returnedByLine, stockByIngredient, qtyByLine])
 
   const selected = rows.filter(r => r.qty > 0)
   const total = dSum(selected.map(r => dMul(r.qty, r.line.pricePerUnit)))
   const anyOver = rows.some(r => r.over)
-  // Долг гасим только в пределах остатка долга по накладной — иначе бэк
-  // ответит 409 (за товар уже заплачено, деньги обязаны вернуться живыми).
-  const overDebt = refundType === 'debt' && total > (receipt?.debtAmount ?? 0)
+  // Не хватает остатка (а не «уже вернули») — показываем отдельно: причина иная.
+  const shortStock = rows.some(r => r.over && r.onHand < r.unreturned)
+  const overDebt = refundType === 'debt' && total > debtRoom
   const canSubmit = selected.length > 0 && !anyOver && !overDebt && !saving &&
-    (refundType === 'money' ? !!accountId : hasDebt)
+    (refundType === 'money' ? !!accountId && !hasDebt : hasDebt)
 
   async function submit() {
     if (!receipt) return
@@ -184,7 +207,9 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
               {anyOver && (
                 <p className="flex items-center gap-1.5 text-xs text-destructive">
                   <AlertTriangle className="size-3.5 shrink-0" />
-                  Нельзя вернуть больше, чем пришло по накладной
+                  {shortStock
+                    ? 'Нельзя вернуть больше, чем сейчас на складе — товар уезжает поставщику'
+                    : 'Нельзя вернуть больше, чем пришло по накладной'}
                 </p>
               )}
 
@@ -222,18 +247,21 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
                     <span className="font-medium text-foreground">Уменьшить долг</span>
                     <span className="text-xs text-muted-foreground">
                       {hasDebt
-                        ? <>долг {formatCurrency(receipt.debtAmount)} → {formatCurrency(dSub(receipt.debtAmount, total))}</>
-                        : 'долга по накладной нет'}
+                        ? <>долг {formatCurrency(debtRoom)} → {formatCurrency(dSub(debtRoom, total))}</>
+                        : 'долга поставщику нет'}
                     </span>
                   </button>
                   <button
                     onClick={() => setRefundType('money')}
-                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-sm transition-colors ${
+                    disabled={hasDebt}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg border text-sm transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                       refundType === 'money' ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-muted'
                     }`}
                   >
                     <span className="font-medium text-foreground">Вернули деньги</span>
-                    <span className="text-xs text-muted-foreground">поставщик отдал сумму назад</span>
+                    <span className="text-xs text-muted-foreground">
+                      {hasDebt ? 'сначала нужно погасить долг' : 'поставщик отдал сумму назад'}
+                    </span>
                   </button>
                   {refundType === 'money' && (
                     <select
@@ -251,8 +279,8 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
                   {overDebt && (
                     <p className="flex items-center gap-1.5 text-xs text-destructive">
                       <AlertTriangle className="size-3.5 shrink-0" />
-                      Возврат больше остатка долга ({formatCurrency(receipt.debtAmount)}) — за товар уже
-                      заплачено. Верните деньгами или уменьшите количество.
+                      Возврат ({formatCurrency(total)}) больше остатка долга ({formatCurrency(debtRoom)}).
+                      Оформите двумя документами: сначала на {formatCurrency(debtRoom)} в долг, остаток — деньгами.
                     </p>
                   )}
                 </div>

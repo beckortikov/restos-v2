@@ -264,6 +264,238 @@ func TestStockReturn_Money(t *testing.T) {
 	}
 }
 
+// TestStockReturn_MoneyOnUnpaidCredit — деньгами нельзя вернуть то, за что не
+// платили: иначе получаем и товар назад, и деньги, и долг остаётся висеть.
+// Регрессия ревью 17.07.2026: ветка money не имела ни одного guard'а и отдавала
+// 201 с +160 на счёт при непогашенном долге 160.
+func TestStockReturn_MoneyOnUnpaidCredit(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+
+	supName := "Ромашка"
+	sup := &models.Supplier{
+		ID: uuid.NewString(), Name: &supName,
+		CurrentDebt: decimal.Zero, RestaurantID: &f.rid,
+	}
+	if err := gdb.Create(sup).Error; err != nil {
+		t.Fatal(err)
+	}
+	veg := seedReturnIngredient(t, gdb, f.rid, "Овощи", "kg")
+
+	r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "credit", "supplier_id": sup.ID, "supplier_name": supName,
+		"lines": []map[string]any{{
+			"ingredient_id": veg.ID, "name": "Овощи", "qty": "20", "unit": "kg", "price_per_unit": "8",
+		}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("receipt: %d %s", r.StatusCode, b)
+	}
+	var receipt models.StockReceipt
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	lineID := receiptLineID(t, gdb, receipt.ID, veg.ID)
+
+	var accBefore models.FinancialAccount
+	gdb.First(&accBefore, "id = ?", accountID)
+
+	r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+		"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "5"}},
+	})
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("возврат деньгами по неоплаченной кредитной накладной: %d %s, want 409", r.StatusCode, b)
+	}
+	var accAfter models.FinancialAccount
+	gdb.First(&accAfter, "id = ?", accountID)
+	if !accAfter.Balance.Equal(accBefore.Balance) {
+		t.Errorf("баланс изменился на отбитом возврате: %s → %s", accBefore.Balance, accAfter.Balance)
+	}
+
+	// Долг гасить можно — это и есть правильный путь для такой накладной.
+	r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "debt",
+		"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "5"}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("возврат в долг: %d %s", r.StatusCode, b)
+	}
+}
+
+// TestStockReturn_AfterPayDebt — накладная в долг, долг погашен через pay-debt.
+// receipt.debt_amount остаётся 160 навсегда (PayDebt его не трогает), поэтому
+// гасить нечего → долгом нельзя, деньгами можно. Это самый частый жизненный
+// поток кредитной накладной: взял в долг → оплатил → нашёл брак.
+func TestStockReturn_AfterPayDebt(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+
+	supName := "Ромашка"
+	sup := &models.Supplier{
+		ID: uuid.NewString(), Name: &supName,
+		CurrentDebt: decimal.Zero, RestaurantID: &f.rid,
+	}
+	if err := gdb.Create(sup).Error; err != nil {
+		t.Fatal(err)
+	}
+	veg := seedReturnIngredient(t, gdb, f.rid, "Овощи-2", "kg")
+
+	r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "credit", "supplier_id": sup.ID, "supplier_name": supName,
+		"lines": []map[string]any{{
+			"ingredient_id": veg.ID, "name": "Овощи-2", "qty": "20", "unit": "kg", "price_per_unit": "8",
+		}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("receipt: %d %s", r.StatusCode, b)
+	}
+	var receipt models.StockReceipt
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	lineID := receiptLineID(t, gdb, receipt.ID, veg.ID)
+
+	if r, b := f.post(t, "/api/v1/suppliers/"+sup.ID+"/pay-debt", tok, uuid.NewString(),
+		map[string]any{"amount": "160", "account_id": accountID}); r.StatusCode != http.StatusOK {
+		t.Fatalf("pay-debt: %d %s", r.StatusCode, b)
+	}
+	// Накладная всё ещё помнит начисленный долг — на это ловился диалог.
+	var afterPay models.StockReceipt
+	gdb.First(&afterPay, "id = ?", receipt.ID)
+	if !afterPay.DebtAmount.Equal(decimal.MustFromString("160")) {
+		t.Fatalf("предусловие: receipt.debt_amount = %s, ожидалось 160 (PayDebt его не трогает)", afterPay.DebtAmount)
+	}
+
+	if r, _ := f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "debt",
+		"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "3"}},
+	}); r.StatusCode != http.StatusConflict {
+		t.Errorf("возврат в долг при погашенном долге: %d, want 409", r.StatusCode)
+	}
+
+	var accBefore models.FinancialAccount
+	gdb.First(&accBefore, "id = ?", accountID)
+	r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+		"lines": []map[string]any{{"receipt_line_id": lineID, "qty": "3"}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("возврат деньгами после гашения долга: %d %s, want 201", r.StatusCode, b)
+	}
+	var accAfter models.FinancialAccount
+	gdb.First(&accAfter, "id = ?", accountID)
+	want := decimal.Add(accBefore.Balance, decimal.MustFromString("24"))
+	if !accAfter.Balance.Equal(want) {
+		t.Errorf("баланс = %s, want %s", accAfter.Balance, want)
+	}
+}
+
+// TestStockReturn_NotEnoughStock — нельзя вернуть то, чего нет: приняли 20,
+// израсходовали 18, осталось 2. Guard «Σ ≤ принятому» это пропускал и выдавал
+// деньги за физически несуществующий товар (остаток уходил в −18).
+func TestStockReturn_NotEnoughStock(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+	ing := seedReturnIngredient(t, gdb, f.rid, "Дефицит", "kg")
+
+	r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+		"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+		"lines": []map[string]any{{
+			"ingredient_id": ing.ID, "name": "Дефицит", "qty": "20", "unit": "kg", "price_per_unit": "5",
+		}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("receipt: %d %s", r.StatusCode, b)
+	}
+	var receipt models.StockReceipt
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		t.Fatal(err)
+	}
+
+	if r, b := f.post(t, "/api/v1/stock/writeoffs", tok, uuid.NewString(), map[string]any{
+		"reason": "spoilage",
+		"lines":  []map[string]any{{"ingredient_id": ing.ID, "name": "Дефицит", "qty": "18", "unit": "kg", "cost": "90"}},
+	}); r.StatusCode != http.StatusCreated {
+		t.Fatalf("writeoff: %d %s", r.StatusCode, b)
+	}
+
+	r, b = f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": receipt.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+		"lines": []map[string]any{{"receipt_line_id": receiptLineID(t, gdb, receipt.ID, ing.ID), "qty": "20"}},
+	})
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("возврат 20 при остатке 2: %d %s, want 409", r.StatusCode, b)
+	}
+	if got := ingQty(t, gdb, ing.ID); !got.Equal(decimal.MustFromString("2")) {
+		t.Errorf("остаток после отбитого возврата = %s, want 2", got)
+	}
+}
+
+// TestStockReturn_NoCostRollbackAfterConsumption — если между приёмкой и
+// возвратом был расход, откат средневзвешенной НЕ применяется.
+//
+// Формула точна лишь пока остаток не расходовали: расход снимает стоимость по
+// средней, а не из партии, и связь «остаток ↔ партия» рвётся. Раньше здесь
+// получалась цена 5.00 — которой не было ни в одной накладной, — и стоимость
+// остатка занижалась вдвое. Оставляем последнюю реальную среднюю (15).
+func TestStockReturn_NoCostRollbackAfterConsumption(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+	ing := seedReturnIngredient(t, gdb, f.rid, "Мясо-партии", "kg")
+
+	mkReceipt := func(qty, price string) models.StockReceipt {
+		r, b := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(), map[string]any{
+			"payment_type": "paid", "supplier_name": "Ромашка", "account_id": accountID, "paid": true,
+			"lines": []map[string]any{{
+				"ingredient_id": ing.ID, "name": "Мясо-партии", "qty": qty, "unit": "kg", "price_per_unit": price,
+			}},
+		})
+		if r.StatusCode != http.StatusCreated {
+			t.Fatalf("receipt: %d %s", r.StatusCode, b)
+		}
+		var rc models.StockReceipt
+		if err := json.Unmarshal(b, &rc); err != nil {
+			t.Fatal(err)
+		}
+		return rc
+	}
+
+	mkReceipt("10", "10")       // qty=10, с/с 10
+	r2 := mkReceipt("10", "20") // qty=20, с/с (100+200)/20 = 15
+	if r, b := f.post(t, "/api/v1/stock/writeoffs", tok, uuid.NewString(), map[string]any{
+		"reason": "spoilage",
+		"lines":  []map[string]any{{"ingredient_id": ing.ID, "name": "Мясо-партии", "qty": "5", "unit": "kg", "cost": "75"}},
+	}); r.StatusCode != http.StatusCreated {
+		t.Fatalf("writeoff: %d %s", r.StatusCode, b)
+	} // qty=15, с/с 15
+
+	if r, b := f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
+		"receipt_id": r2.ID, "reason": "spoilage", "refund_type": "money", "account_id": accountID,
+		"lines": []map[string]any{{"receipt_line_id": receiptLineID(t, gdb, r2.ID, ing.ID), "qty": "10"}},
+	}); r.StatusCode != http.StatusCreated {
+		t.Fatalf("return: %d %s", r.StatusCode, b)
+	}
+
+	var after models.Ingredient
+	gdb.First(&after, "id = ?", ing.ID)
+	if !after.Qty.Equal(decimal.MustFromString("5")) {
+		t.Errorf("остаток = %s, want 5", after.Qty)
+	}
+	if !after.PricePerUnit.Equal(decimal.MustFromString("15")) {
+		t.Errorf("с/с после возврата с расходом = %s, want 15 (откат не применяется). "+
+			"Если тут 5 — вернулась регрессия: цена, которой не было ни в одной накладной", after.PricePerUnit)
+	}
+}
+
 // TestStockReturn_Guards — нельзя вернуть больше, чем пришло (в т.ч. по сумме
 // нескольких возвратов), и нельзя списать в долг то, за что уже заплачено.
 func TestStockReturn_Guards(t *testing.T) {

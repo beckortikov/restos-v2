@@ -226,6 +226,25 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			}
 		}
 
+		// Был ли расход ингредиента ПОСЛЕ этой приёмки — решает, можно ли
+		// откатывать средневзвешенную себестоимость (см. ниже, где считается цена).
+		//
+		// return_supplier исключаем намеренно: возврат — точный обратный ход
+		// приёмки, после него состояние такое, будто приняли меньше. Поэтому
+		// второй возврат по той же накладной откатывается так же точно, как первый.
+		// Приходы тоже не мешают: стоимость аддитивна по партиям.
+		consumedSince := make(map[string]bool, len(ingByID))
+		for ingID := range ingByID {
+			var n int64
+			if err := tx.Model(&models.StockMovement{}).
+				Where("restaurant_id = ? AND ingredient_id = ? AND created_at > ?", rid, ingID, receipt.CreatedAt).
+				Where("qty < 0 AND COALESCE(type, '') <> ?", "return_supplier").
+				Count(&n).Error; err != nil {
+				return err
+			}
+			consumedSince[ingID] = n > 0
+		}
+
 		for _, pl := range parsedLines {
 			if err := tx.Create(&models.StockReturnLine{
 				ID:            uuid.NewString(),
@@ -260,6 +279,16 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				mvUnit = &stockUnit
 			}
 
+			// Нельзя вернуть то, чего физически нет: товар уезжает поставщику.
+			// Guard «Σ ≤ принятому» этого не ловит — приняли 20, съели 18,
+			// осталось 2, а вернуть «по накладной» разрешал все 20 и выдавал за
+			// них деньги. Списание в минус уходить может (там расход мог быть не
+			// проведён), но возврат — это физическое перемещение, его не подделать.
+			if ing != nil && stockQty.GreaterThan(ing.Qty) {
+				return apperrors.Wrap("CONFLICT",
+					"not enough stock to return "+deref(pl.rl.Name)+": have "+ing.Qty.String(), nil)
+			}
+
 			// stock_movement −qty. Хук stockAfterCreate сам вычтет из ingredients.qty
 			// в этой же транзакции (прямой UPDATE qty запрещён).
 			mvType := "return_supplier"
@@ -285,19 +314,31 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			// Откат средневзвешенной себестоимости — обратная формула к приёмке:
 			//   приход:  new = (old_qty*old_price + line_cost) / (old_qty + recv_qty)
 			//   возврат: new = (old_qty*old_price − ret_cost)  / (old_qty − ret_qty)
-			// Без отката: купили 10 кг по 10, потом 10 кг по 20 (с/с стала 15),
-			// вернули битую вторую партию — на складе снова 10 кг по 10, а с/с
-			// осталась 15, и все блюда считаются с завышенной себестоимостью.
+			// Нужен, чтобы возврат дорогой партии не оставлял завышенную с/с во
+			// всех блюдах: купили 10 кг по 10, потом 10 кг по 20 (с/с стала 15),
+			// вернули вторую — на складе снова 10 кг по 10, с/с обязана стать 10.
+			//
+			// НО откат точен, только если с момента приёмки НЕ БЫЛО РАСХОДА.
+			// Расход снимает стоимость по средней, а не из конкретной партии, и
+			// связь «остаток ↔ партия» рвётся — формула тогда даёт цену, которой
+			// не было ни в одной накладной. Реальный пример: 10 кг по 10 + 10 кг
+			// по 20 (с/с 15), расход 5 кг, возврат 10 кг → num = 15*15 − 200 = 25,
+			// denom = 5, цена 5.00 при физическом остатке 5 кг по 10.
+			// Причина глубже арифметики: в средневзвешенной модели партий не
+			// существует, поэтому «вернуть партию 2 целиком» после расхода —
+			// операция без смысла. Был расход → цену не трогаем: 15 хотя бы
+			// реальная историческая средняя, а не выдуманная.
+			//
 			// ret_cost — в единицах накладной, инвариант к конвертации (та же
 			// логика, что в приёмке: сумма денег от единиц не зависит).
 			if ing != nil && decimal.IsPositive(stockQty) {
 				denom := decimal.Sub(ing.Qty, stockQty)
 				num := decimal.Sub(decimal.Mul(ing.Qty, ing.PricePerUnit), pl.cost)
-				// denom ≤ 0 (вернули весь остаток) или num < 0 (историческая
-				// стоимость меньше возвращаемой — остаток уже уходил в минус):
-				// пересчитывать нечего, цену оставляем прежней. Следующая приёмка
-				// перезапишет её чистой ценой прихода (ветка ing.Qty ≤ 0 в CreateReceipt).
-				if decimal.IsPositive(denom) && !decimal.IsNegative(num) {
+				// denom ≤ 0 — вернули весь остаток, цена бессмысленна (следующая
+				// приёмка перезапишет её чистой ценой прихода, см. ветку
+				// ing.Qty ≤ 0 в CreateReceipt). num < 0 — остаток стоит меньше
+				// возвращаемого, такое возможно только после расхода.
+				if !consumedSince[ingID] && decimal.IsPositive(denom) && !decimal.IsNegative(num) {
 					newPrice := decimal.Normalize(decimal.DivRound(num, denom))
 					if err := tx.Model(&models.Ingredient{}).
 						Where("restaurant_id = ? AND id = ?", rid, ingID).
@@ -313,39 +354,51 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 
 		// Деньги.
 		//
-		// Смешанный случай (накладная оплачена частично, а возврат больше остатка
-		// долга) намеренно НЕ раскладываем автоматически: оплаты долга живут
-		// per-supplier (financial_operations category='supplier_payment' по
-		// counterparty), а не per-receipt — «сколько оплачено именно этой
-		// накладной» система не знает. Вместо тихой ошибки в деньгах guard'ы ниже
-		// отбивают такой возврат с подсказкой; кладовщик оформляет его двумя
-		// документами (часть в долг, часть деньгами) — склад в обоих корректен.
-		switch in.RefundType {
-		case "debt":
-			// receipts.debt_amount — НАЧИСЛЕННЫЙ долг накладной; оплаты вычитаются
-			// отдельно в RecomputeDebts (Σ debt_amount − Σ supplier_payment).
-			// Поэтому уменьшаем именно debt_amount: формула пересчёта остаётся
-			// верной. Уменьшить только suppliers.current_debt нельзя — первый же
-			// RecomputeDebts воскресит долг.
-			if !decimal.IsPositive(receipt.DebtAmount) {
-				return apperrors.Wrap("CONFLICT", "receipt has no debt: use refund_type=money", nil)
-			}
-			if totalAmount.GreaterThan(receipt.DebtAmount) {
-				return apperrors.Wrap("CONFLICT", "return exceeds receipt debt: use refund_type=money", nil)
-			}
-			if receipt.SupplierID == nil || *receipt.SupplierID == "" {
-				return apperrors.Wrap("CONFLICT", "receipt has no supplier: use refund_type=money", nil)
-			}
-			var sup models.Supplier
+		// Обе ветки решает ОДНО число — debtRoom, остаток долга, который этот
+		// возврат может погасить. Есть что гасить → возврат обязан гасить долг;
+		// гасить нечего → деньги вернулись живыми. Без этого правила ветка money
+		// выдавала деньги за неоплаченный товар, оставляя долг висеть (получали
+		// и товар назад, и деньги, и долг — тройная выгода из воздуха).
+		var sup *models.Supplier
+		if receipt.SupplierID != nil && *receipt.SupplierID != "" {
+			var s models.Supplier
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-				Where("restaurant_id = ? AND id = ?", rid, *receipt.SupplierID).First(&sup).Error; err != nil {
+				Where("restaurant_id = ? AND id = ?", rid, *receipt.SupplierID).First(&s).Error; err != nil {
 				return apperrors.Wrap("VALIDATION", "supplier not found", err)
 			}
-			// Долг уже погашен через pay-debt — уменьшать нечего. Без этой проверки
-			// GREATEST(0,…) в RecomputeDebts тихо съел бы разницу: за товар уже
-			// заплачено, поставщик обязан вернуть деньгами.
-			if totalAmount.GreaterThan(sup.CurrentDebt) {
-				return apperrors.Wrap("CONFLICT", "return exceeds current supplier debt: use refund_type=money", nil)
+			sup = &s
+		}
+		// debtRoom = min(receipt.debt_amount, supplier.current_debt), потому что
+		// это два РАЗНЫХ числа:
+		//   debt_amount  — долг, НАЧИСЛЕННЫЙ этой накладной. PayDebt его не
+		//                  уменьшает: оплаты вычитаются отдельно в RecomputeDebts
+		//                  (Σ debt_amount − Σ supplier_payment). То есть накладная
+		//                  помнит начисление навсегда, даже когда всё оплачено.
+		//   current_debt — сколько поставщику должны СЕЙЧАС.
+		// Гасить можно только по меньшему: по накладной — чтобы RecomputeDebts
+		// остался верным, по поставщику — чтобы не уехать в минус, который
+		// GREATEST(0,…) тихо съест (за товар уже заплачено → деньгами).
+		debtRoom := decimal.Zero
+		if sup != nil && decimal.IsPositive(receipt.DebtAmount) && decimal.IsPositive(sup.CurrentDebt) {
+			debtRoom = receipt.DebtAmount
+			if sup.CurrentDebt.LessThan(debtRoom) {
+				debtRoom = sup.CurrentDebt
+			}
+		}
+
+		switch in.RefundType {
+		case "debt":
+			if !decimal.IsPositive(debtRoom) {
+				return apperrors.Wrap("CONFLICT", "no supplier debt to reduce: use refund_type=money", nil)
+			}
+			// Возврат больше остатка долга — это смешанный случай: часть гасит
+			// долг, часть обязана вернуться деньгами. Автоматически разложить не
+			// можем — оплаты долга живут per-supplier (по counterparty), а не
+			// per-receipt, поэтому «сколько оплачено именно этой накладной»
+			// система не знает. Отбиваем; кладовщик оформляет двумя документами
+			// (сначала долг на debtRoom, остаток деньгами) — склад в обоих верен.
+			if totalAmount.GreaterThan(debtRoom) {
+				return apperrors.Wrap("CONFLICT", "return exceeds remaining debt "+debtRoom.String()+": split into two returns", nil)
 			}
 			if err := tx.Model(&receipt).Updates(map[string]any{
 				"debt_amount": decimal.Normalize(decimal.Sub(receipt.DebtAmount, totalAmount)),
@@ -353,19 +406,33 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			}).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&sup).Updates(map[string]any{
+			if err := tx.Model(sup).Updates(map[string]any{
 				"current_debt": decimal.Normalize(decimal.Sub(sup.CurrentDebt, totalAmount)),
 				"updated_at":   now,
 			}).Error; err != nil {
 				return err
 			}
 		case "money":
+			// Есть непогашенный долг → деньги нельзя: за товар ещё не заплачено,
+			// поставщик его не вернёт. Сначала гасим долг (ветка debt).
+			// Накладная в долг без поставщика (debt_amount>0, sup=nil) тоже сюда
+			// попадёт: долг ей начислен, но списать его не на кого — такую
+			// накладную сначала чинят, проставляя поставщика.
+			if decimal.IsPositive(receipt.DebtAmount) && (sup == nil || decimal.IsPositive(sup.CurrentDebt)) {
+				return apperrors.Wrap("CONFLICT", "receipt has unpaid debt: use refund_type=debt first", nil)
+			}
 			// Деньги вернулись на счёт. category='stock_purchase' (не «доход»!) —
 			// чтобы возврат схлопнулся с закупкой: ОПиУ берёт выручку из orders, а
 			// opex фильтрует type='out', поэтому в отчёте не появится ни фейкового
 			// дохода, ни отрицательного расхода. ДДС покажет реальный приток — и это
-			// правда, деньги физически пришли. source_ref + UNIQUE(restaurant_id,
-			// source_ref) → повтор запроса не задвоит проводку.
+			// правда, деньги физически пришли.
+			//
+			// source_ref здесь — только для трассировки «откуда проводка», НЕ для
+			// идемпотентности: uq_finops_tenant_receipt_source_ref частичный
+			// (WHERE source_ref LIKE 'receipt:%'), префикс return: под него не
+			// попадает, да и returnID новый на каждый вызов — коллизии не будет
+			// в принципе. От повторной отправки защищает Idempotency-Key middleware
+			// (см. миграцию 013, там это сказано прямым текстом).
 			var acc models.FinancialAccount
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {

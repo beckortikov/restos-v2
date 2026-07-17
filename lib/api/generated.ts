@@ -1345,7 +1345,7 @@ export interface paths {
                         "application/json": components["schemas"]["StockReturn"];
                     };
                 };
-                /** @description Возврат больше, чем пришло по строке накладной; либо refund_type=debt при отсутствующем/меньшем долге (нужен refund_type=money). */
+                /** @description Возврат больше, чем пришло по строке накладной; больше фактического остатка на складе; либо refund_type не соответствует остатку долга (debt при погашенном долге / money при непогашенном). */
                 409: {
                     headers: {
                         [name: string]: unknown;
@@ -10447,7 +10447,7 @@ export interface components {
             reason: "spoilage" | "breakage" | "expired" | "other";
             note?: string;
             /**
-             * @description debt — накладная в долг: уменьшаются stock_receipts.debt_amount и suppliers.current_debt (обе: RecomputeDebts считает current_debt как Σ debt_amount − Σ оплат). 409, если долга нет или он меньше суммы возврата — тогда нужен money. money — накладная оплачена: financial_accounts.balance += сумма и financial_operation (type=in, category=stock_purchase, source_ref=return:<id>). Категория stock_purchase, а не доход: возврат схлопывается с закупкой, ОПиУ не показывает фейковую выручку.
+             * @description Ветки взаимоисключающие, выбор диктует остаток долга поставщику debtRoom = min(receipt.debt_amount, supplier.current_debt). debt — долг есть (debtRoom > 0): уменьшаются обе стороны — stock_receipts.debt_amount и suppliers.current_debt (RecomputeDebts считает current_debt как Σ debt_amount − Σ оплат, поэтому тронуть надо обе). 409, если гасить нечего или сумма больше debtRoom (смешанный случай — оформить двумя возвратами: на debtRoom в долг, остаток деньгами). money — долга нет: financial_accounts.balance += сумма и financial_operation (type=in, category=stock_purchase). 409, если по накладной есть непогашенный долг — иначе получили бы деньги за неоплаченный товар и остались должны. Категория stock_purchase, а не доход: возврат схлопывается с закупкой, ОПиУ не показывает фейковую выручку. Идемпотентность — на Idempotency-Key, не на source_ref.
              * @enum {string}
              */
             refund_type: "debt" | "money";

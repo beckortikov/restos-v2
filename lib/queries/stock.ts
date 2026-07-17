@@ -393,6 +393,7 @@ const STOCK_MOVEMENT_TYPE_MAP: Record<string, StockMovement['type']> = {
   out: 'out',
   receipt: 'in',
   writeoff: 'out',
+  return_supplier: 'return',
   supply_expense: 'out',
   inventory_correction: 'audit',
   batch_out: 'batch',

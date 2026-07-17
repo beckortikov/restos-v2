@@ -4,11 +4,12 @@ import { useState, useEffect, useMemo } from 'react'
 import { formatTime, formatNum } from '@/lib/helpers'
 import type { StockMovementType, StockMovement, Warehouse } from '@/lib/types'
 import { fetchStockMovements, fetchWarehouses } from '@/lib/queries'
-import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, Undo2 } from 'lucide-react'
 
 const TYPE_META: Record<StockMovementType, { label: string; color: string; bg: string; Icon: React.ElementType }> = {
   in:    { label: 'Приход',        color: 'text-emerald-600', bg: 'bg-emerald-100', Icon: ArrowDownToLine },
   out:   { label: 'Списание',      color: 'text-destructive', bg: 'bg-red-100',     Icon: ArrowUpFromLine },
+  return:{ label: 'Возврат',       color: 'text-orange-600',  bg: 'bg-orange-100',  Icon: Undo2 },
   batch: { label: 'Приготовление', color: 'text-purple-600',  bg: 'bg-purple-100',  Icon: CookingPot },
   semi:  { label: 'Производство',  color: 'text-blue-600',    bg: 'bg-blue-100',    Icon: FlaskConical },
   audit: { label: 'Инвентаризация',color: 'text-amber-600',   bg: 'bg-amber-100',   Icon: ClipboardCheck },

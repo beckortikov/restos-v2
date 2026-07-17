@@ -18,17 +18,20 @@
 -- Партионного учёта (FIFO) нет: товар на складе обезличен, накладную для
 -- возврата выбирает кладовщик — он физически звонит этому поставщику.
 --
--- refund_type:
---   debt  — накладная в долг/частично: уменьшаем stock_receipts.debt_amount
---           И suppliers.current_debt. Обязательно обе: RecomputeDebts
---           (admin.go) пересчитывает current_debt как Σ receipts.debt_amount,
+-- refund_type — выбирается не на глаз, а по остатку долга поставщику:
+--   debt  — долг есть: уменьшаем stock_receipts.debt_amount И
+--           suppliers.current_debt. Обязательно обе: RecomputeDebts (admin.go)
+--           пересчитывает current_debt как Σ receipts.debt_amount − Σ оплат,
 --           тронешь только поставщика — первый же пересчёт воскресит долг.
---   money — накладная оплачена: financial_accounts.balance += total и
---           financial_operation type=in, category=stock_purchase,
---           source_ref=return:<id> (UNIQUE(restaurant_id, source_ref) → идемпотентность).
+--   money — долга нет: financial_accounts.balance += total и
+--           financial_operation type=in, category=stock_purchase.
 --           Категория именно stock_purchase, чтобы возврат схлопнулся с закупкой:
 --           ОПиУ берёт выручку из orders, а opex фильтрует type='out' → ни
 --           фейкового дохода, ни отрицательного расхода. ДДС покажет реальный приток.
+-- Ветки взаимоисключающие по debtRoom = min(receipt.debt_amount,
+-- supplier.current_debt): иначе money выдавал деньги за неоплаченный товар,
+-- оставляя долг висеть. Идемпотентность — на Idempotency-Key middleware
+-- (uq_finops_tenant_receipt_source_ref частичный, только для 'receipt:%').
 --
 -- Склад уменьшается ТОЛЬКО через stock_movements (type='return_supplier',
 -- qty < 0) — колонка type это голый TEXT без CHECK, новый тип не требует правок.
