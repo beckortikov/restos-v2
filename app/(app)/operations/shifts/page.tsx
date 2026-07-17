@@ -108,9 +108,15 @@ function ClosedShiftZBreakdown({ z, loading }: { z: ShiftZReport | null; loading
                   <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.expensesTotal)}</span>
                 </div>
               )}
+              {z.withdrawals > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Изъятия</span>
+                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.withdrawals)}</span>
+                </div>
+              )}
               <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
                 <span>Итог</span>
-                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotal)}</span>
+                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotal - z.withdrawals)}</span>
               </div>
             </div>
           )}
