@@ -527,6 +527,24 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			}
 		}
 
+		// 8b. Фастфуд (restaurants.kitchen_on_pay): кухня узнаёт о заказе только
+		//     сейчас — после оплаты. Бегунки при создании/дозаказе пропущены
+		//     (orders_write), ставим их здесь: гость платит → чек с номером ему,
+		//     бегунок с тем же order_number на кухню.
+		//     Печатаем только ненапечатанное — enqueueRunners сам считает
+		//     qty - qty_printed, поэтому повторный close не задвоит.
+		//     Ошибку НЕ проглатываем (в отличие от чека): без бегунка заказ был бы
+		//     оплачен, но не приготовлен — лучше откатить и дать повторить.
+		if s.kitchenOnPay(tx, rid) {
+			var kitchenItems []models.OrderItem
+			if err := tx.Where("order_id = ?", order.ID).Find(&kitchenItems).Error; err != nil {
+				return err
+			}
+			if err := s.enqueueRunners(tx, rid, &order, kitchenItems, now); err != nil {
+				return err
+			}
+		}
+
 		// Если на этом столе больше нет активных заказов — освобождаем его.
 		// Активные статусы — те же, что считает резерв в computeReservations
 		// (open/new/cooking/ready) + bill_requested/served (заказ ещё не закрыт).

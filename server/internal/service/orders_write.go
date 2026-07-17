@@ -248,12 +248,16 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 		}
 
 		// Runner-jobs на кухню/бар — для свежесозданных items.
-		var createdItems []models.OrderItem
-		if err := tx.Where("order_id = ?", order.ID).Find(&createdItems).Error; err != nil {
-			return err
-		}
-		if err := s.enqueueRunners(tx, rid, order, createdItems, now); err != nil {
-			return err
+		// Фастфуд (kitchen_on_pay): кухня узнаёт о заказе ТОЛЬКО после оплаты —
+		// бегунки ставит orders_close.Close, здесь пропускаем.
+		if !s.kitchenOnPay(tx, rid) {
+			var createdItems []models.OrderItem
+			if err := tx.Where("order_id = ?", order.ID).Find(&createdItems).Error; err != nil {
+				return err
+			}
+			if err := s.enqueueRunners(tx, rid, order, createdItems, now); err != nil {
+				return err
+			}
 		}
 
 		// Sync table.status → occupied.
@@ -483,8 +487,13 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		}
 		// Runner-jobs: и свежесозданные, и merged-в-printed (с delta).
 		// enqueueRunners сам считает qty - qty_printed на каждой строке.
-		if err := s.enqueueRunners(tx, rid, &order, runnerItems, now); err != nil {
-			return err
+		// Фастфуд (kitchen_on_pay): дозаказ тоже ждёт оплаты — иначе часть
+		// позиций уехала бы на кухню раньше денег. Close допечатает всё
+		// ненапечатанное (qty - qty_printed).
+		if !s.kitchenOnPay(tx, rid) {
+			if err := s.enqueueRunners(tx, rid, &order, runnerItems, now); err != nil {
+				return err
+			}
 		}
 		updated = &order
 		buf.Add(EventOrderItemAdded, map[string]any{

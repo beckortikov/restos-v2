@@ -128,6 +128,24 @@ func (s *OrdersService) WithStationResolver(r StationResolver) *OrdersService {
 	return s
 }
 
+// kitchenOnPay — фастфуд-режим ресторана (restaurants.kitchen_on_pay, 041).
+// true → кухонный бегунок печатается на ОПЛАТЕ (orders_close.Close), а не при
+// создании/дозаказе (orders_write). false (дефолт) → классический table-service:
+// кухня сразу на «Отправить», оплата потом.
+//
+// Ошибку чтения трактуем как false — безопаснее напечатать бегунок как обычно,
+// чем молча не отправить заказ на кухню.
+func (s *OrdersService) kitchenOnPay(tx *gorm.DB, restaurantID string) bool {
+	var on bool
+	if err := tx.Model(&models.Restaurant{}).
+		Select("COALESCE(kitchen_on_pay, false)").
+		Where("id = ?", restaurantID).
+		Scan(&on).Error; err != nil {
+		return false
+	}
+	return on
+}
+
 // enqueueRunners группирует новые items по station и создаёт runner-print_jobs
 // по одному на station. printer_id заполняется через StationResolver — если
 // принтер не настроен, job создаётся без printer_id и попадёт в "failed"
