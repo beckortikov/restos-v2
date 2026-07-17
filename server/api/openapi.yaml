@@ -473,6 +473,34 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmReceiptInput" } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
 
+  /api/v1/stock/returns:
+    get:
+      tags: [stock]
+      summary: Список возвратов поставщикам.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: supplier_id, schema: { type: string, format: uuid } }
+        - { in: query, name: receipt_id, schema: { type: string, format: uuid } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: include, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReturnsList" } } } } }
+    post:
+      tags: [stock]
+      summary: Возврат поставщику (создаёт stock_movements −qty + возвращает деньги/долг)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReturnInput" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReturn" } } } }
+        "409":
+          description: >
+            Возврат больше, чем пришло по строке накладной; либо refund_type=debt
+            при отсутствующем/меньшем долге (нужен refund_type=money).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
   /api/v1/stock/writeoffs:
     get:
       tags: [stock]
@@ -3209,6 +3237,7 @@ components:
         created_at: { type: string, format: date-time }
     StockMovementsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockMovement" } }, next_cursor: { type: string } } }
     StockReceiptsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReceipt" } }, next_cursor: { type: string } } }
+    StockReturnsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReturn" } }, next_cursor: { type: string } } }
     StockWriteoffsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockWriteoff" } }, next_cursor: { type: string } } }
     ConfirmReceiptInput:
       type: object
@@ -3297,6 +3326,68 @@ components:
         total_amount: { $ref: "#/components/schemas/Decimal" }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         debt_amount: { $ref: "#/components/schemas/Decimal" }
+
+    ReturnInput:
+      type: object
+      required: [receipt_id, reason, refund_type, lines]
+      description: >
+        Возврат поставщику испорченного/битого товара. Зеркало приёмки: склад
+        −qty (stock_movements type=return_supplier), откат средневзвешенной
+        себестоимости, возврат денег/долга. Не путать со списанием: списание —
+        наш убыток и бьёт по прибыли, возврат — сторно закупки.
+      properties:
+        receipt_id:
+          type: string
+          format: uuid
+          description: >
+            Накладная, по которой возвращаем. Цена возврата берётся из её строк,
+            а не из средневзвешенной себестоимости склада — поставщик отдаёт
+            ровно ту сумму, что взял.
+        date: { type: string, description: "YYYY-MM-DD, по умолчанию сегодня" }
+        reason: { type: string, enum: [spoilage, breakage, expired, other] }
+        note: { type: string }
+        refund_type:
+          type: string
+          enum: [debt, money]
+          description: >
+            debt — накладная в долг: уменьшаются stock_receipts.debt_amount и
+            suppliers.current_debt (обе: RecomputeDebts считает current_debt как
+            Σ debt_amount − Σ оплат). 409, если долга нет или он меньше суммы
+            возврата — тогда нужен money.
+            money — накладная оплачена: financial_accounts.balance += сумма и
+            financial_operation (type=in, category=stock_purchase,
+            source_ref=return:<id>). Категория stock_purchase, а не доход:
+            возврат схлопывается с закупкой, ОПиУ не показывает фейковую выручку.
+        account_id:
+          type: string
+          format: uuid
+          description: "Куда пришли деньги. Обязателен при refund_type=money."
+        lines:
+          type: array
+          items:
+            type: object
+            required: [receipt_line_id, qty]
+            properties:
+              receipt_line_id:
+                type: string
+                format: uuid
+                description: "Строка накладной. Σ возвратов по ней не может превысить принятое qty (иначе 409)."
+              qty: { $ref: "#/components/schemas/Decimal" }
+    StockReturn:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        receipt_id: { type: string, format: uuid }
+        supplier_id: { type: string, format: uuid, nullable: true }
+        supplier_name: { type: string, nullable: true }
+        date: { type: string, nullable: true }
+        reason: { type: string, enum: [spoilage, breakage, expired, other] }
+        note: { type: string, nullable: true }
+        total_amount: { $ref: "#/components/schemas/Decimal" }
+        refund_type: { type: string, enum: [debt, money] }
+        account_id: { type: string, format: uuid, nullable: true }
+        created_by: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
 
     WriteoffInput:
       type: object

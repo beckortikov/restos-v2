@@ -1281,6 +1281,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stock/returns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Список возвратов поставщикам. */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: components["parameters"]["Limit"];
+                    /** @description base64url-token из next_cursor предыдущего ответа */
+                    cursor?: components["parameters"]["Cursor"];
+                    supplier_id?: string;
+                    receipt_id?: string;
+                    from?: string;
+                    to?: string;
+                    include?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReturnsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Возврат поставщику (создаёт stock_movements −qty + возвращает деньги/долг) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReturnInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReturn"];
+                    };
+                };
+                /** @description Возврат больше, чем пришло по строке накладной; либо refund_type=debt при отсутствующем/меньшем долге (нужен refund_type=money). */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/writeoffs": {
         parameters: {
             query?: never;
@@ -10256,6 +10337,10 @@ export interface components {
             data?: components["schemas"]["StockReceipt"][];
             next_cursor?: string;
         };
+        StockReturnsList: {
+            data?: components["schemas"]["StockReturn"][];
+            next_cursor?: string;
+        };
         StockWriteoffsList: {
             data?: components["schemas"]["StockWriteoff"][];
             next_cursor?: string;
@@ -10348,6 +10433,58 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+        };
+        /** @description Возврат поставщику испорченного/битого товара. Зеркало приёмки: склад −qty (stock_movements type=return_supplier), откат средневзвешенной себестоимости, возврат денег/долга. Не путать со списанием: списание — наш убыток и бьёт по прибыли, возврат — сторно закупки. */
+        ReturnInput: {
+            /**
+             * Format: uuid
+             * @description Накладная, по которой возвращаем. Цена возврата берётся из её строк, а не из средневзвешенной себестоимости склада — поставщик отдаёт ровно ту сумму, что взял.
+             */
+            receipt_id: string;
+            /** @description YYYY-MM-DD, по умолчанию сегодня */
+            date?: string;
+            /** @enum {string} */
+            reason: "spoilage" | "breakage" | "expired" | "other";
+            note?: string;
+            /**
+             * @description debt — накладная в долг: уменьшаются stock_receipts.debt_amount и suppliers.current_debt (обе: RecomputeDebts считает current_debt как Σ debt_amount − Σ оплат). 409, если долга нет или он меньше суммы возврата — тогда нужен money. money — накладная оплачена: financial_accounts.balance += сумма и financial_operation (type=in, category=stock_purchase, source_ref=return:<id>). Категория stock_purchase, а не доход: возврат схлопывается с закупкой, ОПиУ не показывает фейковую выручку.
+             * @enum {string}
+             */
+            refund_type: "debt" | "money";
+            /**
+             * Format: uuid
+             * @description Куда пришли деньги. Обязателен при refund_type=money.
+             */
+            account_id?: string;
+            lines: {
+                /**
+                 * Format: uuid
+                 * @description Строка накладной. Σ возвратов по ней не может превысить принятое qty (иначе 409).
+                 */
+                receipt_line_id: string;
+                qty: components["schemas"]["Decimal"];
+            }[];
+        };
+        StockReturn: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            receipt_id?: string;
+            /** Format: uuid */
+            supplier_id?: string | null;
+            supplier_name?: string | null;
+            date?: string | null;
+            /** @enum {string} */
+            reason?: "spoilage" | "breakage" | "expired" | "other";
+            note?: string | null;
+            total_amount?: components["schemas"]["Decimal"];
+            /** @enum {string} */
+            refund_type?: "debt" | "money";
+            /** Format: uuid */
+            account_id?: string | null;
+            created_by?: string | null;
+            /** Format: date-time */
+            created_at?: string;
         };
         WriteoffInput: {
             reason: string;

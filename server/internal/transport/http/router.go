@@ -287,6 +287,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/warehouses", warehouseH.List)
 			g.Get("/stock/ingredient-categories", stockReadsH.ListCategories)
 			g.Get("/stock/receipts", stockReadsH.ListReceipts)
+			g.Get("/stock/returns", stockReadsH.ListReturns)
 			g.Get("/stock/writeoffs", stockReadsH.ListWriteoffs)
 			g.Get("/stock/movements", stockReadsH.ListMovements)
 			g.Get("/stock/inventory", inventoryReadsH.List)
@@ -501,6 +502,7 @@ func NewRouter(deps Deps) http.Handler {
 
 			g.Post("/stock/receipts", stockH.CreateReceipt)
 			g.Post("/stock/receipts/{id}/confirm", stockH.ConfirmReceipt)
+			g.Post("/stock/returns", stockH.CreateReturn)
 			g.Post("/stock/writeoffs", stockH.CreateWriteoff)
 			g.Post("/stock/opening-balance", stockH.OpeningBalance)
 			g.Post("/stock/inventory", inventoryH.Create)

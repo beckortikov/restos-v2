@@ -46,6 +46,21 @@ func (h *StockHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusCreated, receipt)
 }
 
+// CreateReturn — POST /api/v1/stock/returns.
+func (h *StockHandler) CreateReturn(w http.ResponseWriter, r *http.Request) {
+	var in service.ReturnInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	ret, err := h.svc.CreateReturn(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, ret)
+}
+
 // OpeningBalance — POST /api/v1/stock/opening-balance.
 func (h *StockHandler) OpeningBalance(w http.ResponseWriter, r *http.Request) {
 	var in service.OpeningBalanceInput

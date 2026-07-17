@@ -114,6 +114,37 @@ func (h *StockReadsHandler) ListReceipts(w http.ResponseWriter, r *http.Request)
 	respond.JSON(w, http.StatusOK, makeList[models.StockReceipt](rows, next))
 }
 
+// ListReturns — GET /api/v1/stock/returns.
+// Query: limit, cursor, supplier_id, receipt_id, from, to, include=lines.
+func (h *StockReadsHandler) ListReturns(w http.ResponseWriter, r *http.Request) {
+	from, to, err := parseTimeRange(r)
+	if err != nil {
+		respond.BadRequest(w, "bad from/to")
+		return
+	}
+	f := service.ReturnsFilter{
+		SupplierID: queryString(r, "supplier_id"),
+		ReceiptID:  queryString(r, "receipt_id"),
+		From:       from, To: to,
+		Page: parsePage(r),
+	}
+	if queryString(r, "include") == "lines" {
+		rows, next, err := h.svc.ListReturnsWithLines(r.Context(), f)
+		if err != nil {
+			respond.Error(w, err)
+			return
+		}
+		respond.JSON(w, http.StatusOK, makeList[service.ReturnWithLines](rows, next))
+		return
+	}
+	rows, next, err := h.svc.ListReturns(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[models.StockReturn](rows, next))
+}
+
 func (h *StockReadsHandler) ListWriteoffs(w http.ResponseWriter, r *http.Request) {
 	from, to, err := parseTimeRange(r)
 	if err != nil {

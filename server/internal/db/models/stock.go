@@ -304,3 +304,47 @@ type InventoryCheckLine struct {
 }
 
 func (InventoryCheckLine) TableName() string { return "inventory_check_lines" }
+
+// StockReturn — возврат товара поставщику (порча/бой/просрочка).
+//
+// Не путать с StockWriteoff: списание — наш убыток (бьёт по прибыли в ОПиУ),
+// возврат — сторно закупки (товар уехал назад, деньги/долг вернулись).
+// Всегда привязан к накладной: цена возврата берётся из её строк, а не из
+// средневзвешенной себестоимости склада. См. миграцию 042.
+type StockReturn struct {
+	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ReceiptID    string          `gorm:"column:receipt_id;type:uuid;not null;index" json:"receipt_id"`
+	SupplierID   *string         `gorm:"column:supplier_id" json:"supplier_id"`
+	SupplierName *string         `gorm:"column:supplier_name" json:"supplier_name"`
+	Date         *string         `json:"date"`
+	Reason       string          `gorm:"not null;default:'spoilage'" json:"reason"`
+	Note         *string         `json:"note"`
+	TotalAmount  decimal.Decimal `gorm:"column:total_amount;type:numeric(14,4);not null;default:0" json:"total_amount"`
+	// RefundType: debt — уменьшили долг поставщику; money — вернули деньги на счёт.
+	RefundType   string    `gorm:"column:refund_type;not null;default:'debt'" json:"refund_type"`
+	AccountID    *string   `gorm:"column:account_id" json:"account_id"`
+	CreatedBy    *string   `gorm:"column:created_by" json:"created_by"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+func (StockReturn) TableName() string { return "stock_returns" }
+
+// StockReturnLine — строка возврата. Привязана к строке накладной
+// (ReceiptLineID): по ней берётся цена и считается guard «нельзя вернуть
+// больше, чем пришло».
+type StockReturnLine struct {
+	ID            string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ReturnID      string          `gorm:"column:return_id;type:uuid;not null;index" json:"return_id"`
+	ReceiptLineID string          `gorm:"column:receipt_line_id;type:uuid;not null;index" json:"receipt_line_id"`
+	IngredientID  *string         `gorm:"column:ingredient_id" json:"ingredient_id"`
+	Name          *string         `json:"name"`
+	Qty           decimal.Decimal `gorm:"type:numeric(14,4);not null;default:0" json:"qty"`
+	Unit          *string         `json:"unit"`
+	PricePerUnit  decimal.Decimal `gorm:"column:price_per_unit;type:numeric(14,4);not null;default:0" json:"price_per_unit"`
+	CreatedAt     time.Time       `json:"created_at"`
+	UpdatedAt     time.Time       `json:"updated_at"`
+}
+
+func (StockReturnLine) TableName() string { return "stock_return_lines" }
