@@ -166,7 +166,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			}
 			wanted[rl.ID] = acc
 			if decimal.Add(returned[rl.ID], acc).GreaterThan(rl.Qty) {
-				return apperrors.Wrap("CONFLICT", "return exceeds received qty for line "+rl.ID, nil)
+				return apperrors.Wrap("CONFLICT", "нельзя вернуть больше, чем пришло по накладной: "+deref(rl.Name), nil)
 			}
 			cost := decimal.Normalize(decimal.Mul(qty, rl.PricePerUnit))
 			parsedLines = append(parsedLines, parsedReturnLine{rl: rl, qty: qty, cost: cost})
@@ -286,7 +286,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			// проведён), но возврат — это физическое перемещение, его не подделать.
 			if ing != nil && stockQty.GreaterThan(ing.Qty) {
 				return apperrors.Wrap("CONFLICT",
-					"not enough stock to return "+deref(pl.rl.Name)+": have "+ing.Qty.String(), nil)
+					"на складе недостаточно товара для возврата: "+deref(pl.rl.Name)+", остаток "+ing.Qty.String(), nil)
 			}
 
 			// stock_movement −qty. Хук stockAfterCreate сам вычтет из ingredients.qty
@@ -368,16 +368,13 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			}
 			sup = &s
 		}
-		// debtRoom = min(receipt.debt_amount, supplier.current_debt), потому что
-		// это два РАЗНЫХ числа:
-		//   debt_amount  — долг, НАЧИСЛЕННЫЙ этой накладной. PayDebt его не
-		//                  уменьшает: оплаты вычитаются отдельно в RecomputeDebts
-		//                  (Σ debt_amount − Σ supplier_payment). То есть накладная
-		//                  помнит начисление навсегда, даже когда всё оплачено.
-		//   current_debt — сколько поставщику должны СЕЙЧАС.
-		// Гасить можно только по меньшему: по накладной — чтобы RecomputeDebts
-		// остался верным, по поставщику — чтобы не уехать в минус, который
-		// GREATEST(0,…) тихо съест (за товар уже заплачено → деньгами).
+		// debtRoom = min(receipt.debt_amount, supplier.current_debt).
+		// С v3.16.89 debt_amount — ОСТАТОК долга накладной (PayDebt раскладывает
+		// оплату по накладным), а current_debt = Σ debt_amount, так что меньшее —
+		// это почти всегда сама накладная. min() оставлен защитой: current_debt
+		// денормализован и может разойтись (восстановление из бэкапа, дрейф) —
+		// уехать в минус нельзя, GREATEST(0,…) в RecomputeDebts тихо съел бы
+		// разницу, а за товар уже заплачено → деньгами.
 		debtRoom := decimal.Zero
 		if sup != nil && decimal.IsPositive(receipt.DebtAmount) && decimal.IsPositive(sup.CurrentDebt) {
 			debtRoom = receipt.DebtAmount
@@ -389,7 +386,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 		switch in.RefundType {
 		case "debt":
 			if !decimal.IsPositive(debtRoom) {
-				return apperrors.Wrap("CONFLICT", "no supplier debt to reduce: use refund_type=money", nil)
+				return apperrors.Wrap("CONFLICT", "долга поставщику нет — оформите возврат деньгами", nil)
 			}
 			// Возврат больше остатка долга — это смешанный случай: часть гасит
 			// долг, часть обязана вернуться деньгами. Автоматически разложить не
@@ -398,7 +395,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			// система не знает. Отбиваем; кладовщик оформляет двумя документами
 			// (сначала долг на debtRoom, остаток деньгами) — склад в обоих верен.
 			if totalAmount.GreaterThan(debtRoom) {
-				return apperrors.Wrap("CONFLICT", "return exceeds remaining debt "+debtRoom.String()+": split into two returns", nil)
+				return apperrors.Wrap("CONFLICT", "возврат больше остатка долга ("+debtRoom.String()+") — оформите двумя документами: сначала долг, остаток деньгами", nil)
 			}
 			if err := tx.Model(&receipt).Updates(map[string]any{
 				"debt_amount": decimal.Normalize(decimal.Sub(receipt.DebtAmount, totalAmount)),
@@ -419,7 +416,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			// попадёт: долг ей начислен, но списать его не на кого — такую
 			// накладную сначала чинят, проставляя поставщика.
 			if decimal.IsPositive(receipt.DebtAmount) && (sup == nil || decimal.IsPositive(sup.CurrentDebt)) {
-				return apperrors.Wrap("CONFLICT", "receipt has unpaid debt: use refund_type=debt first", nil)
+				return apperrors.Wrap("CONFLICT", "по накладной есть непогашенный долг — сначала уменьшите долг", nil)
 			}
 			// Деньги вернулись на счёт. category='stock_purchase' (не «доход»!) —
 			// чтобы возврат схлопнулся с закупкой: ОПиУ берёт выручку из orders, а

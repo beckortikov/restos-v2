@@ -48,6 +48,12 @@ export function humanizeError(e: unknown, fallback = 'Что-то пошло н�
   // 1. V4Error с кодом ErrorEnvelope — самый надёжный сигнал.
   if (e instanceof V4Error) {
     const env = e.envelope()
+    // Русское сообщение бэка выигрывает у общего текста по коду: его писали
+    // ДЛЯ пользователя и оно конкретнее. Раньше код всегда побеждал, и все 22
+    // русских сообщения бэка были недостижимы — кассир вместо «оформите двумя
+    // документами» или «заказ оплачен разделением счёта» видел бесполезное
+    // «обновите страницу и попробуйте снова», которое ничего не чинит.
+    if (env?.message && isUserFacing(env.message)) return env.message
     if (env?.code && CODE_MESSAGES[env.code]) return CODE_MESSAGES[env.code]
     // Код неизвестен, но message бэка может быть уже человеческим (валидация).
     if (env?.message && isHumanReadable(env.message)) return env.message
@@ -64,6 +70,15 @@ export function humanizeError(e: unknown, fallback = 'Что-то пошло н�
   // показываем как есть. Иначе — фолбэк.
   if (text && isHumanReadable(text)) return text
   return fallback
+}
+
+// isUserFacing — сообщение бэка написано ДЛЯ пользователя, а не для лога.
+// Критерий — кириллица: англоязычные строки в бэке это внутренние ошибки
+// («insufficient funds on account», «bad qty in line»), их показывать нельзя —
+// для них остаётся общий текст по коду. Так авторы сообщений сами решают,
+// пойдёт текст пользователю или нет, просто выбирая язык.
+function isUserFacing(s: string): boolean {
+  return isHumanReadable(s) && /[а-яё]/i.test(s)
 }
 
 // isHumanReadable — эвристика «это сообщение можно показать юзеру».

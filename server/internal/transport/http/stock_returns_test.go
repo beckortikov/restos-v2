@@ -325,10 +325,9 @@ func TestStockReturn_MoneyOnUnpaidCredit(t *testing.T) {
 	}
 }
 
-// TestStockReturn_AfterPayDebt — накладная в долг, долг погашен через pay-debt.
-// receipt.debt_amount остаётся 160 навсегда (PayDebt его не трогает), поэтому
-// гасить нечего → долгом нельзя, деньгами можно. Это самый частый жизненный
-// поток кредитной накладной: взял в долг → оплатил → нашёл брак.
+// TestStockReturn_AfterPayDebt — накладная в долг, долг погашен через pay-debt:
+// гасить нечего → долгом нельзя, деньгами можно. Самый частый жизненный поток
+// кредитной накладной: взял в долг → оплатил → нашёл брак.
 func TestStockReturn_AfterPayDebt(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
@@ -364,11 +363,13 @@ func TestStockReturn_AfterPayDebt(t *testing.T) {
 		map[string]any{"amount": "160", "account_id": accountID}); r.StatusCode != http.StatusOK {
 		t.Fatalf("pay-debt: %d %s", r.StatusCode, b)
 	}
-	// Накладная всё ещё помнит начисленный долг — на это ловился диалог.
+	// PayDebt раскладывает оплату по накладным (v3.16.89), поэтому долг накладной
+	// обнулился вместе с долгом поставщика. До фикса тут навсегда оставалось 160,
+	// и диалог на это ловился: предлагал гасить давно погашенный долг.
 	var afterPay models.StockReceipt
 	gdb.First(&afterPay, "id = ?", receipt.ID)
-	if !afterPay.DebtAmount.Equal(decimal.MustFromString("160")) {
-		t.Fatalf("предусловие: receipt.debt_amount = %s, ожидалось 160 (PayDebt его не трогает)", afterPay.DebtAmount)
+	if !afterPay.DebtAmount.Equal(decimal.Zero) {
+		t.Fatalf("предусловие: receipt.debt_amount = %s, ожидалось 0 (оплата раскладывается по накладным)", afterPay.DebtAmount)
 	}
 
 	if r, _ := f.post(t, "/api/v1/stock/returns", tok, uuid.NewString(), map[string]any{
