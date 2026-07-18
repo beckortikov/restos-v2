@@ -12,6 +12,7 @@ import {
   type SemiFinishedType,
   type MenuItem,
   type MenuStation,
+  type MenuAttribute,
 } from '@/lib/types'
 import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
@@ -20,6 +21,7 @@ import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { humanizeError } from '@/lib/errors'
 import { AttributesEditor } from '@/components/menu/attributes-editor'
+import { VariantTechCardsEditor } from '@/components/menu/variant-tech-cards-editor'
 
 interface MenuItemForm {
   name: string
@@ -180,6 +182,11 @@ export default function EditMenuItemPage() {
   // человек печатает цены, жмёт привычную верхнюю кнопку и молча теряет
   // правки: форма уходит на /warehouse/menu, AttributesEditor размонтируется.
   const [attrsDirty, setAttrsDirty] = useState(false)
+  // Живые варианты продукта + их атрибуты — для «Техкарты по вариантам»
+  // (independent от AttributesEditor: та же PUT /attributes-эндпойнт, но
+  // отдельный fetch проще, чем поднимать состояние наверх через колбэк).
+  const [variantAttributes, setVariantAttributes] = useState<MenuAttribute[]>([])
+  const [productVariants, setProductVariants] = useState<MenuItem[]>([])
   const [form, setForm] = useState<MenuItemForm>({
     name: '',
     category: '',
@@ -794,6 +801,17 @@ export default function EditMenuItemPage() {
               isPurchased={form.isPurchased}
               onHasAttributesChange={setHasAttributes}
               onDirtyChange={setAttrsDirty}
+              onVariantsChange={(attrs, variants) => { setVariantAttributes(attrs); setProductVariants(variants) }}
+            />
+          )}
+
+          {/* Техкарта по размерам/вкусам — своя граммовка у каждого варианта. */}
+          {menuItem && !menuItem.parentId && techCardsEnabled && !form.isPurchased && productVariants.length > 0 && (
+            <VariantTechCardsEditor
+              variants={productVariants}
+              ingredients={ingredients}
+              semiTypes={semiTypes}
+              productAttributes={variantAttributes}
             />
           )}
         </div>

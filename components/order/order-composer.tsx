@@ -362,6 +362,9 @@ export function OrderComposer(props: OrderComposerProps) {
   const [weightValue, setWeightValue] = useState<number>(0)
   // Продукт с атрибутами, для которого открыт пикер вариантов.
   const [variantProduct, setVariantProduct] = useState<MenuItem | null>(null)
+  // Индекс строки корзины, чей размер/вариант сейчас меняется пикером —
+  // null значит «добавление новой позиции» (обычный addToCart-флоу).
+  const [editingLineIdx, setEditingLineIdx] = useState<number | null>(null)
 
   const [orderType, setOrderType] = useState<OrderType>(newProps?.initialOrderType ?? 'hall')
   const [selectedTableId, setSelectedTableId] = useState<string>(newProps?.initialTableId ?? '')
@@ -587,6 +590,10 @@ export function OrderComposer(props: OrderComposerProps) {
     return map
   }, [menuItems])
 
+  // id → MenuItem, включая варианты (parentId != null) — для резолва «строка
+  // корзины → продукт-родитель» при смене размера на лету (§4.4 спеки).
+  const menuItemsById = useMemo(() => new Map(menuItems.map(m => [m.id, m])), [menuItems])
+
   // Единый предикат «прятать из меню ПОС»: заготовка без готовых порций ИЛИ
   // (нет права create_stopped и блюдо в стопе/недоступно). Применяется во ВСЕХ
   // представлениях меню (сетка drill-down, поиск, избранное, частые), иначе
@@ -730,6 +737,19 @@ export function OrderComposer(props: OrderComposerProps) {
     // without manually deleting the previous query.
     setSearch('')
   }, [canOrderStopped, stoppedIds, stopReasons, variantsByParent])
+
+  // Смена размера/варианта у УЖЕ добавленной строки корзины на лету — без
+  // удаления и повторного пробития (спека §4.4). Открывает тот же пикер, что
+  // и добавление новой позиции, но с preselect текущего варианта; onSelect
+  // ниже различает этот режим по editingLineIdx и обновляет строку in-place.
+  const swapLineVariant = useCallback((line: CartLine, idx: number) => {
+    const item = menuItemsById.get(line.menuItemId)
+    if (!item?.parentId) return
+    const product = menuItemsById.get(item.parentId)
+    if (!product) return
+    setEditingLineIdx(idx)
+    setVariantProduct(product)
+  }, [menuItemsById])
 
   const confirmWeight = useCallback((portionQty: number = 1) => {
     if (!weightItem || weightValue <= 0) return
@@ -1287,13 +1307,22 @@ export function OrderComposer(props: OrderComposerProps) {
           </div>
         ) : cart.map((line, idx) => {
           const isWeight = line.unit !== 'piece'
+          const isVariantLine = !!menuItemsById.get(line.menuItemId)?.parentId
           return (
             <div key={`${line.menuItemId}-${idx}`} className="flex items-center gap-3 bg-card rounded-xl p-3 border border-border">
               <div className="flex-1 min-w-0">
-                <p className="text-base font-medium truncate">
-                  {line.emoji} {line.name}
-                  {isWeight && <span className="text-sm text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
-                </p>
+                {isVariantLine ? (
+                  <button type="button" onClick={() => swapLineVariant(line, idx)} className="text-left w-full active:opacity-70">
+                    <p className="text-base font-medium truncate underline decoration-dotted decoration-muted-foreground/50 underline-offset-4">
+                      {line.emoji} {line.name}
+                    </p>
+                  </button>
+                ) : (
+                  <p className="text-base font-medium truncate">
+                    {line.emoji} {line.name}
+                    {isWeight && <span className="text-sm text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
+                  </p>
+                )}
                 <p className="text-sm text-primary font-semibold">{formatCurrency(lineTotal(line))}</p>
               </div>
               <div className="flex items-center gap-1">
@@ -2088,14 +2117,23 @@ export function OrderComposer(props: OrderComposerProps) {
             <div className="space-y-2">
               {cart.map((line, idx) => {
                 const isWeight = line.unit !== 'piece'
+                const isVariantLine = !!menuItemsById.get(line.menuItemId)?.parentId
                 return (
                   <div key={`${line.menuItemId}-${idx}`} className="flex items-center gap-2 bg-background rounded-xl p-2.5 border border-border">
                     <span className="text-lg shrink-0">{line.emoji}</span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">
-                        {line.name}
-                        {isWeight && <span className="text-[10px] text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
-                      </p>
+                      {isVariantLine ? (
+                        <button type="button" onClick={() => swapLineVariant(line, idx)} className="text-left w-full active:opacity-70">
+                          <p className="text-xs font-medium text-foreground truncate underline decoration-dotted decoration-muted-foreground/50 underline-offset-4">
+                            {line.name}
+                          </p>
+                        </button>
+                      ) : (
+                        <p className="text-xs font-medium text-foreground truncate">
+                          {line.name}
+                          {isWeight && <span className="text-[10px] text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground">{formatPriceLabel(line.price, line.unit, line.unitSize)}</p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -2229,8 +2267,20 @@ export function OrderComposer(props: OrderComposerProps) {
         product={variantProduct}
         variants={variantProduct ? (variantsByParent.get(variantProduct.id) ?? []) : []}
         stoppedIds={stoppedIds}
-        onClose={() => setVariantProduct(null)}
-        onSelect={(v) => { setVariantProduct(null); addToCart(v) }}
+        initialVariantId={editingLineIdx !== null ? cart[editingLineIdx]?.menuItemId : undefined}
+        onClose={() => { setVariantProduct(null); setEditingLineIdx(null) }}
+        onSelect={(v) => {
+          setVariantProduct(null)
+          if (editingLineIdx !== null) {
+            const idx = editingLineIdx
+            setEditingLineIdx(null)
+            setCart(prev => prev.map((l, i) => i === idx
+              ? { ...l, menuItemId: v.id, name: v.name, emoji: v.emoji, price: v.price, cogs: v.cogs }
+              : l))
+            return
+          }
+          addToCart(v)
+        }}
         nested
       />
 

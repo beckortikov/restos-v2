@@ -1,10 +1,10 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { Plus, Trash2, X, Layers } from 'lucide-react'
+import { Plus, Trash2, X, Layers, Ruler } from 'lucide-react'
 import { toast } from 'sonner'
-import type { MenuItem } from '@/lib/types'
-import { fetchMenuAttributes, syncMenuAttributes, toggleMenuAvailability } from '@/lib/queries'
+import type { MenuItem, MenuAttribute, SizeScale } from '@/lib/types'
+import { fetchMenuAttributes, syncMenuAttributes, toggleMenuAvailability, fetchSizeScales } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { humanizeError } from '@/lib/errors'
 
@@ -14,11 +14,24 @@ import { humanizeError } from '@/lib/errors'
 export interface AttrValueForm {
   id?: string
   label: string
+  // Если значение зеркалит шкалу размеров — id соответствующего SizeScaleValue
+  // (для подсказки «эта заготовка — этого размера» до сохранения на бэке,
+  // когда ни у значения, ни у варианта ещё нет собственного id).
+  sizeScaleValueId?: string
 }
 export interface AttrForm {
   id?: string
   name: string
   values: AttrValueForm[]
+  // Если задан — values зеркалят значения этой шкалы размеров (только для
+  // отображения/расчёта комбинаций на фронте); при сохранении сервер сам
+  // подставляет актуальные значения шкалы, values в payload не идёт.
+  sizeScaleId?: string
+}
+
+/** Значения атрибута из выбранной шкалы (лейбл = title, иначе code). */
+function valuesFromScale(scale: SizeScale): AttrValueForm[] {
+  return scale.values.map(v => ({ label: v.title || v.code, sizeScaleValueId: v.id }))
 }
 
 // Цены комбинаций: ключ — лейблы в порядке атрибутов через \x1f.
@@ -32,18 +45,32 @@ export function comboKeyOf(labels: string[]): string {
   return labels.map(l => l.trim()).join('\x1f')
 }
 
+/**
+ * Ключ комбинации по НАБОРУ лейблов (сортированный, не по порядку атрибутов).
+ * Бэк возвращает variantValueIds отсортированными (не в порядке атрибутов) —
+ * поэтому сопоставлять локальную комбинацию созданному варианту после
+ * PUT /attributes нужно по множеству лейблов, а не по comboKeyOf-порядку.
+ */
+export function comboLabelSetKey(labels: string[]): string {
+  return [...labels].map(l => l.trim()).sort().join('\x1f')
+}
+
 /** Комбинации (декартово произведение заполненных значений) в порядке атрибутов. */
-export function combosOf(attrs: AttrForm[]): { key: string; labels: string[]; title: string }[] {
+export function combosOf(attrs: AttrForm[]): { key: string; labels: string[]; title: string; sizeScaleValueIds: string[] }[] {
   if (attrs.length === 0) return []
-  let acc: string[][] = [[]]
+  let acc: AttrValueForm[][] = [[]]
   for (const a of attrs) {
-    const labels = a.values.map(v => v.label.trim()).filter(Boolean)
-    if (labels.length === 0) return []
-    const next: string[][] = []
-    for (const c of acc) for (const l of labels) next.push([...c, l])
+    const values = a.values.filter(v => v.label.trim())
+    if (values.length === 0) return []
+    const next: AttrValueForm[][] = []
+    for (const c of acc) for (const v of values) next.push([...c, v])
     acc = next
   }
-  return acc.map(labels => ({ key: comboKeyOf(labels), labels, title: labels.join(' · ') }))
+  return acc.map(combo => {
+    const labels = combo.map(v => v.label.trim())
+    const sizeScaleValueIds = combo.map(v => v.sizeScaleValueId).filter((x): x is string => !!x)
+    return { key: comboKeyOf(labels), labels, title: labels.join(' · '), sizeScaleValueIds }
+  })
 }
 
 export function combosCount(attrs: AttrForm[]): number {
@@ -84,9 +111,15 @@ export function AttributesForm({ attrs, onChange }: {
   attrs: AttrForm[]
   onChange: (next: AttrForm[]) => void
 }) {
+  const [scales, setScales] = useState<SizeScale[]>([])
+  useEffect(() => { fetchSizeScales().then(setScales).catch(() => {}) }, [])
+
   return (
     <div className="space-y-3">
-      {attrs.map((attr, ai) => (
+      {attrs.map((attr, ai) => {
+        const scaleLinked = !!attr.sizeScaleId
+        const selectedScale = scales.find(s => s.id === attr.sizeScaleId)
+        return (
         <div key={attr.id ?? `new-${ai}`} className="p-3 bg-muted/20 border border-border/50 rounded-xl space-y-2.5">
           <div className="flex items-center gap-2">
             <input
@@ -106,6 +139,45 @@ export function AttributesForm({ attrs, onChange }: {
             </button>
           </div>
 
+          {scales.length > 0 && (
+            <div className="flex items-center gap-1.5 text-xs">
+              <Ruler className="size-3.5 text-muted-foreground shrink-0" />
+              <select
+                value={attr.sizeScaleId ?? ''}
+                onChange={e => {
+                  const scaleId = e.target.value
+                  if (!scaleId) {
+                    onChange(attrs.map((a, i) => i === ai ? { ...a, sizeScaleId: undefined } : a))
+                    return
+                  }
+                  const scale = scales.find(s => s.id === scaleId)
+                  onChange(attrs.map((a, i) => i === ai
+                    ? { ...a, sizeScaleId: scaleId, values: scale ? valuesFromScale(scale) : a.values }
+                    : a))
+                }}
+                className="flex-1 px-2 py-1 bg-background border border-border rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                <option value="">Свободный ввод значений</option>
+                {scales.map(s => (
+                  <option key={s.id} value={s.id}>Из шкалы: {s.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {scaleLinked ? (
+            <div className="flex flex-wrap gap-1.5">
+              {attr.values.map((v, vi) => (
+                <span key={vi} className="px-2 py-1 bg-background border border-border/50 rounded-lg text-xs text-foreground">{v.label}</span>
+              ))}
+              {attr.values.length === 0 && (
+                <span className="text-xs text-amber-600">У шкалы «{selectedScale?.name}» нет значений</span>
+              )}
+              <span className="text-[10px] text-muted-foreground w-full">
+                Значения редактируются в разделе «Шкалы размеров».
+              </span>
+            </div>
+          ) : (
           <div className="space-y-1.5">
             {attr.values.map((val, vi) => (
               <div key={val.id ?? `new-${vi}`} className="grid grid-cols-[1fr_2rem] gap-2 items-center">
@@ -142,8 +214,10 @@ export function AttributesForm({ attrs, onChange }: {
               </button>
             )}
           </div>
+          )}
         </div>
-      ))}
+        )
+      })}
 
       {attrs.length < MAX_ATTRS && (
         <button
@@ -213,7 +287,7 @@ export function ComboPricesEditor({ attrs, prices, onChange, showPurchase }: {
  * продукта (грузит и сохраняет на бэк). Варианты — реальные menu_items с
  * parent_id; генерирует их бэк на PUT /menu/items/{id}/attributes.
  */
-export function AttributesEditor({ productId, isPurchased, onHasAttributesChange, onDirtyChange }: {
+export function AttributesEditor({ productId, isPurchased, onHasAttributesChange, onDirtyChange, onVariantsChange }: {
   productId: string
   isPurchased?: boolean
   /** Родительская форма скрывает поля цены/закупки, когда атрибуты есть. */
@@ -221,6 +295,9 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
   /** Есть несохранённые правки атрибутов/цен — родитель не должен молча
    *  уходить со страницы («Сохранить изменения» их не затрагивает). */
   onDirtyChange?: (dirty: boolean) => void
+  /** Живые варианты + атрибуты после загрузки/сохранения — для родителя,
+   *  которому нужен актуальный список SKU (например «Техкарты по вариантам»). */
+  onVariantsChange?: (attributes: MenuAttribute[], variants: MenuItem[]) => void
 }) {
   const [attrs, setAttrs] = useState<AttrForm[]>([])
   const [prices, setPrices] = useState<ComboPrices>({})
@@ -236,6 +313,7 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
         const loadedAttrs: AttrForm[] = state.attributes.map(a => ({
           id: a.id,
           name: a.name,
+          sizeScaleId: a.sizeScaleId ?? undefined,
           values: a.values.map(v => ({ id: v.id, label: v.label })),
         }))
         // Цены комбинаций восстанавливаем из вариантов: value_ids варианта →
@@ -256,6 +334,7 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
         setPrices(loadedPrices)
         setVariants(state.variants)
         onHasAttributesChange?.(state.attributes.length > 0)
+        onVariantsChange?.(state.attributes, state.variants)
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -283,6 +362,7 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
         attrs.map(a => ({
           id: a.id,
           name: a.name.trim(),
+          sizeScaleId: a.sizeScaleId,
           values: a.values.map(v => ({ id: v.id, label: v.label.trim() })),
         })),
         buildCombosPayload(attrs, prices),
@@ -290,11 +370,13 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
       setAttrs(state.attributes.map(a => ({
         id: a.id,
         name: a.name,
+        sizeScaleId: a.sizeScaleId ?? undefined,
         values: a.values.map(v => ({ id: v.id, label: v.label })),
       })))
       setVariants(state.variants)
       setDirty(false)
       onHasAttributesChange?.(state.attributes.length > 0)
+      onVariantsChange?.(state.attributes, state.variants)
       toast.success(state.variants.length > 0
         ? `Варианты обновлены: ${state.variants.length}`
         : 'Атрибуты удалены — товар снова обычный')

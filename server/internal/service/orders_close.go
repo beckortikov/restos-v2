@@ -761,7 +761,10 @@ func (s *OrdersService) deductStockForOrder(tx *gorm.DB, restaurantID string, or
 				// нехватку разузловываем в сырьё. Раньше всегда каскадили в сырьё
 				// (cascadeSemiDeduct), игнорируя остаток заготовки, — из-за чего при
 				// использовании предзаготовки (Prepare) сырьё списывалось дважды.
-				if err := s.deductSemiForSale(tx, restaurantID, *line.SemiTypeID, lineQty, deref(line.Unit), itemRef, now); err != nil {
+				// Package-level (не метод OrdersService) — используется и здесь, и
+				// BatchCookingService.Produce (см. batch_cooking.go); itemRef (не
+				// sourceRef) — per-item идемпотентность (#5/#6), как у ingredient-веток.
+				if err := deductSemiForSale(tx, restaurantID, *line.SemiTypeID, lineQty, deref(line.Unit), itemRef, now); err != nil {
 					return err
 				}
 			}
@@ -847,7 +850,11 @@ func writeIngredientDeduct(
 // lineQty — потребность в единице тех-карты блюда (lineUnit); приводим к единице
 // заготовки. yield_percent при расходе готовой заготовки НЕ применяется (он уже
 // учтён при производстве); cascadeSemiDeduct применит его только к остатку-нехватке.
-func (s *OrdersService) deductSemiForSale(
+//
+// Package-level (не метод OrdersService) — используется и при продаже заказом
+// (deductStockForOrder), и при партионной готовке (BatchCookingService.Produce):
+// оба сценария обязаны списывать полуфабрикат из тех-карты одинаково.
+func deductSemiForSale(
 	tx *gorm.DB,
 	restaurantID, semiTypeID string,
 	lineQty decimal.Decimal,
@@ -918,14 +925,14 @@ func (s *OrdersService) deductSemiForSale(
 	// 2. Нехватку разузловываем в сырьё (модель «на лету»); cascadeSemiDeduct сам
 	//    применит yield_percent к этому остатку.
 	if remainder := decimal.Sub(needed, fromStock); decimal.IsPositive(remainder) {
-		if err := s.cascadeSemiDeduct(tx, restaurantID, semiTypeID, remainder, sourceRef, now, 0); err != nil {
+		if err := cascadeSemiDeduct(tx, restaurantID, semiTypeID, remainder, sourceRef, now, 0); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *OrdersService) cascadeSemiDeduct(
+func cascadeSemiDeduct(
 	tx *gorm.DB,
 	restaurantID, semiTypeID string,
 	qty decimal.Decimal,

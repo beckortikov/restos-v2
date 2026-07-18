@@ -136,6 +136,7 @@ func NewRouter(deps Deps) http.Handler {
 	modsSvc := service.NewModifiersService(rep)
 	techCardsSvc := service.NewTechCardsService(rep)
 	semiSvc := service.NewSemiFinishedService(rep)
+	sizeScalesSvc := service.NewSizeScaleService(rep)
 	zonesWriteSvc := service.NewZonesWriteService(rep)
 	tablesWriteSvc := service.NewTablesWriteService(rep).WithPublisher(pub)
 	restaurantsSvc := service.NewRestaurantsService(rep)
@@ -187,6 +188,7 @@ func NewRouter(deps Deps) http.Handler {
 	modsH := handlers.NewModifiers(modsSvc)
 	techCardsH := handlers.NewTechCards(techCardsSvc)
 	semiH := handlers.NewSemiFinished(semiSvc)
+	scalesH := handlers.NewSizeScales(sizeScalesSvc)
 	zonesWriteH := handlers.NewZonesWrite(zonesWriteSvc)
 	tablesWriteH := handlers.NewTablesWrite(tablesWriteSvc)
 	restaurantsH := handlers.NewRestaurants(restaurantsSvc)
@@ -360,6 +362,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/semi/types", semiH.ListTypes)
 			g.Get("/semi/types/{id}", semiH.GetType)
 			g.Get("/semi/stock", semiH.ListStock)
+			g.Get("/size-scales", scalesH.List)
 
 			// Stop-list (compute-on-read).
 			g.Get("/stop-list", stopListH.List)
@@ -596,6 +599,11 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/semi/types/{id}", semiH.DeleteType)
 			g.Post("/semi/prepare", semiH.Prepare)
 			g.Post("/semi/consume", semiH.Consume)
+
+			// Size scales.
+			g.Post("/size-scales", scalesH.Create)
+			g.Patch("/size-scales/{id}", scalesH.Patch)
+			g.Delete("/size-scales/{id}", scalesH.Delete)
 
 			// Stop-list overrides.
 			g.Post("/stop-list/{menu_item_id}/override", stopListH.SetOverride)

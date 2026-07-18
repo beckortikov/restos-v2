@@ -1226,6 +1226,9 @@ type SemiTypeInput struct {
 	OutputUnit   *string            `json:"output_unit,omitempty"`
 	YieldPercent *string            `json:"yield_percent,omitempty"`
 	Recipe       *[]SemiRecipeInput `json:"recipe,omitempty"`
+	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
+	// «Тесто-30» → значение «30» шкалы пиццы); см. models.SemiFinishedType.
+	SizeScaleValueID *string `json:"size_scale_value_id,omitempty"`
 }
 
 // SemiRecipeInput — строка рецепта полуфабриката.
@@ -1329,7 +1332,8 @@ func (s *SemiFinishedService) CreateType(ctx context.Context, in SemiTypeInput) 
 	now := time.Now().UTC()
 	t := &models.SemiFinishedType{
 		ID: uuid.NewString(), Name: in.Name, OutputUnit: in.OutputUnit,
-		RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+		SizeScaleValueID: in.SizeScaleValueID,
+		RestaurantID:     &rid, CreatedAt: now, UpdatedAt: now,
 	}
 	if in.YieldPercent != nil {
 		d, err := decimal.FromString(*in.YieldPercent)
@@ -1406,6 +1410,13 @@ func (s *SemiFinishedService) PatchType(ctx context.Context, id string, in SemiT
 			return nil, apperrors.Wrap("VALIDATION", "bad yield_percent", err)
 		}
 		updates["yield_percent"] = d
+	}
+	if in.SizeScaleValueID != nil {
+		if *in.SizeScaleValueID == "" {
+			updates["size_scale_value_id"] = nil // явная очистка привязки
+		} else {
+			updates["size_scale_value_id"] = *in.SizeScaleValueID
+		}
 	}
 	now := time.Now().UTC()
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
