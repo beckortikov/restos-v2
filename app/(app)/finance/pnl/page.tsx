@@ -10,6 +10,7 @@ import { Download, ChefHat } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { exportToExcel } from '@/lib/export-excel'
 import { fetchPnLReport, type PnLReport } from '@/lib/queries/finance'
+import { finopCategoryLabel } from '@/lib/types'
 import { toast } from 'sonner'
 
 const CHART_COLORS = ['#e87c4f', '#4f9ee8', '#5cb85c', '#f0ad4e', '#d9534f', '#9b59b6', '#1abc9c', '#34495e']
@@ -77,7 +78,8 @@ export default function PnlPage() {
     rows.push({ label: 'Валовая прибыль', value: report.gross_profit, bold: true })
     const sortedOpex = [...report.opex.by_category].sort((a, b) => b.amount - a.amount)
     for (const { category, amount } of sortedOpex) {
-      rows.push({ label: `— ${category}`, value: -amount, bold: false })
+      // Авто-коды (refund и т.п.) → русские подписи; ручные категории — как есть.
+      rows.push({ label: `— ${finopCategoryLabel(category)}`, value: -amount, bold: false })
     }
     rows.push({ label: 'Чистая прибыль', value: report.net_profit, bold: true })
     return rows
@@ -89,7 +91,7 @@ export default function PnlPage() {
     if (report.cogs.total > 0) items.push({ name: 'Себестоимость (COGS)', value: report.cogs.total })
     if (report.writeoffs > 0) items.push({ name: 'Списания', value: report.writeoffs })
     for (const c of report.opex.by_category) {
-      items.push({ name: c.category, value: c.amount })
+      items.push({ name: finopCategoryLabel(c.category), value: c.amount })
     }
     const sorted = items.sort((a, b) => b.value - a.value)
     const top6 = sorted.slice(0, 6)
