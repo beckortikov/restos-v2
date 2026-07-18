@@ -10635,6 +10635,8 @@ export interface components {
             lines: {
                 /** Format: uuid */
                 ingredient_id: string;
+                /** @enum {string} */
+                kind?: "ingredient" | "semi" | "batch";
                 actual_qty: components["schemas"]["Decimal"];
             }[];
         };

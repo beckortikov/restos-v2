@@ -297,8 +297,11 @@ func (InventoryCheck) TableName() string { return "inventory_checks" }
 
 // InventoryCheckLine — позиция инвентаризации.
 type InventoryCheckLine struct {
-	ID             string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	CheckID        string          `gorm:"column:check_id;type:uuid;not null;index" json:"check_id"`
+	ID      string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	CheckID string `gorm:"column:check_id;type:uuid;not null;index" json:"check_id"`
+	// Kind — тип позиции: ingredient | semi | batch (Н1). IngredientID несёт id
+	// соответствующей сущности (для semi — id полуфабриката, для batch — id блюда).
+	Kind           string          `gorm:"column:kind;not null;default:'ingredient'" json:"kind"`
 	IngredientID   string          `gorm:"column:ingredient_id;type:uuid;not null" json:"ingredient_id"`
 	IngredientName string          `gorm:"column:ingredient_name;not null" json:"ingredient_name"`
 	Unit           string          `gorm:"not null" json:"unit"`

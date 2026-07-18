@@ -301,7 +301,7 @@ export async function fetchInventoryCheckLines(checkId: string): Promise<Invento
 }
 
 export async function applyInventoryCheck(
-  lines: { ingredientId: string; ingredientName: string; unit: string; systemQty: number; actualQty: number }[],
+  lines: { ingredientId: string; kind?: string; ingredientName: string; unit: string; systemQty: number; actualQty: number }[],
   conductedBy: string,
   conductedById: string,
   note: string,
@@ -312,6 +312,7 @@ export async function applyInventoryCheck(
       note,
       lines: lines.map(l => ({
         ingredient_id: l.ingredientId,
+        kind: l.kind ?? 'ingredient',
         actual_qty: String(l.actualQty),
       })),
     } as any,
