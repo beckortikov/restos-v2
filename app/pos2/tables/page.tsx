@@ -24,7 +24,8 @@ const pad = (n: number) => String(n).padStart(2, '0')
 export default function PosV2Tables() {
   const navigate = useNavigate()
   const { user, canDo, canAccessRoles, restaurant } = useAuth()
-  const { tables, zones, loading, reload } = useOrderData(true)
+  const { tables, zones, users, loading, reload } = useOrderData(true)
+  const waiterById = useMemo(() => new Map((users ?? []).map(u => [u.id, u.name])), [users])
   const canManage = canDo('tables.edit') || canAccessRoles(['manager', 'owner'])
   // Гейт orders.view_others: официант видит только свободные + свои столы
   // (иначе утечка чужих столов и сумм). Копия старого table-map.
@@ -284,15 +285,17 @@ export default function PosV2Tables() {
               </div>
             )}
             {(() => {
-              // Зоны — табы (а не стопкой), иначе при многих зонах неудобно.
-              const activeZone = (mapZone && byZone.some(g => g.zone === mapZone)) ? mapZone : byZone[0]?.zone
-              const activeTables = byZone.find(g => g.zone === activeZone)?.tables ?? []
+              // Табы зон + «Все» (все столы из всех зон — как карта зала старого POS).
+              const ALL = '__all__'
+              const activeZone = (mapZone && (mapZone === ALL || byZone.some(g => g.zone === mapZone))) ? mapZone : ALL
+              const allTables = byZone.flatMap(g => g.tables)
+              const activeTables = activeZone === ALL ? allTables : (byZone.find(g => g.zone === activeZone)?.tables ?? [])
               return (
               <>
                 {byZone.length > 1 && (
                   <div className="flex items-center overflow-x-auto shrink-0 pv-noscroll" style={{ gap: 'clamp(0.4rem,0.8vw,0.7rem)', marginBottom: 'clamp(0.8rem,1.4vw,1.2rem)' }}>
-                    {byZone.map(g => { const on = g.zone === activeZone; return (
-                      <button key={g.zone} onClick={() => setMapZone(g.zone)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{g.zone}</button>
+                    {[{ key: ALL, label: 'Все' }, ...byZone.map(g => ({ key: g.zone, label: g.zone }))].map(tab => { const on = tab.key === activeZone; return (
+                      <button key={tab.key} onClick={() => setMapZone(tab.key)} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.9rem,1.4vw,1.4rem)', fontSize: 'var(--pv-ctl)' }}>{tab.label}</button>
                     ) })}
                   </div>
                 )}
@@ -305,6 +308,9 @@ export default function PosV2Tables() {
                     const since = busyTile && t.openedAt ? getTimeSince(t.openedAt) : null
                     const total = tableTotals.get(t.id)
                     const sumBig = total != null ? formatCurrencyCompact(total).replace(/\sс\.$/, '') : '—'
+                    // Подпись стола — по имени (Диван N / Кабина N / Стол N), как в старом POS.
+                    const tableLabel = t.name || `Стол ${t.number}`
+                    const waiterName = t.waiterId ? waiterById.get(t.waiterId) : undefined
                     return (
                       <button key={t.id} onClick={() => tap(t)} disabled={busy} className="relative flex flex-col justify-between text-left active:scale-[0.98] transition-transform disabled:opacity-60" style={{ background: selForMerge ? 'var(--pv-brand)' : st.soft, border: `${selForMerge ? 2 : 1}px solid ${selForMerge ? 'var(--pv-brand)' : st.border}`, borderRadius: '16px', boxShadow: '0 2px 10px rgba(0,0,0,0.06)', padding: 'clamp(0.85rem,1.4vw,1.2rem)', minHeight: 'clamp(8rem,12vw,10.5rem)' }}>
                         {selForMerge ? (
@@ -315,7 +321,10 @@ export default function PosV2Tables() {
                         ) : busyTile ? (
                           <>
                             <div className="flex items-center justify-between">
-                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Стол {t.number}</span>
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>{tableLabel}</span>
+                                {waiterName && <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{waiterName}</span>}
+                              </div>
                               <div className="flex items-center gap-1.5 shrink-0">
                                 {t.mergedWith && <Combine style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} />}
                                 {groups >= 2 && <span className="rounded-full font-bold flex items-center justify-center" style={{ background: 'var(--pv-brand)', color: '#fff', minWidth: '1.35rem', height: '1.35rem', fontSize: '0.7rem', padding: '0 0.35rem' }}>{groups}</span>}
@@ -332,14 +341,14 @@ export default function PosV2Tables() {
                           </>
                         ) : t.status === 'reserved' ? (
                           <>
-                            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Стол {t.number}</span>
+                            <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>{tableLabel}</span>
                             <span className="flex items-center gap-1.5 font-semibold" style={{ color: st.text, fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}><span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: st.dot }} />Бронь</span>
                             <div className="flex items-center gap-1" style={{ color: 'var(--pv-text-3)' }}><Users style={{ width: '0.9rem', height: '0.9rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{t.capacity} мест</span></div>
                           </>
                         ) : (
                           <>
                             <div className="flex flex-col" style={{ gap: '0.35rem' }}>
-                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>Стол {t.number}</span>
+                              <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.35rem)' }}>{tableLabel}</span>
                               <span className="flex items-center gap-1.5 font-semibold" style={{ color: st.text, fontSize: 'var(--pv-ctl)' }}><span className="rounded-full" style={{ width: '0.5rem', height: '0.5rem', background: st.dot }} />{st.label}</span>
                             </div>
                             <div className="flex items-center gap-1" style={{ color: 'var(--pv-text-3)' }}><Users style={{ width: '0.9rem', height: '0.9rem' }} /><span style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{t.capacity} мест</span></div>
