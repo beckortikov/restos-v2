@@ -4442,6 +4442,73 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/maintenance/shift-balance-fix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Н13 — превью разовой коррекции балансов счетов (без изменений) */
+        get: {
+            parameters: {
+                query?: {
+                    cutoff?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShiftBalanceFixResult"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Н13 — применить коррекцию балансов РОВНО ОДИН РАЗ (маркер) */
+        post: {
+            parameters: {
+                query?: {
+                    cutoff?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShiftBalanceFixResult"];
+                    };
+                };
+                /** @description Уже применена */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/shadow/stats": {
         parameters: {
             query?: never;
@@ -11769,6 +11836,22 @@ export interface components {
             orders?: number;
             qty?: components["schemas"]["Decimal"];
             revenue?: components["schemas"]["Decimal"];
+        };
+        ShiftBalanceFixLine: {
+            account_id?: string;
+            account_name?: string;
+            balance_now?: components["schemas"]["Decimal"];
+            correction?: components["schemas"]["Decimal"];
+            balance_after?: components["schemas"]["Decimal"];
+            ops_count?: number;
+        };
+        ShiftBalanceFixResult: {
+            already_applied?: boolean;
+            /** Format: date-time */
+            applied_at?: string | null;
+            cutoff?: string;
+            total_correction?: components["schemas"]["Decimal"];
+            lines?: components["schemas"]["ShiftBalanceFixLine"][];
         };
         SalesReportResult: {
             period?: {

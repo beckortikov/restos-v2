@@ -1614,6 +1614,19 @@ paths:
                 items: { type: array, items: { $ref: "#/components/schemas/ShadowReportItem" } }
       responses: { "202": { description: Accepted, content: { application/json: { schema: { type: object, properties: { accepted: { type: integer } } } } } } }
 
+  /api/v1/admin/maintenance/shift-balance-fix:
+    get:
+      tags: [admin]
+      summary: Н13 — превью разовой коррекции балансов счетов (без изменений)
+      parameters: [{ name: cutoff, in: query, schema: { type: string } }]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ShiftBalanceFixResult" } } } } }
+    post:
+      tags: [admin]
+      summary: Н13 — применить коррекцию балансов РОВНО ОДИН РАЗ (маркер)
+      parameters: [{ name: cutoff, in: query, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ShiftBalanceFixResult" } } } }
+        "409": { description: Уже применена }
   /api/v1/admin/shadow/stats:
     get:
       tags: [shadow]
@@ -4533,6 +4546,24 @@ components:
         orders: { type: integer }
         qty: { $ref: "#/components/schemas/Decimal" }
         revenue: { $ref: "#/components/schemas/Decimal" }
+
+    ShiftBalanceFixLine:
+      type: object
+      properties:
+        account_id: { type: string }
+        account_name: { type: string }
+        balance_now: { $ref: "#/components/schemas/Decimal" }
+        correction: { $ref: "#/components/schemas/Decimal" }
+        balance_after: { $ref: "#/components/schemas/Decimal" }
+        ops_count: { type: integer }
+    ShiftBalanceFixResult:
+      type: object
+      properties:
+        already_applied: { type: boolean }
+        applied_at: { type: string, format: date-time, nullable: true }
+        cutoff: { type: string }
+        total_correction: { $ref: "#/components/schemas/Decimal" }
+        lines: { type: array, items: { $ref: "#/components/schemas/ShiftBalanceFixLine" } }
     SalesReportResult:
       type: object
       properties:

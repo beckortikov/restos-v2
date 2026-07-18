@@ -577,3 +577,55 @@ function mapEquityEntry(r: any): EquityEntry {
     note: r.note ?? undefined,
   }
 }
+
+// ─── Н13-ретро: разовая коррекция балансов под фикс кассовых расходов ────────
+
+export interface ShiftBalanceFixLine {
+  account_id: string
+  account_name: string
+  balance_now: number
+  correction: number
+  balance_after: number
+  ops_count: number
+}
+export interface ShiftBalanceFixResult {
+  already_applied: boolean
+  applied_at?: string | null
+  cutoff: string
+  total_correction: number
+  lines: ShiftBalanceFixLine[]
+}
+
+function mapShiftBalanceFix(r: any): ShiftBalanceFixResult {
+  return {
+    already_applied: !!r?.already_applied,
+    applied_at: r?.applied_at ?? null,
+    cutoff: String(r?.cutoff ?? ''),
+    total_correction: Number(r?.total_correction ?? 0),
+    lines: (r?.lines ?? []).map((x: any) => ({
+      account_id: String(x.account_id ?? ''),
+      account_name: String(x.account_name ?? ''),
+      balance_now: Number(x.balance_now ?? 0),
+      correction: Number(x.correction ?? 0),
+      balance_after: Number(x.balance_after ?? 0),
+      ops_count: Number(x.ops_count ?? 0),
+    })),
+  }
+}
+
+// Превью коррекции (без изменений). cutoff — дата установки фикса (YYYY-MM-DD).
+export async function fetchShiftBalanceFixPreview(cutoff?: string): Promise<ShiftBalanceFixResult> {
+  const query: any = cutoff ? { cutoff } : {}
+  const r: any = await unwrap(api.GET('/api/v1/admin/maintenance/shift-balance-fix', { params: { query } }))
+  return mapShiftBalanceFix(r)
+}
+
+// Применить коррекцию РОВНО ОДИН РАЗ (сервер ставит маркер, повтор → 409).
+export async function applyShiftBalanceFix(cutoff?: string): Promise<ShiftBalanceFixResult> {
+  const query: any = cutoff ? { cutoff } : {}
+  const r: any = await unwrap(api.POST('/api/v1/admin/maintenance/shift-balance-fix', {
+    params: { query },
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+  } as any))
+  return mapShiftBalanceFix(r)
+}

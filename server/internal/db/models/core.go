@@ -10,22 +10,25 @@ import (
 
 // Restaurant — тенант. Все остальные таблицы фильтруются по restaurant_id.
 type Restaurant struct {
-	ID                 string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	Name               string          `gorm:"not null" json:"name"`
-	Slug               *string         `gorm:"column:slug" json:"slug"`
-	LogoURL            *string         `gorm:"column:logo_url" json:"logo_url"`
-	Address            *string         `json:"address"`
-	Phone              *string         `json:"phone"`
-	Currency           *string         `gorm:"default:'TJS'" json:"currency"`
-	ServicePercent     decimal.Decimal `gorm:"type:numeric(14,4);default:10" json:"service_percent"`
-	Timezone           *string         `gorm:"default:'Asia/Dushanbe'" json:"timezone"`
-	EnforceStockCheck  *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
-	TechCardsEnabled   *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
-	AutoReadyMode      *bool           `gorm:"column:auto_ready_mode;default:false" json:"auto_ready_mode"`
-	AutoReadyBufferMin *int            `gorm:"column:auto_ready_buffer_min;default:5" json:"auto_ready_buffer_min"`
-	LocalServerIP      *string         `gorm:"column:local_server_ip" json:"local_server_ip"`
-	LicenseKey         *string         `gorm:"column:license_key" json:"license_key"`
-	LicenseExpiresAt   *time.Time      `gorm:"column:license_expires_at" json:"license_expires_at"`
+	ID                string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name              string          `gorm:"not null" json:"name"`
+	Slug              *string         `gorm:"column:slug" json:"slug"`
+	LogoURL           *string         `gorm:"column:logo_url" json:"logo_url"`
+	Address           *string         `json:"address"`
+	Phone             *string         `json:"phone"`
+	Currency          *string         `gorm:"default:'TJS'" json:"currency"`
+	ServicePercent    decimal.Decimal `gorm:"type:numeric(14,4);default:10" json:"service_percent"`
+	Timezone          *string         `gorm:"default:'Asia/Dushanbe'" json:"timezone"`
+	EnforceStockCheck *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
+	TechCardsEnabled  *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
+	// ShiftBalanceCorrectedAt — маркер разовой коррекции балансов под фикс Н13
+	// (v3.16.94+). NULL = не выполнялась; заполнен = повтор запрещён.
+	ShiftBalanceCorrectedAt *time.Time `gorm:"column:shift_balance_corrected_at" json:"shift_balance_corrected_at,omitempty"`
+	AutoReadyMode           *bool      `gorm:"column:auto_ready_mode;default:false" json:"auto_ready_mode"`
+	AutoReadyBufferMin      *int       `gorm:"column:auto_ready_buffer_min;default:5" json:"auto_ready_buffer_min"`
+	LocalServerIP           *string    `gorm:"column:local_server_ip" json:"local_server_ip"`
+	LicenseKey              *string    `gorm:"column:license_key" json:"license_key"`
+	LicenseExpiresAt        *time.Time `gorm:"column:license_expires_at" json:"license_expires_at"`
 	// LicenseIssuedAt — когда выписан токен (v2.6.0+). Используется для
 	// clock-skew check: если now() < issued_at → tampered clock → lock.
 	// Legacy-рестораны до v2.6.0 имеют NULL → skip check (backward compat).

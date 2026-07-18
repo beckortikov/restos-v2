@@ -155,6 +155,7 @@ func NewRouter(deps Deps) http.Handler {
 	insightsSvc := service.NewInsightsService(rep, analyticsSvc, stopListSvc)
 	batchSvc := service.NewBatchCookingService(rep)
 	auditReadsSvc := service.NewAuditReadsService(rep)
+	maintenanceSvc := service.NewMaintenanceService(rep)
 
 	authH := handlers.NewAuth(authSvc, deps.DB)
 	menuH := handlers.NewMenu(menuSvc)
@@ -205,6 +206,7 @@ func NewRouter(deps Deps) http.Handler {
 	stopListH := handlers.NewStopList(stopListSvc)
 	batchH := handlers.NewBatchCooking(batchSvc)
 	auditReadsH := handlers.NewAuditReads(auditReadsSvc)
+	maintenanceH := handlers.NewMaintenance(maintenanceSvc)
 	waiterStatsH := handlers.NewWaiterStats(timeEntriesSvc)
 	eventsH := handlers.NewEvents(hub)
 	// maintFlag — взводится BackupService на время restore. Пока взведён,
@@ -335,6 +337,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/admin/shadow/reports", shadowH.Ingest)
 			g.Get("/admin/shadow/stats", shadowH.Stats)
 			g.Get("/admin/shadow/drifts", shadowH.RecentDrifts)
+			// Н13-ретро: превью коррекции балансов (чтение, без Idempotency).
+			g.Get("/admin/maintenance/shift-balance-fix", maintenanceH.ShiftBalanceFixPreview)
 
 			// Admin CRUD (reads + restaurant.get).
 			g.Get("/users", usersH.List)
@@ -489,6 +493,8 @@ func NewRouter(deps Deps) http.Handler {
 			// Jobs
 			g.Post("/orders/auto-ready/check", ordersH.AutoReadyCheck)
 			g.Post("/admin/cleanup/orphan-orders", ordersH.CleanupOrphans)
+			// Н13-ретро: разовая коррекция балансов (write — с Idempotency).
+			g.Post("/admin/maintenance/shift-balance-fix", maintenanceH.ShiftBalanceFixApply)
 
 			g.Post("/shifts", shiftsH.Open)
 			g.Patch("/shifts/{id}", shiftsH.UpdateAccount)

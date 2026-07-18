@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { formatCurrency } from '@/lib/helpers'
+import { humanizeError } from '@/lib/errors'
 import { dAdd, dMul, dSum } from '@/lib/decimal'
 import { useAuth } from '@/lib/auth-store'
 import {
@@ -36,6 +37,9 @@ import {
   createEquity,
   updateEquity,
   deleteEquity,
+  fetchShiftBalanceFixPreview,
+  applyShiftBalanceFix,
+  type ShiftBalanceFixResult,
 } from '@/lib/queries'
 import { toast } from 'sonner'
 import { ChevronDown, ChevronRight, Plus, TrendingUp, TrendingDown, Wallet, Scale } from 'lucide-react'
@@ -162,6 +166,39 @@ export default function BalancePage() {
   const [editingLiability, setEditingLiability] = useState<Liability | undefined>()
   const [equityDialogOpen, setEquityDialogOpen] = useState(false)
   const [editingEquity, setEditingEquity] = useState<EquityEntry | undefined>()
+
+  // Н13-ретро: разовая коррекция балансов под фикс кассовых расходов.
+  const [fixOpen, setFixOpen] = useState(false)
+  const [fixData, setFixData] = useState<ShiftBalanceFixResult | null>(null)
+  const [fixLoading, setFixLoading] = useState(false)
+  const [fixApplying, setFixApplying] = useState(false)
+
+  async function openFix() {
+    setFixOpen(true)
+    setFixLoading(true)
+    try {
+      setFixData(await fetchShiftBalanceFixPreview())
+    } catch {
+      toast.error('Не удалось загрузить превью коррекции')
+      setFixOpen(false)
+    } finally {
+      setFixLoading(false)
+    }
+  }
+
+  async function doApplyFix() {
+    setFixApplying(true)
+    try {
+      const res = await applyShiftBalanceFix()
+      setFixData(res)
+      toast.success('Балансы счетов скорректированы')
+      await loadData()
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка коррекции'))
+    } finally {
+      setFixApplying(false)
+    }
+  }
 
   const loadData = useCallback(async () => {
     try {
@@ -326,9 +363,20 @@ export default function BalancePage() {
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
-      <div>
-        <h1 className="text-xl font-bold text-foreground">Баланс</h1>
-        <p className="text-muted-foreground text-sm mt-0.5">Бухгалтерский баланс ресторана</p>
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div>
+          <h1 className="text-xl font-bold text-foreground">Баланс</h1>
+          <p className="text-muted-foreground text-sm mt-0.5">Бухгалтерский баланс ресторана</p>
+        </div>
+        {canManage && (
+          <button
+            onClick={openFix}
+            className="text-xs px-3 py-1.5 rounded-lg border border-amber-500/40 text-amber-700 dark:text-amber-300 hover:bg-amber-500/10 transition-colors"
+            title="Разовая коррекция «Денежных средств» под фикс кассовых расходов (v3.16.94)"
+          >
+            Скорректировать балансы
+          </button>
+        )}
       </div>
 
       {/* KPI Cards */}
@@ -550,6 +598,86 @@ export default function BalancePage() {
         onSubmit={handleEquitySubmit}
         onDelete={handleEquityDelete}
       />
+
+      {/* Н13-ретро: разовая коррекция балансов под фикс кассовых расходов */}
+      {fixOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !fixApplying && setFixOpen(false)}>
+          <div className="bg-card rounded-xl border border-border w-full max-w-lg max-h-[85vh] overflow-y-auto p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+            <div>
+              <h2 className="text-base font-bold text-foreground">Коррекция балансов счетов</h2>
+              <p className="text-xs text-muted-foreground mt-1">
+                Разовое выравнивание «Денежных средств» под фикс v3.16.94: до него расходы из кассы
+                смены не уменьшали баланс счёта. Выполняется <b>один раз</b>.
+              </p>
+            </div>
+
+            {fixLoading ? (
+              <div className="py-8 flex items-center justify-center">
+                <div className="size-6 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
+              </div>
+            ) : fixData?.already_applied ? (
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/20 p-3 text-sm text-emerald-700 dark:text-emerald-300">
+                Коррекция уже выполнена{fixData.applied_at ? ` (${fixData.applied_at.slice(0, 10)})` : ''}. Повтор запрещён.
+              </div>
+            ) : fixData && fixData.lines.length === 0 ? (
+              <div className="rounded-lg bg-muted/40 border border-border p-3 text-sm text-muted-foreground">
+                Нечего корректировать — прошлых кассовых расходов не найдено.
+              </div>
+            ) : fixData ? (
+              <>
+                <div className="rounded-lg border border-border overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-muted/40 text-xs text-muted-foreground">
+                        <th className="text-left px-3 py-2">Счёт</th>
+                        <th className="text-right px-3 py-2">Сейчас</th>
+                        <th className="text-right px-3 py-2">Спишется</th>
+                        <th className="text-right px-3 py-2">Станет</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {fixData.lines.map((l) => (
+                        <tr key={l.account_id} className="border-t border-border">
+                          <td className="px-3 py-2 text-foreground">{l.account_name}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-muted-foreground">{formatCurrency(l.balance_now)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums text-destructive">−{formatCurrency(l.correction)}</td>
+                          <td className="px-3 py-2 text-right tabular-nums font-semibold text-foreground">{formatCurrency(l.balance_after)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">Всего спишется</span>
+                  <span className="font-bold text-destructive">−{formatCurrency(fixData.total_correction)}</span>
+                </div>
+                <p className="text-xs text-amber-600 dark:text-amber-400">
+                  Проверьте цифры. Действие необратимо и выполняется один раз.
+                </p>
+              </>
+            ) : null}
+
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                onClick={() => setFixOpen(false)}
+                disabled={fixApplying}
+                className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-muted/50 transition-colors disabled:opacity-50"
+              >
+                Закрыть
+              </button>
+              {fixData && !fixData.already_applied && fixData.lines.length > 0 && (
+                <button
+                  onClick={doApplyFix}
+                  disabled={fixApplying}
+                  className="px-4 py-2 text-sm rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors disabled:opacity-50"
+                >
+                  {fixApplying ? 'Применяю…' : 'Скорректировать'}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
