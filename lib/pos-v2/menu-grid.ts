@@ -67,29 +67,29 @@ export function sameGrid(a: MenuGrid, b: MenuGrid): boolean {
   return a.cols === b.cols && a.rows === b.rows
 }
 
-// CSS для контейнера сетки. АДАПТИВНО на любом экране: колонки авто-заполняются
-// по доступной ширине (auto-fill), карточки — по контенту (высота через
-// menuCardMinH). Матрица {cols, rows} — это ПЛОТНОСТЬ, а не жёсткая привязка:
-// cols → целевая ширина карточки (больше колонок → мельче), rows → высота
-// карточки. Раньше матрица форсила фикс. высоту рядов = areaH/rows: на реальном
-// экране карточки резались, а при малом числе блюд снизу оставалась пустота.
-// Теперь блюда занимают ровно нужные ряды, ничего не режется.
-export function menuGridStyle(grid: MenuGrid): CSSProperties {
-  const gap = 'clamp(0.4rem,0.7vw,0.7rem)'
+// CSS для контейнера сетки. Матрица {cols, rows} = РОВНАЯ сетка: ровно cols
+// колонок (карточки одинаковой ширины), высота ряда подгоняется под видимую
+// область (areaH, px), чтобы на экран влезло ровно rows рядов. Лишние блюда —
+// под скролл. Текст/цена внутри карточки масштабируются под её размер
+// (container-query cqmin в самой карточке — DishTile), поэтому НЕ обрезаются
+// даже на мелкой сетке (5×5/6×6). 'auto' = адаптивная сетка по ширине.
+export function menuGridStyle(grid: MenuGrid, areaH: number): CSSProperties {
   if (grid === 'auto') {
-    return { display: 'grid', gap, gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))' }
+    return {
+      display: 'grid',
+      gap: 'clamp(0.4rem,0.7vw,0.7rem)',
+      gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(9rem, 13vw, 12rem), 1fr))',
+    }
   }
-  // Целевая мин-ширина карточки из cols (эвристика ширины области ~44rem). auto-fill
-  // сам подгонит число колонок под фактическую ширину экрана.
-  const minW = Math.max(6.5, Math.round((44 / grid.cols) * 10) / 10)
-  return { display: 'grid', gap, gridTemplateColumns: `repeat(auto-fill, minmax(${minW}rem, 1fr))` }
-}
-
-// Мин-высота карточки блюда. В матрице зависит от rows (меньше рядов → крупнее
-// карточка); в 'auto' — прежний клэмп. Карточка тянется по контенту от этого
-// минимума, поэтому текст/цена никогда не обрезаются.
-export function menuCardMinH(grid: MenuGrid): string {
-  if (grid === 'auto') return 'clamp(7rem,11vw,9.5rem)'
-  const h = Math.min(9.5, Math.max(5.5, 12 - grid.rows)) // rows 4→8, 5→7, 6→6 (rem)
-  return `${h}rem`
+  const gap = 10 // px — фиксированный интервал в матричном режиме
+  const pad = 24 // px — верт. паддинги скролл-контейнера (прибл.)
+  const rowH = areaH > 0
+    ? Math.max(88, Math.floor((areaH - pad - (grid.rows - 1) * gap) / grid.rows))
+    : undefined
+  return {
+    display: 'grid',
+    gap: `${gap}px`,
+    gridTemplateColumns: `repeat(${grid.cols}, minmax(0, 1fr))`,
+    gridAutoRows: rowH ? `${rowH}px` : undefined,
+  }
 }

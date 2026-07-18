@@ -5,9 +5,8 @@ import { toast } from 'sonner'
 import * as XLSX from 'xlsx'
 import { TrendingUp, ShoppingBag, Package, Receipt, ShoppingCart, Download, ChevronDown } from 'lucide-react'
 
-import { formatCurrency, calcLineTotal } from '@/lib/helpers'
-import { fetchOrders, fetchMenuItems } from '@/lib/queries'
-import type { Order, MenuItem } from '@/lib/types'
+import { formatCurrency } from '@/lib/helpers'
+import { fetchSalesReport, type SalesReportResult } from '@/lib/queries/analytics'
 import { DateRangePicker } from '@/components/ui/date-range-picker'
 import { getPresetRange } from '@/components/finance/date-range-presets'
 
@@ -17,10 +16,6 @@ const today = () => new Date().toISOString().slice(0, 10)
 const HOURS = Array.from({ length: 15 }, (_, i) => i + 8) // 8..22
 const WD_LABEL = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
 
-// Кол-во «порций»: весовые (unit g/kg) переводим в число порций по unitSize.
-function qtyOf(i: Order['items'][number]): number {
-  return i.unit && i.unit !== 'piece' ? i.qty / (i.unitSize && i.unitSize > 0 ? i.unitSize : 1) : i.qty
-}
 function fmtQty(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(1)
 }
@@ -57,8 +52,7 @@ interface Row {
 }
 
 export default function SalesReportPage() {
-  const [orders, setOrders] = useState<Order[]>([])
-  const [menuItems, setMenuItems] = useState<MenuItem[]>([])
+  const [report, setReport] = useState<SalesReportResult | null>(null)
   const [loading, setLoading] = useState(true)
 
   const initial = getPresetRange('week')
@@ -68,72 +62,44 @@ export default function SalesReportPage() {
   const [kind, setKind] = useState<Kind>('all')
   const [expandedDate, setExpandedDate] = useState<string | null>(null)
 
+  // Н21: данные считает СЕРВЕР (скидки/voids/closed+refunded, без лимита 5000).
+  // Перезапрос при смене периода — серверная фильтрация по датам.
   useEffect(() => {
     setLoading(true)
-    Promise.all([fetchOrders(), fetchMenuItems()])
-      .then(([o, mi]) => { setOrders(o); setMenuItems(mi) })
+    fetchSalesReport({ from: dateFrom, to: dateTo })
+      .then(setReport)
       .catch(() => toast.error('Ошибка загрузки отчёта продаж'))
       .finally(() => setLoading(false))
-  }, [])
+  }, [dateFrom, dateTo])
 
-  // id → {category, isPurchased} из меню (в OrderItem этих полей нет).
-  const menuMeta = useMemo(() => {
-    const m = new Map<string, { category: string; isPurchased: boolean }>()
-    for (const mi of menuItems) m.set(mi.id, { category: mi.category || 'Без категории', isPurchased: !!mi.isPurchased })
-    return m
-  }, [menuItems])
-
-  const inRange = (d?: string | null): boolean => {
-    if (!d) return false
-    const day = d.slice(0, 10)
-    return day >= dateFrom && day <= dateTo
-  }
-
-  // Закрытые заказы за период (по дате закрытия = продажи).
-  const soldOrders = useMemo(
-    () => orders.filter(o => o.status === 'done' && inRange(o.closedAt)),
-    [orders, dateFrom, dateTo],
-  )
-
-  // Плоский список проданных позиций (без отменённых) с резолвом категории.
+  // Плоский список проданных позиций (сервер уже отфильтровал/просуммировал:
+  // скидка учтена, voids/отменённые исключены, категория/покупной резолвнуты).
   const soldItems = useMemo(() => {
-    const rows: { name: string; category: string; isPurchased: boolean; qty: number; revenue: number; hour: number; date: string }[] = []
-    for (const o of soldOrders) {
-      const when = o.closedAt || o.createdAt
-      const hour = new Date(when).getHours()
-      const date = (o.closedAt || o.createdAt).slice(0, 10)
-      for (const i of o.items) {
-        if (i.cancelledAt) continue
-        const meta = menuMeta.get(i.menuItemId)
-        rows.push({
-          name: i.name,
-          category: meta?.category ?? 'Без категории',
-          isPurchased: meta?.isPurchased ?? false,
-          qty: qtyOf(i),
-          revenue: calcLineTotal(i.price, i.qty, i.unit, i.unitSize),
-          hour,
-          date,
-        })
-      }
-    }
-    return rows
-  }, [soldOrders, menuMeta])
+    if (!report) return [] as { name: string; category: string; isPurchased: boolean; qty: number; revenue: number; hour: number; date: string }[]
+    return report.rows.map(r => ({
+      name: r.name,
+      category: r.category || 'Без категории',
+      isPurchased: r.is_purchased,
+      qty: Number(r.qty),
+      revenue: Number(r.revenue),
+      hour: r.hour,
+      date: r.date,
+    }))
+  }, [report])
 
   const items = useMemo(
     () => soldItems.filter(r => kind === 'all' || (kind === 'purchased' ? r.isPurchased : !r.isPurchased)),
     [soldItems, kind],
   )
 
-  // KPI.
+  // KPI. «Заказов» — всего за период (сервер); построчный разрез по kind order_id
+  // не несёт, поэтому счётчик заказов — по всему периоду, а выручка/кол-во — по kind.
   const kpi = useMemo(() => {
     const revenue = items.reduce((s, r) => s + r.revenue, 0)
     const qty = items.reduce((s, r) => s + r.qty, 0)
-    const orderCount = new Set(soldOrders.filter(o => kind === 'all' || o.items.some(i => {
-      const p = menuMeta.get(i.menuItemId)?.isPurchased ?? false
-      return kind === 'purchased' ? p : !p
-    })).map(o => o.id)).size
+    const orderCount = report?.totals.orders ?? 0
     return { revenue, qty, orderCount, avg: orderCount > 0 ? revenue / orderCount : 0 }
-  }, [items, soldOrders, kind, menuMeta])
+  }, [items, report])
 
   // Основная таблица: блюда или категории за период.
   const rows = useMemo(() => {
@@ -165,31 +131,26 @@ export default function SalesReportPage() {
     return { rowKeys, cell, max: Math.max(1, max) }
   }, [items, rows, dim])
 
-  // История по датам: что продано в какой день.
+  // История по датам: выручка/кол-во/топ-блюдо из строк (kind-фильтр), число
+  // заказов — distinct с сервера (строки order_id не несут).
   const byDate = useMemo(() => {
-    const map = new Map<string, { date: string; revenue: number; qty: number; orderIds: Set<string>; dish: Map<string, number> }>()
-    for (const o of soldOrders) {
-      const date = (o.closedAt || o.createdAt).slice(0, 10)
-      let e = map.get(date)
-      if (!e) { e = { date, revenue: 0, qty: 0, orderIds: new Set(), dish: new Map() }; map.set(date, e) }
-      e.orderIds.add(o.id)
-      for (const i of o.items) {
-        if (i.cancelledAt) continue
-        const meta = menuMeta.get(i.menuItemId)
-        if (kind !== 'all' && (kind === 'purchased' ? !meta?.isPurchased : meta?.isPurchased)) continue
-        e.revenue += calcLineTotal(i.price, i.qty, i.unit, i.unitSize)
-        e.qty += qtyOf(i)
-        e.dish.set(i.name, (e.dish.get(i.name) ?? 0) + calcLineTotal(i.price, i.qty, i.unit, i.unitSize))
-      }
+    const ordersByDate = new Map((report?.by_date ?? []).map(d => [d.date, d.orders]))
+    const map = new Map<string, { date: string; revenue: number; qty: number; dish: Map<string, number> }>()
+    for (const r of items) {
+      let e = map.get(r.date)
+      if (!e) { e = { date: r.date, revenue: 0, qty: 0, dish: new Map() }; map.set(r.date, e) }
+      e.revenue += r.revenue
+      e.qty += r.qty
+      e.dish.set(r.name, (e.dish.get(r.name) ?? 0) + r.revenue)
     }
     return [...map.values()]
       .map(e => {
         const top = [...e.dish.entries()].sort((a, b) => b[1] - a[1])[0]
         const d = new Date(e.date + 'T00:00:00')
-        return { date: e.date, wd: WD_LABEL[d.getDay()], label: d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }), revenue: e.revenue, qty: e.qty, orders: e.orderIds.size, top: top?.[0] ?? '—' }
+        return { date: e.date, wd: WD_LABEL[d.getDay()], label: d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }), revenue: e.revenue, qty: e.qty, orders: ordersByDate.get(e.date) ?? 0, top: top?.[0] ?? '—' }
       })
       .sort((a, b) => (a.date < b.date ? 1 : -1))
-  }, [soldOrders, menuMeta, kind])
+  }, [items, report])
 
   // Тепловая карта: блюдо/категория × день недели (сумма выручки за период).
   const weekday = useMemo(() => {

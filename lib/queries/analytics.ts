@@ -291,6 +291,34 @@ export async function fetchFoodCost(opts: { from?: Date | string; to?: Date | st
   return (await unwrap(api.GET('/api/v1/analytics/food-cost', { params: { query: query as any } }))) as FoodCostReport
 }
 
+// --- Sales report (Н21): серверный агрегат вместо клиентского расчёта ---
+export interface SalesReportRow {
+  date: string
+  hour: number
+  menu_item_id: string | null
+  name: string
+  category: string
+  is_purchased: boolean
+  qty: DecStr
+  revenue: DecStr
+}
+export interface SalesReportDay {
+  date: string
+  orders: number
+  qty: DecStr
+  revenue: DecStr
+}
+export interface SalesReportResult {
+  period: { from?: string; to?: string }
+  rows: SalesReportRow[]
+  by_date: SalesReportDay[]
+  totals: { revenue: DecStr; qty: DecStr; orders: number }
+}
+export async function fetchSalesReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<SalesReportResult> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/analytics/sales-report', { params: { query: query as any } }))) as SalesReportResult
+}
+
 // --- Ingredient stock value (top-N) ---
 
 export interface IngredientStockRow {

@@ -103,6 +103,21 @@ func (h *AnalyticsHandler) FoodCost(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// SalesReport — GET /api/v1/analytics/sales-report (Н21).
+func (h *AnalyticsHandler) SalesReport(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.SalesReport(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *AnalyticsHandler) IngredientStockValue(w http.ResponseWriter, r *http.Request) {
 	limit := 10
 	if v := queryString(r, "limit"); v != "" {

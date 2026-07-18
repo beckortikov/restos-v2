@@ -8059,6 +8059,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/sales-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Отчёт продаж (строки дата×час×блюдо, скидки учтены, closed+refunded) */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalesReportResult"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/food-cost": {
         parameters: {
             query?: never;
@@ -11712,6 +11751,35 @@ export interface components {
             food_cost_pct?: components["schemas"]["Decimal"];
             margin_percent?: components["schemas"]["Decimal"];
             rows?: components["schemas"]["FoodCostRow"][];
+        };
+        SalesReportRow: {
+            date?: string;
+            hour?: number;
+            menu_item_id?: string | null;
+            name?: string;
+            category?: string;
+            is_purchased?: boolean;
+            qty?: components["schemas"]["Decimal"];
+            revenue?: components["schemas"]["Decimal"];
+        };
+        SalesReportDay: {
+            date?: string;
+            orders?: number;
+            qty?: components["schemas"]["Decimal"];
+            revenue?: components["schemas"]["Decimal"];
+        };
+        SalesReportResult: {
+            period?: {
+                from?: string;
+                to?: string;
+            };
+            rows?: components["schemas"]["SalesReportRow"][];
+            by_date?: components["schemas"]["SalesReportDay"][];
+            totals?: {
+                revenue?: components["schemas"]["Decimal"];
+                qty?: components["schemas"]["Decimal"];
+                orders?: number;
+            };
         };
         FoodCostMonth: {
             /** @description YYYY-MM */

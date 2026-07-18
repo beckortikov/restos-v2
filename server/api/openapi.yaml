@@ -2334,6 +2334,12 @@ paths:
       summary: Оборачиваемость столов за период
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TablesAnalyticsReport" } } } } }
+  /api/v1/analytics/sales-report:
+    get:
+      tags: [analytics]
+      summary: Отчёт продаж (строки дата×час×блюдо, скидки учтены, closed+refunded)
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalesReportResult" } } } } }
   /api/v1/analytics/food-cost:
     get:
       tags: [analytics]
@@ -4507,6 +4513,37 @@ components:
         food_cost_pct: { $ref: "#/components/schemas/Decimal" }
         margin_percent: { $ref: "#/components/schemas/Decimal" }
         rows: { type: array, items: { $ref: "#/components/schemas/FoodCostRow" } }
+
+    SalesReportRow:
+      type: object
+      properties:
+        date: { type: string }
+        hour: { type: integer }
+        menu_item_id: { type: string, nullable: true }
+        name: { type: string }
+        category: { type: string }
+        is_purchased: { type: boolean }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+    SalesReportDay:
+      type: object
+      properties:
+        date: { type: string }
+        orders: { type: integer }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+    SalesReportResult:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string }, to: { type: string } } }
+        rows: { type: array, items: { $ref: "#/components/schemas/SalesReportRow" } }
+        by_date: { type: array, items: { $ref: "#/components/schemas/SalesReportDay" } }
+        totals:
+          type: object
+          properties:
+            revenue: { $ref: "#/components/schemas/Decimal" }
+            qty: { $ref: "#/components/schemas/Decimal" }
+            orders: { type: integer }
 
     FoodCostMonth:
       type: object
