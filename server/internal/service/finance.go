@@ -684,35 +684,114 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	out.Period.To = f.To
 
 	scoped, _ := s.r.ForTenant(ctx)
-	// Revenue total + by payment_method.
+	// Revenue total + разбивка по методам оплаты.
+	// 'refunded' (полный возврат) включаем НАРАВНЕ с 'closed': валовая выручка и
+	// COGS считаются, а возврат вычитается отдельной строкой opex (category=
+	// 'refund'). Иначе полный возврат бил по прибыли дважды.
+	//
+	// ВАЖНО: 'split' — это РЕЖИМ оплаты (счёт разделён), а НЕ счёт. Реальные
+	// деньги ушли в наличные/карту через order_splits. Поэтому псевдо-метод
+	// «split» РАСКЛАДЫВАЕМ на фактические методы его сплитов пропорционально их
+	// долям — в отчёте не должно быть «счёта split» (замечание владельца).
 	type revRow struct {
 		Method string          `gorm:"column:method"`
 		Total  decimal.Decimal `gorm:"column:total"`
 	}
-	// 'refunded' (полный возврат) включаем НАРАВНЕ с 'closed': их валовая выручка
-	// и COGS должны считаться, а сам возврат вычитается отдельной строкой opex
-	// (category='refund'). Иначе полный возврат бил по прибыли дважды: выручка
-	// пропадала (статус 'refunded' выпадал) И возврат шёл в расход. Частичный
-	// возврат оставляет статус 'closed' и уже считался корректно — теперь оба
-	// пути согласованы.
-	q := scoped.Table("orders").
-		Select("COALESCE(payment_method, '') AS method, COALESCE(SUM(total_with_service), 0) AS total").
-		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
-	if f.From != nil {
-		q = q.Where("closed_at >= ?", *f.From)
+	applyDates := func(q *gorm.DB) *gorm.DB {
+		if f.From != nil {
+			q = q.Where("closed_at >= ?", *f.From)
+		}
+		if f.To != nil {
+			q = q.Where("closed_at < ?", *f.To)
+		}
+		return q
 	}
-	if f.To != nil {
-		q = q.Where("closed_at < ?", *f.To)
+	methodTotals := map[string]decimal.Decimal{}
+	methodOrder := []string{}
+	addMethod := func(method string, amt decimal.Decimal) {
+		if _, ok := methodTotals[method]; !ok {
+			methodOrder = append(methodOrder, method)
+		}
+		methodTotals[method] = decimal.Add(methodTotals[method], amt)
 	}
+
+	// 1. Обычные заказы (не split) — по orders.payment_method.
 	var revRows []revRow
-	if err := q.Group("payment_method").Scan(&revRows).Error; err != nil {
+	if err := applyDates(scoped.Table("orders").
+		Select("COALESCE(payment_method, '') AS method, COALESCE(SUM(total_with_service), 0) AS total").
+		Where("status IN ? AND closed_at IS NOT NULL AND COALESCE(payment_method,'') <> 'split'", []string{"closed", "refunded"})).
+		Group("payment_method").Scan(&revRows).Error; err != nil {
 		return nil, err
 	}
-	out.Revenue.Total = decimal.Zero
-	out.Revenue.ByMethod = make([]ByMethodRow, 0, len(revRows))
 	for _, r := range revRows {
-		out.Revenue.Total = decimal.Add(out.Revenue.Total, r.Total)
-		out.Revenue.ByMethod = append(out.Revenue.ByMethod, ByMethodRow{Method: r.Method, Amount: decimal.Normalize(r.Total)})
+		addMethod(r.Method, r.Total)
+	}
+
+	// 2. Split-заказы — распределяем total_with_service по методам их сплитов.
+	scopedSplitOrd, _ := s.r.ForTenant(ctx)
+	type splitOrdRow struct {
+		ID      string          `gorm:"column:id"`
+		TotalWS decimal.Decimal `gorm:"column:total_with_service"`
+	}
+	var splitOrders []splitOrdRow
+	if err := applyDates(scopedSplitOrd.Table("orders").
+		Select("id, total_with_service").
+		Where("status IN ? AND closed_at IS NOT NULL AND COALESCE(payment_method,'') = 'split'", []string{"closed", "refunded"})).
+		Scan(&splitOrders).Error; err != nil {
+		return nil, err
+	}
+	if len(splitOrders) > 0 {
+		ids := make([]string, len(splitOrders))
+		for i, o := range splitOrders {
+			ids[i] = o.ID
+		}
+		scopedSplits, _ := s.r.ForTenant(ctx)
+		type splPart struct {
+			OrderID string          `gorm:"column:order_id"`
+			Method  string          `gorm:"column:method"`
+			Total   decimal.Decimal `gorm:"column:total"`
+		}
+		var parts []splPart
+		if err := scopedSplits.Table("order_splits").
+			Select("order_id, COALESCE(payment_method, '') AS method, COALESCE(total, 0) AS total").
+			Where("order_id IN ?", ids).Scan(&parts).Error; err != nil {
+			return nil, err
+		}
+		byOrder := map[string][]splPart{}
+		baseByOrder := map[string]decimal.Decimal{}
+		for _, pt := range parts {
+			byOrder[pt.OrderID] = append(byOrder[pt.OrderID], pt)
+			baseByOrder[pt.OrderID] = decimal.Add(baseByOrder[pt.OrderID], pt.Total)
+		}
+		for _, o := range splitOrders {
+			ps := byOrder[o.ID]
+			base := baseByOrder[o.ID]
+			if len(ps) == 0 || !decimal.IsPositive(base) {
+				// Нет сплитов/нулевая база — оставляем «split» (edge case).
+				addMethod("split", o.TotalWS)
+				continue
+			}
+			// Пропорция по долям сплитов; последнему — остаток (Σ === TotalWS,
+			// без дрейфа округления).
+			remaining := o.TotalWS
+			for i, pt := range ps {
+				var share decimal.Decimal
+				if i == len(ps)-1 {
+					share = remaining
+				} else {
+					share = decimal.Normalize(decimal.DivRound(decimal.Mul(o.TotalWS, pt.Total), base))
+					remaining = decimal.Sub(remaining, share)
+				}
+				addMethod(pt.Method, share)
+			}
+		}
+	}
+
+	out.Revenue.Total = decimal.Zero
+	out.Revenue.ByMethod = make([]ByMethodRow, 0, len(methodOrder))
+	for _, m := range methodOrder {
+		out.Revenue.Total = decimal.Add(out.Revenue.Total, methodTotals[m])
+		out.Revenue.ByMethod = append(out.Revenue.ByMethod, ByMethodRow{Method: m, Amount: decimal.Normalize(methodTotals[m])})
 	}
 	out.Revenue.Total = decimal.Normalize(out.Revenue.Total)
 

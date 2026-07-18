@@ -90,6 +90,10 @@ export default function PrintQueuePage() {
 
   const hiddenBefore = getHistoryHiddenBefore()
   const filteredHistory = history.filter(h => {
+    // «Не актуально» (dismissed) — кассир убрал задание из очереди: прячем везде,
+    // не только в drawer'е FailedPrintsButton. Сервер хранит status='dismissed'
+    // для аудита, но в очереди печати его быть не должно.
+    if (h.dismissed) return false
     if (hiddenBefore && new Date(h.createdAt).getTime() < hiddenBefore) return false
     if (filterStatus !== 'all' && h.status !== filterStatus) return false
     if (filterKind !== 'all') {

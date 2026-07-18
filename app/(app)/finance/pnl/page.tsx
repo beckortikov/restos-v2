@@ -14,6 +14,22 @@ import { toast } from 'sonner'
 
 const CHART_COLORS = ['#e87c4f', '#4f9ee8', '#5cb85c', '#f0ad4e', '#d9534f', '#9b59b6', '#1abc9c', '#34495e']
 
+// Русские подписи методов оплаты (в БД — сырой enum). 'split' сервер уже
+// раскладывает на реальные методы, оставлен как fallback.
+const PAYMENT_METHOD_RU: Record<string, string> = {
+  cash: 'Наличные',
+  card: 'Карта',
+  noncash: 'Безнал',
+  transfer: 'Перевод',
+  split: 'Раздельно',
+  '': 'Не указан',
+}
+
+// method=true → строка-разбивка выручки по способу оплаты (не бухгалтерская
+// статья, а справочная детализация «Выручки»): показывается серым, с отступом,
+// без знака +/−, чтобы не читалась как ещё одно поступление.
+type PnlRow = { label: string; value: number; bold: boolean; method?: boolean }
+
 export default function PnlPage() {
   const [report, setReport] = useState<PnLReport | null>(null)
   const [loading, setLoading] = useState(true)
@@ -43,11 +59,18 @@ export default function PnlPage() {
   }, [period, customFrom, customTo])
 
   const PNL_ROWS = useMemo(() => {
-    if (!report) return [] as { label: string; value: number; bold: boolean }[]
-    const rows: { label: string; value: number; bold: boolean }[] = [
+    if (!report) return [] as PnlRow[]
+    const rows: PnlRow[] = [
       { label: 'Выручка', value: report.revenue.total, bold: true },
-      { label: '— Себестоимость (COGS)', value: -report.cogs.total, bold: false },
     ]
+    // Разбивка выручки по методам оплаты — подстроками под «Выручкой», на русском.
+    // 'split' на сервере уже разложен на реальные методы (наличные/карта), так что
+    // псевдо-счёта «split» здесь быть не должно.
+    for (const m of report.revenue.by_method) {
+      if (!m.amount) continue
+      rows.push({ label: PAYMENT_METHOD_RU[m.method] ?? m.method, value: m.amount, bold: false, method: true })
+    }
+    rows.push({ label: '— Себестоимость (COGS)', value: -report.cogs.total, bold: false })
     if (report.writeoffs > 0) {
       rows.push({ label: '— Списания (брак/порча)', value: -report.writeoffs, bold: false })
     }
@@ -103,7 +126,9 @@ export default function PnlPage() {
           <button
             onClick={() => {
               exportToExcel(
-                PNL_ROWS.map(r => ({ label: r.label, value: Math.abs(r.value), sign: r.value >= 0 ? '+' : '−' })),
+                // Метод-строки — справочная разбивка выручки, не бухстатьи: в
+                // Excel-ОПиУ их не выгружаем, чтобы столбец знака не двоил выручку.
+                PNL_ROWS.filter(r => !r.method).map(r => ({ label: r.label, value: Math.abs(r.value), sign: r.value >= 0 ? '+' : '−' })),
                 [
                   { key: 'label', header: 'Статья' },
                   { key: 'sign', header: 'Знак' },
@@ -137,38 +162,24 @@ export default function PnlPage() {
         ))}
       </div>
 
-      {/* Charts: Expense structure */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-        <div className="bg-card rounded-xl border border-border p-4">
-          <h2 className="text-sm font-semibold text-foreground mb-3">Структура расходов</h2>
-          {expensePieData.length === 0 ? (
-            <div className="h-[230px] flex items-center justify-center text-sm text-muted-foreground">Нет данных</div>
-          ) : (
-            <ResponsiveContainer width="100%" height={230}>
-              <PieChart>
-                <Pie data={expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} fontSize={11}>
-                  {expensePieData.map((_, i) => (
-                    <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v: number) => formatCurrency(v)} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-              </PieChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-        {report.revenue.by_method.length > 0 && (
-          <div className="bg-card rounded-xl border border-border p-4">
-            <h2 className="text-sm font-semibold text-foreground mb-3">Выручка по методам оплаты</h2>
-            <div className="divide-y divide-border">
-              {report.revenue.by_method.map((m) => (
-                <div key={m.method} className="flex items-center justify-between px-2 py-2.5">
-                  <span className="text-sm text-foreground">{m.method}</span>
-                  <span className="text-sm font-semibold text-emerald-600">{formatCurrency(m.amount)}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+      {/* Chart: Expense structure. Разбивка выручки по методам оплаты теперь
+          живёт подстроками под «Выручкой» в таблице P&L ниже (на русском). */}
+      <div className="bg-card rounded-xl border border-border p-4">
+        <h2 className="text-sm font-semibold text-foreground mb-3">Структура расходов</h2>
+        {expensePieData.length === 0 ? (
+          <div className="h-[230px] flex items-center justify-center text-sm text-muted-foreground">Нет данных</div>
+        ) : (
+          <ResponsiveContainer width="100%" height={230}>
+            <PieChart>
+              <Pie data={expensePieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`} labelLine={false} fontSize={11}>
+                {expensePieData.map((_, i) => (
+                  <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                ))}
+              </Pie>
+              <Tooltip formatter={(v: number) => formatCurrency(v)} />
+              <Legend wrapperStyle={{ fontSize: 11 }} />
+            </PieChart>
+          </ResponsiveContainer>
         )}
       </div>
 
@@ -181,14 +192,21 @@ export default function PnlPage() {
           {PNL_ROWS.map((row, idx) => (
             <div
               key={`${row.label}-${idx}`}
-              className={`flex items-center justify-between px-5 py-3 ${row.bold ? 'bg-muted/30' : ''}`}
+              className={`flex items-center justify-between px-5 py-3 ${row.bold ? 'bg-muted/30' : ''} ${row.method ? 'py-2' : ''}`}
             >
-              <span className={`text-sm ${row.bold ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
-                {row.label}
+              <span className={`text-sm ${row.bold ? 'font-semibold text-foreground' : 'text-muted-foreground'} ${row.method ? 'pl-4 text-xs' : ''}`}>
+                {row.method ? `• ${row.label}` : row.label}
               </span>
-              <span className={`text-sm font-semibold ${row.value >= 0 ? 'text-emerald-600' : 'text-destructive'} ${row.bold ? 'text-base' : ''}`}>
-                {row.value >= 0 ? '+' : ''}{formatCurrency(Math.abs(row.value))}
-              </span>
+              {row.method ? (
+                // Разбивка выручки — нейтрально, без знака (не поступление сверху).
+                <span className="text-xs font-medium text-muted-foreground tabular-nums">
+                  {formatCurrency(row.value)}
+                </span>
+              ) : (
+                <span className={`text-sm font-semibold ${row.value >= 0 ? 'text-emerald-600' : 'text-destructive'} ${row.bold ? 'text-base' : ''}`}>
+                  {row.value >= 0 ? '+' : ''}{formatCurrency(Math.abs(row.value))}
+                </span>
+              )}
             </div>
           ))}
         </div>
