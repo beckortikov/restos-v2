@@ -18,7 +18,7 @@ import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayT
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
-import { useMenuGrid, menuGridStyle, menuCardMinH } from '@/lib/pos-v2/menu-grid'
+import { useMenuGrid, menuGridStyle } from '@/lib/pos-v2/menu-grid'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import { buildReceiptData } from '@/lib/receipt-data'
 import { PrintReceipt } from '@/components/print-receipt'
@@ -729,7 +729,7 @@ export default function PosV2Order() {
           ) : dishes.length === 0 ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
           ) : (
-            <div style={menuGridStyle(menuGrid)}>
+            <div style={menuGridStyle(menuGrid, gridAreaH)}>
               {dishes.map(m => {
                 const variants = variantsByParent.get(m.id)
                 // Продукт с вариантами стопится когда недоступен сам ИЛИ все
@@ -746,9 +746,9 @@ export default function PosV2Order() {
                   // эмодзи-плейсхолдера и БЕЗ звёздочки-избранного на карточке.
                   // Цена — без ,00 (formatCurrencyCompact): «300 с.», не «300,00 с.».
                   <div key={m.id} className="relative">
-                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: menuCardMinH(menuGrid), opacity: stopped ? 0.6 : 1 }}>
-                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.25vw,1.2rem)' }}>{m.name}</span>
-                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none overflow-hidden" style={{ containerType: 'inline-size', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.45rem,0.9vw,1rem) clamp(0.4rem,0.7vw,0.85rem)', gap: 'clamp(0.3rem,0.6vw,0.8rem)', minHeight: menuGrid === 'auto' ? 'clamp(7rem,11vw,9.5rem)' : 0, height: menuGrid === 'auto' ? undefined : '100%', opacity: stopped ? 0.6 : 1 }}>
+                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.62rem, 14cqw, 1.4rem)' }}>{m.name}</span>
+                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.35em 0.85em', fontSize: 'clamp(0.58rem, 11cqw, 1.1rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
                   </div>
