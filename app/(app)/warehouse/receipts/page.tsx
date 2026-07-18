@@ -83,6 +83,15 @@ export default function ReceiptsPage() {
           <tbody>
             {receipts.map((r) => {
               const pt = PAYMENT_LABELS[r.paymentType]
+              // Возврат поставщику перекрывает статус оплаты: полный → «Возвращено»,
+              // частичный → «Возврат части». Иначе показываем статус оплаты.
+              const returned = r.returnedTotal ?? 0
+              const fullyReturned = returned > 0 && returned >= r.totalAmount - 0.01
+              const badge = returned > 0
+                ? (fullyReturned
+                    ? { label: 'Возвращено', color: 'bg-rose-100 text-rose-700' }
+                    : { label: 'Возврат части', color: 'bg-orange-100 text-orange-700' })
+                : pt
               const isOverdue = r.dueDate && new Date(r.dueDate).getTime() < Date.now() && r.debtAmount > 0
               return (
                 <React.Fragment key={r.id}>
@@ -94,7 +103,10 @@ export default function ReceiptsPage() {
                     <td className="px-4 py-3 text-sm text-foreground">{r.date}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{r.supplierName}</td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${pt.color}`}>{pt.label}</span>
+                      <span
+                        className={`text-xs px-2 py-0.5 rounded font-medium ${badge.color}`}
+                        title={returned > 0 ? `Возвращено ${formatCurrency(returned)} из ${formatCurrency(r.totalAmount)}` : undefined}
+                      >{badge.label}</span>
                     </td>
                     <td className="px-4 py-3 font-semibold text-foreground">{formatCurrency(r.totalAmount)}</td>
                     <td className="px-4 py-3 text-emerald-600 font-medium">{formatCurrency(r.paidAmount)}</td>

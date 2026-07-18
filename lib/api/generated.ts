@@ -10787,6 +10787,8 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+            /** @description Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части». */
+            returned_total?: components["schemas"]["Decimal"];
             /** @description Только при ?include=lines. */
             lines?: {
                 /** Format: uuid */

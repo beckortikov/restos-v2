@@ -435,6 +435,10 @@ type ReceiptLineWithAvailable struct {
 type ReceiptWithLines struct {
 	*models.StockReceipt
 	Lines []ReceiptLineWithAvailable `json:"lines"`
+	// ReturnedTotal — сумма НЕотменённых возвратов поставщику по этой накладной.
+	// UI по нему показывает статус «Возвращено» (полный) / «Возврат части»
+	// (частичный) вместо статуса оплаты.
+	ReturnedTotal decimal.Decimal `json:"returned_total"`
 }
 
 // WriteoffWithLines — аналог для writeoffs.
@@ -507,6 +511,28 @@ func (s *StockReadsService) ListReceiptsWithLines(ctx context.Context, f Receipt
 		byReceipt[*l.ReceiptID] = append(byReceipt[*l.ReceiptID],
 			ReceiptLineWithAvailable{StockReceiptLine: l, Available: avail[l.ID]})
 	}
+
+	// Сумма НЕотменённых возвратов по каждой накладной — для статуса «Возвращено»/
+	// «Возврат части» в UI. receipt_id IN ids (отскоупленные) — тот же безопасный
+	// tenant-фильтр, что и для строк выше.
+	returnedByReceipt := make(map[string]decimal.Decimal, len(rows))
+	type retRow struct {
+		ReceiptID string          `gorm:"column:receipt_id"`
+		Sum       decimal.Decimal `gorm:"column:sum"`
+	}
+	var retRows []retRow
+	if err := s.r.Raw().WithContext(ctx).
+		Table("stock_returns").
+		Select("receipt_id, COALESCE(SUM(total_amount), 0) AS sum").
+		Where("receipt_id IN ? AND cancelled_at IS NULL", ids).
+		Group("receipt_id").
+		Find(&retRows).Error; err != nil {
+		return nil, "", err
+	}
+	for _, rr := range retRows {
+		returnedByReceipt[rr.ReceiptID] = decimal.Normalize(rr.Sum)
+	}
+
 	out := make([]ReceiptWithLines, len(rows))
 	for i := range rows {
 		r := rows[i]
@@ -514,7 +540,7 @@ func (s *StockReadsService) ListReceiptsWithLines(ctx context.Context, f Receipt
 		if ls == nil {
 			ls = []ReceiptLineWithAvailable{}
 		}
-		out[i] = ReceiptWithLines{StockReceipt: &r, Lines: ls}
+		out[i] = ReceiptWithLines{StockReceipt: &r, Lines: ls, ReturnedTotal: returnedByReceipt[r.ID]}
 	}
 	return out, next, nil
 }

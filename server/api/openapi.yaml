@@ -3445,6 +3445,9 @@ components:
         total_amount: { $ref: "#/components/schemas/Decimal" }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         debt_amount: { $ref: "#/components/schemas/Decimal" }
+        returned_total:
+          $ref: "#/components/schemas/Decimal"
+          description: "Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части»."
         lines:
           type: array
           description: "Только при ?include=lines."

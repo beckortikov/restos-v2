@@ -426,6 +426,9 @@ export interface StockReceipt {
   paymentType: ReceiptPaymentType
   paidAmount: number
   debtAmount: number
+  // Сумма НЕотменённых возвратов поставщику по накладной. >0 → статус
+  // «Возвращено» (полный) / «Возврат части» (частичный) вместо статуса оплаты.
+  returnedTotal?: number
   dueDate?: string
   confirmedAt?: string
   confirmedBy?: string

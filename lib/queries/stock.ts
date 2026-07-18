@@ -432,6 +432,7 @@ function mapStockReceipt(r: Record<string, unknown>): StockReceipt {
     paymentType: (r.payment_type as ReceiptPaymentType) ?? 'paid',
     paidAmount: Number(r.paid_amount ?? 0),
     debtAmount: Number(r.debt_amount ?? 0),
+    returnedTotal: r.returned_total != null ? Number(r.returned_total) : undefined,
     dueDate: (r.due_date as string | null) ?? undefined,
     confirmedAt: (r.confirmed_at as string | null) ?? undefined,
     confirmedBy: (r.confirmed_by as string | null) ?? undefined,
