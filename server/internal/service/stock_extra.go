@@ -286,6 +286,24 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 				}
 			}
 		}
+		// Н11: переоценка СТАРОГО остатка при смене цены. Меняя цену 10->100 при
+		// 50 шт, актив «Склад» растёт на 50x90=4500 без встречной записи — расчётный
+		// капитал в Балансе дрейфовал. Проводим на existing.Qty x (новая - старая);
+		// вместе с qty-дельтой (на новой цене) это ровно полный дельта-стоимости.
+		if in.PricePerUnit != nil && !effPrice.Equal(existing.PricePerUnit) && decimal.IsPositive(existing.Qty) {
+			reval := decimal.Normalize(decimal.Mul(existing.Qty, decimal.Sub(effPrice, existing.PricePerUnit)))
+			if !reval.IsZero() {
+				rname := "Переоценка остатка склада"
+				rcat := "stock_revaluation"
+				req := &models.EquityEntry{
+					ID: uuid.NewString(), Name: &rname, Category: &rcat, Amount: reval,
+					RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+				}
+				if err := tx.Create(req).Error; err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {

@@ -56,9 +56,15 @@ func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInpu
 		total := decimal.Zero
 		applied := 0
 		for _, l := range in.Lines {
+			// Н12: битую строку не пропускаем молча — это редкая ручная операция,
+			// где применилось «7 из 10» без объяснения. Любая невалидная строка —
+			// ошибка всей операции с указанием, что не так.
 			target, e := decimal.FromString(l.Qty)
-			if e != nil || decimal.IsNegative(target) {
-				continue
+			if e != nil {
+				return apperrors.Wrap("VALIDATION", "строка «"+l.IngredientID+"»: некорректное количество", e)
+			}
+			if decimal.IsNegative(target) {
+				return apperrors.Wrap("VALIDATION", "строка «"+l.IngredientID+"»: количество не может быть отрицательным", nil)
 			}
 			var ing models.Ingredient
 			if err := tx.Where("id = ? AND restaurant_id = ?", l.IngredientID, rid).First(&ing).Error; err != nil {
@@ -68,13 +74,16 @@ func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInpu
 			// обновляем ingredient.price_per_unit, иначе — текущую цену ингредиента.
 			price := ing.PricePerUnit
 			if l.Price != nil && *l.Price != "" {
-				if p, e := decimal.FromString(*l.Price); e == nil && !decimal.IsNegative(p) {
-					price = p
-					if !p.Equal(ing.PricePerUnit) {
-						if err := tx.Model(&models.Ingredient{}).Where("id = ?", l.IngredientID).
-							Update("price_per_unit", p).Error; err != nil {
-							return err
-						}
+				p, e := decimal.FromString(*l.Price)
+				if e != nil || decimal.IsNegative(p) {
+					// Н12: битую цену не проглатываем (иначе тихо взяли бы старую).
+					return apperrors.Wrap("VALIDATION", "строка «"+l.IngredientID+"»: некорректная цена", e)
+				}
+				price = p
+				if !p.Equal(ing.PricePerUnit) {
+					if err := tx.Model(&models.Ingredient{}).Where("id = ?", l.IngredientID).
+						Update("price_per_unit", p).Error; err != nil {
+						return err
 					}
 				}
 			}

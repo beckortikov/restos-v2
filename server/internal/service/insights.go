@@ -589,7 +589,7 @@ func (s *InsightsService) lostSalesInsights(ctx context.Context, f PeriodFilter)
 		Revenue decimal.Decimal `gorm:"column:revenue"`
 	}
 	q := scoped.Table("order_items AS oi").
-		Select("COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END),0) AS revenue").
+		Select("COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)),0) AS revenue").
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL").

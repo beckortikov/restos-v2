@@ -7,6 +7,7 @@ import {
   type FinancialActivity,
   type FinancialOperation,
   type FinancialAccount,
+  finopCategoryLabel,
 } from '@/lib/types'
 import {
   fetchFinancialOperations, fetchFinancialAccounts, createFinancialOperation,
@@ -109,13 +110,17 @@ export default function CashflowPage() {
   })
 
   // Totals from server report (period-aware, decimal-precise).
+  // Н23: финансовая активность (переводы между счетами, займы) исключается из
+  // «Поступления/Выплаты» — иначе переводы раздувают обе цифры (нога-в-нога
+  // +/−) и создают видимость оборота, которого по бизнесу нет. netFlow считаем
+  // из тех же операционных+инвестиционных потоков, чтобы шапка была консистентна.
   const totalIn = report
-    ? Object.values(report.by_activity).reduce((s, v) => s + v.in, 0)
+    ? Object.entries(report.by_activity).filter(([k]) => k !== 'financial').reduce((s, [, v]) => s + v.in, 0)
     : 0
   const totalOut = report
-    ? Object.values(report.by_activity).reduce((s, v) => s + v.out, 0)
+    ? Object.entries(report.by_activity).filter(([k]) => k !== 'financial').reduce((s, [, v]) => s + v.out, 0)
     : 0
-  const netFlow = report?.net_total ?? (totalIn - totalOut)
+  const netFlow = totalIn - totalOut
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -133,7 +138,7 @@ export default function CashflowPage() {
                   { key: 'date', header: 'Дата' },
                   { key: 'type', header: 'Тип', format: (v) => v === 'in' ? 'Приход' : v === 'out' ? 'Расход' : 'Перевод' },
                   { key: 'amount', header: 'Сумма' },
-                  { key: 'category', header: 'Категория' },
+                  { key: 'category', header: 'Категория', format: (v) => finopCategoryLabel(String(v ?? '')) },
                   { key: 'description', header: 'Описание' },
                   { key: 'accountName', header: 'Счёт' },
                   { key: 'activity', header: 'Вид деятельности', format: (v) => ACTIVITY_LABELS[v as FinancialActivity] ?? String(v) },
@@ -243,10 +248,10 @@ export default function CashflowPage() {
               <tr key={op.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
                 <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{op.date}</td>
                 <td className="px-4 py-3 text-sm text-foreground max-w-xs">
-                  <span className="truncate block">{String(op.description || op.category || '')}</span>
+                  <span className="truncate block">{String(op.description || finopCategoryLabel(op.category) || '')}</span>
                 </td>
                 <td className="px-4 py-3">
-                  <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{op.category}</span>
+                  <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{finopCategoryLabel(op.category)}</span>
                 </td>
                 <td className="px-4 py-3 text-xs text-muted-foreground">{String(op.accountName || '')}</td>
                 <td className="px-4 py-3">
@@ -256,8 +261,9 @@ export default function CashflowPage() {
                 </td>
                 <td className="px-4 py-3 text-xs text-muted-foreground">{op.isAuto ? 'Авто' : 'Ручная'}</td>
                 <td className="px-4 py-3">
-                  <span className={`font-semibold text-sm ${op.type === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
-                    {op.type === 'in' ? '+' : '−'}{formatCurrency(op.amount)}
+                  {/* Н23: перевод между счетами — нейтрально (↔), не красный расход. */}
+                  <span className={`font-semibold text-sm ${op.type === 'in' ? 'text-emerald-600' : op.type === 'out' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                    {op.type === 'in' ? '+' : op.type === 'out' ? '−' : '↔ '}{formatCurrency(op.amount)}
                   </span>
                 </td>
               </tr>
@@ -302,7 +308,7 @@ function CashflowCharts({ report, operations }: { report: CashflowReport | null;
     if (report.out_by_category && report.out_by_category.length > 0) {
       return report.out_by_category
         .filter((c) => c.amount > 0)
-        .map((c) => ({ name: c.category, value: c.amount }))
+        .map((c) => ({ name: finopCategoryLabel(c.category), value: c.amount }))
     }
     return Object.entries(report.by_activity)
       .map(([key, v]) => ({ name: ACTIVITY_LABELS_LOCAL[key] ?? key, value: v.out }))
@@ -333,21 +339,26 @@ function CashflowCharts({ report, operations }: { report: CashflowReport | null;
 
   // 4. Top-5 expense ops — still needs raw ops (server report is aggregated).
   const topExpenses = useMemo(() => {
+    // Н23: только реальные расходы — исключаем переводы (type=transfer) и
+    // финансовую активность (займы). Имя — описание или подпись категории.
     return operations
-      .filter((o) => o.type === 'out')
+      .filter((o) => o.type === 'out' && o.activity !== 'financial')
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 5)
-      .map((o) => ({
-        name: o.description.length > 30 ? o.description.slice(0, 27) + '...' : o.description,
-        amount: o.amount,
-      }))
+      .map((o) => {
+        const label = o.description || finopCategoryLabel(o.category) || '—'
+        return {
+          name: label.length > 30 ? label.slice(0, 27) + '...' : label,
+          amount: o.amount,
+        }
+      })
   }, [operations])
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-      {/* 1. Расходы по видам деятельности — Pie */}
+      {/* 1. Расходы по статьям — Pie (out_by_category) */}
       <div className="bg-card rounded-xl border border-border p-5">
-        <h2 className="text-sm font-semibold text-foreground mb-4">Расходы по видам деятельности</h2>
+        <h2 className="text-sm font-semibold text-foreground mb-4">Расходы по статьям</h2>
         {pieData.length === 0 ? (
           <div className="h-[250px] flex items-center justify-center text-sm text-muted-foreground">Нет данных</div>
         ) : (

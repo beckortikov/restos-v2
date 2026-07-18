@@ -90,7 +90,7 @@ export default function WeekdayPage() {
           <div className="bg-card rounded-xl border border-border p-4 md:p-5 space-y-3">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-sm font-semibold">Прибыль по дням недели</h2>
-              <div className="text-xs text-muted-foreground">Чистая = выручка − себестоимость − ФОТ смены</div>
+              <div className="text-xs text-muted-foreground">Прибыль после ФОТ = выручка − себестоимость − ФОТ смены (без прочих расходов)</div>
             </div>
             {best && worst && best.wd !== worst.wd && (
               <div className="flex flex-wrap gap-2 text-sm">
@@ -108,7 +108,7 @@ export default function WeekdayPage() {
                 <XAxis dataKey="label" tick={{ fontSize: 12 }} className="fill-muted-foreground" />
                 <YAxis tick={{ fontSize: 12 }} className="fill-muted-foreground" tickFormatter={(v: number) => `${Math.round(v / 1000)}k`} />
                 <Tooltip
-                  formatter={(v: number, name) => [formatCurrency(v), name === 'net_profit' ? 'Чистая прибыль' : name]}
+                  formatter={(v: number, name) => [formatCurrency(v), name === 'net_profit' ? 'Прибыль после ФОТ' : name]}
                   labelFormatter={(l) => `${l}`}
                 />
                 <ReferenceLine y={0} className="stroke-border" />

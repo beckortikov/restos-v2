@@ -513,7 +513,24 @@ func (s *AnalyticsService) ABCInventory(ctx context.Context, f PeriodFilter) (*A
 	}
 
 	// 3. Сборка enriched rows + сортировка по consumption value desc.
+	// Н19: при пустом периоде берём реальный разброс дат расходных движений
+	// (иначе periodDays=1 и days_of_stock кратно занижается на «всём времени»).
 	periodDays := computePeriodDays(f.From, f.To)
+	if f.From == nil || f.To == nil {
+		var span struct {
+			MinAt *time.Time `gorm:"column:min_at"`
+			MaxAt *time.Time `gorm:"column:max_at"`
+		}
+		spanScoped, _ := s.r.ForTenant(ctx)
+		if err := spanScoped.Table("stock_movements").
+			Select("MIN(created_at) AS min_at, MAX(created_at) AS max_at").
+			Where("type IN ?", []string{"out", "batch", "semi"}).
+			Scan(&span).Error; err == nil && span.MinAt != nil && span.MaxAt != nil {
+			if d := span.MaxAt.Sub(*span.MinAt).Hours() / 24; d >= 1 {
+				periodDays = int(d + 0.999)
+			}
+		}
+	}
 	if periodDays < 1 {
 		periodDays = 1
 	}

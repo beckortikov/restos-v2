@@ -92,7 +92,7 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 		Select(`oi.menu_item_id AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END), 0) AS qty,
-		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS revenue,
+		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)), 0) AS revenue,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
@@ -575,9 +575,25 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 		}
 	}
 
-	// period_days для occupancy% — если from/to не заданы, используем
-	// разброс между min(closed_at) и max(closed_at), fallback = 1.
+	// period_days для occupancy% — если from/to не заданы, используем реальный
+	// разброс между min(closed_at) и max(closed_at) (Н19). Иначе periodDays=1 и
+	// occupancy кратно завышается (может быть >100% на «всём времени»).
 	periodDays := computePeriodDays(f.From, f.To)
+	if f.From == nil || f.To == nil {
+		var span struct {
+			MinAt *time.Time `gorm:"column:min_at"`
+			MaxAt *time.Time `gorm:"column:max_at"`
+		}
+		spanScoped, _ := s.r.ForTenant(ctx)
+		if err := spanScoped.Table("orders").
+			Select("MIN(closed_at) AS min_at, MAX(closed_at) AS max_at").
+			Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"}).
+			Scan(&span).Error; err == nil && span.MinAt != nil && span.MaxAt != nil {
+			if d := span.MaxAt.Sub(*span.MinAt).Hours() / 24; d >= 1 {
+				periodDays = int(d + 0.999)
+			}
+		}
+	}
 	totalRev := decimal.Zero
 	totalOrd := 0
 	sixty := decimal.FromInt(60)
@@ -700,8 +716,8 @@ func (s *AnalyticsService) FoodCost(ctx context.Context, f PeriodFilter) (*FoodC
 	q := scoped.Table("order_items AS oi").
 		Select(`oi.menu_item_id AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
-		        COALESCE(SUM(oi.qty), 0) AS qty,
-		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS revenue,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END), 0) AS qty,
+		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)), 0) AS revenue,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").

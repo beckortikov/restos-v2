@@ -501,6 +501,25 @@ export const EQUITY_CATEGORY_LABELS: Record<EquityCategory, string> = {
   owner_investment: 'Вложения владельца',
 }
 
+// Н22: авто-категории financial_operations, которые бэк создаёт техническими
+// кодами (приёмка, оплата долга, гашение обязательства, возврат). В ДДС/ОПиУ
+// они показывались сырыми кодами. Ручные категории уже по-русски — для них
+// finopCategoryLabel возвращает исходную строку.
+export const FINOP_CATEGORY_LABELS: Record<string, string> = {
+  stock_purchase: 'Закупка на склад (накладная)',
+  supplier_payment: 'Оплата долга поставщику',
+  liability_payment: 'Гашение обязательства',
+  refund: 'Возврат покупателю',
+  revenue: 'Выручка',
+}
+
+// finopCategoryLabel — человекочитаемая подпись категории финоперации.
+// Для авто-кодов берёт из словаря, для ручных (уже русских) — как есть.
+export function finopCategoryLabel(category?: string | null): string {
+  if (!category) return ''
+  return FINOP_CATEGORY_LABELS[category] ?? category
+}
+
 export interface Asset {
   id: string
   name: string

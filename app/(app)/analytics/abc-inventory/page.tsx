@@ -26,6 +26,7 @@ interface UIRow {
   raw: ABCInventoryRow
   qty: number
   consumption: number
+  consumptionValue: number
   turnover: number
   daysOfStock: number
   value: number
@@ -54,6 +55,9 @@ export default function AbcInventoryPage() {
       raw: it,
       qty: Number(it.qty),
       consumption: Number(it.consumption),
+      // Н24: стоимость расхода = qty × цена. Складывать qty в разных единицах
+      // (кг+шт+л) в «общий расход» нельзя — суммируем деньги (аддитивны).
+      consumptionValue: Number(it.consumption) * Number(it.price_per_unit),
       turnover: Number(it.turnover),
       daysOfStock: it.days_of_stock,
       value: Number(it.stock_value),
@@ -61,16 +65,16 @@ export default function AbcInventoryPage() {
     }))
   }, [report])
 
-  const totalConsumption = items.reduce((s, i) => s + i.consumption, 0)
+  const totalConsumptionValue = items.reduce((s, i) => s + i.consumptionValue, 0)
   const byClass = (cls: ABCClass) => items.filter(i => i.abc === cls)
 
   const chartData = useMemo(
     () =>
       items
-        .filter(i => i.consumption > 0)
+        .filter(i => i.consumptionValue > 0)
         .map(item => ({
           name: item.raw.name.length > 14 ? item.raw.name.slice(0, 12) + '...' : item.raw.name,
-          value: item.consumption,
+          value: item.consumptionValue,
           abc: item.abc,
         })),
     [items]
@@ -113,7 +117,7 @@ export default function AbcInventoryPage() {
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {(['A', 'B', 'C'] as ABCClass[]).map(cls => {
               const group = byClass(cls)
-              const groupConsumption = group.reduce((s, i) => s + i.consumption, 0)
+              const groupValue = group.reduce((s, i) => s + i.consumptionValue, 0)
               return (
                 <div key={cls} className="bg-card rounded-xl border border-border p-5">
                   <div className="flex items-center gap-2 mb-2">
@@ -121,9 +125,9 @@ export default function AbcInventoryPage() {
                     <span className="text-sm font-semibold text-foreground">{group.length} позиций</span>
                   </div>
                   <p className="text-xs text-muted-foreground mb-1">{ABC_LABELS[cls]}</p>
-                  <p className="text-lg font-bold text-foreground">Расход: {groupConsumption.toFixed(1)}</p>
+                  <p className="text-lg font-bold text-foreground">Расход: {formatCurrency(groupValue)}</p>
                   <p className="text-xs text-muted-foreground">
-                    {totalConsumption > 0 ? ((groupConsumption / totalConsumption) * 100).toFixed(1) : 0}% от общего расхода
+                    {totalConsumptionValue > 0 ? ((groupValue / totalConsumptionValue) * 100).toFixed(1) : 0}% от общего расхода
                   </p>
                 </div>
               )
