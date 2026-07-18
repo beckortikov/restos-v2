@@ -356,6 +356,12 @@ type ZReport struct {
 	Withdrawals        decimal.Decimal            `json:"withdrawals"`
 	ExpensesTotal      decimal.Decimal            `json:"expenses_total"`
 	ExpensesByCategory []ZReportExpenseByCategory `json:"expenses_by_category"`
+	// Возвраты покупателям за смену (из financial_operations category='refund',
+	// покрывает нал+безнал). RefundsTotal — общая сумма, RefundsCount — сколько
+	// возвратов (чеков). Кассовое зеркало возврата исключено из ExpensesTotal,
+	// чтобы возврат не задваивался.
+	RefundsTotal decimal.Decimal `json:"refunds_total"`
+	RefundsCount int             `json:"refunds_count"`
 	// Previous — выжимка предыдущей закрытой смены (для delta-chip на UI).
 	// nil, если это первая смена ресторана.
 	Previous *PreviousSummary `json:"previous,omitempty"`
@@ -431,9 +437,25 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 			if op.Category != nil {
 				cat = strings.TrimSpace(*op.Category)
 			}
+			desc := ""
+			if op.Description != nil {
+				desc = *op.Description
+			}
+			// Возврат-зеркало (cash_out авто-зеркала с описанием «Возврат заказа
+			// #…») — не расход: возвраты идут отдельной строкой RefundsTotal, иначе
+			// двойной учёт (сумма и в «Расходах», и в «Возвратах»). Операция при этом
+			// остаётся в out.Operations — на смене возврат виден как операция.
+			if cat == autoMirrorCategory && strings.HasPrefix(desc, refundOpDescPrefix) {
+				continue
+			}
 			if cat == "" {
 				out.Withdrawals = decimal.Add(out.Withdrawals, op.Amount)
 				continue
+			}
+			// Внутреннюю метку авто-зеркала (выплаты/списания со счёта) не показываем
+			// сырой — заменяем на человекочитаемую.
+			if cat == autoMirrorCategory {
+				cat = "Списание со счёта"
 			}
 			out.ExpensesTotal = decimal.Add(out.ExpensesTotal, op.Amount)
 			row, ok := expByCat[cat]
@@ -453,6 +475,28 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		row := expByCat[cat]
 		row.Amount = decimal.Normalize(row.Amount)
 		out.ExpensesByCategory = append(out.ExpensesByCategory, *row)
+	}
+
+	// Возвраты покупателям за смену — из financial_operations (category='refund'),
+	// покрывает и наличные, и безналичные возвраты (безнал-зеркала в кассовой
+	// смене нет). Сумма + количество чеков. Кассовое зеркало нал-возврата уже
+	// исключено из ExpensesTotal выше — двойного учёта нет.
+	{
+		type refAgg struct {
+			Cnt int             `gorm:"column:cnt"`
+			Sum decimal.Decimal `gorm:"column:sum"`
+		}
+		var ra refAgg
+		if err := s.r.Raw().WithContext(ctx).
+			Table("financial_operations").
+			Select("COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS sum").
+			Where("restaurant_id = ? AND shift_id = ? AND category = ? AND type = ?",
+				rid, shiftID, "refund", "out").
+			Scan(&ra).Error; err != nil {
+			return nil, err
+		}
+		out.RefundsCount = ra.Cnt
+		out.RefundsTotal = decimal.Normalize(ra.Sum)
 	}
 
 	// Revenue по конкретному счёту оплаты — из financial_operations (revenue),

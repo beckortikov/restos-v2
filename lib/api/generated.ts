@@ -9035,6 +9035,10 @@ export interface paths {
                                 count?: number;
                                 amount?: string;
                             }[];
+                            /** @description Сумма возвратов покупателям за смену (нал+безнал) */
+                            refunds_total?: string;
+                            /** @description Количество возвратов (чеков) за смену */
+                            refunds_count?: number;
                             previous?: {
                                 revenue?: string;
                                 orders_count?: number;

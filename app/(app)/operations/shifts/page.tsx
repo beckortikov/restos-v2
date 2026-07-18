@@ -19,6 +19,21 @@ import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 
 const EXPENSE_CATEGORIES = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
 
+// Внутренняя метка авто-зеркал cash_out (возврат/выплата/списание со счёта),
+// которую ставит бэк при оттоке денег со счёта открытой смены. Возврат-зеркало
+// (описание «Возврат заказа #…») выносим в отдельную строку «Возвраты», прочие
+// авто-зеркала показываем как «Списание со счёта» — сырую метку не светим.
+const AUTO_MIRROR_CAT = '__auto_mirror__'
+const REFUND_DESC_PREFIX = 'Возврат заказа #'
+
+// склонение слова «чек» по количеству (1 чек, 2 чека, 5 чеков).
+function checksWord(n: number): string {
+  const d = n % 10, dd = n % 100
+  if (d === 1 && dd !== 11) return 'чек'
+  if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return 'чека'
+  return 'чеков'
+}
+
 // DeltaChip — маленький бейдж «↑ +5% к прошлой смене» под KPI-числом.
 // Серый «—» если предыдущее значение 0 (деление на ноль) или previous отсутствует.
 function DeltaChip({ current, previous, hasPrevious }: { current: number; previous: number; hasPrevious: boolean }) {
@@ -114,9 +129,15 @@ function ClosedShiftZBreakdown({ z, loading }: { z: ShiftZReport | null; loading
                   <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.withdrawals)}</span>
                 </div>
               )}
+              {z.refundsCount > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Возвраты · {z.refundsCount} чек{z.refundsCount === 1 ? '' : z.refundsCount < 5 ? 'а' : 'ов'}</span>
+                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.refundsTotal)}</span>
+                </div>
+              )}
               <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
                 <span>Итог</span>
-                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotal - z.withdrawals)}</span>
+                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotal - z.withdrawals - z.refundsTotal)}</span>
               </div>
             </div>
           )}
@@ -404,12 +425,15 @@ export default function ShiftsPage() {
   const cashMovement = useMemo(() => {
     const cashIn = dSum(shiftOps.filter(o => o.type === 'cash_in').map(o => o.amount))
     const withdrawalOps = shiftOps.filter(o => o.type === 'cash_out' && !o.category)
-    const expenseOps = shiftOps.filter(o => o.type === 'cash_out' && !!o.category)
+    // Возврат-зеркало (авто-зеркало с описанием «Возврат заказа #…») исключаем из
+    // расходов — оно показывается отдельной строкой «Возвраты» (не задваиваем).
+    const expenseOps = shiftOps.filter(o => o.type === 'cash_out' && !!o.category
+      && !(o.category === AUTO_MIRROR_CAT && (o.description ?? '').startsWith(REFUND_DESC_PREFIX)))
     const withdrawals = dSum(withdrawalOps.map(o => o.amount))
     const expensesTotal = dSum(expenseOps.map(o => o.amount))
     const byCat = new Map<string, { amount: number; count: number }>()
     for (const o of expenseOps) {
-      const c = o.category || 'Прочее'
+      const c = o.category === AUTO_MIRROR_CAT ? 'Списание со счёта' : (o.category || 'Прочее')
       const cur = byCat.get(c) ?? { amount: 0, count: 0 }
       cur.amount += o.amount
       cur.count++
@@ -946,6 +970,8 @@ export default function ShiftsPage() {
                     {(() => {
                       const revenueTotal = zReport.revenueByMethod.reduce((s, m) => s + m.total, 0)
                       const expenses = cashMovement.expensesTotal
+                      const refunds = zReport.refundsTotal
+                      const refundsN = zReport.refundsCount
                       return (
                         <>
                           <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between">
@@ -958,9 +984,15 @@ export default function ShiftsPage() {
                               <span className="font-medium tabular-nums text-destructive">−{formatCurrency(expenses)}</span>
                             </div>
                           )}
+                          {refundsN > 0 && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Возвраты · {refundsN} {checksWord(refundsN)}</span>
+                              <span className="font-medium tabular-nums text-destructive">−{formatCurrency(refunds)}</span>
+                            </div>
+                          )}
                           <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
                             <span>Итог</span>
-                            <span className="tabular-nums">{formatCurrency(revenueTotal - expenses)}</span>
+                            <span className="tabular-nums">{formatCurrency(revenueTotal - expenses - refunds)}</span>
                           </div>
                         </>
                       )
@@ -1095,7 +1127,7 @@ export default function ShiftsPage() {
 
           {/* Cash operations summary */}
           {shiftOps.length > 0 && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className={`grid grid-cols-2 gap-3 ${zReport && zReport.refundsCount > 0 ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
               <div className="bg-muted/50 rounded-lg p-3">
                 <p className="text-xs text-muted-foreground">Нач. остаток</p>
                 <p className="text-sm font-bold text-foreground">{formatCurrency(activeShift.openingBalance)}</p>
@@ -1112,6 +1144,12 @@ export default function ShiftsPage() {
                 <p className="text-xs text-muted-foreground">Расходы</p>
                 <p className="text-sm font-bold text-destructive">{formatCurrency(cashMovement.expensesTotal)}</p>
               </div>
+              {zReport && zReport.refundsCount > 0 && (
+                <div className="bg-muted/50 rounded-lg p-3">
+                  <p className="text-xs text-muted-foreground">Возвраты · {zReport.refundsCount} {checksWord(zReport.refundsCount)}</p>
+                  <p className="text-sm font-bold text-destructive">−{formatCurrency(zReport.refundsTotal)}</p>
+                </div>
+              )}
             </div>
           )}
 

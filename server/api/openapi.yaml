@@ -2539,6 +2539,8 @@ paths:
                         category: { type: string }
                         count: { type: integer }
                         amount: { type: string }
+                  refunds_total: { type: string, description: "Сумма возвратов покупателям за смену (нал+безнал)" }
+                  refunds_count: { type: integer, description: "Количество возвратов (чеков) за смену" }
                   previous:
                     type: object
                     nullable: true

@@ -1131,8 +1131,13 @@ export default function PosV2Order() {
                           const n = (o.items ?? []).filter(i => !i.cancelledAt).length
                           const isClosed = o.status === 'done' || o.status === 'cancelled'
                           const time = isClosed ? (o.closedAt ? ` · закрыт ${new Date(o.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : '') : ` · ${getTimeSince(o.createdAt)}`
-                          const badge = o.status === 'cancelled' ? 'Отменён' : o.status === 'done' ? 'Оплачен' : o.status === 'cooking' ? 'Готовится' : o.status === 'ready' ? 'Готов' : o.status === 'served' ? 'Подан' : o.status === 'bill_requested' ? 'Счёт' : 'Открыт'
-                          const bt = o.status === 'cancelled' ? { bg: 'var(--pv-bg)', c: 'var(--pv-text-3)' } : o.status === 'done' ? { bg: 'var(--pv-free-soft)', c: 'var(--pv-free-text)' } : o.status === 'bill_requested' ? { bg: 'var(--pv-bill-soft)', c: 'var(--pv-bill-text)' } : { bg: 'var(--pv-brand-soft)', c: 'var(--pv-brand)' }
+                          // Возврат: закрытый заказ (бэк 'refunded'/'closed' → 'done') с refundedTotal > 0.
+                          // Полный → «Возврат», частичный → «Возврат части». Иначе «Оплачен».
+                          const refundedAmt = o.status === 'done' ? (o.refundedTotal ?? 0) : 0
+                          const paidAmt = (o.totalWithService ?? o.total) || 0
+                          const refundedFull = refundedAmt > 0 && refundedAmt >= paidAmt - 0.01
+                          const badge = o.status === 'cancelled' ? 'Отменён' : refundedAmt > 0 ? (refundedFull ? 'Возврат' : 'Возврат части') : o.status === 'done' ? 'Оплачен' : o.status === 'cooking' ? 'Готовится' : o.status === 'ready' ? 'Готов' : o.status === 'served' ? 'Подан' : o.status === 'bill_requested' ? 'Счёт' : 'Открыт'
+                          const bt = o.status === 'cancelled' ? { bg: 'var(--pv-bg)', c: 'var(--pv-text-3)' } : refundedAmt > 0 ? { bg: 'var(--pv-occ-soft)', c: 'var(--pv-occ-text)' } : o.status === 'done' ? { bg: 'var(--pv-free-soft)', c: 'var(--pv-free-text)' } : o.status === 'bill_requested' ? { bg: 'var(--pv-bill-soft)', c: 'var(--pv-bill-text)' } : { bg: 'var(--pv-brand-soft)', c: 'var(--pv-brand)' }
                           return (
                             <button key={o.id} onClick={() => tapOrder(o)} className="w-full text-left rounded-xl border active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.95vw,0.85rem)' }}>
                               <div className="flex items-baseline justify-between gap-2" style={{ marginBottom: '0.25rem' }}>
@@ -1140,7 +1145,7 @@ export default function PosV2Order() {
                                 <span className="rounded-full font-semibold shrink-0" style={{ background: bt.bg, color: bt.c, padding: '0.1rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{badge}</span>
                               </div>
                               <div className="flex items-baseline justify-between gap-2">
-                                <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{loc} · {n} поз{time}</span>
+                                <span className="truncate" style={{ color: refundedAmt > 0 ? 'var(--pv-occ-text)' : 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{loc} · {n} поз{time}{refundedAmt > 0 ? ` · возврат ${formatCurrency(refundedAmt)}` : ''}</span>
                                 <span className="font-bold tabular-nums whitespace-nowrap" style={{ color: o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</span>
                               </div>
                             </button>

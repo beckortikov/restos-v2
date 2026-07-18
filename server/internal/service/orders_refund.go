@@ -24,6 +24,12 @@ import (
 // Refund — частичный/полный возврат денег по закрытому заказу.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// refundOpDescPrefix — префикс описания финоперации возврата и её кассового
+// зеркала (cash_out). ZReport по нему отличает возвраты от прочих авто-зеркал
+// (выплаты/списания со счёта): возврат-зеркало исключается из «Расходов» и
+// показывается отдельной строкой «Возвраты» (сумма + кол-во чеков).
+const refundOpDescPrefix = "Возврат заказа #"
+
 // RefundOrderInput — body POST /api/v1/orders/{id}/refund.
 type RefundOrderInput struct {
 	Reason string  `json:"reason"`
@@ -176,7 +182,7 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 		opCat := "refund"
 		opActivity := "operational"
 		opDate := now.Format("2006-01-02")
-		opDesc := fmt.Sprintf("Возврат заказа #%d: %s", order.OrderNumber, reason)
+		opDesc := fmt.Sprintf("%s%d: %s", refundOpDescPrefix, order.OrderNumber, reason)
 		opAuto := true
 		opSourceRef := fmt.Sprintf("order_refund:%s:%d", order.ID, now.UnixNano())
 		finOp := &models.FinancialOperation{

@@ -141,6 +141,10 @@ export interface ShiftZReport {
   withdrawals: number
   expensesTotal: number
   expensesByCategory: { category: string; count: number; amount: number }[]
+  // Возвраты покупателям за смену (нал+безнал). Показываются отдельной строкой;
+  // кассовое зеркало возврата исключено из expensesTotal, чтобы не задваивать.
+  refundsTotal: number
+  refundsCount: number
   previous?: ShiftZReportPrevious | null
 }
 
@@ -192,6 +196,8 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
       count: Number(e.count ?? 0),
       amount: Number(e.amount ?? 0),
     })),
+    refundsTotal: Number(r?.refunds_total ?? 0),
+    refundsCount: Number(r?.refunds_count ?? 0),
     previous: r?.previous
       ? {
           revenue: Number(r.previous.revenue ?? 0),
