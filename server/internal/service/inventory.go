@@ -69,6 +69,12 @@ func (s *InventoryService) Create(ctx context.Context, in InventoryCheckInput) (
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad actual_qty", err)
 		}
+		// Н2: фактический остаток не может быть отрицательным. Через API можно
+		// прислать actual_qty=−5 → diff = −5 − system, что задрало бы недостачу
+		// и списало несуществующий объём.
+		if decimal.IsNegative(actual) {
+			return nil, apperrors.Wrap("VALIDATION", "фактический остаток не может быть отрицательным", nil)
+		}
 		parsed[i] = struct {
 			IngredientID string
 			Actual       decimal.Decimal
@@ -211,7 +217,10 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 			}
 			if len(ids) > 0 {
 				var ings []models.Ingredient
-				if err := tx.Select("id, price_per_unit").Where("id IN ?", ids).Find(&ings).Error; err != nil {
+				// Н3: tenant-фильтр — закон (CLAUDE.md). id из своих строк, но
+				// добавляем restaurant_id явно, чтобы запрос не читал чужие цены.
+				if err := tx.Select("id, price_per_unit").
+					Where("restaurant_id = ? AND id IN ?", ridStr, ids).Find(&ings).Error; err != nil {
 					return err
 				}
 				for _, i := range ings {
@@ -221,6 +230,12 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 		}
 		shortfallValue := decimal.Zero // стоимость недостачи (diff<0)
 		overageValue := decimal.Zero   // стоимость излишка (diff>0)
+		// Н4: строки акта недостачи — что именно и на сколько не хватило.
+		type shortLine struct {
+			ingID, name, unit string
+			qty, cost         decimal.Decimal
+		}
+		var shortLines []shortLine
 		for _, l := range lines {
 			if l.Diff.IsZero() {
 				continue
@@ -246,6 +261,11 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 			val := decimal.Mul(l.Diff, priceByID[ingID])
 			if decimal.IsNegative(l.Diff) {
 				shortfallValue = decimal.Add(shortfallValue, val.Neg())
+				shortLines = append(shortLines, shortLine{
+					ingID: ingID, name: ingName, unit: unit,
+					qty:  decimal.Normalize(l.Diff.Neg()),
+					cost: decimal.Normalize(val.Neg()),
+				})
 			} else {
 				overageValue = decimal.Add(overageValue, val)
 			}
@@ -255,13 +275,26 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 		// расхождения нигде не фиксировалась — убыток тихо испарялся, виден был
 		// только как падение оценки склада между снимками.
 		if decimal.IsPositive(shortfallValue) {
+			woID := uuid.NewString()
 			reason := "inventory_shortage"
 			note := "Недостача по инвентаризации " + checkID
 			if err := tx.Create(&models.StockWriteoff{
-				ID: uuid.NewString(), Reason: &reason, Description: &note,
+				ID: woID, Reason: &reason, Description: &note,
 				TotalCost: decimal.Normalize(shortfallValue), RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
 			}).Error; err != nil {
 				return err
+			}
+			// Н4: детализация — раньше акт был «пустой» (только сумма), в списке
+			// списаний нельзя было понять, чего не хватило.
+			for _, sl := range shortLines {
+				ingID, name, unit := sl.ingID, sl.name, sl.unit
+				if err := tx.Create(&models.StockWriteoffLine{
+					ID: uuid.NewString(), WriteoffID: &woID,
+					IngredientID: &ingID, Name: &name, Qty: sl.qty,
+					Unit: &unit, Cost: sl.cost, UpdatedAt: now,
+				}).Error; err != nil {
+					return err
+				}
 			}
 		}
 		if decimal.IsPositive(overageValue) {

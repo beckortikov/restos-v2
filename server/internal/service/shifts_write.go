@@ -418,9 +418,6 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 		// внесения/изъятия без категории). ОПиУ и ДДС читают ТОЛЬКО
 		// financial_operations, поэтому без этой записи расход был виден
 		// лишь в самой смене (Сводка/X-Z) и пропадал из P&L и cashflow.
-		// account_id — best-effort (для трассировки); баланс счёта НЕ трогаем:
-		// opening_balance смены никогда не постился на счёт, поэтому списание
-		// с баланса создало бы ложное «недостаточно средств» на свежих сменах.
 		if typ == "cash_out" && category != nil {
 			var accountName *string
 			if shift.AccountID != nil && *shift.AccountID != "" {
@@ -453,6 +450,25 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 			}
 			if err := tx.Create(fo).Error; err != nil {
 				return err
+			}
+			// Н13: дебетуем счёт смены на сумму расхода. Раньше баланс НЕ трогали
+			// — но выручка счёт кредитует полностью при закрытии заказа, а
+			// кассовые расходы его не уменьшали → «Денежные средства» в Балансе
+			// систематически завышались на сумму всех расходов из кассы за всю
+			// историю. Деньги ушли — счёт обязан это отразить.
+			// Гард «недостаточно средств» НЕ применяем: opening_balance смены на
+			// счёт не постится, поэтому свежая смена может списать из физического
+			// флоата больше, чем на балансе счёта — относительное движение всё
+			// равно верное, а ложный отказ заблокировал бы реальную закупку.
+			if shift.AccountID != nil && *shift.AccountID != "" {
+				if err := tx.Model(&models.FinancialAccount{}).
+					Where("restaurant_id = ? AND id = ?", rid, *shift.AccountID).
+					Updates(map[string]any{
+						"balance":    gorm.Expr("balance - ?", amt),
+						"updated_at": now,
+					}).Error; err != nil {
+					return err
+				}
 			}
 		}
 		return nil

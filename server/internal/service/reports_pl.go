@@ -178,24 +178,22 @@ func (s *ReportsService) computePnL(ctx context.Context, f PeriodFilter) (*PnL, 
 		byDay[r.Day] = d
 	}
 
-	// 4. Supply expenses: JOIN с ingredients для получения price_per_unit.
-	// Используем Raw (не ForTenant) — у нас два tenant-fields (se и i),
-	// и ForTenant добавил бы неквалифицированный WHERE restaurant_id, что
-	// привело бы к ambiguous column. Tenant-фильтрация — явно по se.
+	// 4. Supply expenses: читаем зафиксированную стоимость se.cost (Н8).
+	// Раньше был JOIN на ingredients по текущей price_per_unit — история
+	// дорожала при подорожании и обнулялась при удалении ингредиента
+	// (LEFT JOIN → NULL). Теперь стоимость заморожена в момент выдачи.
 	type seRow struct {
 		Day  string          `gorm:"column:day"`
 		Cost decimal.Decimal `gorm:"column:cost"`
 	}
-	rawQ := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
-	q4 := rawQ.Table("supply_expenses AS se").
-		Select("to_char(se.created_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(se.qty * i.price_per_unit), 0) AS cost").
-		Joins("LEFT JOIN ingredients i ON i.id::text = se.ingredient_id::text").
-		Where("se.restaurant_id = ?", rid)
+	scopedSE, _ := s.r.ForTenant(ctx)
+	q4 := scopedSE.Table("supply_expenses").
+		Select("to_char(created_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(cost), 0) AS cost")
 	if f.From != nil {
-		q4 = q4.Where("se.created_at >= ?", *f.From)
+		q4 = q4.Where("created_at >= ?", *f.From)
 	}
 	if f.To != nil {
-		q4 = q4.Where("se.created_at < ?", *f.To)
+		q4 = q4.Where("created_at < ?", *f.To)
 	}
 	q4 = q4.Group("day")
 	var seRows []seRow

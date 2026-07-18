@@ -96,7 +96,7 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL").
 		Where("oi.menu_item_id IS NOT NULL")
 	if f.From != nil {
@@ -274,7 +274,7 @@ func (s *AnalyticsService) PeakHours(ctx context.Context, f PeriodFilter) (*Peak
 		        EXTRACT(HOUR FROM closed_at)::int AS hour,
 		        COUNT(*) AS orders,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("closed_at >= ?", *f.From)
 	}
@@ -357,7 +357,7 @@ func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*Waiter
 		        COALESCE(SUM(o.tip_amount), 0) AS tip_amount,
 		        COALESCE(AVG(EXTRACT(EPOCH FROM (o.closed_at - o.created_at))), 0) AS avg_dur_sec`).
 		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed")
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("o.closed_at >= ?", *f.From)
 	}
@@ -378,7 +378,7 @@ func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*Waiter
 	qi := scoped2.Table("orders AS o").
 		Select("o.waiter_id AS waiter_id, COALESCE(SUM(oi.qty), 0) AS qty").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL")
 	if f.From != nil {
 		qi = qi.Where("o.closed_at >= ?", *f.From)
@@ -408,7 +408,7 @@ func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*Waiter
 	qb := scoped3.Table("orders").
 		Select(`waiter_id, to_char(closed_at, 'YYYY-MM-DD') AS day,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		qb = qb.Where("closed_at >= ?", *f.From)
 	}
@@ -537,7 +537,7 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 		        COALESCE(SUM(o.guests_count), 0) AS guests_total`).
 		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
 		Joins("LEFT JOIN zones z ON z.id::text = t.zone_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed")
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("o.closed_at >= ?", *f.From)
 	}
@@ -705,7 +705,7 @@ func (s *AnalyticsService) FoodCost(ctx context.Context, f PeriodFilter) (*FoodC
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL").
 		Where("oi.menu_item_id IS NOT NULL")
 	if f.From != nil {

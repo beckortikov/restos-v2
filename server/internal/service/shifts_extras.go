@@ -153,11 +153,24 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 		if shift.Status == nil || *shift.Status != "open" {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
+		// Грузим операцию — нужно знать, дебетовала ли она счёт (Н13).
+		var op models.CashShiftOperation
+		if err := tx.Where("id = ? AND shift_id = ?", opID, shiftID).First(&op).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
 		// Реверс связанной financial_operation (если это был расход с
 		// категорией — см. AddOperation), иначе удалённый расход остался бы
 		// висеть в ОПиУ/ДДС.
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
+			return err
+		}
+		// Н13: вернуть деньги на счёт, если операция его дебетовала (cash_out с
+		// реальной категорией). Авто-зеркала счёт не дебетовали — их исключаем.
+		if err := reverseShiftAccountDebit(tx, rid, &shift, &op); err != nil {
 			return err
 		}
 		res := tx.Where("id = ? AND shift_id = ?", opID, shiftID).
@@ -170,6 +183,25 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 		}
 		return nil
 	})
+}
+
+// reverseShiftAccountDebit возвращает деньги на счёт смены при удалении
+// cash_out-операции, которая ранее дебетовала счёт (Н13). No-op для операций
+// без категории (счёт не трогали) и для авто-зеркал (счёт дебетовался в другом
+// месте — зарплата/возврат/ручной расход, — их удаление вообще запрещено).
+func reverseShiftAccountDebit(tx *gorm.DB, rid string, shift *models.CashShift, op *models.CashShiftOperation) error {
+	if op.Type == nil || *op.Type != "cash_out" || op.Category == nil || *op.Category == autoMirrorCategory {
+		return nil
+	}
+	if shift.AccountID == nil || *shift.AccountID == "" {
+		return nil
+	}
+	return tx.Model(&models.FinancialAccount{}).
+		Where("restaurant_id = ? AND id = ?", rid, *shift.AccountID).
+		Updates(map[string]any{
+			"balance":    gorm.Expr("balance + ?", op.Amount),
+			"updated_at": time.Now().UTC(),
+		}).Error
 }
 
 // DeleteOperation — DELETE /api/v1/cash-shift-operations/{id}.
@@ -211,6 +243,11 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		// Реверс связанной financial_operation (см. DeleteExpense).
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
+			return err
+		}
+		// Н13: вернуть деньги на счёт (см. reverseShiftAccountDebit). Авто-зеркала
+		// сюда не доходят — их удаление отбито выше (#28).
+		if err := reverseShiftAccountDebit(tx, rid, &shift, &op); err != nil {
 			return err
 		}
 		res := tx.Where("id = ?", opID).Delete(&models.CashShiftOperation{})

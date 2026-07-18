@@ -264,12 +264,17 @@ type SupplyExpense struct {
 	IngredientName *string         `gorm:"column:ingredient_name" json:"ingredient_name"`
 	Qty            decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"qty"`
 	Unit           *string         `json:"unit"`
-	Reason         *string         `json:"reason"`
-	IssuedTo       *string         `gorm:"column:issued_to" json:"issued_to"`
-	Note           *string         `json:"note"`
-	CreatedBy      *string         `gorm:"column:created_by" json:"created_by"`
-	RestaurantID   *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt      time.Time       `json:"created_at"`
+	// Cost — стоимость выдачи, зафиксированная НА МОМЕНТ (qty_склада × цена
+	// ингредиента тогда). ОПиУ читает это поле, а не JOIN на текущую цену (Н8):
+	// иначе история хозрасхода дорожает при подорожании и обнуляется при
+	// удалении ингредиента (LEFT JOIN → NULL).
+	Cost         decimal.Decimal `gorm:"column:cost;type:numeric(14,4);default:0" json:"cost"`
+	Reason       *string         `json:"reason"`
+	IssuedTo     *string         `gorm:"column:issued_to" json:"issued_to"`
+	Note         *string         `json:"note"`
+	CreatedBy    *string         `gorm:"column:created_by" json:"created_by"`
+	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 func (SupplyExpense) TableName() string { return "supply_expenses" }

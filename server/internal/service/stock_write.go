@@ -139,6 +139,18 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 		totalAmount = decimal.Add(totalAmount, line)
 	}
 	totalAmount = decimal.Normalize(totalAmount)
+	// Н14: строки без ingredient_id — «услуги/доставка» (форма: «без учёта на
+	// складе»). Деньги уходят, но склад не пополняют. Их стоимость — НЕ
+	// stock_purchase (иначе она выпадает из ОПиУ: не COGS и не opex), а
+	// операционный расход. Считаем эту часть отдельно, чтобы ниже развести
+	// оплату на товарную часть (stock_purchase) и услуги (расход).
+	serviceTotal := decimal.Zero
+	for _, pl := range parsedLines {
+		if pl.in.IngredientID == "" {
+			serviceTotal = decimal.Add(serviceTotal, pl.line)
+		}
+	}
+	serviceTotal = decimal.Normalize(serviceTotal)
 	debt := decimal.Normalize(decimal.Sub(totalAmount, paid))
 	if in.PaymentType == "paid" {
 		paid = totalAmount
@@ -319,37 +331,86 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			if err := tx.Model(acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
 				return err
 			}
+			// Н14: делим оплату на товарную часть (stock_purchase, станет COGS при
+			// продаже) и услуги/доставку (операционный расход, виден в ОПиУ сразу).
+			// Пропорционально, т.к. paid может быть меньше total (частичная оплата);
+			// при полной оплате servicePaid == serviceTotal. Баланс уже списан на
+			// весь paid — ниже только две записи-проводки на его части.
+			servicePaid := decimal.Zero
+			if decimal.IsPositive(serviceTotal) && decimal.IsPositive(totalAmount) {
+				servicePaid = decimal.Normalize(decimal.DivRound(decimal.Mul(paid, serviceTotal), totalAmount))
+				if servicePaid.GreaterThan(paid) {
+					servicePaid = paid
+				}
+			}
+			goodsPaid := decimal.Normalize(decimal.Sub(paid, servicePaid))
+
 			opType := "out"
-			opCat := "stock_purchase"
 			opActivity := "operational"
 			opDate := date
-			opSrc := "receipt:" + receiptID
 			isAuto := true
+			accID := *in.AccountID
+			ridStr := rid
 			desc := "Приёмка"
 			if in.SupplierName != nil && *in.SupplierName != "" {
 				desc = "Приёмка от " + *in.SupplierName
 			}
-			accID := *in.AccountID
-			ridStr := rid
-			finOp := &models.FinancialOperation{
-				ID:           uuid.NewString(),
-				Type:         &opType,
-				Amount:       paid,
-				Category:     &opCat,
-				AccountID:    &accID,
-				AccountName:  acc.Name,
-				Activity:     &opActivity,
-				Date:         &opDate,
-				Description:  &desc,
-				Counterparty: in.SupplierName,
-				IsAuto:       &isAuto,
-				SourceRef:    &opSrc,
-				RestaurantID: &ridStr,
-				CreatedAt:    now,
-				UpdatedAt:    now,
+			// Товарная часть → stock_purchase. Создаём, если есть товарная оплата
+			// ЛИБО вся накладная товарная (serviceTotal==0) — чтобы нулевые
+			// (полностью в долг) товарные приёмки поведения не меняли.
+			if decimal.IsPositive(goodsPaid) || serviceTotal.IsZero() {
+				opCat := "stock_purchase"
+				opSrc := "receipt:" + receiptID
+				finOp := &models.FinancialOperation{
+					ID:           uuid.NewString(),
+					Type:         &opType,
+					Amount:       goodsPaid,
+					Category:     &opCat,
+					AccountID:    &accID,
+					AccountName:  acc.Name,
+					Activity:     &opActivity,
+					Date:         &opDate,
+					Description:  &desc,
+					Counterparty: in.SupplierName,
+					IsAuto:       &isAuto,
+					SourceRef:    &opSrc,
+					RestaurantID: &ridStr,
+					CreatedAt:    now,
+					UpdatedAt:    now,
+				}
+				if err := tx.Create(finOp).Error; err != nil {
+					return err
+				}
 			}
-			if err := tx.Create(finOp).Error; err != nil {
-				return err
+			// Услуги/доставка → операционный расход (отдельный source_ref, чтобы
+			// не конфликтовать с товарным по UNIQUE(restaurant_id, source_ref)).
+			if decimal.IsPositive(servicePaid) {
+				svcCat := "Услуги/доставка"
+				svcSrc := "receipt_service:" + receiptID
+				svcDesc := "Услуги/доставка по накладной"
+				if in.SupplierName != nil && *in.SupplierName != "" {
+					svcDesc = "Услуги/доставка — " + *in.SupplierName
+				}
+				svcOp := &models.FinancialOperation{
+					ID:           uuid.NewString(),
+					Type:         &opType,
+					Amount:       servicePaid,
+					Category:     &svcCat,
+					AccountID:    &accID,
+					AccountName:  acc.Name,
+					Activity:     &opActivity,
+					Date:         &opDate,
+					Description:  &svcDesc,
+					Counterparty: in.SupplierName,
+					IsAuto:       &isAuto,
+					SourceRef:    &svcSrc,
+					RestaurantID: &ridStr,
+					CreatedAt:    now,
+					UpdatedAt:    now,
+				}
+				if err := tx.Create(svcOp).Error; err != nil {
+					return err
+				}
 			}
 		}
 
@@ -407,29 +468,22 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 	actor, _ := audit.ActorFromContext(ctx)
 	now := time.Now().UTC()
 
+	// Н5: клиентский cost больше не участвует в деньгах — стоимость каждой
+	// строки считает сервер по цене сущности. Парсим только qty.
 	parsed := make([]struct {
-		in   WriteoffLine
-		qty  decimal.Decimal
-		cost decimal.Decimal
+		in  WriteoffLine
+		qty decimal.Decimal
 	}, len(in.Lines))
-	totalCost := decimal.Zero
 	for i, l := range in.Lines {
 		qty, err := decimal.FromString(l.Qty)
 		if err != nil || !decimal.IsPositive(qty) {
 			return nil, apperrors.Wrap("VALIDATION", "bad qty in line", err)
 		}
-		cost, err := decimal.FromString(l.Cost)
-		if err != nil || decimal.IsNegative(cost) {
-			return nil, apperrors.Wrap("VALIDATION", "bad cost", err)
-		}
 		parsed[i] = struct {
-			in   WriteoffLine
-			qty  decimal.Decimal
-			cost decimal.Decimal
-		}{l, qty, cost}
-		totalCost = decimal.Add(totalCost, cost)
+			in  WriteoffLine
+			qty decimal.Decimal
+		}{l, qty}
 	}
-	totalCost = decimal.Normalize(totalCost)
 
 	var created *models.StockWriteoff
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -441,7 +495,7 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 			ID:           writeoffID,
 			Reason:       &reason,
 			Description:  in.Description,
-			TotalCost:    totalCost,
+			TotalCost:    decimal.Zero, // пересчитается сервером после цикла (Н5)
 			CreatedBy:    &creator,
 			RestaurantID: &rid,
 			CreatedAt:    now,
@@ -451,13 +505,20 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 			return err
 		}
 		// #21: для semi/batch фактически снятое может быть МЕНЬШЕ запрошенного
-		// (остаток кончился). Раньше строка и стоимость писались на полный
-		// запрошенный объём → фантомные единицы в стоимостных книгах. Теперь
-		// пишем фактически снятое, а header total_cost пересчитываем.
+		// (остаток кончился) → пишем фактически снятое.
+		// Н5/Н6: стоимость и складское количество считает СЕРВЕР. Клиентский
+		// pl.cost игнорируется (как price-override позиции в заказе — политика
+		// v3.16.7), а qty ингредиента конвертируется в единицу склада ДО
+		// движения. Раньше движение писалось в единице строки: «500 г» при
+		// складе в кг денормализовало остаток как −500 кг. Стоимость строки =
+		// складское_кол-во × цена (ингредиент), qty × цена п/ф (semi), qty ×
+		// себестоимость порции (batch) — единый источник цены, а не клиент.
 		actualTotal := decimal.Zero
 		for _, pl := range parsed {
-			actualQty := pl.qty
-			actualCost := pl.cost
+			actualQty := pl.qty  // в единице документа (для строки-записи)
+			stockQty := pl.qty   // в единице склада (для движения/стоимости)
+			mvUnit := pl.in.Unit // единица движения — склада
+			var actualCost decimal.Decimal
 			switch pl.in.Kind {
 			case "semi":
 				var stock models.SemiFinishedStock
@@ -474,9 +535,8 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 						actualQty = decimal.Zero
 					}
 				}
-				if decimal.IsPositive(pl.qty) {
-					actualCost = decimal.Normalize(decimal.DivRound(decimal.Mul(pl.cost, actualQty), pl.qty))
-				}
+				stockQty = actualQty
+				actualCost = decimal.Normalize(decimal.Mul(actualQty, stock.PricePerUnit))
 			case "batch":
 				var mi models.MenuItem
 				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
@@ -493,9 +553,29 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 				if actualQty.GreaterThan(prepared) {
 					actualQty = prepared
 				}
-				if decimal.IsPositive(pl.qty) {
-					actualCost = decimal.Normalize(decimal.DivRound(decimal.Mul(pl.cost, actualQty), pl.qty))
+				stockQty = actualQty
+				actualCost = decimal.Normalize(decimal.Mul(actualQty, mi.COGS))
+			default:
+				// Ингредиент: грузим под замком (нужны единица склада + цена).
+				// Раньше здесь ингредиент вообще не загружался — движение с чужим
+				// id тихо денормализовало 0 строк, а стоимость бралась с клиента.
+				var ing models.Ingredient
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("restaurant_id = ? AND id = ?", rid, pl.in.IngredientID).First(&ing).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return apperrors.Wrap("VALIDATION", "ingredient not found: "+pl.in.IngredientID, nil)
+					}
+					return err
 				}
+				stockUnit := deref(ing.Unit)
+				// Конвертация в единицу склада — симметрично приёмке
+				// (см. CreateReceipt). Несводимые пары Convert возвращает как есть
+				// (штучный склад/строка в шт → без изменений).
+				stockQty = units.Convert(pl.qty, deref(pl.in.Unit), stockUnit)
+				if stockUnit != "" {
+					mvUnit = &stockUnit
+				}
+				actualCost = decimal.Normalize(decimal.Mul(stockQty, ing.PricePerUnit))
 			}
 			actualTotal = decimal.Add(actualTotal, actualCost)
 
@@ -527,8 +607,8 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 					return err
 				}
 			default:
-				// Ингредиент: stock_movement type='writeoff' → хук денормализует
-				// ingredients.qty (единственный корректный путь для сырья).
+				// Ингредиент: stock_movement type='writeoff' в единице склада →
+				// хук денормализует ingredients.qty (единственный корректный путь).
 				mvType := "writeoff"
 				desc := "writeoff:" + writeoffID
 				mv := &models.StockMovement{
@@ -537,8 +617,8 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 					IngredientID:   &pl.in.IngredientID,
 					IngredientName: &pl.in.Name,
 					Description:    &desc,
-					Qty:            pl.qty.Neg(),
-					Unit:           pl.in.Unit,
+					Qty:            stockQty.Neg(),
+					Unit:           mvUnit,
 					RestaurantID:   &rid,
 					CreatedAt:      now,
 				}
@@ -547,7 +627,9 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 				}
 			}
 		}
-		if !actualTotal.Equal(totalCost) {
+		// Header total — всегда пересчитанный сервером (клиентский totalCost
+		// больше не источник истины для денег).
+		if !actualTotal.Equal(w.TotalCost) {
 			if err := tx.Model(w).Update("total_cost", decimal.Normalize(actualTotal)).Error; err != nil {
 				return err
 			}
@@ -565,7 +647,7 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 			"kind":        "writeoff",
 			"writeoff_id": created.ID,
 			"lines":       len(in.Lines),
-			"total_cost":  totalCost.String(),
+			"total_cost":  created.TotalCost.String(),
 		})
 		s.pub.Flush(ctx, rid, buf)
 	}

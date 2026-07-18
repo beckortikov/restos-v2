@@ -142,6 +142,25 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 			if err := tx.Create(mv).Error; err != nil {
 				return err
 			}
+			// Н10: начальный остаток при создании ингредиента — тот же
+			// экономический смысл, что экран «Начальный остаток»: вырос актив
+			// «Склад», встречно растёт капитал (взнос собственника). Без этой
+			// проводки актив появлялся «из воздуха» и расчётный капитал в Балансе
+			// дрейфовал на стоимость остатка. Категория та же (opening_inventory),
+			// поэтому оба пути агрегируются в одну строку капитала.
+			stockValue := decimal.Normalize(decimal.Mul(initialQty, ing.PricePerUnit))
+			if decimal.IsPositive(stockValue) {
+				eqName := "Взнос собственника — начальный остаток склада"
+				eqCat := "opening_inventory"
+				eqNow := time.Now().UTC()
+				eq := &models.EquityEntry{
+					ID: uuid.NewString(), Name: &eqName, Category: &eqCat,
+					Amount: stockValue, RestaurantID: &rid, CreatedAt: eqNow, UpdatedAt: eqNow,
+				}
+				if err := tx.Create(eq).Error; err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
@@ -863,12 +882,25 @@ func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInpu
 		unit = ing.Unit
 	}
 
+	// Н7: количество для движения — в единице склада (симметрично приёмке).
+	// Раньше движение писалось в единице строки: «500 г» при складе в кг
+	// денормализовало остаток как −500 кг.
+	stockUnit := deref(ing.Unit)
+	stockQty := units.Convert(qty, deref(unit), stockUnit)
+	mvUnit := unit
+	if stockUnit != "" {
+		mvUnit = &stockUnit
+	}
+	// Н8: стоимость фиксируем сейчас = складское_кол-во × текущая цена.
+	cost := decimal.Normalize(decimal.Mul(stockQty, ing.PricePerUnit))
+
 	exp := &models.SupplyExpense{
 		ID:             uuid.NewString(),
 		IngredientID:   in.IngredientID,
 		IngredientName: &ingName,
 		Qty:            qty,
 		Unit:           unit,
+		Cost:           cost,
 		Reason:         in.Reason,
 		IssuedTo:       in.IssuedTo,
 		Note:           in.Note,
@@ -920,8 +952,8 @@ func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInpu
 			IngredientID:   in.IngredientID,
 			IngredientName: &ingName,
 			Description:    &desc,
-			Qty:            qty.Neg(),
-			Unit:           unit,
+			Qty:            stockQty.Neg(),
+			Unit:           mvUnit,
 			RestaurantID:   &rid,
 			CreatedAt:      now,
 		}

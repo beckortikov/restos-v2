@@ -181,7 +181,10 @@ func (s *InsightsService) leakInsights(ctx context.Context, f PeriodFilter) ([]I
 		COALESCE(SUM(discount_amount),0) AS discount,
 		COALESCE(SUM(refunded_total),0) AS refunds,
 		COUNT(*) FILTER (WHERE refunded_total > 0) AS refund_cnt`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		// Н15: полный возврат ставит status='refunded' (частичный оставляет
+		// 'closed'). Фильтр только 'closed' терял именно полные возвраты —
+		// самые крупные утечки. Словарь: выручка/возвраты = closed+refunded.
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	q = applyClosedPeriod(q, f)
 	if err := q.Scan(&agg).Error; err != nil {
 		return nil, err
@@ -537,7 +540,7 @@ func (s *InsightsService) basketInsights(ctx context.Context, f PeriodFilter) ([
 		Select("COALESCE(MAX(a.name),'') AS aname, COALESCE(MAX(b.name),'') AS bname, COUNT(DISTINCT a.order_id) AS cnt").
 		Joins("JOIN order_items b ON b.order_id = a.order_id AND a.menu_item_id < b.menu_item_id").
 		Joins("JOIN orders o ON o.id = a.order_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("a.cancelled_at IS NULL AND b.cancelled_at IS NULL").
 		Where("a.menu_item_id IS NOT NULL AND b.menu_item_id IS NOT NULL")
 	if f.From != nil {
@@ -588,7 +591,7 @@ func (s *InsightsService) lostSalesInsights(ctx context.Context, f PeriodFilter)
 	q := scoped.Table("order_items AS oi").
 		Select("COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END),0) AS revenue").
 		Joins("JOIN orders o ON o.id = oi.order_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL").
 		Where("oi.menu_item_id IN ?", ids)
 	if f.From != nil {

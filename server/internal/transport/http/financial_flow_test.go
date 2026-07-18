@@ -210,7 +210,7 @@ func TestFinancialFlow_Full(t *testing.T) {
 				"name":          meatName,
 				"qty":           "1",
 				"unit":          "kg",
-				"cost":          "20", // 1 kg × 20 cost
+				"cost":          "20", // клиентский cost игнорируется (Н5)
 			}},
 		}
 		r, b := f.post(t, "/api/v1/stock/writeoffs", tok, uuid.NewString(), body)
@@ -219,8 +219,11 @@ func TestFinancialFlow_Full(t *testing.T) {
 		}
 		var wo models.StockWriteoff
 		_ = json.Unmarshal(b, &wo)
-		if !wo.TotalCost.Equal(decimal.MustFromString("20")) {
-			t.Errorf("MISMATCH writeoff.total_cost = %s, want 20", wo.TotalCost.String())
+		// Н5: стоимость считает сервер по ФАКТИЧЕСКОЙ цене ингредиента. После
+		// приёмки 10kg × 25 (Flow1) средневзвешенная = 25/kg, поэтому списание
+		// 1 kg стоит 25, а не присланные клиентом «20».
+		if !wo.TotalCost.Equal(decimal.MustFromString("25")) {
+			t.Errorf("MISMATCH writeoff.total_cost = %s, want 25 (1kg × 25 факт.)", wo.TotalCost.String())
 		}
 
 		// ingredient.qty 10 - 1 = 9.
@@ -481,13 +484,13 @@ func TestFinancialFlow_Full(t *testing.T) {
 		if !pnl.COGS.Total.Equal(decimal.MustFromString("20")) {
 			t.Errorf("MISMATCH PnL cogs = %s, want 20 (4×5)", pnl.COGS.Total.String())
 		}
-		// Writeoffs = 1 kg × 20 cost = 20 (Flow2). v2.0.87: отдельной строкой.
-		if !pnl.Writeoffs.Equal(decimal.MustFromString("20")) {
-			t.Errorf("MISMATCH PnL writeoffs = %s, want 20", pnl.Writeoffs.String())
+		// Writeoffs = 1 kg × 25 факт. цена = 25 (Flow2, Н5). Отдельной строкой.
+		if !pnl.Writeoffs.Equal(decimal.MustFromString("25")) {
+			t.Errorf("MISMATCH PnL writeoffs = %s, want 25", pnl.Writeoffs.String())
 		}
-		// Gross = 275 - 20 (COGS) - 20 (writeoffs) = 235.
-		if !pnl.GrossProfit.Equal(decimal.MustFromString("235")) {
-			t.Errorf("MISMATCH PnL gross_profit = %s, want 235", pnl.GrossProfit.String())
+		// Gross = 275 - 20 (COGS) - 25 (writeoffs) = 230.
+		if !pnl.GrossProfit.Equal(decimal.MustFromString("230")) {
+			t.Errorf("MISMATCH PnL gross_profit = %s, want 230", pnl.GrossProfit.String())
 		}
 		// Opex = salary 200 + bonus 50 = 250. Закупки (stock_purchase 250) в ОПиУ
 		// НЕ входят — это движение запасов, а не расход (учитываются как COGS при
@@ -495,9 +498,9 @@ func TestFinancialFlow_Full(t *testing.T) {
 		if !pnl.Opex.Total.Equal(decimal.MustFromString("250")) {
 			t.Errorf("MISMATCH PnL opex.total = %s, want 250 (без stock_purchase)", pnl.Opex.Total.String())
 		}
-		// Net = 235 - 250 = -15.
-		if !pnl.NetProfit.Equal(decimal.MustFromString("-15")) {
-			t.Errorf("MISMATCH PnL net_profit = %s, want -15", pnl.NetProfit.String())
+		// Net = 230 - 250 = -20.
+		if !pnl.NetProfit.Equal(decimal.MustFromString("-20")) {
+			t.Errorf("MISMATCH PnL net_profit = %s, want -20", pnl.NetProfit.String())
 		}
 		// By category coverage.
 		cats := map[string]decimal.Decimal{}

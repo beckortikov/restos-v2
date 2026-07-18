@@ -118,6 +118,66 @@ func TestShiftExpense_AppearsInPnLAndCashflow(t *testing.T) {
 	}
 }
 
+// Н13: расход из смены с категорией ДЕБЕТУЕТ счёт смены, а удаление — возвращает.
+// Раньше баланс счёта не трогали, тогда как выручка кредитует счёт полностью при
+// закрытии заказа → «Денежные средства» в Балансе завышались на сумму всех
+// кассовых расходов за всю историю.
+func TestShiftExpense_DebitsAndRestoresAccount(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	accID, accName := uuid.NewString(), "Касса"
+	if err := gdb.Create(&models.FinancialAccount{
+		ID: accID, Name: &accName, Balance: decimal.MustFromString("1000"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	shiftID, openStatus, openedBy := uuid.NewString(), "open", "test"
+	now := time.Now().UTC()
+	if err := gdb.Create(&models.CashShift{
+		ID: shiftID, RestaurantID: &f.rid, AccountID: &accID, Status: &openStatus, OpenedBy: &openedBy,
+		OpeningBalance: decimal.Zero, OpenedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	balOf := func() decimal.Decimal {
+		var a models.FinancialAccount
+		gdb.Where("id = ?", accID).First(&a)
+		return decimal.Normalize(a.Balance)
+	}
+
+	// Расход 40 с категорией → счёт 1000 − 40 = 960.
+	r, b := f.post(t, "/api/v1/shifts/"+shiftID+"/expenses", tok, uuid.NewString(), map[string]any{
+		"type": "expense", "amount": "40", "category": "Закупка продуктов", "description": "нон",
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("expense: %d %s", r.StatusCode, b)
+	}
+	var op models.CashShiftOperation
+	if err := json.Unmarshal(b, &op); err != nil {
+		t.Fatal(err)
+	}
+	if got := balOf(); !got.Equal(decimal.MustFromString("960")) {
+		t.Fatalf("после кассового расхода баланс счёта = %s, want 960 (1000−40)", got)
+	}
+
+	// Удаление расхода → счёт возвращается к 1000 (реверс дебета).
+	rd, rdb := f.del(t, "/api/v1/shifts/"+shiftID+"/expenses/"+op.ID, tok, uuid.NewString())
+	if rd.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete expense: %d %s", rd.StatusCode, rdb)
+	}
+	if got := balOf(); !got.Equal(decimal.MustFromString("1000")) {
+		t.Fatalf("после удаления баланс счёта = %s, want 1000 (реверс)", got)
+	}
+}
+
 // Внесение/изъятие (cash_in / cash_out БЕЗ категории) — это движение налички
 // в кассе, а не расход бизнеса. Оно НЕ должно создавать financial_operations
 // и попадать в ОПиУ.
