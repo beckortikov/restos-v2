@@ -128,6 +128,14 @@ func (s *OrdersService) WithStationResolver(r StationResolver) *OrdersService {
 	return s
 }
 
+// isFastFood — ресторан работает без столов (041, tables_enabled=false): гость
+// забирает заказ по номеру. Включает крупный номер заказа в чеке и ранере
+// (escpos: FontBig 6×) — гость читает своё число через зал, повар собирает
+// заказ по нему. В зале с официантами номер гостю не нужен.
+func isFastFood(rest models.Restaurant) bool {
+	return rest.TablesEnabled != nil && !*rest.TablesEnabled
+}
+
 // kitchenOnPay — фастфуд-режим ресторана (restaurants.kitchen_on_pay, 041).
 // true → кухонный бегунок печатается на ОПЛАТЕ (orders_close.Close), а не при
 // создании/дозаказе (orders_write). false (дефолт) → классический table-service:
@@ -236,6 +244,7 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 
 		in := escpos.RunnerInput{
 			Station:     stationLabel(station),
+			FastFood:    isFastFood(rest),
 			OrderNumber: order.OrderNumber,
 			TableLabel:  runnerTableLabel,
 			WaiterName:  meta.WaiterName,

@@ -63,6 +63,9 @@ type ReceiptInput struct {
 	PaymentMethod  string
 	Cols           int
 	IsReprint      bool
+	// FastFood — ресторан работает без столов (restaurants.tables_enabled=false):
+	// гость забирает заказ по номеру. Включает крупный номер шапкой чека.
+	FastFood bool
 	// Content suppress-flags (миграция 015).
 	SuppressLogo     bool
 	SuppressDiscount bool
@@ -125,6 +128,18 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 		b.TextLn(hrHeavy)
 	}
 
+	// ── Фастфуд: крупный номер заказа шапкой ─────────────────────────────
+	// Гость забирает заказ по номеру, поэтому число идёт ПЕРВЫМ и самым
+	// крупным кеглем (6×) — читается через зал. В зале с официантами номер
+	// гостю не нужен, поэтому только при FastFood.
+	if in.FastFood {
+		b.TextLn("ВАШ НОМЕР")
+		b.FontBig()
+		b.TextLn(strconv.Itoa(in.OrderNumber))
+		b.FontNormal()
+		b.TextLn(hrHeavy)
+	}
+
 	// ── Document title — double size (tall, single width) ────────────────
 	b.FontTall()
 	if isPreCheck {
@@ -153,7 +168,10 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 			b.TextLn(PadRow(k, v, cols))
 		}
 	}
-	writeMeta("Чек №", orderRef)
+	if !in.FastFood {
+		// В фастфуде номер уже напечатан крупно шапкой — не дублируем.
+		writeMeta("Чек №", orderRef)
+	}
 	writeMeta("Дата", dateStr)
 	writeMeta("", in.TableLabel)
 	writeMeta("Официант", in.WaiterName)
@@ -252,6 +270,8 @@ type RunnerInput struct {
 	Items       []RunnerItem
 	Comment     string
 	Cols        int // игнорируется, runner всегда 32 cols
+	// FastFood — крупный номер заказа вместо станции шапкой (см. ReceiptInput).
+	FastFood bool
 }
 
 // RunnerItem — позиция для повара.
@@ -320,22 +340,41 @@ func fmtRunnerQty(it RunnerItem) string {
 func RunnerLayout(in RunnerInput) []byte {
 	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
-	// ── Station header — центр, bold, double-height ──────────────────────
-	b.AlignCenter().Bold(true).FontTall()
-	b.TextLn(strings.ToUpper(in.Station))
-	b.FontNormal().Bold(false)
+	timeStr := in.CreatedAt.In(displayLoc).Format("15:04")
+
+	// ── Шапка ────────────────────────────────────────────────────────────
+	// Фастфуд: номер заказа ВМЕСТО станции — повару он нужен, чтобы собрать
+	// заказ и выкрикнуть его, поэтому число идёт первым и крупнее названий
+	// блюд (6×). Станция уходит подписью. В зале с официантами наоборот:
+	// станция важнее (несколько цехов), номер — служебная строка.
+	if in.FastFood {
+		b.AlignCenter().Bold(true)
+		b.FontBig()
+		b.TextLn(strconv.Itoa(in.OrderNumber))
+		b.FontNormal()
+		b.TextLn(strings.ToUpper(in.Station) + " · " + timeStr)
+		b.Bold(false)
+	} else {
+		b.AlignCenter().Bold(true).FontTall()
+		b.TextLn(strings.ToUpper(in.Station))
+		b.FontNormal().Bold(false)
+	}
 
 	// Разделитель 32 char (v1 hard-coded).
 	b.TextLn("________________________________")
 
 	// ── Order info — left align ──────────────────────────────────────────
 	b.AlignLeft()
-	timeStr := in.CreatedAt.In(displayLoc).Format("15:04")
+	// В фастфуде время и номер уже в шапке — оставляем только официанта.
 	dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
-	if in.WaiterName != "" {
+	if in.FastFood {
+		dateLine = in.WaiterName
+	} else if in.WaiterName != "" {
 		dateLine += " " + in.WaiterName
 	}
-	b.TextLn(dateLine)
+	if dateLine != "" {
+		b.TextLn(dateLine)
+	}
 
 	// Стол + зона — bold
 	if in.TableLabel != "" {

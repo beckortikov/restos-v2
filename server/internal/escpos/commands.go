@@ -64,6 +64,13 @@ func (b *Builder) FontSize(n byte) *Builder { return b.Raw(0x1D, '!', n) }
 func (b *Builder) FontNormal() *Builder { return b.FontSize(0x00) }
 func (b *Builder) FontDouble() *Builder { return b.FontSize(0x11) }
 
+// FontBig — 6× по ширине И высоте (GS ! 0x55: биты 4..6 = 5 → 6× ширина,
+// биты 0..2 = 5 → 6× высота). Номер заказа в фастфуд-режиме: гость читает
+// своё число через зал, повар — из стопки чеков на полке.
+// Влезает 7 знаков на ленте 42 кол и 5 знаков на 32 кол — номера заказа
+// (1–3 цифры) хватает с запасом.
+func (b *Builder) FontBig() *Builder { return b.FontSize(0x55) }
+
 // FontTall — double height ONLY (single width). GS ! 0x01.
 // Используется для строк где важна высота, но ширина бумаги ограничена
 // (например, items в runner — нужно чтобы повар прочитал издалека, но

@@ -114,6 +114,7 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 
 		in := escpos.ReceiptInput{
 			RestaurantName:   rest.Name,
+			FastFood:         isFastFood(rest),
 			OrderNumber:      order.OrderNumber,
 			OpenedAt:         order.CreatedAt,
 			ClosedAt:         now,

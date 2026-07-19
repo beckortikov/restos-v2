@@ -1038,6 +1038,7 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 	// 3. Готовим input layout.
 	in := escpos.ReceiptInput{
 		RestaurantName: rest.Name,
+		FastFood:       isFastFood(rest),
 		OrderNumber:    order.OrderNumber,
 		OpenedAt:       order.CreatedAt,
 		ClosedAt:       now,

@@ -68,6 +68,45 @@ func TestGolden_Runner(t *testing.T) {
 	assertGolden(t, "runner_simple.hex", RunnerLayout(in))
 }
 
+// Фастфуд (tables_enabled=false): гость забирает заказ по номеру, поэтому
+// номер печатается крупно (6×) шапкой чека, а «Чек №» в мете не дублируется.
+func TestGolden_ReceiptFastFood(t *testing.T) {
+	in := ReceiptInput{
+		RestaurantName: "Бургер Хаус",
+		RestaurantAddr: "пр. Сомони, 12",
+		OrderNumber:    42,
+		OpenedAt:       fixedTime,
+		ClosedAt:       fixedTime.Add(4 * time.Minute),
+		CashierName:    "Нафиса",
+		FastFood:       true,
+		Items: []ReceiptItem{
+			{Name: "Бургер Классик", Qty: decimal.MustFromString("2"), Price: decimal.MustFromString("35"), LineTotal: decimal.MustFromString("70")},
+			{Name: "Картофель фри", Qty: decimal.MustFromString("1"), Price: decimal.MustFromString("18"), LineTotal: decimal.MustFromString("18")},
+		},
+		Subtotal:      decimal.MustFromString("88"),
+		Total:         decimal.MustFromString("88"),
+		PaymentMethod: "cash",
+	}
+	assertGolden(t, "receipt_fastfood.hex", ReceiptLayout(in))
+}
+
+// Фастфуд-ранер: номер заказа вместо станции шапкой (6×) — повар собирает
+// заказ по нему; станция уходит подписью, «Зак: N» в строке не дублируется.
+func TestGolden_RunnerFastFood(t *testing.T) {
+	in := RunnerInput{
+		Station:     "Кухня",
+		OrderNumber: 42,
+		WaiterName:  "Нафиса",
+		CreatedAt:   fixedTime,
+		FastFood:    true,
+		Items: []RunnerItem{
+			{Name: "Бургер Классик", Qty: 2},
+			{Name: "Картофель фри", Qty: 1},
+		},
+	}
+	assertGolden(t, "runner_fastfood.hex", RunnerLayout(in))
+}
+
 func TestGolden_CancelRunner(t *testing.T) {
 	in := CancelRunnerInput{
 		Station:     "Горячий цех",
