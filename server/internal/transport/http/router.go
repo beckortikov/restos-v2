@@ -317,6 +317,8 @@ func NewRouter(deps Deps) http.Handler {
 
 			// Admin: принтеры и очередь — read-only через эту же группу.
 			g.Get("/printers", printersH.List)
+			// Строго до /printers/{id}: очереди печати ОС для driver=system.
+			g.Get("/printers/system-queues", printersH.SystemQueues)
 			g.Get("/printers/{id}", printersH.Get)
 			g.Get("/print/jobs", printJobsH.List)
 			g.Get("/print/jobs/active-by-station", printJobsH.ActiveByStation)

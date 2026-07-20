@@ -24,10 +24,26 @@ export async function listPrinters(): Promise<DBPrinter[]> {
   return res?.data ?? []
 }
 
+// SystemQueue — очередь печати, зарегистрированная в ОС кассы. Имя очереди —
+// это и есть target принтера с driver='system'.
+export type SystemQueue = {
+  name: string
+  is_default?: boolean
+  status?: string
+}
+
+// listSystemQueues — очереди печати машины, где работает Go-бэк (касса).
+// Не путать с принтерами того устройства, где открыт браузер: при заходе
+// через LAN Web Access список всё равно приходит с кассы.
+export async function listSystemQueues(): Promise<SystemQueue[]> {
+  const res: any = await unwrap(api.GET('/api/v1/printers/system-queues'))
+  return res?.data ?? []
+}
+
 export type PrinterFormPayload = {
   name?: string
   kind?: 'receipt' | 'station'
-  driver?: 'virtual' | 'tcp' | 'usb' | 'mock'
+  driver?: 'virtual' | 'tcp' | 'usb' | 'system' | 'mock'
   target?: string
   is_default?: boolean
   enabled?: boolean

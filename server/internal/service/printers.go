@@ -14,6 +14,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/escpos"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/printer"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -55,6 +56,17 @@ type PrinterInput struct {
 	PrintService    *bool `json:"print_service,omitempty"`
 	PrintTip        *bool `json:"print_tip,omitempty"`
 	PrintQRFeedback *bool `json:"print_qr_feedback,omitempty"`
+}
+
+// SystemQueues — очереди печати, зарегистрированные в ОС кассы. Нужны, чтобы
+// в настройках driver=system кассир выбирал принтер из списка, а не вбивал
+// имя очереди руками (опечатка = принтер, который молча не печатает).
+//
+// Сознательно не tenant-scoped: это железо конкретной машины, а не данные
+// ресторана. Список всегда снимается с машины, где крутится Go-бэк, — при
+// заходе через LAN Web Access с ноутбука это по-прежнему принтеры кассы.
+func (s *PrintersService) SystemQueues(ctx context.Context) ([]printer.SystemQueue, error) {
+	return printer.ListSystemQueues(ctx)
 }
 
 // List — все принтеры ресторана.
@@ -108,7 +120,7 @@ func (s *PrintersService) Create(ctx context.Context, in PrinterInput) (*models.
 		return nil, apperrors.Wrap("VALIDATION", "station is required for kind=station", nil)
 	}
 	if in.Driver == nil || !validDriver(*in.Driver) {
-		return nil, apperrors.Wrap("VALIDATION", "driver must be tcp|usb|virtual|mock", nil)
+		return nil, apperrors.Wrap("VALIDATION", "driver must be tcp|usb|system|virtual|mock", nil)
 	}
 
 	now := time.Now().UTC()
@@ -131,6 +143,9 @@ func (s *PrintersService) Create(ctx context.Context, in PrinterInput) (*models.
 	}
 	if in.Target != nil {
 		p.Target = normalizePrinterTarget(p.Driver, *in.Target)
+	}
+	if err := validateSystemTarget(p.Driver, p.Target); err != nil {
+		return nil, err
 	}
 	if in.Cols != nil {
 		p.Cols = *in.Cols
@@ -218,8 +233,21 @@ func (s *PrintersService) Patch(ctx context.Context, id string, in PrinterInput)
 		updates["driver"] = *in.Driver
 		driverForTarget = *in.Driver
 	}
+	effectiveTarget := existing.Target
 	if in.Target != nil {
-		updates["target"] = normalizePrinterTarget(driverForTarget, *in.Target)
+		effectiveTarget = normalizePrinterTarget(driverForTarget, *in.Target)
+		updates["target"] = effectiveTarget
+	}
+	// Ловит и «создали system без очереди», и «переключили tcp→system, а
+	// target остался старым host:port» — во втором случае target непустой,
+	// но очередью с таким именем он не станет, поэтому проверяем на смене
+	// драйвера отдельно ниже.
+	if err := validateSystemTarget(driverForTarget, effectiveTarget); err != nil {
+		return nil, err
+	}
+	if in.Driver != nil && *in.Driver != existing.Driver && *in.Driver == "system" && in.Target == nil {
+		return nil, apperrors.Wrap("VALIDATION",
+			"при переключении на driver=system нужно указать target (имя очереди печати)", nil)
 	}
 	if in.Cols != nil {
 		updates["cols"] = *in.Cols
@@ -304,10 +332,23 @@ func (s *PrintersService) Delete(ctx context.Context, id string) error {
 
 func validDriver(d string) bool {
 	switch d {
-	case "tcp", "usb", "virtual", "mock":
+	case "tcp", "usb", "system", "virtual", "mock":
 		return true
 	}
 	return false
+}
+
+// validateSystemTarget — для driver=system target обязателен: это имя очереди
+// печати в ОС. Пустое имя даёт принтер, который молча не печатает (job уходит
+// в failed на резолве драйвера), поэтому ловим на входе.
+//
+// Для tcp такой проверки сознательно нет: исторически принтер можно создать
+// без адреса и дозаполнить его позже, ломать этот сценарий не хочется.
+func validateSystemTarget(driver, target string) error {
+	if driver == "system" && strings.TrimSpace(target) == "" {
+		return apperrors.Wrap("VALIDATION", "target (имя очереди печати) is required for driver=system", nil)
+	}
+	return nil
 }
 
 // mapPGConflict — превращает Postgres-unique-violation в наш CONFLICT.

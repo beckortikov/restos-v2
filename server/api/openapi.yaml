@@ -1568,6 +1568,16 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses: { "204": { description: No content } }
 
+  /api/v1/printers/system-queues:
+    get:
+      tags: [printers]
+      summary: Очереди печати ОС (для driver=system)
+      description: >
+        Список очередей печати, зарегистрированных в ОС той машины, где работает
+        Go-бэк (касса). Используется в настройках, чтобы выбрать встроенный
+        USB-принтер моноблока из списка, а не вбивать имя очереди руками.
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SystemPrintQueuesList" } } } } }
+
   /api/v1/printers/{id}/test:
     post:
       tags: [printers]
@@ -3750,7 +3760,7 @@ components:
         name: { type: string }
         kind: { type: string, enum: [receipt, station] }
         station: { type: string }
-        driver: { type: string, enum: [tcp, usb, virtual, mock] }
+        driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
         target: { type: string }
         cols: { type: integer, description: "32=58mm, 42-48=80mm" }
         is_default: { type: boolean }
@@ -3766,8 +3776,8 @@ components:
         name: { type: string }
         kind: { type: string, enum: [receipt, station] }
         station: { type: string }
-        driver: { type: string, enum: [tcp, usb, virtual, mock] }
-        target: { type: string, description: "host[:port] — для tcp; :9100 добавляется автоматически если не указан" }
+        driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
+        target: { type: string, description: "tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues" }
         cols: { type: integer }
         is_default: { type: boolean }
         enabled: { type: boolean }
@@ -3777,6 +3787,13 @@ components:
         print_tip: { type: boolean }
         print_qr_feedback: { type: boolean }
     PrintersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Printer" } } } }
+    SystemPrintQueue:
+      type: object
+      properties:
+        name: { type: string, description: "Имя очереди в ОС — оно же target принтера с driver=system" }
+        is_default: { type: boolean, description: "Принтер по умолчанию в ОС" }
+        status: { type: string, description: "idle/printing/offline — если ОС отдаёт состояние (CUPS); на Windows пусто" }
+    SystemPrintQueuesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SystemPrintQueue" } } } }
     PrintJob:
       type: object
       properties:

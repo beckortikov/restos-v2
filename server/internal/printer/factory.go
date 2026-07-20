@@ -10,6 +10,7 @@ import (
 // FromRow строит Printer-driver из БД-записи `printers`.
 //
 //	tcp     → NewTCP(target)
+//	system  → NewSystem(target) где target — имя очереди печати ОС
 //	virtual → NewVirtual(target) (target — путь к директории)
 //	mock    → NewMock()  (target игнорируется; для тестов)
 //	usb     → NewUSB(vid, pid)  где target="04b8:0202"
@@ -22,6 +23,11 @@ func FromRow(p *models.Printer) (Printer, error) {
 			return nil, fmt.Errorf("printer %s: tcp target is empty", p.ID)
 		}
 		return NewTCP(p.Target), nil
+	case "system":
+		if strings.TrimSpace(p.Target) == "" {
+			return nil, fmt.Errorf("printer %s: system queue name is empty", p.ID)
+		}
+		return NewSystem(p.Target), nil
 	case "virtual":
 		dir := p.Target
 		if dir == "" {

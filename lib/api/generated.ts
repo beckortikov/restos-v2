@@ -4247,6 +4247,45 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/printers/system-queues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Очереди печати ОС (для driver=system)
+         * @description Список очередей печати, зарегистрированных в ОС той машины, где работает Go-бэк (касса). Используется в настройках, чтобы выбрать встроенный USB-принтер моноблока из списка, а не вбивать имя очереди руками.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SystemPrintQueuesList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/printers/{id}/test": {
         parameters: {
             query?: never;
@@ -11084,7 +11123,7 @@ export interface components {
             kind?: "receipt" | "station";
             station?: string;
             /** @enum {string} */
-            driver?: "tcp" | "usb" | "virtual" | "mock";
+            driver?: "tcp" | "usb" | "system" | "virtual" | "mock";
             target?: string;
             /** @description 32=58mm, 42-48=80mm */
             cols?: number;
@@ -11102,8 +11141,8 @@ export interface components {
             kind?: "receipt" | "station";
             station?: string;
             /** @enum {string} */
-            driver?: "tcp" | "usb" | "virtual" | "mock";
-            /** @description host[:port] — для tcp; :9100 добавляется автоматически если не указан */
+            driver?: "tcp" | "usb" | "system" | "virtual" | "mock";
+            /** @description tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues */
             target?: string;
             cols?: number;
             is_default?: boolean;
@@ -11116,6 +11155,17 @@ export interface components {
         };
         PrintersList: {
             data?: components["schemas"]["Printer"][];
+        };
+        SystemPrintQueue: {
+            /** @description Имя очереди в ОС — оно же target принтера с driver=system */
+            name?: string;
+            /** @description Принтер по умолчанию в ОС */
+            is_default?: boolean;
+            /** @description idle/printing/offline — если ОС отдаёт состояние (CUPS); на Windows пусто */
+            status?: string;
+        };
+        SystemPrintQueuesList: {
+            data?: components["schemas"]["SystemPrintQueue"][];
         };
         PrintJob: {
             /** Format: uuid */

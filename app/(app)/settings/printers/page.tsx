@@ -12,7 +12,9 @@ import {
   updatePrinter,
   deletePrinter,
   testPrinter,
+  listSystemQueues,
   type PrinterFormPayload,
+  type SystemQueue,
 } from '@/lib/queries/printers'
 import { ALL_STATIONS, STATION_LABELS, type MenuStation } from '@/lib/types'
 import { Button } from '@/components/ui/button'
@@ -57,8 +59,15 @@ type DBPrinter = {
   print_qr_feedback?: boolean
 }
 
-type DriverKind = 'tcp' | 'virtual'
+// system — печать через очередь ОС кассы (встроенный USB-принтер моноблока).
+type DriverKind = 'tcp' | 'system' | 'virtual'
 type PrinterKind = 'receipt' | 'station'
+
+const DRIVER_LABELS: Record<DriverKind, string> = {
+  tcp: 'Сетевой',
+  system: 'USB',
+  virtual: 'Virtual',
+}
 
 interface FormState {
   name: string
@@ -66,6 +75,8 @@ interface FormState {
   kind: PrinterKind
   host: string
   port: string
+  // Имя очереди печати ОС — target для driver=system.
+  queue: string
   station: MenuStation | ''
   enabled: boolean
   is_default: boolean
@@ -83,6 +94,7 @@ const DEFAULT_FORM: FormState = {
   kind: 'receipt',
   host: '',
   port: '',
+  queue: '',
   station: '',
   enabled: true,
   is_default: false,
@@ -123,11 +135,25 @@ function joinTarget(host: string, port: string): string {
   return `${h}:${p}`
 }
 
+// Драйверы, которые умеет редактировать эта форма. Незнакомый драйвер (usb по
+// vid:pid, mock) в форму не подставляем — см. isEditableDriver ниже.
+const EDITABLE_DRIVERS: DriverKind[] = ['tcp', 'system', 'virtual']
+
+function isEditableDriver(d: string): d is DriverKind {
+  return (EDITABLE_DRIVERS as string[]).includes(d)
+}
+
 function fromPrinter(p: DBPrinter): FormState {
   const { host, port } = p.driver === 'tcp' ? splitTarget(p.target) : { host: '', port: '' }
   return {
     name: p.name,
-    driver: (p.driver === 'tcp' || p.driver === 'virtual' ? p.driver : 'tcp') as DriverKind,
+    // Раньше здесь незнакомый драйвер молча приводился к 'tcp': открыть
+    // такой принтер просто чтобы переименовать → сохранение перезаписывало
+    // driver на tcp с пустым адресом, и принтер тихо переставал печатать.
+    // Теперь драйвер проходит насквозь, а переключатель для нередактируемых
+    // драйверов заменяется на бейдж — затереть его случайно нельзя.
+    driver: p.driver as DriverKind,
+    queue: p.driver === 'system' ? p.target : '',
     kind: (p.kind === 'station' ? 'station' : 'receipt') as PrinterKind,
     host,
     port,
@@ -143,12 +169,29 @@ function fromPrinter(p: DBPrinter): FormState {
   }
 }
 
+// targetFor — target зависит от драйвера: host:port для сетевого, имя очереди
+// ОС для system, пусто для virtual. Для незнакомых драйверов (usb/mock) target
+// не трогаем вообще — вернём undefined, и PATCH оставит значение как есть.
+function targetFor(form: FormState): string | undefined {
+  switch (form.driver) {
+    case 'tcp':
+      return joinTarget(form.host, form.port)
+    case 'system':
+      return form.queue.trim()
+    case 'virtual':
+      return ''
+    default:
+      return undefined
+  }
+}
+
 function toPayload(form: FormState, editing: boolean): PrinterFormPayload {
+  const target = targetFor(form)
   const payload: PrinterFormPayload = {
     name: form.name.trim(),
     driver: form.driver,
     kind: form.kind,
-    target: form.driver === 'virtual' ? '' : joinTarget(form.host, form.port),
+    ...(target === undefined ? {} : { target }),
     enabled: form.enabled,
     is_default: form.kind === 'receipt' ? form.is_default : false,
     cols: form.cols,
@@ -178,6 +221,9 @@ export default function PrinterSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DBPrinter | null>(null)
+  const [sysQueues, setSysQueues] = useState<SystemQueue[]>([])
+  const [queuesLoading, setQueuesLoading] = useState(false)
+  const [queuesError, setQueuesError] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     try {
@@ -192,6 +238,26 @@ export default function PrinterSettingsPage() {
 
   useEffect(() => { reload() }, [reload])
 
+  // Очереди печати ОС тянем лениво — только когда кассир реально выбрал
+  // USB-драйвер. На кассе с десятком установленных принтеров EnumPrinters
+  // не бесплатен, а на большинстве экранов список не нужен вовсе.
+  const loadQueues = useCallback(async () => {
+    setQueuesLoading(true)
+    setQueuesError(null)
+    try {
+      setSysQueues(await listSystemQueues())
+    } catch (e) {
+      setQueuesError(humanizeError(e, 'Не удалось получить список принтеров ОС'))
+    } finally {
+      setQueuesLoading(false)
+    }
+  }, [])
+
+  const selectDriver = useCallback((d: DriverKind) => {
+    setForm(f => ({ ...f, driver: d }))
+    if (d === 'system') loadQueues()
+  }, [loadQueues])
+
   const openCreate = () => {
     setEditing(null)
     setForm(DEFAULT_FORM)
@@ -202,6 +268,7 @@ export default function PrinterSettingsPage() {
     setEditing(p)
     setForm(fromPrinter(p))
     setDialogOpen(true)
+    if (p.driver === 'system') loadQueues()
   }
 
   const handleSave = async () => {
@@ -211,6 +278,10 @@ export default function PrinterSettingsPage() {
     }
     if (form.driver === 'tcp' && !form.host.trim()) {
       toast.error('Укажите IP или хост принтера')
+      return
+    }
+    if (form.driver === 'system' && !form.queue.trim()) {
+      toast.error('Выберите принтер из списка очередей ОС')
       return
     }
     if (form.kind === 'station' && !form.station) {
@@ -352,7 +423,7 @@ export default function PrinterSettingsPage() {
                       {p.kind === 'receipt' ? 'Чек' : 'Станция'}
                     </span>
                     <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
-                      {p.driver}
+                      {isEditableDriver(p.driver) ? DRIVER_LABELS[p.driver] : p.driver}
                     </span>
                     {colsLabel(p.cols) && (
                       <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
@@ -421,9 +492,10 @@ export default function PrinterSettingsPage() {
         </p>
         <ol className="space-y-1 list-decimal list-inside">
           <li>Кассир закрывает заказ или печатает пре-чек → бэкенд создаёт job в очереди печати.</li>
-          <li>Worker отправляет ESC/POS на драйвер (TCP) или пишет файл (virtual).</li>
+          <li>Worker отправляет ESC/POS по сети, в очередь печати ОС или пишет файл (virtual).</li>
           <li>На ошибки — повтор по backoff, после 5 попыток job переходит в «failed».</li>
           <li>Порт не указан — backend сам подставит :9100 (стандартный ESC/POS).</li>
+          <li>USB-принтер моноблока подключается через очередь печати Windows, отдельный драйвер не нужен.</li>
         </ol>
       </div>
 
@@ -433,7 +505,8 @@ export default function PrinterSettingsPage() {
           <DialogHeader>
             <DialogTitle>{editing ? 'Редактировать принтер' : 'Добавить принтер'}</DialogTitle>
             <DialogDescription>
-              TCP — сетевой термопринтер. Virtual — пишет в файл (для тестов без железа).
+              Сетевой — принтер с IP (Wi-Fi или Ethernet). USB — принтер, встроенный
+              в кассу или воткнутый в неё кабелем. Virtual — пишет в файл, для тестов без железа.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">
@@ -468,21 +541,30 @@ export default function PrinterSettingsPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label>Драйвер</Label>
-                <div className="flex rounded-lg border border-border bg-card overflow-hidden">
-                  {(['tcp', 'virtual'] as DriverKind[]).map(d => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setForm(f => ({ ...f, driver: d }))}
-                      className={`flex-1 px-2.5 py-1.5 text-xs font-medium ${
-                        form.driver === d ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                      }`}
-                    >
-                      {d === 'tcp' ? 'TCP' : 'Virtual'}
-                    </button>
-                  ))}
-                </div>
+                <Label>Подключение</Label>
+                {isEditableDriver(form.driver) ? (
+                  <div className="flex rounded-lg border border-border bg-card overflow-hidden">
+                    {EDITABLE_DRIVERS.map(d => (
+                      <button
+                        key={d}
+                        type="button"
+                        onClick={() => selectDriver(d)}
+                        className={`flex-1 px-2.5 py-1.5 text-xs font-medium ${
+                          form.driver === d ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                        }`}
+                      >
+                        {DRIVER_LABELS[d]}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  // Драйвер, которого нет в форме (usb по vid:pid, mock).
+                  // Показываем как есть и не даём затереть — менять такой
+                  // принтер нужно осознанно, а не побочным эффектом.
+                  <div className="px-2.5 py-1.5 rounded-lg border border-border bg-muted/50 text-xs font-mono text-muted-foreground">
+                    {form.driver}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -526,6 +608,53 @@ export default function PrinterSettingsPage() {
                 <p className="col-span-3 text-[11px] text-muted-foreground -mt-1">
                   Порт можно не указывать — backend сам подставит 9100.
                 </p>
+              </div>
+            )}
+
+            {form.driver === 'system' && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="printer-queue">Принтер в системе</Label>
+                  <button
+                    type="button"
+                    onClick={loadQueues}
+                    disabled={queuesLoading}
+                    className="text-[11px] text-primary hover:underline disabled:opacity-50"
+                  >
+                    {queuesLoading ? 'Обновляю…' : 'Обновить список'}
+                  </button>
+                </div>
+                <select
+                  id="printer-queue"
+                  value={form.queue}
+                  onChange={e => setForm(f => ({ ...f, queue: e.target.value }))}
+                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg"
+                >
+                  <option value="">
+                    {queuesLoading ? '— Загружаю принтеры —' : '— Выберите принтер —'}
+                  </option>
+                  {sysQueues.map(q => (
+                    <option key={q.name} value={q.name}>
+                      {q.name}
+                      {q.is_default ? ' (по умолчанию)' : ''}
+                      {q.status ? ` — ${q.status}` : ''}
+                    </option>
+                  ))}
+                  {/* Очередь могла исчезнуть из ОС (принтер отключили), но она
+                      прописана у принтера — показываем, чтобы её не затёрло
+                      молча при сохранении. */}
+                  {form.queue && !sysQueues.some(q => q.name === form.queue) && (
+                    <option value={form.queue}>{form.queue} — не найден в системе</option>
+                  )}
+                </select>
+                {queuesError ? (
+                  <p className="text-[11px] text-destructive">{queuesError}</p>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">
+                    Список принтеров кассы, а не того устройства, с которого открыты настройки.
+                    Подходит для принтера, встроенного в моноблок.
+                  </p>
+                )}
               </div>
             )}
 
