@@ -20,9 +20,14 @@ export default function PosV2Settings() {
   const canEditMode = canAccessRoles(['owner', 'manager'])
   const [savingMode, setSavingMode] = useState(false)
   const tablesEnabled = restaurant?.tablesEnabled ?? true
-  const kitchenOnPay = restaurant?.kitchenOnPay ?? false
+  const deliveryEnabled = restaurant?.deliveryEnabled ?? false
+  const deliveryContactsRequired = restaurant?.deliveryContactsRequired ?? true
 
-  async function saveMode(patch: { tablesEnabled?: boolean; kitchenOnPay?: boolean }) {
+  async function saveMode(patch: {
+    tablesEnabled?: boolean
+    deliveryEnabled?: boolean
+    deliveryContactsRequired?: boolean
+  }) {
     if (!restaurant || savingMode) return
     setSavingMode(true)
     try {
@@ -111,8 +116,34 @@ export default function PosV2Settings() {
                 </div>
               </div>
               {([
-                { key: 'tablesEnabled' as const, on: tablesEnabled, title: 'Столы в зале', sub: tablesEnabled ? 'Классический зал: заказ на стол' : 'Фастфуд: «Зал» без стола, по номеру' },
-                { key: 'kitchenOnPay' as const, on: kitchenOnPay, title: 'Кухня после оплаты', sub: kitchenOnPay ? 'Фастфуд: бегунок на кухню после оплаты' : 'Классика: «Отправить» → кухня сразу' },
+                {
+                  key: 'tablesEnabled' as const,
+                  on: tablesEnabled,
+                  title: 'Столы в зале',
+                  sub: tablesEnabled
+                    ? 'Классический зал: заказ на стол, оплата в конце'
+                    : 'Фастфуд: по номеру, только с оплатой вперёд',
+                },
+                {
+                  key: 'deliveryEnabled' as const,
+                  on: deliveryEnabled,
+                  title: 'Доставка',
+                  sub: deliveryEnabled
+                    ? 'Третий тип заказа рядом с «Зал» и «С собой»'
+                    : 'Только «Зал» и «С собой»',
+                },
+                // Под-настройка доставки: показываем только когда она включена,
+                // иначе тумблер висит без смысла.
+                ...(deliveryEnabled
+                  ? [{
+                      key: 'deliveryContactsRequired' as const,
+                      on: deliveryContactsRequired,
+                      title: 'Телефон и адрес',
+                      sub: deliveryContactsRequired
+                        ? 'Спросить перед оплатой, печатать курьеру'
+                        : 'Не спрашивать на кассе',
+                    }]
+                  : []),
               ]).map(row => (
                 <div key={row.key} className="flex items-center gap-3 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.7rem,1vw,0.9rem)' }}>
                   <div className="min-w-0 flex-1">

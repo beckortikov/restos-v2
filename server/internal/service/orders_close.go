@@ -57,6 +57,12 @@ type CloseOrderInput struct {
 	// «Закрыть без печати» в sidebar'е. Заказ всё равно закрывается + revenue
 	// fix'ится. Полезно когда принтер недоступен или клиенту не нужен чек.
 	SkipReceipt bool `json:"skip_receipt,omitempty"`
+
+	// Контакты доставки (052) — касса спрашивает их перед оплатой заказа с
+	// type='delivery'. Обязательны, если restaurants.delivery_contacts_required
+	// (иначе курьеру некуда ехать); настройку можно выключить.
+	DeliveryPhone   *string `json:"delivery_phone,omitempty"`
+	DeliveryAddress *string `json:"delivery_address,omitempty"`
 }
 
 // PaymentSplit — одна часть split-payment.
@@ -208,6 +214,29 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		}
 		if splitCount > 0 {
 			return apperrors.Wrap("CONFLICT", "заказ разделён на счета — оплатите по частям или отмените разделение", nil)
+		}
+
+		// #2b: контакты доставки (052). Спрашиваются кассой именно здесь, на
+		// оплате — корзина уже набрана, контакты последний шаг перед чеком.
+		// Проверяем ДО мутации заказа: без адреса курьеру некуда ехать, а
+		// «оплачено, но доставить некуда» чинится только возвратом.
+		if order.Type != nil && *order.Type == "delivery" {
+			if in.DeliveryPhone != nil {
+				p := strings.TrimSpace(*in.DeliveryPhone)
+				order.DeliveryPhone = &p
+			}
+			if in.DeliveryAddress != nil {
+				a := strings.TrimSpace(*in.DeliveryAddress)
+				order.DeliveryAddress = &a
+			}
+			if s.deliveryContactsRequired(tx, rid) {
+				if order.DeliveryPhone == nil || *order.DeliveryPhone == "" {
+					return apperrors.Wrap("VALIDATION", "укажите телефон клиента для доставки", nil)
+				}
+				if order.DeliveryAddress == nil || *order.DeliveryAddress == "" {
+					return apperrors.Wrap("VALIDATION", "укажите адрес доставки", nil)
+				}
+			}
 		}
 
 		// 3 + 4. Mutate order.

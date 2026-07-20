@@ -1375,9 +1375,14 @@ export function OrderComposer(props: OrderComposerProps) {
   // Order type selector (used in desktop right panel + mobile cart)
   function renderOrderTypeSelector(variant: 'mobile' | 'desktop') {
     if (lockDestination) return null
+    // Доставка (052) — только когда включена в настройках ресторана. Уже
+    // созданный заказ-доставку это не прячет: фильтруется лишь выбор типа.
+    const options = restaurant?.deliveryEnabled
+      ? ORDER_TYPE_OPTIONS
+      : ORDER_TYPE_OPTIONS.filter(o => o.value !== 'delivery')
     return (
       <div className={`flex gap-1 bg-muted/50 p-1 rounded-xl ${variant === 'desktop' ? '' : ''}`}>
-        {ORDER_TYPE_OPTIONS.map(opt => {
+        {options.map(opt => {
           const Icon = opt.icon
           return (
             <button key={opt.value}
@@ -1629,6 +1634,7 @@ export function OrderComposer(props: OrderComposerProps) {
   // там — редирект сюда с ?tableId=, и состав заказа открывается уже для стола.
   const renderTopBar = () => {
     const isHall = orderType === 'hall'
+    const deliveryEnabled = restaurant?.deliveryEnabled ?? false
     return (
       <div className="shrink-0 bg-card border-b border-border px-6 py-3 flex items-center gap-4">
         {/* Mode toggle */}
@@ -1660,11 +1666,26 @@ export function OrderComposer(props: OrderComposerProps) {
                 setSelectedTableId('')
               }}
               className={`px-6 py-2.5 rounded-xl text-base font-semibold transition-all ${
-                !isHall ? 'bg-primary text-primary-foreground shadow-md' : 'text-muted-foreground hover:text-foreground'
+                orderType === 'takeaway' ? 'bg-primary text-primary-foreground shadow-md' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               🥡 С СОБОЙ
             </button>
+            {/* Доставка (052) — третья кнопка, только если включена в настройках.
+                Флоу тот же, что у «С собой»: заказ без стола, без обслуживания. */}
+            {deliveryEnabled && (
+              <button
+                onClick={() => {
+                  setOrderType('delivery')
+                  setSelectedTableId('')
+                }}
+                className={`px-6 py-2.5 rounded-xl text-base font-semibold transition-all ${
+                  orderType === 'delivery' ? 'bg-primary text-primary-foreground shadow-md' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                🛵 ДОСТАВКА
+              </button>
+            )}
           </div>
         ) : null}
 

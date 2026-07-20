@@ -53,11 +53,16 @@ type Restaurant struct {
 	// Режим обслуживания (041). TablesEnabled=false → фастфуд «в зал по номеру»
 	// без столов. KitchenOnPay=true → кухонный бегунок печатается на оплате.
 	// PosV2Default=true → новый POS по умолчанию на кассах.
-	TablesEnabled *bool     `gorm:"column:tables_enabled;not null;default:true" json:"tables_enabled"`
-	KitchenOnPay  *bool     `gorm:"column:kitchen_on_pay;not null;default:false" json:"kitchen_on_pay"`
-	PosV2Default  *bool     `gorm:"column:pos_v2_default;not null;default:false" json:"pos_v2_default"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	TablesEnabled *bool `gorm:"column:tables_enabled;not null;default:true" json:"tables_enabled"`
+	KitchenOnPay  *bool `gorm:"column:kitchen_on_pay;not null;default:false" json:"kitchen_on_pay"`
+	PosV2Default  *bool `gorm:"column:pos_v2_default;not null;default:false" json:"pos_v2_default"`
+	// Доставка (052). DeliveryEnabled=false → в POS только «Зал» и «С собой».
+	// DeliveryContactsRequired=true → перед оплатой заказа-доставки касса
+	// спрашивает телефон и адрес.
+	DeliveryEnabled          *bool     `gorm:"column:delivery_enabled;not null;default:false" json:"delivery_enabled"`
+	DeliveryContactsRequired *bool     `gorm:"column:delivery_contacts_required;not null;default:true" json:"delivery_contacts_required"`
+	CreatedAt                time.Time `json:"created_at"`
+	UpdatedAt                time.Time `json:"updated_at"`
 }
 
 func (Restaurant) TableName() string { return "restaurants" }

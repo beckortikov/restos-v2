@@ -136,17 +136,43 @@ func isFastFood(rest models.Restaurant) bool {
 	return rest.TablesEnabled != nil && !*rest.TablesEnabled
 }
 
-// kitchenOnPay — фастфуд-режим ресторана (restaurants.kitchen_on_pay, 041).
-// true → кухонный бегунок печатается на ОПЛАТЕ (orders_close.Close), а не при
-// создании/дозаказе (orders_write). false (дефолт) → классический table-service:
-// кухня сразу на «Отправить», оплата потом.
+// kitchenOnPay — «оплата вперёд»: кухонный бегунок печатается на ОПЛАТЕ
+// (orders_close.Close), а не при создании/дозаказе (orders_write).
+//
+// С 052 включается ДВУМЯ способами:
+//   - tables_enabled=false — фастфуд. Режим самодостаточен: нет столов →
+//     заказ без оплаты не создаётся вовсе, чек и бегунок печатаются вместе
+//     по факту оплаты. Отдельного тумблера в настройках больше нет, чтобы
+//     нельзя было выставить противоречивую комбинацию («фастфуд, но кухня
+//     печатает до оплаты»).
+//   - kitchen_on_pay=true — старый флаг из 041. Оставлен ради существующих
+//     конфигов: ресторан со столами мог включить предоплату отдельно.
 //
 // Ошибку чтения трактуем как false — безопаснее напечатать бегунок как обычно,
 // чем молча не отправить заказ на кухню.
 func (s *OrdersService) kitchenOnPay(tx *gorm.DB, restaurantID string) bool {
 	var on bool
 	if err := tx.Model(&models.Restaurant{}).
-		Select("COALESCE(kitchen_on_pay, false)").
+		Select("COALESCE(kitchen_on_pay, false) OR NOT COALESCE(tables_enabled, true)").
+		Where("id = ?", restaurantID).
+		Scan(&on).Error; err != nil {
+		return false
+	}
+	return on
+}
+
+// deliveryContactsRequired — restaurants.delivery_contacts_required (052).
+// true (дефолт) → перед оплатой заказа-доставки касса обязана прислать телефон
+// и адрес. Ресторан, который развозит по своим каналам и контакты в кассе не
+// ведёт, выключает настройку.
+//
+// Ошибку чтения трактуем как false — не блокировать оплату на кассе из-за
+// сбоя чтения настройки. Пропущенный адрес чинится звонком, заблокированная
+// касса — нет.
+func (s *OrdersService) deliveryContactsRequired(tx *gorm.DB, restaurantID string) bool {
+	var on bool
+	if err := tx.Model(&models.Restaurant{}).
+		Select("COALESCE(delivery_contacts_required, true)").
 		Where("id = ?", restaurantID).
 		Scan(&on).Error; err != nil {
 		return false
@@ -249,6 +275,12 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			TableLabel:  runnerTableLabel,
 			WaiterName:  meta.WaiterName,
 			CreatedAt:   now,
+			// Контакты доставки (052) — только для type='delivery'. В фастфуде
+			// бегунок ставится на оплате, когда контакты уже заполнены; в
+			// table-service бегунок печатается раньше оплаты, и адреса ещё
+			// нет — тогда блок просто не печатается.
+			DeliveryPhone:   strOrEmpty(order.DeliveryPhone),
+			DeliveryAddress: strOrEmpty(order.DeliveryAddress),
 		}
 		// Группируем одинаковые весовые порции в одну строку «100г × 3».
 		// Unit берём из order_item (бэкенд всегда проставляет его из меню).

@@ -278,11 +278,21 @@ export async function updateOrderTable(orderId: string, newTableId: string): Pro
   return
 }
 
-export async function patchOrder(id: string, data: Partial<{ guestsCount: number; comment: string; customerId: string }>): Promise<void> {
+export async function patchOrder(id: string, data: Partial<{
+  guestsCount: number
+  comment: string
+  customerId: string
+  // Контакты доставки (052) — сохраняются перед открытием панели оплаты,
+  // бэкенд читает их на close и печатает на бегунке курьеру.
+  deliveryPhone: string
+  deliveryAddress: string
+}>): Promise<void> {
   const body: Record<string, unknown> = {}
   if (data.guestsCount !== undefined) body.guests_count = data.guestsCount
   if (data.comment !== undefined) body.comment = data.comment
   if (data.customerId !== undefined) body.customer_id = data.customerId
+  if (data.deliveryPhone !== undefined) body.delivery_phone = data.deliveryPhone
+  if (data.deliveryAddress !== undefined) body.delivery_address = data.deliveryAddress
   if (Object.keys(body).length === 0) return
   await unwrap(api.PATCH('/api/v1/orders/{id}', { params: { path: { id } }, body: body as any }))
 }

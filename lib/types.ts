@@ -45,12 +45,21 @@ export interface Restaurant {
   // Экранная клавиатура (iiko-style) на POS/смене/зале. Default false —
   // включается в настройках владельца для тач-терминалов без физ. клавиатуры.
   onScreenKeyboardEnabled?: boolean
-  // Режим обслуживания (041). tablesEnabled=false → фастфуд «в зал по номеру»
-  // без столов. kitchenOnPay=true → кухонный бегунок на оплате (не на «Отправить»).
+  // Режим обслуживания (041 + 052). tablesEnabled=false → фастфуд: заказ по
+  // номеру без столов, создать его без оплаты нельзя, чек и кухонный бегунок
+  // печатаются вместе по факту оплаты.
+  // kitchenOnPay — legacy-флаг из 041: то же «кухня на оплате», но для зала со
+  // столами. Отдельного тумблера в настройках больше нет (фастфуд включает
+  // поведение сам), поле оставлено ради существующих конфигов.
   // posV2Default=true → новый POS по умолчанию на кассах ресторана.
   tablesEnabled?: boolean
   kitchenOnPay?: boolean
   posV2Default?: boolean
+  // Доставка (052). deliveryEnabled=false → в POS только «Зал» и «С собой».
+  // deliveryContactsRequired=true → перед оплатой доставки касса спрашивает
+  // телефон и адрес.
+  deliveryEnabled?: boolean
+  deliveryContactsRequired?: boolean
   // Разрешает хозтоварам (is_food=false) уходить в реальный минус. Когда false —
   // createSupplyExpense блокирует выдачу если qty > остаток.
   supplyAllowNegative?: boolean
@@ -341,6 +350,10 @@ export interface Order {
   cashierId?: string
   paymentMethod?: PaymentMethod
   comment?: string
+  // Контакты доставки (052) — заполняются на оплате заказа type='delivery',
+  // печатаются на бегунке курьеру.
+  deliveryPhone?: string
+  deliveryAddress?: string
   items: OrderItem[]
   /** v2.1.2: число живых (не-cancelled) позиций. Заполняется backend slim-payload
    *  (items_count) или вычисляется из items. Используется UI чтобы скрыть

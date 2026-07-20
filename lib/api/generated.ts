@@ -2476,6 +2476,9 @@ export interface paths {
                         comment?: string;
                         /** Format: uuid */
                         customer_id?: string;
+                        /** @description Контакты доставки — касса сохраняет их перед открытием панели оплаты */
+                        delivery_phone?: string;
+                        delivery_address?: string;
                     };
                 };
             };
@@ -2645,6 +2648,13 @@ export interface paths {
                          * @description Кассир, закрывший заказ. Пишется в order.cashier_id.
                          */
                         cashier_id?: string;
+                        /**
+                         * @description Телефон клиента для заказа type='delivery'. Обязателен, если
+                         *     restaurants.delivery_contacts_required=true — иначе 400 VALIDATION.
+                         */
+                        delivery_phone?: string;
+                        /** @description Адрес доставки. Те же правила, что у delivery_phone. */
+                        delivery_address?: string;
                         /**
                          * @description Тип скидки. Применяется к order.total ДО формирования financial_operation.
                          * @enum {string}
@@ -11028,6 +11038,9 @@ export interface components {
             kitchen_started_at?: string;
             is_split?: boolean;
             split_count?: number;
+            /** @description Контакты доставки — заполняются на оплате заказа type='delivery' */
+            delivery_phone?: string;
+            delivery_address?: string;
         };
         PaymentSplit: {
             /** @enum {string} */
@@ -11351,6 +11364,10 @@ export interface components {
             tables_enabled?: boolean;
             kitchen_on_pay?: boolean;
             pos_v2_default?: boolean;
+            /** @description Показывать «Доставка» третьим типом заказа в POS */
+            delivery_enabled?: boolean;
+            /** @description Спрашивать телефон и адрес перед оплатой заказа-доставки */
+            delivery_contacts_required?: boolean;
             /** Format: date-time */
             license_expires_at?: string;
             is_blocked?: boolean;
@@ -11374,6 +11391,8 @@ export interface components {
             tables_enabled?: boolean;
             kitchen_on_pay?: boolean;
             pos_v2_default?: boolean;
+            delivery_enabled?: boolean;
+            delivery_contacts_required?: boolean;
         };
         BootstrapInput: {
             restaurant_name: string;

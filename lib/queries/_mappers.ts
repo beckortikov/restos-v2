@@ -194,6 +194,8 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     tablesEnabled: r.tables_enabled ?? true,
     kitchenOnPay: r.kitchen_on_pay ?? false,
     posV2Default: r.pos_v2_default ?? false,
+    deliveryEnabled: r.delivery_enabled ?? false,
+    deliveryContactsRequired: r.delivery_contacts_required ?? true,
     supplyAllowNegative: r.supply_allow_negative ?? true,
     localServerIp: r.local_server_ip ?? undefined,
     licenseKey: r.license_key ?? undefined,
@@ -278,6 +280,8 @@ export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[
     cashierId: r.cashier_id ?? undefined,
     paymentMethod: r.payment_method ?? undefined,
     comment: r.comment ?? undefined,
+    deliveryPhone: r.delivery_phone ?? undefined,
+    deliveryAddress: r.delivery_address ?? undefined,
     total: Number(r.total ?? 0),
     // subtotal — бэкендовый Σ price×effectivePortions (единый источник правды).
     subtotal: r.subtotal != null ? Number(r.subtotal) : undefined,

@@ -78,9 +78,12 @@ export default function SettingsPage() {
   const [pinLockTimeoutMin, setPinLockTimeoutMin] = useState(5)
   const [supplyAllowNegative, setSupplyAllowNegative] = useState(true)
   const [onScreenKeyboardEnabled, setOnScreenKeyboardEnabled] = useState(false)
-  // Режим обслуживания (041): столы в зале / кухня на оплате (фастфуд) + дефолт нового POS.
+  // Режим обслуживания (041 + 052): столы в зале (выкл = фастфуд) + доставка.
+  // Отдельного тумблера «кухня после оплаты» больше нет — фастфуд включает это
+  // поведение сам (см. lib/order-types.ts isPrepayMode и серверный kitchenOnPay).
   const [tablesEnabled, setTablesEnabled] = useState(true)
-  const [kitchenOnPay, setKitchenOnPay] = useState(false)
+  const [deliveryEnabled, setDeliveryEnabled] = useState(false)
+  const [deliveryContactsRequired, setDeliveryContactsRequired] = useState(true)
   const [posV2Default, setPosV2Default] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -107,7 +110,8 @@ export default function SettingsPage() {
           setSupplyAllowNegative(r.supplyAllowNegative ?? true)
           setOnScreenKeyboardEnabled(r.onScreenKeyboardEnabled ?? false)
           setTablesEnabled(r.tablesEnabled ?? true)
-          setKitchenOnPay(r.kitchenOnPay ?? false)
+          setDeliveryEnabled(r.deliveryEnabled ?? false)
+          setDeliveryContactsRequired(r.deliveryContactsRequired ?? true)
           setPosV2Default(r.posV2Default ?? false)
         }
       })
@@ -143,9 +147,9 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, kitchenOnPay, posV2Default })
+      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, kitchenOnPay, posV2Default }
+      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -160,7 +164,7 @@ export default function SettingsPage() {
         tags: { component: 'settings.save' },
         extra: {
           restaurantId: rest.id,
-          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, kitchenOnPay, posV2Default },
+          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default },
         },
       })
     } finally {
@@ -183,7 +187,8 @@ export default function SettingsPage() {
     setSupplyAllowNegative(rest.supplyAllowNegative ?? true)
     setOnScreenKeyboardEnabled(rest.onScreenKeyboardEnabled ?? false)
     setTablesEnabled(rest.tablesEnabled ?? true)
-    setKitchenOnPay(rest.kitchenOnPay ?? false)
+    setDeliveryEnabled(rest.deliveryEnabled ?? false)
+    setDeliveryContactsRequired(rest.deliveryContactsRequired ?? true)
     setPosV2Default(rest.posV2Default ?? false)
   }
 
@@ -368,16 +373,26 @@ export default function SettingsPage() {
           <Card title="Режим обслуживания">
             <ToggleRow
               title="🍽️ Столы в зале"
-              hint="Включено — классический зал: заказ «в зал» привязывается к столу, группы, карта зала. Выключите для фастфуда: «Зал» ведётся БЕЗ стола — заказ по номеру, как «С собой» (в отчётах «здесь» и «навынос» остаются разными)."
+              hint="Включено — классический зал: заказ «в зал» привязывается к столу, группы, карта зала, оплата в конце. Выключите для фастфуда: заказ по номеру без стола, создать его без оплаты нельзя — чек гостю и бегунок на кухню печатаются вместе по факту оплаты."
               checked={tablesEnabled}
               onChange={() => setTablesEnabled(!tablesEnabled)}
             />
             <ToggleRow
-              title="💳 Кухня после оплаты (фастфуд)"
-              hint="Включено — фастфуд: заказ уходит на кухню ТОЛЬКО после оплаты, гостю печатается чек с номером, тот же номер на кухонном бегунке. Выключено — классика: «Отправить на кухню» сразу, оплата потом."
-              checked={kitchenOnPay}
-              onChange={() => setKitchenOnPay(!kitchenOnPay)}
+              title="🛵 Доставка"
+              hint="Добавляет «Доставка» третьим типом заказа рядом с «Зал» и «С собой». Флоу тот же, что у «С собой». Выключение не прячет уже созданные заказы-доставки — только убирает выбор типа для новых."
+              checked={deliveryEnabled}
+              onChange={() => setDeliveryEnabled(!deliveryEnabled)}
             />
+            {deliveryEnabled && (
+              <div className="ml-4 pl-3 border-l-2 border-border">
+                <ToggleRow
+                  title="📞 Спрашивать телефон и адрес"
+                  hint="Перед оплатой заказа-доставки касса просит телефон и адрес клиента — они печатаются на бегунке курьеру. Выключите, если контакты ведутся вне кассы."
+                  checked={deliveryContactsRequired}
+                  onChange={() => setDeliveryContactsRequired(!deliveryContactsRequired)}
+                />
+              </div>
+            )}
           </Card>
 
           {/* Интерфейс */}

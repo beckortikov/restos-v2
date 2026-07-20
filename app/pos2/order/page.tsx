@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2, Bike,
   ChevronUp, ChevronDown,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -24,7 +24,8 @@ import { buildReceiptData } from '@/lib/receipt-data'
 import { PrintReceipt } from '@/components/print-receipt'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
-import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit } from '@/lib/types'
+import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit, OrderType } from '@/lib/types'
+import { ORDER_TYPE_LABELS, ORDER_TYPE_TITLES, availableOrderTypes, isPrepayMode, isTogo, needsDeliveryContacts } from '@/lib/order-types'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -42,6 +43,14 @@ function printerErr(e: unknown): string {
   return /printer|принтер/i.test(msg) ? 'Не настроен чековый принтер — Настройки → Принтеры' : `Не удалось: ${msg}`
 }
 
+// Иконки типов заказа. Лейблы — в lib/order-types.ts (общий словарь), иконки
+// живут здесь: lib/ не должен зависеть от lucide.
+const ORDER_TYPE_ICONS: Record<OrderType, React.ElementType> = {
+  hall: UtensilsCrossed,
+  takeaway: ShoppingBag,
+  delivery: Bike,
+}
+
 // Phase 2 + критичный блок: заказ на реальных данных. Зал/такаут, гости, стоп-лист
 // override (менеджер), весовые позиции (вес × порции). Логику не переписываем.
 export default function PosV2Order() {
@@ -52,14 +61,22 @@ export default function PosV2Order() {
   const favorites = useFavorites(restaurantId ?? '')
   const favSet = useMemo(() => new Set(favorites), [favorites])
 
-  const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
+  const [orderType, setOrderType] = useState<OrderType>('hall')
   // Фастфуд без столов (restaurants.tablesEnabled=false): «Зал» ведётся БЕЗ стола —
   // заказ по номеру, ровно как «С собой» (тип остаётся 'hall' — для отчётов
   // «здесь» vs «навынос»). numberMode = «работаем по номеру, стола нет».
-  // При tablesEnabled=true (дефолт) numberMode ≡ (orderType === 'takeaway'),
+  // При tablesEnabled=true (дефолт) numberMode ≡ (заказ не в зал),
   // т.е. классический зал со столами не меняется вообще.
   const tablesEnabled = restaurant?.tablesEnabled ?? true
-  const numberMode = orderType === 'takeaway' || !tablesEnabled
+  const numberMode = isTogo(orderType) || !tablesEnabled
+  // Типы заказа в переключателе: «Доставка» появляется третьей только если
+  // включена в настройках ресторана (052).
+  const orderTypes = useMemo(() => availableOrderTypes(restaurant), [restaurant])
+  // Фастфуд = оплата вперёд: кнопки «Создать без оплаты» нет вовсе, чек и
+  // кухонный бегунок печатаются вместе по факту оплаты. Зеркалит серверный
+  // kitchenOnPay() — если разойдётся, касса покажет кнопку, а кухня всё равно
+  // не получит бегунок до оплаты.
+  const prepayMode = isPrepayMode(restaurant)
   const [menuGrid] = useMenuGrid()
   // Высота области сетки блюд — чтобы в матричном режиме (N×M) подогнать высоту
   // рядов под экран (карточки квадратнее, а не «широкие и низкие»).
@@ -189,7 +206,7 @@ export default function PosV2Order() {
   // (tableOrders), чтобы созданный «без оплаты» заказ оставался виден в сайдбаре
   // до оплаты. Тип параметризован: «С собой» всегда, а в фастфуде (tablesEnabled
   // = false) так же работает и «Зал» — заказ без стола, идентификация по номеру.
-  const loadQueue = useCallback(async (type: 'hall' | 'takeaway', selectId?: string) => {
+  const loadQueue = useCallback(async (type: OrderType, selectId?: string) => {
     setTableLoading(true)
     try {
       const os = await fetchOrders({ type, slim: false }).catch(() => [] as Order[])
@@ -460,6 +477,48 @@ export default function PosV2Order() {
   const [paying, setPaying] = useState(false)
   const payingRef = useRef(false)
 
+  // ── Контакты доставки (052) ───────────────────────────────────
+  // Спрашиваем ПЕРЕД оплатой, а не при создании заказа: кассир сначала
+  // набирает корзину, контакты — последний шаг перед чеком. Сохраняем их
+  // patch'ем на заказ, бэкенд читает на close и печатает курьеру.
+  const [contactsFor, setContactsFor] = useState<Order | null>(null)
+  const [contactPhone, setContactPhone] = useState('')
+  const [contactAddress, setContactAddress] = useState('')
+  const [savingContacts, setSavingContacts] = useState(false)
+
+  // openPayment — единая точка входа в оплату. Для доставки с включённым
+  // запросом контактов сначала показывает модалку, иначе сразу панель оплаты.
+  // Все кнопки «К оплате» идут через неё, чтобы контакты нельзя было обойти
+  // ни из очереди, ни из карточки заказа.
+  const openPayment = useCallback((order: Order) => {
+    if (needsDeliveryContacts(restaurant, order.type) && !order.deliveryAddress) {
+      setContactPhone(order.deliveryPhone ?? '')
+      setContactAddress(order.deliveryAddress ?? '')
+      setContactsFor(order)
+      return
+    }
+    setPayTarget(order)
+  }, [restaurant])
+
+  async function confirmContacts() {
+    const order = contactsFor
+    if (!order || savingContacts) return
+    const phone = contactPhone.trim()
+    const address = contactAddress.trim()
+    if (!phone) { toast.error('Укажите телефон клиента'); return }
+    if (!address) { toast.error('Укажите адрес доставки'); return }
+    setSavingContacts(true)
+    try {
+      await patchOrder(order.id, { deliveryPhone: phone, deliveryAddress: address })
+      setContactsFor(null)
+      setPayTarget({ ...order, deliveryPhone: phone, deliveryAddress: address })
+    } catch (e) {
+      toast.error(`Не удалось сохранить контакты: ${humanizeError(e)}`)
+    } finally {
+      setSavingContacts(false)
+    }
+  }
+
   // Заказ «по номеру» (без стола) без оплаты — остаётся открытым до оплаты.
   // Это «С собой», а в фастфуде (tablesEnabled=false) так же и «Зал».
   async function createQueueOrderNoPay() {
@@ -490,7 +549,7 @@ export default function PosV2Order() {
       setCart([])
       const [fresh] = await fetchOrders({ ids: [order.id], slim: false }).catch(() => [order])
       await loadQueue(orderType, order.id)
-      setPayTarget(fresh ?? order)
+      openPayment(fresh ?? order)
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
     finally { payingRef.current = false; setPaying(false) }
   }
@@ -597,7 +656,13 @@ export default function PosV2Order() {
     if (o.status === 'cancelled') return
     // активный → грузим в сайдбар (без ухода с экрана)
     setOrdersOpen(false)
-    const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && (o.tableId || !tablesEnabled)) ? 'hall' : 'takeaway'
+    // Тип восстанавливаем из самого заказа: доставку нельзя схлопывать в
+    // «с собой», иначе тап по заказу-доставке молча менял бы его тип в UI.
+    // Заказ 'hall' без стола при включённых столах — данные из очереди по
+    // номеру, показываем как «с собой» (поведение до 052).
+    const nextType: OrderType = (o.type === 'hall' && (o.tableId || !tablesEnabled))
+      ? 'hall'
+      : isTogo(o.type) ? o.type : 'takeaway'
     if (nextType !== orderType) skipTypeResetRef.current = true
     setOrderType(nextType)
     if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
@@ -635,7 +700,13 @@ export default function PosV2Order() {
       await reopenOrder(o.id)
       toast.success('Заказ переоткрыт для редактирования')
       setViewReceipt(null); setOrdersOpen(false)
-      const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && (o.tableId || !tablesEnabled)) ? 'hall' : 'takeaway'
+      // Тип восстанавливаем из самого заказа: доставку нельзя схлопывать в
+    // «с собой», иначе тап по заказу-доставке молча менял бы его тип в UI.
+    // Заказ 'hall' без стола при включённых столах — данные из очереди по
+    // номеру, показываем как «с собой» (поведение до 052).
+    const nextType: OrderType = (o.type === 'hall' && (o.tableId || !tablesEnabled))
+      ? 'hall'
+      : isTogo(o.type) ? o.type : 'takeaway'
       if (nextType !== orderType) skipTypeResetRef.current = true
       setOrderType(nextType)
       if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
@@ -685,11 +756,12 @@ export default function PosV2Order() {
             <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
           </button>
           <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-            {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
+            {orderTypes.map(val => {
               const on = orderType === val
+              const Icon = ORDER_TYPE_ICONS[val]
               return (
                 <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                  <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{label}
+                  <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{ORDER_TYPE_LABELS[val]}
                 </button>
               )
             })}
@@ -908,12 +980,16 @@ export default function PosV2Order() {
               ) : (
                 <div className="flex items-center gap-2">
                   <button disabled={busy} onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center shrink-0 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)' }}><Printer style={{ width: '1.3em', height: '1.3em' }} /></button>
-                  <button onClick={() => setPayTarget(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}><CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате</button>
+                  <button onClick={() => openPayment(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}><CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате</button>
                 </div>
               )
             ) : cart.length > 0 ? (
               <div className="flex flex-col" style={{ gap: '0.6rem' }}>
-                <button disabled={paying} onClick={createQueueOrderNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
+                {/* Фастфуд = оплата вперёд: заказ без оплаты не создаётся вовсе.
+                    Чек гостю и бегунок на кухню печатаются вместе по оплате. */}
+                {!prepayMode && (
+                  <button disabled={paying} onClick={createQueueOrderNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
+                )}
                 <button disabled={paying} onClick={payNewQueueOrder} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
                   <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате · {formatCurrency(subtotal)}
                 </button>
@@ -947,7 +1023,7 @@ export default function PosV2Order() {
                 <button onClick={() => doPreBill(activeGroup.id)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><Printer style={{ width: '1.15em', height: '1.15em' }} />Пре-чек</button>
                 <button onClick={() => setExtrasOpen(true)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.15em', height: '1.15em' }} />Ещё</button>
               </div>
-              <button onClick={() => setPayTarget(activeGroup)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+              <button onClick={() => openPayment(activeGroup)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
                 <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
               </button>
             </div>
@@ -1034,10 +1110,56 @@ export default function PosV2Order() {
         </PosModal>
       )}
 
+      {/* ── Контакты доставки — спрашиваем ПЕРЕД панелью оплаты ──── */}
+      {contactsFor && (
+        <PosModal open onClose={() => setContactsFor(null)} width="clamp(20rem,44vw,32rem)"
+          title={`Доставка · заказ #${contactsFor.orderNumber ?? ''}`}>
+          <div className="flex flex-col" style={{ gap: 'clamp(0.7rem,1.1vw,1rem)' }}>
+            <div className="flex flex-col" style={{ gap: '0.35rem' }}>
+              <label htmlFor="pv-delivery-phone" className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Телефон клиента</label>
+              <input
+                id="pv-delivery-phone"
+                value={contactPhone}
+                onChange={e => setContactPhone(e.target.value)}
+                inputMode="tel"
+                autoFocus
+                placeholder="+992 ..."
+                className="rounded-xl border outline-none"
+                style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', color: 'var(--pv-text)', padding: 'clamp(0.7rem,1vw,0.95rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}
+              />
+            </div>
+            <div className="flex flex-col" style={{ gap: '0.35rem' }}>
+              <label htmlFor="pv-delivery-address" className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Адрес доставки</label>
+              <textarea
+                id="pv-delivery-address"
+                value={contactAddress}
+                onChange={e => setContactAddress(e.target.value)}
+                rows={3}
+                placeholder="Улица, дом, квартира, подъезд"
+                className="rounded-xl border outline-none resize-none"
+                style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', color: 'var(--pv-text)', padding: 'clamp(0.7rem,1vw,0.95rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}
+              />
+            </div>
+            <p style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
+              Напечатаются на бегунке курьеру вместе с составом заказа.
+            </p>
+            <button
+              disabled={savingContacts}
+              onClick={confirmContacts}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform"
+              style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}
+            >
+              <CreditCard style={{ width: '1.3em', height: '1.3em' }} />
+              {savingContacts ? 'Сохраняем…' : 'Далее · к оплате'}
+            </button>
+          </div>
+        </PosModal>
+      )}
+
       {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}
       {payTarget && (
         <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,64vw,52rem)"
-          title={`Оплата · ${payTarget.type === 'hall' ? `Стол ${selectedTable?.number ?? ''}` : `С собой #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
+          title={`Оплата · ${payTarget.type === 'hall' && !numberMode ? `Стол ${selectedTable?.number ?? ''}` : `${ORDER_TYPE_TITLES[payTarget.type] ?? ''} #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
           <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} previewCtx={{ restaurant, tables, zones, currentUser: user }} />
         </PosModal>
       )}

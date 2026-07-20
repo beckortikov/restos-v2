@@ -89,6 +89,11 @@ type OrderSlim struct {
 	// корректно считать «остаток к возврату» и прятать кнопку у полностью
 	// возвращённых заказов (иначе показывался полный возврат повторно).
 	RefundedTotal decimal.Decimal `json:"refunded_total"`
+	// Контакты доставки (052) — в slim-списке, чтобы касса не переспрашивала
+	// адрес у заказа, выбранного из очереди: без них UI видит пустое поле и
+	// открывает модалку контактов повторно.
+	DeliveryPhone   *string `json:"delivery_phone,omitempty"`
+	DeliveryAddress *string `json:"delivery_address,omitempty"`
 	// Enriched display-only fields (батч-загрузка в List, чтобы избежать N+1 на клиенте).
 	TableName  string `json:"table_name,omitempty"`
 	WaiterName string `json:"waiter_name,omitempty"`
@@ -125,7 +130,7 @@ type orderSlimRow struct {
 
 const slimSelect = `id, order_number, status, "type", table_id, waiter_id, guests_count,
 total, total_with_service, service_percent, service_amount, discount_amount, tip_amount,
-shift_id, created_at, closed_at, refunded_total`
+shift_id, created_at, closed_at, refunded_total, delivery_phone, delivery_address`
 
 // List — постраничный slim-список. Использует индекс
 // idx_orders_restaurant_created (PRD 05) → keyset быстрый.

@@ -890,6 +890,8 @@ paths:
                 guests_count: { type: integer }
                 comment: { type: string }
                 customer_id: { type: string, format: uuid }
+                delivery_phone: { type: string, description: "Контакты доставки — касса сохраняет их перед открытием панели оплаты" }
+                delivery_address: { type: string }
       responses: { "200": { description: OK } }
 
   /api/v1/order-items/{id}:
@@ -960,6 +962,14 @@ paths:
                   type: string
                   format: uuid
                   description: Кассир, закрывший заказ. Пишется в order.cashier_id.
+                delivery_phone:
+                  type: string
+                  description: |
+                    Телефон клиента для заказа type='delivery'. Обязателен, если
+                    restaurants.delivery_contacts_required=true — иначе 400 VALIDATION.
+                delivery_address:
+                  type: string
+                  description: Адрес доставки. Те же правила, что у delivery_phone.
                 discount_type:
                   type: string
                   enum: [percent, fixed]
@@ -3675,6 +3685,8 @@ components:
         kitchen_started_at: { type: string, format: date-time }
         is_split: { type: boolean }
         split_count: { type: integer }
+        delivery_phone: { type: string, description: "Контакты доставки — заполняются на оплате заказа type='delivery'" }
+        delivery_address: { type: string }
     PaymentSplit:
       type: object
       required: [method, amount, account_id]
@@ -3967,6 +3979,8 @@ components:
         tables_enabled: { type: boolean }
         kitchen_on_pay: { type: boolean }
         pos_v2_default: { type: boolean }
+        delivery_enabled: { type: boolean, description: "Показывать «Доставка» третьим типом заказа в POS" }
+        delivery_contacts_required: { type: boolean, description: "Спрашивать телефон и адрес перед оплатой заказа-доставки" }
         license_expires_at: { type: string, format: date-time }
         is_blocked: { type: boolean }
     RestaurantInput:
@@ -3990,6 +4004,8 @@ components:
         tables_enabled: { type: boolean }
         kitchen_on_pay: { type: boolean }
         pos_v2_default: { type: boolean }
+        delivery_enabled: { type: boolean }
+        delivery_contacts_required: { type: boolean }
 
     # ─── Bootstrap ──
     BootstrapInput:

@@ -272,6 +272,11 @@ type RunnerInput struct {
 	Cols        int // игнорируется, runner всегда 32 cols
 	// FastFood — крупный номер заказа вместо станции шапкой (см. ReceiptInput).
 	FastFood bool
+	// Контакты доставки (052) — печатаются на бегунке заказа type='delivery',
+	// чтобы курьер забирал еду сразу с адресом, а не бегал за ним к кассе.
+	// Пусто для зала и «с собой».
+	DeliveryPhone   string
+	DeliveryAddress string
 }
 
 // RunnerItem — позиция для повара.
@@ -379,6 +384,23 @@ func RunnerLayout(in RunnerInput) []byte {
 	// Стол + зона — bold
 	if in.TableLabel != "" {
 		b.Bold(true).TextLn(in.TableLabel).Bold(false)
+	}
+
+	// Контакты доставки (052) — крупнее обычного текста: курьер читает адрес
+	// на ходу. Печатаем до разделителя, чтобы блок читался как часть шапки,
+	// а не как первая позиция заказа.
+	if in.DeliveryPhone != "" || in.DeliveryAddress != "" {
+		b.TextLn("--------------------------------")
+		b.Bold(true)
+		if in.DeliveryPhone != "" {
+			b.TextLn("Тел: " + in.DeliveryPhone)
+		}
+		if in.DeliveryAddress != "" {
+			// Длинный адрес переносит сам принтер по ширине ленты — так же,
+			// как комментарий к заказу ниже.
+			b.TextLn(in.DeliveryAddress)
+		}
+		b.Bold(false)
 	}
 	b.TextLn("--------------------------------")
 
