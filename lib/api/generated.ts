@@ -8798,6 +8798,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Отчёт по зарплате — кому сколько выдали и когда
+         * @description Агрегация financial_operations категорий «Зарплата», «Аванс» и «Сервис» за период: сводка по сотрудникам + плоский список выплат со счётом.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description YYYY-MM-DD включительно */
+                    from?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/service-charge/pay": {
         parameters: {
             query?: never;
@@ -12221,6 +12265,52 @@ export interface components {
             employee_name?: string;
             period?: string;
             description?: string;
+            /**
+             * @description salary — окончательный расчёт (категория «Зарплата»), advance — аванс (категория «Аванс»). Пусто → salary. До разделения категорий оба вида писались как «Зарплата» и отчёт не мог их разделить.
+             * @enum {string}
+             */
+            kind?: "salary" | "advance";
+        };
+        SalaryReport: {
+            from?: string;
+            to?: string;
+            rows?: components["schemas"]["SalaryReportRow"][];
+            payouts?: components["schemas"]["SalaryPayoutRow"][];
+            totals?: components["schemas"]["SalaryReportTotals"];
+        };
+        SalaryReportRow: {
+            user_id?: string;
+            user_name?: string;
+            position?: string;
+            role?: string;
+            salary?: components["schemas"]["Decimal"];
+            salary_paid?: components["schemas"]["Decimal"];
+            advance_paid?: components["schemas"]["Decimal"];
+            service_paid?: components["schemas"]["Decimal"];
+            total?: components["schemas"]["Decimal"];
+            payouts_count?: number;
+            last_payout_at?: string;
+        };
+        SalaryPayoutRow: {
+            /** Format: uuid */
+            id?: string;
+            date?: string;
+            user_id?: string;
+            user_name?: string;
+            /** @enum {string} */
+            kind?: "salary" | "advance" | "service";
+            amount?: components["schemas"]["Decimal"];
+            account_id?: string;
+            account_name?: string;
+            description?: string;
+        };
+        SalaryReportTotals: {
+            salary_paid?: components["schemas"]["Decimal"];
+            advance_paid?: components["schemas"]["Decimal"];
+            service_paid?: components["schemas"]["Decimal"];
+            total?: components["schemas"]["Decimal"];
+            employees?: number;
+            payouts?: number;
         };
         ServiceChargePayInput: {
             /** Format: uuid */

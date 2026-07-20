@@ -9,9 +9,9 @@ import {
   fetchTimeEntries, fetchActiveClockIn, clockIn as apiClockIn, clockOut as apiClockOut,
   updateTimeEntry, deleteTimeEntry,
   fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, payServiceCharge,
-  fetchFinancialOperations,
+  fetchFinancialOperations, fetchSalaryReport, type SalaryReport,
 } from '@/lib/queries'
-import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer } from 'lucide-react'
+import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -26,7 +26,19 @@ function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string 
 }
 
 type PayAction = 'salary' | 'advance' | 'deduction' | 'edit_salary' | 'service'
-type TabKey = 'salary' | 'timesheet'
+type TabKey = 'salary' | 'report' | 'timesheet'
+
+const PAYOUT_KIND_LABELS: Record<'salary' | 'advance' | 'service', string> = {
+  salary: 'Зарплата',
+  advance: 'Аванс',
+  service: 'Обслуживание',
+}
+
+const PAYOUT_KIND_TONE: Record<'salary' | 'advance' | 'service', string> = {
+  salary: 'bg-emerald-100 text-emerald-700',
+  advance: 'bg-amber-100 text-amber-700',
+  service: 'bg-blue-100 text-blue-700',
+}
 
 // ─── Elapsed timer hook ──────────────────────────────────────────────────────
 
@@ -88,6 +100,12 @@ export default function PayrollPage() {
   // разделе не отражалась — теперь читаем её и показываем.
   const [salaryPaid, setSalaryPaid] = useState<Record<string, number>>({})
 
+  // ─── Report state ──────────────────────────────────────────────────────────
+  // Отчёт считает сервер (агрегация financial_operations), а не браузер: раньше
+  // «Выплачено» тянуло на клиент всю историю операций и фильтровало её в цикле.
+  const [report, setReport] = useState<SalaryReport | null>(null)
+  const [reportLoading, setReportLoading] = useState(false)
+
   // ─── Timesheet state ───────────────────────────────────────────────────────
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([])
   const [myActiveEntry, setMyActiveEntry] = useState<TimeEntry | null>(null)
@@ -108,7 +126,10 @@ export default function PayrollPage() {
     const ops = await fetchFinancialOperations()
     const sp: Record<string, number> = {}
     for (const op of ops) {
-      if (op.category !== 'Зарплата' || !op.sourceRef) continue
+      // Категории «Зарплата» И «Аванс»: с разделением категорий фильтр только
+      // по «Зарплата» перестал бы видеть авансы, и колонка «Выплачено»
+      // занизилась бы ровно на сумму авансов.
+      if ((op.category !== 'Зарплата' && op.category !== 'Аванс') || !op.sourceRef) continue
       const d = (op.date || '').slice(0, 10)
       if (d && (d < fromD || d > toD)) continue
       sp[op.sourceRef] = (sp[op.sourceRef] ?? 0) + op.amount
@@ -126,7 +147,12 @@ export default function PayrollPage() {
     ])
     setEmployees(users.filter(u => u.role !== 'owner' && u.role !== 'superadmin'))
     setAccounts(accs)
-    if (accs.length > 0 && !selectedAccountId) setSelectedAccountId(accs[0].id)
+    // Счёт НЕ преднастраиваем. Раньше здесь подставлялся accs[0], а
+    // selectedAccountId не сбрасывался между модалками — форма не спрашивала,
+    // с какого счёта платить, а угадывала, и следующая выплата молча уходила
+    // с того же счёта, что и прошлая. Деньги уходили не оттуда, откуда думал
+    // кассир. Теперь выбор обязателен и делается заново на каждую выплату
+    // (сброс — в openDialog).
     const accrualMap: Record<string, { accrued: number; ordersCount: number }> = {}
     for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
     setServiceAccrual(accrualMap)
@@ -188,12 +214,52 @@ export default function PayrollPage() {
     if (tab === 'timesheet') loadTimeEntries()
   }, [tab, loadTimeEntries])
 
+  // Отчёт грузим только на своей вкладке и перезапрашиваем при смене периода —
+  // он использует тот же селектор дат, что и обслуживание выше.
+  const loadReport = useCallback(async () => {
+    setReportLoading(true)
+    try {
+      setReport(await fetchSalaryReport(serviceFrom.slice(0, 10), serviceTo.slice(0, 10)))
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось загрузить отчёт'))
+    } finally {
+      setReportLoading(false)
+    }
+  }, [serviceFrom, serviceTo])
+
+  useEffect(() => {
+    if (tab === 'report') loadReport()
+  }, [tab, loadReport])
+
+  const exportReport = () => {
+    if (!report) return
+    exportToExcel(
+      report.payouts.map(p => ({
+        date: p.date,
+        employee: p.userName,
+        kind: PAYOUT_KIND_LABELS[p.kind],
+        account: p.accountName ?? '',
+        amount: p.amount,
+      })),
+      [
+        { key: 'date', header: 'Дата' },
+        { key: 'employee', header: 'Сотрудник' },
+        { key: 'kind', header: 'Вид выплаты' },
+        { key: 'account', header: 'Со счёта' },
+        { key: 'amount', header: 'Сумма' },
+      ],
+      `Зарплата ${report.from} — ${report.to}`,
+    )
+  }
+
   // ─── Salary helpers ────────────────────────────────────────────────────────
 
   const openDialog = (emp: User, action: PayAction) => {
     setSelectedEmp(emp)
     setPayAction(action)
     setDeductionReason('')
+    // Счёт выбирается заново на каждую выплату — см. комментарий в reload().
+    setSelectedAccountId('')
     if (action === 'advance') {
       setPayAmount(0)
     } else if (action === 'deduction') {
@@ -223,7 +289,7 @@ export default function PayrollPage() {
         const account = accounts.find(a => a.id === selectedAccountId)
         // Create financial operation FIRST (cash payout), then update advance counter.
         // This way if updateUser fails (e.g. legacy schema), the payout is still recorded.
-        await paySalaryFull(selectedEmp.id, payAmount, selectedAccountId, account?.name ?? '', `${selectedEmp.name} (аванс)`)
+        await paySalaryFull(selectedEmp.id, payAmount, selectedAccountId, account?.name ?? '', selectedEmp.name, 'advance')
         const newAdvance = (selectedEmp.advance ?? 0) + payAmount
         try { await updateUser(selectedEmp.id, { advance: newAdvance }) } catch (e) { console.warn('advance counter update failed:', e) }
         toast.success(`Аванс ${formatCurrency(payAmount)}: ${selectedEmp.name}`)
@@ -411,6 +477,11 @@ export default function PayrollPage() {
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'salary' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
               <Wallet className="size-3.5 inline mr-1.5 -mt-0.5" />
               Зарплата
+            </button>
+            <button onClick={() => setTab('report')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'report' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
+              <FileText className="size-3.5 inline mr-1.5 -mt-0.5" />
+              Отчёт
             </button>
             <button onClick={() => setTab('timesheet')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'timesheet' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -696,6 +767,122 @@ export default function PayrollPage() {
         </>
       )}
 
+      {/* ═══════════════════════════ REPORT TAB ═══════════════════════════════ */}
+      {tab === 'report' && (
+        <>
+          {/* Итоги периода */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { label: 'Зарплата', value: report?.totals.salaryPaid ?? 0, tone: 'text-emerald-600' },
+              { label: 'Авансы', value: report?.totals.advancePaid ?? 0, tone: 'text-amber-600' },
+              { label: 'Обслуживание', value: report?.totals.servicePaid ?? 0, tone: 'text-blue-600' },
+              { label: 'Всего выдано', value: report?.totals.total ?? 0, tone: 'text-foreground' },
+            ].map(k => (
+              <div key={k.label} className="bg-card rounded-xl border border-border p-4">
+                <p className="text-[11px] text-muted-foreground uppercase tracking-wide">{k.label}</p>
+                <p className={`text-xl font-bold mt-1 ${k.tone}`}>{formatCurrency(k.value)}</p>
+              </div>
+            ))}
+          </div>
+
+          {/* Сводка по сотрудникам */}
+          <div className="bg-card rounded-xl border border-border overflow-hidden">
+            <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
+              <h2 className="text-sm font-semibold text-foreground">
+                По сотрудникам
+                {report && <span className="text-muted-foreground font-normal"> · {report.totals.employees}</span>}
+              </h2>
+              <button
+                onClick={exportReport}
+                disabled={!report || report.payouts.length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-muted rounded-lg hover:bg-muted/70 disabled:opacity-40">
+                <Download className="size-3.5" />Excel
+              </button>
+            </div>
+            {reportLoading ? (
+              <p className="p-6 text-center text-sm text-muted-foreground">Загружаем…</p>
+            ) : !report || report.rows.length === 0 ? (
+              <p className="p-6 text-center text-sm text-muted-foreground">За период выплат не было</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/30">
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <th className="px-4 py-2 font-medium">Сотрудник</th>
+                      <th className="px-4 py-2 font-medium text-right">Зарплата</th>
+                      <th className="px-4 py-2 font-medium text-right">Авансы</th>
+                      <th className="px-4 py-2 font-medium text-right">Обслуж.</th>
+                      <th className="px-4 py-2 font-medium text-right">Всего</th>
+                      <th className="px-4 py-2 font-medium text-right">Выплат</th>
+                      <th className="px-4 py-2 font-medium">Последняя</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {report.rows.map(r => (
+                      <tr key={r.userId || r.userName} className="hover:bg-muted/20">
+                        <td className="px-4 py-2.5">
+                          <p className="font-medium text-foreground">{r.userName || '—'}</p>
+                          {(r.position || r.role) && (
+                            <p className="text-[11px] text-muted-foreground">
+                              {r.position || ROLE_LABELS[r.role as keyof typeof ROLE_LABELS] || r.role}
+                            </p>
+                          )}
+                        </td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">{r.salaryPaid ? formatCurrency(r.salaryPaid) : '—'}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-amber-700">{r.advancePaid ? formatCurrency(r.advancePaid) : '—'}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums">{r.servicePaid ? formatCurrency(r.servicePaid) : '—'}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums font-semibold">{formatCurrency(r.total)}</td>
+                        <td className="px-4 py-2.5 text-right tabular-nums text-muted-foreground">{r.payoutsCount}</td>
+                        <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">{r.lastPayoutAt || '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Хронология выплат — «кому, сколько, когда и с какого счёта» */}
+          {report && report.payouts.length > 0 && (
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <div className="px-4 py-3 border-b border-border">
+                <h2 className="text-sm font-semibold text-foreground">
+                  Все выплаты <span className="text-muted-foreground font-normal">· {report.totals.payouts}</span>
+                </h2>
+              </div>
+              <div className="overflow-x-auto max-h-[28rem] overflow-y-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/30 sticky top-0">
+                    <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                      <th className="px-4 py-2 font-medium">Дата</th>
+                      <th className="px-4 py-2 font-medium">Сотрудник</th>
+                      <th className="px-4 py-2 font-medium">Вид</th>
+                      <th className="px-4 py-2 font-medium">Со счёта</th>
+                      <th className="px-4 py-2 font-medium text-right">Сумма</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {report.payouts.map(p => (
+                      <tr key={p.id} className="hover:bg-muted/20">
+                        <td className="px-4 py-2 whitespace-nowrap text-muted-foreground">{p.date || '—'}</td>
+                        <td className="px-4 py-2 font-medium text-foreground">{p.userName || '—'}</td>
+                        <td className="px-4 py-2">
+                          <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-medium ${PAYOUT_KIND_TONE[p.kind]}`}>
+                            {PAYOUT_KIND_LABELS[p.kind]}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 text-muted-foreground">{p.accountName || '—'}</td>
+                        <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatCurrency(p.amount)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
       {/* ═══════════════════════════ TIMESHEET TAB ════════════════════════════ */}
       {tab === 'timesheet' && (
         <>
@@ -963,7 +1150,9 @@ export default function PayrollPage() {
 
               {needsPayment(payAction) && (
                 <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Со счёта</label>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                    Со счёта {!selectedAccountId && <span className="text-destructive">— выберите</span>}
+                  </label>
                   <div className="space-y-1.5">
                     {accounts.map(acc => (
                       <button key={acc.id} onClick={() => setSelectedAccountId(acc.id)}

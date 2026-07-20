@@ -263,6 +263,19 @@ func (h *SalaryHandler) PaySalary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusCreated, out)
 }
 
+// SalaryReport — GET /api/v1/finance/salary/report?from=&to=
+// «Кому сколько выдали и когда» за период: сводка по сотрудникам + плоский
+// список выплат с датой, суммой и счётом.
+func (h *SalaryHandler) SalaryReport(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.svc.SalaryReport(r.Context(), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *SalaryHandler) PayServiceCharge(w http.ResponseWriter, r *http.Request) {
 	var in service.ServiceChargePayInput
 	if !decodeBody(r, &in) {

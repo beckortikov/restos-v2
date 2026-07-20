@@ -252,18 +252,115 @@ export async function fetchMonthlyRevenue() {
 
 // ─── Salary / Service charge ──────────────────────────────────────────────
 
-export async function paySalaryFull(userId: string, amount: number, accountId: string, accountName: string, employeeName: string) {
+// kind='advance' → проводка ляжет категорией «Аванс», иначе «Зарплата».
+// Без этого отчёт не мог отделить авансы от расчёта: оба писались одной
+// категорией и различались лишь текстом «(аванс)» в имени контрагента.
+export async function paySalaryFull(
+  userId: string,
+  amount: number,
+  accountId: string,
+  accountName: string,
+  employeeName: string,
+  kind: 'salary' | 'advance' = 'salary',
+) {
   void accountName
+  const label = kind === 'advance' ? 'Аванс' : 'Зарплата'
   await unwrap(api.POST('/api/v1/finance/salary/pay', {
     body: {
       user_id: userId,
       amount: String(amount),
       account_id: accountId,
       employee_name: employeeName,
-      description: `Зарплата ${employeeName}`,
+      kind,
+      description: `${label} ${employeeName}`,
     } as any,
   }))
-  logAction('payroll.pay', 'payroll', userId, employeeName, { amount })
+  logAction('payroll.pay', 'payroll', userId, employeeName, { amount, kind })
+}
+
+// ─── Отчёт по зарплате ────────────────────────────────────────────────────
+
+export interface SalaryPayoutRow {
+  id: string
+  date: string
+  userId: string
+  userName: string
+  kind: 'salary' | 'advance' | 'service'
+  amount: number
+  accountId?: string
+  accountName?: string
+  description?: string
+}
+
+export interface SalaryReportRow {
+  userId: string
+  userName: string
+  position?: string
+  role?: string
+  salary: number
+  salaryPaid: number
+  advancePaid: number
+  servicePaid: number
+  total: number
+  payoutsCount: number
+  lastPayoutAt?: string
+}
+
+export interface SalaryReport {
+  from: string
+  to: string
+  rows: SalaryReportRow[]
+  payouts: SalaryPayoutRow[]
+  totals: {
+    salaryPaid: number
+    advancePaid: number
+    servicePaid: number
+    total: number
+    employees: number
+    payouts: number
+  }
+}
+
+export async function fetchSalaryReport(from: string, to: string): Promise<SalaryReport> {
+  const res: any = await unwrap(
+    api.GET('/api/v1/finance/salary/report', { params: { query: { from, to } } as any }),
+  )
+  return {
+    from: res?.from ?? from,
+    to: res?.to ?? to,
+    rows: (res?.rows ?? []).map((r: any) => ({
+      userId: r.user_id ?? '',
+      userName: r.user_name ?? '',
+      position: r.position || undefined,
+      role: r.role || undefined,
+      salary: Number(r.salary ?? 0),
+      salaryPaid: Number(r.salary_paid ?? 0),
+      advancePaid: Number(r.advance_paid ?? 0),
+      servicePaid: Number(r.service_paid ?? 0),
+      total: Number(r.total ?? 0),
+      payoutsCount: Number(r.payouts_count ?? 0),
+      lastPayoutAt: r.last_payout_at || undefined,
+    })),
+    payouts: (res?.payouts ?? []).map((p: any) => ({
+      id: p.id ?? '',
+      date: p.date ?? '',
+      userId: p.user_id ?? '',
+      userName: p.user_name ?? '',
+      kind: (p.kind ?? 'salary') as SalaryPayoutRow['kind'],
+      amount: Number(p.amount ?? 0),
+      accountId: p.account_id || undefined,
+      accountName: p.account_name || undefined,
+      description: p.description || undefined,
+    })),
+    totals: {
+      salaryPaid: Number(res?.totals?.salary_paid ?? 0),
+      advancePaid: Number(res?.totals?.advance_paid ?? 0),
+      servicePaid: Number(res?.totals?.service_paid ?? 0),
+      total: Number(res?.totals?.total ?? 0),
+      employees: Number(res?.totals?.employees ?? 0),
+      payouts: Number(res?.totals?.payouts ?? 0),
+    },
+  }
 }
 
 export interface ServiceAccrualByWaiter {

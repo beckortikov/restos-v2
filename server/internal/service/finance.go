@@ -1286,6 +1286,25 @@ type SalaryPayInput struct {
 	EmployeeName *string `json:"employee_name,omitempty"`
 	Period       *string `json:"period,omitempty"`
 	Description  *string `json:"description,omitempty"`
+	// Kind — «salary» (окончательный расчёт) или «advance» (аванс). До этого
+	// оба писались одной категорией «Зарплата» и различались только текстом
+	// «(аванс)» в имени контрагента, из-за чего отчёт не мог их разделить.
+	// Пусто → salary (совместимость со старыми клиентами).
+	Kind *string `json:"kind,omitempty"`
+}
+
+// Категории зарплатных проводок в financial_operations.
+const (
+	CategorySalary  = "Зарплата"
+	CategoryAdvance = "Аванс"
+)
+
+// salaryCategory — маппинг kind → категория проводки.
+func salaryCategory(kind *string) string {
+	if kind != nil && *kind == "advance" {
+		return CategoryAdvance
+	}
+	return CategorySalary
 }
 
 func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*models.FinancialOperation, error) {
@@ -1308,11 +1327,14 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 		}
 		// Уже выплачено за период = Σ зарплатных проводок этого сотрудника,
 		// датированных этим месяцем (date LIKE 'YYYY-MM%').
+		// Только категория «Зарплата»: авансы теперь пишутся отдельной
+		// категорией и вычитаются из остатка через u.Advance — считать их
+		// здесь второй раз означало бы вычесть аванс дважды.
 		var paid decimal.Decimal
 		scopedP, _ := s.r.ForTenant(ctx)
 		if err := scopedP.Table("financial_operations").
 			Select("COALESCE(SUM(amount), 0)").
-			Where("category = ? AND source_ref = ? AND date LIKE ?", "Зарплата", *in.UserID, *in.Period+"%").
+			Where("category = ? AND source_ref = ? AND date LIKE ?", CategorySalary, *in.UserID, *in.Period+"%").
 			Scan(&paid).Error; err != nil {
 			return nil, err
 		}
@@ -1321,7 +1343,8 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 		if !u.Salary.IsPositive() {
 			return s.payout(ctx, payoutInput{
 				UserID: in.UserID, Amount: in.Amount, AccountID: in.AccountID,
-				Counterparty: in.EmployeeName, Category: "Зарплата", Period: in.Period, Description: in.Description,
+				Counterparty: in.EmployeeName, Category: salaryCategory(in.Kind),
+				Period: in.Period, Description: in.Description,
 			})
 		}
 		// Начислено − аванс − удержания − уже выплачено.
@@ -1335,15 +1358,13 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 					amount, payable, u.Salary, u.Advance, u.Deductions, paid), nil)
 		}
 	}
-	// Зарплатная проводка датируется периодом (не «сегодня»), чтобы «выплачено за
-	// период» считалось стабильно по полю date.
 	sp := in
 	return s.payout(ctx, payoutInput{
 		UserID:       sp.UserID,
 		Amount:       sp.Amount,
 		AccountID:    sp.AccountID,
 		Counterparty: sp.EmployeeName,
-		Category:     "Зарплата",
+		Category:     salaryCategory(sp.Kind),
 		Period:       sp.Period,
 		Description:  sp.Description,
 	})

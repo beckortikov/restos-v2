@@ -2485,6 +2485,17 @@ paths:
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryPayInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+  /api/v1/finance/salary/report:
+    get:
+      tags: [finance, payroll]
+      summary: Отчёт по зарплате — кому сколько выдали и когда
+      description: >
+        Агрегация financial_operations категорий «Зарплата», «Аванс» и «Сервис»
+        за период: сводка по сотрудникам + плоский список выплат со счётом.
+      parameters:
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryReport" } } } } }
   /api/v1/finance/service-charge/pay:
     post:
       tags: [finance, payroll]
@@ -4770,6 +4781,56 @@ components:
         employee_name: { type: string }
         period: { type: string }
         description: { type: string }
+        kind:
+          type: string
+          enum: [salary, advance]
+          description: >
+            salary — окончательный расчёт (категория «Зарплата»), advance — аванс
+            (категория «Аванс»). Пусто → salary. До разделения категорий оба вида
+            писались как «Зарплата» и отчёт не мог их разделить.
+    SalaryReport:
+      type: object
+      properties:
+        from: { type: string }
+        to: { type: string }
+        rows: { type: array, items: { $ref: "#/components/schemas/SalaryReportRow" } }
+        payouts: { type: array, items: { $ref: "#/components/schemas/SalaryPayoutRow" } }
+        totals: { $ref: "#/components/schemas/SalaryReportTotals" }
+    SalaryReportRow:
+      type: object
+      properties:
+        user_id: { type: string }
+        user_name: { type: string }
+        position: { type: string }
+        role: { type: string }
+        salary: { $ref: "#/components/schemas/Decimal" }
+        salary_paid: { $ref: "#/components/schemas/Decimal" }
+        advance_paid: { $ref: "#/components/schemas/Decimal" }
+        service_paid: { $ref: "#/components/schemas/Decimal" }
+        total: { $ref: "#/components/schemas/Decimal" }
+        payouts_count: { type: integer }
+        last_payout_at: { type: string }
+    SalaryPayoutRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        date: { type: string }
+        user_id: { type: string }
+        user_name: { type: string }
+        kind: { type: string, enum: [salary, advance, service] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string }
+        account_name: { type: string }
+        description: { type: string }
+    SalaryReportTotals:
+      type: object
+      properties:
+        salary_paid: { $ref: "#/components/schemas/Decimal" }
+        advance_paid: { $ref: "#/components/schemas/Decimal" }
+        service_paid: { $ref: "#/components/schemas/Decimal" }
+        total: { $ref: "#/components/schemas/Decimal" }
+        employees: { type: integer }
+        payouts: { type: integer }
     ServiceChargePayInput:
       type: object
       required: [waiter_id, amount, account_id]
