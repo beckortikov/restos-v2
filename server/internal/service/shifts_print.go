@@ -137,6 +137,11 @@ func (s *ShiftsService) printReport(ctx context.Context, shiftID, jobType string
 	}
 
 	var payload []byte
+	// Кодовая страница принтера — иначе отчёт печатается дефолтной таблицей
+	// и на принтерах с другой нумерацией выходит мусором вместо кириллицы.
+	if rp, ok := receiptPrinterFor(s.r.Raw().WithContext(ctx), rid); ok {
+		in.Codepage = byte(rp.Codepage)
+	}
 	if isZ {
 		payload = escpos.ZReportLayout(in)
 	} else {
@@ -262,6 +267,9 @@ func (s *ShiftsService) PrintService(ctx context.Context, shiftID string) (*Prin
 	}
 	if shift.ClosedAt != nil {
 		in.ClosedAt = *shift.ClosedAt
+	}
+	if rp, ok := receiptPrinterFor(s.r.Raw().WithContext(ctx), rid); ok {
+		in.Codepage = byte(rp.Codepage)
 	}
 	payload := escpos.ServiceReportLayout(in)
 

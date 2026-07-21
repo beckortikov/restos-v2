@@ -316,6 +316,12 @@ func (s *OrdersService) ReprintReceipt(ctx context.Context, orderID string) (*Pr
 			}
 			in.Items = append(in.Items, ri)
 		}
+		// Настройки принтера — те же, что при оплате. Без этого перепечатка
+		// шла с дефолтной кодовой страницей: чек при оплате печатался верно,
+		// а он же из закрытых заказов — абракадаброй.
+		if rp, ok := receiptPrinterFor(tx, rid); ok {
+			applyPrinterToReceipt(&in, rp)
+		}
 		payload := escpos.ReceiptLayout(in)
 
 		now := time.Now().UTC()

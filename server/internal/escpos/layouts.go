@@ -327,6 +327,70 @@ func fmtWeightQty(q decimal.Decimal, unit string) string {
 
 // fmtRunnerQty — «x2» для штучных, «250г» / «1,5кг» для весовых.
 // Порт логики из v1 lib/print-service.ts:155-160.
+// ColsRunnerWide — сколько знаков влезает в строку при двойной ширине.
+// Печатающая головка та же, глифы вдвое шире — значит колонок вдвое меньше.
+const ColsRunnerWide = ColsRunner / 2
+
+// wrapRunnerItem — строки блюда для печати двойной шириной.
+//
+// Количество идёт ПЕРВЫМ, а не в конце строки: при 16 колонках почти любое
+// название переносится, и количество в хвосте оказалось бы одиноко висящим
+// на второй строке. Повар в первую очередь считает порции — число должно
+// быть в начале, где его невозможно пропустить.
+//
+// Перенос по словам, продолжение выравнивается под название (отступ в ширину
+// префикса), чтобы список читался колонкой, а не сплошным текстом.
+func wrapRunnerItem(qty, name string, width int) []string {
+	prefix := qty + " "
+	indent := spaces(visibleRuneCount(prefix))
+	avail := width - visibleRuneCount(prefix)
+	if avail < 4 {
+		// Аномально длинное количество — не ломаем строку, отдаём как есть.
+		return []string{prefix + name}
+	}
+
+	words := strings.Fields(name)
+	if len(words) == 0 {
+		return []string{prefix + name}
+	}
+	lines := []string{}
+	cur := ""
+	for _, w := range words {
+		// Слово длиннее строки — режем по границе колонок, иначе оно уедет
+		// за край и принтер порвёт его в произвольном месте.
+		for visibleRuneCount(w) > avail {
+			if cur != "" {
+				lines = append(lines, cur)
+				cur = ""
+			}
+			lines = append(lines, runeSlice(w, avail))
+			w = string([]rune(w)[avail:])
+		}
+		switch {
+		case cur == "":
+			cur = w
+		case visibleRuneCount(cur)+1+visibleRuneCount(w) <= avail:
+			cur += " " + w
+		default:
+			lines = append(lines, cur)
+			cur = w
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+
+	out := make([]string, 0, len(lines))
+	for i, l := range lines {
+		if i == 0 {
+			out = append(out, prefix+l)
+		} else {
+			out = append(out, indent+l)
+		}
+	}
+	return out
+}
+
 func fmtRunnerQty(it RunnerItem) string {
 	switch it.Unit {
 	case "g", "kg":
@@ -412,34 +476,31 @@ func RunnerLayout(in RunnerInput) []byte {
 	}
 	b.TextLn("--------------------------------")
 
-	// ── Items — bold + double-height (НЕ double-width!) ──────────────────
-	b.FontTall().Bold(true)
+	// ── Items — bold + ДВОЙНАЯ ширина и высота ───────────────────────────
+	// Тот же кегль, что у алерта «ОТМЕНА» на чеке отмены: только двойная
+	// ширина реально увеличивает буквы, растяжение по высоте оставляло их
+	// узкими и на потоке читалось плохо. Плата — 16 колонок вместо 32,
+	// поэтому длинные названия переносятся (см. wrapRunnerItem).
+	b.FontDouble().Bold(true)
 	for _, it := range in.Items {
 		qty := fmtRunnerQty(it)
-		name := it.Name
-		// Строка блюда занимает ВСЮ ширину ленты: количество прижато к правому
-		// краю, имени достаётся всё остальное. Раньше поле было 20 колонок из
-		// 32 — правая треть бумаги простаивала, а длинные названия жались к
-		// количеству («Фри Маленький     x1» и 12 пустых колонок справа).
-		nameLen := visibleRuneCount(name)
-		qtyLen := visibleRuneCount(qty)
-		pad := ColsRunner - nameLen - qtyLen
-		if pad < 1 {
-			pad = 1
+		for _, line := range wrapRunnerItem(qty, it.Name, ColsRunnerWide) {
+			b.TextLn(line)
 		}
-		b.TextLn(name + spaces(pad) + qty)
 		if len(it.Modifiers) > 0 {
 			// Modifiers — normal size
 			b.FontNormal()
 			for _, m := range it.Modifiers {
 				b.TextLn("  + " + m)
 			}
-			b.FontTall()
+			// Возвращаем размер ПОЗИЦИЙ, а не прежний FontTall: иначе блюда
+			// после первого же модификатора печатались бы мельче остальных.
+			b.FontDouble()
 		}
 		if it.Comment != "" {
 			b.FontNormal()
 			b.TextLn("  ! " + it.Comment)
-			b.FontTall()
+			b.FontDouble()
 		}
 	}
 	b.Bold(false).FontNormal()

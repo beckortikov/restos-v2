@@ -183,6 +183,32 @@ func (s *OrdersService) deliveryContactsRequired(tx *gorm.DB, restaurantID strin
 	return on
 }
 
+// receiptPrinterFor — конфиг чекового принтера ресторана (кодовая страница,
+// ширина ленты, флаги содержимого). Второй результат — нашёлся ли принтер.
+//
+// Вынесен в общий хелпер, потому что путей печати чеков несколько: оплата,
+// пре-чек, перепечатка из истории, X/Z-отчёты. Раньше каждый собирал
+// ReceiptInput сам, и перепечатка кодовую страницу не проставляла вовсе —
+// чек при оплате печатался нормально, а тот же чек из закрытых заказов
+// выходил абракадаброй. Одна точка чтения — один шанс забыть, а не пять.
+func receiptPrinterFor(tx *gorm.DB, restaurantID string) (models.Printer, bool) {
+	var p models.Printer
+	ok := tx.Where("restaurant_id = ? AND kind = 'receipt' AND enabled = TRUE", restaurantID).
+		Order("is_default DESC, created_at ASC").First(&p).Error == nil
+	return p, ok
+}
+
+// applyPrinterToReceipt переносит настройки принтера в макет чека.
+func applyPrinterToReceipt(in *escpos.ReceiptInput, p models.Printer) {
+	in.Cols = p.Cols
+	in.Codepage = byte(p.Codepage)
+	in.SuppressLogo = !p.PrintLogo
+	in.SuppressDiscount = !p.PrintDiscount
+	in.SuppressService = !p.PrintService
+	in.ShowTip = p.PrintTip
+	in.ShowQRFeedback = p.PrintQRFeedback
+}
+
 // runnerTarget — одна цель печати бегунка: принтер (или legacy-цех) и его
 // позиции в порядке заказа. Stations — какие цехи попали в цель (для
 // заголовка: один цех — его имя, несколько — «КУХНЯ»).
