@@ -191,21 +191,31 @@ export function OnScreenKeyboard() {
         })
         return
       }
+      // 1b) Нижняя шторка. Диалог центрирован в окне — перецентровываем его в
+      //     свободной полосе НАД клавиатурой: сдвиг вверх ровно на половину её
+      //     высоты. Если в полосу не влезает — ограничиваем высоту, и диалог
+      //     скроллится (у /pos2-модалки скроллится её внутренний body, у
+      //     обычных — сам контейнер: overflow-y ставим на всякий случай).
+      //
+      //     Прежняя формула поднимала диалог «на сколько не хватает, но не
+      //     задирая верх за экран» и считала полосу от его старого top. На
+      //     карточке `flex flex-col` с `overflow:hidden` это давало высоту, при
+      //     которой поле ввода оставалось под клавиатурой.
       if (rect.bottom <= kbTop - gap) return // уже не перекрыт
       const prev = {
         marginTop: host.style.marginTop, maxHeight: host.style.maxHeight,
         overflowY: host.style.overflowY, transition: host.style.transition,
       }
-      const lift = Math.min(rect.bottom - (kbTop - gap), Math.max(0, rect.top - gap))
-      host.style.transition = 'margin-top 160ms ease'
-      host.style.marginTop = `-${lift}px`
-      // Диалог всё равно выше доступной полосы → ограничиваем высоту + внутр. скролл.
-      const band = (kbTop - gap) - (rect.top - lift)
-      if (host.scrollHeight > band + 1) {
+      const band = kbTop - 2 * gap
+      host.style.transition = 'margin-top 160ms ease, max-height 160ms ease'
+      host.style.marginTop = `-${Math.round(kbHeight / 2)}px`
+      if (rect.height > band) {
         host.style.maxHeight = `${Math.max(160, band)}px`
         host.style.overflowY = 'auto'
-        window.setTimeout(() => active.scrollIntoView?.({ block: 'center', behavior: 'smooth' }), 0)
       }
+      // Скроллим к полю только когда диалог доехал: у движущейся цели smooth-скролл
+      // считает дистанцию один раз на старте и не доезжает.
+      window.setTimeout(() => active.scrollIntoView?.({ block: 'center', behavior: 'smooth' }), 200)
       liftUndoRef.current = () => {
         host.style.marginTop = prev.marginTop
         host.style.maxHeight = prev.maxHeight
@@ -225,10 +235,24 @@ export function OnScreenKeyboard() {
     //    паддинг скролл-контейнеру,
     //    чтобы под клавиатурой было куда прокрутить, и поднимаем инпут в верхнюю
     //    треть видимой полосы — тогда кнопки под ним тоже остаются видимыми.
-    //    Для боковой панели это не нужно: снизу она ничего не закрывает, а
-    //    вертикальный скролл от горизонтального перекрытия всё равно не спасёт
-    //    (и что набрано — видно на её табло).
-    if (sidePanel) return
+    //    Боковая панель снизу ничего не закрывает — вертикальный скролл ей не
+    //    нужен. Но само поле может оказаться ПОД ней (правая колонка, нижний
+    //    drawer): тогда переставляем панель к левому краю. Если поле такое
+    //    широкое, что накрыто с любой стороны, — оставляем справа.
+    if (sidePanel) {
+      const vw = window.innerWidth
+      const kbW = numpadWidth()
+      const r = active.getBoundingClientRect()
+      const coveredRight = r.right > vw - kbW - gap
+      const coveredLeft = r.left < gap + kbW
+      if (coveredRight && !coveredLeft) {
+        setAnchor({
+          left: gap,
+          top: Math.max(gap, Math.round((window.innerHeight - kb.offsetHeight) / 2)),
+        })
+      }
+      return
+    }
     const sc = nearestScrollable(active)
     const prevPad = sc.style.paddingBottom
     const basePad = parseFloat(window.getComputedStyle(sc).paddingBottom) || 0
