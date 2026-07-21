@@ -47,7 +47,13 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, PUT, DELETE, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Requested-With")
+				// X-Skip-Auth-Expire шлёт auth-store на фоновых дозагрузках
+				// (ресторан, права): без него в списке разрешённых браузер
+				// блокирует САМ запрос после успешного preflight, и настройки
+				// ресторана в POS не обновляются вовсе. В Electron и при заходе
+				// по LAN на порт бэка это same-origin и CORS не применяется —
+				// поэтому промах был виден только на vite-dev (:5173).
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Requested-With, X-Skip-Auth-Expire")
 				w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id")
 				w.Header().Set("Access-Control-Max-Age", "600")
 			}
