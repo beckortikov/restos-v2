@@ -554,20 +554,33 @@ export default function PosV2Order() {
   const [contactPhone, setContactPhone] = useState('')
   const [contactAddress, setContactAddress] = useState('')
   const [savingContacts, setSavingContacts] = useState(false)
+  // 'pay' — модалка ведёт в панель оплаты; 'queue' — заказ «без оплаты»,
+  // после сохранения контактов просто закрываемся, оставляя заказ в очереди.
+  const [contactsIntent, setContactsIntent] = useState<'pay' | 'queue'>('pay')
+  const contactsOnConfirmRef = useRef<((order: Order) => void) | null>(null)
+
+  // requireDeliveryContacts — единая точка входа перед любым завершением
+  // создания заказа доставки (оплата ИЛИ «без оплаты»), чтобы телефон/адрес
+  // нельзя было обойти ни одним из путей создания заказа.
+  const requireDeliveryContacts = useCallback((order: Order, intent: 'pay' | 'queue', onReady: (order: Order) => void) => {
+    if (needsDeliveryContacts(restaurant, order.type) && !order.deliveryAddress) {
+      setContactPhone(order.deliveryPhone ?? '')
+      setContactAddress(order.deliveryAddress ?? '')
+      setContactsIntent(intent)
+      contactsOnConfirmRef.current = onReady
+      setContactsFor(order)
+      return
+    }
+    onReady(order)
+  }, [restaurant])
 
   // openPayment — единая точка входа в оплату. Для доставки с включённым
   // запросом контактов сначала показывает модалку, иначе сразу панель оплаты.
   // Все кнопки «К оплате» идут через неё, чтобы контакты нельзя было обойти
   // ни из очереди, ни из карточки заказа.
   const openPayment = useCallback((order: Order) => {
-    if (needsDeliveryContacts(restaurant, order.type) && !order.deliveryAddress) {
-      setContactPhone(order.deliveryPhone ?? '')
-      setContactAddress(order.deliveryAddress ?? '')
-      setContactsFor(order)
-      return
-    }
-    setPayTarget(order)
-  }, [restaurant])
+    requireDeliveryContacts(order, 'pay', setPayTarget)
+  }, [requireDeliveryContacts])
 
   async function confirmContacts() {
     const order = contactsFor
@@ -579,8 +592,13 @@ export default function PosV2Order() {
     setSavingContacts(true)
     try {
       await patchOrder(order.id, { deliveryPhone: phone, deliveryAddress: address })
+      const updated = { ...order, deliveryPhone: phone, deliveryAddress: address }
+      // Иначе activeGroup (из tableOrders) остаётся без контактов, и повторный
+      // клик «К оплате» по тому же заказу снова спросит телефон/адрес.
+      setTableOrders(prev => prev.map(o => o.id === order.id ? { ...o, deliveryPhone: phone, deliveryAddress: address } : o))
       setContactsFor(null)
-      setPayTarget({ ...order, deliveryPhone: phone, deliveryAddress: address })
+      contactsOnConfirmRef.current?.(updated)
+      contactsOnConfirmRef.current = null
     } catch (e) {
       toast.error(`Не удалось сохранить контакты: ${humanizeError(e)}`)
     } finally {
@@ -600,6 +618,10 @@ export default function PosV2Order() {
       toast.success(`Заказ создан · ${formatCurrency(subtotal)}`, { description: 'Без оплаты — оплатите позже' })
       setCart([])
       await loadQueue(orderType, order.id) // остаётся в списке открытых до оплаты
+      // Контакты доставки нельзя обойти и в флоу «без оплаты» — тот же гейт,
+      // что и перед панелью оплаты, только без перехода в неё после сохранения.
+      const [fresh] = await fetchOrders({ ids: [order.id], slim: false }).catch(() => [order])
+      requireDeliveryContacts(fresh ?? order, 'queue', () => {})
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
     finally { payingRef.current = false; setPaying(false) }
   }
@@ -1247,8 +1269,8 @@ export default function PosV2Order() {
               className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform"
               style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}
             >
-              <CreditCard style={{ width: '1.3em', height: '1.3em' }} />
-              {savingContacts ? 'Сохраняем…' : 'Далее · к оплате'}
+              {contactsIntent === 'pay' ? <CreditCard style={{ width: '1.3em', height: '1.3em' }} /> : <Check style={{ width: '1.3em', height: '1.3em' }} />}
+              {savingContacts ? 'Сохраняем…' : (contactsIntent === 'pay' ? 'Далее · к оплате' : 'Сохранить')}
             </button>
           </div>
         </PosModal>
