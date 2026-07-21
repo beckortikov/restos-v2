@@ -26,6 +26,7 @@ import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
 import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit, OrderType } from '@/lib/types'
 import { ORDER_TYPE_LABELS, ORDER_TYPE_TITLES, availableOrderTypes, isPrepayMode, isTogo, needsDeliveryContacts } from '@/lib/order-types'
+import { describePayment } from '@/lib/payment-labels'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -1270,6 +1271,18 @@ export default function PosV2Order() {
                                 <span className="truncate" style={{ color: refundedAmt > 0 ? 'var(--pv-occ-text)' : 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{loc} · {n} поз{time}{refundedAmt > 0 ? ` · возврат ${formatCurrency(refundedAmt)}` : ''}</span>
                                 <span className="font-bold tabular-nums whitespace-nowrap" style={{ color: o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</span>
                               </div>
+                              {/* Чем расплатились — у оплаченных заказов. */}
+                              {o.status === 'done' && (() => {
+                                const pay = describePayment(o)
+                                if (!pay) return null
+                                return (
+                                  <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)', marginTop: '0.15rem' }}>
+                                    {pay.isMixed && pay.parts.length > 0
+                                      ? pay.parts.map(p => `${p.label}${p.account ? ` (${p.account})` : ''} ${formatCurrency(p.amount)}`).join(' + ')
+                                      : `${pay.label}${pay.account ? ` · ${pay.account}` : ''}`}
+                                  </div>
+                                )
+                              })()}
                             </button>
                           )
                         })}

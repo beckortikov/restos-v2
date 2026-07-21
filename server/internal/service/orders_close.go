@@ -72,6 +72,54 @@ type PaymentSplit struct {
 	AccountID string `json:"account_id"` // financial_account UUID
 }
 
+// paymentSnapshot — то, что реально сохраняется в orders.payments (jsonb).
+//
+// Отличается от входного PaymentSplit наличием account_name: имя счёта
+// денормализуется на момент оплаты, как это уже сделано в
+// financial_operations.account_name. Так чек закрытого заказа показывает счёт
+// без второго запроса к справочнику, а переименование счёта не переписывает
+// задним числом историю оплат.
+type paymentSnapshot struct {
+	Method      string `json:"method"`
+	Amount      string `json:"amount"`
+	AccountID   string `json:"account_id"`
+	AccountName string `json:"account_name,omitempty"`
+}
+
+// buildPaymentSnapshot проставляет имена счетов одним запросом.
+// Неизвестный/пустой account_id не ошибка на этом шаге — существование счетов
+// проверяется ниже, перед постингом выручки; здесь просто останется пустое имя.
+func buildPaymentSnapshot(tx *gorm.DB, restaurantID string, parts []PaymentSplit) ([]paymentSnapshot, error) {
+	ids := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p.AccountID != "" {
+			ids = append(ids, p.AccountID)
+		}
+	}
+	names := make(map[string]string, len(ids))
+	if len(ids) > 0 {
+		var accs []models.FinancialAccount
+		if err := tx.Where("restaurant_id = ? AND id IN ?", restaurantID, ids).Find(&accs).Error; err != nil {
+			return nil, err
+		}
+		for _, a := range accs {
+			if a.Name != nil {
+				names[a.ID] = *a.Name
+			}
+		}
+	}
+	out := make([]paymentSnapshot, 0, len(parts))
+	for _, p := range parts {
+		out = append(out, paymentSnapshot{
+			Method:      p.Method,
+			Amount:      p.Amount,
+			AccountID:   p.AccountID,
+			AccountName: names[p.AccountID],
+		})
+	}
+	return out, nil
+}
+
 // Close — критичный многошаговый flow закрытия заказа.
 //
 // Шаги (всё в ОДНОЙ транзакции):
@@ -378,12 +426,34 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			order.IsSplit = &isSplit
 			sc := len(in.Payments)
 			order.SplitCount = &sc
-			if jsonBytes, jerr := json.Marshal(in.Payments); jerr == nil {
+			snap, serr := buildPaymentSnapshot(tx, rid, in.Payments)
+			if serr != nil {
+				return serr
+			}
+			if jsonBytes, jerr := json.Marshal(snap); jerr == nil {
 				order.Payments = datatypes.JSON(jsonBytes)
 			}
 		} else {
 			pm := in.PaymentMethod
 			order.PaymentMethod = &pm
+			// Одиночная оплата тоже пишется в payments. Раньше здесь
+			// сохранялся только метод, а счёт не оставался на заказе вообще
+			// (колонки orders.account_id нет) — он жил лишь в
+			// financial_operations. Из-за этого «куда ушли деньги» по обычному
+			// чеку было невозможно показать, не поднимая финоперации по
+			// source_ref. Теперь одна ветка данных покрывает и одиночную, и
+			// смешанную оплату.
+			snap, serr := buildPaymentSnapshot(tx, rid, []PaymentSplit{{
+				Method:    in.PaymentMethod,
+				Amount:    order.TotalWithService.String(),
+				AccountID: in.AccountID,
+			}})
+			if serr != nil {
+				return serr
+			}
+			if jsonBytes, jerr := json.Marshal(snap); jerr == nil {
+				order.Payments = datatypes.JSON(jsonBytes)
+			}
 		}
 		if err := tx.Save(&order).Error; err != nil {
 			return err

@@ -14,6 +14,7 @@ import {
   ORDER_STATUS_LABELS,
   type Order, type OrderStatus, type OrderVoid, type Table, type User,
 } from '@/lib/types'
+import { PAYMENT_LABELS, describePayment } from '@/lib/payment-labels'
 
 export const STATUS_STYLE: Record<OrderStatus, string> = {
   new: 'bg-status-new-soft text-status-new-text',
@@ -36,10 +37,39 @@ export const TYPE_BADGE_STYLE: Record<string, string> = {
   delivery: 'bg-sky-100 text-sky-700 border border-sky-200 dark:bg-sky-950/50 dark:text-sky-300 dark:border-sky-900',
 }
 
-export const PAYMENT_LABELS: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  transfer: 'Перевод',
+// Реэкспорт общего словаря — на него уже ссылаются другие модули.
+// Локальная копия не знала про 'split' (бэкенд пишет его при смешанной оплате)
+// и рисовала для таких заказов пустоту.
+export { PAYMENT_LABELS }
+
+/**
+ * PaymentCell — «чем и куда» заплатили. До 3.16.111 колонка всегда показывала
+ * «—»: список заказов вообще не отдавал payment_method с бэка.
+ *
+ * Смешанная оплата раскрывается построчно — кассиру важно видеть, сколько
+ * ушло наличными, а сколько на карту, и на какие счета.
+ */
+function PaymentCell({ order }: { order: Order }) {
+  const pay = describePayment(order)
+  if (!pay) return <span className="text-xs text-muted-foreground">—</span>
+  if (pay.isMixed && pay.parts.length > 0) {
+    return (
+      <div className="text-xs">
+        <span className="font-medium text-foreground">{pay.label}</span>
+        {pay.parts.map((p, i) => (
+          <div key={i} className="text-muted-foreground whitespace-nowrap">
+            {p.label}{p.account ? ` · ${p.account}` : ''} — {formatCurrency(p.amount)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+  return (
+    <div className="text-xs">
+      <span className="text-foreground">{pay.label}</span>
+      {pay.account && <div className="text-muted-foreground whitespace-nowrap">{pay.account}</div>}
+    </div>
+  )
 }
 
 export const isTogo = (t?: string) => t === 'delivery' || t === 'takeaway'
@@ -127,7 +157,16 @@ function OrderCardInner({ order, tablesData, usersData, voids, servicePercent, o
           {cancelledCount > 0 && <span className="ml-1 text-zinc-500">· отм. {cancelledCount}</span>}
           {voidedCount > 0 && <span className="ml-1 text-rose-500">· списано {voidedCount}</span>}
         </span>
-        <span>{waiter?.name.split(' ')[0] ?? '—'} {order.paymentMethod ? `· ${PAYMENT_LABELS[order.paymentMethod]}` : ''}</span>
+        <span>
+          {waiter?.name.split(' ')[0] ?? '—'}
+          {(() => {
+            // Метод + счёт: на узком экране одной строкой, детализация
+            // смешанной оплаты живёт в раскрытой карточке и в чеке.
+            const pay = describePayment(order)
+            if (!pay) return ''
+            return ` · ${pay.label}${pay.account ? ` (${pay.account})` : ''}`
+          })()}
+        </span>
       </div>
 
       {order.cancelReason && (
@@ -227,7 +266,7 @@ function OrderRowInner({ order, tablesData, usersData, voids, servicePercent, on
         </div>
       </td>
       <td className="px-4 py-3">
-        <span className="text-xs text-muted-foreground">{order.paymentMethod ? PAYMENT_LABELS[order.paymentMethod] : '—'}</span>
+        <PaymentCell order={order} />
       </td>
       {renderActions && (
         <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
@@ -354,7 +393,7 @@ export function VirtualOrderRows({ orders, tablesData, usersData, voidsByOrderId
                     <Clock className="size-3.5" />{getTimeSince(order.createdAt, order.status === 'done' ? order.closedAt : null)}
                   </div>
                 </div>
-                <div className="px-4 py-3"><span className="text-xs text-muted-foreground">{order.paymentMethod ? PAYMENT_LABELS[order.paymentMethod] : '—'}</span></div>
+                <div className="px-4 py-3"><PaymentCell order={order} /></div>
                 {renderActions && (
                   <div className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>{renderActions(order)}</div>
                 )}

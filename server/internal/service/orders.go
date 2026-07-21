@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"gorm.io/datatypes"
 	"strconv"
 	"time"
 
@@ -94,6 +95,14 @@ type OrderSlim struct {
 	// открывает модалку контактов повторно.
 	DeliveryPhone   *string `json:"delivery_phone,omitempty"`
 	DeliveryAddress *string `json:"delivery_address,omitempty"`
+	// Оплата. Без этих полей список закрытых заказов не мог показать, чем
+	// расплатились: колонка «Оплата» в истории всегда рисовала «—», а чек
+	// закрытого заказа печатал «Оплата: —». Payments — jsonb как есть
+	// ([{method, amount, account_id, account_name}]), с 3.16.111 заполняется
+	// и для одиночной оплаты, поэтому одна ветка UI покрывает оба случая.
+	PaymentMethod *string        `json:"payment_method,omitempty"`
+	Payments      datatypes.JSON `json:"payments,omitempty"`
+	IsSplit       *bool          `json:"is_split,omitempty"`
 	// Enriched display-only fields (батч-загрузка в List, чтобы избежать N+1 на клиенте).
 	TableName  string `json:"table_name,omitempty"`
 	WaiterName string `json:"waiter_name,omitempty"`
@@ -126,11 +135,17 @@ type orderSlimRow struct {
 	CreatedAt        time.Time       `gorm:"column:created_at"`
 	ClosedAt         *time.Time      `gorm:"column:closed_at"`
 	RefundedTotal    decimal.Decimal `gorm:"column:refunded_total"`
+	DeliveryPhone    *string         `gorm:"column:delivery_phone"`
+	DeliveryAddress  *string         `gorm:"column:delivery_address"`
+	PaymentMethod    *string         `gorm:"column:payment_method"`
+	Payments         datatypes.JSON  `gorm:"column:payments"`
+	IsSplit          *bool           `gorm:"column:is_split"`
 }
 
 const slimSelect = `id, order_number, status, "type", table_id, waiter_id, guests_count,
 total, total_with_service, service_percent, service_amount, discount_amount, tip_amount,
-shift_id, created_at, closed_at, refunded_total, delivery_phone, delivery_address`
+shift_id, created_at, closed_at, refunded_total, delivery_phone, delivery_address,
+payment_method, payments, is_split`
 
 // List — постраничный slim-список. Использует индекс
 // idx_orders_restaurant_created (PRD 05) → keyset быстрый.
@@ -206,6 +221,14 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 			ShiftID:        r.ShiftID,
 			CreatedAt:      r.CreatedAt,
 			ClosedAt:       r.ClosedAt,
+			// Доставка попала в slimSelect и в OrderSlim в 3.16.109, но не в
+			// orderSlimRow и не сюда — колонки выбирались, а до клиента не
+			// доезжали, и касса переспрашивала адрес.
+			DeliveryPhone:   r.DeliveryPhone,
+			DeliveryAddress: r.DeliveryAddress,
+			PaymentMethod:   r.PaymentMethod,
+			Payments:        r.Payments,
+			IsSplit:         r.IsSplit,
 		})
 	}
 	// Enrich display-only поля (table_name, waiter_name, zone_name) батч-запросами.

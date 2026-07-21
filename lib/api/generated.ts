@@ -11085,6 +11085,17 @@ export interface components {
             /** @description Контакты доставки — заполняются на оплате заказа type='delivery' */
             delivery_phone?: string;
             delivery_address?: string;
+            /** @description Состав оплаты. С 3.16.111 заполняется и для одиночной оплаты (один элемент), поэтому «чем и на какой счёт заплатили» доступно единообразно. */
+            payments?: components["schemas"]["OrderPaymentPart"][];
+        };
+        OrderPaymentPart: {
+            /** @enum {string} */
+            method?: "cash" | "card" | "transfer";
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+            /** @description Имя счёта на момент оплаты (денормализовано) */
+            account_name?: string;
         };
         PaymentSplit: {
             /** @enum {string} */
@@ -11165,6 +11176,13 @@ export interface components {
             service_amount?: components["schemas"]["Decimal"];
             /** Format: date-time */
             created_at?: string;
+            /** @description cash|card|transfer|split */
+            payment_method?: string;
+            is_split?: boolean;
+            /** @description Состав оплаты — заполнен и для одиночной оплаты (один элемент). */
+            payments?: components["schemas"]["OrderPaymentPart"][];
+            delivery_phone?: string;
+            delivery_address?: string;
             /** @description Заполняется только при ?include=items. Иначе отсутствует. */
             items?: components["schemas"]["OrderItem"][];
         };

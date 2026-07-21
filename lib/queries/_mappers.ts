@@ -265,11 +265,21 @@ export function _mapV4OrderItem(i: Record<string, any>): OrderItem {
 
 export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[]): Order {
   const mappedItems = (items ?? []).map(_mapV4OrderItem)
-  let payments: import('../types').OrderPayment[] = []
-  if (Array.isArray(r.payments)) payments = r.payments
+  // payments приходит как jsonb-массив (или строка, если драйвер отдал текстом).
+  // Элементы — snake_case из БД, а тип OrderPayment — camelCase, поэтому
+  // нормализуем: раньше массив клался сырым, и p.accountName было undefined
+  // при заполненном account_name (счёт оплаты «терялся» по дороге).
+  let rawPayments: any[] = []
+  if (Array.isArray(r.payments)) rawPayments = r.payments
   else if (typeof r.payments === 'string' && r.payments.length > 0) {
-    try { const p = JSON.parse(r.payments); if (Array.isArray(p)) payments = p } catch {}
+    try { const p = JSON.parse(r.payments); if (Array.isArray(p)) rawPayments = p } catch {}
   }
+  const payments: import('../types').OrderPayment[] = rawPayments.map((p: any) => ({
+    method: p.method,
+    amount: Number(p.amount ?? 0),
+    accountId: p.accountId ?? p.account_id ?? '',
+    accountName: p.accountName ?? p.account_name ?? undefined,
+  }))
   return {
     id: r.id,
     orderNumber: r.order_number != null ? Number(r.order_number) : undefined,

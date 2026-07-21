@@ -3698,6 +3698,19 @@ components:
         split_count: { type: integer }
         delivery_phone: { type: string, description: "Контакты доставки — заполняются на оплате заказа type='delivery'" }
         delivery_address: { type: string }
+        payments:
+          type: array
+          description: >
+            Состав оплаты. С 3.16.111 заполняется и для одиночной оплаты (один
+            элемент), поэтому «чем и на какой счёт заплатили» доступно единообразно.
+          items: { $ref: "#/components/schemas/OrderPaymentPart" }
+    OrderPaymentPart:
+      type: object
+      properties:
+        method: { type: string, enum: [cash, card, transfer] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        account_name: { type: string, description: "Имя счёта на момент оплаты (денормализовано)" }
     PaymentSplit:
       type: object
       required: [method, amount, account_id]
@@ -3769,6 +3782,14 @@ components:
         service_percent: { $ref: "#/components/schemas/Decimal" }
         service_amount: { $ref: "#/components/schemas/Decimal" }
         created_at: { type: string, format: date-time }
+        payment_method: { type: string, description: "cash|card|transfer|split" }
+        is_split: { type: boolean }
+        payments:
+          description: Состав оплаты — заполнен и для одиночной оплаты (один элемент).
+          type: array
+          items: { $ref: "#/components/schemas/OrderPaymentPart" }
+        delivery_phone: { type: string }
+        delivery_address: { type: string }
         items:
           description: Заполняется только при ?include=items. Иначе отсутствует.
           type: array

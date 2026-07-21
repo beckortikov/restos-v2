@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, RefreshCw, Search, X, CreditCard, UtensilsCrossed, ShoppingBag, Bike, Clock, Printer } from 'lucide-react'
+import { LayoutGrid, RefreshCw, Search, X, CreditCard, UtensilsCrossed, ShoppingBag, Bike, Clock, Printer, Banknote } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { fetchActiveShift, fetchOrders, fetchTables, fetchZones, fetchUsers, reprintOrderReceipt } from '@/lib/queries'
+import { describePayment, isCashMethod } from '@/lib/payment-labels'
 import { formatCurrency, getTimeSince } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildReceiptData } from '@/lib/receipt-data'
@@ -174,6 +175,26 @@ export default function PosV2Orders() {
                       <span style={{ color: 'var(--pv-text-3)' }}>· {n} поз.</span>
                       {!closed && <span className="flex items-center gap-0.5 shrink-0" style={{ color: 'var(--pv-text-3)' }}><Clock style={{ width: '0.85rem', height: '0.85rem' }} />{getTimeSince(o.createdAt)}</span>}
                     </div>
+                    {/* Чем расплатились — только у закрытых: у открытых оплаты
+                        ещё нет, а место в карточке дорогое. */}
+                    {closed && o.status === 'done' && (() => {
+                      const pay = describePayment(o)
+                      if (!pay) return null
+                      return (
+                        <div className="flex items-center gap-1.5 flex-wrap" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
+                          {isCashMethod(pay.parts[0]?.method ?? o.paymentMethod)
+                            ? <Banknote style={{ width: '0.95rem', height: '0.95rem' }} />
+                            : <CreditCard style={{ width: '0.95rem', height: '0.95rem' }} />}
+                          <span>{pay.label}</span>
+                          {pay.account && <span style={{ color: 'var(--pv-text-3)' }}>· {pay.account}</span>}
+                          {pay.isMixed && pay.parts.length > 0 && (
+                            <span style={{ color: 'var(--pv-text-3)' }}>
+                              ({pay.parts.map(p => `${p.label} ${formatCurrency(p.amount)}`).join(' + ')})
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })()}
                     <div className="font-bold" style={{ color: closed && o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-brand)', fontSize: 'clamp(1.15rem,1.6vw,1.45rem)' }}>{formatCurrency(o.total)}</div>
                   </button>
                   {!closed && o.type === 'hall' && (
