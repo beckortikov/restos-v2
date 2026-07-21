@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { useFavorites } from '@/lib/pos-favorites'
+import { toggleFavorite, useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
@@ -143,6 +143,34 @@ export default function PosV2Order() {
   const [search, setSearch] = useState('')
   const deferred = useDeferredValue(search)
   const [activeCat, setActiveCat] = useState<string | null>(null)
+  // Избранное: долгое нажатие по карточке блюда (тач) или правый клик (мышь).
+  // Раньше /pos2 умел только ЧИТАТЬ список — вкладка «Избранное» была, а
+  // положить в неё что-то можно было лишь из старого POS.
+  const longPress = useRef<{ timer?: number; fired: boolean; x: number; y: number }>({ fired: false, x: 0, y: 0 })
+  const toggleFav = useCallback((m: MenuItem) => {
+    if (!restaurantId) return
+    if (toggleFavorite(restaurantId, m.id)) toast.success(`«${m.name}» в избранном`)
+    else toast.message('Убрано из избранного', { description: m.name })
+  }, [restaurantId])
+  const pressStart = useCallback((e: React.PointerEvent, m: MenuItem) => {
+    // Правая кнопка мыши — не долгое нажатие, её обрабатывает onContextMenu.
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    longPress.current.fired = false
+    longPress.current.x = e.clientX
+    longPress.current.y = e.clientY
+    window.clearTimeout(longPress.current.timer)
+    longPress.current.timer = window.setTimeout(() => {
+      longPress.current.fired = true
+      toggleFav(m)
+    }, 450)
+  }, [toggleFav])
+  const pressCancel = useCallback(() => window.clearTimeout(longPress.current.timer), [])
+  // Палец поехал — это скролл сетки, а не удержание.
+  const pressMove = useCallback((e: React.PointerEvent) => {
+    if (Math.abs(e.clientX - longPress.current.x) > 12 || Math.abs(e.clientY - longPress.current.y) > 12) {
+      window.clearTimeout(longPress.current.timer)
+    }
+  }, [])
   const [cart, setCart] = useState<CartLine[]>([])
   const [selectedTableId, setSelectedTableId] = useState<string>('')
   const [tablesOpen, setTablesOpen] = useState(false)
@@ -824,11 +852,12 @@ export default function PosV2Order() {
         {/* Категории переносятся на второй ряд (flex-wrap), а не скроллятся
             горизонтально — все категории видны сразу. Интервалы уменьшены. */}
         <div className="flex flex-wrap items-center shrink-0" style={{ gap: 'clamp(0.3rem,0.5vw,0.5rem)', padding: 'var(--pv-gap) var(--pv-gap) clamp(0.35rem,0.6vw,0.55rem) 0' }}>
-          {favorites.length > 0 && (
-            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>
-              <Star style={{ width: '1rem', height: '1rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
-            </button>
-          )}
+          {/* Чип виден ВСЕГДА, даже когда список пуст: иначе про избранное просто
+              не узнать — жест удержания сам себя не покажет. Пустая вкладка
+              объясняет, как класть блюда. */}
+          <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} title="Удержите блюдо, чтобы добавить или убрать из избранного" className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>
+            <Star style={{ width: '1rem', height: '1rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
+          </button>
           {visibleCats.map(c => {
             const on = c === currentCat && !deferred.trim()
             return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
@@ -840,7 +869,15 @@ export default function PosV2Order() {
           {loading ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка меню…</div>
           ) : dishes.length === 0 ? (
-            <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
+            currentCat === '__fav__' && !deferred.trim() ? (
+              <div className="h-full flex flex-col items-center justify-center text-center" style={{ color: 'var(--pv-text-3)', gap: '0.6rem', padding: '1rem' }}>
+                <Star style={{ width: '2.2rem', height: '2.2rem', color: 'var(--pv-border)' }} />
+                <span className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Избранное пусто</span>
+                <span style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Откройте категорию и удержите блюдо секунду — оно попадёт сюда</span>
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
+            )
           ) : (
             <div style={menuGridStyle(menuGrid, gridAreaH)}>
               {dishes.map(m => {
@@ -859,11 +896,31 @@ export default function PosV2Order() {
                   // эмодзи-плейсхолдера и БЕЗ звёздочки-избранного на карточке.
                   // Цена — без ,00 (formatCurrencyCompact): «300 с.», не «300,00 с.».
                   <div key={m.id} className="relative">
-                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none overflow-hidden" style={{ containerType: 'inline-size', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.45rem,0.9vw,1rem) clamp(0.4rem,0.7vw,0.85rem)', gap: 'clamp(0.3rem,0.6vw,0.8rem)', minHeight: menuGrid === 'auto' ? 'clamp(7rem,11vw,9.5rem)' : 0, height: menuGrid === 'auto' ? undefined : '100%', opacity: stopped ? 0.6 : 1 }}>
+                    <button
+                      onClick={() => {
+                        // Клик после сработавшего удержания — это «хвост» того же
+                        // жеста: блюдо уже ушло в избранное, в корзину не кладём.
+                        if (longPress.current.fired) { longPress.current.fired = false; return }
+                        add(m)
+                      }}
+                      onPointerDown={e => pressStart(e, m)}
+                      onPointerUp={pressCancel}
+                      onPointerLeave={pressCancel}
+                      onPointerCancel={pressCancel}
+                      onPointerMove={pressMove}
+                      onContextMenu={e => {
+                        e.preventDefault()
+                        pressCancel()
+                        if (!longPress.current.fired) { toggleFav(m); longPress.current.fired = true }
+                      }}
+                      disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none overflow-hidden" style={{ containerType: 'inline-size', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.45rem,0.9vw,1rem) clamp(0.4rem,0.7vw,0.85rem)', gap: 'clamp(0.3rem,0.6vw,0.8rem)', minHeight: menuGrid === 'auto' ? 'clamp(7rem,11vw,9.5rem)' : 0, height: menuGrid === 'auto' ? undefined : '100%', opacity: stopped ? 0.6 : 1, userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}>
                       <span className="font-semibold leading-tight" style={{ color: 'var(--pv-text)', ...dishNameStyle(m.name) }}>{m.name}</span>
                       <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.35em 0.85em', fontSize: 'clamp(0.58rem, 11cqw, 1.1rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
+                    {/* Звёздочка только у избранного: иначе кассир не видит, что
+                        повторное удержание УБЕРЁТ блюдо из списка. */}
+                    {favSet.has(m.id) && <Star className="absolute pointer-events-none" style={{ top: '0.5rem', left: '0.5rem', width: '0.95rem', height: '0.95rem', color: 'var(--pv-brand)', fill: 'var(--pv-brand)' }} />}
                   </div>
                 )
               })}
