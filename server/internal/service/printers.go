@@ -49,12 +49,14 @@ type PrinterInput struct {
 	Station *string `json:"station,omitempty"`
 	// Stations — цехи станционного принтера (053): всё, что попало в заказ по
 	// этим цехам, печатается одним бегунком. Полная замена списка на PATCH.
-	Stations  *[]string `json:"stations,omitempty"`
-	Driver    *string   `json:"driver,omitempty"` // tcp|usb|virtual|mock
-	Target    *string   `json:"target,omitempty"`
-	Cols      *int      `json:"cols,omitempty"`
-	IsDefault *bool     `json:"is_default,omitempty"`
-	Enabled   *bool     `json:"enabled,omitempty"`
+	Stations *[]string `json:"stations,omitempty"`
+	Driver   *string   `json:"driver,omitempty"` // tcp|usb|virtual|mock
+	Target   *string   `json:"target,omitempty"`
+	Cols     *int      `json:"cols,omitempty"`
+	// Codepage — таблица символов принтера (ESC t n), 055. 17 = PC866.
+	Codepage  *int  `json:"codepage,omitempty"`
+	IsDefault *bool `json:"is_default,omitempty"`
+	Enabled   *bool `json:"enabled,omitempty"`
 	// Content flags (миграция 015).
 	PrintLogo       *bool `json:"print_logo,omitempty"`
 	PrintDiscount   *bool `json:"print_discount,omitempty"`
@@ -256,6 +258,12 @@ func (s *PrintersService) Create(ctx context.Context, in PrinterInput) (*models.
 	if in.Cols != nil {
 		p.Cols = *in.Cols
 	}
+	if in.Codepage != nil {
+		if *in.Codepage < 0 || *in.Codepage > 255 {
+			return nil, apperrors.Wrap("VALIDATION", "codepage must be 0..255", nil)
+		}
+		p.Codepage = *in.Codepage
+	}
 	if in.IsDefault != nil {
 		p.IsDefault = *in.IsDefault
 	}
@@ -380,6 +388,12 @@ func (s *PrintersService) Patch(ctx context.Context, id string, in PrinterInput)
 	}
 	if in.Cols != nil {
 		updates["cols"] = *in.Cols
+	}
+	if in.Codepage != nil {
+		if *in.Codepage < 0 || *in.Codepage > 255 {
+			return nil, apperrors.Wrap("VALIDATION", "codepage must be 0..255", nil)
+		}
+		updates["codepage"] = *in.Codepage
 	}
 	if in.IsDefault != nil {
 		updates["is_default"] = *in.IsDefault
@@ -536,6 +550,55 @@ func indexOf(s, sub string) int {
 // Создаёт print_job типа "test" с готовым ESC/POS-эталоном (TestPageLayout) и
 // привязкой printer_id=<this>. Воркер на следующем тике отправит. Если принтер
 // неисправен — job попадёт в failed, видно в /print/jobs?status=failed.
+// CodepageProbe — печать пробы кодовых страниц (055).
+//
+// Печатает одну и ту же русскую строку несколькими таблицами подряд с
+// подписью номера. Нужна, когда принтер печатает вместо кириллицы мусор:
+// единой нумерации в ESC/POS нет, а самотест со списком таблиц печатают не
+// все модели. Кассир смотрит, какая строка читается, и вбивает её номер в
+// настройку принтера.
+func (s *PrintersService) CodepageProbe(ctx context.Context, id string) (*models.PrintJob, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	scoped, _ := s.r.ForTenant(ctx)
+	var p models.Printer
+	if err := scoped.Where("id = ?", id).First(&p).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	if !p.Enabled {
+		return nil, apperrors.Wrap("CONFLICT", "printer is disabled", nil)
+	}
+
+	payload := escpos.CodepageProbeLayout(escpos.CodepageProbeInput{
+		PrinterName: p.Name,
+		Cols:        p.Cols,
+		Now:         time.Now().UTC(),
+	})
+
+	now := time.Now().UTC()
+	pid := p.ID
+	job := &models.PrintJob{
+		ID:           uuid.NewString(),
+		Type:         "test",
+		PrinterID:    &pid,
+		Payload:      payload,
+		Status:       "pending",
+		RestaurantID: &rid,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	scoped2, _ := s.r.ForTenant(ctx)
+	if err := scoped2.Session(&gorm.Session{SkipHooks: true}).Create(job).Error; err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
 func (s *PrintersService) Test(ctx context.Context, id string) (*models.PrintJob, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
@@ -563,6 +626,7 @@ func (s *PrintersService) Test(ctx context.Context, id string) (*models.PrintJob
 		PrinterName: p.Name,
 		Station:     station,
 		Cols:        p.Cols,
+		Codepage:    byte(p.Codepage),
 		Now:         time.Now().UTC(),
 	})
 

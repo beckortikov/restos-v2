@@ -1154,6 +1154,7 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 	}
 	if hasReceiptP {
 		in.Cols = receiptP.Cols
+		in.Codepage = byte(receiptP.Codepage)
 		in.SuppressLogo = !receiptP.PrintLogo
 		in.SuppressDiscount = !receiptP.PrintDiscount
 		in.SuppressService = !receiptP.PrintService

@@ -21,8 +21,13 @@ type Printer struct {
 	Driver       string  `gorm:"not null" json:"driver"`
 	Target       string  `gorm:"not null;default:''" json:"target"`
 	Cols         int     `gorm:"not null;default:48" json:"cols"`
-	IsDefault    bool    `gorm:"column:is_default;not null;default:false" json:"is_default"`
-	Enabled      bool    `gorm:"not null;default:true" json:"enabled"`
+	// Codepage — номер таблицы символов (ESC t n), 055. 17 = PC866 по Epson.
+	// Вынесен в настройку: часть принтеров держит кириллицу на другом индексе
+	// и незнакомый номер игнорирует, оставаясь на CP437 — на чеке тогда вместо
+	// русских букв греческие символы.
+	Codepage  int  `gorm:"not null;default:17" json:"codepage"`
+	IsDefault bool `gorm:"column:is_default;not null;default:false" json:"is_default"`
+	Enabled   bool `gorm:"not null;default:true" json:"enabled"`
 	// Content flags (миграция 015) — что печатать в receipt-чеке.
 	// Для kind=station игнорируется (ранер всегда содержит позиции).
 	PrintLogo       bool `gorm:"column:print_logo;not null;default:true" json:"print_logo"`

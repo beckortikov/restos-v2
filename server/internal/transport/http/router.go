@@ -544,6 +544,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Put("/printers/{id}", printersH.Patch)
 			g.Delete("/printers/{id}", printersH.Delete)
 			g.Post("/printers/{id}/test", printersH.Test)
+			g.Post("/printers/{id}/codepage-probe", printersH.CodepageProbe)
 			g.Post("/print/jobs/{id}/retry", printJobsH.Retry)
 			g.Post("/print/jobs/{id}/dismiss", printJobsH.Dismiss)
 

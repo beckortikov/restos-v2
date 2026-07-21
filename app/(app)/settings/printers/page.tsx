@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Printer, Plus, Trash2, CheckCircle2, ListOrdered, Star, ServerCog, Loader2, Pencil, FileText } from 'lucide-react'
+import { Printer, Plus, Trash2, CheckCircle2, ListOrdered, Star, ServerCog, Loader2, Pencil, FileText, Languages } from 'lucide-react'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useAuth } from '@/lib/auth-store'
@@ -12,6 +12,7 @@ import {
   updatePrinter,
   deletePrinter,
   testPrinter,
+  probePrinterCodepage,
   listSystemQueues,
   type PrinterFormPayload,
   type SystemQueue,
@@ -53,6 +54,7 @@ type DBPrinter = {
   station?: string | null
   stations?: string[]
   cols?: number
+  codepage?: number
   print_logo?: boolean
   print_discount?: boolean
   print_service?: boolean
@@ -83,6 +85,7 @@ interface FormState {
   enabled: boolean
   is_default: boolean
   cols: number // 32 | 42 | 48
+  codepage: number // ESC t n; 17 = PC866
   print_logo: boolean
   print_discount: boolean
   print_service: boolean
@@ -101,6 +104,7 @@ const DEFAULT_FORM: FormState = {
   enabled: true,
   is_default: false,
   cols: 48,
+  codepage: 17,
   print_logo: true,
   print_discount: true,
   print_service: true,
@@ -170,6 +174,7 @@ function fromPrinter(p: DBPrinter): FormState {
     enabled: p.enabled,
     is_default: p.is_default,
     cols: p.cols ?? 48,
+    codepage: p.codepage ?? 17,
     print_logo: p.print_logo ?? true,
     print_discount: p.print_discount ?? true,
     print_service: p.print_service ?? true,
@@ -204,6 +209,7 @@ function toPayload(form: FormState, editing: boolean): PrinterFormPayload {
     enabled: form.enabled,
     is_default: form.kind === 'receipt' ? form.is_default : false,
     cols: form.cols,
+    codepage: form.codepage,
     print_logo: form.print_logo,
     print_discount: form.print_discount,
     print_service: form.print_service,
@@ -363,6 +369,21 @@ export default function PrinterSettingsPage() {
     }
   }
 
+  // Проба кодовых страниц — для принтера, который печатает кириллицу мусором.
+  const handleProbe = async (p: DBPrinter) => {
+    setTesting(p.id)
+    try {
+      await probePrinterCodepage(p.id)
+      toast.success(`Проба кодировок отправлена на «${p.name}»`, {
+        description: 'Найдите на чеке читаемую строку и впишите её номер N в настройку принтера',
+      })
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка печати пробы'))
+    } finally {
+      setTesting(null)
+    }
+  }
+
   const handleDelete = async () => {
     if (!deleteTarget) return
     try {
@@ -478,6 +499,15 @@ export default function PrinterSettingsPage() {
                     {testing === p.id
                       ? <Loader2 className="size-4 animate-spin" />
                       : <FileText className="size-4" />}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleProbe(p)}
+                    disabled={testing === p.id || !p.enabled}
+                    title="Подобрать кодировку: печатает русскую строку разными таблицами"
+                  >
+                    <Languages className="size-4" />
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => openEdit(p)} title="Редактировать">
                     <Pencil className="size-4" />
@@ -728,6 +758,40 @@ export default function PrinterSettingsPage() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            {/* Кодовая страница (055). Единой нумерации в ESC/POS нет: часть
+                принтеров держит кириллицу не на 17, а незнакомый номер молча
+                игнорирует — на чеке тогда вместо русских букв греческие
+                символы. Подобрать номер помогает кнопка «Подобрать кодировку»
+                в списке принтеров. */}
+            <div className="space-y-1.5">
+              <Label htmlFor="printer-codepage">Кодовая страница</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="printer-codepage"
+                  value={String(form.codepage)}
+                  onChange={e => {
+                    const n = Number(e.target.value.replace(/[^0-9]/g, ''))
+                    setForm(f => ({ ...f, codepage: Number.isFinite(n) ? Math.min(255, n) : 0 }))
+                  }}
+                  inputMode="numeric"
+                  className="w-24"
+                />
+                {form.codepage !== 17 && (
+                  <button
+                    type="button"
+                    onClick={() => setForm(f => ({ ...f, codepage: 17 }))}
+                    className="text-[11px] text-primary hover:underline"
+                  >
+                    вернуть 17
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                17 — стандарт (PC866), подходит большинству принтеров. Меняйте только если
+                вместо кириллицы печатается мусор.
+              </p>
             </div>
 
             {form.kind === 'receipt' && (

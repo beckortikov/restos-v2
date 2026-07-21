@@ -4296,6 +4296,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/printers/{id}/codepage-probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Проба кодовых страниц (подбор номера для кириллицы)
+         * @description Печатает одну и ту же русскую строку несколькими таблицами символов подряд, подписывая номер каждой латиницей. Нужна, когда принтер печатает вместо кириллицы мусор: единой нумерации в ESC/POS нет, а самотест со списком таблиц печатают не все модели.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PrintJob"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/printers/{id}/test": {
         parameters: {
             query?: never;
@@ -11295,6 +11339,8 @@ export interface components {
             target?: string;
             /** @description 32=58mm, 42-48=80mm */
             cols?: number;
+            /** @description Таблица символов ESC t n. 17=PC866 (дефолт). Часть принтеров держит кириллицу на другом номере */
+            codepage?: number;
             is_default?: boolean;
             enabled?: boolean;
             print_logo?: boolean;
@@ -11316,6 +11362,7 @@ export interface components {
             /** @description tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues */
             target?: string;
             cols?: number;
+            codepage?: number;
             is_default?: boolean;
             enabled?: boolean;
             print_logo?: boolean;

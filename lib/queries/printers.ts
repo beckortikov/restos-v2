@@ -15,6 +15,7 @@ type DBPrinter = {
   // station — legacy-поле, первый цех списка.
   stations?: string[]
   cols?: number
+  codepage?: number
   print_logo?: boolean
   print_discount?: boolean
   print_service?: boolean
@@ -53,6 +54,7 @@ export type PrinterFormPayload = {
   station?: string
   stations?: string[]
   cols?: number
+  codepage?: number
   print_logo?: boolean
   print_discount?: boolean
   print_service?: boolean
@@ -71,6 +73,16 @@ export async function updatePrinter(
 ): Promise<DBPrinter> {
   const res: any = await unwrap(
     api.PATCH('/api/v1/printers/{id}', { params: { path: { id } }, body: input as any }),
+  )
+  return res
+}
+
+// probePrinterCodepage — POST /printers/{id}/codepage-probe. Печатает одну
+// русскую строку несколькими кодовыми таблицами с подписью номера: так
+// подбирается codepage для принтера, который печатает кириллицу мусором.
+export async function probePrinterCodepage(id: string): Promise<{ id: string; status: string }> {
+  const res: any = await unwrap(
+    api.POST('/api/v1/printers/{id}/codepage-probe', { params: { path: { id } } } as any),
   )
   return res
 }

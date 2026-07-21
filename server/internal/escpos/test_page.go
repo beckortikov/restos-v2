@@ -8,6 +8,8 @@ type TestPageInput struct {
 	Station     string // пусто для receipt-принтеров
 	Cols        int
 	Now         time.Time
+	// Codepage — таблица символов принтера (ESC t n). 0 → 17 (PC866).
+	Codepage byte
 }
 
 // TestPageLayout — короткий чек для проверки настройки принтера.
@@ -31,7 +33,7 @@ func TestPageLayout(in TestPageInput) []byte {
 		now = time.Now()
 	}
 
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 
 	b.AlignCenter().FontDouble().Bold(true).TextLn("ТЕСТ ПЕЧАТИ").Bold(false).FontNormal()
 	b.LF()

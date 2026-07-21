@@ -1588,6 +1588,20 @@ paths:
         USB-принтер моноблока из списка, а не вбивать имя очереди руками.
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SystemPrintQueuesList" } } } } }
 
+  /api/v1/printers/{id}/codepage-probe:
+    post:
+      tags: [printers]
+      summary: Проба кодовых страниц (подбор номера для кириллицы)
+      description: >
+        Печатает одну и ту же русскую строку несколькими таблицами символов
+        подряд, подписывая номер каждой латиницей. Нужна, когда принтер печатает
+        вместо кириллицы мусор: единой нумерации в ESC/POS нет, а самотест со
+        списком таблиц печатают не все модели.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/PrintJob" } } } } }
+
   /api/v1/printers/{id}/test:
     post:
       tags: [printers]
@@ -3837,6 +3851,7 @@ components:
         driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
         target: { type: string }
         cols: { type: integer, description: "32=58mm, 42-48=80mm" }
+        codepage: { type: integer, minimum: 0, maximum: 255, description: "Таблица символов ESC t n. 17=PC866 (дефолт). Часть принтеров держит кириллицу на другом номере" }
         is_default: { type: boolean }
         enabled: { type: boolean }
         print_logo: { type: boolean }
@@ -3857,6 +3872,7 @@ components:
         driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
         target: { type: string, description: "tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues" }
         cols: { type: integer }
+        codepage: { type: integer, minimum: 0, maximum: 255 }
         is_default: { type: boolean }
         enabled: { type: boolean }
         print_logo: { type: boolean }

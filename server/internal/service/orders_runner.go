@@ -317,9 +317,12 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 	}
 	runnerTableLabel := joinNonEmpty(", ", meta.TableLabel, zoneLabel, guestsLabel)
 
+	codepages := printerCodepages(tx, restaurantID)
+
 	for _, t := range targets {
 		in := escpos.RunnerInput{
 			Station:     runnerHeaderLabel(t.stations),
+			Codepage:    codepageOfTarget(codepages, t.printerID),
 			FastFood:    isFastFood(rest),
 			OrderNumber: order.OrderNumber,
 			TableLabel:  runnerTableLabel,
@@ -388,6 +391,30 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 	return nil
 }
 
+// printerCodepages — id принтера → его таблица символов (ESC t n).
+// Один запрос на весь ресторан: принтеров единицы, а бегунок может уходить
+// сразу на несколько, и N+1 здесь был бы бессмысленным.
+func printerCodepages(tx *gorm.DB, restaurantID string) map[string]byte {
+	out := map[string]byte{}
+	var rows []models.Printer
+	if err := tx.Where("restaurant_id = ?", restaurantID).Find(&rows).Error; err != nil {
+		return out
+	}
+	for _, p := range rows {
+		out[p.ID] = byte(p.Codepage)
+	}
+	return out
+}
+
+// codepageOfTarget — таблица символов цели печати. Пустой printerID (legacy-
+// режим без привязок цехов) → 0, и layout подставит дефолт.
+func codepageOfTarget(codepages map[string]byte, printerID *string) byte {
+	if printerID == nil {
+		return 0
+	}
+	return codepages[*printerID]
+}
+
 // enqueueCancelRunners печатает "ОТМЕНА" на station-принтерах для items,
 // которые были отменены. Группирует по station так же, как enqueueRunners.
 //
@@ -449,9 +476,12 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 	var rest models.Restaurant
 	_ = tx.Where("id = ?", restaurantID).First(&rest).Error
 
+	codepages := printerCodepages(tx, restaurantID)
+
 	for _, t := range targets {
 		in := escpos.CancelRunnerInput{
 			Station:     runnerHeaderLabel(t.stations),
+			Codepage:    codepageOfTarget(codepages, t.printerID),
 			FastFood:    isFastFood(rest),
 			OrderNumber: order.OrderNumber,
 			TableLabel:  cancelTableLabel,

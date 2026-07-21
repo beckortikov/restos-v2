@@ -73,6 +73,10 @@ type ReceiptInput struct {
 	ShowTip          bool
 	ShowQRFeedback   bool
 	QRFeedbackURL    string
+	// Codepage — номер таблицы символов принтера (ESC t n). 0 → 17 (PC866).
+	// Вынесен в настройку, потому что единой нумерации нет: часть принтеров
+	// держит кириллицу на другом индексе и незнакомый номер игнорирует.
+	Codepage byte
 }
 
 // ReceiptItem — одна позиция в чеке.
@@ -109,7 +113,7 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	hrHeavy := strings.Repeat("=", cols)
 	hrLight := strings.Repeat("-", cols)
 
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 
 	// v1: bold ON для всего чека — на термопринтерах non-bold печатает блекло.
 	b.Bold(true)
@@ -277,6 +281,10 @@ type RunnerInput struct {
 	// Пусто для зала и «с собой».
 	DeliveryPhone   string
 	DeliveryAddress string
+	// Codepage — номер таблицы символов принтера (ESC t n). 0 → 17 (PC866).
+	// Вынесен в настройку, потому что единой нумерации нет: часть принтеров
+	// держит кириллицу на другом индексе и незнакомый номер игнорирует.
+	Codepage byte
 }
 
 // RunnerItem — позиция для повара.
@@ -343,7 +351,7 @@ func fmtRunnerQty(it RunnerItem) string {
 // названия блюд («Шашлык куриный») переносятся и обрезаются ножом до того
 // как принтер допечатал содержимое.
 func RunnerLayout(in RunnerInput) []byte {
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 
 	timeStr := in.CreatedAt.In(displayLoc).Format("15:04")
 
@@ -464,13 +472,17 @@ type CancelRunnerInput struct {
 	// её со стопкой чеков, где номера напечатаны 6× — а сопоставить надо
 	// быстро, блюдо уже в работе.
 	FastFood bool
+	// Codepage — номер таблицы символов принтера (ESC t n). 0 → 17 (PC866).
+	// Вынесен в настройку, потому что единой нумерации нет: часть принтеров
+	// держит кириллицу на другом индексе и незнакомый номер игнорирует.
+	Codepage byte
 }
 
 // CancelRunnerLayout — отмена. Порт buildEscPosCancellation() из v1.
 // БОЛЬШОЙ alert-блок (double-width + double-height + bold), чтобы повар
 // гарантированно увидел отмену.
 func CancelRunnerLayout(in CancelRunnerInput) []byte {
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 
 	// ── Section 1: station header centered ──────────────────────────────
 	// Фастфуд: номер заказа первым и крупно — тем же кеглем, что в обычном
@@ -564,6 +576,8 @@ type ReportInput struct {
 	// Безнал в разрезе счетов (Банк А / Банк Б). Сумма строк = CardRevenue.
 	CardByBank []ReportBankLine
 	Cols       int
+	// Codepage — таблица символов принтера (ESC t n). 0 → 17 (PC866).
+	Codepage byte
 }
 
 // XReportLayout — промежуточный отчёт.
@@ -588,6 +602,8 @@ type ServiceReportInput struct {
 	ClosedAt       time.Time
 	Waiters        []ServiceWaiterLine
 	Cols           int
+	// Codepage — таблица символов принтера (ESC t n). 0 → 17 (PC866).
+	Codepage byte
 }
 
 // ServiceReportLayout — чек по сервисному сбору за смену (рядом с X/Z).
@@ -596,7 +612,7 @@ func ServiceReportLayout(in ServiceReportInput) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 	b.Bold(true)
 	b.AlignCenter().FontTall().TextLn("ОБСЛУЖИВАНИЕ").FontNormal()
 	b.TextLn(in.RestaurantName)
@@ -639,7 +655,7 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 	b.Bold(true)
 
 	b.AlignCenter().FontTall().TextLn(title).FontNormal()

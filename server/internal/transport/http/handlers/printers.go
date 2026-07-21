@@ -80,6 +80,19 @@ func (h *PrintersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, p)
 }
 
+// CodepageProbe — POST /api/v1/printers/{id}/codepage-probe.
+// Печать пробы кодовых страниц: одна русская строка несколькими таблицами
+// подряд с подписью номера — чтобы подобрать номер для принтера, который
+// печатает вместо кириллицы мусор.
+func (h *PrintersHandler) CodepageProbe(w http.ResponseWriter, r *http.Request) {
+	j, err := h.svc.CodepageProbe(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusAccepted, j)
+}
+
 // Delete — DELETE /api/v1/printers/{id}.
 func (h *PrintersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
