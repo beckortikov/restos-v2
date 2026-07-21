@@ -417,10 +417,13 @@ func RunnerLayout(in RunnerInput) []byte {
 	for _, it := range in.Items {
 		qty := fmtRunnerQty(it)
 		name := it.Name
-		// padding до ширины 20 (v1: pad = max(0, 20 - len(name) - len(qty)))
+		// Строка блюда занимает ВСЮ ширину ленты: количество прижато к правому
+		// краю, имени достаётся всё остальное. Раньше поле было 20 колонок из
+		// 32 — правая треть бумаги простаивала, а длинные названия жались к
+		// количеству («Фри Маленький     x1» и 12 пустых колонок справа).
 		nameLen := visibleRuneCount(name)
 		qtyLen := visibleRuneCount(qty)
-		pad := 20 - nameLen - qtyLen
+		pad := ColsRunner - nameLen - qtyLen
 		if pad < 1 {
 			pad = 1
 		}
@@ -526,7 +529,8 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 		name := "X " + it.Name
 		nameLen := visibleRuneCount(name)
 		qtyLen := visibleRuneCount(qty)
-		pad := 20 - nameLen - qtyLen
+		// Та же ширина, что и у обычного бегунка (см. выше).
+		pad := ColsRunner - nameLen - qtyLen
 		if pad < 1 {
 			pad = 1
 		}

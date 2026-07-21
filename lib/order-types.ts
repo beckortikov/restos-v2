@@ -52,6 +52,22 @@ export function isPrepayMode(rest: Restaurant | null | undefined): boolean {
   return rest.tablesEnabled === false || rest.kitchenOnPay === true
 }
 
+/**
+ * canCreateWithoutPayment — можно ли создать заказ, не оплачивая его.
+ *
+ * В фастфуде нельзя: гость платит на кассе и сразу забирает. Но доставка —
+ * исключение, и по делу: заказ принимают по телефону, а деньги приходят от
+ * курьера позже. Без этого пришлось бы держать неоплаченный заказ в голове
+ * до возвращения курьера.
+ */
+export function canCreateWithoutPayment(
+  rest: Restaurant | null | undefined,
+  type: OrderType | string | null | undefined,
+): boolean {
+  if (type === 'delivery') return true
+  return !isPrepayMode(rest)
+}
+
 // needsDeliveryContacts — спросить ли телефон и адрес перед оплатой.
 export function needsDeliveryContacts(
   rest: Restaurant | null | undefined,

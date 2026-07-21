@@ -25,7 +25,7 @@ import { PrintReceipt } from '@/components/print-receipt'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
 import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit, OrderType } from '@/lib/types'
-import { ORDER_TYPE_LABELS, ORDER_TYPE_TITLES, availableOrderTypes, isPrepayMode, isTogo, needsDeliveryContacts } from '@/lib/order-types'
+import { ORDER_TYPE_LABELS, ORDER_TYPE_TITLES, availableOrderTypes, canCreateWithoutPayment, isTogo, needsDeliveryContacts } from '@/lib/order-types'
 import { describePayment } from '@/lib/payment-labels'
 import type { CartLine } from '@/components/order/types'
 
@@ -42,6 +42,33 @@ const ITEM_REASONS = ['Гость передумал', 'Ошибка кухни'
 function printerErr(e: unknown): string {
   const msg = humanizeError(e)
   return /printer|принтер/i.test(msg) ? 'Не настроен чековый принтер — Настройки → Принтеры' : `Не удалось: ${msg}`
+}
+
+// dishNameStyle — кегль и число строк под длину названия.
+//
+// Раньше кегль был фиксированным (14cqw) при жёстком обрезании в две строки:
+// «ЛАВАШ КУРИНИЙ С ОВОЩАМИ» и «Паста карбонара с курицей» упирались в предел
+// и уезжали в «…» — кассир не видел, что именно он нажимает, и отличить
+// два похожих блюда мог только по цене.
+//
+// Считаем по длине имени, а не по факту переполнения: измерять реальную
+// высоту пришлось бы в JS после отрисовки, это лишний layout-проход на
+// каждую карточку сетки. Длина символов — достаточно точный прокси, а
+// container query (cqw) продолжает подстраивать кегль под ширину карточки.
+function dishNameStyle(name: string): { fontSize: string; WebkitLineClamp: number; display: string; WebkitBoxOrient: 'vertical'; overflow: string } {
+  const n = name.length
+  const [fontSize, lines] =
+    n <= 14 ? ['clamp(0.62rem, 14cqw, 1.4rem)', 2] :
+    n <= 22 ? ['clamp(0.58rem, 11cqw, 1.1rem)', 3] :
+    n <= 32 ? ['clamp(0.54rem, 9cqw, 0.92rem)', 3] :
+              ['clamp(0.5rem, 7.5cqw, 0.8rem)', 4]
+  return {
+    fontSize,
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: lines,
+    overflow: 'hidden',
+  }
 }
 
 // Иконки типов заказа. Лейблы — в lib/order-types.ts (общий словарь), иконки
@@ -77,7 +104,9 @@ export default function PosV2Order() {
   // кухонный бегунок печатаются вместе по факту оплаты. Зеркалит серверный
   // kitchenOnPay() — если разойдётся, касса покажет кнопку, а кухня всё равно
   // не получит бегунок до оплаты.
-  const prepayMode = isPrepayMode(restaurant)
+  // Можно ли создать заказ без оплаты. В фастфуде нельзя, но доставка —
+  // исключение: заказ принимают по телефону, деньги привозит курьер.
+  const allowNoPay = canCreateWithoutPayment(restaurant, orderType)
   const [menuGrid] = useMenuGrid()
   // Высота области сетки блюд — чтобы в матричном режиме (N×M) подогнать высоту
   // рядов под экран (карточки квадратнее, а не «широкие и низкие»).
@@ -831,7 +860,7 @@ export default function PosV2Order() {
                   // Цена — без ,00 (formatCurrencyCompact): «300 с.», не «300,00 с.».
                   <div key={m.id} className="relative">
                     <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none overflow-hidden" style={{ containerType: 'inline-size', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.45rem,0.9vw,1rem) clamp(0.4rem,0.7vw,0.85rem)', gap: 'clamp(0.3rem,0.6vw,0.8rem)', minHeight: menuGrid === 'auto' ? 'clamp(7rem,11vw,9.5rem)' : 0, height: menuGrid === 'auto' ? undefined : '100%', opacity: stopped ? 0.6 : 1 }}>
-                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.62rem, 14cqw, 1.4rem)' }}>{m.name}</span>
+                      <span className="font-semibold leading-tight" style={{ color: 'var(--pv-text)', ...dishNameStyle(m.name) }}>{m.name}</span>
                       <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.35em 0.85em', fontSize: 'clamp(0.58rem, 11cqw, 1.1rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
@@ -999,7 +1028,7 @@ export default function PosV2Order() {
               <div className="flex flex-col" style={{ gap: '0.6rem' }}>
                 {/* Фастфуд = оплата вперёд: заказ без оплаты не создаётся вовсе.
                     Чек гостю и бегунок на кухню печатаются вместе по оплате. */}
-                {!prepayMode && (
+                {allowNoPay && (
                   <button disabled={paying} onClick={createQueueOrderNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
                 )}
                 <button disabled={paying} onClick={payNewQueueOrder} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
