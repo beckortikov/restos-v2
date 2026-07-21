@@ -54,7 +54,7 @@ export default function PosV2Pay() {
     if (oid && orders.length) { const o = orders.find(x => x.id === oid); if (o) { autoOpenRef.current = true; setTarget(o) } }
   }, [orders, searchParams])
 
-  const labelOf = (o: Order) => o.type === 'hall' ? `Стол ${o.tableId ? (tableNo.get(o.tableId) ?? '—') : '—'}` : 'С собой'
+  const labelOf = (o: Order) => o.type === 'hall' ? `Стол ${o.tableId ? (tableNo.get(o.tableId) ?? '—') : '—'}` : o.type === 'delivery' ? 'Доставка' : 'С собой'
   // База = o.total (с модификаторами), как считает бэк; см. PaymentPanel.
   const payableOf = (o: Order) => calcPayable(o.total, 0, o.type === 'hall' ? (restaurant?.servicePercent ?? 0) : 0)
 

@@ -542,7 +542,7 @@ export default function PosV2Shift() {
                   <div className="flex items-center gap-1.5 font-bold" style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><AlertTriangle style={{ width: '1rem', height: '1rem' }} />Смена не закрывается — есть незакрытые заказы</div>
                   <div style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)', opacity: 0.9 }}>Отмените их (или закройте с оплатой из заказа), затем нажмите «Закрыть смену» ещё раз.</div>
                   <div className="flex flex-col gap-1.5">
-                    {stuckOrders.map(o => { const label = o.type === 'takeaway' ? 'С собой' : 'Зал'; return (
+                    {stuckOrders.map(o => { const label = o.type === 'takeaway' ? 'С собой' : o.type === 'delivery' ? 'Доставка' : 'Зал'; return (
                       <div key={o.id} className="flex items-center justify-between rounded-lg" style={{ background: 'var(--pv-card)', padding: '0.5rem 0.7rem' }}>
                         <span style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{label} №{o.orderNumber ?? '—'} <span style={{ color: 'var(--pv-text-3)' }}>{formatCurrency(o.total ?? 0)}</span></span>
                         <button disabled={cancellingId === o.id} onClick={() => cancelStuck(o.id)} className="flex items-center gap-1 rounded-md font-semibold disabled:opacity-50" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.35rem 0.6rem', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}><Ban style={{ width: '0.85rem', height: '0.85rem' }} />{cancellingId === o.id ? 'Отмена…' : 'Отменить'}</button>

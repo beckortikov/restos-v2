@@ -75,7 +75,7 @@ export default function PosV2Ticket() {
     fetchUsers().then(u => setWaiters(u.filter(x => x.role === 'waiter'))).catch(() => {})
   }, [load])
 
-  const label = order ? (order.type === 'hall' ? `Стол ${order.tableId ? (tableNo.get(order.tableId) ?? '—') : '—'}` : 'С собой') : ''
+  const label = order ? (order.type === 'hall' ? `Стол ${order.tableId ? (tableNo.get(order.tableId) ?? '—') : '—'}` : order.type === 'delivery' ? 'Доставка' : 'С собой') : ''
   const items = order?.items ?? []
   const liveItems = items.filter(i => !i.cancelledAt)
 
