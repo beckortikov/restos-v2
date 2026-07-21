@@ -459,6 +459,11 @@ type CancelRunnerInput struct {
 	Items       []RunnerItem
 	Reason      string
 	Cols        int
+	// FastFood — крупный номер заказа шапкой, как в обычном бегунке.
+	// Без него отмена приходила с мелким «Зак: 1», и повар не мог сопоставить
+	// её со стопкой чеков, где номера напечатаны 6× — а сопоставить надо
+	// быстро, блюдо уже в работе.
+	FastFood bool
 }
 
 // CancelRunnerLayout — отмена. Порт buildEscPosCancellation() из v1.
@@ -468,7 +473,14 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
 
 	// ── Section 1: station header centered ──────────────────────────────
+	// Фастфуд: номер заказа первым и крупно — тем же кеглем, что в обычном
+	// бегунке, иначе отмену не сопоставить со стопкой чеков на полке.
 	b.AlignCenter()
+	if in.FastFood {
+		b.Bold(true).FontBig()
+		b.TextLn(strconv.Itoa(in.OrderNumber))
+		b.FontNormal().Bold(false)
+	}
 	b.TextLn("(" + strings.ToUpper(in.Station) + ")")
 	b.TextLn("================================")
 

@@ -397,6 +397,26 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 	if len(items) == 0 {
 		return nil
 	}
+	// Отменяем только то, что кухня РЕАЛЬНО видела. printed_at проставляется
+	// в enqueueRunners после успешной постановки бегунка, поэтому пустой
+	// printed_at = позиция на кухню не уходила.
+	//
+	// Без этого фильтра в фастфуде (бегунок печатается на ОПЛАТЕ) отмена
+	// неоплаченного заказа выплёвывала повару «БЛЮДА УДАЛЕНЫ! НЕ ГОТОВИТЬ!»
+	// про блюдо, о котором он никогда не слышал: в лучшем случае мусор, в
+	// худшем — повар решает, что пропустил заказ, и идёт разбираться.
+	// Тот же эффект в зале, если позицию удалили до «Отправить на кухню».
+	printed := make([]models.OrderItem, 0, len(items))
+	for _, it := range items {
+		if it.PrintedAt != nil {
+			printed = append(printed, it)
+		}
+	}
+	if len(printed) == 0 {
+		return nil
+	}
+	items = printed
+
 	menuIDs := make([]string, 0, len(items))
 	for _, it := range items {
 		if it.MenuItemID != nil {
@@ -426,9 +446,13 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 	meta := loadOrderPrintMeta(tx, order, false)
 	cancelTableLabel := joinNonEmpty(", ", meta.TableLabel, meta.ZoneName)
 
+	var rest models.Restaurant
+	_ = tx.Where("id = ?", restaurantID).First(&rest).Error
+
 	for _, t := range targets {
 		in := escpos.CancelRunnerInput{
 			Station:     runnerHeaderLabel(t.stations),
+			FastFood:    isFastFood(rest),
 			OrderNumber: order.OrderNumber,
 			TableLabel:  cancelTableLabel,
 			WaiterName:  meta.WaiterName,
