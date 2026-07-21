@@ -1347,7 +1347,7 @@ export default function PosV2Order() {
                     ) : (
                       <div className="flex flex-col" style={{ gap: '0.4rem' }}>
                         {rows.map(o => {
-                          const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
+                          const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : o.type === 'delivery' ? 'Доставка' : 'С собой'
                           const n = (o.items ?? []).filter(i => !i.cancelledAt).length
                           const isClosed = o.status === 'done' || o.status === 'cancelled'
                           const time = isClosed ? (o.closedAt ? ` · закрыт ${new Date(o.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : '') : ` · ${getTimeSince(o.createdAt)}`
