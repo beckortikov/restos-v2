@@ -261,9 +261,20 @@ export default function PosV2Order() {
   // сброс контекста не нужен (иначе он затрёт выбранный стол/группу).
   const skipTypeResetRef = useRef(false)
   useEffect(() => {
-    if (typeInitRef.current) { typeInitRef.current = false; return }
+    // Первый рендер: контекст сбрасывать нечего, но очередь загрузить НАДО.
+    // Раньше здесь был просто return, и на свежеоткрытом экране список заказов
+    // по номеру не подтягивался вовсе — вкладки появлялись только после
+    // переключения типа туда-обратно. Отсюда «то попадает, то стоит».
+    if (typeInitRef.current) {
+      typeInitRef.current = false
+      if (numberMode) loadQueue(orderType)
+      return
+    }
     if (skipTypeResetRef.current) { skipTypeResetRef.current = false; return }
-    setCart([]); setActiveGroupId(null)
+    // Корзину при смене типа НЕ чистим: кассир набрал блюда и понял, что это
+    // «с собой», а не в зал — переключение типа не должно стирать набранное.
+    // Контекст заказа (группа/стол) сбрасываем — он привязан к прежнему типу.
+    setActiveGroupId(null)
     if (numberMode) { setSelectedTableId(''); loadQueue(orderType) }
     else { setSelectedTableId(''); setTableOrders([]) }
   }, [orderType, numberMode, loadQueue])

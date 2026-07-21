@@ -344,7 +344,7 @@ export default function DashboardPage() {
   // Orders by type (chart 3)
   const ordersByType = useMemo(() => {
     const todayAll = orders.filter(o => inRange(o.createdAt))
-    const labels: Record<string, string> = { hall: 'Зал', delivery: 'Доставка', takeaway: 'Самовывоз' }
+    const labels: Record<string, string> = { hall: 'Зал', delivery: 'Доставка', takeaway: 'С собой' }
     const counts: Record<string, number> = { hall: 0, delivery: 0, takeaway: 0 }
     todayAll.forEach(o => { if (counts[o.type] !== undefined) counts[o.type]++ })
     return Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => ({ name: labels[k], value: v }))
@@ -542,7 +542,7 @@ export default function DashboardPage() {
                           {ORDER_STATUS_LABELS[o.status]}
                         </span>
                         <span className="text-foreground font-medium truncate">
-                          {table?.name || (o.type === 'delivery' ? 'Доставка' : 'Самовывоз')}
+                          {table?.name || (o.type === 'delivery' ? 'Доставка' : 'С собой')}
                         </span>
                         <span className="text-muted-foreground">{o.items.length} поз.</span>
                       </div>

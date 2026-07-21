@@ -29,7 +29,7 @@ export const STATUS_STYLE: Record<OrderStatus, string> = {
 export const TYPE_LABELS: Record<string, string> = {
   hall: 'Зал',
   delivery: 'Доставка',
-  takeaway: 'Самовывоз',
+  takeaway: 'С собой',
 }
 
 export const TYPE_BADGE_STYLE: Record<string, string> = {

@@ -51,7 +51,7 @@ import type { CartLine, OrderComposerProps, TabInfo } from './types'
 
 const ORDER_TYPE_OPTIONS = [
   { value: 'hall' as const, label: 'Зал', icon: UtensilsCrossed },
-  { value: 'takeaway' as const, label: 'Самовывоз', icon: ShoppingBag },
+  { value: 'takeaway' as const, label: 'С собой', icon: ShoppingBag },
   { value: 'delivery' as const, label: 'Доставка', icon: Truck },
 ]
 

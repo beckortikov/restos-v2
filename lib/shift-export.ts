@@ -40,7 +40,7 @@ function num(n: number): number {
 
 const TYPE_LABEL: Record<string, string> = {
   hall: 'Зал',
-  takeaway: 'Самовывоз',
+  takeaway: 'С собой',
   delivery: 'Доставка',
 }
 

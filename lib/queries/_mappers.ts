@@ -182,7 +182,11 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     address: r.address,
     phone: r.phone,
     currency: r.currency || 'TJS',
-    servicePercent: r.service_percent != null ? Number(r.service_percent) : 10,
+    // Дефолт 0, а НЕ 10: отсутствующий процент — это «неизвестно», и молча
+    // начислять гостю 10% по такому поводу нельзя. Ошибка в безопасную
+    // сторону — недосчитать обслуживание заметят, лишние 10% в чеке гостя
+    // заметят хуже и позже.
+    servicePercent: r.service_percent != null ? Number(r.service_percent) : 0,
     timezone: r.timezone || 'Asia/Dushanbe',
     enforceStockCheck: r.enforce_stock_check ?? false,
     techCardsEnabled: r.tech_cards_enabled ?? true,

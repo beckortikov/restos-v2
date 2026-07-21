@@ -93,7 +93,7 @@ func joinNonEmpty(sep string, parts ...string) string {
 	return strings.Join(out, sep)
 }
 
-// orderTypeLabel — "Зал" / "Доставка" / "Самовывоз".
+// orderTypeLabel — "Зал" / "Доставка" / "С собой".
 func orderTypeLabel(order *models.Order) string {
 	if order == nil || order.Type == nil {
 		return "Зал"
@@ -102,7 +102,7 @@ func orderTypeLabel(order *models.Order) string {
 	case "delivery":
 		return "Доставка"
 	case "takeaway":
-		return "Самовывоз"
+		return "С собой"
 	default:
 		return "Зал"
 	}

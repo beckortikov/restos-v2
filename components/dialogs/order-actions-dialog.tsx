@@ -40,7 +40,7 @@ const STATUS_STYLE: Record<OrderStatus, { bg: string; text: string }> = {
 const TYPE_LABELS: Record<string, string> = {
   hall: 'Зал',
   delivery: 'Доставка',
-  takeaway: 'Самовывоз',
+  takeaway: 'С собой',
 }
 
 export function OrderActionsDialog({

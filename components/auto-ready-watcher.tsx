@@ -72,7 +72,7 @@ export function AutoReadyWatcher() {
     const place = t?.name
       ? t.name
       : o.type === 'delivery' ? 'Доставка'
-      : o.type === 'takeaway' ? 'Самовывоз'
+      : o.type === 'takeaway' ? 'С собой'
       : ''
     return [place, ref].filter(Boolean).join(' · ') || 'Заберите блюда с кухни'
   }
