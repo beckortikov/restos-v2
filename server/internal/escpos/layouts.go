@@ -327,68 +327,13 @@ func fmtWeightQty(q decimal.Decimal, unit string) string {
 
 // fmtRunnerQty — «x2» для штучных, «250г» / «1,5кг» для весовых.
 // Порт логики из v1 lib/print-service.ts:155-160.
-// ColsRunnerWide — сколько знаков влезает в строку при двойной ширине.
-// Печатающая головка та же, глифы вдвое шире — значит колонок вдвое меньше.
-const ColsRunnerWide = ColsRunner / 2
-
-// wrapRunnerItem — строки блюда для печати двойной шириной.
-//
-// Количество идёт ПЕРВЫМ, а не в конце строки: при 16 колонках почти любое
-// название переносится, и количество в хвосте оказалось бы одиноко висящим
-// на второй строке. Повар в первую очередь считает порции — число должно
-// быть в начале, где его невозможно пропустить.
-//
-// Перенос по словам, продолжение выравнивается под название (отступ в ширину
-// префикса), чтобы список читался колонкой, а не сплошным текстом.
-func wrapRunnerItem(qty, name string, width int) []string {
-	prefix := qty + " "
-	indent := spaces(visibleRuneCount(prefix))
-	avail := width - visibleRuneCount(prefix)
-	if avail < 4 {
-		// Аномально длинное количество — не ломаем строку, отдаём как есть.
-		return []string{prefix + name}
+// runnerItemLine — строка позиции: имя слева, количество прижато вправо.
+func runnerItemLine(name, qty string, cols int) string {
+	pad := cols - visibleRuneCount(name) - visibleRuneCount(qty)
+	if pad < 1 {
+		pad = 1
 	}
-
-	words := strings.Fields(name)
-	if len(words) == 0 {
-		return []string{prefix + name}
-	}
-	lines := []string{}
-	cur := ""
-	for _, w := range words {
-		// Слово длиннее строки — режем по границе колонок, иначе оно уедет
-		// за край и принтер порвёт его в произвольном месте.
-		for visibleRuneCount(w) > avail {
-			if cur != "" {
-				lines = append(lines, cur)
-				cur = ""
-			}
-			lines = append(lines, runeSlice(w, avail))
-			w = string([]rune(w)[avail:])
-		}
-		switch {
-		case cur == "":
-			cur = w
-		case visibleRuneCount(cur)+1+visibleRuneCount(w) <= avail:
-			cur += " " + w
-		default:
-			lines = append(lines, cur)
-			cur = w
-		}
-	}
-	if cur != "" {
-		lines = append(lines, cur)
-	}
-
-	out := make([]string, 0, len(lines))
-	for i, l := range lines {
-		if i == 0 {
-			out = append(out, prefix+l)
-		} else {
-			out = append(out, indent+l)
-		}
-	}
-	return out
+	return name + spaces(pad) + qty
 }
 
 func fmtRunnerQty(it RunnerItem) string {
@@ -410,10 +355,11 @@ func fmtRunnerQty(it RunnerItem) string {
 
 // RunnerLayout — ранер на станцию. Порт buildEscPosRunner() из v1.
 //
-// КРИТИЧНО: используется FontTall (GS ! 01 = double-height, single-width)
-// для items, а НЕ FontDouble (GS ! 11). Иначе на 80mm бумаге длинные
-// названия блюд («Шашлык куриный») переносятся и обрезаются ножом до того
-// как принтер допечатал содержимое.
+// Позиции печатаются БЕЗ растяжения по осям (1×1). Прежний FontTall
+// (1× ширина × 2× высота) давал узкие вытянутые буквы: заголовок цеха,
+// набранный вдвое мельче, но естественными пропорциями, читался лучше самих
+// названий блюд. FontDouble (2×2) не берём — в 16 колонок не влезает почти
+// ни одно реальное название, и каждое пришлось бы переносить.
 func RunnerLayout(in RunnerInput) []byte {
 	b := beginPayload(in.Codepage)
 
@@ -432,7 +378,9 @@ func RunnerLayout(in RunnerInput) []byte {
 		b.TextLn(strings.ToUpper(in.Station) + " · " + timeStr)
 		b.Bold(false)
 	} else {
-		b.AlignCenter().Bold(true).FontTall()
+		// 2×2, а не 1×2: заголовку тоже не нужны вытянутые буквы. Имя цеха
+		// короткое и в 16 колонок влезает, так что растягивать нечего.
+		b.AlignCenter().Bold(true).FontDouble()
 		b.TextLn(strings.ToUpper(in.Station))
 		b.FontNormal().Bold(false)
 	}
@@ -476,31 +424,30 @@ func RunnerLayout(in RunnerInput) []byte {
 	}
 	b.TextLn("--------------------------------")
 
-	// ── Items — bold + ДВОЙНАЯ ширина и высота ───────────────────────────
-	// Тот же кегль, что у алерта «ОТМЕНА» на чеке отмены: только двойная
-	// ширина реально увеличивает буквы, растяжение по высоте оставляло их
-	// узкими и на потоке читалось плохо. Плата — 16 колонок вместо 32,
-	// поэтому длинные названия переносятся (см. wrapRunnerItem).
-	b.FontDouble().Bold(true)
+	// ── Items — bold, БЕЗ растяжения по вертикали ────────────────────────
+	// Раньше позиции печатались 1× ширина × 2× высота: буквы выходили узкими
+	// и вытянутыми, и читались хуже, чем заголовок цеха, набранный вдвое
+	// мельче, но естественными пропорциями. Дело было не в кегле, а в форме
+	// букв.
+	//
+	// Теперь тот же размер, что у заголовка цеха: 1×1, естественные пропорции,
+	// вся ширина ленты. Двойную ширину не берём осознанно — в 16 колонок не
+	// влезает почти ни одно реальное название («Курутоб 1 порция», «Пицца
+	// Цезарь XL»), и каждое пришлось бы переносить на две строки.
+	b.FontNormal().Bold(true)
 	for _, it := range in.Items {
 		qty := fmtRunnerQty(it)
-		for _, line := range wrapRunnerItem(qty, it.Name, ColsRunnerWide) {
-			b.TextLn(line)
-		}
+		b.TextLn(runnerItemLine(it.Name, qty, ColsRunner))
 		if len(it.Modifiers) > 0 {
 			// Modifiers — normal size
 			b.FontNormal()
 			for _, m := range it.Modifiers {
 				b.TextLn("  + " + m)
 			}
-			// Возвращаем размер ПОЗИЦИЙ, а не прежний FontTall: иначе блюда
-			// после первого же модификатора печатались бы мельче остальных.
-			b.FontDouble()
 		}
 		if it.Comment != "" {
 			b.FontNormal()
 			b.TextLn("  ! " + it.Comment)
-			b.FontDouble()
 		}
 	}
 	b.Bold(false).FontNormal()
@@ -583,19 +530,14 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	b.FontNormal().Bold(false).AlignLeft()
 	b.TextLn("--------------------------------")
 
-	// ── Section 4: items (bold + double-height) ─────────────────────────
-	b.FontTall().Bold(true)
+	// ── Section 4: items ────────────────────────────────────────────────
+	// Размер подбирается так же, как в обычном бегунке: без растяжения по
+	// вертикали, крупно если влезает. Повар сверяет отмену с бегунком —
+	// строки должны выглядеть одинаково, иначе сопоставлять их труднее.
+	b.FontNormal().Bold(true)
 	for _, it := range in.Items {
 		qty := fmtRunnerQty(it)
-		name := "X " + it.Name
-		nameLen := visibleRuneCount(name)
-		qtyLen := visibleRuneCount(qty)
-		// Та же ширина, что и у обычного бегунка (см. выше).
-		pad := ColsRunner - nameLen - qtyLen
-		if pad < 1 {
-			pad = 1
-		}
-		b.TextLn(name + spaces(pad) + qty)
+		b.TextLn(runnerItemLine("X "+it.Name, qty, ColsRunner))
 	}
 	b.Bold(false).FontNormal()
 	b.TextLn("--------------------------------")
