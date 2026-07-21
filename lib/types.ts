@@ -88,6 +88,10 @@ export interface User {
   roleDisplay: string
   restaurantId: string
   salary?: number
+  // Тип оплаты труда (054). 'monthly' — оклад (salary), 'daily' — ставка за
+  // отработанный день (dailyRate × дни с отметкой в табеле). Пусто = monthly.
+  payType?: 'monthly' | 'daily'
+  dailyRate?: number
   advance?: number
   deductions?: number
   password?: string

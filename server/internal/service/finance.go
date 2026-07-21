@@ -1338,9 +1338,24 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			Scan(&paid).Error; err != nil {
 			return nil, err
 		}
-		// Кап действует только если у сотрудника задан оклад. Если оклад 0
-		// (не сконфигурирован) — выплата ручная, без ограничения (совместимость).
-		if !u.Salary.IsPositive() {
+		// Начислено за период. Для оклада — сумма из карточки, для дневной
+		// оплаты (054) — ставка × отработанные дни из табеля: капить дневника
+		// по u.Salary было бы неверно, у него оклад равен нулю.
+		accrued := u.Salary
+		basis := fmt.Sprintf("оклад %s", u.Salary)
+		if payTypeOf(u) == PayTypeDaily {
+			days, derr := s.daysWorkedInPeriod(ctx, *in.UserID, *in.Period)
+			if derr != nil {
+				return nil, derr
+			}
+			accrued = accruedFor(u, days)
+			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
+		}
+		// Кап действует только если начислено что-то положительное. Ноль
+		// (не сконфигурирован оклад/ставка или нет отметок) — выплата ручная,
+		// без ограничения: иначе включение дневной оплаты заблокировало бы
+		// выплаты до заполнения табеля.
+		if !accrued.IsPositive() {
 			return s.payout(ctx, payoutInput{
 				UserID: in.UserID, Amount: in.Amount, AccountID: in.AccountID,
 				Counterparty: in.EmployeeName, Category: salaryCategory(in.Kind),
@@ -1348,14 +1363,14 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			})
 		}
 		// Начислено − аванс − удержания − уже выплачено.
-		payable := decimal.Sub(decimal.Sub(decimal.Sub(u.Salary, u.Advance), u.Deductions), paid)
+		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, u.Advance), u.Deductions), paid)
 		if decimal.IsNegative(payable) {
 			payable = decimal.Zero
 		}
 		if decimal.Sub(amount, payable).GreaterThan(decimal.MustFromString("0.01")) {
 			return nil, apperrors.Wrap("VALIDATION",
-				fmt.Sprintf("сумма %s превышает остаток к выплате %s (оклад %s − аванс %s − удержания %s − выплачено %s)",
-					amount, payable, u.Salary, u.Advance, u.Deductions, paid), nil)
+				fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
+					amount, payable, basis, u.Advance, u.Deductions, paid), nil)
 		}
 	}
 	sp := in

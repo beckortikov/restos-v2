@@ -64,6 +64,8 @@ export async function updateUser(userId: string, data: Partial<{
   name: string; username: string; role: string; salary: number; password: string;
   position: string; birth_date: string; station: string; shift_number: number;
   advance: number; deductions: number; pin: string;
+  // Тип оплаты труда (054): monthly (оклад) | daily (ставка за день).
+  pay_type: 'monthly' | 'daily'; daily_rate: number;
 }>) {
   const body: Record<string, unknown> = {}
   if (data.name !== undefined) body.name = data.name
@@ -77,6 +79,8 @@ export async function updateUser(userId: string, data: Partial<{
   if (data.salary !== undefined) body.salary = String(data.salary)
   if (data.advance !== undefined) body.advance = String(data.advance)
   if (data.deductions !== undefined) body.deductions = String(data.deductions)
+  if (data.pay_type !== undefined) body.pay_type = data.pay_type
+  if (data.daily_rate !== undefined) body.daily_rate = String(data.daily_rate)
   if (data.shift_number !== undefined) body.shift_number = data.shift_number
   if (Object.keys(body).length > 0) {
     await unwrap(api.PATCH('/api/v1/users/{id}', { params: { path: { id: userId } }, body: body as any }))

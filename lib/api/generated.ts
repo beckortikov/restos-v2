@@ -8842,6 +8842,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/accrual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Начислено за период по сотрудникам
+         * @description Для оклада (pay_type=monthly) — сумма из карточки, от периода не зависит. Для дневной оплаты (daily) — daily_rate × число дней с отметкой в табеле: день считается отработанным, если в нём есть хотя бы одна отметка прихода (две отметки в один день = один день).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description YYYY-MM-DD включительно */
+                    from?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: components["schemas"]["SalaryAccrualRow"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/report": {
         parameters: {
             query?: never;
@@ -11361,6 +11407,12 @@ export interface components {
             station?: string;
             salary?: components["schemas"]["Decimal"];
             hourly_rate?: components["schemas"]["Decimal"];
+            /**
+             * @description Тип оплаты труда (054): оклад или ставка за день
+             * @enum {string}
+             */
+            pay_type?: "monthly" | "daily";
+            daily_rate?: components["schemas"]["Decimal"];
         };
         UserInput: {
             name?: string;
@@ -11374,6 +11426,12 @@ export interface components {
             station?: string;
             salary?: components["schemas"]["Decimal"];
             hourly_rate?: components["schemas"]["Decimal"];
+            /**
+             * @description Тип оплаты труда (054): оклад или ставка за день
+             * @enum {string}
+             */
+            pay_type?: "monthly" | "daily";
+            daily_rate?: components["schemas"]["Decimal"];
         };
         UsersList: {
             data?: components["schemas"]["User"][];
@@ -12366,6 +12424,22 @@ export interface components {
             per_account?: {
                 [key: string]: components["schemas"]["Decimal"];
             };
+        };
+        SalaryAccrualRow: {
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            position?: string;
+            role?: string;
+            /** @enum {string} */
+            pay_type?: "monthly" | "daily";
+            salary?: components["schemas"]["Decimal"];
+            daily_rate?: components["schemas"]["Decimal"];
+            /** @description Дней с отметкой в табеле за период */
+            days_worked?: number;
+            accrued?: components["schemas"]["Decimal"];
+            advance?: components["schemas"]["Decimal"];
+            deductions?: components["schemas"]["Decimal"];
         };
         SalaryReport: {
             from?: string;

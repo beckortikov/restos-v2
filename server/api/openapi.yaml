@@ -2498,6 +2498,19 @@ paths:
         - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD, по умолчанию 30 дней назад" }
         - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD, по умолчанию сегодня" }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountBalanceHistory" } } } } }
+  /api/v1/finance/salary/accrual:
+    get:
+      tags: [finance, payroll]
+      summary: Начислено за период по сотрудникам
+      description: >
+        Для оклада (pay_type=monthly) — сумма из карточки, от периода не зависит.
+        Для дневной оплаты (daily) — daily_rate × число дней с отметкой в табеле:
+        день считается отработанным, если в нём есть хотя бы одна отметка прихода
+        (две отметки в один день = один день).
+      parameters:
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryAccrualRow" } } } } } } } }
   /api/v1/finance/salary/report:
     get:
       tags: [finance, payroll]
@@ -3927,6 +3940,8 @@ components:
         station: { type: string }
         salary: { $ref: "#/components/schemas/Decimal" }
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
+        pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
+        daily_rate: { $ref: "#/components/schemas/Decimal" }
     UserInput:
       type: object
       properties:
@@ -3940,6 +3955,8 @@ components:
         station: { type: string }
         salary: { $ref: "#/components/schemas/Decimal" }
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
+        pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
+        daily_rate: { $ref: "#/components/schemas/Decimal" }
     UsersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/User" } } } }
 
     Customer:
@@ -4859,6 +4876,20 @@ components:
           type: object
           additionalProperties: { $ref: "#/components/schemas/Decimal" }
           description: "account_id → остаток на конец дня"
+    SalaryAccrualRow:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        position: { type: string }
+        role: { type: string }
+        pay_type: { type: string, enum: [monthly, daily] }
+        salary: { $ref: "#/components/schemas/Decimal" }
+        daily_rate: { $ref: "#/components/schemas/Decimal" }
+        days_worked: { type: integer, description: "Дней с отметкой в табеле за период" }
+        accrued: { $ref: "#/components/schemas/Decimal" }
+        advance: { $ref: "#/components/schemas/Decimal" }
+        deductions: { $ref: "#/components/schemas/Decimal" }
     SalaryReport:
       type: object
       properties:

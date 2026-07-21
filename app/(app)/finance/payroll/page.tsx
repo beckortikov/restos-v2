@@ -10,6 +10,7 @@ import {
   updateTimeEntry, deleteTimeEntry,
   fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, payServiceCharge,
   fetchFinancialOperations, fetchSalaryReport, type SalaryReport,
+  fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
@@ -80,6 +81,11 @@ export default function PayrollPage() {
   const [payAmount, setPayAmount] = useState(0)
   const [deductionReason, setDeductionReason] = useState('')
   const [selectedAccountId, setSelectedAccountId] = useState('')
+  // Форма «Оплата труда» (054): тип + ставка за день.
+  const [formPayType, setFormPayType] = useState<'monthly' | 'daily'>('monthly')
+  // Отметка явки за другого сотрудника (054).
+  const [attendanceEmpId, setAttendanceEmpId] = useState('')
+  const [markingAttendance, setMarkingAttendance] = useState(false)
   const [paying, setPaying] = useState(false)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('all')
@@ -99,6 +105,11 @@ export default function PayrollPage() {
   // кассе, сгруппированы по сотруднику). Раньше выплата минусовала счёт, но в
   // разделе не отражалась — теперь читаем её и показываем.
   const [salaryPaid, setSalaryPaid] = useState<Record<string, number>>({})
+
+  // ─── Accrual state (054) ───────────────────────────────────────────────────
+  // Начислено за период: для оклада — сумма из карточки, для дневной оплаты —
+  // ставка × дни с отметкой в табеле. Считает сервер: дни живут в time_entries.
+  const [accrualByUser, setAccrualByUser] = useState<Record<string, SalaryAccrualRow>>({})
 
   // ─── Report state ──────────────────────────────────────────────────────────
   // Отчёт считает сервер (агрегация financial_operations), а не браузер: раньше
@@ -137,13 +148,20 @@ export default function PayrollPage() {
     return sp
   }, [serviceFrom, serviceTo])
 
+  // loadAccrual — начисления за тот же период, что и обслуживание.
+  const loadAccrual = useCallback(async (): Promise<Record<string, SalaryAccrualRow>> => {
+    const rows = await fetchSalaryAccrual(serviceFrom.slice(0, 10), serviceTo.slice(0, 10)).catch(() => [])
+    return Object.fromEntries(rows.map(r => [r.userId, r]))
+  }, [serviceFrom, serviceTo])
+
   const reload = async () => {
-    const [users, accs, accrual, payout, salPaid] = await Promise.all([
+    const [users, accs, accrual, payout, salPaid, accrualRows] = await Promise.all([
       fetchUsers(),
       fetchFinancialAccounts(),
       fetchServiceAccrualByWaiter(serviceFrom, serviceTo),
       fetchServicePayoutByWaiter(serviceFrom, serviceTo),
       loadSalaryPaid(),
+      loadAccrual(),
     ])
     setEmployees(users.filter(u => u.role !== 'owner' && u.role !== 'superadmin'))
     setAccounts(accs)
@@ -158,6 +176,7 @@ export default function PayrollPage() {
     setServiceAccrual(accrualMap)
     setServicePayout(payout)
     setSalaryPaid(salPaid)
+    setAccrualByUser(accrualRows)
   }
 
   const loadTimeEntries = useCallback(async () => {
@@ -200,12 +219,14 @@ export default function PayrollPage() {
       fetchServiceAccrualByWaiter(serviceFrom, serviceTo),
       fetchServicePayoutByWaiter(serviceFrom, serviceTo),
       loadSalaryPaid(),
-    ]).then(([accrual, payout, salPaid]) => {
+      loadAccrual(),
+    ]).then(([accrual, payout, salPaid, accrualRows]) => {
       const accrualMap: Record<string, { accrued: number; ordersCount: number }> = {}
       for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
       setServiceAccrual(accrualMap)
       setServicePayout(payout)
       setSalaryPaid(salPaid)
+      setAccrualByUser(accrualRows)
     }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceFrom, serviceTo])
@@ -265,13 +286,18 @@ export default function PayrollPage() {
     } else if (action === 'deduction') {
       setPayAmount(0)
     } else if (action === 'edit_salary') {
-      setPayAmount(emp.salary ?? 0)
+      const pt = emp.payType === 'daily' ? 'daily' : 'monthly'
+      setFormPayType(pt)
+      setPayAmount(pt === 'daily' ? (emp.dailyRate ?? 0) : (emp.salary ?? 0))
     } else if (action === 'service') {
       const accrued = serviceAccrual[emp.id]?.accrued ?? 0
       const paid = servicePayout[emp.id] ?? 0
       setPayAmount(Math.max(0, accrued - paid))
     } else {
-      setPayAmount(Math.max(0, (emp.salary ?? 0) - (emp.advance ?? 0) - (emp.deductions ?? 0)))
+      // Остаток к выплате — от начисленного за период, а не от оклада:
+      // у сотрудника на дневной оплате оклад нулевой.
+      const accrued = accrualByUser[emp.id]?.accrued ?? (emp.salary ?? 0)
+      setPayAmount(Math.max(0, accrued - (emp.advance ?? 0) - (emp.deductions ?? 0)))
     }
   }
 
@@ -282,8 +308,15 @@ export default function PayrollPage() {
     setPaying(true)
     try {
       if (payAction === 'edit_salary') {
-        await updateUser(selectedEmp.id, { salary: payAmount })
-        toast.success(`Оклад ${selectedEmp.name}: ${formatCurrency(payAmount)}`)
+        // Пишем и тип, и соответствующую ему сумму. Второе поле обнуляем,
+        // чтобы не осталось «оклад 3000 + ставка 120» — по такой карточке
+        // непонятно, за что человеку платят.
+        await updateUser(selectedEmp.id, formPayType === 'daily'
+          ? { pay_type: 'daily', daily_rate: payAmount, salary: 0 }
+          : { pay_type: 'monthly', salary: payAmount, daily_rate: 0 })
+        toast.success(formPayType === 'daily'
+          ? `${selectedEmp.name}: ${formatCurrency(payAmount)} за день`
+          : `Оклад ${selectedEmp.name}: ${formatCurrency(payAmount)}`)
       } else if (payAction === 'advance') {
         if (payAmount <= 0) { setPaying(false); return }
         const account = accounts.find(a => a.id === selectedAccountId)
@@ -326,6 +359,27 @@ export default function PayrollPage() {
   }
 
   // ─── Timesheet helpers ─────────────────────────────────────────────────────
+
+  // handleMarkAttendance — менеджер отмечает выход сотрудника на смену.
+  // Тот же clockIn, что и «Начать смену», только за другого: бэкенд принимает
+  // произвольный user_id. Начисление дневной оплаты считает именно эти дни,
+  // поэтому после отметки перезагружаем начисления.
+  const handleMarkAttendance = async () => {
+    if (!attendanceEmpId || markingAttendance) return
+    const emp = employees.find(e => e.id === attendanceEmpId)
+    setMarkingAttendance(true)
+    try {
+      await apiClockIn(attendanceEmpId)
+      toast.success(`${emp?.name ?? 'Сотрудник'}: явка отмечена`)
+      setAttendanceEmpId('')
+      await loadTimeEntries()
+      setAccrualByUser(await loadAccrual())
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось отметить явку'))
+    } finally {
+      setMarkingAttendance(false)
+    }
+  }
 
   const handleClockIn = async () => {
     if (!currentUser) return
@@ -387,8 +441,11 @@ export default function PayrollPage() {
 
   // ─── Salary computed ───────────────────────────────────────────────────────
 
-  const withSalary = employees.filter(e => (e.salary ?? 0) > 0)
-  const totalSalary = withSalary.reduce((s, e) => s + (e.salary ?? 0), 0)
+  // ФОТ считаем по НАЧИСЛЕННОМУ: у дневников оклад нулевой, и старый подсчёт
+  // по e.salary просто не видел бы их в фонде оплаты труда.
+  const accruedOf = (e: User) => accrualByUser[e.id]?.accrued ?? (e.salary ?? 0)
+  const withSalary = employees.filter(e => accruedOf(e) > 0)
+  const totalSalary = withSalary.reduce((s, e) => s + accruedOf(e), 0)
   const totalAdvance = withSalary.reduce((s, e) => s + (e.advance ?? 0), 0)
   const totalDeductions = withSalary.reduce((s, e) => s + (e.deductions ?? 0), 0)
   const totalSalaryPaid = Object.values(salaryPaid).reduce((s, v) => s + v, 0)
@@ -417,7 +474,7 @@ export default function PayrollPage() {
     salary: 'Выплатить зарплату',
     advance: 'Выдать аванс',
     deduction: 'Внести удержание',
-    edit_salary: 'Изменить оклад',
+    edit_salary: 'Оплата труда',
     service: 'Выплатить обслуживание',
   }
   const dialogColor: Record<PayAction, string> = {
@@ -429,7 +486,7 @@ export default function PayrollPage() {
   }
   const dialogBtnText = (): string => {
     if (paying) return 'Обработка...'
-    if (payAction === 'edit_salary') return `Сохранить оклад`
+    if (payAction === 'edit_salary') return 'Сохранить'
     if (payAction === 'deduction') return `Удержать ${payAmount > 0 ? formatCurrency(payAmount) : ''}`
     if (payAction === 'advance') return `Выдать аванс ${payAmount > 0 ? formatCurrency(payAmount) : ''}`
     if (payAction === 'service') return `Выплатить обсл. ${payAmount > 0 ? formatCurrency(payAmount) : ''}`
@@ -642,7 +699,7 @@ export default function PayrollPage() {
                   <tr className="border-b border-border bg-muted/40">
                     <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase">Сотрудник</th>
                     <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase">Должность</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Оклад</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Начислено</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Аванс</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Удержания</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 uppercase" title="Выплачено зарплаты/аванса из кассы за выбранный период">Выплачено (ЗП)</th>
@@ -659,7 +716,13 @@ export default function PayrollPage() {
                     const advance = emp.advance ?? 0
                     const deductions = emp.deductions ?? 0
                     const paidSalary = salaryPaid[emp.id] ?? 0
-                    const toPay = salary - advance - deductions
+                    // Начислено за период: оклад или ставка × отработанные дни.
+                    // Пока начисления не загрузились — откатываемся на оклад,
+                    // чтобы таблица не мигала нулями.
+                    const acc = accrualByUser[emp.id]
+                    const isDaily = acc?.payType === 'daily' || emp.payType === 'daily'
+                    const accruedPay = acc ? acc.accrued : salary
+                    const toPay = accruedPay - advance - deductions
                     const accrued = serviceAccrual[emp.id]?.accrued ?? 0
                     const paidService = servicePayout[emp.id] ?? 0
                     const serviceToPay = Math.max(0, accrued - paidService)
@@ -681,11 +744,20 @@ export default function PayrollPage() {
                           <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{emp.position || ROLE_LABELS[emp.role]}</span>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button onClick={() => openDialog(emp, 'edit_salary')} className="group inline-flex items-center gap-1">
-                            <span className={`font-medium ${salary > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
-                              {salary > 0 ? formatCurrency(salary) : 'Не указан'}
+                          <button onClick={() => openDialog(emp, 'edit_salary')} className="group inline-flex flex-col items-end gap-0.5">
+                            <span className="inline-flex items-center gap-1">
+                              <span className={`font-medium ${accruedPay > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
+                                {accruedPay > 0 ? formatCurrency(accruedPay) : 'Не указан'}
+                              </span>
+                              <Pencil className="size-3 text-muted-foreground/0 group-hover:text-primary transition-colors" />
                             </span>
-                            <Pencil className="size-3 text-muted-foreground/0 group-hover:text-primary transition-colors" />
+                            {/* Расшифровка дневной оплаты: без неё сумма выглядит
+                                необъяснимым числом и её нельзя проверить. */}
+                            {isDaily && (
+                              <span className="text-[10px] text-muted-foreground">
+                                {formatCurrency(acc?.dailyRate ?? emp.dailyRate ?? 0)} × {acc?.daysWorked ?? 0} дн.
+                              </span>
+                            )}
                           </button>
                         </td>
                         <td className="px-4 py-3 text-right">
@@ -916,6 +988,52 @@ export default function PayrollPage() {
             </div>
           </div>
 
+          {/* Отметить явку за сотрудника (054).
+              Без этого дневная оплата не работает: повар или посудомойщик сам
+              себя в системе не отмечает — терминал стоит у кассы. Начисление
+              «ставка × дни» считает именно эти отметки. */}
+          {isManager && (
+            <div className="bg-card rounded-xl border border-border p-4">
+              <div className="flex flex-col sm:flex-row sm:items-end gap-3">
+                <div className="flex-1 min-w-0">
+                  <label htmlFor="attendance-emp" className="text-sm font-semibold text-foreground block">
+                    Отметить явку
+                  </label>
+                  <p className="text-xs text-muted-foreground mt-0.5 mb-1.5">
+                    Для тех, кто не отмечается сам. Влияет на начисление при дневной оплате.
+                  </p>
+                  <select
+                    id="attendance-emp"
+                    value={attendanceEmpId}
+                    onChange={e => setAttendanceEmpId(e.target.value)}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm"
+                  >
+                    <option value="">— Выберите сотрудника —</option>
+                    {employees.map(e => {
+                      const onShift = activeEntries.some(a => a.userId === e.id)
+                      const daily = e.payType === 'daily'
+                      return (
+                        <option key={e.id} value={e.id} disabled={onShift}>
+                          {e.name}
+                          {daily ? ' · дневная' : ''}
+                          {onShift ? ' — уже на смене' : ''}
+                        </option>
+                      )
+                    })}
+                  </select>
+                </div>
+                <button
+                  onClick={handleMarkAttendance}
+                  disabled={!attendanceEmpId || markingAttendance}
+                  className="flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-40 shrink-0"
+                >
+                  <Play className="size-4" />
+                  {markingAttendance ? 'Отмечаем…' : 'Отметить день'}
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Active employees */}
           {activeEntries.length > 0 && (
             <div className="bg-emerald-50 dark:bg-emerald-950/30 rounded-xl border border-emerald-200 dark:border-emerald-800 p-4">
@@ -1124,9 +1242,47 @@ export default function PayrollPage() {
                 )}
               </div>
 
+              {/* Тип оплаты труда (054). Переключатель только в «Оплата труда»:
+                  в выплатах/авансах менять его нельзя — это настройка карточки,
+                  а не свойство конкретной операции. */}
+              {payAction === 'edit_salary' && (
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Как платим</label>
+                  <div className="flex rounded-lg border border-border overflow-hidden">
+                    {([
+                      ['monthly', 'Оклад за месяц'],
+                      ['daily', 'Ставка за день'],
+                    ] as const).map(([v, label]) => (
+                      <button
+                        key={v}
+                        type="button"
+                        onClick={() => {
+                          setFormPayType(v)
+                          setPayAmount(v === 'daily' ? (selectedEmp.dailyRate ?? 0) : (selectedEmp.salary ?? 0))
+                        }}
+                        className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
+                          formPayType === v ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {formPayType === 'daily' && (
+                    <p className="text-[11px] text-muted-foreground mt-1">
+                      Начисление считается автоматически: ставка × дни с отметкой в табеле.
+                      {(() => {
+                        const d = accrualByUser[selectedEmp.id]?.daysWorked ?? 0
+                        return d > 0 ? ` За выбранный период отмечено ${d} дн.` : ' За выбранный период отметок пока нет.'
+                      })()}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <div>
                 <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                  {payAction === 'edit_salary' ? 'Новый оклад (TJS)' :
+                  {payAction === 'edit_salary' ? (formPayType === 'daily' ? 'Ставка за день (TJS)' : 'Оклад за месяц (TJS)') :
                    payAction === 'deduction' ? 'Сумма удержания (TJS)' :
                    payAction === 'advance' ? 'Сумма аванса (TJS)' : 'Сумма выплаты (TJS)'}
                 </label>

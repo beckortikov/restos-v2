@@ -88,11 +88,17 @@ type User struct {
 	ShiftNumber  *int            `gorm:"column:shift_number" json:"shift_number"`
 	Salary       decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"salary"`
 	HourlyRate   decimal.Decimal `gorm:"column:hourly_rate;type:numeric(14,4);default:0" json:"hourly_rate"`
-	Advance      decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"advance"`
-	Deductions   decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"deductions"`
-	Permissions  datatypes.JSON  `gorm:"type:jsonb" json:"permissions"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// Тип оплаты труда (054). monthly → начисление = Salary. daily →
+	// DailyRate × число дней с отметкой в табеле за период. Дни не хранятся
+	// отдельно: источник правды — time_entries, чтобы расчёт всегда сходился
+	// с тем, что видно в табеле.
+	PayType     *string         `gorm:"column:pay_type;not null;default:'monthly'" json:"pay_type"`
+	DailyRate   decimal.Decimal `gorm:"column:daily_rate;type:numeric(14,4);not null;default:0" json:"daily_rate"`
+	Advance     decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"advance"`
+	Deductions  decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"deductions"`
+	Permissions datatypes.JSON  `gorm:"type:jsonb" json:"permissions"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 func (User) TableName() string { return "users" }

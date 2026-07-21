@@ -339,6 +339,43 @@ export async function fetchAccountBalanceHistory(from: string, to: string): Prom
   }
 }
 
+// ─── Начисления (оклад / дневная оплата) ──────────────────────────────────
+
+export interface SalaryAccrualRow {
+  userId: string
+  userName: string
+  position?: string
+  role?: string
+  payType: 'monthly' | 'daily'
+  salary: number
+  dailyRate: number
+  /** Дней с отметкой в табеле за период. Для оклада не используется. */
+  daysWorked: number
+  /** Оклад или ставка × дни — в зависимости от payType. */
+  accrued: number
+  advance: number
+  deductions: number
+}
+
+export async function fetchSalaryAccrual(from: string, to: string): Promise<SalaryAccrualRow[]> {
+  const res: any = await unwrap(
+    api.GET('/api/v1/finance/salary/accrual', { params: { query: { from, to } } as any }),
+  )
+  return (res?.data ?? []).map((r: any) => ({
+    userId: r.user_id ?? '',
+    userName: r.user_name ?? '',
+    position: r.position || undefined,
+    role: r.role || undefined,
+    payType: r.pay_type === 'daily' ? 'daily' : 'monthly',
+    salary: Number(r.salary ?? 0),
+    dailyRate: Number(r.daily_rate ?? 0),
+    daysWorked: Number(r.days_worked ?? 0),
+    accrued: Number(r.accrued ?? 0),
+    advance: Number(r.advance ?? 0),
+    deductions: Number(r.deductions ?? 0),
+  }))
+}
+
 // ─── Отчёт по зарплате ────────────────────────────────────────────────────
 
 export interface SalaryPayoutRow {

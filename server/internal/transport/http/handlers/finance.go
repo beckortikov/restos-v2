@@ -289,6 +289,19 @@ func (h *SalaryHandler) SalaryReport(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// SalaryAccrual — GET /api/v1/finance/salary/accrual?from=&to=
+// Начислено за период по каждому сотруднику: оклад или ставка × отработанные
+// дни из табеля.
+func (h *SalaryHandler) SalaryAccrual(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	rows, err := h.svc.SalaryAccrual(r.Context(), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(rows, ""))
+}
+
 func (h *SalaryHandler) PayServiceCharge(w http.ResponseWriter, r *http.Request) {
 	var in service.ServiceChargePayInput
 	if !decodeBody(r, &in) {

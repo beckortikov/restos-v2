@@ -415,6 +415,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/forecast", analyticsH.Forecast)
 			g.Get("/analytics/abc-inventory", analyticsH.ABCInventory)
 			g.Get("/finance/salary/report", salaryH.SalaryReport)
+			g.Get("/finance/salary/accrual", salaryH.SalaryAccrual)
 			g.Get("/finance/service-accrual/by-waiter", salaryH.AccrualByWaiter)
 			g.Get("/finance/service-accrual/by-shift/{shift_id}", salaryH.AccrualByShift)
 			g.Get("/finance/service-payout/by-waiter", salaryH.PayoutByWaiter)

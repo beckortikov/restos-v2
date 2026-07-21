@@ -33,18 +33,21 @@ func NewUsersService(r *repo.Repo) *UsersService { return &UsersService{r: r} }
 
 // UserInput — body POST/PATCH /api/v1/users. На PATCH nil поля не меняются.
 type UserInput struct {
-	Username    *string          `json:"username,omitempty"`
-	Name        *string          `json:"name,omitempty"`
-	PIN         *string          `json:"pin,omitempty"`
-	Password    *string          `json:"password,omitempty"`
-	Role        *string          `json:"role,omitempty"` // cashier|cook|waiter|manager|owner
-	Phone       *string          `json:"phone,omitempty"`
-	Email       *string          `json:"email,omitempty"`
-	Position    *string          `json:"position,omitempty"`
-	BirthDate   *string          `json:"birth_date,omitempty"`
-	Station     *string          `json:"station,omitempty"`
-	Salary      *string          `json:"salary,omitempty"`
-	HourlyRate  *string          `json:"hourly_rate,omitempty"`
+	Username   *string `json:"username,omitempty"`
+	Name       *string `json:"name,omitempty"`
+	PIN        *string `json:"pin,omitempty"`
+	Password   *string `json:"password,omitempty"`
+	Role       *string `json:"role,omitempty"` // cashier|cook|waiter|manager|owner
+	Phone      *string `json:"phone,omitempty"`
+	Email      *string `json:"email,omitempty"`
+	Position   *string `json:"position,omitempty"`
+	BirthDate  *string `json:"birth_date,omitempty"`
+	Station    *string `json:"station,omitempty"`
+	Salary     *string `json:"salary,omitempty"`
+	HourlyRate *string `json:"hourly_rate,omitempty"`
+	// Тип оплаты труда (054): monthly (оклад) | daily (ставка за день).
+	PayType     *string          `json:"pay_type,omitempty"`
+	DailyRate   *string          `json:"daily_rate,omitempty"`
 	Advance     *string          `json:"advance,omitempty"`
 	Deductions  *string          `json:"deductions,omitempty"`
 	ShiftNumber *int             `json:"shift_number,omitempty"`
@@ -124,6 +127,23 @@ func (s *UsersService) Create(ctx context.Context, in UserInput) (*models.User, 
 			return nil, apperrors.Wrap("VALIDATION", "bad hourly_rate", err)
 		}
 		u.HourlyRate = d
+	}
+	if in.PayType != nil {
+		if *in.PayType != PayTypeMonthly && *in.PayType != PayTypeDaily {
+			return nil, apperrors.Wrap("VALIDATION", "pay_type must be monthly|daily", nil)
+		}
+		pt := *in.PayType
+		u.PayType = &pt
+	}
+	if in.DailyRate != nil {
+		d, err := decimal.FromString(*in.DailyRate)
+		if err != nil {
+			return nil, apperrors.Wrap("VALIDATION", "bad daily_rate", err)
+		}
+		if decimal.IsNegative(d) {
+			return nil, apperrors.Wrap("VALIDATION", "daily_rate must be >= 0", nil)
+		}
+		u.DailyRate = d
 	}
 	if in.Advance != nil {
 		d, err := decimal.FromString(*in.Advance)
@@ -208,6 +228,22 @@ func (s *UsersService) Patch(ctx context.Context, id string, in UserInput) (*mod
 			return nil, apperrors.Wrap("VALIDATION", "bad hourly_rate", err)
 		}
 		updates["hourly_rate"] = d
+	}
+	if in.PayType != nil {
+		if *in.PayType != PayTypeMonthly && *in.PayType != PayTypeDaily {
+			return nil, apperrors.Wrap("VALIDATION", "pay_type must be monthly|daily", nil)
+		}
+		updates["pay_type"] = *in.PayType
+	}
+	if in.DailyRate != nil {
+		d, err := decimal.FromString(*in.DailyRate)
+		if err != nil {
+			return nil, apperrors.Wrap("VALIDATION", "bad daily_rate", err)
+		}
+		if decimal.IsNegative(d) {
+			return nil, apperrors.Wrap("VALIDATION", "daily_rate must be >= 0", nil)
+		}
+		updates["daily_rate"] = d
 	}
 	if in.Advance != nil {
 		d, err := decimal.FromString(*in.Advance)

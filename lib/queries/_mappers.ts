@@ -219,6 +219,8 @@ export function mapUserRow(r: Record<string, any>): User {
     roleDisplay: ROLE_DISPLAY_FULL[r.role as string] ?? r.role,
     restaurantId: r.restaurant_id || '',
     salary: r.salary != null ? Number(r.salary) || 0 : 0,
+    payType: r.pay_type === 'daily' ? 'daily' : 'monthly',
+    dailyRate: r.daily_rate != null ? Number(r.daily_rate) || 0 : 0,
     advance: r.advance != null ? Number(r.advance) || 0 : 0,
     deductions: r.deductions != null ? Number(r.deductions) || 0 : 0,
     position: r.position || undefined,
