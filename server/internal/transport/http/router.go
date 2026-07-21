@@ -387,6 +387,7 @@ func NewRouter(deps Deps) http.Handler {
 
 			// Finance: accounts, operations, custom categories, JSON reports, service accrual/payout.
 			g.Get("/finance/accounts", finAccountsH.List)
+			g.Get("/finance/accounts/balance-history", finAccountsH.BalanceHistory)
 			g.Get("/finance/operations", finOpsH.List)
 			g.Get("/finance/custom-categories", customCatsH.List)
 			g.Get("/finance/pnl", finReportsH.PnL)

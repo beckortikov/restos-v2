@@ -278,6 +278,67 @@ export async function paySalaryFull(
   logAction('payroll.pay', 'payroll', userId, employeeName, { amount, kind })
 }
 
+// ─── Остатки по счетам на дату ────────────────────────────────────────────
+
+export interface AccountPeriodSummary {
+  accountId: string
+  accountName: string
+  accountType: string
+  currentBalance: number
+  openingBalance: number
+  in: number
+  out: number
+  closingBalance: number
+}
+
+export interface AccountBalanceDay {
+  date: string
+  in: number
+  out: number
+  closingBalance: number
+  perAccount: Record<string, number>
+}
+
+export interface AccountBalanceHistory {
+  from: string
+  to: string
+  accounts: AccountPeriodSummary[]
+  days: AccountBalanceDay[]
+}
+
+// fetchAccountBalanceHistory — «сколько денег было на счетах в каждый день».
+// Считает сервер: financial_accounts.balance — остаток «сейчас», истории в
+// схеме нет, а список операций на клиенте обрезан лимитом выборки.
+export async function fetchAccountBalanceHistory(from: string, to: string): Promise<AccountBalanceHistory> {
+  const res: any = await unwrap(
+    api.GET('/api/v1/finance/accounts/balance-history', { params: { query: { from, to } } as any }),
+  )
+  const num = (v: any) => Number(v ?? 0)
+  return {
+    from: res?.from ?? from,
+    to: res?.to ?? to,
+    accounts: (res?.accounts ?? []).map((a: any) => ({
+      accountId: a.account_id ?? '',
+      accountName: a.account_name ?? '',
+      accountType: a.account_type ?? '',
+      currentBalance: num(a.current_balance),
+      openingBalance: num(a.opening_balance),
+      in: num(a.in),
+      out: num(a.out),
+      closingBalance: num(a.closing_balance),
+    })),
+    days: (res?.days ?? []).map((d: any) => ({
+      date: d.date ?? '',
+      in: num(d.in),
+      out: num(d.out),
+      closingBalance: num(d.closing_balance),
+      perAccount: Object.fromEntries(
+        Object.entries(d.per_account ?? {}).map(([k, v]) => [k, num(v)]),
+      ) as Record<string, number>,
+    })),
+  }
+}
+
 // ─── Отчёт по зарплате ────────────────────────────────────────────────────
 
 export interface SalaryPayoutRow {

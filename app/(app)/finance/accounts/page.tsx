@@ -2,10 +2,10 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { DatePeriodFilter, filterByDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { DatePeriodFilter, filterByDateRange, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { formatCurrency } from '@/lib/helpers'
 import { type FinancialAccount, type FinancialOperation } from '@/lib/types'
-import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialAccount } from '@/lib/queries'
+import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { toast } from 'sonner'
@@ -49,11 +49,32 @@ export default function AccountsPage() {
   const [editType, setEditType] = useState<'cash' | 'bank'>('cash')
   const [editSaving, setEditSaving] = useState(false)
 
+  // История остатков по дням — считает бэк (см. fetchAccountBalanceHistory).
+  const [balanceHistory, setBalanceHistory] = useState<AccountBalanceHistory | null>(null)
+  const [historyLoading, setHistoryLoading] = useState(false)
+
   useEffect(() => {
     Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
       .then(([accs, ops]) => { setAccounts(accs); setOperations(ops) })
       .finally(() => setLoading(false))
   }, [])
+
+  // Перезапрашиваем при смене периода. Для «всё время» истории по дням не
+  // строим — ряд был бы неограниченным, а карточки показывают текущий остаток.
+  useEffect(() => {
+    if (period === 'all') { setBalanceHistory(null); return }
+    const { from, to } = getDateRange(period, customFrom, customTo)
+    if (!from || !to) { setBalanceHistory(null); return }
+    const ymd = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    let cancelled = false
+    setHistoryLoading(true)
+    fetchAccountBalanceHistory(ymd(from), ymd(to))
+      .then(h => { if (!cancelled) setBalanceHistory(h) })
+      .catch(() => { if (!cancelled) setBalanceHistory(null) })
+      .finally(() => { if (!cancelled) setHistoryLoading(false) })
+    return () => { cancelled = true }
+  }, [period, customFrom, customTo])
 
   const [addingSaving, setAddingSaving] = useState(false)
 
@@ -146,7 +167,11 @@ export default function AccountsPage() {
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
-  const totalBalance = accounts.reduce((s, a) => s + a.balance, 0)
+  // Итог тоже периодо-зависимый: на конец выбранного периода, а не «сейчас».
+  const totalBalance = period !== 'all' && balanceHistory
+    ? balanceHistory.accounts.reduce((s, a) => s + a.closingBalance, 0)
+    : accounts.reduce((s, a) => s + a.balance, 0)
+  const totalNow = accounts.reduce((s, a) => s + a.balance, 0)
 
   // Only show operations that have an account (accounting-only ops have account_id=null)
   const filteredOps = filteredByDate.filter(
@@ -185,12 +210,25 @@ export default function AccountsPage() {
             <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Все счета</span>
           </div>
           <p className="text-2xl font-bold text-foreground">{formatCurrency(totalBalance)}</p>
-          <p className="text-xs text-muted-foreground mt-1">{accounts.length} счёта</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {accounts.length} счёта
+            {totalBalance !== totalNow && ` · сейчас ${formatCurrency(totalNow)}`}
+          </p>
         </button>
         {accounts.map((acc) => {
-          const accOps = operations.filter((o) => o.accountId === acc.id)
+          // Движение — ЗА ВЫБРАННЫЙ ПЕРИОД. Раньше здесь стоял `operations`
+          // вместо `filteredByDate`: фильтр менял только мелкий список внизу,
+          // а крупные суммы на карточках считались по всей истории и на
+          // переключение периода не реагировали вообще.
+          const accOps = filteredByDate.filter((o) => o.accountId === acc.id)
           const inSum = accOps.filter((o) => o.type === 'in').reduce((s, o) => s + o.amount, 0)
           const outSum = accOps.filter((o) => o.type === 'out').reduce((s, o) => s + o.amount, 0)
+          // Остаток на конец периода приходит с бэка (balance — это «сейчас»,
+          // по датам он не фильтруется в принципе). Пока не загрузился или
+          // период = «всё время» — показываем текущий.
+          const summary = balanceHistory?.accounts.find(a => a.accountId === acc.id)
+          const shownBalance = period !== 'all' && summary ? summary.closingBalance : acc.balance
+          const isHistorical = period !== 'all' && summary && shownBalance !== acc.balance
           return (
             <button
               key={acc.id}
@@ -217,15 +255,86 @@ export default function AccountsPage() {
                   </span>
                 )}
               </div>
-              <p className="text-2xl font-bold text-foreground">{formatCurrency(acc.balance)}</p>
+              <p className="text-2xl font-bold text-foreground">{formatCurrency(shownBalance)}</p>
               <div className="flex items-center gap-3 mt-1.5 text-xs">
                 <span className="text-emerald-600">+{formatCurrency(inSum)}</span>
                 <span className="text-destructive">−{formatCurrency(outSum)}</span>
               </div>
+              {isHistorical && (
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  на конец периода · сейчас {formatCurrency(acc.balance)}
+                </p>
+              )}
             </button>
           )
         })}
       </div>
+
+      {/* Остаток по дням — «в какой день сколько денег было на счетах».
+          Считается на бэке обратным ходом от текущего баланса: колонка
+          financial_accounts.balance хранит только состояние «сейчас». */}
+      {period !== 'all' && (
+        <div className="bg-card rounded-xl border border-border overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
+            <h2 className="text-sm font-semibold text-foreground">
+              Остаток по дням
+              {selectedAccount !== 'all' && (
+                <span className="text-muted-foreground font-normal">
+                  {' · '}{accounts.find(a => a.id === selectedAccount)?.name ?? ''}
+                </span>
+              )}
+            </h2>
+            {historyLoading && <span className="text-xs text-muted-foreground">Загружаем…</span>}
+          </div>
+          {!balanceHistory || balanceHistory.days.length === 0 ? (
+            <p className="p-6 text-center text-sm text-muted-foreground">
+              {historyLoading ? '' : 'Нет данных за период'}
+            </p>
+          ) : (
+            <div className="overflow-x-auto max-h-[26rem] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/30 sticky top-0">
+                  <tr className="text-left text-[11px] uppercase tracking-wide text-muted-foreground">
+                    <th className="px-4 py-2 font-medium">Дата</th>
+                    <th className="px-4 py-2 font-medium text-right">Приход</th>
+                    <th className="px-4 py-2 font-medium text-right">Расход</th>
+                    <th className="px-4 py-2 font-medium text-right">Остаток на конец дня</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {[...balanceHistory.days].reverse().map(d => {
+                    // При выбранном счёте показываем именно его срез, иначе сумму.
+                    const closing = selectedAccount === 'all'
+                      ? d.closingBalance
+                      : (d.perAccount[selectedAccount] ?? 0)
+                    const dayOps = filteredByDate.filter(
+                      o => o.accountId && o.date?.slice(0, 10) === d.date &&
+                        (selectedAccount === 'all' || o.accountId === selectedAccount),
+                    )
+                    const dIn = dayOps.filter(o => o.type === 'in').reduce((s, o) => s + o.amount, 0)
+                    const dOut = dayOps.filter(o => o.type === 'out').reduce((s, o) => s + o.amount, 0)
+                    const quiet = dIn === 0 && dOut === 0
+                    return (
+                      <tr key={d.date} className={`hover:bg-muted/20 ${quiet ? 'text-muted-foreground' : ''}`}>
+                        <td className="px-4 py-2 whitespace-nowrap">{d.date}</td>
+                        <td className="px-4 py-2 text-right tabular-nums text-emerald-600">
+                          {dIn ? `+${formatCurrency(dIn)}` : '—'}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular-nums text-destructive">
+                          {dOut ? `−${formatCurrency(dOut)}` : '—'}
+                        </td>
+                        <td className="px-4 py-2 text-right tabular-nums font-semibold text-foreground">
+                          {formatCurrency(closing)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Transfer / quick actions */}
       <div className="flex flex-col sm:flex-row gap-2">

@@ -15,9 +15,31 @@ const PERIOD_OPTIONS: { value: PeriodKey; label: string }[] = [
   { value: 'custom', label: 'Свой' },
 ]
 
+// parseLocalDate — разбирает и «2026-07-21», и полный ISO-таймстамп.
+//
+// Ключевой момент: голую дату `new Date('2026-07-21')` JS парсит как ПОЛНОЧЬ
+// UTC, тогда как границы периода строятся в локальном времени. В ресторане на
+// UTC+5 операция за сегодня превращалась в «сегодня 05:00 локального», и с
+// полуночи до 5 утра фильтр «Сегодня» отдавал пустоту — при том что операции
+// в базе были. Здесь голая дата разбирается как локальная полночь.
+export function parseLocalDate(value: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+  return new Date(value)
+}
+
+// endOfDay — верхняя граница включительно.
+function endOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999)
+}
+
 export function getDateRange(period: PeriodKey, customFrom?: string, customTo?: string): { from: Date | null; to: Date | null } {
   const now = new Date()
-  const to = now
+  // Верхняя граница — КОНЕЦ сегодняшнего дня, а не «сейчас». С `to = now`
+  // операция, датированная сегодняшним числом (без времени), считалась
+  // «позже, чем сейчас» и выпадала из выборки; операции с будущей датой
+  // (диалог позволяет её выбрать) не показывались никогда.
+  const to = endOfDay(now)
 
   switch (period) {
     case 'today': return { from: new Date(now.getFullYear(), now.getMonth(), now.getDate()), to }
@@ -27,8 +49,8 @@ export function getDateRange(period: PeriodKey, customFrom?: string, customTo?: 
     case 'year': return { from: new Date(now.getTime() - 365 * 86400000), to }
     case 'all': return { from: null, to: null }
     case 'custom': return {
-      from: customFrom ? new Date(customFrom) : null,
-      to: customTo ? new Date(customTo + 'T23:59:59') : null,
+      from: customFrom ? parseLocalDate(customFrom) : null,
+      to: customTo ? endOfDay(parseLocalDate(customTo)) : null,
     }
     default: return { from: null, to: null }
   }
@@ -40,7 +62,7 @@ export function filterByDateRange<T>(items: T[], getDate: (item: T) => string | 
   return items.filter(item => {
     const dateStr = getDate(item)
     if (!dateStr) return false
-    const d = new Date(dateStr)
+    const d = parseLocalDate(dateStr)
     if (from && d < from) return false
     if (to && d > to) return false
     return true

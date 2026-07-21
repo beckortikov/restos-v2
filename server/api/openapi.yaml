@@ -2485,6 +2485,19 @@ paths:
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryPayInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+  /api/v1/finance/accounts/balance-history:
+    get:
+      tags: [finance]
+      summary: Остаток по счетам на каждый день периода
+      description: >
+        История остатков восстанавливается обратным ходом от текущего баланса
+        (financial_accounts.balance — скаляр «сейчас», таблицы снимков нет):
+        closing(D) = balance_now − Σ(приход − расход) за все дни после D.
+        Период ограничен 400 днями.
+      parameters:
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD, по умолчанию 30 дней назад" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD, по умолчанию сегодня" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountBalanceHistory" } } } } }
   /api/v1/finance/salary/report:
     get:
       tags: [finance, payroll]
@@ -4809,6 +4822,35 @@ components:
             salary — окончательный расчёт (категория «Зарплата»), advance — аванс
             (категория «Аванс»). Пусто → salary. До разделения категорий оба вида
             писались как «Зарплата» и отчёт не мог их разделить.
+    AccountBalanceHistory:
+      type: object
+      properties:
+        from: { type: string }
+        to: { type: string }
+        accounts: { type: array, items: { $ref: "#/components/schemas/AccountPeriodSummary" } }
+        days: { type: array, items: { $ref: "#/components/schemas/AccountBalanceDay" } }
+    AccountPeriodSummary:
+      type: object
+      properties:
+        account_id: { type: string, format: uuid }
+        account_name: { type: string }
+        account_type: { type: string, enum: [cash, bank] }
+        current_balance: { $ref: "#/components/schemas/Decimal" }
+        opening_balance: { $ref: "#/components/schemas/Decimal" }
+        in: { $ref: "#/components/schemas/Decimal" }
+        out: { $ref: "#/components/schemas/Decimal" }
+        closing_balance: { $ref: "#/components/schemas/Decimal" }
+    AccountBalanceDay:
+      type: object
+      properties:
+        date: { type: string }
+        in: { $ref: "#/components/schemas/Decimal" }
+        out: { $ref: "#/components/schemas/Decimal" }
+        closing_balance: { $ref: "#/components/schemas/Decimal" }
+        per_account:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/Decimal" }
+          description: "account_id → остаток на конец дня"
     SalaryReport:
       type: object
       properties:

@@ -32,6 +32,19 @@ func (h *FinancialAccountsHandler) List(w http.ResponseWriter, r *http.Request) 
 	respond.JSON(w, http.StatusOK, makeList[models.FinancialAccount](rows, ""))
 }
 
+// BalanceHistory — GET /api/v1/finance/accounts/balance-history?from=&to=
+// Остаток по каждому счёту на конец каждого дня периода + движение за период.
+// Статический сегмент пути приоритетнее {id} в chi, конфликта нет.
+func (h *FinancialAccountsHandler) BalanceHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.svc.BalanceHistory(r.Context(), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *FinancialAccountsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var in service.FinancialAccountInput
 	if !decodeBody(r, &in) {

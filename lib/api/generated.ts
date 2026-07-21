@@ -8798,6 +8798,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/accounts/balance-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Остаток по счетам на каждый день периода
+         * @description История остатков восстанавливается обратным ходом от текущего баланса (financial_accounts.balance — скаляр «сейчас», таблицы снимков нет): closing(D) = balance_now − Σ(приход − расход) за все дни после D. Период ограничен 400 днями.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description YYYY-MM-DD, по умолчанию 30 дней назад */
+                    from?: string;
+                    /** @description YYYY-MM-DD, по умолчанию сегодня */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountBalanceHistory"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/report": {
         parameters: {
             query?: never;
@@ -12288,6 +12332,34 @@ export interface components {
              * @enum {string}
              */
             kind?: "salary" | "advance";
+        };
+        AccountBalanceHistory: {
+            from?: string;
+            to?: string;
+            accounts?: components["schemas"]["AccountPeriodSummary"][];
+            days?: components["schemas"]["AccountBalanceDay"][];
+        };
+        AccountPeriodSummary: {
+            /** Format: uuid */
+            account_id?: string;
+            account_name?: string;
+            /** @enum {string} */
+            account_type?: "cash" | "bank";
+            current_balance?: components["schemas"]["Decimal"];
+            opening_balance?: components["schemas"]["Decimal"];
+            in?: components["schemas"]["Decimal"];
+            out?: components["schemas"]["Decimal"];
+            closing_balance?: components["schemas"]["Decimal"];
+        };
+        AccountBalanceDay: {
+            date?: string;
+            in?: components["schemas"]["Decimal"];
+            out?: components["schemas"]["Decimal"];
+            closing_balance?: components["schemas"]["Decimal"];
+            /** @description account_id → остаток на конец дня */
+            per_account?: {
+                [key: string]: components["schemas"]["Decimal"];
+            };
         };
         SalaryReport: {
             from?: string;
