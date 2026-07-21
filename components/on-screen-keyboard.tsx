@@ -137,6 +137,13 @@ export function OnScreenKeyboard() {
     if (host && window.getComputedStyle(host).top !== 'auto') {
       const rect = host.getBoundingClientRect()
       if (rect.bottom <= kbTop - gap) return // уже не перекрыт
+      // Цифровая панель пришвартована к правому краю и с центрированным
+      // диалогом по горизонтали не пересекается — поднимать и ужимать его
+      // незачем. Без этой проверки диалог всё равно получал maxHeight и
+      // внутренний скролл, и кнопка подтверждения уезжала под срез, хотя
+      // клавиатура её ничем не закрывала.
+      const kbRect = kb.getBoundingClientRect()
+      if (rect.right <= kbRect.left || rect.left >= kbRect.right) return
       const prev = {
         marginTop: host.style.marginTop, maxHeight: host.style.maxHeight,
         overflowY: host.style.overflowY, transition: host.style.transition,
@@ -297,15 +304,32 @@ export function OnScreenKeyboard() {
         // pointer-events-auto: модальные Radix-диалоги (Dialog/AlertDialog)
         // ставят pointer-events:none на <body> — без явного auto клавиатура
         // видна (z-90), но не кликабельна.
-        'fixed inset-x-0 bottom-0 z-[90] select-none pointer-events-auto',
+        'fixed bottom-0 z-[90] select-none pointer-events-auto',
         'shadow-2xl',
         'px-4 pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom))]',
         'animate-in slide-in-from-bottom-4 duration-150',
+        // Буквенная раскладка занимает всю ширину — иначе клавиши не влезают.
+        // Цифровая собирается в панель по центру: на широком кассовом мониторе
+        // лоток во всю ленту закрывал низ диалога целиком, включая кнопку
+        // подтверждения, хотя сами клавиши занимали лишь треть.
+        // Цифровая панель прижата к ПРАВОМУ краю и узкая (22rem). Диалоги
+        // центрированы и шире 30rem; при панели по центру или во всю ленту
+        // она перекрывала им низ — кнопку подтверждения приходилось
+        // доскроллить. Справа и в такой ширине пересечения нет, поэтому
+        // подъём диалога вообще не включается (см. applyLift). На узком
+        // экране ширина упирается в 100vw и поведение вырождается в прежнее.
+        layout === 'numeric'
+          ? 'right-0 w-[min(22rem,100vw)] rounded-tl-2xl'
+          : 'inset-x-0',
       )}
       // Дизайн restos.pen (Keyboard Wrap): бежевый лоток #E6E3DB, клавиши белые.
-      style={{ background: '#E6E3DB', borderTop: '1px solid #D5D1C9' }}
+      style={{ background: '#E6E3DB', border: '1px solid #D5D1C9', borderBottom: 'none' }}
     >
-      <div className="w-full">
+      {/* Цифровой блок не растягиваем на всю ленту экрана: на кассовом
+          мониторе это полтора метра пустых клавиш, а перекрывает он при этом
+          весь низ диалога — поле суммы и кнопку отправки. Буквенной раскладке
+          ширина нужна вся, ей ограничение не ставим. */}
+      <div className={cn('w-full', layout === 'numeric' && 'mx-auto max-w-[26rem]')}>
         {/* Хедер: ручка + закрыть */}
         <div className="relative flex items-center justify-center py-1.5">
           <div className="h-1 w-10 rounded-full" style={{ background: '#C4BFB4' }} />
@@ -469,8 +493,11 @@ function NumericPad({
       tabIndex={-1}
       onClick={onTap}
       className={cn(
-        'flex h-16 items-center justify-center rounded-[10px] text-2xl font-semibold touch-manipulation',
-        'transition-transform active:scale-[0.97] sm:h-[68px]',
+        // Высота клавиши: было h-16/68px — четыре ряда съедали треть экрана
+        // и прятали содержимое диалога. 52/56px остаются комфортными для
+        // пальца (рекомендованный минимум тач-цели — 44px).
+        'flex h-[52px] items-center justify-center rounded-[10px] text-2xl font-semibold touch-manipulation',
+        'transition-transform active:scale-[0.97] sm:h-[56px]',
         className,
       )}
       style={KEY_STYLE[variant]}
