@@ -51,6 +51,12 @@ function isTypeable(el: Element | null): el is HTMLInputElement | HTMLTextAreaEl
   return TYPEABLE_INPUT_TYPES.has(type)
 }
 
+// Ширина цифровой панели — держим в паре с классом `w-[min(20rem,…)]` ниже.
+// Считаем её, а не меряем: в момент пересчёта позиции панель может ещё ехать
+// по transition, и измерение вернёт промежуточное состояние.
+const NUMPAD_W = 320
+const numpadWidth = () => Math.min(NUMPAD_W, window.innerWidth - 32)
+
 function layoutFor(el: HTMLInputElement | HTMLTextAreaElement): Layout {
   const type = (el.getAttribute('type') || '').toLowerCase()
   const im = (el.getAttribute('inputmode') || '').toLowerCase()
@@ -100,8 +106,18 @@ export function OnScreenKeyboard() {
   const [layout, setLayout] = useState<Layout>('text')
   const [lang, setLang] = useState<Lang>('ru')
   const [shift, setShift] = useState(false)
+  // Текущее значение фокусного поля — показываем табло в цифровой панели, чтобы
+  // она читалась как самостоятельный компонент, а не «кнопки в углу».
+  const [display, setDisplay] = useState('')
+  // Координаты цифровой панели, когда она пристыкована к диалогу: пара
+  // «форма слева + нумпад справа» центрируется как единое целое. null —
+  // панель просто пришвартована к правому краю экрана.
+  const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null)
 
   const activeRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
+  // Раскладка, актуальная для applyLift: он вызывается из setTimeout, а читать
+  // её из DOM нельзя — панель в этот момент может ещё анимироваться.
+  const layoutRef = useRef<Layout>('text')
   const rootRef = useRef<HTMLDivElement>(null)
   const closeTimer = useRef<number | undefined>(undefined)
   // Функция отмены текущего «подъёма» (диалога или инлайн-формы) — восстанавливает
@@ -115,6 +131,7 @@ export function OnScreenKeyboard() {
     liftUndoRef.current?.()
     liftUndoRef.current = null
     liftedForRef.current = null
+    setAnchor(null)
   }, [])
 
   // Сделать так, чтобы клавиатура не перекрывала фокусный инпут и кнопки под ним.
@@ -130,20 +147,51 @@ export function OnScreenKeyboard() {
     const gap = 12
     const kbHeight = kb.offsetHeight
     const kbTop = window.innerHeight - kbHeight
+    // Цифровая раскладка — самостоятельная панель-карточка сбоку; буквенная —
+    // шторка на всю ширину внизу. Разная геометрия → разные способы уступить
+    // ей место.
+    const sidePanel = layoutRef.current === 'numeric'
 
     // 1) Центрированный диалог — поднимаем целиком. AlertDialog рендерится
     //    с role="alertdialog", обычный Dialog — role="dialog".
     const host = active.closest('[role="dialog"], [role="alertdialog"]') as HTMLElement | null
     if (host && window.getComputedStyle(host).top !== 'auto') {
       const rect = host.getBoundingClientRect()
+      // 1a) Боковая панель: по вертикали она диалог не закрывает, поэтому
+      //     поднимать и ужимать его нельзя — так он только терял верх и
+      //     получал внутренний скролл. Вместо этого стыкуем их в пару:
+      //     форма слева, нумпад справа, и центрируем пару целиком.
+      //
+      //     Считаем от ШТАТНОЙ позиции центрированного диалога, а не от
+      //     измеренной: rect.left может быть снят посреди анимации предыдущего
+      //     сдвига — так и получался «залипший» влево диалог.
+      if (sidePanel) {
+        const vw = window.innerWidth
+        const vh = window.innerHeight
+        const kbW = numpadWidth()
+        const kbH = kb.offsetHeight
+        const naturalLeft = (vw - rect.width) / 2
+        // Пара уезжает влево ровно на половину того, что занимает панель.
+        const dx = Math.min(Math.round((gap + kbW) / 2), Math.max(0, Math.round(naturalLeft - gap)))
+        const prevML = host.style.marginLeft
+        const prevTr = host.style.transition
+        if (dx !== 0) {
+          host.style.transition = 'margin-left 160ms ease'
+          host.style.marginLeft = `${-dx}px`
+        }
+        liftUndoRef.current = () => {
+          host.style.marginLeft = prevML
+          host.style.transition = prevTr
+        }
+        setAnchor({
+          left: Math.min(Math.round(naturalLeft - dx + rect.width + gap), Math.max(gap, vw - kbW - gap)),
+          // Диалог центрирован по вертикали — центрируем и панель: так они
+          // читаются как одна пара, и мерить положение диалога не нужно.
+          top: Math.max(gap, Math.round((vh - kbH) / 2)),
+        })
+        return
+      }
       if (rect.bottom <= kbTop - gap) return // уже не перекрыт
-      // Цифровая панель пришвартована к правому краю и с центрированным
-      // диалогом по горизонтали не пересекается — поднимать и ужимать его
-      // незачем. Без этой проверки диалог всё равно получал maxHeight и
-      // внутренний скролл, и кнопка подтверждения уезжала под срез, хотя
-      // клавиатура её ничем не закрывала.
-      const kbRect = kb.getBoundingClientRect()
-      if (rect.right <= kbRect.left || rect.left >= kbRect.right) return
       const prev = {
         marginTop: host.style.marginTop, maxHeight: host.style.maxHeight,
         overflowY: host.style.overflowY, transition: host.style.transition,
@@ -177,6 +225,10 @@ export function OnScreenKeyboard() {
     //    паддинг скролл-контейнеру,
     //    чтобы под клавиатурой было куда прокрутить, и поднимаем инпут в верхнюю
     //    треть видимой полосы — тогда кнопки под ним тоже остаются видимыми.
+    //    Для боковой панели это не нужно: снизу она ничего не закрывает, а
+    //    вертикальный скролл от горизонтального перекрытия всё равно не спасёт
+    //    (и что набрано — видно на её табло).
+    if (sidePanel) return
     const sc = nearestScrollable(active)
     const prevPad = sc.style.paddingBottom
     const basePad = parseFloat(window.getComputedStyle(sc).paddingBottom) || 0
@@ -202,9 +254,11 @@ export function OnScreenKeyboard() {
       // не сбрасываем раскладку/Shift и не дёргаем лифт (иначе экран прыгает).
       const sameInput = activeRef.current === el
       activeRef.current = el
+      layoutRef.current = layoutFor(el)
       if (!sameInput) {
         setLayout(layoutFor(el))
         setShift(false)
+        setDisplay(el.value)
         setOpen(true)
       }
       // После рендера клавиатуры (знаем её высоту) убираем перекрытие: диалог
@@ -257,26 +311,36 @@ export function OnScreenKeyboard() {
     }
   }, [open])
 
+  // Табло читаем на следующем кадре: controlled-инпут мог отформатировать или
+  // отвергнуть введённое (маски суммы, лимиты), и на табло должно попасть то,
+  // что реально осталось в поле.
+  const syncDisplay = useCallback(() => {
+    requestAnimationFrame(() => setDisplay(activeRef.current?.value ?? ''))
+  }, [])
+
   const applyChar = useCallback((ch: string) => {
     const el = activeRef.current
     if (!el) return
     setNativeValue(el, el.value + ch)
     el.focus()
-  }, [])
+    syncDisplay()
+  }, [syncDisplay])
 
   const applyBackspace = useCallback(() => {
     const el = activeRef.current
     if (!el) return
     setNativeValue(el, el.value.slice(0, -1))
     el.focus()
-  }, [])
+    syncDisplay()
+  }, [syncDisplay])
 
   const applyClear = useCallback(() => {
     const el = activeRef.current
     if (!el) return
     setNativeValue(el, '')
     el.focus()
-  }, [])
+    syncDisplay()
+  }, [syncDisplay])
 
   const applyDone = useCallback(() => {
     const el = activeRef.current
@@ -304,41 +368,65 @@ export function OnScreenKeyboard() {
         // pointer-events-auto: модальные Radix-диалоги (Dialog/AlertDialog)
         // ставят pointer-events:none на <body> — без явного auto клавиатура
         // видна (z-90), но не кликабельна.
-        'fixed bottom-0 z-[90] select-none pointer-events-auto',
-        'shadow-2xl',
-        'px-4 pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom))]',
-        'animate-in slide-in-from-bottom-4 duration-150',
-        // Буквенная раскладка занимает всю ширину — иначе клавиши не влезают.
-        // Цифровая собирается в панель по центру: на широком кассовом мониторе
-        // лоток во всю ленту закрывал низ диалога целиком, включая кнопку
-        // подтверждения, хотя сами клавиши занимали лишь треть.
-        // Цифровая панель прижата к ПРАВОМУ краю и узкая (22rem). Диалоги
-        // центрированы и шире 30rem; при панели по центру или во всю ленту
-        // она перекрывала им низ — кнопку подтверждения приходилось
-        // доскроллить. Справа и в такой ширине пересечения нет, поэтому
-        // подъём диалога вообще не включается (см. applyLift). На узком
-        // экране ширина упирается в 100vw и поведение вырождается в прежнее.
+        'fixed z-[90] select-none pointer-events-auto shadow-2xl',
         layout === 'numeric'
-          ? 'right-0 w-[min(22rem,100vw)] rounded-tl-2xl'
-          : 'inset-x-0',
+          // Цифровая раскладка — самостоятельная панель-карточка. Рядом с
+          // диалогом она пристыковывается к его правому краю (applyLift
+          // сдвигает диалог влево, и пара «форма + нумпад» стоит по центру),
+          // иначе просто швартуется к правому краю экрана.
+          ? cn(
+              'w-[min(20rem,calc(100vw-2rem))] rounded-2xl p-3',
+              anchor
+                ? 'animate-in fade-in duration-150'
+                : 'right-4 top-1/2 -translate-y-1/2 animate-in slide-in-from-right-4 duration-150',
+            )
+          // Буквенной нужна вся ширина — иначе клавиши не влезают.
+          : cn(
+              'inset-x-0 bottom-0',
+              'px-4 pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom))]',
+              'animate-in slide-in-from-bottom-4 duration-150',
+            ),
       )}
       // Дизайн restos.pen (Keyboard Wrap): бежевый лоток #E6E3DB, клавиши белые.
-      style={{ background: '#E6E3DB', border: '1px solid #D5D1C9', borderBottom: 'none' }}
+      style={{
+        background: '#E6E3DB',
+        border: '1px solid #D5D1C9',
+        ...(layout === 'numeric' && anchor
+          ? { left: anchor.left, top: anchor.top, transition: 'left 160ms ease, top 160ms ease' }
+          : null),
+      }}
     >
-      {/* Цифровой блок не растягиваем на всю ленту экрана: на кассовом
-          мониторе это полтора метра пустых клавиш, а перекрывает он при этом
-          весь низ диалога — поле суммы и кнопку отправки. Буквенной раскладке
-          ширина нужна вся, ей ограничение не ставим. */}
-      <div className={cn('w-full', layout === 'numeric' && 'mx-auto max-w-[26rem]')}>
-        {/* Хедер: ручка + закрыть */}
-        <div className="relative flex items-center justify-center py-1.5">
-          <div className="h-1 w-10 rounded-full" style={{ background: '#C4BFB4' }} />
+      <div className="w-full">
+        {/* Хедер. У нижней раскладки — «ручка» шторки по центру; у боковой
+            панели вместо ручки табло с текущим значением поля: ручка ничего не
+            тянет, а пустая полоса с одним крестиком читалась как обрезок. */}
+        <div className={cn(
+          'relative flex items-center py-1.5',
+          layout === 'numeric' ? 'gap-2 pb-2.5' : 'justify-center',
+        )}>
+          {layout === 'numeric' ? (
+            <div
+              className="min-w-0 flex-1 truncate rounded-[10px] px-3 py-1.5 text-right text-2xl font-semibold tabular-nums"
+              style={{
+                background: '#FFFFFF',
+                color: display ? '#1A1A1A' : '#A8A398',
+                boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.06)',
+              }}
+            >
+              {display || '0'}
+            </div>
+          ) : (
+            <div className="h-1 w-10 rounded-full" style={{ background: '#C4BFB4' }} />
+          )}
           <button
             type="button"
             tabIndex={-1}
             aria-label="Скрыть клавиатуру"
             onClick={applyDone}
-            className="absolute right-0 top-1/2 -translate-y-1/2 grid size-9 place-items-center rounded-[10px] active:scale-95 touch-manipulation"
+            className={cn(
+              'grid size-9 shrink-0 place-items-center rounded-[10px] active:scale-95 touch-manipulation',
+              layout !== 'numeric' && 'absolute right-0 top-1/2 -translate-y-1/2',
+            )}
             style={{ background: '#D5D1C9', color: '#3A382F' }}
           >
             <X className="size-4" />
