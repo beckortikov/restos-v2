@@ -3816,7 +3816,11 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         kind: { type: string, enum: [receipt, station] }
-        station: { type: string }
+        station: { type: string, description: "Legacy (до 053) — первый цех списка stations" }
+        stations:
+          type: array
+          items: { type: string }
+          description: "Цехи станционного принтера (053) — их позиции печатаются одним бегунком"
         driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
         target: { type: string }
         cols: { type: integer, description: "32=58mm, 42-48=80mm" }
@@ -3832,7 +3836,11 @@ components:
       properties:
         name: { type: string }
         kind: { type: string, enum: [receipt, station] }
-        station: { type: string }
+        station: { type: string, description: "Legacy — эквивалент stations из одного цеха" }
+        stations:
+          type: array
+          items: { type: string }
+          description: "Цехи станционного принтера; на PATCH список заменяется целиком. Цех может принадлежать максимум одному принтеру (409 при конфликте)"
         driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
         target: { type: string, description: "tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues" }
         cols: { type: integer }

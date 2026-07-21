@@ -25,13 +25,30 @@ type Printer struct {
 	Enabled      bool    `gorm:"not null;default:true" json:"enabled"`
 	// Content flags (миграция 015) — что печатать в receipt-чеке.
 	// Для kind=station игнорируется (ранер всегда содержит позиции).
-	PrintLogo       bool      `gorm:"column:print_logo;not null;default:true" json:"print_logo"`
-	PrintDiscount   bool      `gorm:"column:print_discount;not null;default:true" json:"print_discount"`
-	PrintService    bool      `gorm:"column:print_service;not null;default:true" json:"print_service"`
-	PrintTip        bool      `gorm:"column:print_tip;not null;default:false" json:"print_tip"`
-	PrintQRFeedback bool      `gorm:"column:print_qr_feedback;not null;default:false" json:"print_qr_feedback"`
-	CreatedAt       time.Time `gorm:"not null" json:"created_at"`
-	UpdatedAt       time.Time `gorm:"not null" json:"updated_at"`
+	PrintLogo       bool `gorm:"column:print_logo;not null;default:true" json:"print_logo"`
+	PrintDiscount   bool `gorm:"column:print_discount;not null;default:true" json:"print_discount"`
+	PrintService    bool `gorm:"column:print_service;not null;default:true" json:"print_service"`
+	PrintTip        bool `gorm:"column:print_tip;not null;default:false" json:"print_tip"`
+	PrintQRFeedback bool `gorm:"column:print_qr_feedback;not null;default:false" json:"print_qr_feedback"`
+	// Stations — цехи, которые обслуживает станционный принтер (053,
+	// printer_stations). Заполняется сервисом при чтении, в БД живёт в
+	// join-таблице. Поле Station (legacy) хранит первую станцию списка.
+	Stations  []string  `gorm:"-" json:"stations"`
+	CreatedAt time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt time.Time `gorm:"not null" json:"updated_at"`
 }
 
 func (Printer) TableName() string { return "printers" }
+
+// PrinterStation — связка «принтер ↔ цех» (053). Один цех принадлежит максимум
+// одному принтеру ресторана (unique restaurant_id+station). Все позиции цехов
+// одного принтера печатаются одним бегунком (см. enqueueRunners).
+type PrinterStation struct {
+	PrinterID    string    `gorm:"column:printer_id;type:uuid;primaryKey" json:"printer_id"`
+	Station      string    `gorm:"primaryKey" json:"station"`
+	RestaurantID string    `gorm:"column:restaurant_id;not null;index" json:"restaurant_id"`
+	CreatedAt    time.Time `gorm:"not null" json:"created_at"`
+	UpdatedAt    time.Time `gorm:"not null" json:"updated_at"`
+}
+
+func (PrinterStation) TableName() string { return "printer_stations" }

@@ -11,6 +11,9 @@ type DBPrinter = {
   is_default: boolean
   target: string
   station?: string | null
+  // Цехи станционного принтера (053) — печатаются одним бегунком.
+  // station — legacy-поле, первый цех списка.
+  stations?: string[]
   cols?: number
   print_logo?: boolean
   print_discount?: boolean
@@ -48,6 +51,7 @@ export type PrinterFormPayload = {
   is_default?: boolean
   enabled?: boolean
   station?: string
+  stations?: string[]
   cols?: number
   print_logo?: boolean
   print_discount?: boolean

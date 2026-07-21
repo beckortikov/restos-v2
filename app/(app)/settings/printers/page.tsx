@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Printer, Plus, Trash2, CheckCircle2, ListOrdered, Star, ServerCog, Loader2, Pencil, FileText } from 'lucide-react'
 import { toast } from 'sonner'
@@ -51,6 +51,7 @@ type DBPrinter = {
   is_default: boolean
   target: string
   station?: string | null
+  stations?: string[]
   cols?: number
   print_logo?: boolean
   print_discount?: boolean
@@ -77,7 +78,8 @@ interface FormState {
   port: string
   // Имя очереди печати ОС — target для driver=system.
   queue: string
-  station: MenuStation | ''
+  // Цехи станционного принтера: их позиции печатаются одним бегунком.
+  stations: MenuStation[]
   enabled: boolean
   is_default: boolean
   cols: number // 32 | 42 | 48
@@ -95,7 +97,7 @@ const DEFAULT_FORM: FormState = {
   host: '',
   port: '',
   queue: '',
-  station: '',
+  stations: [],
   enabled: true,
   is_default: false,
   cols: 48,
@@ -143,6 +145,13 @@ function isEditableDriver(d: string): d is DriverKind {
   return (EDITABLE_DRIVERS as string[]).includes(d)
 }
 
+// printerStations — цехи принтера; legacy-фолбэк на station для строк,
+// которые бэк ещё не отдаёт со списком (до 053).
+function printerStations(p: DBPrinter): MenuStation[] {
+  if (p.stations && p.stations.length > 0) return p.stations as MenuStation[]
+  return p.station ? [p.station as MenuStation] : []
+}
+
 function fromPrinter(p: DBPrinter): FormState {
   const { host, port } = p.driver === 'tcp' ? splitTarget(p.target) : { host: '', port: '' }
   return {
@@ -157,7 +166,7 @@ function fromPrinter(p: DBPrinter): FormState {
     kind: (p.kind === 'station' ? 'station' : 'receipt') as PrinterKind,
     host,
     port,
-    station: (p.station as MenuStation) ?? '',
+    stations: printerStations(p),
     enabled: p.enabled,
     is_default: p.is_default,
     cols: p.cols ?? 48,
@@ -201,13 +210,12 @@ function toPayload(form: FormState, editing: boolean): PrinterFormPayload {
     print_tip: form.print_tip,
     print_qr_feedback: form.print_qr_feedback,
   }
-  if (form.kind === 'station' && form.station) {
-    payload.station = form.station as string
+  if (form.kind === 'station' && form.stations.length > 0) {
+    // Полный список цехов; бэк заменяет привязки целиком (printer_stations).
+    payload.stations = form.stations as string[]
   }
-  // На редактирование station-принтера обнулять station нельзя — поле остаётся.
-  if (editing && form.kind === 'receipt') {
-    // Бэк хранит station=null для receipt — ничего не передаём (PATCH не тронет).
-  }
+  // Для kind=receipt цехи не передаём: бэк сам снимает привязки при смене
+  // station→receipt, а PATCH без поля ничего не трогает.
   return payload
 }
 
@@ -221,6 +229,20 @@ export default function PrinterSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<DBPrinter | null>(null)
+
+  // Цехи без печати: есть станционные принтеры, но цех не входит ни в один
+  // ВКЛЮЧЁННЫЙ. Пока станционных принтеров нет вовсе — не пугаем (legacy-режим:
+  // бегунки уходят на первый настроенный станционный принтер).
+  const paperlessStations = useMemo(() => {
+    const stationPrinters = printers.filter(p => p.kind === 'station')
+    if (stationPrinters.length === 0) return []
+    const covered = new Set<string>()
+    for (const p of stationPrinters) {
+      if (!p.enabled) continue
+      for (const s of printerStations(p)) covered.add(s)
+    }
+    return ALL_STATIONS.filter(s => !covered.has(s))
+  }, [printers])
   const [sysQueues, setSysQueues] = useState<SystemQueue[]>([])
   const [queuesLoading, setQueuesLoading] = useState(false)
   const [queuesError, setQueuesError] = useState<string | null>(null)
@@ -284,8 +306,8 @@ export default function PrinterSettingsPage() {
       toast.error('Выберите принтер из списка очередей ОС')
       return
     }
-    if (form.kind === 'station' && !form.station) {
-      toast.error('Выберите станцию')
+    if (form.kind === 'station' && form.stations.length === 0) {
+      toast.error('Выберите хотя бы один цех')
       return
     }
     setSaving(true)
@@ -430,11 +452,11 @@ export default function PrinterSettingsPage() {
                         {colsLabel(p.cols)}
                       </span>
                     )}
-                    {p.station && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
-                        {STATION_LABELS[p.station as MenuStation] ?? p.station}
+                    {printerStations(p).map(s => (
+                      <span key={s} className="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                        {STATION_LABELS[s] ?? s}
                       </span>
-                    )}
+                    ))}
                   </div>
                   <div className="text-xs text-muted-foreground mt-1 font-mono">
                     {p.driver === 'virtual' ? 'backups/print/' : (p.target || '—')}
@@ -485,6 +507,18 @@ export default function PrinterSettingsPage() {
         Добавить принтер
       </Button>
 
+      {/* Бесбумажные цехи: привязаны только к отключённым принтерам или не
+          привязаны никуда — их бегунки не печатаются. Показываем явно, чтобы
+          это было осознанным решением, а не сюрпризом на кухне. */}
+      {paperlessStations.length > 0 && (
+        <div className="bg-muted/30 rounded-xl border border-border p-4 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Без печати: </span>
+          {paperlessStations.map(s => STATION_LABELS[s] ?? s).join(', ')} — бегунки этих
+          цехов не печатаются; позиции видны на кухонном экране и в чеке гостя.
+          Чтобы печатать, добавьте цех в один из принтеров-станций.
+        </div>
+      )}
+
       {/* Info */}
       <div className="bg-muted/30 rounded-xl border border-border p-4 space-y-2 text-xs text-muted-foreground">
         <p className="font-semibold text-foreground flex items-center gap-2">
@@ -529,7 +563,7 @@ export default function PrinterSettingsPage() {
                     <button
                       key={k}
                       type="button"
-                      onClick={() => setForm(f => ({ ...f, kind: k, station: k === 'receipt' ? '' : f.station }))}
+                      onClick={() => setForm(f => ({ ...f, kind: k, stations: k === 'receipt' ? [] : f.stations }))}
                       className={`flex-1 px-2.5 py-1.5 text-xs font-medium ${
                         form.kind === k ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
                       }`}
@@ -570,18 +604,34 @@ export default function PrinterSettingsPage() {
 
             {form.kind === 'station' && (
               <div className="space-y-1.5">
-                <Label htmlFor="printer-station">Станция</Label>
-                <select
-                  id="printer-station"
-                  value={form.station}
-                  onChange={e => setForm(f => ({ ...f, station: e.target.value as MenuStation }))}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg"
-                >
-                  <option value="">— Выберите станцию —</option>
-                  {ALL_STATIONS.map(s => (
-                    <option key={s} value={s}>{STATION_LABELS[s]}</option>
-                  ))}
-                </select>
+                <Label>Цехи</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {ALL_STATIONS.map(s => {
+                    const active = form.stations.includes(s)
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setForm(f => ({
+                          ...f,
+                          stations: active ? f.stations.filter(x => x !== s) : [...f.stations, s],
+                        }))}
+                        className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                          active
+                            ? 'bg-primary text-primary-foreground border-primary'
+                            : 'bg-background border-border text-foreground hover:bg-muted'
+                        }`}
+                      >
+                        {STATION_LABELS[s]}
+                      </button>
+                    )
+                  })}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Позиции всех выбранных цехов печатаются одним бегунком. Цех, не привязанный
+                  ни к одному принтеру, не печатается вовсе — его позиции видны на кухонном
+                  экране и в чеке гостя.
+                </p>
               </div>
             )}
 

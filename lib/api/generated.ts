@@ -11240,7 +11240,10 @@ export interface components {
             name?: string;
             /** @enum {string} */
             kind?: "receipt" | "station";
+            /** @description Legacy (до 053) — первый цех списка stations */
             station?: string;
+            /** @description Цехи станционного принтера (053) — их позиции печатаются одним бегунком */
+            stations?: string[];
             /** @enum {string} */
             driver?: "tcp" | "usb" | "system" | "virtual" | "mock";
             target?: string;
@@ -11258,7 +11261,10 @@ export interface components {
             name?: string;
             /** @enum {string} */
             kind?: "receipt" | "station";
+            /** @description Legacy — эквивалент stations из одного цеха */
             station?: string;
+            /** @description Цехи станционного принтера; на PATCH список заменяется целиком. Цех может принадлежать максимум одному принтеру (409 при конфликте) */
+            stations?: string[];
             /** @enum {string} */
             driver?: "tcp" | "usb" | "system" | "virtual" | "mock";
             /** @description tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues */

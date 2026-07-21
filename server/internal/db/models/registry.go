@@ -33,8 +33,8 @@ func All() []any {
 		&TimeEntry{}, &IdempotencyKey{}, &PrintJob{},
 		// auth
 		&Session{},
-		// printers (Phase 4.5)
-		&Printer{},
+		// printers (Phase 4.5; 053 — мультистанционная печать)
+		&Printer{}, &PrinterStation{},
 		// shadow drifts (Phase 8)
 		&ShadowDrift{},
 	}

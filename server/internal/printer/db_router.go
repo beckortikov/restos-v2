@@ -130,29 +130,39 @@ func (r *DBRouter) getOrBuild(p *models.Printer) Printer {
 	return dr
 }
 
-// ResolveByStation — для runner-эмиссии. Возвращает (printer_id, ok).
-// Используется write-side (enqueueRunner) чтобы заполнить job.printer_id.
-func (r *DBRouter) ResolveByStation(restaurantID, station string) (string, bool) {
-	var p models.Printer
-	q := r.db.Where("restaurant_id = ? AND kind = ? AND enabled = ? AND station = ?",
-		restaurantID, "station", true, station)
-	if err := q.First(&p).Error; err != nil {
-		return "", false
+// StationRouting — маршрутизация цехов ресторана для runner-эмиссии (053).
+//
+// enabled: цех → id ВКЛЮЧЁННОГО принтера, обслуживающего его (printer_stations).
+// configured: есть ли у ресторана вообще привязки цехов (включая отключённые
+// принтеры). Семантика write-side (enqueueRunners):
+//   - configured и цех в enabled → печатаем на этот принтер (цехи одного
+//     принтера сливаются в один бегунок);
+//   - configured и цеха нет в enabled → бесбумажный цех (принтер отключён или
+//     цех никуда не привязан): бегунок не печатается, повар видит KDS;
+//   - !configured → станционных принтеров нет вовсе: legacy-поведение,
+//     job без printer_id на каждый цех (воркер найдёт первый станционный).
+//
+// Ошибка чтения трактуется как «не настроено» — безопаснее напечатать
+// по-старому, чем молча потерять бегунок.
+func (r *DBRouter) StationRouting(restaurantID string) (enabled map[string]string, configured bool) {
+	var rows []struct {
+		Station   string
+		PrinterID string
+		Enabled   bool
 	}
-	return p.ID, true
-}
-
-// StationHasPrinter — есть ли у станции ХОТЬ ОДИН принтер в БД (независимо от
-// enabled). Позволяет write-side отличить «станция настроена, но её принтер
-// отключён» (ResolveByStation=false, StationHasPrinter=true → бесбумажная, runner
-// не печатаем) от «у станции нет своего принтера» (обе false → runner уходит на
-// общий станционный принтер, как раньше).
-func (r *DBRouter) StationHasPrinter(restaurantID, station string) bool {
-	var count int64
-	if err := r.db.Model(&models.Printer{}).
-		Where("restaurant_id = ? AND kind = ? AND station = ?", restaurantID, "station", station).
-		Count(&count).Error; err != nil {
-		return false
+	err := r.db.Table("printer_stations ps").
+		Select("ps.station AS station, p.id AS printer_id, p.enabled AS enabled").
+		Joins("JOIN printers p ON p.id = ps.printer_id").
+		Where("ps.restaurant_id = ? AND p.kind = ?", restaurantID, "station").
+		Scan(&rows).Error
+	if err != nil || len(rows) == 0 {
+		return nil, false
 	}
-	return count > 0
+	enabled = make(map[string]string, len(rows))
+	for _, row := range rows {
+		if row.Enabled {
+			enabled[row.Station] = row.PrinterID
+		}
+	}
+	return enabled, true
 }
