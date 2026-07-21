@@ -85,10 +85,24 @@ export const PrintReceipt = forwardRef<HTMLDivElement, PrintReceiptProps>(
               )}
             </>
           ) : (
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Тип</span>
-              <span>{TYPE_LABELS[data.orderType]}</span>
-            </div>
+            <>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span>Тип</span>
+                <span>{TYPE_LABELS[data.orderType]}</span>
+              </div>
+              {data.deliveryPhone && (
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Телефон</span>
+                  <span>{data.deliveryPhone}</span>
+                </div>
+              )}
+              {data.deliveryAddress && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '8px' }}>
+                  <span style={{ whiteSpace: 'nowrap' }}>Адрес</span>
+                  <span style={{ textAlign: 'right', wordBreak: 'break-word' }}>{data.deliveryAddress}</span>
+                </div>
+              )}
+            </>
           )}
           {data.waiterName && (
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>

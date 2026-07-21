@@ -27,6 +27,8 @@ export interface ReceiptPrintData {
   restaurantAddress?: string
   tableName?: string
   zoneName?: string
+  deliveryPhone?: string
+  deliveryAddress?: string
   waiterName?: string
   cashierName?: string
   items: { name: string; qty: number; price: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; modifiers?: { name: string; price: number }[]; portions?: number }[]
@@ -135,6 +137,8 @@ export function buildReceiptData(
     restaurantAddress: ctx.restaurant?.address,
     tableName: table?.name,
     zoneName: isHall ? (zone?.name ?? 'Зал') : undefined,
+    deliveryPhone: order.type === 'delivery' ? order.deliveryPhone : undefined,
+    deliveryAddress: order.type === 'delivery' ? order.deliveryAddress : undefined,
     waiterName: waiter?.name,
     cashierName: ctx.currentUser?.name,
     items: displayItems.map(i => ({
