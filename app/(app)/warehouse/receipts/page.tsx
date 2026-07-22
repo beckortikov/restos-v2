@@ -1,14 +1,18 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul } from '@/lib/decimal'
 import { type StockReceipt, type Supplier } from '@/lib/types'
 import { fetchReceipts, fetchSuppliers } from '@/lib/queries'
-import { Plus, CheckCircle, Clock, CreditCard, Undo2 } from 'lucide-react'
+import { Plus, CheckCircle, Clock, CreditCard, Undo2, Search } from 'lucide-react'
 import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
+
+// Статус-фильтры списка накладных. 'debt' — есть непогашенный долг; 'returns' —
+// был возврат поставщику (полный/частичный). Счётчики считаются от всех накладных.
+type ReceiptFilter = 'all' | 'debt' | 'paid' | 'returns'
 
 const PAYMENT_LABELS: Record<string, { label: string; color: string }> = {
   paid: { label: 'Оплачено', color: 'bg-emerald-100 text-emerald-700' },
@@ -24,6 +28,8 @@ export default function ReceiptsPage() {
   const [, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [returnFor, setReturnFor] = useState<StockReceipt | null>(null)
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<ReceiptFilter>('all')
 
   useEffect(() => {
     Promise.all([fetchReceipts(), fetchSuppliers()])
@@ -31,6 +37,25 @@ export default function ReceiptsPage() {
       .catch(() => setLoading(false))
   }, [])
 
+  const isReturned = (r: StockReceipt) => (r.returnedTotal ?? 0) > 0
+  const counts = useMemo(() => ({
+    all: receipts.length,
+    debt: receipts.filter(r => r.debtAmount > 0).length,
+    paid: receipts.filter(r => r.debtAmount <= 0.01 && !isReturned(r)).length,
+    returns: receipts.filter(isReturned).length,
+  }), [receipts])
+
+  const filtered = useMemo(() => {
+    let rows = receipts
+    if (filter === 'debt') rows = rows.filter(r => r.debtAmount > 0)
+    else if (filter === 'paid') rows = rows.filter(r => r.debtAmount <= 0.01 && !isReturned(r))
+    else if (filter === 'returns') rows = rows.filter(isReturned)
+    const q = search.trim().toLowerCase()
+    if (q) rows = rows.filter(r =>
+      (r.supplierName ?? '').toLowerCase().includes(q) ||
+      (r.date ?? '').toLowerCase().includes(q))
+    return rows
+  }, [receipts, filter, search])
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
@@ -69,7 +94,55 @@ export default function ReceiptsPage() {
         ))}
       </div>
 
+      {/* Filter tabs + search */}
+      {receipts.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex gap-1 bg-muted/50 p-1 rounded-xl overflow-x-auto">
+            {([
+              { key: 'all', label: 'Все' },
+              { key: 'debt', label: 'С долгом' },
+              { key: 'paid', label: 'Оплачено' },
+              { key: 'returns', label: 'Возвраты' },
+            ] as { key: ReceiptFilter; label: string }[]).map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setFilter(tab.key)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-colors ${
+                  filter === tab.key ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {tab.label}
+                <span className={`min-w-[20px] text-center px-1.5 py-0.5 rounded-md text-[10px] font-bold ${
+                  filter === tab.key ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+                }`}>
+                  {counts[tab.key]}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Поиск по поставщику или дате..."
+              className="w-full pl-10 pr-4 py-2.5 bg-card border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* No results */}
+      {receipts.length > 0 && filtered.length === 0 && (
+        <div className="bg-card rounded-xl border border-border p-8 text-center">
+          <p className="text-sm text-muted-foreground">
+            {search ? `Ничего не найдено по запросу "${search}"` : 'Нет накладных с таким статусом'}
+          </p>
+        </div>
+      )}
+
       {/* Table */}
+      {filtered.length > 0 && (
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[600px]">
@@ -81,7 +154,7 @@ export default function ReceiptsPage() {
             </tr>
           </thead>
           <tbody>
-            {receipts.map((r) => {
+            {filtered.map((r) => {
               const pt = PAYMENT_LABELS[r.paymentType]
               // Возврат поставщику перекрывает статус оплаты: полный → «Возвращено»,
               // частичный → «Возврат части». Иначе показываем статус оплаты.
@@ -177,6 +250,7 @@ export default function ReceiptsPage() {
         </table>
         </div>
       </div>
+      )}
 
 
       {/* Возврат поставщику — склад и деньги/долг назад */}
