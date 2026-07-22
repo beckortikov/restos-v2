@@ -41,8 +41,19 @@ export const MAX_ATTRS = 3
 const MAX_VALUES = 10
 export const MAX_COMBOS = 60
 
-export function comboKeyOf(labels: string[]): string {
-  return labels.map(l => l.trim()).join('\x1f')
+// Идентичность значения — стабильна при переименовании лейбла. Приоритет:
+// id значения (backend UUID, при правке лейбла НЕ меняется) → id значения шкалы
+// размеров → как фолбэк лейбл (для новых значений без id, в форме создания).
+function valueIdentity(v: { id?: string; sizeScaleValueId?: string; label: string }): string {
+  return v.id ?? v.sizeScaleValueId ?? 'lbl:' + v.label.trim()
+}
+
+// Ключ комбинации — отсортированный набор идентичностей её значений. Ключуем по
+// id значения, а не по лейблу: переименование значения больше НЕ обнуляет его
+// цену/закупку в форме (баг «правка варианта удаляет цены»). Сортировка делает
+// ключ независимым и от порядка атрибутов.
+export function comboKeyOf(values: { id?: string; sizeScaleValueId?: string; label: string }[]): string {
+  return values.map(valueIdentity).sort().join('\x1f')
 }
 
 /**
@@ -69,7 +80,7 @@ export function combosOf(attrs: AttrForm[]): { key: string; labels: string[]; ti
   return acc.map(combo => {
     const labels = combo.map(v => v.label.trim())
     const sizeScaleValueIds = combo.map(v => v.sizeScaleValueId).filter((x): x is string => !!x)
-    return { key: comboKeyOf(labels), labels, title: labels.join(' · '), sizeScaleValueIds }
+    return { key: comboKeyOf(combo), labels, title: labels.join(' · '), sizeScaleValueIds }
   })
 }
 
@@ -322,19 +333,19 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
           sizeScaleId: a.sizeScaleId ?? undefined,
           values: a.values.map(v => ({ id: v.id, label: v.label })),
         }))
-        // Цены комбинаций восстанавливаем из вариантов: value_ids варианта →
-        // лейблы в порядке атрибутов; цена = price, закупка = cogs (покупной).
-        const labelById = new Map<string, { label: string; attrIdx: number }>()
-        state.attributes.forEach((a, ai) => a.values.forEach(v => labelById.set(v.id, { label: v.label, attrIdx: ai })))
+        // Цены комбинаций восстанавливаем из вариантов по НАБОРУ id значений
+        // (value_ids) — тем же ключом, что и comboKeyOf(combo) в форме (набор
+        // идентичностей, отсортирован). Ключ по id, а не по лейблам: при
+        // переименовании значения его цена/закупка не «осиротеет».
+        // price/cogs приходят строками (mapMenuItem) — приводим к числу.
         const loadedPrices: ComboPrices = {}
         for (const v of state.variants) {
-          const parts = (v.variantValueIds ?? [])
-            .map(id => labelById.get(id))
-            .filter((x): x is { label: string; attrIdx: number } => !!x)
-            .sort((a, b) => a.attrIdx - b.attrIdx)
-            .map(x => x.label)
-          if (parts.length === 0) continue
-          loadedPrices[comboKeyOf(parts)] = { price: v.price, purchase: v.cogs ?? 0 }
+          const ids = (v.variantValueIds ?? []).map(String)
+          if (ids.length === 0) continue
+          loadedPrices[ids.slice().sort().join('\x1f')] = {
+            price: Number(v.price) || 0,
+            purchase: Number(v.cogs ?? 0) || 0,
+          }
         }
         setAttrs(loadedAttrs)
         setPrices(loadedPrices)
