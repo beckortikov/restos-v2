@@ -302,6 +302,37 @@ func (h *SalaryHandler) SalaryAccrual(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, makeList(rows, ""))
 }
 
+// WorkedDays — GET /finance/salary/worked-days?user_id=&from=&to=.
+func (h *SalaryHandler) WorkedDays(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.svc.WorkedDays(r.Context(), q.Get("user_id"), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// SetWorkedDays — PUT /finance/salary/worked-days: замена ручных отметок дней.
+func (h *SalaryHandler) SetWorkedDays(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		UserID string   `json:"user_id"`
+		From   string   `json:"from"`
+		To     string   `json:"to"`
+		Dates  []string `json:"dates"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.SetWorkedDays(r.Context(), in.UserID, in.From, in.To, in.Dates)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *SalaryHandler) PayServiceCharge(w http.ResponseWriter, r *http.Request) {
 	var in service.ServiceChargePayInput
 	if !decodeBody(r, &in) {

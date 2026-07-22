@@ -2525,6 +2525,32 @@ paths:
         - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
         - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
       responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryAccrualRow" } } } } } } } }
+  /api/v1/finance/salary/worked-days:
+    get:
+      tags: [finance, payroll]
+      summary: Отработанные дни сотрудника (табель + ручные отметки) за период
+      parameters:
+        - { in: query, name: user_id, schema: { type: string } }
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WorkedDaysResult" } } } } }
+    put:
+      tags: [finance, payroll]
+      summary: Заменить ручные отметки дней сотрудника в периоде
+      description: >
+        Идемпотентно заменяет РУЧНЫЕ отметки (salary_worked_days) в [from, to] на
+        переданный набор dates. Табель (реальные приходы) не трогает.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string }
+                from: { type: string }
+                to: { type: string }
+                dates: { type: array, items: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WorkedDaysResult" } } } } }
   /api/v1/finance/salary/report:
     get:
       tags: [finance, payroll]
@@ -4906,6 +4932,12 @@ components:
         accrued: { $ref: "#/components/schemas/Decimal" }
         advance: { $ref: "#/components/schemas/Decimal" }
         deductions: { $ref: "#/components/schemas/Decimal" }
+    WorkedDaysResult:
+      type: object
+      properties:
+        shift_dates: { type: array, items: { type: string }, description: "Дни с приходом в табеле (снять нельзя)" }
+        manual_dates: { type: array, items: { type: string }, description: "Ручные отметки (toggleable)" }
+        count: { type: integer, description: "Уникальных отработанных дней всего" }
     SalaryReport:
       type: object
       properties:

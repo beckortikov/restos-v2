@@ -416,6 +416,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/abc-inventory", analyticsH.ABCInventory)
 			g.Get("/finance/salary/report", salaryH.SalaryReport)
 			g.Get("/finance/salary/accrual", salaryH.SalaryAccrual)
+			g.Get("/finance/salary/worked-days", salaryH.WorkedDays)
 			g.Get("/finance/service-accrual/by-waiter", salaryH.AccrualByWaiter)
 			g.Get("/finance/service-accrual/by-shift/{shift_id}", salaryH.AccrualByShift)
 			g.Get("/finance/service-payout/by-waiter", salaryH.PayoutByWaiter)
@@ -651,6 +652,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/finance/custom-categories", customCatsH.Create)
 			g.Delete("/finance/custom-categories/{id}", customCatsH.Delete)
 			g.Post("/finance/salary/pay", salaryH.PaySalary)
+			g.Put("/finance/salary/worked-days", salaryH.SetWorkedDays)
 			g.Post("/finance/service-charge/pay", salaryH.PayServiceCharge)
 
 			// Restaurants write (Phase 10).

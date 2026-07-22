@@ -8932,6 +8932,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/worked-days": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Отработанные дни сотрудника (табель + ручные отметки) за период */
+        get: {
+            parameters: {
+                query?: {
+                    user_id?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    from?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkedDaysResult"];
+                    };
+                };
+            };
+        };
+        /**
+         * Заменить ручные отметки дней сотрудника в периоде
+         * @description Идемпотентно заменяет РУЧНЫЕ отметки (salary_worked_days) в [from, to] на переданный набор dates. Табель (реальные приходы) не трогает.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_id?: string;
+                        from?: string;
+                        to?: string;
+                        dates?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkedDaysResult"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/report": {
         parameters: {
             query?: never;
@@ -12487,6 +12561,14 @@ export interface components {
             accrued?: components["schemas"]["Decimal"];
             advance?: components["schemas"]["Decimal"];
             deductions?: components["schemas"]["Decimal"];
+        };
+        WorkedDaysResult: {
+            /** @description Дни с приходом в табеле (снять нельзя) */
+            shift_dates?: string[];
+            /** @description Ручные отметки (toggleable) */
+            manual_dates?: string[];
+            /** @description Уникальных отработанных дней всего */
+            count?: number;
         };
         SalaryReport: {
             from?: string;
