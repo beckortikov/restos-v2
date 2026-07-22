@@ -182,6 +182,26 @@ export async function createStockReturn(input: {
   return data
 }
 
+// payReceipt — оплата долга по конкретной накладной. Бэк атомарно списывает
+// сумму со счёта, уменьшает долг накладной и поставщика, создаёт
+// financial_operation. Сумма клампится к остатку долга накладной.
+export async function payReceipt(input: {
+  receiptId: string
+  amount: number
+  accountId: string
+  // idempotencyKey — один ключ на попытку оплаты: второй клик получит
+  // кэшированный ответ первого, а не проведёт вторую оплату (см. createStockReturn).
+  idempotencyKey?: string
+}): Promise<StockReceipt> {
+  const data: any = await unwrap(api.POST('/api/v1/stock/receipts/{id}/pay', {
+    params: { path: { id: input.receiptId } },
+    ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
+    body: { amount: String(input.amount), account_id: input.accountId } as any,
+  }))
+  logAction('receipt.pay', 'receipt', input.receiptId, 'Оплата накладной')
+  return mapStockReceipt(data) as StockReceipt
+}
+
 // cancelStockReturn — сторно возврата: товар назад на склад, деньги/долг
 // откатываются. Документ не удаляется, помечается отменённым.
 export async function cancelStockReturn(id: string) {

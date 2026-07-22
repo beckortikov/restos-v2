@@ -1408,6 +1408,69 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stock/receipts/{id}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Оплата долга по конкретной накладной
+         * @description Адресный платёж именно этой накладной (в отличие от
+         *     `/suppliers/{id}/pay-debt`, который гасит долг поставщику FIFO по всем
+         *     накладным). Атомарно: списывает `amount` со счёта `account_id`, на
+         *     накладной `debt_amount −amount` / `paid_amount +amount` и пересчитывает
+         *     `payment_type` (paid/partial), у поставщика `current_debt −amount`, и
+         *     создаёт financial_operation out (category='supplier_payment', исключён
+         *     из opex ОПиУ). Сумма клампится к остатку долга накладной.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SupplierPayDebtInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReceipt"];
+                    };
+                };
+                /** @description По накладной нет долга; либо на счёте недостаточно денег. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/returns": {
         parameters: {
             query?: never;

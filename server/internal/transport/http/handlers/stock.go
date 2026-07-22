@@ -63,6 +63,21 @@ func (h *StockHandler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusCreated, ret)
 }
 
+// PayReceipt — POST /api/v1/stock/receipts/{id}/pay. Оплата долга по накладной.
+func (h *StockHandler) PayReceipt(w http.ResponseWriter, r *http.Request) {
+	var in service.ReceiptPayInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	receipt, err := h.svc.PayReceipt(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, receipt)
+}
+
 // CancelReturn — POST /api/v1/stock/returns/{id}/cancel.
 func (h *StockHandler) CancelReturn(w http.ResponseWriter, r *http.Request) {
 	ret, err := h.svc.CancelReturn(r.Context(), chi.URLParam(r, "id"))

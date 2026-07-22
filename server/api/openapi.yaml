@@ -504,6 +504,27 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptInput" } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
 
+  /api/v1/stock/receipts/{id}/pay:
+    post:
+      tags: [stock]
+      summary: Оплата долга по конкретной накладной
+      description: |
+        Адресный платёж именно этой накладной (в отличие от
+        `/suppliers/{id}/pay-debt`, который гасит долг поставщику FIFO по всем
+        накладным). Атомарно: списывает `amount` со счёта `account_id`, на
+        накладной `debt_amount −amount` / `paid_amount +amount` и пересчитывает
+        `payment_type` (paid/partial), у поставщика `current_debt −amount`, и
+        создаёт financial_operation out (category='supplier_payment', исключён
+        из opex ОПиУ). Сумма клампится к остатку долга накладной.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierPayDebtInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } }
+        "409":
+          description: По накладной нет долга; либо на счёте недостаточно денег.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/stock/returns:
     get:

@@ -9,6 +9,7 @@ import { type StockReceipt, type Supplier } from '@/lib/types'
 import { fetchReceipts, fetchSuppliers } from '@/lib/queries'
 import { Plus, CheckCircle, Clock, CreditCard, Undo2, Search } from 'lucide-react'
 import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
+import { PayReceiptDialog } from '@/components/dialogs/pay-receipt-dialog'
 
 // Статус-фильтры списка накладных. 'debt' — есть непогашенный долг; 'returns' —
 // был возврат поставщику (полный/частичный). Счётчики считаются от всех накладных.
@@ -28,6 +29,7 @@ export default function ReceiptsPage() {
   const [, setSuppliers] = useState<Supplier[]>([])
   const [loading, setLoading] = useState(true)
   const [returnFor, setReturnFor] = useState<StockReceipt | null>(null)
+  const [payFor, setPayFor] = useState<StockReceipt | null>(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<ReceiptFilter>('all')
 
@@ -199,13 +201,24 @@ export default function ReceiptsPage() {
                         <div className="flex items-center justify-between gap-3 mb-2 max-w-3xl">
                           <p className="text-xs font-semibold text-muted-foreground">Позиции накладной ({r.lines.length}):</p>
                           {canDo('inventory.manage') && (
-                            <button
-                              onClick={() => setReturnFor(r)}
-                              className="flex items-center gap-1.5 text-xs font-medium text-foreground bg-card border border-border px-2.5 py-1.5 rounded-lg hover:bg-muted transition-colors"
-                            >
-                              <Undo2 className="size-3.5" />
-                              Возврат
-                            </button>
+                            <div className="flex items-center gap-2">
+                              {r.debtAmount > 0 && (
+                                <button
+                                  onClick={() => setPayFor(r)}
+                                  className="flex items-center gap-1.5 text-xs font-medium text-primary-foreground bg-primary px-2.5 py-1.5 rounded-lg hover:bg-primary/90 transition-colors"
+                                >
+                                  <CreditCard className="size-3.5" />
+                                  Оплатить {formatCurrency(r.debtAmount)}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => setReturnFor(r)}
+                                className="flex items-center gap-1.5 text-xs font-medium text-foreground bg-card border border-border px-2.5 py-1.5 rounded-lg hover:bg-muted transition-colors"
+                              >
+                                <Undo2 className="size-3.5" />
+                                Возврат
+                              </button>
+                            </div>
                           )}
                         </div>
                         <div className="overflow-hidden rounded-lg border border-border bg-card max-w-3xl">
@@ -258,6 +271,14 @@ export default function ReceiptsPage() {
         receipt={returnFor}
         open={!!returnFor}
         onOpenChange={(v) => { if (!v) setReturnFor(null) }}
+        onSuccess={() => { fetchReceipts().then(setReceipts).catch(() => {}) }}
+      />
+
+      {/* Оплата долга по накладной — списание со счёта, долг накладной и поставщика вниз */}
+      <PayReceiptDialog
+        receipt={payFor}
+        open={!!payFor}
+        onOpenChange={(v) => { if (!v) setPayFor(null) }}
         onSuccess={() => { fetchReceipts().then(setReceipts).catch(() => {}) }}
       />
     </div>
