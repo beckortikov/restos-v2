@@ -527,6 +527,22 @@ export interface BudgetLine {
   factAmount: number
 }
 
+// RecurringPayment — шаблон повторяющегося платежа (модуль «Платежи»).
+export interface RecurringPayment {
+  id: string
+  name: string
+  category: string
+  amount: number
+  accountId?: string
+  activity: FinancialActivity
+  counterparty?: string
+  dayOfMonth: number
+  nextDue?: string        // YYYY-MM-DD
+  lastPaidAt?: string
+  active: boolean
+  note?: string
+}
+
 // ─── Balance: Assets, Liabilities, Equity ────────────────────────────────────
 
 export type AssetCategory = 'equipment' | 'renovation' | 'furniture' | 'vehicle' | 'other'
@@ -996,8 +1012,8 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'menu.edit': ['/warehouse/menu', '/warehouse/semi'],
   'writeoffs.create': ['/warehouse/writeoffs'],
   'batch_cooking.manage': ['/operations/batch-cooking'],
-  'finance.view': ['/finance/cashflow', '/finance/pnl', '/finance/balance'],
-  'finance.manage': ['/finance/cashflow', '/finance/accounts', '/finance/budget'],
+  'finance.view': ['/finance/cashflow', '/finance/pnl', '/finance/balance', '/finance/payments'],
+  'finance.manage': ['/finance/cashflow', '/finance/accounts', '/finance/budget', '/finance/payments'],
   'payroll.manage': ['/finance/payroll'],
   'analytics.view': ['/analytics/abc-menu', '/analytics/abc-inventory', '/analytics/tables', '/analytics/waiters', '/analytics/peak-hours', '/analytics/food-cost', '/analytics/forecast'],
   'showcase.view': ['/operations/showcase'],

@@ -82,6 +82,7 @@ const PnL = () => L(() => import('@/app/(app)/finance/pnl/page'))
 const Balance = () => L(() => import('@/app/(app)/finance/balance/page'))
 const Budget = () => L(() => import('@/app/(app)/finance/budget/page'))
 const Accounts = () => L(() => import('@/app/(app)/finance/accounts/page'))
+const Payments = () => L(() => import('@/app/(app)/finance/payments/page'))
 const Payroll = () => L(() => import('@/app/(app)/finance/payroll/page'))
 const ServiceReport = () => L(() => import('@/app/(app)/finance/service-report/page'))
 
@@ -178,6 +179,7 @@ export function AppRouter() {
         <Route path="/finance/balance" element={<Balance />} />
         <Route path="/finance/budget" element={<Budget />} />
         <Route path="/finance/accounts" element={<Accounts />} />
+        <Route path="/finance/payments" element={<Payments />} />
         <Route path="/finance/payroll" element={<Payroll />} />
         <Route path="/finance/service-report" element={<ServiceReport />} />
 
