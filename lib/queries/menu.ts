@@ -501,3 +501,22 @@ function mapMenuCategory(c: Record<string, unknown>): MenuCategory {
     sortOrder: (c.sort_order as number) ?? 0,
   }
 }
+
+// ─── Популярность позиций (для сортировки меню по продаваемости, 060) ────────
+
+// fetchMenuPopularity — Map<menuItemId, продано штук> за последние days дней.
+// Пустая мапа при ошибке/нет данных — сортировка тихо падает на алфавит.
+export async function fetchMenuPopularity(days = 30): Promise<Map<string, number>> {
+  try {
+    const r: any = await unwrap(api.GET('/api/v1/menu/popularity', { params: { query: { days } } }))
+    const rows: any[] = r?.data ?? []
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      const id = String(row?.menu_item_id ?? '')
+      if (id) map.set(id, Number(row?.qty ?? 0))
+    }
+    return map
+  } catch {
+    return new Map()
+  }
+}

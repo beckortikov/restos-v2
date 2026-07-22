@@ -11,9 +11,10 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { toggleFavorite, useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
+import { sortMenuItems } from '@/lib/menu-sort'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder, fetchMenuPopularity } from '@/lib/queries'
 import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, startOfToday, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -88,6 +89,14 @@ export default function PosV2Order() {
   const { menuItems, categories, tables, zones, loading } = useOrderData(true)
   const favorites = useFavorites(restaurantId ?? '')
   const favSet = useMemo(() => new Set(favorites), [favorites])
+
+  // Популярность блюд для сортировки по продаваемости (060). Грузим только
+  // когда тумблер включён; иначе меню сортируется по алфавиту.
+  const [popularity, setPopularity] = useState<Map<string, number>>(new Map())
+  useEffect(() => {
+    if (!restaurant?.menuSortBySales) { setPopularity(new Map()); return }
+    fetchMenuPopularity(30).then(setPopularity).catch(() => {})
+  }, [restaurant?.menuSortBySales])
 
   const [orderType, setOrderType] = useState<OrderType>('hall')
   // Фастфуд без столов (restaurants.tablesEnabled=false): «Зал» ведётся БЕЗ стола —
@@ -438,9 +447,12 @@ export default function PosV2Order() {
     const base = menuItems.filter(m => !m.parentId)
     const q = deferred.trim().toLowerCase()
     if (q) return base.filter(m => m.name.toLowerCase().includes(q))
-    if (currentCat === '__fav__') return base.filter(m => favSet.has(m.id))
-    return base.filter(m => m.category === currentCat)
-  }, [menuItems, currentCat, deferred, favSet])
+    const inCat = currentCat === '__fav__'
+      ? base.filter(m => favSet.has(m.id))
+      : base.filter(m => m.category === currentCat)
+    // Сортировка: алфавит по умолчанию, хиты вверху при menu_sort_by_sales (060).
+    return sortMenuItems(inCat, !!restaurant?.menuSortBySales, popularity)
+  }, [menuItems, currentCat, deferred, favSet, restaurant?.menuSortBySales, popularity])
   // Пересчёт стрелок прокрутки при смене категории/поиска/сетки (меняется высота контента).
   useEffect(() => { updateScrollBtns() }, [dishes, gridAreaH, menuGrid, updateScrollBtns])
 

@@ -562,6 +562,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/menu/popularity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Продано штук по позициям за окно (для сортировки меню) */
+        get: {
+            parameters: {
+                query?: {
+                    days?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: {
+                                menu_item_id?: string;
+                                qty?: components["schemas"]["Decimal"];
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/menu/categories": {
         parameters: {
             query?: never;
@@ -11670,6 +11713,7 @@ export interface components {
             tables_enabled?: boolean;
             kitchen_on_pay?: boolean;
             pos_v2_default?: boolean;
+            menu_sort_by_sales?: boolean;
             /** @description Показывать «Доставка» третьим типом заказа в POS */
             delivery_enabled?: boolean;
             /** @description Спрашивать телефон и адрес перед оплатой заказа-доставки */
@@ -11697,6 +11741,7 @@ export interface components {
             tables_enabled?: boolean;
             kitchen_on_pay?: boolean;
             pos_v2_default?: boolean;
+            menu_sort_by_sales?: boolean;
             delivery_enabled?: boolean;
             delivery_contacts_required?: boolean;
         };

@@ -646,14 +646,8 @@ func (s *FinanceReportsService) OpexByDay(ctx context.Context, f PeriodFilter) (
 		Day   string          `gorm:"column:day"`
 		Total decimal.Decimal `gorm:"column:total"`
 	}
-	q := applyOpexFilter(scoped.Table("financial_operations").
-		Select("to_char(created_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(amount), 0) AS total"))
-	if f.From != nil {
-		q = q.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q = q.Where("created_at < ?", *f.To)
-	}
+	q := applyFOPeriod(applyOpexFilter(scoped.Table("financial_operations").
+		Select(foBizDay+" AS day, COALESCE(SUM(amount), 0) AS total")), f)
 	var rows []dayRow
 	if err := q.Group("day").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -672,6 +666,26 @@ func applyOpexFilter(q *gorm.DB) *gorm.DB {
 	return q.Where("type = ?", "out").
 		Where("COALESCE(activity, '') <> ?", "financial").
 		Where("COALESCE(category, '') NOT IN ?", opexExcludedCategories)
+}
+
+// foBizDay — SQL деловой даты финоперации: date (введённая пользователем), а если
+// пусто — дата создания. По ней фильтруем и группируем финотчёты. Иначе операция,
+// заведённая задним числом (напр. «Аренда 01.07», внесена 05.07), попадала в
+// период/день ВВОДА, а не в свой: в ДДС график по created_at не сходился с
+// таблицей, которую клиент фильтрует по date.
+const foBizDay = "COALESCE(NULLIF(date, ''), to_char(created_at, 'YYYY-MM-DD'))"
+
+// applyFOPeriod фильтрует financial_operations по деловой дате (foBizDay) в
+// полуинтервале [From, To). To уже эксклюзивна — date-only +1 день в parsePeriod.
+// Сравнение текстовых 'YYYY-MM-DD' лексикографическое, что корректно для дат.
+func applyFOPeriod(q *gorm.DB, f PeriodFilter) *gorm.DB {
+	if f.From != nil {
+		q = q.Where(foBizDay+" >= ?", f.From.Format("2006-01-02"))
+	}
+	if f.To != nil {
+		q = q.Where(foBizDay+" < ?", f.To.Format("2006-01-02"))
+	}
+	return q
 }
 
 func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJSON, error) {
@@ -854,14 +868,8 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 		Category string          `gorm:"column:category"`
 		Total    decimal.Decimal `gorm:"column:total"`
 	}
-	q3 := applyOpexFilter(scoped3.Table("financial_operations").
-		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total"))
-	if f.From != nil {
-		q3 = q3.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q3 = q3.Where("created_at < ?", *f.To)
-	}
+	q3 := applyFOPeriod(applyOpexFilter(scoped3.Table("financial_operations").
+		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total")), f)
 	var opexRows []opexRow
 	if err := q3.Group("category").Scan(&opexRows).Error; err != nil {
 		return nil, err
@@ -932,14 +940,8 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Type     string          `gorm:"column:type"`
 		Total    decimal.Decimal `gorm:"column:total"`
 	}
-	q := scoped.Table("financial_operations").
-		Select("COALESCE(activity, 'operational') AS activity, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total")
-	if f.From != nil {
-		q = q.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q = q.Where("created_at < ?", *f.To)
-	}
+	q := applyFOPeriod(scoped.Table("financial_operations").
+		Select("COALESCE(activity, 'operational') AS activity, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total"), f)
 	var rows []actRow
 	if err := q.Group("activity, type").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -966,14 +968,8 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Type  string          `gorm:"column:type"`
 		Total decimal.Decimal `gorm:"column:total"`
 	}
-	q2 := scoped2.Table("financial_operations").
-		Select("to_char(created_at, 'YYYY-MM-DD') AS day, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total")
-	if f.From != nil {
-		q2 = q2.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q2 = q2.Where("created_at < ?", *f.To)
-	}
+	q2 := applyFOPeriod(scoped2.Table("financial_operations").
+		Select(foBizDay+" AS day, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total"), f)
 	var drows []dayRow
 	if err := q2.Group("day, type").Order("day ASC").Scan(&drows).Error; err != nil {
 		return nil, err
@@ -1004,15 +1000,9 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Category string          `gorm:"column:category"`
 		Total    decimal.Decimal `gorm:"column:total"`
 	}
-	q3 := applyOpexFilter(scoped3.Table("financial_operations").
+	q3 := applyFOPeriod(applyOpexFilter(scoped3.Table("financial_operations").
 		Select(`COALESCE(NULLIF(category, ''), 'Без категории') AS category,
-		        COALESCE(SUM(amount), 0) AS total`))
-	if f.From != nil {
-		q3 = q3.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q3 = q3.Where("created_at < ?", *f.To)
-	}
+		        COALESCE(SUM(amount), 0) AS total`)), f)
 	var crows []catRow
 	_ = q3.Group("category").Scan(&crows).Error
 	out.OutByCategory = make([]CategoryAmount, 0, len(crows))
@@ -1233,8 +1223,8 @@ func (s *FinanceReportsService) MonthlyRevenue(ctx context.Context, months int) 
 	scopedE, _ := s.r.ForTenant(ctx)
 	var expRows []expRow
 	if err := applyOpexFilter(scopedE.Table("financial_operations").
-		Select("to_char(created_at, 'YYYY-MM') AS month, COALESCE(SUM(amount), 0) AS total")).
-		Where("created_at >= ?", startMonth).
+		Select("left("+foBizDay+", 7) AS month, COALESCE(SUM(amount), 0) AS total")).
+		Where(foBizDay+" >= ?", startMonth.Format("2006-01-02")).
 		Group("month").
 		Scan(&expRows).Error; err != nil {
 		return nil, err

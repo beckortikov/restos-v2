@@ -85,6 +85,7 @@ export default function SettingsPage() {
   const [deliveryEnabled, setDeliveryEnabled] = useState(false)
   const [deliveryContactsRequired, setDeliveryContactsRequired] = useState(true)
   const [posV2Default, setPosV2Default] = useState(false)
+  const [menuSortBySales, setMenuSortBySales] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -113,6 +114,7 @@ export default function SettingsPage() {
           setDeliveryEnabled(r.deliveryEnabled ?? false)
           setDeliveryContactsRequired(r.deliveryContactsRequired ?? true)
           setPosV2Default(r.posV2Default ?? false)
+          setMenuSortBySales(r.menuSortBySales ?? false)
         }
       })
       .catch(e => console.error('Failed to load restaurant:', e))
@@ -147,9 +149,9 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default })
+      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default }
+      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -164,7 +166,7 @@ export default function SettingsPage() {
         tags: { component: 'settings.save' },
         extra: {
           restaurantId: rest.id,
-          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default },
+          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales },
         },
       })
     } finally {
@@ -190,6 +192,7 @@ export default function SettingsPage() {
     setDeliveryEnabled(rest.deliveryEnabled ?? false)
     setDeliveryContactsRequired(rest.deliveryContactsRequired ?? true)
     setPosV2Default(rest.posV2Default ?? false)
+    setMenuSortBySales(rest.menuSortBySales ?? false)
   }
 
   return (
@@ -408,6 +411,12 @@ export default function SettingsPage() {
               hint="Кассы открывают новый интерфейс (POS 2) без ручного включения на каждой. Касса может переопределить локально в своих настройках."
               checked={posV2Default}
               onChange={() => setPosV2Default(!posV2Default)}
+            />
+            <ToggleRow
+              title="🔥 Меню по продаваемости"
+              hint="Внутри каждой категории самые продаваемые блюда встают вверх (за последние 30 дней). Выключено — по алфавиту."
+              checked={menuSortBySales}
+              onChange={() => setMenuSortBySales(!menuSortBySales)}
             />
           </Card>
         </div>

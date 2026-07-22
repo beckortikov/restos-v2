@@ -46,6 +46,8 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
 import { useOrderData } from './use-order-data'
+import { sortMenuItems } from '@/lib/menu-sort'
+import { fetchMenuPopularity } from '@/lib/queries'
 import { useDataSync } from '@/hooks/use-data-sync'
 import type { CartLine, OrderComposerProps, TabInfo } from './types'
 
@@ -324,6 +326,14 @@ export function OrderComposer(props: OrderComposerProps) {
   // через context-menu на DishTile. Никакого автотрекинга кликов — в полосе
   // ровно то, что кассир добавил руками. Видна на любой категории.
   const frequentIds = useFrequent(restaurant?.id ?? '')
+
+  // Продаваемость блюд (060): грузим только при включённом тумблере, иначе
+  // меню сортируется по алфавиту.
+  const [popularity, setPopularity] = useState<Map<string, number>>(new Map())
+  useEffect(() => {
+    if (!restaurant?.menuSortBySales) { setPopularity(new Map()); return }
+    fetchMenuPopularity(30).then(setPopularity).catch(() => {})
+  }, [restaurant?.menuSortBySales])
 
   // Destination state (only used in 'new' mode) — declared before cart so its
   // initialCart can seed useState below.
@@ -635,6 +645,8 @@ export function OrderComposer(props: OrderComposerProps) {
     // Сортировка по имени A-Z (locale-aware). При активном поиске —
     // сначала те, у кого имя НАЧИНАЕТСЯ с запроса, потом остальные;
     // внутри обеих групп — alpha. Без поиска — просто alpha.
+    // При поиске — релевантность (совпадение с начала имени), затем алфавит.
+    // Без поиска — алфавит по умолчанию, хиты вверху при menu_sort_by_sales (060).
     const sorted = q
       ? filtered.slice().sort((a, b) => {
           const ar = a.name.toLowerCase().startsWith(q) ? 0 : 1
@@ -642,9 +654,7 @@ export function OrderComposer(props: OrderComposerProps) {
           if (ar !== br) return ar - br
           return a.name.localeCompare(b.name, undefined, { numeric: true })
         })
-      : filtered.slice().sort((a, b) =>
-          a.name.localeCompare(b.name, undefined, { numeric: true }),
-        )
+      : sortMenuItems(filtered, !!restaurant?.menuSortBySales, popularity)
     // Already-added items pinned to the top, preserving cart order.
     if (cart.length === 0) return sorted
     const cartOrder = new Map(cart.map((l, i) => [l.menuItemId, i]))
@@ -652,7 +662,7 @@ export function OrderComposer(props: OrderComposerProps) {
       .sort((a, b) => (cartOrder.get(a.id)! - cartOrder.get(b.id)!))
     const rest = sorted.filter(i => !cartOrder.has(i.id))
     return [...inCart, ...rest]
-  }, [menuItems, category, deferredSearch, cart, isPosHidden])
+  }, [menuItems, category, deferredSearch, cart, isPosHidden, restaurant?.menuSortBySales, popularity])
 
   const total = dSum(cart.map(lineTotal))
   const totalItems = cart.length

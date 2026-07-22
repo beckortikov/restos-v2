@@ -59,10 +59,13 @@ type Restaurant struct {
 	// Доставка (052). DeliveryEnabled=false → в POS только «Зал» и «С собой».
 	// DeliveryContactsRequired=true → перед оплатой заказа-доставки касса
 	// спрашивает телефон и адрес.
-	DeliveryEnabled          *bool     `gorm:"column:delivery_enabled;not null;default:false" json:"delivery_enabled"`
-	DeliveryContactsRequired *bool     `gorm:"column:delivery_contacts_required;not null;default:true" json:"delivery_contacts_required"`
-	CreatedAt                time.Time `json:"created_at"`
-	UpdatedAt                time.Time `json:"updated_at"`
+	DeliveryEnabled          *bool `gorm:"column:delivery_enabled;not null;default:false" json:"delivery_enabled"`
+	DeliveryContactsRequired *bool `gorm:"column:delivery_contacts_required;not null;default:true" json:"delivery_contacts_required"`
+	// MenuSortBySales — сортировать меню в POS/pos2 по продаваемости (окно 30
+	// дней), хиты вверху категории. Default false → алфавит (060).
+	MenuSortBySales *bool     `gorm:"column:menu_sort_by_sales;not null;default:false" json:"menu_sort_by_sales"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (Restaurant) TableName() string { return "restaurants" }

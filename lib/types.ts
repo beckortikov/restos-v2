@@ -55,6 +55,9 @@ export interface Restaurant {
   tablesEnabled?: boolean
   kitchenOnPay?: boolean
   posV2Default?: boolean
+  // Сортировать меню в POS/pos2 по продаваемости (окно 30 дней). Default false
+  // → алфавит. Тумблер в настройках ресторана (060).
+  menuSortBySales?: boolean
   // Доставка (052). deliveryEnabled=false → в POS только «Зал» и «С собой».
   // deliveryContactsRequired=true → перед оплатой доставки касса спрашивает
   // телефон и адрес.

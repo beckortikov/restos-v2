@@ -54,6 +54,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   tablesEnabled: boolean
   kitchenOnPay: boolean
   posV2Default: boolean
+  menuSortBySales: boolean
   deliveryEnabled: boolean
   deliveryContactsRequired: boolean
   isBlocked: boolean
@@ -78,6 +79,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   if (data.tablesEnabled !== undefined) updates.tables_enabled = data.tablesEnabled
   if (data.kitchenOnPay !== undefined) updates.kitchen_on_pay = data.kitchenOnPay
   if (data.posV2Default !== undefined) updates.pos_v2_default = data.posV2Default
+  if (data.menuSortBySales !== undefined) updates.menu_sort_by_sales = data.menuSortBySales
   if (data.deliveryEnabled !== undefined) updates.delivery_enabled = data.deliveryEnabled
   if (data.deliveryContactsRequired !== undefined) updates.delivery_contacts_required = data.deliveryContactsRequired
   if (Object.keys(updates).length > 0) {

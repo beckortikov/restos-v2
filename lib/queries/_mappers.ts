@@ -198,6 +198,7 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     tablesEnabled: r.tables_enabled ?? true,
     kitchenOnPay: r.kitchen_on_pay ?? false,
     posV2Default: r.pos_v2_default ?? false,
+    menuSortBySales: r.menu_sort_by_sales ?? false,
     deliveryEnabled: r.delivery_enabled ?? false,
     deliveryContactsRequired: r.delivery_contacts_required ?? true,
     supplyAllowNegative: r.supply_allow_negative ?? true,

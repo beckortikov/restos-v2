@@ -46,6 +46,8 @@ type RestaurantCreateInput struct {
 	// Доставка (052).
 	DeliveryEnabled          *bool `json:"delivery_enabled,omitempty"`
 	DeliveryContactsRequired *bool `json:"delivery_contacts_required,omitempty"`
+	// Сортировать меню по продаваемости (060). Default false → алфавит.
+	MenuSortBySales *bool `json:"menu_sort_by_sales,omitempty"`
 }
 
 func (s *RestaurantsService) List(ctx context.Context) ([]models.Restaurant, error) {
@@ -99,6 +101,7 @@ func (s *RestaurantsService) Create(ctx context.Context, in RestaurantCreateInpu
 		TablesEnabled:           in.TablesEnabled,
 		KitchenOnPay:            in.KitchenOnPay,
 		PosV2Default:            in.PosV2Default,
+		MenuSortBySales:         in.MenuSortBySales,
 		CreatedAt:               now,
 		UpdatedAt:               now,
 	}
@@ -189,6 +192,9 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 	}
 	if in.PosV2Default != nil {
 		updates["pos_v2_default"] = *in.PosV2Default
+	}
+	if in.MenuSortBySales != nil {
+		updates["menu_sort_by_sales"] = *in.MenuSortBySales
 	}
 	if in.DeliveryEnabled != nil {
 		updates["delivery_enabled"] = *in.DeliveryEnabled

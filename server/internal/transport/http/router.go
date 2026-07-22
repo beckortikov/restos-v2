@@ -283,6 +283,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/menu/items", menuH.ListItems)
 			g.Get("/menu/items/{id}/attributes", menuH.GetAttributes)
 			g.Get("/menu/categories", menuH.ListCategories)
+			g.Get("/menu/popularity", menuH.Popularity)
 
 			g.Get("/zones", tablesH.ListZones)
 			g.Get("/tables", tablesH.ListTables)
