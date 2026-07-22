@@ -12,7 +12,8 @@ import {
   fetchFinancialOperations, fetchSalaryReport, type SalaryReport,
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
-import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText } from 'lucide-react'
+import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays } from 'lucide-react'
+import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -78,6 +79,8 @@ export default function PayrollPage() {
   // ─── Salary state ──────────────────────────────────────────────────────────
   const [payAction, setPayAction] = useState<PayAction | null>(null)
   const [selectedEmp, setSelectedEmp] = useState<User | null>(null)
+  // Диалог отметки отработанных дней (дневная оплата, 059).
+  const [workedDaysEmp, setWorkedDaysEmp] = useState<User | null>(null)
   const [payAmount, setPayAmount] = useState(0)
   const [deductionReason, setDeductionReason] = useState('')
   const [selectedAccountId, setSelectedAccountId] = useState('')
@@ -347,7 +350,10 @@ export default function PayrollPage() {
       } else {
         if (payAmount <= 0) { setPaying(false); return }
         const account = accounts.find(a => a.id === selectedAccountId)
-        await paySalaryFull(selectedEmp.id, payAmount, selectedAccountId, account?.name ?? '', selectedEmp.name)
+        // period=месяц включает серверный кап (не переплатить сверх начисленного).
+        // Для сотрудника без оклада/ставки начислено 0 → сервер платит свободно.
+        const payPeriod = serviceFrom.slice(0, 7)
+        await paySalaryFull(selectedEmp.id, payAmount, selectedAccountId, account?.name ?? '', selectedEmp.name, 'salary', payPeriod)
         try { await updateUser(selectedEmp.id, { advance: 0, deductions: 0 }) } catch (e) { console.warn('reset counters failed:', e) }
         toast.success(`Зарплата ${formatCurrency(payAmount)}: ${selectedEmp.name}`)
       }
@@ -771,7 +777,7 @@ export default function PayrollPage() {
                         </td>
                         <td className="px-4 py-3 text-right">
                           <span className={`font-bold ${toPay > 0 ? 'text-foreground' : toPay < 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                            {salary > 0 ? formatCurrency(toPay) : '—'}
+                            {accruedPay > 0 ? formatCurrency(toPay) : '—'}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-right">
@@ -784,33 +790,38 @@ export default function PayrollPage() {
                           {serviceToPay > 0 ? <span className="font-bold text-blue-700">{formatCurrency(serviceToPay)}</span> : <span className="text-muted-foreground">—</span>}
                         </td>
                         <td className="px-4 py-3">
-                          {canDo('payroll.manage') && salary > 0 && (
-                            <div className="flex items-center justify-center gap-1">
-                              <button onClick={() => openDialog(emp, 'advance')} title="Аванс"
-                                className="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors">
-                                Аванс
-                              </button>
-                              <button onClick={() => openDialog(emp, 'deduction')} title="Удержание"
-                                className="px-2 py-1 text-[11px] font-medium text-destructive bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors">
-                                Удерж.
-                              </button>
-                              <button onClick={() => openDialog(emp, 'salary')} disabled={toPay <= 0} title="Выплатить"
-                                className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-colors disabled:opacity-40">
-                                Выплатить
-                              </button>
+                          {canDo('payroll.manage') && (
+                            <div className="flex flex-col items-center gap-1">
+                              <div className="flex items-center justify-center gap-1 flex-wrap">
+                                {/* Дневная оплата: отметить отработанные дни (059) */}
+                                {isDaily && (
+                                  <button onClick={() => setWorkedDaysEmp(emp)} title="Отметить отработанные дни"
+                                    className="px-2 py-1 text-[11px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-md hover:bg-primary/20 transition-colors inline-flex items-center gap-1">
+                                    <CalendarDays className="size-3" />Дни
+                                  </button>
+                                )}
+                                <button onClick={() => openDialog(emp, 'advance')} title="Аванс"
+                                  className="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors">
+                                  Аванс
+                                </button>
+                                {/* Выплатить доступно ВСЕГДА: есть начисление → сервер капит,
+                                    нет оклада/ставки → свободная выплата любой суммы. */}
+                                <button onClick={() => openDialog(emp, 'salary')} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
+                                  className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-colors">
+                                  Выплатить
+                                </button>
+                                <button onClick={() => openDialog(emp, 'deduction')} title="Удержание"
+                                  className="px-2 py-1 text-[11px] font-medium text-destructive bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors">
+                                  Удерж.
+                                </button>
+                              </div>
+                              {serviceToPay > 0 && (
+                                <button onClick={() => openDialog(emp, 'service')} title="Выплатить обслуживание"
+                                  className="px-2 py-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors">
+                                  Выпл. обсл.
+                                </button>
+                              )}
                             </div>
-                          )}
-                          {canDo('payroll.manage') && salary === 0 && (
-                            <button onClick={() => openDialog(emp, 'edit_salary')}
-                              className="px-2 py-1 text-[11px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-md hover:bg-primary/20 transition-colors">
-                              Указать оклад
-                            </button>
-                          )}
-                          {canDo('payroll.manage') && serviceToPay > 0 && (
-                            <button onClick={() => openDialog(emp, 'service')} title="Выплатить обслуживание"
-                              className="mt-1 px-2 py-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors">
-                              Выпл. обсл.
-                            </button>
                           )}
                         </td>
                       </tr>
@@ -1338,6 +1349,20 @@ export default function PayrollPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Отметка отработанных дней (дневная оплата, 059) */}
+      {workedDaysEmp && (
+        <WorkedDaysDialog
+          open={!!workedDaysEmp}
+          onOpenChange={(v) => { if (!v) setWorkedDaysEmp(null) }}
+          employeeId={workedDaysEmp.id}
+          employeeName={workedDaysEmp.name}
+          dailyRate={accrualByUser[workedDaysEmp.id]?.dailyRate ?? workedDaysEmp.dailyRate ?? 0}
+          from={serviceFrom.slice(0, 10)}
+          to={serviceTo.slice(0, 10)}
+          onSaved={() => { reload() }}
+        />
       )}
     </div>
   )

@@ -262,6 +262,7 @@ export async function paySalaryFull(
   accountName: string,
   employeeName: string,
   kind: 'salary' | 'advance' = 'salary',
+  period?: string, // YYYY-MM — включает серверный кап (без него кап отключён)
 ) {
   void accountName
   const label = kind === 'advance' ? 'Аванс' : 'Зарплата'
@@ -272,10 +273,43 @@ export async function paySalaryFull(
       account_id: accountId,
       employee_name: employeeName,
       kind,
+      ...(period ? { period } : {}),
       description: `${label} ${employeeName}`,
     } as any,
   }))
   logAction('payroll.pay', 'payroll', userId, employeeName, { amount, kind })
+}
+
+// ─── Отработанные дни (059): табель + ручные отметки ────────────────────────
+
+export interface WorkedDaysResult {
+  shift_dates: string[]   // дни с приходом в табеле (снять нельзя)
+  manual_dates: string[]  // ручные отметки (toggleable)
+  count: number           // уникальных отработанных дней всего
+}
+
+export async function fetchWorkedDays(userId: string, from: string, to: string): Promise<WorkedDaysResult> {
+  const r: any = await unwrap(api.GET('/api/v1/finance/salary/worked-days', {
+    params: { query: { user_id: userId, from, to } },
+  }))
+  return {
+    shift_dates: r?.shift_dates ?? [],
+    manual_dates: r?.manual_dates ?? [],
+    count: Number(r?.count ?? 0),
+  }
+}
+
+// Заменяет РУЧНЫЕ отметки дней сотрудника в [from,to] на набор dates (идемпотентно).
+export async function setWorkedDays(userId: string, from: string, to: string, dates: string[]): Promise<WorkedDaysResult> {
+  const r: any = await unwrap(api.PUT('/api/v1/finance/salary/worked-days', {
+    body: { user_id: userId, from, to, dates },
+    headers: { 'Idempotency-Key': crypto.randomUUID() },
+  }))
+  return {
+    shift_dates: r?.shift_dates ?? [],
+    manual_dates: r?.manual_dates ?? [],
+    count: Number(r?.count ?? 0),
+  }
 }
 
 // ─── Остатки по счетам на дату ────────────────────────────────────────────
