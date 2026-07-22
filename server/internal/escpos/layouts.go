@@ -353,6 +353,22 @@ func fmtRunnerQty(it RunnerItem) string {
 	}
 }
 
+// fmtRunnerQtyLead — количество как ВЕДУЩИЙ токен (фастфуд, количество впереди):
+// «2×» для штучных, вес — как есть («250г», «1,5кг × 3»). Отличается от
+// fmtRunnerQty порядком: там число прижато вправо строкой «x2».
+func fmtRunnerQtyLead(it RunnerItem) string {
+	switch it.Unit {
+	case "g", "kg":
+		return fmtRunnerQty(it)
+	default:
+		n := it.Qty
+		if it.Count > 1 {
+			n = it.Qty * it.Count
+		}
+		return strconv.Itoa(n) + "×"
+	}
+}
+
 // RunnerLayout — ранер на станцию. Порт buildEscPosRunner() из v1.
 //
 // Позиции печатаются БЕЗ растяжения по осям (1×1). Прежний FontTall
@@ -424,20 +440,27 @@ func RunnerLayout(in RunnerInput) []byte {
 	}
 	b.TextLn("--------------------------------")
 
-	// ── Items — bold, БЕЗ растяжения по вертикали ────────────────────────
-	// Раньше позиции печатались 1× ширина × 2× высота: буквы выходили узкими
-	// и вытянутыми, и читались хуже, чем заголовок цеха, набранный вдвое
-	// мельче, но естественными пропорциями. Дело было не в кегле, а в форме
-	// букв.
+	// ── Items ────────────────────────────────────────────────────────────
+	// Зал (несколько цехов): имя слева, количество справа, размер 1×1 —
+	// естественные пропорции, вся ширина ленты. Двойную ширину не берём: в
+	// 16 колонок не влезает почти ни одно реальное название, пришлось бы
+	// переносить.
 	//
-	// Теперь тот же размер, что у заголовка цеха: 1×1, естественные пропорции,
-	// вся ширина ленты. Двойную ширину не берём осознанно — в 16 колонок не
-	// влезает почти ни одно реальное название («Курутоб 1 порция», «Пицца
-	// Цезарь XL»), и каждое пришлось бы переносить на две строки.
-	b.FontNormal().Bold(true)
+	// Фастфуд: количество ВПЕРЕДИ отдельным ведущим токеном, название крупнее
+	// (double-height) — повар читает его издалека. На название остаётся вся
+	// ширина ленты. Double-width (2×2) не берём: «Курутоб 1 порция»/«Пицца
+	// Цезарь XL» в 16 колонок не влезают и переносились бы на две строки.
+	if !in.FastFood {
+		b.FontNormal().Bold(true)
+	}
 	for _, it := range in.Items {
-		qty := fmtRunnerQty(it)
-		b.TextLn(runnerItemLine(it.Name, qty, ColsRunner))
+		if in.FastFood {
+			b.FontTall().Bold(true)
+			b.TextLn(fmtRunnerQtyLead(it) + "  " + it.Name)
+			b.FontNormal().Bold(false)
+		} else {
+			b.TextLn(runnerItemLine(it.Name, fmtRunnerQty(it), ColsRunner))
+		}
 		if len(it.Modifiers) > 0 {
 			// Modifiers — normal size
 			b.FontNormal()
@@ -450,7 +473,9 @@ func RunnerLayout(in RunnerInput) []byte {
 			b.TextLn("  ! " + it.Comment)
 		}
 	}
-	b.Bold(false).FontNormal()
+	if !in.FastFood {
+		b.Bold(false).FontNormal()
+	}
 
 	// ── Comment ──────────────────────────────────────────────────────────
 	if in.Comment != "" {
