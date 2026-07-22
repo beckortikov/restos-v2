@@ -732,6 +732,7 @@ function mapFinancialOperation(r: any): FinancialOperation {
     isAuto: r.is_auto,
     sourceRef: r.source_ref ?? undefined,
     shiftId: r.shift_id ?? undefined,
+    createdAt: r.created_at ?? undefined,
   } as FinancialOperation
 }
 

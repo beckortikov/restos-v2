@@ -39,6 +39,10 @@ export default function AccountsPage() {
   const [period, setPeriod] = useState<PeriodKey>('month')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  // «Остаток по дням»: за длинный период большинство дней без движения (только
+  // перенос остатка). По умолчанию прячем их — показываем лишь дни с приходом/
+  // расходом. Тумблер возвращает полный ряд.
+  const [hideQuietDays, setHideQuietDays] = useState(true)
 
   // Edit-account dialog state. Открывается по клику на pencil-иконку
   // в карточке счёта. Позволяет поменять name и/или type (cash ↔ bank).
@@ -165,6 +169,24 @@ export default function AccountsPage() {
 
   const filteredByDate = useMemo(() => filterByDateRange(operations, o => o.date, period, customFrom, customTo), [operations, period, customFrom, customTo])
 
+  // «Остаток по дням»: считаем приход/расход/остаток по каждому дню периода
+  // (новые сверху). quiet — день без движения (только перенос остатка).
+  const balanceDayRows = useMemo(() => {
+    if (!balanceHistory) return [] as { date: string; closing: number; dIn: number; dOut: number; quiet: boolean }[]
+    return [...balanceHistory.days].reverse().map(d => {
+      const closing = selectedAccount === 'all' ? d.closingBalance : (d.perAccount[selectedAccount] ?? 0)
+      const dayOps = filteredByDate.filter(
+        o => o.accountId && o.date?.slice(0, 10) === d.date &&
+          (selectedAccount === 'all' || o.accountId === selectedAccount),
+      )
+      const dIn = dayOps.filter(o => o.type === 'in').reduce((s, o) => s + o.amount, 0)
+      const dOut = dayOps.filter(o => o.type === 'out').reduce((s, o) => s + o.amount, 0)
+      return { date: d.date, closing, dIn, dOut, quiet: dIn === 0 && dOut === 0 }
+    })
+  }, [balanceHistory, filteredByDate, selectedAccount])
+  const quietDaysCount = useMemo(() => balanceDayRows.filter(r => r.quiet).length, [balanceDayRows])
+  const visibleDayRows = hideQuietDays ? balanceDayRows.filter(r => !r.quiet) : balanceDayRows
+
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
   // Итог тоже периодо-зависимый: на конец выбранного периода, а не «сейчас».
@@ -284,7 +306,19 @@ export default function AccountsPage() {
                 </span>
               )}
             </h2>
-            {historyLoading && <span className="text-xs text-muted-foreground">Загружаем…</span>}
+            <div className="flex items-center gap-3">
+              {historyLoading && <span className="text-xs text-muted-foreground">Загружаем…</span>}
+              {quietDaysCount > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setHideQuietDays(v => !v)}
+                  className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
+                  title="Дни без прихода и расхода — только перенос остатка"
+                >
+                  {hideQuietDays ? `Показать пустые дни (${quietDaysCount})` : 'Скрыть пустые дни'}
+                </button>
+              )}
+            </div>
           </div>
           {!balanceHistory || balanceHistory.days.length === 0 ? (
             <p className="p-6 text-center text-sm text-muted-foreground">
@@ -302,33 +336,27 @@ export default function AccountsPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {[...balanceHistory.days].reverse().map(d => {
-                    // При выбранном счёте показываем именно его срез, иначе сумму.
-                    const closing = selectedAccount === 'all'
-                      ? d.closingBalance
-                      : (d.perAccount[selectedAccount] ?? 0)
-                    const dayOps = filteredByDate.filter(
-                      o => o.accountId && o.date?.slice(0, 10) === d.date &&
-                        (selectedAccount === 'all' || o.accountId === selectedAccount),
-                    )
-                    const dIn = dayOps.filter(o => o.type === 'in').reduce((s, o) => s + o.amount, 0)
-                    const dOut = dayOps.filter(o => o.type === 'out').reduce((s, o) => s + o.amount, 0)
-                    const quiet = dIn === 0 && dOut === 0
-                    return (
-                      <tr key={d.date} className={`hover:bg-muted/20 ${quiet ? 'text-muted-foreground' : ''}`}>
-                        <td className="px-4 py-2 whitespace-nowrap">{d.date}</td>
-                        <td className="px-4 py-2 text-right tabular-nums text-emerald-600">
-                          {dIn ? `+${formatCurrency(dIn)}` : '—'}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums text-destructive">
-                          {dOut ? `−${formatCurrency(dOut)}` : '—'}
-                        </td>
-                        <td className="px-4 py-2 text-right tabular-nums font-semibold text-foreground">
-                          {formatCurrency(closing)}
-                        </td>
-                      </tr>
-                    )
-                  })}
+                  {visibleDayRows.map(d => (
+                    <tr key={d.date} className={`hover:bg-muted/20 ${d.quiet ? 'text-muted-foreground' : ''}`}>
+                      <td className="px-4 py-2 whitespace-nowrap">{d.date}</td>
+                      <td className="px-4 py-2 text-right tabular-nums text-emerald-600">
+                        {d.dIn ? `+${formatCurrency(d.dIn)}` : '—'}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums text-destructive">
+                        {d.dOut ? `−${formatCurrency(d.dOut)}` : '—'}
+                      </td>
+                      <td className="px-4 py-2 text-right tabular-nums font-semibold text-foreground">
+                        {formatCurrency(d.closing)}
+                      </td>
+                    </tr>
+                  ))}
+                  {visibleDayRows.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-4 py-6 text-center text-sm text-muted-foreground">
+                        За период не было движения по счетам
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>

@@ -107,6 +107,15 @@ export default function CashflowPage() {
     const matchDateFrom = !dateFrom || op.date >= dateFrom
     const matchDateTo = !dateTo || op.date <= dateTo
     return matchType && matchActivity && matchDateFrom && matchDateTo
+  }).sort((a, b) => {
+    // Реестр читается хронологически: новые сверху. Ключ — бизнес-дата (date),
+    // а не порядок прихода с бэка: операция с задней датой раньше стояла вверху
+    // (её ввели последней) и ломала хронологию. Внутри дня — по времени ввода,
+    // затем id как стабильный тай-брейк.
+    if (a.date !== b.date) return a.date < b.date ? 1 : -1
+    const ca = a.createdAt ?? '', cb = b.createdAt ?? ''
+    if (ca !== cb) return ca < cb ? 1 : -1
+    return a.id < b.id ? 1 : -1
   })
 
   // Totals from server report (period-aware, decimal-precise).

@@ -516,6 +516,7 @@ export interface FinancialOperation {
   isAuto: boolean
   sourceRef?: string
   shiftId?: string
+  createdAt?: string // момент ввода — для внутридневной сортировки реестра ДДС
 }
 
 export interface BudgetLine {
