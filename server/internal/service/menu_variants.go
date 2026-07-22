@@ -717,7 +717,166 @@ func (s *MenuService) syncVariants(tx *gorm.DB, rid string, product *models.Menu
 			return err
 		}
 	}
+
+	// Покупной продукт с вариациями: у каждого варианта — свой склад, у родителя
+	// нет. createVariant уже завёл ингредиенты новым вариантам; здесь досоздаём
+	// пропущенные (напр. вариации, жившие до конвертации в покупной) и снимаем
+	// фантом-ингредиент родителя, который создал CreateItem до знания об атрибутах.
+	if product.IsPurchased && len(combos) > 0 {
+		unitHint := parentBackingUnit(tx, rid, product.ID)
+		if err := s.ensureVariantsPurchasedBacking(tx, rid, product, unitHint, product.COGS, now); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// parentBackingUnit — единица backing-ингредиента продукта (для наследования
+// вариациями). Пусто → вызывающий подставит дефолт.
+func parentBackingUnit(tx *gorm.DB, rid, productID string) string {
+	var lines []models.TechCardLine
+	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", rid, productID).Find(&lines).Error; err != nil {
+		return ""
+	}
+	if len(lines) != 1 || lines[0].IngredientID == nil {
+		return ""
+	}
+	var ing models.Ingredient
+	if err := tx.Where("id = ?", *lines[0].IngredientID).First(&ing).Error; err != nil {
+		return ""
+	}
+	if ing.Unit != nil {
+		return *ing.Unit
+	}
+	return ""
+}
+
+// ensureVariantsPurchasedBacking гарантирует складской учёт покупного товара с
+// вариациями «по-вариантно»: у КАЖДОЙ живой вариации — свой ингредиент на складе
+// «Покупные» (0 остаток) + 1:1 техкарта, сама вариация помечена is_purchased.
+// Родительский backing-ингредиент (фантом «Кола») снимается — продукт с
+// вариациями напрямую не продаётся, склад под него не нужен.
+//
+// Идемпотентна: у вариации с готовым 1:1 покупным ингредиентом только
+// подтверждает склад/флаг, не плодит дубликаты. Вызывается из patchPurchased
+// (конвертация существующего блюда) и syncVariants (создание/досоздание
+// вариаций у покупного продукта).
+//
+// unitHint / priceFallback — единица и закупка для ВНОВЬ создаваемых
+// ингредиентов, если у вариации нет своей (cogs<=0).
+func (s *MenuService) ensureVariantsPurchasedBacking(tx *gorm.DB, rid string, product *models.MenuItem, unitHint string, priceFallback decimal.Decimal, now time.Time) error {
+	wid, err := resolveWarehouseID(tx, rid, false, true)
+	if err != nil {
+		return err
+	}
+	var variants []models.MenuItem
+	if err := tx.Where("restaurant_id = ? AND parent_id = ? AND is_deleted = ?", rid, product.ID, false).
+		Find(&variants).Error; err != nil {
+		return err
+	}
+	if len(variants) == 0 {
+		return nil // нет вариаций — этот путь не про нас
+	}
+	if unitHint == "" {
+		unitHint = "шт"
+	}
+	for i := range variants {
+		v := &variants[i]
+		nm := ""
+		if v.Name != nil {
+			nm = *v.Name
+		}
+		price := v.COGS
+		if !price.IsPositive() {
+			price = priceFallback
+		}
+		var lines []models.TechCardLine
+		if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", rid, v.ID).Find(&lines).Error; err != nil {
+			return err
+		}
+		if len(lines) == 1 && lines[0].IngredientID != nil {
+			// Уже есть 1:1 backing — только подтверждаем склад «Покупные».
+			if wid != nil {
+				if err := tx.Model(&models.Ingredient{}).Where("id = ?", *lines[0].IngredientID).
+					Update("warehouse_id", *wid).Error; err != nil {
+					return err
+				}
+			}
+		} else {
+			// Нет своего склада (обычная вариация до конвертации) — создаём
+			// ингредиент и заменяем техкарту на 1:1, как у одиночного покупного.
+			ing := &models.Ingredient{
+				ID: uuid.NewString(), Name: &nm, Category: product.Category,
+				Qty: decimal.Zero, MinQty: decimal.Zero, Unit: &unitHint, PricePerUnit: price,
+				WarehouseID: wid, RestaurantID: &rid,
+			}
+			if err := tx.Create(ing).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("menu_item_id = ?", v.ID).Delete(&models.TechCardLine{}).Error; err != nil {
+				return err
+			}
+			line := &models.TechCardLine{
+				ID: uuid.NewString(), MenuItemID: &v.ID, IngredientID: &ing.ID,
+				Name: &nm, Qty: decimal.MustFromString("1"), Unit: &unitHint, RestaurantID: &rid,
+			}
+			if err := tx.Create(line).Error; err != nil {
+				return err
+			}
+		}
+		// Вариация покупного продукта — тоже покупная (иначе POS/склад считают её
+		// готовящимся блюдом). cogs проставляем, если своей закупки не было.
+		vUpd := map[string]any{"updated_at": now}
+		if !v.IsPurchased {
+			vUpd["is_purchased"] = true
+		}
+		if !v.COGS.IsPositive() && price.IsPositive() {
+			vUpd["cogs"] = price
+		}
+		if len(vUpd) > 1 {
+			if err := tx.Model(&models.MenuItem{}).Where("id = ?", v.ID).Updates(vUpd).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return removeParentPhantomBacking(tx, rid, product.ID)
+}
+
+// removeParentPhantomBacking снимает backing-ингредиент продукта-контейнера
+// (у которого есть вариации): его создаёт CreateItem/patchPurchased до того, как
+// узнаёт про атрибуты, а продаётся только вариант. Удаляем ТОЛЬКО безопасный
+// фантом — пустой (qty 0) и без единого движения; со стоком/историей (была
+// приёмка или начальный остаток) ингредиент оставляем как есть.
+func removeParentPhantomBacking(tx *gorm.DB, rid, productID string) error {
+	var lines []models.TechCardLine
+	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", rid, productID).Find(&lines).Error; err != nil {
+		return err
+	}
+	if len(lines) != 1 || lines[0].IngredientID == nil {
+		return nil
+	}
+	ingID := *lines[0].IngredientID
+	var ing models.Ingredient
+	if err := tx.Where("id = ?", ingID).First(&ing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if ing.Qty.IsPositive() {
+		return nil
+	}
+	var mvCount int64
+	if err := tx.Model(&models.StockMovement{}).Where("ingredient_id = ?", ingID).Count(&mvCount).Error; err != nil {
+		return err
+	}
+	if mvCount > 0 {
+		return nil
+	}
+	if err := tx.Where("menu_item_id = ?", productID).Delete(&models.TechCardLine{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("id = ?", ingID).Delete(&models.Ingredient{}).Error
 }
 
 // syncVariantIngredientPrice обновляет закупку backing-ингредиента варианта

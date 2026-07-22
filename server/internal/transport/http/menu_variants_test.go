@@ -700,3 +700,153 @@ func TestMenuAttributes_ScaleLinkedRejectsExplicitValues(t *testing.T) {
 		t.Fatalf("ожидали 400 (values + size_scale_id несовместимы), получили %d %s", r.StatusCode, b)
 	}
 }
+
+// varBackingUnit — небольшой помощник: вернуть *string или "".
+func strOr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// TestMenuAttributes_ConvertToPurchasedBacksEachVariant — конвертация блюда с
+// вариациями в «Покупной» должна завести склад КАЖДОМУ варианту (свой SKU и
+// остаток на складе «Покупные»), пометить вариации is_purchased, а фантом-
+// ингредиент родителя-контейнера снять. Регресс: раньше склад получала только
+// «группа»-родитель, вариации оставались без остатка (напитки «по объёмам»).
+func TestMenuAttributes_ConvertToPurchasedBacksEachVariant(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+
+	// 1) обычное (НЕ покупное) блюдо с двумя вариациями
+	product := createAttrProduct(t, f, tok, "Фанта", nil)
+	pid := product["id"].(string)
+	create := map[string]any{
+		"attributes": []map[string]any{
+			{"name": "Объём", "values": []map[string]any{{"label": "0.5 л"}, {"label": "1 л"}}},
+		},
+		"combos": []map[string]any{
+			{"labels": []string{"0.5 л"}, "price": "6"},
+			{"labels": []string{"1 л"}, "price": "9"},
+		},
+	}
+	if r, b := f.put(t, "/api/v1/menu/items/"+pid+"/attributes", tok, uuid.NewString(), create); r.StatusCode != http.StatusOK {
+		t.Fatalf("PUT attributes: %d %s", r.StatusCode, b)
+	}
+
+	// 2) конвертация в покупной
+	if r, b := f.patch(t, "/api/v1/menu/items/"+pid, tok, uuid.NewString(), map[string]any{
+		"is_purchased": true, "purchase_price": "5", "purchase_unit": "шт",
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("patch purchased: %d %s", r.StatusCode, b)
+	}
+
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if s, e := gdb.DB(); e == nil {
+			_ = s.Close()
+		}
+	})
+
+	var variants []models.MenuItem
+	if err := gdb.Where("parent_id = ? AND is_deleted = ?", pid, false).Find(&variants).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(variants) != 2 {
+		t.Fatalf("ожидали 2 вариации, получили %d", len(variants))
+	}
+	for _, v := range variants {
+		nm := strOr(v.Name)
+		if !v.IsPurchased {
+			t.Errorf("вариация %q осталась НЕ покупной", nm)
+		}
+		var line models.TechCardLine
+		if err := gdb.Where("menu_item_id = ?", v.ID).First(&line).Error; err != nil {
+			t.Fatalf("вариация %q без техкарты (нет своего склада): %v", nm, err)
+		}
+		if line.IngredientID == nil {
+			t.Fatalf("вариация %q: техкарта без ingredient_id", nm)
+		}
+		var ing models.Ingredient
+		if err := gdb.Where("id = ?", *line.IngredientID).First(&ing).Error; err != nil {
+			t.Fatalf("вариация %q: ингредиент не найден: %v", nm, err)
+		}
+		if ing.WarehouseID == nil {
+			t.Errorf("вариация %q: ингредиент вне склада", nm)
+		} else {
+			var w models.Warehouse
+			if err := gdb.Where("id = ?", *ing.WarehouseID).First(&w).Error; err == nil && strOr(w.Kind) != "purchased" {
+				t.Errorf("вариация %q: склад %q, ожидали purchased", nm, strOr(w.Kind))
+			}
+		}
+	}
+
+	// Родитель-контейнер: фантома быть не должно (ни техкарты, ни ингредиента «Фанта»).
+	var parentLines int64
+	gdb.Model(&models.TechCardLine{}).Where("menu_item_id = ?", pid).Count(&parentLines)
+	if parentLines != 0 {
+		t.Errorf("у родителя-контейнера осталась техкарта-фантом: %d строк", parentLines)
+	}
+	var phantom int64
+	gdb.Model(&models.Ingredient{}).Where("restaurant_id = ? AND name = ?", f.rid, "Фанта").Count(&phantom)
+	if phantom != 0 {
+		t.Errorf("остался фантом-ингредиент «Фанта»: %d", phantom)
+	}
+}
+
+// TestMenuAttributes_PurchasedProductNoParentPhantom — покупной продукт,
+// созданный сразу с вариациями (флоу «новый товар»), не должен оставлять
+// backing-ингредиент у родителя-контейнера: склад только у вариантов.
+func TestMenuAttributes_PurchasedProductNoParentPhantom(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+
+	product := createAttrProduct(t, f, tok, "Кола", map[string]any{
+		"is_purchased": true, "purchase_price": "5", "purchase_unit": "шт",
+	})
+	pid := product["id"].(string)
+	create := map[string]any{
+		"attributes": []map[string]any{
+			{"name": "Объём", "values": []map[string]any{{"label": "0.5 л"}, {"label": "1 л"}}},
+		},
+		"combos": []map[string]any{
+			{"labels": []string{"0.5 л"}, "price": "6", "purchase_price": "4"},
+			{"labels": []string{"1 л"}, "price": "9", "purchase_price": "6"},
+		},
+	}
+	if r, b := f.put(t, "/api/v1/menu/items/"+pid+"/attributes", tok, uuid.NewString(), create); r.StatusCode != http.StatusOK {
+		t.Fatalf("PUT attributes: %d %s", r.StatusCode, b)
+	}
+
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if s, e := gdb.DB(); e == nil {
+			_ = s.Close()
+		}
+	})
+
+	// Родитель: ни техкарты, ни фантома-ингредиента «Кола» (варианты — «Кола 0.5 л» и т.п.).
+	var parentLines int64
+	gdb.Model(&models.TechCardLine{}).Where("menu_item_id = ?", pid).Count(&parentLines)
+	if parentLines != 0 {
+		t.Errorf("фантом-техкарта родителя не снята: %d строк", parentLines)
+	}
+	var phantom int64
+	gdb.Model(&models.Ingredient{}).Where("restaurant_id = ? AND name = ?", f.rid, "Кола").Count(&phantom)
+	if phantom != 0 {
+		t.Errorf("остался фантом-ингредиент «Кола»: %d", phantom)
+	}
+
+	// Каждая вариация — свой backing на складе.
+	var variants []models.MenuItem
+	gdb.Where("parent_id = ? AND is_deleted = ?", pid, false).Find(&variants)
+	if len(variants) != 2 {
+		t.Fatalf("ожидали 2 вариации, получили %d", len(variants))
+	}
+	for _, v := range variants {
+		var line models.TechCardLine
+		if err := gdb.Where("menu_item_id = ?", v.ID).First(&line).Error; err != nil || line.IngredientID == nil {
+			t.Errorf("вариация %q без своего склада: %v", strOr(v.Name), err)
+		}
+	}
+}

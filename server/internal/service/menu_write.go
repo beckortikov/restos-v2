@@ -350,6 +350,24 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 
 	txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
+		// Продукт с вариациями — контейнер: продаются варианты, а не он сам.
+		// Склад заводим КАЖДОМУ варианту (свой SKU, свой остаток), у родителя —
+		// нет. Иначе покупным становился только «группа», а вариации оставались
+		// без склада (баг: конвертация напитка «по объёмам» в покупной).
+		var variantCount int64
+		if err := tx.Model(&models.MenuItem{}).
+			Where("restaurant_id = ? AND parent_id = ? AND is_deleted = ?", rid, mi.ID, false).
+			Count(&variantCount).Error; err != nil {
+			return err
+		}
+		if variantCount > 0 {
+			if err := tx.Model(&models.MenuItem{}).Where("id = ?", mi.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+			mi.IsPurchased = true
+			return s.ensureVariantsPurchasedBacking(tx, rid, mi, unit, price, time.Now().UTC())
+		}
+
 		var lines []models.TechCardLine
 		if err := tx.Where("menu_item_id = ?", mi.ID).Find(&lines).Error; err != nil {
 			return err
