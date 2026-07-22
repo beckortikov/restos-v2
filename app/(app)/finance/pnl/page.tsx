@@ -116,10 +116,10 @@ export default function PnlPage() {
           <h1 className="text-xl font-bold text-foreground">Отчёт о прибылях и убытках (ОПиУ)</h1>
           <p className="text-muted-foreground text-sm mt-0.5">Расчёт на сервере</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             to="/analytics/food-cost"
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors whitespace-nowrap shrink-0"
             title="Маржа по каждому блюду — отдельный экран"
           >
             <ChefHat className="size-3.5" />
@@ -139,7 +139,7 @@ export default function PnlPage() {
                 'ОПиУ'
               )
             }}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors whitespace-nowrap shrink-0"
           >
             <Download className="size-3.5" />
             Excel
