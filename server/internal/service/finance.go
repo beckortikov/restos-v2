@@ -870,6 +870,12 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	}
 	q3 := applyFOPeriod(applyOpexFilter(scoped3.Table("financial_operations").
 		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total")), f)
+	if f.OperationalOnly {
+		// «Только операционные»: капвложения (investment — оборудование) и
+		// финансовую активность в opex не считаем, чтобы разовая покупка не
+		// проваливала операционную прибыль. По умолчанию (флаг off) — как было.
+		q3 = q3.Where("COALESCE(activity, 'operational') = ?", "operational")
+	}
 	var opexRows []opexRow
 	if err := q3.Group("category").Scan(&opexRows).Error; err != nil {
 		return nil, err

@@ -167,10 +167,11 @@ function isoOrDate(v: Date | string | undefined): string | undefined {
   return String(v)
 }
 
-export async function fetchPnLReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<PnLReport> {
+export async function fetchPnLReport(opts: { from?: Date | string; to?: Date | string; operationalOnly?: boolean } = {}): Promise<PnLReport> {
   const query: Record<string, string> = {}
   const from = isoOrDate(opts.from); if (from) query.from = from
   const to = isoOrDate(opts.to); if (to) query.to = to
+  if (opts.operationalOnly) query.operational_only = 'true'
   const r: any = await unwrap(api.GET('/api/v1/finance/pnl', { params: { query: query as any } }))
   const revenue = r?.revenue ?? {}
   const cogs = r?.cogs ?? {}

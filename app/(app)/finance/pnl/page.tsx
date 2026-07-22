@@ -43,6 +43,9 @@ export default function PnlPage() {
   })
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  const [operationalOnly, setOperationalOnly] = useState(() => {
+    try { return localStorage.getItem('pnl:operationalOnly') === '1' } catch { return false }
+  })
 
   useEffect(() => {
     if (period !== 'custom') {
@@ -51,13 +54,17 @@ export default function PnlPage() {
   }, [period])
 
   useEffect(() => {
+    try { localStorage.setItem('pnl:operationalOnly', operationalOnly ? '1' : '0') } catch {}
+  }, [operationalOnly])
+
+  useEffect(() => {
     setLoading(true)
     const { from, to } = getDateRange(period, customFrom, customTo)
-    fetchPnLReport({ from: from ?? undefined, to: to ?? undefined })
+    fetchPnLReport({ from: from ?? undefined, to: to ?? undefined, operationalOnly })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки отчёта'))
       .finally(() => setLoading(false))
-  }, [period, customFrom, customTo])
+  }, [period, customFrom, customTo, operationalOnly])
 
   const PNL_ROWS = useMemo(() => {
     if (!report) return [] as PnlRow[]
@@ -117,6 +124,19 @@ export default function PnlPage() {
           <p className="text-muted-foreground text-sm mt-0.5">Расчёт на сервере</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={operationalOnly}
+            onClick={() => setOperationalOnly(v => !v)}
+            title="Не считать капвложения (оборудование) и финансовую активность в операционных расходах — чтобы разовая крупная покупка не искажала операционную прибыль"
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-medium border rounded-lg transition-colors whitespace-nowrap shrink-0 ${operationalOnly ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border hover:bg-muted text-muted-foreground'}`}
+          >
+            <span className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${operationalOnly ? 'bg-primary' : 'bg-muted-foreground/30'}`}>
+              <span className={`inline-block size-3 rounded-full bg-white transition-transform ${operationalOnly ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+            </span>
+            Только операционные
+          </button>
           <Link
             to="/analytics/food-cost"
             className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors whitespace-nowrap shrink-0"

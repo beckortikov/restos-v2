@@ -210,6 +210,7 @@ func (h *FinanceReportsHandler) PnL(w http.ResponseWriter, r *http.Request) {
 		respond.BadRequest(w, err.Error())
 		return
 	}
+	f.OperationalOnly = queryString(r, "operational_only") == "true"
 	out, err := h.svc.PnL(r.Context(), f)
 	if err != nil {
 		respond.Error(w, err)

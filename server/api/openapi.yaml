@@ -2372,7 +2372,10 @@ paths:
     get:
       tags: [finance]
       summary: P&L отчёт (JSON) за период
-      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      parameters:
+        - { $ref: "#/components/parameters/From" }
+        - { $ref: "#/components/parameters/To" }
+        - { in: query, name: operational_only, required: false, schema: { type: boolean }, description: "true → в opex только операционная активность (без капвложений и финансовой), чтобы разовая покупка оборудования не проваливала операционную прибыль" }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PnLReport" } } } } }
   /api/v1/finance/cashflow:
     get:

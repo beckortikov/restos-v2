@@ -8061,6 +8061,8 @@ export interface paths {
                 query?: {
                     from?: components["parameters"]["From"];
                     to?: components["parameters"]["To"];
+                    /** @description true → в opex только операционная активность (без капвложений и финансовой), чтобы разовая покупка оборудования не проваливала операционную прибыль */
+                    operational_only?: boolean;
                 };
                 header?: never;
                 path?: never;
