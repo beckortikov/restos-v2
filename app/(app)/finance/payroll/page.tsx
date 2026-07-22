@@ -70,7 +70,7 @@ function ElapsedBadge({ since }: { since: string }) {
 }
 
 export default function PayrollPage() {
-  const { user: currentUser, canDo, canAccessRoles } = useAuth()
+  const { user: currentUser, canDo, canAccessRoles, restaurant } = useAuth()
   const [tab, setTab] = useState<TabKey>('salary')
   const [employees, setEmployees] = useState<User[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
@@ -460,6 +460,14 @@ export default function PayrollPage() {
   const totalServicePaid = Object.values(servicePayout).reduce((s, v) => s + v, 0)
   const totalServiceToPay = Math.max(0, totalServiceAccrued - totalServicePaid)
 
+  // Показывать блок «Обслуживание» (3 колонки + фильтр), только если ресторан
+  // берёт сервисный сбор ИЛИ за период есть его начисления/выплаты. Иначе это
+  // три колонки прочерков, которые выталкивают действия вправо за край.
+  const showService =
+    (restaurant?.servicePercent ?? 0) > 0 ||
+    Object.values(serviceAccrual).some(v => (v?.accrued ?? 0) > 0) ||
+    Object.values(servicePayout).some(v => (v ?? 0) > 0)
+
   const filtered = employees.filter(e => {
     if (roleFilter !== 'all' && e.role !== roleFilter) return false
     if (statusFilter === 'with_salary' && (e.salary ?? 0) === 0) return false
@@ -602,9 +610,11 @@ export default function PayrollPage() {
       {/* ═══════════════════════════ SALARY TAB ═══════════════════════════════ */}
       {tab === 'salary' && (
         <>
-          {/* Service period filter */}
-          <div className="flex flex-wrap items-center gap-3 bg-blue-50/40 border border-blue-100 rounded-xl p-3">
-            <label className="text-[10px] font-semibold text-blue-700 uppercase">Период обслуживания</label>
+          {/* Период — управляет всей таблицей (начисления, выплаты, обслуживание),
+              не только обслуживанием: подпись и цвет нейтральные, иначе читалось
+              как «фильтр только для сервиса». */}
+          <div className="flex flex-wrap items-center gap-3 bg-muted/30 border border-border rounded-xl p-3">
+            <label className="text-[10px] font-semibold text-muted-foreground uppercase">Период</label>
             <DateRangePresets
               value={servicePreset}
               onChange={(p, r) => {
@@ -625,7 +635,7 @@ export default function PayrollPage() {
           </div>
 
           {/* KPI */}
-          <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
+          <div className={`grid grid-cols-2 gap-3 ${showService ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
             <div className="bg-card rounded-xl border border-border p-4">
               <p className="text-xs text-muted-foreground">ФОТ (оклады)</p>
               <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totalSalary)}</p>
@@ -642,11 +652,13 @@ export default function PayrollPage() {
               <p className="text-xs text-muted-foreground">К выплате (оклад)</p>
               <p className="text-2xl font-bold text-emerald-600 mt-1">{formatCurrency(totalToPay)}</p>
             </div>
-            <div className="bg-blue-50/60 rounded-xl border border-blue-200 p-4">
-              <p className="text-xs text-blue-700">Обслуживание (к выплате)</p>
-              <p className="text-2xl font-bold text-blue-700 mt-1">{formatCurrency(totalServiceToPay)}</p>
-              <p className="text-[10px] text-blue-600/80 mt-0.5">начислено {formatCurrency(totalServiceAccrued)} · выпл. {formatCurrency(totalServicePaid)}</p>
-            </div>
+            {showService && (
+              <div className="bg-blue-50/60 rounded-xl border border-blue-200 p-4">
+                <p className="text-xs text-blue-700">Обслуживание (к выплате)</p>
+                <p className="text-2xl font-bold text-blue-700 mt-1">{formatCurrency(totalServiceToPay)}</p>
+                <p className="text-[10px] text-blue-600/80 mt-0.5">начислено {formatCurrency(totalServiceAccrued)} · выпл. {formatCurrency(totalServicePaid)}</p>
+              </div>
+            )}
           </div>
 
           {/* Filters */}
@@ -700,7 +712,7 @@ export default function PayrollPage() {
           {/* Table */}
           <div className="bg-card rounded-xl border border-border overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[1100px]">
+              <table className={`w-full text-sm ${showService ? 'min-w-[1100px]' : 'min-w-[820px]'}`}>
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
                     <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase">Сотрудник</th>
@@ -710,9 +722,11 @@ export default function PayrollPage() {
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Удержания</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 uppercase" title="Выплачено зарплаты/аванса из кассы за выбранный период">Выплачено (ЗП)</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">К выплате</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание начислено за выбранный период">Обсл. начисл.</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание выплачено за выбранный период">Обсл. выпл.</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Остаток обслуживания к выплате">К выпл. (обсл.)</th>
+                    {showService && <>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание начислено за выбранный период">Обсл. начисл.</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание выплачено за выбранный период">Обсл. выпл.</th>
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Остаток обслуживания к выплате">К выпл. (обсл.)</th>
+                    </>}
                     <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase">Действия</th>
                   </tr>
                 </thead>
@@ -752,10 +766,17 @@ export default function PayrollPage() {
                         <td className="px-4 py-3 text-right">
                           <button onClick={() => openDialog(emp, 'edit_salary')} className="group inline-flex flex-col items-end gap-0.5">
                             <span className="inline-flex items-center gap-1">
-                              <span className={`font-medium ${accruedPay > 0 ? 'text-foreground' : 'text-muted-foreground'}`}>
-                                {accruedPay > 0 ? formatCurrency(accruedPay) : 'Не указан'}
-                              </span>
-                              <Pencil className="size-3 text-muted-foreground/0 group-hover:text-primary transition-colors" />
+                              {accruedPay > 0 ? (
+                                <>
+                                  <span className="font-medium text-foreground">{formatCurrency(accruedPay)}</span>
+                                  <Pencil className="size-3 text-muted-foreground/0 group-hover:text-primary transition-colors" />
+                                </>
+                              ) : (
+                                // Нет оклада/ставки — явный призыв, а не тихий «Не указан».
+                                <span className="inline-flex items-center gap-1 text-primary font-medium">
+                                  <Pencil className="size-3" />Указать ставку
+                                </span>
+                              )}
                             </span>
                             {/* Расшифровка дневной оплаты: без неё сумма выглядит
                                 необъяснимым числом и её нельзя проверить. */}
@@ -780,6 +801,7 @@ export default function PayrollPage() {
                             {accruedPay > 0 ? formatCurrency(toPay) : '—'}
                           </span>
                         </td>
+                        {showService && <>
                         <td className="px-4 py-3 text-right">
                           {accrued > 0 ? <span className="text-blue-700 font-medium">{formatCurrency(accrued)}</span> : <span className="text-muted-foreground">—</span>}
                         </td>
@@ -789,6 +811,7 @@ export default function PayrollPage() {
                         <td className="px-4 py-3 text-right">
                           {serviceToPay > 0 ? <span className="font-bold text-blue-700">{formatCurrency(serviceToPay)}</span> : <span className="text-muted-foreground">—</span>}
                         </td>
+                        </>}
                         <td className="px-4 py-3">
                           {canDo('payroll.manage') && (
                             <div className="flex flex-col items-center gap-1">
@@ -837,9 +860,11 @@ export default function PayrollPage() {
                       <td className="px-4 py-3 text-right font-bold text-destructive">{formatCurrency(totalDeductions)}</td>
                       <td className="px-4 py-3 text-right font-bold text-emerald-600">{formatCurrency(totalSalaryPaid)}</td>
                       <td className="px-4 py-3 text-right font-bold text-foreground">{formatCurrency(totalToPay)}</td>
-                      <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totalServiceAccrued)}</td>
-                      <td className="px-4 py-3 text-right font-bold text-blue-600">{formatCurrency(totalServicePaid)}</td>
-                      <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totalServiceToPay)}</td>
+                      {showService && <>
+                        <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totalServiceAccrued)}</td>
+                        <td className="px-4 py-3 text-right font-bold text-blue-600">{formatCurrency(totalServicePaid)}</td>
+                        <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totalServiceToPay)}</td>
+                      </>}
                       <td></td>
                     </tr>
                   </tfoot>
