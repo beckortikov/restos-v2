@@ -1359,8 +1359,7 @@ export default function PayrollPage() {
           employeeId={workedDaysEmp.id}
           employeeName={workedDaysEmp.name}
           dailyRate={accrualByUser[workedDaysEmp.id]?.dailyRate ?? workedDaysEmp.dailyRate ?? 0}
-          from={serviceFrom.slice(0, 10)}
-          to={serviceTo.slice(0, 10)}
+          initialDate={serviceTo.slice(0, 10)}
           onSaved={() => { reload() }}
         />
       )}

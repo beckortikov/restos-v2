@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
@@ -8,54 +8,57 @@ import { fetchWorkedDays, setWorkedDays } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import {
-  startOfMonth, endOfMonth, eachDayOfInterval, format, getDay, isWeekend,
+  startOfMonth, endOfMonth, eachDayOfInterval, format, getDay, isWeekend, addMonths,
 } from 'date-fns'
 import { ru } from 'date-fns/locale'
 
-// Отметка отработанных дней для дневной оплаты (059). Календарь месяца +
-// быстрый ввод: тык по дням ИЛИ «отметить N дней» / «будни». Дни из табеля
-// (реальные приходы) показаны заблокированными — их снять нельзя.
+// Отметка отработанных дней для дневной оплаты (059). Календарь МЕСЯЦА со своей
+// навигацией (◀ ▶) — независимой от периода-фильтра сверху: рабочие дни всегда
+// отмечаются помесячно. Тык по дням ИЛИ быстрый ввод «N дней» / «Будни».
+// Дни из табеля (реальные приходы) заблокированы — их снять нельзя.
 export function WorkedDaysDialog({
-  open, onOpenChange, employeeId, employeeName, dailyRate, from, to, onSaved,
+  open, onOpenChange, employeeId, employeeName, dailyRate, initialDate, onSaved,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
   employeeId: string
   employeeName: string
   dailyRate: number
-  from: string // YYYY-MM-DD
-  to: string   // YYYY-MM-DD
+  initialDate?: string // YYYY-MM-DD — какой месяц открыть первым (обычно конец периода)
   onSaved?: (count: number) => void
 }) {
+  const [month, setMonth] = useState<Date>(() =>
+    startOfMonth(initialDate ? new Date(initialDate + 'T00:00:00') : new Date()),
+  )
   const [shiftSet, setShiftSet] = useState<Set<string>>(new Set())
   const [manualSet, setManualSet] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [nDays, setNDays] = useState('')
 
-  // Месяц календаря — по началу периода (обычно период = месяц).
-  const monthAnchor = useMemo(() => (from ? new Date(from + 'T00:00:00') : new Date()), [from])
-  const days = useMemo(() => {
-    const s = startOfMonth(monthAnchor)
-    const e = endOfMonth(monthAnchor)
-    return eachDayOfInterval({ start: s, end: e })
-  }, [monthAnchor])
-  const leadPad = useMemo(() => (getDay(startOfMonth(monthAnchor)) + 6) % 7, [monthAnchor]) // Пн=0
+  const monthStart = useMemo(() => format(startOfMonth(month), 'yyyy-MM-dd'), [month])
+  const monthEnd = useMemo(() => format(endOfMonth(month), 'yyyy-MM-dd'), [month])
+  const days = useMemo(
+    () => eachDayOfInterval({ start: startOfMonth(month), end: endOfMonth(month) }),
+    [month],
+  )
+  const leadPad = useMemo(() => (getDay(startOfMonth(month)) + 6) % 7, [month]) // Пн=0
+  const periodDates = useMemo(() => days.map((d) => format(d, 'yyyy-MM-dd')), [days])
 
-  const inPeriod = useCallback((iso: string) => iso >= from && iso <= to, [from, to])
-
+  // Перезагрузка при открытии И при смене месяца — набор дат помесячный.
   useEffect(() => {
     if (!open || !employeeId) return
     setLoading(true)
-    fetchWorkedDays(employeeId, from, to)
+    fetchWorkedDays(employeeId, monthStart, monthEnd)
       .then((r) => {
         setShiftSet(new Set(r.shift_dates))
         setManualSet(new Set(r.manual_dates))
       })
       .catch(() => toast.error('Не удалось загрузить дни'))
       .finally(() => setLoading(false))
-  }, [open, employeeId, from, to])
+  }, [open, employeeId, monthStart, monthEnd])
 
   const totalDays = useMemo(() => {
     const u = new Set(shiftSet)
@@ -64,7 +67,7 @@ export function WorkedDaysDialog({
   }, [shiftSet, manualSet])
 
   function toggle(iso: string) {
-    if (shiftSet.has(iso) || !inPeriod(iso)) return // табель не трогаем
+    if (shiftSet.has(iso)) return // табель не трогаем
     setManualSet((prev) => {
       const next = new Set(prev)
       if (next.has(iso)) next.delete(iso)
@@ -73,16 +76,10 @@ export function WorkedDaysDialog({
     })
   }
 
-  // Периодные даты в порядке возрастания (для быстрого «N дней»).
-  const periodDates = useMemo(
-    () => days.map((d) => format(d, 'yyyy-MM-dd')).filter(inPeriod),
-    [days, inPeriod],
-  )
-
   function markFirstN() {
     const n = parseInt(nDays, 10)
     if (!Number.isFinite(n) || n <= 0) return
-    // Первые N дней периода как ручные (дни табеля уже считаются, их не дублируем).
+    // Первые N дней месяца как ручные (дни табеля уже считаются — их не дублируем).
     const next = new Set<string>()
     let added = 0
     for (const iso of periodDates) {
@@ -98,7 +95,7 @@ export function WorkedDaysDialog({
     const next = new Set<string>()
     for (const d of days) {
       const iso = format(d, 'yyyy-MM-dd')
-      if (!inPeriod(iso) || shiftSet.has(iso) || isWeekend(d)) continue
+      if (shiftSet.has(iso) || isWeekend(d)) continue
       next.add(iso)
     }
     setManualSet(next)
@@ -107,8 +104,8 @@ export function WorkedDaysDialog({
   async function save() {
     setSaving(true)
     try {
-      const res = await setWorkedDays(employeeId, from, to, [...manualSet])
-      toast.success(`Отмечено дней: ${res.count}`)
+      const res = await setWorkedDays(employeeId, monthStart, monthEnd, [...manualSet])
+      toast.success(`${format(month, 'LLLL', { locale: ru })}: отмечено дней ${res.count}`)
       onSaved?.(res.count)
       onOpenChange(false)
     } catch (e) {
@@ -119,7 +116,7 @@ export function WorkedDaysDialog({
   }
 
   const accrued = totalDays * (dailyRate || 0)
-  const monthLabel = format(monthAnchor, 'LLLL yyyy', { locale: ru })
+  const monthLabel = format(month, 'LLLL yyyy', { locale: ru })
   const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
   return (
@@ -130,7 +127,24 @@ export function WorkedDaysDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <p className="text-xs text-muted-foreground capitalize">{monthLabel}</p>
+          {/* Навигация по месяцам */}
+          <div className="flex items-center justify-between">
+            <button
+              onClick={() => setMonth((m) => startOfMonth(addMonths(m, -1)))}
+              className="size-8 rounded-md border border-border hover:bg-muted flex items-center justify-center transition-colors"
+              aria-label="Предыдущий месяц"
+            >
+              <ChevronLeft className="size-4" />
+            </button>
+            <span className="text-sm font-medium capitalize">{monthLabel}</span>
+            <button
+              onClick={() => setMonth((m) => startOfMonth(addMonths(m, 1)))}
+              className="size-8 rounded-md border border-border hover:bg-muted flex items-center justify-center transition-colors"
+              aria-label="Следующий месяц"
+            >
+              <ChevronRight className="size-4" />
+            </button>
+          </div>
 
           {loading ? (
             <div className="h-56 flex items-center justify-center">
@@ -146,7 +160,6 @@ export function WorkedDaysDialog({
                 {Array.from({ length: leadPad }).map((_, i) => <div key={`pad-${i}`} />)}
                 {days.map((d) => {
                   const iso = format(d, 'yyyy-MM-dd')
-                  const outside = !inPeriod(iso)
                   const isShift = shiftSet.has(iso)
                   const isManual = manualSet.has(iso)
                   const on = isShift || isManual
@@ -154,14 +167,13 @@ export function WorkedDaysDialog({
                     <button
                       key={iso}
                       onClick={() => toggle(iso)}
-                      disabled={outside || isShift}
+                      disabled={isShift}
                       title={isShift ? 'Из табеля — снять нельзя' : undefined}
                       className={[
                         'aspect-square rounded-md text-sm flex items-center justify-center transition-colors tabular-nums',
-                        outside ? 'text-muted-foreground/30 cursor-default' : '',
                         isShift ? 'bg-primary/30 text-foreground font-semibold cursor-not-allowed ring-1 ring-primary/40' : '',
                         !isShift && isManual ? 'bg-primary text-primary-foreground font-semibold' : '',
-                        !on && !outside ? 'bg-muted/50 text-foreground hover:bg-muted' : '',
+                        !on ? 'bg-muted/50 text-foreground hover:bg-muted' : '',
                       ].join(' ')}
                     >
                       {format(d, 'd')}
