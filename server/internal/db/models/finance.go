@@ -73,7 +73,12 @@ type CashShiftOperation struct {
 	Description *string         `json:"description"`
 	// Category — категория расхода (Закупка/Зарплата/Хозтовары…). Заполнена
 	// только для расходов (cash_out с категорией). NULL → изъятие/внесение.
-	Category  *string   `json:"category"`
+	Category *string `json:"category"`
+	// AccountID — счёт, с которого прошла операция. NULL → счёт смены (наличный
+	// ящик, legacy). Не-NULL и ≠ счёту смены → безналичный расход: дебетует свой
+	// счёт, но наличный ящик (expected_cash) не трогает — зеркалит приход, где
+	// нал идёт на кассу, а карта на банк-счёт.
+	AccountID *string   `gorm:"column:account_id;type:uuid" json:"account_id"`
 	CreatedBy *string   `gorm:"column:created_by" json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

@@ -318,6 +318,11 @@ export default function ShiftsPage() {
   const [expAmount, setExpAmount] = useState(0)
   const [expCategory, setExpCategory] = useState(EXPENSE_CATEGORIES[0])
   const [expDesc, setExpDesc] = useState('')
+  // Безналичные счета (банк/карта) — для безналичного расхода. Расход нал →
+  // счёт смены (ящик), безнал → выбранный банк-счёт (ящик не трогает).
+  const [nonCashAccounts, setNonCashAccounts] = useState<FinancialAccount[]>([])
+  const [expenseCash, setExpenseCash] = useState(true)
+  const [expenseBankId, setExpenseBankId] = useState('')
 
   // Service-charge accruals during the active shift
   const [waiterServiceRows, setWaiterServiceRows] = useState<Array<{
@@ -388,6 +393,9 @@ export default function ShiftsPage() {
       const list = cashOnly.length > 0 ? cashOnly : accs
       setCashAccounts(list)
       if (list.length > 0) setOpenAccountId(list[0].id)
+      const bank = accs.filter(a => a.type !== 'cash')
+      setNonCashAccounts(bank)
+      if (bank.length > 0) setExpenseBankId(prev => prev || bank[0].id)
     }).catch(() => {})
   }, [reload])
 
@@ -415,8 +423,11 @@ export default function ShiftsPage() {
 
   const expectedAtClose = useMemo(() => {
     if (!activeShift) return 0
-    const cashIn = dSum(shiftOps.filter(o => o.type === 'cash_in').map(o => o.amount))
-    const cashOut = dSum(shiftOps.filter(o => o.type === 'cash_out').map(o => o.amount))
+    // Наличный ящик трогают только операции без своего счёта или на счёте смены.
+    // Безналичный расход (accountId = банк-счёт) в кассовую математику не идёт.
+    const drawer = (o: CashShiftOperation) => !o.accountId || o.accountId === activeShift.accountId
+    const cashIn = dSum(shiftOps.filter(o => o.type === 'cash_in' && drawer(o)).map(o => o.amount))
+    const cashOut = dSum(shiftOps.filter(o => o.type === 'cash_out' && drawer(o)).map(o => o.amount))
     return dSub(dAdd(dAdd(activeShift.openingBalance, liveRevenue.cashRevenue), cashIn), cashOut)
   }, [activeShift, shiftOps, liveRevenue.cashRevenue])
 
@@ -541,7 +552,7 @@ export default function ShiftsPage() {
   const handleExpense = async () => {
     if (!activeShift || expAmount <= 0) return
     try {
-      await createShiftExpense(activeShift.id, expAmount, expCategory, expDesc, user?.id)
+      await createShiftExpense(activeShift.id, expAmount, expCategory, expDesc, expenseCash ? undefined : expenseBankId)
       toast.success('Расход оформлен')
       setShowExpense(false)
       setExpAmount(0)
@@ -1170,6 +1181,7 @@ export default function ShiftsPage() {
                   <div key={op.id} className="flex items-center justify-between gap-2 text-sm bg-white/60 dark:bg-black/20 rounded-lg px-3 py-2">
                     <div className="min-w-0">
                       <span className="font-medium text-foreground">{op.category}</span>
+                      {op.accountId && op.accountId !== activeShift.accountId && <span className="ml-1.5 rounded bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] font-bold">безнал</span>}
                       {op.description && <span className="text-muted-foreground"> · {op.description}</span>}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -1305,7 +1317,7 @@ export default function ShiftsPage() {
               <ArrowUpFromLine className="size-4" />Изъятие
             </button>
             <button
-              onClick={() => { setShowExpense(true); setExpAmount(0); setExpDesc(''); setExpCategory(EXPENSE_CATEGORIES[0]) }}
+              onClick={() => { setShowExpense(true); setExpAmount(0); setExpDesc(''); setExpCategory(EXPENSE_CATEGORIES[0]); setExpenseCash(true) }}
               disabled={!activeShift.accountId}
               title={!activeShift.accountId ? 'У смены не указан счёт' : ''}
               className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 transition-colors disabled:opacity-50"
@@ -1365,7 +1377,27 @@ export default function ShiftsPage() {
                 <input value={expDesc} onChange={e => setExpDesc(e.target.value)} placeholder="Куда пошли деньги"
                   className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
-              <p className="text-[11px] text-muted-foreground">Списание со счёта «{activeShift.accountName || 'Касса'}» и в журнал смены.</p>
+              {/* Наличные (счёт смены) или безналичные (банк-счёт). Безнал дебетует
+                  свой счёт, наличный ящик не трогает. Показываем только при наличии
+                  безналичного счёта. */}
+              {nonCashAccounts.length > 0 && (
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1">Откуда</label>
+                  <div className="flex gap-2">
+                    {([[true, 'Наличные'], [false, 'Безналичные']] as const).map(([isCash, lbl]) => (
+                      <button key={lbl} type="button" onClick={() => setExpenseCash(isCash)}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${expenseCash === isCash ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-muted'}`}>{lbl}</button>
+                    ))}
+                  </div>
+                  {!expenseCash && (
+                    <select value={expenseBankId} onChange={e => setExpenseBankId(e.target.value)}
+                      className="mt-2 w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
+                      {nonCashAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  )}
+                </div>
+              )}
+              <p className="text-[11px] text-muted-foreground">{expenseCash ? `Списание со счёта «${activeShift.accountName || 'Касса'}» и в журнал смены.` : 'Безналичный расход: списание с банк-счёта, наличный ящик не трогает.'}</p>
               <div className="flex gap-2">
                 <button onClick={handleExpense} disabled={expAmount <= 0}
                   className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 disabled:opacity-50">

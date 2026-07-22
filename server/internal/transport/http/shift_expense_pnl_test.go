@@ -217,3 +217,92 @@ func TestShiftCashOut_WithoutCategory_DoesNotHitPnL(t *testing.T) {
 		t.Fatalf("изъятие без категории не должно создавать financial_operations, найдено %d", cnt)
 	}
 }
+
+// Безналичный расход из смены (account_id = банк-счёт) ДЕБЕТУЕТ банк-счёт, а не
+// наличный ящик смены, и НЕ идёт в кассовый Z-отчёт (expected_cash). Наличный
+// расход при этом ведёт себя как раньше — со счёта смены и в кассовый Z.
+func TestShiftExpense_Cashless_DebitsBankNotDrawer(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	cashID, cashName := uuid.NewString(), "Касса"
+	bankID, bankName, bankType := uuid.NewString(), "Банк", "bank"
+	if err := gdb.Create(&models.FinancialAccount{ID: cashID, Name: &cashName, Balance: decimal.MustFromString("1000"), RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&models.FinancialAccount{ID: bankID, Name: &bankName, Type: &bankType, Balance: decimal.MustFromString("500"), RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	shiftID, openStatus, openedBy := uuid.NewString(), "open", "test"
+	now := time.Now().UTC()
+	if err := gdb.Create(&models.CashShift{
+		ID: shiftID, RestaurantID: &f.rid, AccountID: &cashID, Status: &openStatus, OpenedBy: &openedBy,
+		OpeningBalance: decimal.Zero, OpenedAt: now, UpdatedAt: now,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	balOf := func(id string) decimal.Decimal {
+		var a models.FinancialAccount
+		gdb.Where("id = ?", id).First(&a)
+		return decimal.Normalize(a.Balance)
+	}
+
+	// 1) Наличный расход 40 (без account_id) → касса 960, банк 500.
+	r, b := f.post(t, "/api/v1/shifts/"+shiftID+"/expenses", tok, uuid.NewString(), map[string]any{
+		"type": "expense", "amount": "40", "category": "Закупка продуктов",
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("cash expense: %d %s", r.StatusCode, b)
+	}
+
+	// 2) Безналичный расход 100 (account_id = банк) → касса 960 (не тронута), банк 400.
+	r2, b2 := f.post(t, "/api/v1/shifts/"+shiftID+"/expenses", tok, uuid.NewString(), map[string]any{
+		"type": "expense", "amount": "100", "category": "Ремонт", "account_id": bankID,
+	})
+	if r2.StatusCode != http.StatusCreated {
+		t.Fatalf("cashless expense: %d %s", r2.StatusCode, b2)
+	}
+	var cashlessOp models.CashShiftOperation
+	if err := json.Unmarshal(b2, &cashlessOp); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := balOf(cashID); !got.Equal(decimal.MustFromString("960")) {
+		t.Errorf("касса = %s, want 960 (только наличный расход 40; безнал её не трогает)", got)
+	}
+	if got := balOf(bankID); !got.Equal(decimal.MustFromString("400")) {
+		t.Errorf("банк = %s, want 400 (500 − безнал 100)", got)
+	}
+
+	// account_id сохранён на безналичной операции.
+	var stored models.CashShiftOperation
+	if err := gdb.Where("id = ?", cashlessOp.ID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.AccountID == nil || *stored.AccountID != bankID {
+		t.Errorf("account_id безналичного расхода = %v, want %s", stored.AccountID, bankID)
+	}
+
+	// Z-отчёт (наличный ящик): expenses_total = 40 (только наличный расход),
+	// безналичные 100 в кассовый Z не идут.
+	rz, bz := f.get(t, "/api/v1/shifts/"+shiftID+"/zreport", tok)
+	if rz.StatusCode != http.StatusOK {
+		t.Fatalf("zreport: %d %s", rz.StatusCode, bz)
+	}
+	var z struct {
+		ExpensesTotal decimal.Decimal `json:"expenses_total"`
+	}
+	if err := json.Unmarshal(bz, &z); err != nil {
+		t.Fatal(err)
+	}
+	if !z.ExpensesTotal.Equal(decimal.MustFromString("40")) {
+		t.Errorf("Z-отчёт expenses_total = %s, want 40 (безналичный расход в наличный Z не идёт)", decimal.Normalize(z.ExpensesTotal))
+	}
+}

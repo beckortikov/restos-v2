@@ -84,8 +84,7 @@ export async function addShiftOperation(shiftId: string, type: 'cash_in' | 'cash
   logAction(type === 'cash_in' ? 'shift.cash_in' : 'shift.cash_out', 'shift', shiftId, type === 'cash_in' ? 'Внесение наличных' : 'Изъятие наличных', { amount, description })
 }
 
-export async function createShiftExpense(shiftId: string, amount: number, category: string, description: string, createdBy?: string) {
-  void createdBy
+export async function createShiftExpense(shiftId: string, amount: number, category: string, description: string, accountId?: string) {
   await unwrap(api.POST('/api/v1/shifts/{id}/expenses', {
     params: { path: { id: shiftId } },
     body: {
@@ -95,9 +94,12 @@ export async function createShiftExpense(shiftId: string, amount: number, catego
       // префиксом в description. Позволяет агрегировать в своде/экспорте/X-Z.
       category,
       description: description || null,
+      // account_id — счёт расхода. Пусто → счёт смены (наличный). Банк-счёт →
+      // безналичный расход: дебетует его, наличный ящик не трогает.
+      ...(accountId ? { account_id: accountId } : {}),
     } as any,
   }))
-  logAction('shift.expense', 'shift', shiftId, `Расход из смены: ${category}`, { amount, category, description })
+  logAction('shift.expense', 'shift', shiftId, `Расход из смены: ${category}`, { amount, category, description, accountId })
 }
 
 export async function deleteShiftExpense(opId: string) {
@@ -250,6 +252,7 @@ function mapShiftOperation(r: any, fallbackShiftId: string): CashShiftOperation 
     amount: Number(r.amount ?? 0),
     description: r.description ?? undefined,
     category: r.category ?? undefined,
+    accountId: r.account_id ?? undefined,
     createdBy: r.created_by ?? undefined,
     createdByName: undefined,
     createdAt: r.created_at,

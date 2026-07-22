@@ -2123,6 +2123,11 @@ export interface paths {
                         type: "cash_in" | "cash_out";
                         amount: string;
                         description?: string;
+                        /**
+                         * Format: uuid
+                         * @description Счёт операции. Пусто → счёт смены (наличный ящик). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает.
+                         */
+                        account_id?: string;
                     };
                 };
             };
@@ -9612,6 +9617,11 @@ export interface paths {
                         description?: string;
                         /** @description Категория расхода (только для expense/cash_out). Структурное поле для свода/экспорта/X-Z. */
                         category?: string;
+                        /**
+                         * Format: uuid
+                         * @description Счёт расхода. Пусто → счёт смены (наличный). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает.
+                         */
+                        account_id?: string;
                     };
                 };
             };
@@ -11240,6 +11250,11 @@ export interface components {
             description?: string;
             /** @description Категория расхода; NULL для внесения/изъятия */
             category?: string | null;
+            /**
+             * Format: uuid
+             * @description Счёт операции; NULL → счёт смены (наличный ящик). ≠ счёту смены → безналичная операция, наличный ящик не трогает.
+             */
+            account_id?: string | null;
         };
         ShiftsList: {
             data?: components["schemas"]["CashShift"][];

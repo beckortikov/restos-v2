@@ -38,6 +38,10 @@ type ShiftOperationInput struct {
 	// Category — заполнена только для расходов (cash_out с категорией). Для
 	// внесения/изъятия пустая → хранится NULL, операция считается изъятием.
 	Category string `json:"category,omitempty"`
+	// AccountID — счёт операции. Пусто → счёт смены (наличный ящик). Для
+	// безналичного расхода — id банк-счёта: дебетуется он, наличный ящик
+	// (expected_cash) не трогается.
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // WithPublisher — fluent setter (как в OrdersService).
@@ -173,6 +177,11 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 		opSum = decimal.Zero
 		for _, op := range ops {
 			if op.Type == nil {
+				continue
+			}
+			// Безналичная операция (счёт ≠ счёту смены) наличный ящик не трогает —
+			// деньги ушли/пришли не через кассу, а через банк-счёт.
+			if !opTouchesDrawer(op.AccountID, shift.AccountID) {
 				continue
 			}
 			switch *op.Type {
@@ -354,6 +363,19 @@ func (s *ShiftsService) UpdateAccount(ctx context.Context, shiftID string, in Up
 	return updated, nil
 }
 
+// opTouchesDrawer — трогает ли операция наличный ящик смены. Наличной считаем
+// операцию без своего счёта (legacy/наличные) или на самом счёте смены.
+// Операция на другом счёте (безналичный расход) ящик не трогает.
+func opTouchesDrawer(opAccountID, shiftAccountID *string) bool {
+	if opAccountID == nil || *opAccountID == "" {
+		return true
+	}
+	if shiftAccountID == nil || *shiftAccountID == "" {
+		return false
+	}
+	return *opAccountID == *shiftAccountID
+}
+
 // AddOperation вносит cash_in / cash_out в смену.
 func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in ShiftOperationInput) (*models.CashShiftOperation, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
@@ -397,6 +419,18 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 		if c := strings.TrimSpace(in.Category); c != "" {
 			category = &c
 		}
+		// Целевой счёт операции: явный account_id (безналичный расход с банк-счёта)
+		// либо счёт смены (наличный ящик). Храним на операции только если он
+		// отличается от счёта смены — тогда Close/ZReport понимают, что наличный
+		// ящик эта операция не трогает.
+		var opAccountID *string
+		if a := strings.TrimSpace(in.AccountID); a != "" {
+			opAccountID = &a
+		}
+		targetAccountID := shift.AccountID
+		if opAccountID != nil {
+			targetAccountID = opAccountID
+		}
 		newOp := &models.CashShiftOperation{
 			ID:          uuid.NewString(),
 			ShiftID:     &sid,
@@ -404,6 +438,7 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 			Amount:      amt,
 			Description: &desc,
 			Category:    category,
+			AccountID:   opAccountID,
 			CreatedBy:   &creator,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -420,9 +455,9 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 		// лишь в самой смене (Сводка/X-Z) и пропадал из P&L и cashflow.
 		if typ == "cash_out" && category != nil {
 			var accountName *string
-			if shift.AccountID != nil && *shift.AccountID != "" {
+			if targetAccountID != nil && *targetAccountID != "" {
 				var acc models.FinancialAccount
-				if err := tx.Where("id = ?", *shift.AccountID).First(&acc).Error; err == nil {
+				if err := tx.Where("id = ?", *targetAccountID).First(&acc).Error; err == nil {
 					accountName = acc.Name
 				}
 			}
@@ -436,7 +471,7 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 				Type:         &opType,
 				Amount:       amt,
 				Category:     category,
-				AccountID:    shift.AccountID,
+				AccountID:    targetAccountID,
 				AccountName:  accountName,
 				Activity:     &activity,
 				Date:         &date,
@@ -451,18 +486,18 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 			if err := tx.Create(fo).Error; err != nil {
 				return err
 			}
-			// Н13: дебетуем счёт смены на сумму расхода. Раньше баланс НЕ трогали
-			// — но выручка счёт кредитует полностью при закрытии заказа, а
-			// кассовые расходы его не уменьшали → «Денежные средства» в Балансе
-			// систематически завышались на сумму всех расходов из кассы за всю
-			// историю. Деньги ушли — счёт обязан это отразить.
+			// Н13: дебетуем ЦЕЛЕВОЙ счёт на сумму расхода (наличный ящик смены или
+			// банк-счёт при безналичном расходе). Раньше баланс НЕ трогали — но
+			// выручка счёт кредитует полностью при закрытии заказа, а кассовые
+			// расходы его не уменьшали → «Денежные средства» в Балансе
+			// систематически завышались на сумму всех расходов за всю историю.
 			// Гард «недостаточно средств» НЕ применяем: opening_balance смены на
 			// счёт не постится, поэтому свежая смена может списать из физического
 			// флоата больше, чем на балансе счёта — относительное движение всё
 			// равно верное, а ложный отказ заблокировал бы реальную закупку.
-			if shift.AccountID != nil && *shift.AccountID != "" {
+			if targetAccountID != nil && *targetAccountID != "" {
 				if err := tx.Model(&models.FinancialAccount{}).
-					Where("restaurant_id = ? AND id = ?", rid, *shift.AccountID).
+					Where("restaurant_id = ? AND id = ?", rid, *targetAccountID).
 					Updates(map[string]any{
 						"balance":    gorm.Expr("balance - ?", amt),
 						"updated_at": now,

@@ -60,6 +60,13 @@ export default function PosV2Shift() {
   const busyRef = useRef(false)
 
   const cashAccounts = useMemo(() => accounts.filter(a => a.type === 'cash'), [accounts])
+  // Безналичные счета (банк/карта) — для безналичного расхода из смены.
+  const nonCashAccounts = useMemo(() => accounts.filter(a => a.type !== 'cash'), [accounts])
+  // Расход: нал (счёт смены) или безнал (выбранный банк-счёт). Безнал дебетует
+  // свой счёт, наличный ящик не трогает.
+  const [expenseCash, setExpenseCash] = useState(true)
+  const [expenseBankId, setExpenseBankId] = useState('')
+  useEffect(() => { if (!expenseBankId && nonCashAccounts.length) setExpenseBankId(nonCashAccounts[0].id) }, [nonCashAccounts, expenseBankId])
   // Счёт смены при открытии — обязателен (иначе расход/выплата обслуживания падают).
   const [openAccountId, setOpenAccountId] = useState('')
   // Гард закрытия: бэк называет блокирующие заказы в details.order_ids.
@@ -104,13 +111,19 @@ export default function PosV2Shift() {
     fetchFinancialAccounts().then(setAccounts).catch(() => {})
   }, [load])
 
-  const cashIn = useMemo(() => dSum(ops.filter(o => o.type === 'cash_in').map(o => Number(o.amount))), [ops])
-  const withdraw = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !o.category).map(o => Number(o.amount))), [ops])
+  // Наличный ящик трогают только операции без своего счёта или на счёте смены.
+  // Безналичный расход (accountId = банк-счёт) в кассовую математику не идёт.
+  const touchesDrawer = useCallback((o: CashShiftOperation) => !o.accountId || o.accountId === shift?.accountId, [shift?.accountId])
+  const cashIn = useMemo(() => dSum(ops.filter(o => o.type === 'cash_in' && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
+  const withdraw = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !o.category && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
+  // «Расходы» карточка — все расходы бизнеса (нал + безнал). Для наличного
+  // ящика ниже берём только наличные (cashExpenses).
   const expenses = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !!o.category).map(o => Number(o.amount))), [ops])
+  const cashExpenses = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !!o.category && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
   const openingBalance = shift?.openingBalance ?? 0
   const expected = useMemo(
-    () => dSub(dSub(dAdd(dAdd(openingBalance, rev.cashRevenue), cashIn), withdraw), expenses),
-    [openingBalance, rev.cashRevenue, cashIn, withdraw, expenses],
+    () => dSub(dSub(dAdd(dAdd(openingBalance, rev.cashRevenue), cashIn), withdraw), cashExpenses),
+    [openingBalance, rev.cashRevenue, cashIn, withdraw, cashExpenses],
   )
 
   const duration = useMemo(() => {
@@ -203,7 +216,7 @@ export default function PosV2Shift() {
     try {
       if (action === 'cash_in') await addShiftOperation(shift.id, 'cash_in', num(amt), desc)
       else if (action === 'cash_out') await addShiftOperation(shift.id, 'cash_out', num(amt), desc)
-      else if (action === 'expense') await createShiftExpense(shift.id, num(amt), cat, desc)
+      else if (action === 'expense') await createShiftExpense(shift.id, num(amt), cat, desc, expenseCash ? undefined : expenseBankId)
       else if (action === 'close') { await closeShift(shift.id, user?.id ?? '', amt ? num(amt) : expected); toast.success('Смена закрыта'); setAction(null); await load(); return }
       toast.success(action === 'cash_in' ? 'Внесение проведено' : action === 'cash_out' ? 'Изъятие проведено' : 'Расход проведён')
       setAction(null); setAmt(''); setDesc(''); await load()
@@ -239,7 +252,7 @@ export default function PosV2Shift() {
   }
 
   function openAction(a: Action) {
-    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0]); setStuckOrders(null)
+    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0]); setStuckOrders(null); setExpenseCash(true)
     setAmt(a === 'close' ? String(expected) : '')
   }
 
@@ -486,7 +499,7 @@ export default function PosV2Shift() {
                   {expenseOps.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Расходов пока нет</span> : expenseOps.map(o => (
                     <div key={o.id} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.55rem 0.7rem' }}>
                       <div className="rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--pv-occ-soft)', width: '2rem', height: '2rem' }}><ReceiptText style={{ width: '1rem', height: '1rem', color: 'var(--pv-occ-text)' }} /></div>
-                      <div className="flex-1 min-w-0"><div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{o.category}</div>{o.description && <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{o.description}</div>}</div>
+                      <div className="flex-1 min-w-0"><div className="font-semibold flex items-center gap-1.5" style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}><span className="truncate">{o.category}</span>{!touchesDrawer(o) && <span className="rounded-md shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.05rem 0.35rem', fontSize: 'calc(var(--pv-ctl) - 0.28rem)', fontWeight: 700 }}>безнал</span>}</div>{o.description && <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{o.description}</div>}</div>
                       <span className="font-bold shrink-0" style={{ color: 'var(--pv-occ-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>−{formatCurrency(Number(o.amount))}</span>
                       <button onClick={() => deleteExpense(o.id)} disabled={busy} className="shrink-0 disabled:opacity-40" style={{ padding: '0.2rem' }} aria-label="Удалить расход"><Trash2 style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>
                     </div>
@@ -518,6 +531,25 @@ export default function PosV2Shift() {
                       return <button key={c} onClick={() => setCat(c)} className="rounded-full font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{c}</button>
                     })}
                   </div>
+                </div>
+              )}
+              {/* Способ расхода: наличные (счёт смены) или безналичные (банк-счёт).
+                  Безнал дебетует свой счёт, наличный ящик не трогает. Показываем
+                  только если вообще есть безналичный счёт. */}
+              {action === 'expense' && nonCashAccounts.length > 0 && (
+                <div>
+                  <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Откуда</div>
+                  <div className="flex gap-2">
+                    {([[true, 'Наличные'], [false, 'Безналичные']] as const).map(([isCash, lbl]) => {
+                      const on = expenseCash === isCash
+                      return <button key={lbl} onClick={() => setExpenseCash(isCash)} className="flex-1 rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.5rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{lbl}</button>
+                    })}
+                  </div>
+                  {!expenseCash && (
+                    <select value={expenseBankId} onChange={e => setExpenseBankId(e.target.value)} className="mt-2 w-full rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.55rem 0.8rem' }}>
+                      {nonCashAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  )}
                 </div>
               )}
               <div>

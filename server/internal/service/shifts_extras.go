@@ -106,6 +106,9 @@ type ShiftExpenseInput struct {
 	// Category — категория расхода. Для type=expense/cash_out сохраняется в
 	// cash_shift_operations.category (структурно, не в тексте описания).
 	Category *string `json:"category,omitempty"`
+	// AccountID — счёт расхода. Пусто → счёт смены (наличный). id банк-счёта →
+	// безналичный расход: дебетует его, наличный ящик не трогает.
+	AccountID *string `json:"account_id,omitempty"`
 }
 
 // AddExpense — POST /api/v1/shifts/{id}/expenses.
@@ -126,11 +129,16 @@ func (s *ShiftsService) AddExpense(ctx context.Context, shiftID string, in Shift
 	if in.Category != nil {
 		category = *in.Category
 	}
+	accountID := ""
+	if in.AccountID != nil {
+		accountID = *in.AccountID
+	}
 	return s.AddOperation(ctx, shiftID, ShiftOperationInput{
 		Type:        typ,
 		Amount:      in.Amount,
 		Description: desc,
 		Category:    category,
+		AccountID:   accountID,
 	})
 }
 
@@ -193,11 +201,17 @@ func reverseShiftAccountDebit(tx *gorm.DB, rid string, shift *models.CashShift, 
 	if op.Type == nil || *op.Type != "cash_out" || op.Category == nil || *op.Category == autoMirrorCategory {
 		return nil
 	}
-	if shift.AccountID == nil || *shift.AccountID == "" {
+	// Возвращаем на ТОТ счёт, который операция дебетовала: банк-счёт у
+	// безналичного расхода, иначе счёт смены (наличный ящик).
+	target := shift.AccountID
+	if op.AccountID != nil && *op.AccountID != "" {
+		target = op.AccountID
+	}
+	if target == nil || *target == "" {
 		return nil
 	}
 	return tx.Model(&models.FinancialAccount{}).
-		Where("restaurant_id = ? AND id = ?", rid, *shift.AccountID).
+		Where("restaurant_id = ? AND id = ?", rid, *target).
 		Updates(map[string]any{
 			"balance":    gorm.Expr("balance + ?", op.Amount),
 			"updated_at": time.Now().UTC(),
@@ -428,6 +442,12 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		t := ""
 		if op.Type != nil {
 			t = *op.Type
+		}
+		// Z-отчёт — наличный ящик. Безналичные операции (счёт ≠ счёту смены)
+		// в кассовые агрегаты не идут: expected_cash из них не считается.
+		// Сами операции остаются в out.Operations — на смене их видно.
+		if !opTouchesDrawer(op.AccountID, shift.AccountID) {
+			continue
 		}
 		switch t {
 		case "cash_in":

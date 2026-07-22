@@ -740,6 +740,7 @@ paths:
                 type: { type: string, enum: [cash_in, cash_out] }
                 amount: { type: string }
                 description: { type: string }
+                account_id: { type: string, format: uuid, description: "Счёт операции. Пусто → счёт смены (наличный ящик). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает." }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
 
   # ─── Orders ─────────────────────────────────────────────────────────────
@@ -2748,6 +2749,7 @@ paths:
                 amount: { type: string }
                 description: { type: string }
                 category: { type: string, description: "Категория расхода (только для expense/cash_out). Структурное поле для свода/экспорта/X-Z." }
+                account_id: { type: string, format: uuid, description: "Счёт расхода. Пусто → счёт смены (наличный). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает." }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
 
   /api/v1/shifts/{id}/expenses/{op_id}:
@@ -3723,6 +3725,7 @@ components:
         amount: { $ref: "#/components/schemas/Decimal" }
         description: { type: string }
         category: { type: string, nullable: true, description: "Категория расхода; NULL для внесения/изъятия" }
+        account_id: { type: string, format: uuid, nullable: true, description: "Счёт операции; NULL → счёт смены (наличный ящик). ≠ счёту смены → безналичная операция, наличный ящик не трогает." }
     ShiftsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/CashShift" } }, next_cursor: { type: string } } }
 
     # ─── Orders ──

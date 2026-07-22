@@ -752,6 +752,9 @@ export interface CashShiftOperation {
   /** Категория расхода. Заполнена только для расходов (cash_out с категорией);
    *  для внесения/изъятия пустая. См. cash_shift_operations.category. */
   category?: string
+  /** Счёт операции. Пусто → счёт смены (наличный ящик). ≠ счёту смены →
+   *  безналичная операция: наличный ящик (Ожидается в кассе) не трогает. */
+  accountId?: string
   createdBy?: string
   createdByName?: string
   createdAt: string
