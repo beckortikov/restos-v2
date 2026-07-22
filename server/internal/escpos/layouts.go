@@ -54,15 +54,20 @@ type ReceiptInput struct {
 	WaiterName     string
 	TableLabel     string
 	GuestsCount    int
-	Items          []ReceiptItem
-	Subtotal       decimal.Decimal
-	DiscountAmount decimal.Decimal
-	ServiceAmount  decimal.Decimal
-	TipAmount      decimal.Decimal
-	Total          decimal.Decimal
-	PaymentMethod  string
-	Cols           int
-	IsReprint      bool
+	// Контакты доставки (052) — печатаются на ГОСТЕВОМ чеке для type='delivery':
+	// чек уходит с едой, курьер берёт телефон и адрес отсюда. На кухонный
+	// бегунок они НЕ идут — повару адрес клиента не нужен. Пусто для зала/с собой.
+	DeliveryPhone   string
+	DeliveryAddress string
+	Items           []ReceiptItem
+	Subtotal        decimal.Decimal
+	DiscountAmount  decimal.Decimal
+	ServiceAmount   decimal.Decimal
+	TipAmount       decimal.Decimal
+	Total           decimal.Decimal
+	PaymentMethod   string
+	Cols            int
+	IsReprint       bool
 	// FastFood — ресторан работает без столов (restaurants.tables_enabled=false):
 	// гость забирает заказ по номеру. Включает крупный номер шапкой чека.
 	FastFood bool
@@ -183,6 +188,15 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	if in.GuestsCount > 0 {
 		writeMeta("Гостей", strconv.Itoa(in.GuestsCount))
 	}
+	// Контакты доставки — на гостевом чеке (курьер забирает еду вместе с чеком).
+	// Телефон строкой meta, адрес — отдельной строкой на всю ширину (переносит
+	// сам принтер). Раньше этот блок печатался на кухонном бегунке — убрали.
+	if in.DeliveryPhone != "" {
+		writeMeta("Тел", in.DeliveryPhone)
+	}
+	if in.DeliveryAddress != "" {
+		writeMeta("", "Адрес: "+in.DeliveryAddress)
+	}
 
 	// ── Items header ──────────────────────────────────────────────────────
 	b.TextLn(hrLight)
@@ -280,11 +294,6 @@ type RunnerInput struct {
 	// (время · ТИП) вместо станции: на одной кухне повару полезнее знать способ
 	// выдачи, чем цех. Пусто → печатается только время.
 	OrderType string
-	// Контакты доставки (052) — печатаются на бегунке заказа type='delivery',
-	// чтобы курьер забирал еду сразу с адресом, а не бегал за ним к кассе.
-	// Пусто для зала и «с собой».
-	DeliveryPhone   string
-	DeliveryAddress string
 	// Codepage — номер таблицы символов принтера (ESC t n). 0 → 17 (PC866).
 	// Вынесен в настройку, потому что единой нумерации нет: часть принтеров
 	// держит кириллицу на другом индексе и незнакомый номер игнорирует.
@@ -430,28 +439,13 @@ func RunnerLayout(in RunnerInput) []byte {
 		}
 	}
 
-	// Контакты доставки (052) — крупнее обычного текста: курьер читает адрес
-	// на ходу. Печатаем до разделителя, чтобы блок читался как часть шапки,
-	// а не как первая позиция заказа.
-	deliveryPrinted := false
-	if in.DeliveryPhone != "" || in.DeliveryAddress != "" {
-		b.TextLn("--------------------------------")
-		b.Bold(true)
-		if in.DeliveryPhone != "" {
-			b.TextLn("Тел: " + in.DeliveryPhone)
-		}
-		if in.DeliveryAddress != "" {
-			// Длинный адрес переносит сам принтер по ширине ленты — так же,
-			// как комментарий к заказу ниже.
-			b.TextLn(in.DeliveryAddress)
-		}
-		b.Bold(false)
-		deliveryPrinted = true
-	}
-	// Разделитель перед позициями. В зале — всегда. В фастфуде — только если
-	// выше печатался блок доставки: без него шапку уже отделило подчёркивание,
-	// и второй разделитель подряд — пустой шум (жалоба «много места сверху»).
-	if !in.FastFood || deliveryPrinted {
+	// Контакты доставки (телефон/адрес) на кухонный бегунок НЕ печатаем — повару
+	// данные клиента не нужны, они уходят на гостевой чек (курьер забирает еду
+	// с чеком). См. ReceiptInput.DeliveryPhone/DeliveryAddress.
+	//
+	// Разделитель перед позициями: в зале — всегда; в фастфуде не нужен — шапку
+	// уже отделило подчёркивание, второй разделитель подряд = пустой шум сверху.
+	if !in.FastFood {
 		b.TextLn("--------------------------------")
 	}
 

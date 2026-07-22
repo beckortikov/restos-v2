@@ -357,12 +357,8 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			// В зале layout это поле игнорирует.
 			OrderType: typeLbl,
 			CreatedAt: now,
-			// Контакты доставки (052) — только для type='delivery'. В фастфуде
-			// бегунок ставится на оплате, когда контакты уже заполнены; в
-			// table-service бегунок печатается раньше оплаты, и адреса ещё
-			// нет — тогда блок просто не печатается.
-			DeliveryPhone:   strOrEmpty(order.DeliveryPhone),
-			DeliveryAddress: strOrEmpty(order.DeliveryAddress),
+			// Контакты доставки на кухонный бегунок больше не идут — они уходят
+			// на гостевой чек (см. buildCloseReceipt). Повару адрес не нужен.
 		}
 		// Группируем одинаковые весовые порции в одну строку «100г × 3».
 		// Unit берём из order_item (бэкенд всегда проставляет его из меню).

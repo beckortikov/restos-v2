@@ -90,6 +90,28 @@ func TestGolden_ReceiptFastFood(t *testing.T) {
 	assertGolden(t, "receipt_fastfood.hex", ReceiptLayout(in))
 }
 
+// Доставка: контакты клиента (телефон/адрес) печатаются на ГОСТЕВОМ чеке —
+// курьер забирает еду вместе с чеком. На кухонный бегунок они не идут.
+func TestGolden_ReceiptDelivery(t *testing.T) {
+	in := ReceiptInput{
+		RestaurantName:  "Пицца Экспресс",
+		OrderNumber:     77,
+		OpenedAt:        fixedTime,
+		ClosedAt:        fixedTime.Add(6 * time.Minute),
+		CashierName:     "Диана",
+		TableLabel:      "Доставка",
+		DeliveryPhone:   "+992 900 11 22 33",
+		DeliveryAddress: "ул. Айни, 24, кв. 12, 3 этаж",
+		Items: []ReceiptItem{
+			{Name: "Пицца Пепперони", Qty: decimal.MustFromString("1"), Price: decimal.MustFromString("60"), LineTotal: decimal.MustFromString("60")},
+		},
+		Subtotal:      decimal.MustFromString("60"),
+		Total:         decimal.MustFromString("60"),
+		PaymentMethod: "card",
+	}
+	assertGolden(t, "receipt_delivery.hex", ReceiptLayout(in))
+}
+
 // Фастфуд-ранер: номер заказа вместо станции шапкой (6×) — повар собирает
 // заказ по нему; станция уходит подписью, «Зак: N» в строке не дублируется.
 func TestGolden_RunnerFastFood(t *testing.T) {

@@ -1151,6 +1151,10 @@ func (s *OrdersService) enqueueReceipt(tx *gorm.DB, restaurantID string, order *
 		WaiterName:     meta.WaiterName,
 		CashierName:    meta.CashierName,
 		GuestsCount:    meta.GuestsCount,
+		// Контакты доставки — на гостевой чек (курьер забирает еду с чеком).
+		// Пусто для зала/с собой. С бегунка кухни они убраны.
+		DeliveryPhone:   strOrEmpty(order.DeliveryPhone),
+		DeliveryAddress: strOrEmpty(order.DeliveryAddress),
 	}
 	if hasReceiptP {
 		in.Cols = receiptP.Cols
