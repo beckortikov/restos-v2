@@ -302,8 +302,17 @@ function startSidecar() {
     goReady = false
     if (!app.isQuitting) {
       Sentry.captureMessage(`Go sidecar exited unexpectedly: code=${code} signal=${signal}`)
-      // Restart after a short delay.
-      setTimeout(() => { if (!app.isQuitting) startSidecar() }, 2000)
+      // Перед рестартом освобождаем порт PG. Если бэк упал ПОСЛЕ старта
+      // embedded-postgres (напр., на миграции), PG мог осиротеть и держать 54330
+      // — тогда каждый следующий старт падает с «process already listening on
+      // port 54330», и касса не поднимается никогда (инцидент 22.07.2026).
+      // ensurePortFree добьёт зомби-PG перед новым стартом. Стартовый cleanup в
+      // app.on('ready') такой рестарт-путь не покрывал.
+      setTimeout(async () => {
+        if (app.isQuitting) return
+        await ensurePortFree(54330)
+        if (!app.isQuitting) startSidecar()
+      }, 2000)
     }
   })
   goProc.on('error', (err) => {

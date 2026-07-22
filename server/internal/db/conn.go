@@ -86,7 +86,22 @@ func migrateUp(ctx context.Context, sqlDB *sql.DB) error {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
 	goose.SetLogger(gooseZerolog{})
-	if err := goose.UpContext(ctx, sqlDB, "migrations"); err != nil {
+	// WithAllowMissing — применять «пропущенные» (out-of-order) миграции вместо
+	// фатального отказа.
+	//
+	// Зачем (инцидент 22.07.2026, касса встала после апдейта):
+	// миграция 057_shift_op_account добавлена в коде ПОЗЖЕ (v3.16.132), чем
+	// 059_salary_worked_days (v3.16.130). На кассах, успевших применить 059 (у
+	// них goose_db_version=59), новый бинарь с файлом 057 в strict-режиме goose
+	// падал: «found 1 missing migrations before current version 59: version 57».
+	// Падение на старте → log.Fatal → бесконечный рестарт-луп, касса down.
+	//
+	// AllowMissing заставляет goose ДОприменить 057 (её DDL идемпотентен —
+	// ADD COLUMN IF NOT EXISTS), а не отвергать всю миграцию. Порядок номеров у
+	// этих миграций независим (057 не зависит от 058/059), поэтому применение
+	// вне очереди безопасно. Дальше держим номера строго по возрастанию, но
+	// защита остаётся на случай повторения.
+	if err := goose.UpContext(ctx, sqlDB, "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("goose up: %w", err)
 	}
 	log.Info().Msg("migrations applied")

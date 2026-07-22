@@ -112,13 +112,34 @@ func main() {
 		log.Info().Str("dsn", maskDSN(cfg.ExternalPGDSN)).Msg("using external Postgres")
 	}
 
+	// fatalStopPG — фатальный выход, но СНАЧАЛА останавливаем embedded-postgres.
+	//
+	// log.Fatal вызывает os.Exit, который НЕ выполняет defer'ы — включая
+	// defer sup.Stop() выше. Значит, если мы упадём ПОСЛЕ успешного старта PG
+	// (например, на миграции), запущенный embedded-postgres останется висеть на
+	// порту 54330. Тогда КАЖДЫЙ следующий рестарт sidecar'а от Electron будет
+	// падать с «process already listening on port 54330» — касса не поднимется
+	// уже никогда (инцидент 22.07.2026: goose-ошибка на миграции осиротила PG,
+	// касса ушла в вечный рестарт-луп). Явный Stop освобождает порт, и
+	// перезапущенный sidecar стартует с чистого листа.
+	//
+	// sup == nil при external-PG (там ничего не поднимали) — тогда просто Fatal.
+	fatalStopPG := func(err error, msg string) {
+		if sup != nil {
+			if stopErr := sup.Stop(); stopErr != nil {
+				log.Error().Err(stopErr).Msg("embedded-postgres stop before fatal exit failed")
+			}
+		}
+		log.Fatal().Err(err).Msg(msg)
+	}
+
 	// 2. GORM + миграции.
 	gdb, err := db.Open(cfg.ActiveDSN())
 	if err != nil {
-		log.Fatal().Err(err).Msg("db.Open")
+		fatalStopPG(err, "db.Open")
 	}
 	if err := db.MigrateUp(ctx, gdb); err != nil {
-		log.Fatal().Err(err).Msg("migrations failed")
+		fatalStopPG(err, "migrations failed")
 	}
 
 	// Audit worker — async writer для audit_log. Должен стартовать ДО первой
@@ -130,7 +151,7 @@ func main() {
 	if cfg.LicensePublicKey != "" {
 		key, err := license.DecodePublicKey(cfg.LicensePublicKey)
 		if err != nil {
-			log.Fatal().Err(err).Msg("bad --license-public-key")
+			fatalStopPG(err, "bad --license-public-key")
 		}
 		licPub = key
 		log.Info().Msg("license verification enabled")
