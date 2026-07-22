@@ -287,7 +287,7 @@ export function ComboPricesEditor({ attrs, prices, onChange, showPurchase }: {
  * продукта (грузит и сохраняет на бэк). Варианты — реальные menu_items с
  * parent_id; генерирует их бэк на PUT /menu/items/{id}/attributes.
  */
-export function AttributesEditor({ productId, isPurchased, onHasAttributesChange, onDirtyChange, onVariantsChange }: {
+export function AttributesEditor({ productId, isPurchased, onHasAttributesChange, onDirtyChange, onVariantsChange, onEnsurePurchased }: {
   productId: string
   isPurchased?: boolean
   /** Родительская форма скрывает поля цены/закупки, когда атрибуты есть. */
@@ -298,6 +298,12 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
   /** Живые варианты + атрибуты после загрузки/сохранения — для родителя,
    *  которому нужен актуальный список SKU (например «Техкарты по вариантам»). */
   onVariantsChange?: (attributes: MenuAttribute[], variants: MenuItem[]) => void
+  /** Досохранить конвертацию в «Покупной» ПЕРЕД синком вариантов. Нужен на
+   *  странице правки: закупка по вариациям применяется, только когда товар уже
+   *  покупной на бэке. Без этого при конвертации в один заход
+   *  («Сохранить варианты» до «Сохранить изменения») введённые закупки молча
+   *  терялись. No-op, если товар уже покупной. */
+  onEnsurePurchased?: () => Promise<void>
 }) {
   const [attrs, setAttrs] = useState<AttrForm[]>([])
   const [prices, setPrices] = useState<ComboPrices>({})
@@ -357,6 +363,11 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
     if (saving) return
     setSaving(true)
     try {
+      // Сначала — конвертация в покупной (если форма её подразумевает, а бэк
+      // ещё нет): иначе syncVariants проигнорирует закупку по вариациям.
+      if (isPurchased) {
+        await onEnsurePurchased?.()
+      }
       const state = await syncMenuAttributes(
         productId,
         attrs.map(a => ({

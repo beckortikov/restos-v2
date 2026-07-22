@@ -802,6 +802,16 @@ export default function EditMenuItemPage() {
               onHasAttributesChange={setHasAttributes}
               onDirtyChange={setAttrsDirty}
               onVariantsChange={(attrs, variants) => { setVariantAttributes(attrs); setProductVariants(variants) }}
+              onEnsurePurchased={async () => {
+                // Конвертация в покупной ещё не сохранена на бэке (тумблер
+                // переключён, но «Сохранить изменения» не нажимали) → делаем
+                // это ПЕРЕД синком вариантов, иначе бэк отбросит закупку по
+                // вариациям. Реюзаем handleSubmit-payload (form целиком).
+                if (form.isPurchased && menuItem && !menuItem.isPurchased) {
+                  await updateMenuItem(menuItem.id, form)
+                  setMenuItem({ ...menuItem, isPurchased: true })
+                }
+              }}
             />
           )}
 
