@@ -21,6 +21,7 @@ import {
   type Supplier,
   type User,
   type MenuItem,
+  type RecurringPayment,
 } from '@/lib/types'
 import {
   fetchOrders,
@@ -32,6 +33,7 @@ import {
   fetchSuppliers,
   fetchUsers,
   fetchMenuItems,
+  fetchRecurringPayments,
 } from '@/lib/queries'
 import {
   TrendingUp,
@@ -52,6 +54,7 @@ import {
   BarChart3,
   Banknote,
   Truck,
+  CalendarClock,
 } from 'lucide-react'
 
 const RevenueChart = lazy(() => import('@/components/charts/revenue-chart'))
@@ -196,6 +199,7 @@ export default function DashboardPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
+  const [recurringPayments, setRecurringPayments] = useState<RecurringPayment[]>([])
   const [loading, setLoading] = useState(true)
   // Выбранный период (по умолчанию — сегодня: from === to). Все показатели
   // считаются за него фильтром по дате из уже загруженных заказов/операций.
@@ -207,10 +211,12 @@ export default function DashboardPage() {
       fetchOrders(), fetchFinancialAccounts(), fetchIngredients(),
       fetchFinancialOperations(), fetchTables(), fetchZones(),
       fetchSuppliers(), fetchUsers(), fetchMenuItems(),
-    ]).then(([o, fa, ing, fo, t, z, s, u, mi]) => {
+      fetchRecurringPayments().catch(() => [] as RecurringPayment[]),
+    ]).then(([o, fa, ing, fo, t, z, s, u, mi, rp]) => {
       setOrders(o); setAccounts(fa); setIngredients(ing)
       setOperations(fo); setTables(t); setZones(z)
       setSuppliers(s); setUsers(u); setMenuItems(mi)
+      setRecurringPayments(rp)
     }).finally(() => setLoading(false))
   }, [])
 
@@ -267,6 +273,19 @@ export default function DashboardPage() {
   }), [orders])
   const overdueSuppliers = useMemo(() => suppliers.filter(s => s.currentDebt > 0), [suppliers])
   const billRequested = useMemo(() => tables.filter(t => t.status === 'bill_requested'), [tables])
+  // Регулярные платежи «к оплате»: активные, срок ≤ 7 дней (включая просроченные).
+  const duePayments = useMemo(() => {
+    const now = new Date()
+    const todayMs = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+    return recurringPayments.filter(p => {
+      if (!p.active || !p.nextDue) return false
+      const [y, m, d] = p.nextDue.split('-').map(Number)
+      if (!y || !m || !d) return false
+      const days = Math.round((Date.UTC(y, m - 1, d) - todayMs) / 86400000)
+      return days <= 7
+    })
+  }, [recurringPayments])
+  const duePaymentsTotal = useMemo(() => duePayments.reduce((s, p) => s + p.amount, 0), [duePayments])
 
   // Active orders
   const activeOrders = useMemo(() => orders.filter(o => o.status !== 'done'), [orders])
@@ -451,7 +470,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ═══ Требует внимания — компактный баннер на всю ширину ═══ */}
-      {(lowStock.length > 0 || longCooking.length > 0 || overdueSuppliers.length > 0 || billRequested.length > 0) && (
+      {(lowStock.length > 0 || longCooking.length > 0 || overdueSuppliers.length > 0 || billRequested.length > 0 || duePayments.length > 0) && (
         <div className="bg-card rounded-xl border border-amber-200/70 dark:border-amber-900/40 p-3.5 md:p-4">
           <h2 className="text-sm font-semibold text-foreground mb-2.5 flex items-center gap-2">
             <AlertTriangle className="size-4 text-amber-500" />
@@ -488,6 +507,14 @@ export default function DashboardPage() {
                 text={`${billRequested.length} стол${billRequested.length > 1 ? 'ов' : ''} ждут оплату`}
                 severity="info"
                 href="/operations/table-map"
+              />
+            )}
+            {duePayments.length > 0 && (
+              <AlertItem
+                icon={CalendarClock}
+                text={`К оплате: ${duePayments.length} платеж(ей) на ${formatCurrency(duePaymentsTotal)}`}
+                severity="warn"
+                href="/finance/payments"
               />
             )}
           </div>
