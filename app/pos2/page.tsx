@@ -7,6 +7,7 @@ import {
   Settings, LogOut, OctagonX, PackageCheck, CookingPot, Lock,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
+import { isPosV2EnabledFor } from '@/lib/pos-v2/flag'
 import { fetchActiveShift } from '@/lib/queries'
 import { FailedPrintsButton } from '@/components/order/failed-prints-button'
 
@@ -41,7 +42,12 @@ const TILES: Array<{
 
 export default function PosV2Launcher() {
   const navigate = useNavigate()
-  const { user, restaurant, hasAccess } = useAuth()
+  const { user, restaurant, hasAccess, logout } = useAuth()
+  // pos2 — «дом» этой кассы (флаг устройства pos_ui_v2 или дефолт ресторана
+  // posV2Default). Тогда старого POS для неё нет: «Выход» = завершить сеанс →
+  // экран PIN. Иначе pos2 открыт как бета-превью из старого POS — «Выход»
+  // возвращает туда. Условие зеркалит homeRoute (та же isPosV2EnabledFor).
+  const posV2Home = isPosV2EnabledFor(!!restaurant?.posV2Default)
   // Владелец/менеджер видят всё; кассир/официант — только разделы по своим
   // правам (hasAccess мапит /pos2-плитку на старый маршрут). owner/manager → всё.
   const tiles = TILES.filter(t => hasAccess(t.req))
@@ -139,7 +145,7 @@ export default function PosV2Launcher() {
             </button>
           )}
           <button
-            onClick={() => navigate('/operations/pos')}
+            onClick={() => { if (posV2Home) logout(); else navigate('/operations/pos') }}
             className="flex items-center gap-2 rounded-xl transition-transform active:scale-95 shrink-0"
             style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: 'clamp(0.55rem,0.8vw,0.8rem) clamp(0.75rem,1.1vw,1.1rem)' }}
           >
@@ -214,7 +220,9 @@ export default function PosV2Launcher() {
         className="hidden lg:block shrink-0"
         style={{ padding: '0.75rem var(--pv-pad-x)', color: 'var(--pv-text-3)', fontSize: '0.72rem' }}
       >
-        Бета-интерфейс. «Выход» возвращает в классическую кассу. Экраны открываются в текущем дизайне и по мере готовности заменяются новыми.
+        {posV2Home
+          ? '«Выход» завершает сеанс кассира — возврат к вводу PIN. Экраны открываются в текущем дизайне и по мере готовности заменяются новыми.'
+          : 'Бета-интерфейс. «Выход» возвращает в классическую кассу. Экраны открываются в текущем дизайне и по мере готовности заменяются новыми.'}
       </footer>
     </div>
   )
