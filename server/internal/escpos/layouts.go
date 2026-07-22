@@ -276,6 +276,10 @@ type RunnerInput struct {
 	Cols        int // игнорируется, runner всегда 32 cols
 	// FastFood — крупный номер заказа вместо станции шапкой (см. ReceiptInput).
 	FastFood bool
+	// OrderType — «Зал» / «С собой» / «Доставка». В фастфуде печатается в шапке
+	// (время · ТИП) вместо станции: на одной кухне повару полезнее знать способ
+	// выдачи, чем цех. Пусто → печатается только время.
+	OrderType string
 	// Контакты доставки (052) — печатаются на бегунке заказа type='delivery',
 	// чтобы курьер забирал еду сразу с адресом, а не бегал за ним к кассе.
 	// Пусто для зала и «с собой».
@@ -391,7 +395,13 @@ func RunnerLayout(in RunnerInput) []byte {
 		b.FontBig()
 		b.TextLn(strconv.Itoa(in.OrderNumber))
 		b.FontNormal()
-		b.TextLn(strings.ToUpper(in.Station) + " · " + timeStr)
+		// Подпись под номером: время и ТИП заказа (Зал/С собой/Доставка).
+		// Станцию не печатаем — на фастфуде кухня одна, а тип важнее для выдачи.
+		sub := timeStr
+		if in.OrderType != "" {
+			sub = timeStr + " · " + strings.ToUpper(in.OrderType)
+		}
+		b.TextLn(sub)
 		b.Bold(false)
 	} else {
 		// 2×2, а не 1×2: заголовку тоже не нужны вытянутые буквы. Имя цеха
@@ -406,25 +416,24 @@ func RunnerLayout(in RunnerInput) []byte {
 
 	// ── Order info — left align ──────────────────────────────────────────
 	b.AlignLeft()
-	// В фастфуде время и номер уже в шапке — оставляем только официанта.
-	dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
-	if in.FastFood {
-		dateLine = in.WaiterName
-	} else if in.WaiterName != "" {
-		dateLine += " " + in.WaiterName
-	}
-	if dateLine != "" {
+	// В фастфуде шапка самодостаточна (номер + время + тип). Официант, кассир и
+	// число гостей повару не нужны — печать этих полей убрана из кухонного чека.
+	// В зале — служебная строка: время, номер заказа, официант, стол+зона.
+	if !in.FastFood {
+		dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
+		if in.WaiterName != "" {
+			dateLine += " " + in.WaiterName
+		}
 		b.TextLn(dateLine)
-	}
-
-	// Стол + зона — bold
-	if in.TableLabel != "" {
-		b.Bold(true).TextLn(in.TableLabel).Bold(false)
+		if in.TableLabel != "" {
+			b.Bold(true).TextLn(in.TableLabel).Bold(false)
+		}
 	}
 
 	// Контакты доставки (052) — крупнее обычного текста: курьер читает адрес
 	// на ходу. Печатаем до разделителя, чтобы блок читался как часть шапки,
 	// а не как первая позиция заказа.
+	deliveryPrinted := false
 	if in.DeliveryPhone != "" || in.DeliveryAddress != "" {
 		b.TextLn("--------------------------------")
 		b.Bold(true)
@@ -437,8 +446,14 @@ func RunnerLayout(in RunnerInput) []byte {
 			b.TextLn(in.DeliveryAddress)
 		}
 		b.Bold(false)
+		deliveryPrinted = true
 	}
-	b.TextLn("--------------------------------")
+	// Разделитель перед позициями. В зале — всегда. В фастфуде — только если
+	// выше печатался блок доставки: без него шапку уже отделило подчёркивание,
+	// и второй разделитель подряд — пустой шум (жалоба «много места сверху»).
+	if !in.FastFood || deliveryPrinted {
+		b.TextLn("--------------------------------")
+	}
 
 	// ── Items ────────────────────────────────────────────────────────────
 	// Зал (несколько цехов): имя слева, количество справа, размер 1×1 —
@@ -446,17 +461,22 @@ func RunnerLayout(in RunnerInput) []byte {
 	// 16 колонок не влезает почти ни одно реальное название, пришлось бы
 	// переносить.
 	//
-	// Фастфуд: количество ВПЕРЕДИ отдельным ведущим токеном, название крупнее
-	// (double-height) — повар читает его издалека. На название остаётся вся
-	// ширина ленты. Double-width (2×2) не берём: «Курутоб 1 порция»/«Пицца
-	// Цезарь XL» в 16 колонок не влезают и переносились бы на две строки.
+	// Фастфуд: имя блюда КРУПНО (2×2 — двойная ширина И высота) и жирным, как
+	// кухонный чек iiko: повар читает его через зал. Количество — ведущим
+	// токеном («2×»). Раньше был FontTall (1×2) — узкие вытянутые буквы, повар
+	// жаловался на нечитабельность. Длинное имя (16 колонок в 2×) переносит сам
+	// принтер — это осознанно: крупно и читаемо важнее, чем «в одну строку».
+	// Между блюдами — пустая строка, чтобы список сканировался быстрее.
 	if !in.FastFood {
 		b.FontNormal().Bold(true)
 	}
-	for _, it := range in.Items {
+	for i, it := range in.Items {
 		if in.FastFood {
-			b.FontTall().Bold(true)
-			b.TextLn(fmtRunnerQtyLead(it) + "  " + it.Name)
+			if i > 0 {
+				b.LF()
+			}
+			b.FontDouble().Bold(true)
+			b.TextLn(fmtRunnerQtyLead(it) + " " + strings.ToUpper(it.Name))
 			b.FontNormal().Bold(false)
 		} else {
 			b.TextLn(runnerItemLine(it.Name, fmtRunnerQty(it), ColsRunner))

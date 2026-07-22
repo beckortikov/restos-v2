@@ -96,12 +96,15 @@ func TestGolden_RunnerFastFood(t *testing.T) {
 	in := RunnerInput{
 		Station:     "Кухня",
 		OrderNumber: 42,
-		WaiterName:  "Нафиса",
+		OrderType:   "С собой",
+		WaiterName:  "Нафиса",  // на фастфуд-бегунке НЕ печатается (убрано)
+		TableLabel:  "3 гост.", // число гостей на кухне НЕ печатается (убрано)
 		CreatedAt:   fixedTime,
 		FastFood:    true,
 		Items: []RunnerItem{
-			{Name: "Бургер Классик", Qty: 2},
+			{Name: "Бургер Классик", Qty: 2, Modifiers: []string{"без лука"}},
 			{Name: "Картофель фри", Qty: 1},
+			{Name: "Кола 0.5", Qty: 1, Comment: "со льдом"},
 		},
 	}
 	assertGolden(t, "runner_fastfood.hex", RunnerLayout(in))

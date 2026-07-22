@@ -353,7 +353,10 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 			OrderNumber: order.OrderNumber,
 			TableLabel:  runnerTableLabel,
 			WaiterName:  meta.WaiterName,
-			CreatedAt:   now,
+			// Тип заказа в шапку фастфуд-бегунка (Зал/С собой/Доставка).
+			// В зале layout это поле игнорирует.
+			OrderType: typeLbl,
+			CreatedAt: now,
 			// Контакты доставки (052) — только для type='delivery'. В фастфуде
 			// бегунок ставится на оплате, когда контакты уже заполнены; в
 			// table-service бегунок печатается раньше оплаты, и адреса ещё
