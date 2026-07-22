@@ -2418,6 +2418,47 @@ paths:
         - { in: query, name: year, schema: { type: integer } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MonthlyRevenueList" } } } } }
 
+  /api/v1/finance/recurring-payments:
+    get:
+      tags: [finance]
+      summary: Список регулярных платежей (модуль «Платежи»)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentsList" } } } } }
+    post:
+      tags: [finance]
+      summary: Создать регулярный платёж (шаблон)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPayment" } } } } }
+  /api/v1/finance/recurring-payments/{id}:
+    patch:
+      tags: [finance]
+      summary: Изменить регулярный платёж
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPayment" } } } } }
+    delete:
+      tags: [finance]
+      summary: Удалить регулярный платёж
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "204": { description: No Content } }
+  /api/v1/finance/recurring-payments/{id}/pay:
+    post:
+      tags: [finance]
+      summary: Провести платёж по шаблону
+      description: |
+        Списывает сумму со счёта и создаёт financial_operation out. Сумма/счёт по
+        умолчанию из шаблона, но переопределяются в теле (коммуналка меняется
+        помесячно). next_due двигается на следующий месяц, ставится last_paid_at.
+        Обычный операционный расход (в отличие от гашения долга поставщику).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: false, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentPayInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPayment" } } } }
+        "409":
+          description: На счёте недостаточно денег.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
   # ─── Analytics: серверные агрегаты ───────────────────────────────────────
   /api/v1/analytics/abc-menu:
     get:
@@ -4452,6 +4493,43 @@ components:
         counterparty: { type: string }
         shift_id: { type: string, format: uuid }
     FinancialOperationsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/FinancialOperation" } }, next_cursor: { type: string } } }
+
+    RecurringPayment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        activity: { type: string, enum: [operational, investment, financial] }
+        counterparty: { type: string }
+        day_of_month: { type: integer, minimum: 1, maximum: 31 }
+        next_due: { type: string, description: "YYYY-MM-DD — следующая дата платежа" }
+        last_paid_at: { type: string, format: date-time }
+        active: { type: boolean }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RecurringPaymentInput:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        activity: { type: string }
+        counterparty: { type: string }
+        day_of_month: { type: integer, minimum: 1, maximum: 31 }
+        active: { type: boolean }
+        note: { type: string }
+    RecurringPaymentPayInput:
+      type: object
+      description: "amount/account_id необязательны — по умолчанию из шаблона."
+      properties:
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+    RecurringPaymentsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/RecurringPayment" } }, next_cursor: { type: string } } }
 
     AccountTransferInput:
       type: object

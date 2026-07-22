@@ -8266,6 +8266,188 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/recurring-payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Список регулярных платежей (модуль «Платежи») */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPaymentsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Создать регулярный платёж (шаблон) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecurringPaymentInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPayment"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/recurring-payments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Удалить регулярный платёж */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Изменить регулярный платёж */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecurringPaymentInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPayment"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/v1/finance/recurring-payments/{id}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Провести платёж по шаблону
+         * @description Списывает сумму со счёта и создаёт financial_operation out. Сумма/счёт по
+         *     умолчанию из шаблона, но переопределяются в теле (коммуналка меняется
+         *     помесячно). next_due двигается на следующий месяц, ставится last_paid_at.
+         *     Обычный операционный расход (в отличие от гашения долга поставщику).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RecurringPaymentPayInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPayment"];
+                    };
+                };
+                /** @description На счёте недостаточно денег. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/abc-menu": {
         parameters: {
             query?: never;
@@ -12158,6 +12340,51 @@ export interface components {
         };
         FinancialOperationsList: {
             data?: components["schemas"]["FinancialOperation"][];
+            next_cursor?: string;
+        };
+        RecurringPayment: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            category?: string;
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+            /** @enum {string} */
+            activity?: "operational" | "investment" | "financial";
+            counterparty?: string;
+            day_of_month?: number;
+            /** @description YYYY-MM-DD — следующая дата платежа */
+            next_due?: string;
+            /** Format: date-time */
+            last_paid_at?: string;
+            active?: boolean;
+            note?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        RecurringPaymentInput: {
+            name?: string;
+            category?: string;
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+            activity?: string;
+            counterparty?: string;
+            day_of_month?: number;
+            active?: boolean;
+            note?: string;
+        };
+        /** @description amount/account_id необязательны — по умолчанию из шаблона. */
+        RecurringPaymentPayInput: {
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+        };
+        RecurringPaymentsList: {
+            data?: components["schemas"]["RecurringPayment"][];
             next_cursor?: string;
         };
         AccountTransferInput: {

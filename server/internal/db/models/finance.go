@@ -150,3 +150,27 @@ type BudgetLine struct {
 }
 
 func (BudgetLine) TableName() string { return "budget_lines" }
+
+// RecurringPayment — шаблон повторяющегося платежа (аренда, коммуналка, оклад).
+// Не авто-списание: напоминает и подставляет сумму/счёт, деньги уходят по
+// кнопке «Оплатить». next_due — следующая дата платежа (двигается на месяц
+// вперёд при каждой оплате).
+type RecurringPayment struct {
+	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name         *string         `json:"name"`
+	Category     *string         `json:"category"`
+	Amount       decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"amount"`
+	AccountID    *string         `gorm:"column:account_id" json:"account_id"`
+	Activity     *string         `gorm:"default:'operational'" json:"activity"`
+	Counterparty *string         `json:"counterparty"`
+	DayOfMonth   int             `gorm:"column:day_of_month;default:1" json:"day_of_month"`
+	NextDue      *string         `gorm:"column:next_due" json:"next_due"`
+	LastPaidAt   *time.Time      `gorm:"column:last_paid_at" json:"last_paid_at"`
+	Active       bool            `gorm:"default:true" json:"active"`
+	Note         *string         `json:"note"`
+	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+func (RecurringPayment) TableName() string { return "recurring_payments" }
