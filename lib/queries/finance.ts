@@ -7,6 +7,7 @@ import type {
   FinancialActivity,
 } from '../types'
 import { logAction } from './audit'
+import { randomId } from '../random-id'
 
 export async function fetchFinancialAccounts(): Promise<FinancialAccount[]> {
   const res: any = await unwrap(api.GET('/api/v1/finance/accounts'))
@@ -303,7 +304,7 @@ export async function fetchWorkedDays(userId: string, from: string, to: string):
 export async function setWorkedDays(userId: string, from: string, to: string, dates: string[]): Promise<WorkedDaysResult> {
   const r: any = await unwrap(api.PUT('/api/v1/finance/salary/worked-days', {
     body: { user_id: userId, from, to, dates },
-    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    headers: { 'Idempotency-Key': randomId() },
   }))
   return {
     shift_dates: r?.shift_dates ?? [],
@@ -854,7 +855,7 @@ export async function applyShiftBalanceFix(cutoff?: string): Promise<ShiftBalanc
   const query: any = cutoff ? { cutoff } : {}
   const r: any = await unwrap(api.POST('/api/v1/admin/maintenance/shift-balance-fix', {
     params: { query },
-    headers: { 'Idempotency-Key': crypto.randomUUID() },
+    headers: { 'Idempotency-Key': randomId() },
   } as any))
   return mapShiftBalanceFix(r)
 }

@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Search, FileDown, Loader2, Printer, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
+import { randomId } from '@/lib/random-id'
 
 import { useAuth } from '@/lib/auth-store'
 import { startOfDay, endOfDay, formatCurrency } from '@/lib/helpers'
@@ -206,7 +207,7 @@ export function HistoryOrdersTab() {
 
   const openRefundDialog = useCallback((o: Order) => {
     setRefundOrderObj(o)
-    refundKeyRef.current = crypto.randomUUID()
+    refundKeyRef.current = randomId()
     setRefundReason(REFUND_REASONS[0])
     setRefundAmount(String(orderRemainingRefund(o).toFixed(2)))
   }, [orderRemainingRefund])

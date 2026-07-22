@@ -5,6 +5,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { createStockReturn, fetchFinancialAccounts, fetchSuppliers } from '@/lib/queries'
+import { randomId } from '@/lib/random-id'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSub, dSum } from '@/lib/decimal'
 import {
@@ -57,7 +58,7 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
     setQtyByLine({})
     setNote('')
     setReason('spoilage')
-    setIdemKey(crypto.randomUUID())
+    setIdemKey(randomId())
     setLoading(true)
     Promise.all([fetchFinancialAccounts(), fetchSuppliers()])
       .then(([accs, suppliers]) => {

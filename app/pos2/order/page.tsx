@@ -804,7 +804,7 @@ export default function PosV2Order() {
       else { loadQueue(nextType, o.id) }
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
   }
-  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))); refundKeyRef.current = crypto.randomUUID() }
+  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))); refundKeyRef.current = randomId() }
   async function doRefund() {
     if (!refundTarget || refundBusy) return
     const rem = remainingRefund(refundTarget)
