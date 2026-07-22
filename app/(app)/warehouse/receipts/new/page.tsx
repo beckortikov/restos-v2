@@ -346,6 +346,15 @@ export default function NewReceiptPage() {
     lines.every((l) => l.name.trim().length > 0 && l.qty > 0 && l.pricePerUnit >= 0) &&
     ((paymentType !== 'paid' && paymentType !== 'partial') || !!accountId)
 
+  // Почему кнопка «Сохранить» недоступна — показываем прямо на ней (иначе
+  // серая кнопка молчит, и непонятно, чего не хватает).
+  const submitBlockReason =
+    !supplierId ? 'Выберите поставщика'
+    : lines.length === 0 ? 'Добавьте хотя бы одну позицию'
+    : !lines.every((l) => l.name.trim().length > 0 && l.qty > 0 && l.pricePerUnit >= 0) ? 'У позиций проверьте количество и цену'
+    : ((paymentType === 'paid' || paymentType === 'partial') && !accountId) ? 'Выберите счёт списания'
+    : ''
+
   async function handleSubmit() {
     if (!canSubmit || submitting) return
     setSubmitting(true)
@@ -397,15 +406,21 @@ export default function NewReceiptPage() {
           <h1 className="flex-1 text-base md:text-lg font-bold text-foreground truncate">
             Новая накладная
           </h1>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit || submitting}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <CheckCircle className="size-4" />
-            {submitting ? 'Сохранение...' : 'Сохранить'}
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit || submitting}
+              title={!canSubmit ? submitBlockReason : undefined}
+              className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              <CheckCircle className="size-4" />
+              {submitting ? 'Сохранение...' : 'Сохранить'}
+            </button>
+            {!canSubmit && submitBlockReason && (
+              <span className="text-xs text-muted-foreground">{submitBlockReason}</span>
+            )}
+          </div>
         </div>
       </div>
 

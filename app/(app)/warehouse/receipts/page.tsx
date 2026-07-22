@@ -75,7 +75,7 @@ export default function ReceiptsPage() {
         <table className="w-full text-sm min-w-[600px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              {['#', 'Дата', 'Поставщик', 'Оплата', 'Сумма', 'Оплачено', 'Долг', 'Срок'].map((h) => (
+              {['Дата', 'Поставщик', 'Оплата', 'Сумма', 'Оплачено', 'Долг', 'Срок'].map((h) => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
               ))}
             </tr>
@@ -99,7 +99,6 @@ export default function ReceiptsPage() {
                     onClick={() => setExpanded(expanded === r.id ? null : r.id)}
                     className="border-b border-border hover:bg-muted/30 cursor-pointer transition-colors"
                   >
-                    <td className="px-4 py-3 text-xs font-mono text-muted-foreground">{r.id}</td>
                     <td className="px-4 py-3 text-sm text-foreground">{r.date}</td>
                     <td className="px-4 py-3 font-medium text-foreground">{r.supplierName}</td>
                     <td className="px-4 py-3">
@@ -123,7 +122,7 @@ export default function ReceiptsPage() {
                   </tr>
                   {expanded === r.id && (
                     <tr key={`${r.id}-exp`} className="bg-muted/20">
-                      <td colSpan={8} className="px-6 py-4">
+                      <td colSpan={7} className="px-6 py-4">
                         <div className="flex items-center justify-between gap-3 mb-2 max-w-3xl">
                           <p className="text-xs font-semibold text-muted-foreground">Позиции накладной ({r.lines.length}):</p>
                           {canDo('inventory.manage') && (

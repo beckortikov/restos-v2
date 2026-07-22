@@ -204,9 +204,16 @@ export default function PnlPage() {
                 <span className="text-xs font-medium text-muted-foreground tabular-nums">
                   {formatCurrency(row.value)}
                 </span>
+              ) : row.value === 0 ? (
+                // Ноль — нейтрально, без «+»/«−» (иначе «+0,00 с.» смотрелось странно).
+                <span className={`text-sm font-semibold text-muted-foreground tabular-nums ${row.bold ? 'text-base' : ''}`}>
+                  {formatCurrency(0)}
+                </span>
               ) : (
-                <span className={`text-sm font-semibold ${row.value >= 0 ? 'text-emerald-600' : 'text-destructive'} ${row.bold ? 'text-base' : ''}`}>
-                  {row.value >= 0 ? '+' : ''}{formatCurrency(Math.abs(row.value))}
+                // Знак согласован с карточками сверху: плюс у доходов, минус у
+                // расходов/убытка (formatCurrency сам ставит «−» для отрицательных).
+                <span className={`text-sm font-semibold tabular-nums ${row.value > 0 ? 'text-emerald-600' : 'text-destructive'} ${row.bold ? 'text-base' : ''}`}>
+                  {row.value > 0 ? '+' : ''}{formatCurrency(row.value)}
                 </span>
               )}
             </div>

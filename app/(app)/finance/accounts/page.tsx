@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { DatePeriodFilter, filterByDateRange, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { formatCurrency } from '@/lib/helpers'
-import { type FinancialAccount, type FinancialOperation } from '@/lib/types'
+import { type FinancialAccount, type FinancialOperation, finopCategoryLabel } from '@/lib/types'
 import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
@@ -383,8 +383,8 @@ export default function AccountsPage() {
                 )}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-foreground truncate">{String(op.description || op.category || '')}</p>
-                <p className="text-xs text-muted-foreground">{String(op.category || '')} · {String(op.accountName || '')} · {String(op.date || '')}</p>
+                <p className="text-sm font-medium text-foreground truncate">{String(op.description || finopCategoryLabel(op.category) || '')}</p>
+                <p className="text-xs text-muted-foreground">{[finopCategoryLabel(op.category), op.accountName, op.date].filter(Boolean).join(' · ')}</p>
               </div>
               <span className={`text-sm font-bold shrink-0 ${op.type === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
                 {op.type === 'in' ? '+' : '−'}{formatCurrency(op.amount)}
