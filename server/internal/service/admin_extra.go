@@ -385,7 +385,7 @@ func (s *LiabilitiesService) Pay(ctx context.Context, id string, in LiabilityPay
 			return err
 		}
 		// #27: наличное гашение с кассового счёта открытой смены зеркалим в смену.
-		if err := recordShiftCashOutIfActive(tx, rid, "", in.AccountID, desc, pay, now); err != nil {
+		if err := recordShiftCashOutIfActive(tx, rid, "", in.AccountID, desc, opDate, pay, now); err != nil {
 			return err
 		}
 		out = &lia

@@ -521,8 +521,20 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 // обслуживание) наличными списывали баланс счёта, но не уменьшали expected_cash →
 // Z-отчёт показывал ложную недостачу. Вызывается ВНУТРИ транзакции операции.
 // No-op, если открытой смены на этом счёте нет (напр. безнал-счёт или смена закрыта).
-func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc string, amount decimal.Decimal, now time.Time) error {
+//
+// opDate — бизнес-дата самой финоперации (то, что пользователь выбрал в форме;
+// пусто = «не указана явно», всегда сегодня). Если операция ЗАДНИМ ЧИСЛОМ
+// (opDate ≠ сегодня) — зеркало НЕ создаём: это исторический учётный факт (забыли
+// внести расход за прошлую смену), а не движение в физическом ящике ТЕКУЩЕЙ
+// открытой смены. Мы не знаем, ушли ли деньги из кассы именно сегодня — если
+// зеркалить как обычно, ДДС-запись задним числом создаёт фантомную
+// недостачу/излишек в СЕГОДНЯШНЕМ Z-отчёте, а сама операция и так корректно
+// легла на свою дату в ДДС (foBizDay). Инцидент 23.07.2026.
+func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc, opDate string, amount decimal.Decimal, now time.Time) error {
 	if !decimal.IsPositive(amount) {
+		return nil
+	}
+	if opDate != "" && opDate != now.Format("2006-01-02") {
 		return nil
 	}
 	var shift models.CashShift
