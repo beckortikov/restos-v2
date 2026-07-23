@@ -195,8 +195,13 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 
 // reverseShiftAccountDebit возвращает деньги на счёт смены при удалении
 // cash_out-операции, которая ранее дебетовала счёт (Н13). No-op для операций
-// без категории (счёт не трогали) и для авто-зеркал (счёт дебетовался в другом
-// месте — зарплата/возврат/ручной расход, — их удаление вообще запрещено).
+// без категории (счёт не трогали) и для авто-зеркал (__auto_mirror__) — их
+// САМ CashShiftOperation удалить МОЖНО (DeleteExpense это не блокирует, см.
+// v3.16.163), а вот баланс счёта восстанавливать нельзя: счёт дебетовался
+// НЕ этим зеркалом, а исходной финоперацией в другом месте (зарплата/возврат/
+// ручной расход ДДС) — восстановление здесь задвоило бы деньги. Именно так
+// штатно чистят фантомные зеркала от бэкдейтнутых ДДС-операций, случайно
+// попавшие не в ту смену (см. recordShiftCashOutIfActive).
 func reverseShiftAccountDebit(tx *gorm.DB, rid string, shift *models.CashShift, op *models.CashShiftOperation) error {
 	if op.Type == nil || *op.Type != "cash_out" || op.Category == nil || *op.Category == autoMirrorCategory {
 		return nil
