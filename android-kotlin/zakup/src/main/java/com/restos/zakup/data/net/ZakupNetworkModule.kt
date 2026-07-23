@@ -2,6 +2,7 @@ package com.restos.zakup.data.net
 
 import com.restos.zakup.data.finance.FinanceApi
 import com.restos.zakup.data.receipts.ReceiptsApi
+import com.restos.zakup.data.stock.OperationsApi
 import com.restos.zakup.data.stock.StockApi
 import com.restos.zakup.data.suppliers.SuppliersApi
 import dagger.Module
@@ -37,4 +38,9 @@ object ZakupNetworkModule {
     @Singleton
     fun provideFinanceApi(retrofit: Retrofit): FinanceApi =
         retrofit.create(FinanceApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideOperationsApi(retrofit: Retrofit): OperationsApi =
+        retrofit.create(OperationsApi::class.java)
 }

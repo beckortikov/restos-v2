@@ -15,16 +15,16 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
-import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.Category
+import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LocalShipping
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.RemoveCircleOutline
-import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Warehouse
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -47,6 +47,7 @@ import com.restos.zakup.ui.theme.ZakupRadius
 fun MoreScreen(
     me: MeData?,
     onLogout: () -> Unit,
+    onOperation: (String) -> Unit = {},
 ) {
     Column(
         Modifier
@@ -58,10 +59,10 @@ fun MoreScreen(
         ProfileCard(me)
 
         Section("ОПЕРАЦИИ") {
-            MoreRow(Icons.Outlined.Inventory2, "Инвентаризации")
-            MoreRow(Icons.Outlined.RemoveCircleOutline, "Списания")
-            MoreRow(Icons.AutoMirrored.Outlined.KeyboardReturn, "Возвраты поставщикам")
-            MoreRow(Icons.Outlined.SwapVert, "Движения склада", last = true)
+            MoreRow(Icons.Outlined.Inventory2, "Инвентаризация") { onOperation(MoreOps.INVENTORY) }
+            MoreRow(Icons.Outlined.RemoveCircleOutline, "Списание") { onOperation(MoreOps.WRITEOFF) }
+            MoreRow(Icons.Outlined.CleaningServices, "Расход хозтоваров") { onOperation(MoreOps.SUPPLY_EXPENSE) }
+            MoreRow(Icons.Outlined.Inbox, "Начальный остаток", last = true) { onOperation(MoreOps.OPENING_BALANCE) }
         }
 
         Section("СПРАВОЧНИКИ") {
@@ -166,17 +167,25 @@ private fun Section(label: String, content: @Composable () -> Unit) {
     }
 }
 
+object MoreOps {
+    const val INVENTORY = "inventory"
+    const val WRITEOFF = "writeoff"
+    const val SUPPLY_EXPENSE = "supply-expense"
+    const val OPENING_BALANCE = "opening-balance"
+}
+
 @Composable
 private fun MoreRow(
     icon: ImageVector,
     title: String,
     trailing: String? = null,
     last: Boolean = false,
+    onClick: (() -> Unit)? = null,
 ) {
     Row(
         Modifier
             .fillMaxWidth()
-            .clickable { /* навигация — Ф3+ */ }
+            .clickable(enabled = onClick != null) { onClick?.invoke() }
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {

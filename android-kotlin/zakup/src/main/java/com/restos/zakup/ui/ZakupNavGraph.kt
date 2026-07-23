@@ -18,8 +18,14 @@ import com.restos.zakup.ui.auth.AuthGateViewModel
 import com.restos.zakup.ui.auth.AuthStatus
 import com.restos.zakup.ui.history.HistoryScreen
 import com.restos.zakup.ui.login.PinLoginScreen
+import com.restos.zakup.ui.more.MoreOps
 import com.restos.zakup.ui.newreceipt.NewReceiptScreen
 import com.restos.zakup.ui.onboarding.OnboardingScreen
+import com.restos.zakup.ui.ops.InventoryScreen
+import com.restos.zakup.ui.ops.OpeningBalanceScreen
+import com.restos.zakup.ui.ops.ReturnScreen
+import com.restos.zakup.ui.ops.SupplyExpenseScreen
+import com.restos.zakup.ui.ops.WriteoffScreen
 import com.restos.zakup.ui.shell.ZakupShell
 import com.restos.zakup.ui.supplier.SupplierDetailScreen
 import com.restos.zakup.ui.tobuy.ToBuyScreen
@@ -32,8 +38,10 @@ object Routes {
     const val HISTORY = "history"
     const val TO_BUY = "to-buy"
     const val NEW_RECEIPT = "receipt/new"
+    const val RETURN = "return/{receiptId}"
 
     fun supplier(id: String) = "supplier/$id"
+    fun receiptReturn(receiptId: String) = "return/$receiptId"
 }
 
 @Composable
@@ -91,7 +99,24 @@ fun ZakupNavGraph(
                 onOpenHistory = { navController.navigate(Routes.HISTORY) },
                 onOpenToBuy = { navController.navigate(Routes.TO_BUY) },
                 onNewReceipt = { navController.navigate(Routes.NEW_RECEIPT) },
+                onOperation = { op -> navController.navigate("op/$op") },
             )
+        }
+        composable(
+            route = "op/{op}",
+            arguments = listOf(navArgument("op") { type = NavType.StringType }),
+        ) { entry ->
+            val back = { navController.popBackStack(); Unit }
+            val done = {
+                navController.popBackStack()
+                Unit
+            }
+            when (entry.arguments?.getString("op")) {
+                MoreOps.WRITEOFF -> WriteoffScreen(onBack = back, onDone = done)
+                MoreOps.INVENTORY -> InventoryScreen(onBack = back, onDone = done)
+                MoreOps.SUPPLY_EXPENSE -> SupplyExpenseScreen(onBack = back, onDone = done)
+                MoreOps.OPENING_BALANCE -> OpeningBalanceScreen(onBack = back, onDone = done)
+            }
         }
         composable(Routes.NEW_RECEIPT) {
             NewReceiptScreen(
@@ -110,7 +135,19 @@ fun ZakupNavGraph(
             SupplierDetailScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.HISTORY) {
-            HistoryScreen(onBack = { navController.popBackStack() })
+            HistoryScreen(
+                onBack = { navController.popBackStack() },
+                onOpenReturn = { id -> navController.navigate(Routes.receiptReturn(id)) },
+            )
+        }
+        composable(
+            route = Routes.RETURN,
+            arguments = listOf(navArgument("receiptId") { type = NavType.StringType }),
+        ) {
+            ReturnScreen(
+                onBack = { navController.popBackStack() },
+                onDone = { navController.popBackStack() },
+            )
         }
         composable(Routes.TO_BUY) {
             ToBuyScreen(

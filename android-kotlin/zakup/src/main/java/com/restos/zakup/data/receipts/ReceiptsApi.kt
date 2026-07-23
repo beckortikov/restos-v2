@@ -69,4 +69,6 @@ data class ReceiptLineDto(
     val qty: String = "0",
     val unit: String? = null,
     @SerialName("price_per_unit") val pricePerUnit: String = "0",
+    // Сколько ещё можно вернуть по строке (в единицах накладной) — считает бэк.
+    @SerialName("available_to_return") val availableToReturn: String? = null,
 )

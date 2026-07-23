@@ -44,6 +44,7 @@ import java.math.BigDecimal
 @Composable
 fun HistoryScreen(
     onBack: () -> Unit,
+    onOpenReturn: (String) -> Unit = {},
     viewModel: HistoryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -80,7 +81,7 @@ fun HistoryScreen(
                         ZakupCard(Modifier.fillMaxWidth()) {
                             Column {
                                 group.rows.forEachIndexed { i, row ->
-                                    ReceiptRowView(row)
+                                    ReceiptRowView(row, onClick = { onOpenReturn(row.id) })
                                     if (i < group.rows.lastIndex) RowDivider()
                                 }
                             }
@@ -141,8 +142,8 @@ private fun FilterChips(selected: HistoryFilter, onSelect: (HistoryFilter) -> Un
 }
 
 @Composable
-private fun ReceiptRowView(row: ReceiptRow) {
-    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun ReceiptRowView(row: ReceiptRow, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(row.supplierName, style = MaterialTheme.typography.titleMedium, maxLines = 1)
             Spacer(Modifier.size(2.dp))

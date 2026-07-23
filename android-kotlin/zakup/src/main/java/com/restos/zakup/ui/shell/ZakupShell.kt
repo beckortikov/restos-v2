@@ -60,6 +60,7 @@ fun ZakupShell(
     onOpenHistory: () -> Unit = {},
     onOpenToBuy: () -> Unit = {},
     onNewReceipt: () -> Unit = {},
+    onOperation: (String) -> Unit = {},
     viewModel: ZakupShellViewModel = hiltViewModel(),
 ) {
     val me by viewModel.me.collectAsStateWithLifecycle()
@@ -88,6 +89,7 @@ fun ZakupShell(
                 ZakupTab.More -> MoreScreen(
                     me = me,
                     onLogout = { viewModel.logout(onLoggedOut) },
+                    onOperation = onOperation,
                 )
             }
         }
