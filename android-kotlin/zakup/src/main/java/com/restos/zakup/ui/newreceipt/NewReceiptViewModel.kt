@@ -1,5 +1,6 @@
 package com.restos.zakup.ui.newreceipt
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.restos.core.net.ApiException
@@ -48,6 +49,7 @@ data class SearchItem(
     val name: String,
     val unit: String?,
     val price: BigDecimal,
+    val stock: BigDecimal,
     val kind: WarehouseKind,
 )
 
@@ -84,12 +86,15 @@ class NewReceiptViewModel @Inject constructor(
     private val financeApi: FinanceApi,
     private val stockApi: StockApi,
     private val receiptsApi: ReceiptsApi,
+    savedStateHandle: SavedStateHandle,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(NewReceiptUiState())
     val state: StateFlow<NewReceiptUiState> = _state.asStateFlow()
 
     private var kindByWarehouse: Map<String, WarehouseKind> = emptyMap()
+    private val prefillIngredientIds: List<String> =
+        savedStateHandle.get<String>("ingredientId")?.split(",")?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
 
     init { load() }
 
@@ -113,6 +118,7 @@ class NewReceiptViewModel @Inject constructor(
                         searchItems = ingredients.map { ing -> ing.toSearchItem() },
                     )
                 }
+                prefillIngredientIds.forEach { id -> _state.value.searchItems.find { it.id == id }?.let { addItem(it) } }
             }.onFailure { e ->
                 _state.update { it.copy(loading = false, loadError = e.message ?: "Не удалось загрузить данные") }
             }
@@ -194,6 +200,7 @@ class NewReceiptViewModel @Inject constructor(
         name = name?.takeIf { it.isNotBlank() } ?: "—",
         unit = unit,
         price = pricePerUnit.toDecimalOrZero(),
+        stock = qty.toDecimalOrZero(),
         kind = warehouseId?.let { kindByWarehouse[it] } ?: if (!isFood) WarehouseKind.Supplies else WarehouseKind.Products,
     )
 }

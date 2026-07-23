@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.ZakupCard
@@ -48,6 +49,7 @@ fun SupplyExpenseScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showPicker by remember { mutableStateOf(false) }
+    var confirmSubmit by remember { mutableStateOf(false) }
     LaunchedEffectDone(state.done, onDone)
 
     if (showPicker) {
@@ -61,6 +63,16 @@ fun SupplyExpenseScreen(
         return
     }
 
+    if (confirmSubmit) {
+        ConfirmDialog(
+            title = "Оформить расход?",
+            message = "${state.lines.size} поз. хозтоваров будет списано. Действие нельзя отменить.",
+            confirmLabel = "Оформить",
+            onConfirm = { confirmSubmit = false; viewModel.submit() },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
+
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ZakupTopBar("Расход хозтоваров", onBack = onBack)
         when {
@@ -68,7 +80,7 @@ fun SupplyExpenseScreen(
             state.loadError != null -> ErrorState(state.loadError!!, onRetry = viewModel::load)
             else -> Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item { OpLabel("Основание") }
@@ -118,10 +130,10 @@ fun SupplyExpenseScreen(
                     totalLabel = "Позиций",
                     totalValue = "${state.lines.size}",
                     totalColor = ZakupColors.TextPrimary,
-                    button = "Оформить расход",
+                    button = "Оформить расход · ${state.lines.size} поз.",
                     enabled = state.canSubmit,
                     submitting = state.submitting,
-                    onSubmit = viewModel::submit,
+                    onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }

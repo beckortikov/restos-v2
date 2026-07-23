@@ -14,7 +14,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,11 +33,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.ZakupCard
 import com.restos.zakup.ui.components.ZakupTopBar
 import com.restos.zakup.ui.theme.ZakupColors
+import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatMoney
 
 /** Экран 15 «Начальный остаток» — заводится один раз, взнос собственника. */
@@ -44,6 +51,7 @@ fun OpeningBalanceScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showPicker by remember { mutableStateOf(false) }
+    var confirmSubmit by remember { mutableStateOf(false) }
     LaunchedEffectDone(state.done, onDone)
 
     if (showPicker) {
@@ -57,6 +65,16 @@ fun OpeningBalanceScreen(
         return
     }
 
+    if (confirmSubmit) {
+        ConfirmDialog(
+            title = "Провести начальный остаток?",
+            message = "${state.lines.size} поз. на сумму ${formatMoney(state.total)}, взнос собственника. Действие нельзя отменить.",
+            confirmLabel = "Провести",
+            onConfirm = { confirmSubmit = false; viewModel.submit() },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
+
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ZakupTopBar("Начальный остаток", onBack = onBack)
         when {
@@ -64,12 +82,16 @@ fun OpeningBalanceScreen(
             state.loadError != null -> ErrorState(state.loadError!!, onRetry = viewModel::load)
             else -> Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item {
-                        ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
-                            Text("Заводится один раз при запуске. Проводится как взнос собственника.", fontSize = 12.5.sp, color = ZakupColors.TextSecondary)
+                        Surface(shape = RoundedCornerShape(ZakupRadius.tile), color = ZakupColors.InfoSoft, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.Info, contentDescription = null, tint = ZakupColors.InfoText, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.size(8.dp))
+                                Text("Заводится один раз при запуске. Проводится как взнос собственника.", fontSize = 12.5.sp, color = ZakupColors.InfoText)
+                            }
                         }
                     }
                     items(state.lines, key = { it.id }) { line ->
@@ -101,7 +123,7 @@ fun OpeningBalanceScreen(
                     button = "Провести остаток",
                     enabled = state.canSubmit,
                     submitting = state.submitting,
-                    onSubmit = viewModel::submit,
+                    onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }

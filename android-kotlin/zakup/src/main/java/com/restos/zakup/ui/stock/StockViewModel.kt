@@ -32,8 +32,11 @@ data class StockRow(
     val qty: BigDecimal,
     val unit: String?,
     val minQty: BigDecimal,
+    val price: BigDecimal,
     val level: StockLevel,
-)
+) {
+    val value: BigDecimal get() = qty * price
+}
 
 data class StockUiState(
     val loading: Boolean = true,
@@ -45,6 +48,8 @@ data class StockUiState(
     val rows: List<StockRow> = emptyList(),
     val lowCount: Int = 0,
     val outCount: Int = 0,
+    /** Стоимость остатков выбранного склада (#4) — сумма qty×цена, независимо от поиска/статус-фильтра. */
+    val warehouseValue: BigDecimal = BigDecimal.ZERO,
 )
 
 @HiltViewModel
@@ -81,6 +86,7 @@ class StockViewModel @Inject constructor(
                         rows = apply(it.selectedWarehouse, it.status, it.query),
                         lowCount = all.count { r -> r.level == StockLevel.Low },
                         outCount = all.count { r -> r.level == StockLevel.Out },
+                        warehouseValue = warehouseValue(it.selectedWarehouse),
                     )
                 }
             }.onFailure { e ->
@@ -89,10 +95,13 @@ class StockViewModel @Inject constructor(
         }
     }
 
-    fun selectWarehouse(id: String?) = _state.update { it.copy(selectedWarehouse = id, rows = apply(id, it.status, it.query)) }
+    fun selectWarehouse(id: String?) = _state.update {
+        it.copy(selectedWarehouse = id, rows = apply(id, it.status, it.query), warehouseValue = warehouseValue(id))
+    }
     fun setStatus(s: StockStatusFilter) = _state.update { it.copy(status = s, rows = apply(it.selectedWarehouse, s, it.query)) }
     fun setQuery(q: String) = _state.update { it.copy(query = q, rows = apply(it.selectedWarehouse, it.status, q)) }
 
+    /** Нет/мало остатка — всегда в начале списка (#2), внутри группы — как пришло с бэка. */
     private fun apply(warehouse: String?, status: StockStatusFilter, query: String): List<StockRow> {
         val q = query.trim().lowercase()
         return all.filter { row ->
@@ -103,8 +112,14 @@ class StockViewModel @Inject constructor(
                     StockStatusFilter.Low -> row.level == StockLevel.Low
                     StockStatusFilter.Out -> row.level == StockLevel.Out
                 }
+        }.sortedBy { row ->
+            when (row.level) { StockLevel.Out -> 0; StockLevel.Low -> 1; StockLevel.Ok -> 2 }
         }
     }
+
+    /** Стоимость остатков склада (#4) — независимо от поиска/статус-фильтра. */
+    private fun warehouseValue(warehouse: String?): BigDecimal =
+        all.filter { warehouse == null || it.warehouseId == warehouse }.fold(BigDecimal.ZERO) { a, r -> a + r.value }
 
     private fun warehouseName(w: WarehouseDto): String = w.name.ifBlank {
         when (w.kind) {
@@ -128,6 +143,7 @@ class StockViewModel @Inject constructor(
             qty = q,
             unit = unit,
             minQty = min,
+            price = pricePerUnit.toDecimalOrZero(),
             level = level,
         )
     }

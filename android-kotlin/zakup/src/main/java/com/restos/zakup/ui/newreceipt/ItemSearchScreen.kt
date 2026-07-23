@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -23,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Remove
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -40,10 +42,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.zakup.ui.components.RowDivider
+import com.restos.zakup.ui.components.ZakupCard
 import com.restos.zakup.ui.components.ZakupTopBar
 import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatMoney
+import com.restos.zakup.util.formatQty
+import com.restos.zakup.util.toDecimalOrZero
+import java.math.BigDecimal
 
 /** Экран 14 «Позиции приёмки» — вкладки по складам, поиск, добавление в 1 тап. */
 @Composable
@@ -65,11 +72,19 @@ fun ItemSearchScreen(
     Surface(Modifier.fillMaxSize(), color = ZakupColors.Bg) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             ZakupTopBar("Позиции приёмки", onBack = onClose)
+            if (!state.supplierName.isNullOrBlank()) {
+                Text(
+                    state.supplierName!!,
+                    fontSize = 12.5.sp,
+                    color = ZakupColors.TextTertiary,
+                    modifier = Modifier.padding(start = 20.dp, bottom = 8.dp),
+                )
+            }
 
             TextField(
                 value = state.searchQuery,
                 onValueChange = viewModel::setSearchQuery,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 placeholder = { Text("Поиск ингредиента", color = ZakupColors.TextTertiary, fontSize = 14.sp) },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ZakupColors.TextTertiary) },
                 singleLine = true,
@@ -95,16 +110,27 @@ fun ItemSearchScreen(
 
             Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    items(filtered, key = { it.id }) { item ->
-                        ItemRow(
-                            item = item,
-                            added = state.lines.any { it.ingredientId == item.id },
-                            onAdd = { viewModel.addItem(item) },
-                            onRemove = { viewModel.removeLine(item.id) },
-                        )
+                    if (filtered.isNotEmpty()) {
+                        item {
+                            ZakupCard(Modifier.fillMaxWidth()) {
+                                Column {
+                                    filtered.forEachIndexed { i, item ->
+                                        val line = state.lines.find { it.ingredientId == item.id }
+                                        ItemRow(
+                                            item = item,
+                                            line = line,
+                                            onAdd = { viewModel.addItem(item) },
+                                            onRemove = { viewModel.removeLine(item.id) },
+                                            onQty = { viewModel.setQty(item.id, it) },
+                                        )
+                                        if (i < filtered.lastIndex) RowDivider()
+                                    }
+                                }
+                            }
+                        }
                     }
                     item { Spacer(Modifier.height(72.dp)) }
                 }
@@ -130,7 +156,7 @@ private fun WarehouseTabs(
     onSelect: (WarehouseKind?) -> Unit,
 ) {
     LazyRow(
-        contentPadding = PaddingValues(horizontal = 20.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         item { Tab("Все", total, active = selected == null) { onSelect(null) } }
@@ -157,44 +183,98 @@ private fun Tab(label: String, count: Int, active: Boolean, onClick: () -> Unit)
         ) {
             Text(label, color = if (active) Color.White else ZakupColors.TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.size(6.dp))
-            Text("$count", color = if (active) Color.White.copy(alpha = 0.7f) else ZakupColors.TextTertiary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+            Surface(
+                shape = RoundedCornerShape(6.dp),
+                color = if (active) Color.White.copy(alpha = 0.15f) else ZakupColors.SurfaceMuted,
+            ) {
+                Text(
+                    "$count",
+                    color = if (active) Color.White else ZakupColors.TextTertiary,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun ItemRow(item: SearchItem, added: Boolean, onAdd: () -> Unit, onRemove: () -> Unit) {
-    Surface(
-        shape = RoundedCornerShape(ZakupRadius.card),
-        color = ZakupColors.Surface,
-        border = BorderStroke(1.dp, if (added) ZakupColors.Primary else ZakupColors.Border),
-        modifier = Modifier.fillMaxWidth(),
+private fun ItemRow(item: SearchItem, line: DraftLine?, onAdd: () -> Unit, onRemove: () -> Unit, onQty: (String) -> Unit) {
+    val added = line != null
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(if (added) ZakupColors.PrimarySoft else ZakupColors.Surface)
+            .clickable(enabled = !added, onClick = onAdd)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(item.name, style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.size(2.dp))
+        Surface(
+            shape = RoundedCornerShape(ZakupRadius.chip),
+            color = if (added) ZakupColors.Primary else ZakupColors.Surface,
+            border = if (added) null else BorderStroke(1.dp, ZakupColors.Border),
+            modifier = Modifier.size(38.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                if (added) {
+                    Icon(Icons.Outlined.Check, contentDescription = "Добавлено", tint = ZakupColors.OnPrimary, modifier = Modifier.size(18.dp))
+                } else {
+                    Icon(Icons.Outlined.Add, contentDescription = "Добавить", tint = ZakupColors.TextSecondary, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+        Spacer(Modifier.size(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.name, style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.size(2.dp))
+            if (added) {
+                Text("Добавлено в приёмку", fontSize = 12.5.sp, color = ZakupColors.Primary)
+            } else {
                 Text(
-                    "цена ${formatMoney(item.price, "")}${item.unit?.let { "/$it" } ?: ""}",
+                    "${item.kind.label} · остаток ${formatQty(item.stock, item.unit)}",
                     fontSize = 12.5.sp,
                     color = ZakupColors.TextTertiary,
                 )
             }
-            Surface(
-                onClick = if (added) onRemove else onAdd,
-                shape = RoundedCornerShape(ZakupRadius.chip),
-                color = if (added) ZakupColors.PrimarySoft else ZakupColors.Primary,
-                modifier = Modifier.size(40.dp),
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        if (added) Icons.Outlined.Check else Icons.Outlined.Add,
-                        contentDescription = if (added) "Добавлено" else "Добавить",
-                        tint = if (added) ZakupColors.Primary else ZakupColors.OnPrimary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
+        }
+        if (added) {
+            QtyStepper(
+                qty = line!!.qty.toDecimalOrZero(),
+                unit = item.unit,
+                onChange = { onQty(it.stripTrailingZeros().toPlainString()) },
+                onZeroOrBelow = onRemove,
+            )
+        }
+    }
+}
+
+/** Инлайн-степпер кол-ва (#14) — доступен сразу в результатах поиска, без возврата в приёмку. */
+@Composable
+private fun QtyStepper(qty: BigDecimal, unit: String?, onChange: (BigDecimal) -> Unit, onZeroOrBelow: () -> Unit) {
+    val step = BigDecimal.ONE
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        StepBtn(Icons.Outlined.Remove) {
+            val next = qty - step
+            if (next.signum() <= 0) onZeroOrBelow() else onChange(next)
+        }
+        Text(
+            formatQty(qty, unit),
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = ZakupColors.TextPrimary,
+            modifier = Modifier.padding(horizontal = 8.dp).width(56.dp),
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        StepBtn(Icons.Outlined.Add) { onChange(qty + step) }
+    }
+}
+
+@Composable
+private fun StepBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Surface(onClick = onClick, shape = RoundedCornerShape(ZakupRadius.badge), color = ZakupColors.Surface, border = BorderStroke(1.dp, ZakupColors.Border), modifier = Modifier.size(26.dp)) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = ZakupColors.TextSecondary, modifier = Modifier.size(14.dp))
         }
     }
 }
@@ -202,15 +282,22 @@ private fun ItemRow(item: SearchItem, added: Boolean, onAdd: () -> Unit, onRemov
 @Composable
 private fun DoneBar(count: Int, total: java.math.BigDecimal, onDone: () -> Unit, modifier: Modifier) {
     Surface(color = ZakupColors.Bg, modifier = modifier.fillMaxWidth()) {
-        Box(Modifier.padding(20.dp).navigationBarsPadding()) {
+        Row(
+            Modifier.padding(16.dp).navigationBarsPadding(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("$count позиций", fontSize = 12.5.sp, color = ZakupColors.TextTertiary)
+                Text(formatMoney(total), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
+            }
+            Spacer(Modifier.size(12.dp))
             Surface(
                 onClick = onDone,
                 shape = RoundedCornerShape(ZakupRadius.button),
                 color = ZakupColors.Primary,
-                modifier = Modifier.fillMaxWidth().height(54.dp),
+                modifier = Modifier.height(48.dp),
             ) {
-                Row(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("$count позиций · ${formatMoney(total, "")}", color = ZakupColors.OnPrimary, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                Box(Modifier.padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
                     Text("Готово", color = ZakupColors.OnPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                 }
             }

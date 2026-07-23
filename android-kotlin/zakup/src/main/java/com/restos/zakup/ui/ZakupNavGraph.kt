@@ -39,11 +39,12 @@ object Routes {
     const val SUPPLIER_DETAIL = "supplier/{id}"
     const val HISTORY = "history"
     const val TO_BUY = "to-buy"
-    const val NEW_RECEIPT = "receipt/new"
+    const val NEW_RECEIPT = "receipt/new?ingredientId={ingredientId}"
     const val RETURN = "return/{receiptId}"
 
     fun supplier(id: String) = "supplier/$id"
     fun receiptReturn(receiptId: String) = "return/$receiptId"
+    fun newReceipt(ingredientId: String? = null) = "receipt/new?ingredientId=${ingredientId.orEmpty()}"
 }
 
 @Composable
@@ -100,7 +101,7 @@ fun ZakupNavGraph(
                 onOpenSupplier = { id -> navController.navigate(Routes.supplier(id)) },
                 onOpenHistory = { navController.navigate(Routes.HISTORY) },
                 onOpenToBuy = { navController.navigate(Routes.TO_BUY) },
-                onNewReceipt = { navController.navigate(Routes.NEW_RECEIPT) },
+                onNewReceipt = { ingredientId -> navController.navigate(Routes.newReceipt(ingredientId)) },
                 onOperation = { op -> navController.navigate("op/$op") },
             )
         }
@@ -124,7 +125,10 @@ fun ZakupNavGraph(
                 MoreOps.CATEGORIES -> com.restos.zakup.ui.reference.CategoriesScreen(onBack = back)
             }
         }
-        composable(Routes.NEW_RECEIPT) {
+        composable(
+            route = Routes.NEW_RECEIPT,
+            arguments = listOf(navArgument("ingredientId") { type = NavType.StringType; nullable = true; defaultValue = null }),
+        ) {
             NewReceiptScreen(
                 onBack = { navController.popBackStack() },
                 onCreated = {
@@ -158,7 +162,7 @@ fun ZakupNavGraph(
         composable(Routes.TO_BUY) {
             ToBuyScreen(
                 onBack = { navController.popBackStack() },
-                onCreateReceipt = { navController.navigate(Routes.NEW_RECEIPT) },
+                onCreateReceipt = { ids -> navController.navigate(Routes.newReceipt(ids.joinToString(","))) },
             )
         }
     }

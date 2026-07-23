@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -28,6 +30,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.zakup.ui.components.ErrorState
+import com.restos.zakup.ui.components.IconTile
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.RowDivider
 import com.restos.zakup.ui.components.StatusBadge
@@ -56,7 +59,7 @@ fun HistoryScreen(
             state.loading -> LoadingState()
             state.error != null -> ErrorState(state.error!!, onRetry = viewModel::load)
             else -> LazyColumn(
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item {
@@ -71,8 +74,8 @@ fun HistoryScreen(
                     item(key = "h_${group.dayKey}") {
                         Text(
                             group.dayLabel,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.5.sp,
+                            fontWeight = FontWeight.SemiBold,
                             color = ZakupColors.TextTertiary,
                             modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp),
                         )
@@ -94,11 +97,21 @@ fun HistoryScreen(
     }
 }
 
+private val historyMonths = listOf(
+    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+)
+
 @Composable
 private fun SummaryCard(count: Int, purchased: BigDecimal, paid: BigDecimal, debt: BigDecimal) {
+    val now = java.time.LocalDate.now()
+    val period = "${historyMonths[now.monthValue - 1]} ${now.year}"
     ZakupCard(Modifier.fillMaxWidth(), padding = 16) {
         Column {
-            Text("$count приёмок", fontSize = 13.sp, color = ZakupColors.TextTertiary, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(period, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
+                Text("$count приёмок", fontSize = 13.sp, color = ZakupColors.TextTertiary)
+            }
             Spacer(Modifier.height(12.dp))
             Row {
                 Stat("Закуплено", purchased, ZakupColors.TextPrimary, Modifier.weight(1f))
@@ -144,11 +157,15 @@ private fun FilterChips(selected: HistoryFilter, onSelect: (HistoryFilter) -> Un
 @Composable
 private fun ReceiptRowView(row: ReceiptRow, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconTile(icon = Icons.Outlined.ReceiptLong, tint = ZakupColors.TextSecondary, bg = ZakupColors.SurfaceMuted, size = 38)
+        Spacer(Modifier.size(12.dp))
         Column(Modifier.weight(1f)) {
             Text(row.supplierName, style = MaterialTheme.typography.titleMedium, maxLines = 1)
             Spacer(Modifier.size(2.dp))
+            // Время из dateLabel («Сегодня, 09:14» → «09:14») — день уже вынесен в заголовок группы.
+            val time = row.dateLabel.substringAfter(", ", missingDelimiterValue = row.dateLabel)
             val pos = row.lineCount?.let { " · $it поз." } ?: ""
-            Text(row.dateLabel + pos, fontSize = 12.5.sp, color = ZakupColors.TextTertiary)
+            Text(time + pos, fontSize = 12.5.sp, color = ZakupColors.TextTertiary)
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(formatMoney(row.amount, ""), fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)

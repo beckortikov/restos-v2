@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -34,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.ZakupCard
@@ -52,6 +54,7 @@ fun WriteoffScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showPicker by remember { mutableStateOf(false) }
+    var confirmSubmit by remember { mutableStateOf(false) }
 
     LaunchedEffectDone(state.done, onDone)
 
@@ -66,6 +69,17 @@ fun WriteoffScreen(
         return
     }
 
+    if (confirmSubmit) {
+        ConfirmDialog(
+            title = "Списать позиции?",
+            message = "${state.lines.size} поз. на сумму ${formatMoney(state.loss)}. Остатки уменьшатся, действие нельзя отменить.",
+            confirmLabel = "Списать",
+            danger = true,
+            onConfirm = { confirmSubmit = false; viewModel.submit() },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
+
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ZakupTopBar("Списание", onBack = onBack)
         when {
@@ -73,16 +87,20 @@ fun WriteoffScreen(
             state.loadError != null -> ErrorState(state.loadError!!, onRetry = viewModel::load)
             else -> Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item {
-                        ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
-                            Text(
-                                "Списание — это убыток. Для брака от поставщика оформите возврат.",
-                                fontSize = 12.5.sp,
-                                color = ZakupColors.TextSecondary,
-                            )
+                        Surface(shape = RoundedCornerShape(ZakupRadius.tile), color = ZakupColors.DangerSoft, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = ZakupColors.DangerText, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.size(8.dp))
+                                Text(
+                                    "Списание — это убыток. Для брака от поставщика оформите возврат.",
+                                    fontSize = 12.5.sp,
+                                    color = ZakupColors.DangerText,
+                                )
+                            }
                         }
                     }
                     item { OpLabel("Причина") }
@@ -122,8 +140,9 @@ fun WriteoffScreen(
                     button = "Списать",
                     enabled = state.canSubmit,
                     submitting = state.submitting,
-                    onSubmit = viewModel::submit,
+                    onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
+                    accentColor = ZakupColors.Danger,
                 )
             }
         }

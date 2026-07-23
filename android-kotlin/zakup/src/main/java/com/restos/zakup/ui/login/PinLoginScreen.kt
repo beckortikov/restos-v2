@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,7 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -83,7 +82,14 @@ fun PinLoginScreen(
 
             // Лого-плитка «корзина»
             Surface(
-                modifier = Modifier.size(72.dp),
+                modifier = Modifier
+                    .size(66.dp)
+                    .shadow(
+                        elevation = 10.dp,
+                        shape = RoundedCornerShape(ZakupRadius.card),
+                        ambientColor = ZakupColors.Primary.copy(alpha = 0.27f),
+                        spotColor = ZakupColors.Primary.copy(alpha = 0.27f),
+                    ),
                 shape = RoundedCornerShape(ZakupRadius.card),
                 color = ZakupColors.Primary,
             ) {
@@ -92,7 +98,7 @@ fun PinLoginScreen(
                         Icons.Outlined.ShoppingBasket,
                         contentDescription = null,
                         tint = ZakupColors.OnPrimary,
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(32.dp),
                     )
                 }
             }
@@ -108,7 +114,7 @@ fun PinLoginScreen(
             Text(
                 stringResource(R.string.pin_login_subtitle),
                 style = MaterialTheme.typography.bodyMedium,
-                color = ZakupColors.TextTertiary,
+                color = ZakupColors.TextSecondary,
             )
 
             Spacer(Modifier.height(28.dp))
@@ -121,13 +127,15 @@ fun PinLoginScreen(
                 border = androidx.compose.foundation.BorderStroke(1.dp, ZakupColors.Border),
             ) {
                 Column(
-                    modifier = Modifier.padding(20.dp),
+                    modifier = Modifier.padding(22.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     PinDots(length = state.pin.length, max = PinLoginViewModel.MAX_PIN)
 
+                    Spacer(Modifier.height(20.dp))
+
                     Box(
-                        modifier = Modifier.fillMaxWidth().height(28.dp),
+                        modifier = Modifier.fillMaxWidth().height(20.dp),
                         contentAlignment = Alignment.Center,
                     ) {
                         if (state.error != null) {
@@ -147,11 +155,19 @@ fun PinLoginScreen(
                         enabled = !state.loading,
                     )
 
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(20.dp))
 
                     Button(
                         onClick = { viewModel.submit(onLoggedIn) },
-                        modifier = Modifier.fillMaxWidth().height(56.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .shadow(
+                                elevation = 10.dp,
+                                shape = RoundedCornerShape(ZakupRadius.button),
+                                ambientColor = ZakupColors.Primary.copy(alpha = 0.27f),
+                                spotColor = ZakupColors.Primary.copy(alpha = 0.27f),
+                            ),
                         enabled = !state.loading && state.pin.length >= PinLoginViewModel.MIN_PIN_SUBMIT,
                         shape = RoundedCornerShape(ZakupRadius.button),
                         colors = ButtonDefaults.buttonColors(
@@ -163,12 +179,12 @@ fun PinLoginScreen(
                     ) {
                         if (state.loading) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
+                                modifier = Modifier.size(18.dp),
                                 color = ZakupColors.OnPrimary,
                                 strokeWidth = 2.dp,
                             )
                         } else {
-                            Icon(Icons.AutoMirrored.Outlined.Login, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Icon(Icons.AutoMirrored.Outlined.Login, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.size(8.dp))
                             Text("Войти", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
                         }
@@ -186,12 +202,14 @@ fun PinLoginScreen(
 
 @Composable
 private fun PinDots(length: Int, max: Int) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
         repeat(max) { i ->
+            val filled = i < length
             Surface(
                 shape = CircleShape,
-                color = if (i < length) ZakupColors.Primary else ZakupColors.Border,
-                modifier = Modifier.size(12.dp),
+                color = if (filled) ZakupColors.Primary else androidx.compose.ui.graphics.Color.Transparent,
+                border = if (filled) null else androidx.compose.foundation.BorderStroke(2.dp, ZakupColors.TextTertiary),
+                modifier = Modifier.size(14.dp),
                 content = {},
             )
         }
@@ -211,30 +229,30 @@ private fun Keypad(
         listOf('7', '8', '9'),
     )
     Column(
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
         modifier = Modifier.fillMaxWidth(),
     ) {
         rows.forEach { row ->
             Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 row.forEach { c ->
                     Key(Modifier.weight(1f), enabled = enabled, onClick = { onDigit(c) }) {
-                        Text(c.toString(), fontSize = 26.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary)
+                        Text(c.toString(), fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary)
                     }
                 }
             }
         }
         Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Key(Modifier.weight(1f), enabled = enabled, onClick = onClear) {
-                Text("Очистить", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = ZakupColors.TextSecondary)
+                Text("Очистить", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextSecondary)
             }
             Key(Modifier.weight(1f), enabled = enabled, onClick = { onDigit('0') }) {
-                Text("0", fontSize = 26.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary)
+                Text("0", fontSize = 22.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary)
             }
             Key(Modifier.weight(1f), enabled = enabled, onClick = onBackspace) {
                 Icon(
@@ -256,7 +274,7 @@ private fun Key(
     content: @Composable () -> Unit,
 ) {
     Surface(
-        modifier = modifier.aspectRatio(1.5f),
+        modifier = modifier.height(62.dp),
         shape = RoundedCornerShape(ZakupRadius.tile),
         color = ZakupColors.SurfaceMuted,
         onClick = onClick,

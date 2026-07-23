@@ -20,7 +20,7 @@ fun formatAmount(value: BigDecimal): String {
 }
 
 /** «1 240 000 сум». */
-fun formatMoney(value: BigDecimal, currency: String = "с."): String =
+fun formatMoney(value: BigDecimal, currency: String = "сум"): String =
     "${formatAmount(value)} $currency"
 
 /** Крупные суммы компактно: «4.85 млн», «860 тыс», «1 240 000». Для метрик-плиток. */

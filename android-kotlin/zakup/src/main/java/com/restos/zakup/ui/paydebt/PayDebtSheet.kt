@@ -13,28 +13,42 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.zakup.ui.components.Avatar
+import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatMoney
 import com.restos.zakup.util.initialsOf
+import com.restos.zakup.util.toDecimalOrZero
 import java.math.BigDecimal
+import java.math.RoundingMode
 
 /** Экран 12 «Погашение долга» — bottom-sheet. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,9 +63,28 @@ fun PayDebtSheet(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var amountText by remember(supplierId) { mutableStateOf(if (debt.signum() == 0) "" else debt.stripTrailingZeros().toPlainString()) }
+    var selectedPreset by remember(supplierId) { mutableStateOf<String?>("all") }
+    var confirmSubmit by remember { mutableStateOf(false) }
+
+    fun applyAmount(v: BigDecimal, preset: String?) {
+        amountText = if (v.signum() == 0) "" else v.stripTrailingZeros().toPlainString()
+        selectedPreset = preset
+        viewModel.setAmount(v)
+    }
 
     LaunchedEffect(supplierId) { viewModel.start(supplierId, supplierName, debt) }
     LaunchedEffect(state.done) { if (state.done) onPaid() }
+
+    if (confirmSubmit) {
+        ConfirmDialog(
+            title = "Погасить долг?",
+            message = "Спишется ${formatMoney(state.amount)} со счёта. Действие нельзя отменить.",
+            confirmLabel = "Погасить",
+            onConfirm = { confirmSubmit = false; viewModel.submit() },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -66,7 +99,14 @@ fun PayDebtSheet(
                 .padding(bottom = 12.dp)
                 .navigationBarsPadding(),
         ) {
-            Text("Погасить долг", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Погасить долг", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
+                Surface(onClick = onDismiss, shape = androidx.compose.foundation.shape.CircleShape, color = ZakupColors.SurfaceMuted, modifier = Modifier.size(34.dp)) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.Close, contentDescription = "Закрыть", tint = ZakupColors.TextSecondary, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
             Spacer(Modifier.height(14.dp))
 
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -89,26 +129,45 @@ fun PayDebtSheet(
                 Spacer(Modifier.height(6.dp))
                 Surface(
                     shape = RoundedCornerShape(ZakupRadius.tile),
-                    color = ZakupColors.SurfaceMuted,
+                    color = ZakupColors.Surface,
+                    border = BorderStroke(1.5.dp, ZakupColors.Primary),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            formatMoney(state.amount, ""),
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = ZakupColors.TextPrimary,
+                    Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        TextField(
+                            value = amountText,
+                            onValueChange = { input ->
+                                val sanitized = input.filter { it.isDigit() || it == '.' || it == ',' }.replace(',', '.')
+                                amountText = sanitized
+                                selectedPreset = null
+                                viewModel.setAmount(sanitized.toDecimalOrZero())
+                            },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            textStyle = androidx.compose.ui.text.TextStyle(fontSize = 30.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary),
                             modifier = Modifier.weight(1f),
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = Color.Transparent,
+                                unfocusedContainerColor = Color.Transparent,
+                                focusedIndicatorColor = Color.Transparent,
+                                unfocusedIndicatorColor = Color.Transparent,
+                            ),
                         )
-                        Text("с.", fontSize = 13.sp, color = ZakupColors.TextTertiary)
+                        Text("сум", fontSize = 13.sp, color = ZakupColors.TextTertiary)
                     }
                 }
 
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PresetChip("25%", Modifier.weight(1f)) { viewModel.setFraction(0.25) }
-                    PresetChip("50%", Modifier.weight(1f)) { viewModel.setFraction(0.5) }
-                    PresetChip("Весь долг", Modifier.weight(1f)) { viewModel.setAllDebt() }
+                    PresetChip("25%", selectedPreset == "25", Modifier.weight(1f)) {
+                        applyAmount(state.debt.multiply(BigDecimal("0.25")).setScale(0, RoundingMode.HALF_UP), "25")
+                    }
+                    PresetChip("50%", selectedPreset == "50", Modifier.weight(1f)) {
+                        applyAmount(state.debt.multiply(BigDecimal("0.5")).setScale(0, RoundingMode.HALF_UP), "50")
+                    }
+                    PresetChip("Весь долг", selectedPreset == "all", Modifier.weight(1f)) {
+                        applyAmount(state.debt, "all")
+                    }
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -130,11 +189,10 @@ fun PayDebtSheet(
                 }
 
                 Spacer(Modifier.height(8.dp))
-                Text(
-                    "Останется долг ${formatMoney(state.remaining)}",
-                    fontSize = 13.sp,
-                    color = ZakupColors.TextSecondary,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Останется долг", fontSize = 13.sp, color = ZakupColors.TextSecondary, modifier = Modifier.weight(1f))
+                    Text(formatMoney(state.remaining), fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ZakupColors.Primary)
+                }
 
                 if (state.error != null) {
                     Spacer(Modifier.height(8.dp))
@@ -143,7 +201,7 @@ fun PayDebtSheet(
 
                 Spacer(Modifier.height(16.dp))
                 Surface(
-                    onClick = viewModel::submit,
+                    onClick = { confirmSubmit = true },
                     enabled = state.canSubmit,
                     shape = RoundedCornerShape(ZakupRadius.button),
                     color = if (state.canSubmit) ZakupColors.Primary else ZakupColors.Primary.copy(alpha = 0.4f),
@@ -163,15 +221,22 @@ fun PayDebtSheet(
 }
 
 @Composable
-private fun PresetChip(label: String, modifier: Modifier, onClick: () -> Unit) {
+private fun PresetChip(label: String, selected: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Surface(
         shape = RoundedCornerShape(ZakupRadius.chip),
-        color = ZakupColors.Surface,
-        border = BorderStroke(1.dp, ZakupColors.Border),
+        color = if (selected) ZakupColors.PrimarySoft else ZakupColors.Surface,
+        border = BorderStroke(1.dp, if (selected) ZakupColors.Primary else ZakupColors.Border),
         modifier = modifier.clickable(onClick = onClick),
     ) {
         Box(Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
-            Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextSecondary, modifier = Modifier.fillMaxWidth(), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text(
+                label,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (selected) ZakupColors.Primary else ZakupColors.TextSecondary,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
     }
 }

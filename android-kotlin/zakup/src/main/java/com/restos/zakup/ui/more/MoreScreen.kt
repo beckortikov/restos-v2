@@ -14,18 +14,18 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Assignment
+import androidx.compose.material.icons.automirrored.outlined.CompareArrows
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
 import androidx.compose.material.icons.automirrored.outlined.Logout
-import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Inbox
-import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LocalShipping
 import androidx.compose.material.icons.outlined.Notifications
-import androidx.compose.material.icons.outlined.RemoveCircleOutline
-import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Warehouse
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.restos.core.auth.MeData
+import com.restos.zakup.ui.components.IconTile
 import com.restos.zakup.ui.shell.ZakupScreenHeader
 import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
@@ -61,17 +62,17 @@ fun MoreScreen(
         ProfileCard(me)
 
         Section("ОПЕРАЦИИ") {
-            MoreRow(Icons.Outlined.Inventory2, "Инвентаризации") { onOperation(MoreOps.INVENTORY) }
-            MoreRow(Icons.Outlined.RemoveCircleOutline, "Списания") { onOperation(MoreOps.WRITEOFF) }
+            MoreRow(Icons.AutoMirrored.Outlined.Assignment, "Инвентаризации") { onOperation(MoreOps.INVENTORY) }
+            MoreRow(Icons.Outlined.DeleteOutline, "Списания") { onOperation(MoreOps.WRITEOFF) }
             MoreRow(Icons.AutoMirrored.Outlined.KeyboardReturn, "Возвраты поставщикам") { onOperation(MoreOps.RETURNS) }
-            MoreRow(Icons.Outlined.SwapVert, "Движения склада") { onOperation(MoreOps.MOVEMENTS) }
+            MoreRow(Icons.AutoMirrored.Outlined.CompareArrows, "Движения склада") { onOperation(MoreOps.MOVEMENTS) }
             MoreRow(Icons.Outlined.CleaningServices, "Расход хозтоваров") { onOperation(MoreOps.SUPPLY_EXPENSE) }
             MoreRow(Icons.Outlined.Inbox, "Начальный остаток", last = true) { onOperation(MoreOps.OPENING_BALANCE) }
         }
 
         Section("СПРАВОЧНИКИ") {
             MoreRow(Icons.Outlined.Warehouse, "Склады") { onOperation(MoreOps.WAREHOUSES) }
-            MoreRow(Icons.Outlined.Category, "Категории ингредиентов") { onOperation(MoreOps.CATEGORIES) }
+            MoreRow(Icons.Outlined.Sell, "Категории ингредиентов") { onOperation(MoreOps.CATEGORIES) }
             MoreRow(Icons.Outlined.LocalShipping, "Все поставщики", last = true) { onOpenSuppliers() }
         }
 
@@ -89,17 +90,17 @@ fun MoreScreen(
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
+                .padding(horizontal = 16.dp)
                 .clickable(onClick = onLogout),
             shape = RoundedCornerShape(ZakupRadius.card),
             color = ZakupColors.Surface,
             border = androidx.compose.foundation.BorderStroke(1.dp, ZakupColors.Border),
         ) {
             Row(
-                Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+                Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = null, tint = ZakupColors.Danger, modifier = Modifier.size(20.dp))
+                IconTile(icon = Icons.AutoMirrored.Outlined.Logout, tint = ZakupColors.Danger, bg = ZakupColors.DangerSoft, size = 36)
                 Spacer(Modifier.size(12.dp))
                 Text("Выйти из аккаунта", color = ZakupColors.Danger, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
             }
@@ -123,7 +124,7 @@ private fun ProfileCard(me: MeData?) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp),
+            .padding(horizontal = 16.dp),
         shape = RoundedCornerShape(ZakupRadius.card),
         color = ZakupColors.Surface,
         border = androidx.compose.foundation.BorderStroke(1.dp, ZakupColors.Border),
@@ -133,19 +134,19 @@ private fun ProfileCard(me: MeData?) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Surface(
-                modifier = Modifier.size(48.dp),
-                shape = RoundedCornerShape(ZakupRadius.tile),
+                modifier = Modifier.size(52.dp),
+                shape = RoundedCornerShape(15.dp),
                 color = ZakupColors.PrimarySoft,
             ) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(initials(name), color = ZakupColors.Primary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(initials(name), color = ZakupColors.Primary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
                 }
             }
             Spacer(Modifier.size(12.dp))
-            Column {
-                Text(name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary)
+            Column(Modifier.weight(1f)) {
+                Text(name, fontSize = 17.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
                 Spacer(Modifier.size(2.dp))
-                Text("Закупщик · $restaurant", fontSize = 13.sp, color = ZakupColors.TextTertiary)
+                Text("Закупщик · $restaurant", fontSize = 13.sp, color = ZakupColors.TextSecondary)
             }
         }
     }
@@ -157,13 +158,12 @@ private fun Section(label: String, content: @Composable () -> Unit) {
         Text(
             label,
             color = ZakupColors.TextTertiary,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 0.6.sp,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.SemiBold,
             modifier = Modifier.padding(start = 24.dp, top = 20.dp, bottom = 8.dp),
         )
         Surface(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             shape = RoundedCornerShape(ZakupRadius.card),
             color = ZakupColors.Surface,
             border = androidx.compose.foundation.BorderStroke(1.dp, ZakupColors.Border),
@@ -196,26 +196,20 @@ private fun MoreRow(
         Modifier
             .fillMaxWidth()
             .clickable(enabled = onClick != null) { onClick?.invoke() }
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = ZakupColors.TextSecondary, modifier = Modifier.size(20.dp))
+        IconTile(icon = icon, tint = ZakupColors.TextSecondary, bg = ZakupColors.SurfaceMuted, size = 36)
         Spacer(Modifier.size(12.dp))
-        Text(title, fontSize = 14.5.sp, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
+        Text(title, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
         if (trailing != null) {
-            Text(trailing, fontSize = 13.sp, color = ZakupColors.TextTertiary)
+            Text(trailing, fontSize = 13.5.sp, color = ZakupColors.TextTertiary)
             Spacer(Modifier.size(6.dp))
         }
         Icon(Icons.AutoMirrored.Outlined.KeyboardArrowRight, contentDescription = null, tint = ZakupColors.TextTertiary, modifier = Modifier.size(20.dp))
     }
     if (!last) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 48.dp)
-                .height(1.dp)
-                .background(ZakupColors.Border),
-        )
+        Box(Modifier.fillMaxWidth().height(1.dp).background(ZakupColors.Border))
     }
 }
 

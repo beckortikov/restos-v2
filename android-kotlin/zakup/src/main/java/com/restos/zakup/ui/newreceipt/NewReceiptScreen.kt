@@ -1,6 +1,7 @@
 package com.restos.zakup.ui.newreceipt
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -52,13 +53,16 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.zakup.data.suppliers.SupplierDto
 import com.restos.zakup.ui.components.Avatar
+import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
+import com.restos.zakup.ui.components.RowDivider
 import com.restos.zakup.ui.components.ZakupCard
 import com.restos.zakup.ui.components.ZakupTopBar
 import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatMoney
+import com.restos.zakup.util.formatQty
 import com.restos.zakup.util.initialsOf
 import com.restos.zakup.util.toDecimalOrZero
 
@@ -73,6 +77,8 @@ fun NewReceiptScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showSearch by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
+    var confirmSubmit by remember { mutableStateOf(false) }
+    var expandedLineId by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(state.done) { if (state.done) onCreated() }
 
@@ -89,6 +95,18 @@ fun NewReceiptScreen(
         )
     }
 
+    if (confirmSubmit) {
+        ConfirmDialog(
+            title = "Провести приёмку?",
+            message = "${state.lines.size} поз. на сумму ${formatMoney(state.total)}. " +
+                (if (state.payment == PaymentType.Paid) "Оплата спишется со счёта." else "Приёмка встанет в долг поставщику.") +
+                " Действие нельзя отменить.",
+            confirmLabel = "Провести",
+            onConfirm = { confirmSubmit = false; viewModel.submit() },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
+
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ZakupTopBar("Новая приёмка", onBack = onBack)
 
@@ -97,22 +115,36 @@ fun NewReceiptScreen(
             state.loadError != null -> ErrorState(state.loadError!!, onRetry = viewModel::load)
             else -> Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item { Label("Поставщик") }
                     item { SupplierRow(state, onClick = { showPicker = true }) }
 
                     item { Label("Позиции · ${state.lines.size}") }
-                    items(state.lines, key = { it.ingredientId }) { line ->
-                        LineCard(
-                            line = line,
-                            onQty = { viewModel.setQty(line.ingredientId, it) },
-                            onPrice = { viewModel.setPrice(line.ingredientId, it) },
-                            onRemove = { viewModel.removeLine(line.ingredientId) },
-                        )
+                    if (state.lines.isNotEmpty()) {
+                        item {
+                            ZakupCard(Modifier.fillMaxWidth()) {
+                                Column {
+                                    state.lines.forEachIndexed { i, line ->
+                                        CompactLineRow(
+                                            line = line,
+                                            expanded = line.ingredientId == expandedLineId,
+                                            onToggle = { expandedLineId = if (expandedLineId == line.ingredientId) null else line.ingredientId },
+                                            onQty = { viewModel.setQty(line.ingredientId, it) },
+                                            onPrice = { viewModel.setPrice(line.ingredientId, it) },
+                                            onRemove = { viewModel.removeLine(line.ingredientId) },
+                                        )
+                                        if (i < state.lines.lastIndex) RowDivider()
+                                    }
+                                    RowDivider()
+                                    AddPositionRow(onClick = { showSearch = true })
+                                }
+                            }
+                        }
+                    } else {
+                        item { AddPositionButton(onClick = { showSearch = true }) }
                     }
-                    item { AddPositionButton(onClick = { showSearch = true }) }
 
                     item { Label("Оплата") }
                     item { PaymentToggle(state.payment, viewModel::setPayment) }
@@ -130,7 +162,7 @@ fun NewReceiptScreen(
                     total = state.total,
                     enabled = state.canSubmit,
                     submitting = state.submitting,
-                    onSubmit = viewModel::submit,
+                    onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
@@ -145,7 +177,14 @@ private fun Label(text: String) {
 
 @Composable
 private fun SupplierRow(state: NewReceiptUiState, onClick: () -> Unit) {
-    ZakupCard(Modifier.fillMaxWidth().clickable(onClick = onClick), padding = 14) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(ZakupRadius.button),
+        color = ZakupColors.Surface,
+        border = BorderStroke(1.dp, ZakupColors.Border),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+      Box(Modifier.padding(14.dp)) {
         if (state.supplierId == null) {
             Text("Выберите поставщика", fontSize = 14.5.sp, color = ZakupColors.TextTertiary)
         } else {
@@ -164,16 +203,53 @@ private fun SupplierRow(state: NewReceiptUiState, onClick: () -> Unit) {
                 }
             }
         }
+      }
     }
 }
 
+/**
+ * Компактная строка позиции (#5) — одна свёрнутая строка «название / кол-во×цена / сумма»
+ * внутри общего списка; тап разворачивает поля кол-во/цена под ней. Так на экране
+ * одновременно помещается много позиций, а не по одной развесистой карточке на каждую.
+ */
 @Composable
-private fun LineCard(line: DraftLine, onQty: (String) -> Unit, onPrice: (String) -> Unit, onRemove: () -> Unit) {
-    ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
-        Column {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(line.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                Text(formatMoney(line.lineTotal, ""), fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
+private fun CompactLineRow(
+    line: DraftLine,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onQty: (String) -> Unit,
+    onPrice: (String) -> Unit,
+    onRemove: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 14.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(line.name, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary, maxLines = 1)
+                Spacer(Modifier.size(2.dp))
+                val hasQty = line.qty.toDecimalOrZero().signum() > 0
+                if (hasQty) {
+                    Text(
+                        "${formatQty(line.qty.toDecimalOrZero(), line.unit)} × ${formatMoney(line.price.toDecimalOrZero(), "")}",
+                        fontSize = 12.5.sp,
+                        color = ZakupColors.TextTertiary,
+                    )
+                } else {
+                    Text("Укажите кол-во и цену", fontSize = 12.5.sp, color = ZakupColors.Warn)
+                }
+            }
+            Text(formatMoney(line.lineTotal, ""), fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
+        }
+        if (expanded) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NumField(line.qty, onQty, placeholder = "кол-во", suffix = line.unit, modifier = Modifier.weight(1f))
+                Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
+                NumField(line.price, onPrice, placeholder = "цена", suffix = "сум", modifier = Modifier.weight(1.3f))
                 Spacer(Modifier.size(8.dp))
                 Surface(onClick = onRemove, shape = RoundedCornerShape(ZakupRadius.badge), color = ZakupColors.SurfaceMuted, modifier = Modifier.size(28.dp)) {
                     Box(contentAlignment = Alignment.Center) {
@@ -181,13 +257,24 @@ private fun LineCard(line: DraftLine, onQty: (String) -> Unit, onPrice: (String)
                     }
                 }
             }
-            Spacer(Modifier.size(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                NumField(line.qty, onQty, placeholder = "кол-во", suffix = line.unit, modifier = Modifier.weight(1f))
-                Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
-                NumField(line.price, onPrice, placeholder = "цена", suffix = "с.", modifier = Modifier.weight(1.3f))
-            }
         }
+    }
+}
+
+@Composable
+private fun AddPositionRow(onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .background(ZakupColors.PrimarySoft)
+            .padding(vertical = 13.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Add, contentDescription = null, tint = ZakupColors.Primary, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.size(8.dp))
+        Text("Добавить позицию", color = ZakupColors.Primary, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -247,7 +334,7 @@ private fun PaymentToggle(payment: PaymentType, onSelect: (PaymentType) -> Unit)
 private fun SegItem(label: String, active: Boolean, modifier: Modifier, onClick: () -> Unit) {
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(ZakupRadius.small),
+        shape = RoundedCornerShape(9.dp),
         color = if (active) ZakupColors.Surface else Color.Transparent,
         modifier = modifier.height(40.dp),
     ) {
@@ -263,10 +350,10 @@ private fun AccountRow(state: NewReceiptUiState, onSelect: (String) -> Unit) {
         state.accounts.forEach { acc ->
             val selected = acc.id == state.accountId
             Surface(
-                shape = RoundedCornerShape(ZakupRadius.tile),
+                shape = RoundedCornerShape(ZakupRadius.button),
                 color = if (selected) ZakupColors.PrimarySoft else ZakupColors.Surface,
                 border = BorderStroke(1.dp, if (selected) ZakupColors.Primary else ZakupColors.Border),
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { onSelect(acc.id) },
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).heightIn(min = 52.dp).clickable { onSelect(acc.id) },
             ) {
                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(acc.name.ifBlank { acc.type }, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
@@ -290,7 +377,7 @@ private fun SubmitBar(total: java.math.BigDecimal, enabled: Boolean, submitting:
                 enabled = enabled,
                 shape = RoundedCornerShape(ZakupRadius.button),
                 color = if (enabled) ZakupColors.Primary else ZakupColors.Primary.copy(alpha = 0.4f),
-                modifier = Modifier.fillMaxWidth().height(54.dp),
+                modifier = Modifier.fillMaxWidth().height(52.dp),
             ) {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                     if (submitting) CircularProgressIndicator(color = ZakupColors.OnPrimary, strokeWidth = 2.dp, modifier = Modifier.size(20.dp))

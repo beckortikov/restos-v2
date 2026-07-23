@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,12 +15,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.outlined.Call
 import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -39,8 +42,8 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.zakup.ui.components.Avatar
-import com.restos.zakup.ui.components.BadgeKind
 import com.restos.zakup.ui.components.ErrorState
+import com.restos.zakup.ui.components.IconTile
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.RowDivider
 import com.restos.zakup.ui.components.StatusBadge
@@ -83,34 +86,31 @@ fun SupplierDetailScreen(
             state.loading -> LoadingState()
             state.error != null -> ErrorState(state.error!!, onRetry = viewModel::load)
             else -> LazyColumn(
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
                 item {
-                    ZakupCard(Modifier.fillMaxWidth(), padding = 16) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Avatar(initialsOf(state.name), size = 52)
+                        Spacer(Modifier.size(12.dp))
                         Column {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Avatar(initialsOf(state.name), size = 52)
-                                Spacer(Modifier.size(12.dp))
-                                Column {
-                                    Text(state.name, style = MaterialTheme.typography.titleLarge)
-                                    val sub = state.contact ?: "—"
-                                    Text(sub, fontSize = 13.sp, color = ZakupColors.TextTertiary)
-                                }
-                            }
-                            Spacer(Modifier.height(14.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                ContactAction("Позвонить", Icons.Outlined.Call, enabled = state.phone != null, modifier = Modifier.weight(1f)) {
-                                    state.phone?.let { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$it"))) }
-                                }
-                                ContactAction("SMS", Icons.AutoMirrored.Outlined.Message, enabled = state.phone != null, modifier = Modifier.weight(1f)) {
-                                    state.phone?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("smsto:$it"))) }
-                                }
-                                ContactAction("На карте", Icons.Outlined.Place, enabled = true, modifier = Modifier.weight(1f)) {
-                                    val q = Uri.encode(state.name)
-                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q"))) }
-                                }
-                            }
+                            Text(state.name, style = MaterialTheme.typography.titleLarge)
+                            val sub = state.contact ?: "—"
+                            Text(sub, fontSize = 13.sp, color = ZakupColors.TextSecondary)
+                        }
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ContactAction("Позвонить", Icons.Outlined.Call, enabled = state.phone != null, modifier = Modifier.weight(1f)) {
+                            state.phone?.let { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$it"))) }
+                        }
+                        ContactAction("SMS", Icons.AutoMirrored.Outlined.Message, enabled = state.phone != null, modifier = Modifier.weight(1f)) {
+                            state.phone?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("smsto:$it"))) }
+                        }
+                        ContactAction("На карте", Icons.Outlined.Place, enabled = true, modifier = Modifier.weight(1f)) {
+                            val q = Uri.encode(state.name)
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q"))) }
                         }
                     }
                 }
@@ -118,12 +118,16 @@ fun SupplierDetailScreen(
                 item { DebtCard(state, onPay = { showPay = true }) }
 
                 item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        StatCard("${state.receiptsCount}", "приёмок", Modifier.weight(1f))
-                        StatCard(formatCompactMoney(state.turnover), "оборот", Modifier.weight(1f))
-                        val cat = state.categories.firstOrNull() ?: "—"
-                        val extra = if (state.categories.size > 1) "+${state.categories.size - 1} кат." else "категория"
-                        StatCard(cat, extra, Modifier.weight(1f))
+                    val cat = state.categories.firstOrNull() ?: "—"
+                    val extra = if (state.categories.size > 1) "+${state.categories.size - 1} кат." else "категория"
+                    ZakupCard(Modifier.fillMaxWidth()) {
+                        Row {
+                            Stat("${state.receiptsCount}", "приёмок", Modifier.weight(1f))
+                            Box(Modifier.width(1.dp).height(40.dp).background(ZakupColors.Border))
+                            Stat(formatCompactMoney(state.turnover), "оборот", Modifier.weight(1f))
+                            Box(Modifier.width(1.dp).height(40.dp).background(ZakupColors.Border))
+                            Stat(cat, extra, Modifier.weight(1f))
+                        }
                     }
                 }
 
@@ -194,18 +198,26 @@ private fun DebtCard(state: SupplierDetailUiState, onPay: () -> Unit) {
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(18.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Текущий долг", color = ZakupColors.OnDarkMuted, fontSize = 13.sp)
                     Spacer(Modifier.height(6.dp))
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(formatMoney(state.debt, ""), color = ZakupColors.OnDark, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.size(6.dp))
-                        Text("с.", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
+                        Text("сум", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
                     }
                 }
                 if (state.agingDays != null) {
-                    StatusBadge("${state.agingDays} дней", BadgeKind.Danger)
+                    Surface(shape = RoundedCornerShape(ZakupRadius.badge), color = ZakupColors.Danger) {
+                        Text(
+                            "${state.agingDays} дней",
+                            color = ZakupColors.OnDark,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -227,19 +239,19 @@ private fun DebtCard(state: SupplierDetailUiState, onPay: () -> Unit) {
 }
 
 @Composable
-private fun StatCard(value: String, label: String, modifier: Modifier) {
-    ZakupCard(modifier, padding = 16) {
-        Column {
-            Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
-            Spacer(Modifier.height(2.dp))
-            Text(label, fontSize = 12.sp, color = ZakupColors.TextTertiary)
-        }
+private fun Stat(value: String, label: String, modifier: Modifier) {
+    Column(modifier.padding(vertical = 16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary, maxLines = 1)
+        Spacer(Modifier.height(2.dp))
+        Text(label, fontSize = 12.sp, color = ZakupColors.TextTertiary)
     }
 }
 
 @Composable
 private fun InvoiceRow(row: ReceiptRow) {
     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconTile(icon = Icons.Outlined.ReceiptLong, tint = ZakupColors.TextSecondary, bg = ZakupColors.SurfaceMuted, size = 38)
+        Spacer(Modifier.size(12.dp))
         Column(Modifier.weight(1f)) {
             Text(row.dateLabel, style = MaterialTheme.typography.titleMedium)
             row.lineCount?.let {

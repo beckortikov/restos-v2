@@ -17,10 +17,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,8 +60,9 @@ fun ZakupTopBar(title: String, onBack: () -> Unit, action: (@Composable () -> Un
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Surface(
-            shape = RoundedCornerShape(ZakupRadius.chip),
-            color = Color.Transparent,
+            shape = androidx.compose.foundation.shape.CircleShape,
+            color = ZakupColors.Surface,
+            border = BorderStroke(1.dp, ZakupColors.Border),
             modifier = Modifier.size(40.dp).clickable(onClick = onBack),
         ) {
             Box(contentAlignment = Alignment.Center) {
@@ -67,7 +70,7 @@ fun ZakupTopBar(title: String, onBack: () -> Unit, action: (@Composable () -> Un
                     Icons.AutoMirrored.Outlined.ArrowBack,
                     contentDescription = "Назад",
                     tint = ZakupColors.TextPrimary,
-                    modifier = Modifier.size(22.dp),
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }
@@ -110,7 +113,7 @@ fun SectionHeader(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, fontSize = 15.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
+        Text(title, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
         if (actionLabel != null) {
             Row(
                 Modifier.clickable(enabled = onAction != null) { onAction?.invoke() },
@@ -138,19 +141,19 @@ fun IconTile(
     }
 }
 
-/** Аватар-инициалы (эмеральд-soft подложка). */
+/** Аватар-инициалы — нейтральная подложка, как в макете (контакты/поставщики/рестораны). */
 @Composable
 fun Avatar(initials: String, size: Int = 44) {
-    Surface(shape = RoundedCornerShape(ZakupRadius.chip), color = ZakupColors.PrimarySoft, modifier = Modifier.size(size.dp)) {
+    Surface(shape = RoundedCornerShape(ZakupRadius.chip), color = ZakupColors.SurfaceMuted, modifier = Modifier.size(size.dp)) {
         Box(contentAlignment = Alignment.Center) {
-            Text(initials, color = ZakupColors.Primary, fontWeight = FontWeight.Bold, fontSize = (size * 0.34).sp)
+            Text(initials, color = ZakupColors.TextSecondary, fontWeight = FontWeight.Bold, fontSize = (size * 0.34).sp)
         }
     }
 }
 
-/** Тонкий разделитель строк внутри карточки. */
+/** Тонкий разделитель строк внутри карточки — во всю ширину, как в макете. */
 @Composable
-fun RowDivider(startIndent: Int = 14) {
+fun RowDivider(startIndent: Int = 0) {
     Box(Modifier.fillMaxWidth().padding(start = startIndent.dp).height(1.dp).background(ZakupColors.Border))
 }
 
@@ -174,6 +177,34 @@ fun ErrorState(message: String, onRetry: (() -> Unit)? = null) {
             Text("Повторить", color = ZakupColors.Primary, fontWeight = FontWeight.SemiBold, modifier = Modifier.clickable { onRetry() })
         }
     }
+}
+
+/**
+ * Подтверждение перед необратимой операцией (приёмка/списание/возврат/инвентаризация/
+ * нач.остаток/расход/погашение долга) — ни одна из «важных» операций не проводится
+ * по одному тапу без этого диалога.
+ */
+@Composable
+fun ConfirmDialog(
+    title: String,
+    message: String,
+    confirmLabel: String = "Подтвердить",
+    danger: Boolean = false,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary) },
+        text = { Text(message, color = ZakupColors.TextSecondary) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(confirmLabel, color = if (danger) ZakupColors.Danger else ZakupColors.Primary, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Отмена", color = ZakupColors.TextSecondary) } },
+        containerColor = ZakupColors.Surface,
+    )
 }
 
 @Composable

@@ -18,11 +18,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ReceiptLong
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -31,7 +37,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.components.ErrorState
+import com.restos.zakup.ui.components.IconTile
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.ZakupCard
 import com.restos.zakup.ui.components.ZakupTopBar
@@ -48,7 +56,19 @@ fun ReturnScreen(
     viewModel: ReturnViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var confirmSubmit by remember { mutableStateOf(false) }
     LaunchedEffectDone(state.done, onDone)
+
+    if (confirmSubmit) {
+        ConfirmDialog(
+            title = "Оформить возврат?",
+            message = "Возврат на сумму ${formatMoney(state.total)}. Остатки уменьшатся, действие нельзя отменить.",
+            confirmLabel = "Оформить",
+            danger = true,
+            onConfirm = { confirmSubmit = false; viewModel.submit() },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ZakupTopBar("Возврат поставщику", onBack = onBack)
@@ -57,15 +77,19 @@ fun ReturnScreen(
             state.loadError != null -> ErrorState(state.loadError!!, onRetry = viewModel::load)
             else -> Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     item {
                         ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
-                            Column {
-                                Text("Накладная", fontSize = 12.sp, color = ZakupColors.TextTertiary)
-                                Spacer(Modifier.size(2.dp))
-                                Text("${state.supplierName} · ${state.receiptDate}", style = MaterialTheme.typography.titleMedium)
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconTile(icon = Icons.Outlined.ReceiptLong, tint = ZakupColors.TextSecondary, bg = ZakupColors.SurfaceMuted, size = 38)
+                                Spacer(Modifier.size(12.dp))
+                                Column {
+                                    Text("Накладная", fontSize = 12.sp, color = ZakupColors.TextTertiary)
+                                    Spacer(Modifier.size(2.dp))
+                                    Text("${state.supplierName} · ${state.receiptDate}", style = MaterialTheme.typography.titleMedium)
+                                }
                             }
                         }
                     }
@@ -76,6 +100,7 @@ fun ReturnScreen(
                             reasons = ReturnReason.entries.map { it.label },
                             selected = state.reason.label,
                             onSelect = { lbl -> ReturnReason.entries.firstOrNull { it.label == lbl }?.let(viewModel::setReason) },
+                            activeColor = ZakupColors.Danger,
                         )
                     }
 
@@ -130,12 +155,13 @@ fun ReturnScreen(
                 OpSubmitBar(
                     totalLabel = "Сумма возврата",
                     totalValue = formatMoney(state.total),
-                    totalColor = ZakupColors.TextPrimary,
+                    totalColor = ZakupColors.Danger,
                     button = "Оформить возврат",
                     enabled = state.canSubmit,
                     submitting = state.submitting,
-                    onSubmit = viewModel::submit,
+                    onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
+                    accentColor = ZakupColors.Danger,
                 )
             }
         }

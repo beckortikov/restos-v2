@@ -1,5 +1,6 @@
 package com.restos.zakup.ui.shell
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -33,6 +35,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -59,7 +63,7 @@ fun ZakupShell(
     onOpenSupplier: (String) -> Unit = {},
     onOpenHistory: () -> Unit = {},
     onOpenToBuy: () -> Unit = {},
-    onNewReceipt: () -> Unit = {},
+    onNewReceipt: (String?) -> Unit = {},
     onOperation: (String) -> Unit = {},
     viewModel: ZakupShellViewModel = hiltViewModel(),
 ) {
@@ -80,12 +84,12 @@ fun ZakupShell(
             when (tab) {
                 ZakupTab.Overview -> OverviewScreen(
                     restaurantName = me?.restaurant?.name,
-                    onNewReceipt = onNewReceipt,
+                    onNewReceipt = { onNewReceipt(null) },
                     onOpenToBuy = onOpenToBuy,
                     onOpenHistory = onOpenHistory,
                     onOpenSuppliers = { currentTab = ZakupTab.Suppliers.ordinal },
                 )
-                ZakupTab.Stock -> StockScreen()
+                ZakupTab.Stock -> StockScreen(onBuyIngredient = onNewReceipt)
                 ZakupTab.Suppliers -> SuppliersScreen(onOpenSupplier = onOpenSupplier)
                 ZakupTab.More -> MoreScreen(
                     me = me,
@@ -98,26 +102,39 @@ fun ZakupShell(
     }
 }
 
-/** Нижняя навигация: иконка + подпись у КАЖДОГО таба (читабельно), активный —
- *  эмеральд + soft-подложка, остальные — серые. */
+/** Нижняя навигация — плавающая белая капсула (r29) с тенью, как в макете:
+ *  иконка + подпись у КАЖДОГО таба, активный — эмеральд + soft-пилюля (r23). */
 @Composable
 private fun ZakupBottomBar(
     current: ZakupTab,
     onSelect: (ZakupTab) -> Unit,
 ) {
-    Surface(
-        color = ZakupColors.Surface,
-        shadowElevation = 0.dp,
-        modifier = Modifier.fillMaxWidth(),
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+            .padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+        contentAlignment = Alignment.Center,
     ) {
-        Column {
-            Box(Modifier.fillMaxWidth().height(1.dp).background(ZakupColors.Border))
+        Surface(
+            color = ZakupColors.Surface,
+            border = BorderStroke(1.dp, ZakupColors.Border),
+            shape = RoundedCornerShape(29.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp)
+                .shadow(
+                    elevation = 8.dp,
+                    shape = RoundedCornerShape(29.dp),
+                    ambientColor = ZakupColors.Shadow.copy(alpha = 0.06f),
+                    spotColor = ZakupColors.Shadow.copy(alpha = 0.06f),
+                ),
+        ) {
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 8.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    .fillMaxSize()
+                    .padding(6.dp),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 ZakupTab.entries.forEach { t ->
@@ -125,25 +142,26 @@ private fun ZakupBottomBar(
                     Column(
                         modifier = Modifier
                             .weight(1f)
+                            .fillMaxHeight()
                             .background(
-                                color = if (selected) ZakupColors.PrimarySoft else ZakupColors.Surface,
-                                shape = RoundedCornerShape(ZakupRadius.tile),
+                                color = if (selected) ZakupColors.PrimarySoft else Color.Transparent,
+                                shape = RoundedCornerShape(23.dp),
                             )
-                            .clickable { onSelect(t) }
-                            .padding(vertical = 8.dp),
+                            .clickable { onSelect(t) },
                         horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
                     ) {
                         Icon(
                             t.icon,
                             contentDescription = t.title,
                             tint = if (selected) ZakupColors.Primary else ZakupColors.TextTertiary,
-                            modifier = Modifier.size(22.dp),
+                            modifier = Modifier.size(21.dp),
                         )
                         Spacer(Modifier.height(3.dp))
                         Text(
                             t.title,
-                            color = if (selected) ZakupColors.Primary else ZakupColors.TextTertiary,
-                            fontSize = 11.sp,
+                            color = if (selected) ZakupColors.Primary else ZakupColors.TextSecondary,
+                            fontSize = 10.5.sp,
                             fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                         )
                     }
@@ -159,7 +177,7 @@ fun ZakupScreenHeader(title: String, subtitle: String? = null) {
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp)
+            .padding(horizontal = 16.dp)
             .padding(top = 8.dp, bottom = 12.dp),
     ) {
         Text(title, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)

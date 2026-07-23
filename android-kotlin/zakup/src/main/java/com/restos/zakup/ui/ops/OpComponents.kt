@@ -57,19 +57,20 @@ data class PickItem(
 
 /** Ряд чипов-оснований (причина операции). */
 @Composable
-fun ReasonChips(reasons: List<String>, selected: String, onSelect: (String) -> Unit) {
+fun ReasonChips(reasons: List<String>, selected: String, onSelect: (String) -> Unit, activeColor: Color = ZakupColors.TextPrimary) {
     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         items(reasons, key = { it }) { r ->
             val active = r == selected
+            val soft = activeColor != ZakupColors.TextPrimary
             Surface(
                 shape = RoundedCornerShape(ZakupRadius.pill),
-                color = if (active) ZakupColors.TextPrimary else ZakupColors.Surface,
-                border = if (active) null else BorderStroke(1.dp, ZakupColors.Border),
+                color = when { !active -> ZakupColors.Surface; soft -> activeColor.copy(alpha = 0.1f); else -> activeColor },
+                border = when { active && soft -> BorderStroke(1.dp, activeColor); active -> null; else -> BorderStroke(1.dp, ZakupColors.Border) },
                 modifier = Modifier.clickable { onSelect(r) },
             ) {
                 Text(
                     r,
-                    color = if (active) Color.White else ZakupColors.TextSecondary,
+                    color = when { !active -> ZakupColors.TextSecondary; soft -> activeColor; else -> Color.White },
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
@@ -116,6 +117,7 @@ fun OpSubmitBar(
     submitting: Boolean,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
+    accentColor: Color = ZakupColors.Primary,
 ) {
     Surface(color = ZakupColors.Bg, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp).navigationBarsPadding()) {
@@ -127,7 +129,7 @@ fun OpSubmitBar(
                 onClick = onSubmit,
                 enabled = enabled,
                 shape = RoundedCornerShape(ZakupRadius.button),
-                color = if (enabled) ZakupColors.Primary else ZakupColors.Primary.copy(alpha = 0.4f),
+                color = if (enabled) accentColor else accentColor.copy(alpha = 0.4f),
                 modifier = Modifier.fillMaxWidth().height(54.dp),
             ) {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {

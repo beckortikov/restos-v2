@@ -79,7 +79,7 @@ object ZakupRadius {
 }
 
 object ZakupSpacing {
-    val screenH = 20.dp   // горизонтальный отступ экрана
+    val screenH = 16.dp   // горизонтальный отступ экрана
     val gap = 12.dp       // типовой промежуток между карточками
 }
 

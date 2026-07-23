@@ -41,27 +41,39 @@ import com.restos.zakup.ui.components.EmptyState
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.ZakupCard
-import com.restos.zakup.ui.shell.ZakupScreenHeader
 import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
+import com.restos.zakup.util.formatCompactMoney
 import com.restos.zakup.util.formatQty
 
 /** Экран 03 «Склад» — остатки с выбором склада, быстрым фильтром и поиском. */
 @Composable
-fun StockScreen(viewModel: StockViewModel = hiltViewModel()) {
+fun StockScreen(onBuyIngredient: (String) -> Unit = {}, viewModel: StockViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize()) {
-        ZakupScreenHeader(title = "Склад")
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Склад", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
+            // Стоимость остатков выбранного склада (#4).
+            Surface(shape = RoundedCornerShape(ZakupRadius.pill), color = ZakupColors.SurfaceMuted) {
+                Text(
+                    "${formatCompactMoney(state.warehouseValue)} сум",
+                    fontSize = 12.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = ZakupColors.TextSecondary,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                )
+            }
+        }
 
-        SearchField(state.query, viewModel::setQuery, Modifier.padding(horizontal = 20.dp))
+        SearchField(state.query, viewModel::setQuery, Modifier.padding(horizontal = 16.dp))
         Spacer(Modifier.height(10.dp))
 
-        // Быстрый фильтр по остатку (#4): Все / Мало / Нет.
+        // Быстрый фильтр по остатку: Все / Мало / Нет.
         StatusChips(state.status, state.lowCount, state.outCount, viewModel::setStatus)
         Spacer(Modifier.height(8.dp))
 
-        // Выбор склада (#5).
+        // Выбор склада.
         if (state.warehouses.size > 1) {
             WarehouseChips(state.warehouses, state.selectedWarehouse, viewModel::selectWarehouse)
             Spacer(Modifier.height(8.dp))
@@ -72,10 +84,10 @@ fun StockScreen(viewModel: StockViewModel = hiltViewModel()) {
             state.error != null -> ErrorState(state.error!!, onRetry = viewModel::load)
             state.rows.isEmpty() -> EmptyState("Ничего не найдено")
             else -> LazyColumn(
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(state.rows, key = { it.id }) { row -> StockRowCard(row) }
+                items(state.rows, key = { it.id }) { row -> StockRowCard(row, onClick = { onBuyIngredient(row.id) }) }
             }
         }
     }
@@ -105,7 +117,7 @@ private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Mod
 @Composable
 private fun StatusChips(selected: StockStatusFilter, low: Int, out: Int, onSelect: (StockStatusFilter) -> Unit) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         StockStatusFilter.entries.forEach { f ->
@@ -134,7 +146,7 @@ private fun StatusChips(selected: StockStatusFilter, low: Int, out: Int, onSelec
 @Composable
 private fun WarehouseChips(tabs: List<WarehouseTab>, selected: String?, onSelect: (String?) -> Unit) {
     LazyRow(
-        contentPadding = PaddingValues(horizontal = 20.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(tabs, key = { it.id ?: "all" }) { tab ->
@@ -158,15 +170,20 @@ private fun WarehouseChips(tabs: List<WarehouseTab>, selected: String?, onSelect
 }
 
 @Composable
-private fun StockRowCard(row: StockRow) {
+private fun StockRowCard(row: StockRow, onClick: () -> Unit) {
     val dot = when (row.level) {
         StockLevel.Ok -> ZakupColors.Primary
         StockLevel.Low -> ZakupColors.Warn
         StockLevel.Out -> ZakupColors.Danger
     }
-    ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
+    // Тап по позиции — быстрый закуп (#1): открывает Новую приёмку с этим ингредиентом.
+    ZakupCard(Modifier.fillMaxWidth().clickable(onClick = onClick), padding = 14) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).background(dot, CircleShape))
+            Surface(shape = RoundedCornerShape(ZakupRadius.pill), color = ZakupColors.SurfaceMuted, modifier = Modifier.size(38.dp)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(10.dp).background(dot, CircleShape))
+                }
+            }
             Spacer(Modifier.size(12.dp))
             Column(Modifier.weight(1f)) {
                 Text(row.name, style = MaterialTheme.typography.titleMedium)
@@ -182,7 +199,11 @@ private fun StockRowCard(row: StockRow) {
                 )
                 if (row.level != StockLevel.Ok && row.minQty.signum() > 0) {
                     Spacer(Modifier.size(2.dp))
-                    Text("мин ${formatQty(row.minQty, row.unit)}", fontSize = 11.5.sp, color = ZakupColors.TextTertiary)
+                    Text(
+                        "мин ${formatQty(row.minQty, row.unit)}",
+                        fontSize = 11.5.sp,
+                        color = if (row.level == StockLevel.Out) ZakupColors.Danger else ZakupColors.Warn,
+                    )
                 }
             }
         }

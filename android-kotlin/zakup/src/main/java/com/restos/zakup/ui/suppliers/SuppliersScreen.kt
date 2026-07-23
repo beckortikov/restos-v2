@@ -35,11 +35,9 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.zakup.ui.components.Avatar
-import com.restos.zakup.ui.components.BadgeKind
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.RowDivider
-import com.restos.zakup.ui.components.StatusBadge
 import com.restos.zakup.ui.components.ZakupCard
 import com.restos.zakup.ui.shell.ZakupScreenHeader
 import com.restos.zakup.ui.theme.ZakupColors
@@ -75,7 +73,7 @@ fun SuppliersScreen(
             state.loading -> LoadingState()
             state.error != null -> ErrorState(state.error!!, onRetry = viewModel::load)
             else -> LazyColumn(
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item {
@@ -104,14 +102,14 @@ private fun DebtSummaryCard(total: BigDecimal, count: Int, withDebt: Int, overdu
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
                     Text("Общий долг поставщикам", color = ZakupColors.OnDarkMuted, fontSize = 13.sp)
                     Spacer(Modifier.height(4.dp))
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(formatMoney(total, ""), color = ZakupColors.OnDark, fontSize = 27.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.size(6.dp))
-                        Text("с.", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
+                        Text("сум", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
                     }
                 }
                 if (withDebt > 0) {
@@ -163,12 +161,17 @@ private fun SupplierCard(row: SupplierRow, onClick: () -> Unit) {
             }
             RowDivider(0)
             Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    row.categories.joinToString(" · ").ifBlank { "—" },
-                    fontSize = 11.5.sp,
-                    color = ZakupColors.TextSecondary,
-                    modifier = Modifier.weight(1f),
-                )
+                if (row.categories.isEmpty()) {
+                    Text("—", fontSize = 11.5.sp, color = ZakupColors.TextSecondary, modifier = Modifier.weight(1f))
+                } else {
+                    Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.categories.forEach { cat ->
+                            Surface(shape = RoundedCornerShape(ZakupRadius.badge), color = ZakupColors.SurfaceMuted) {
+                                Text(cat, fontSize = 11.5.sp, color = ZakupColors.TextSecondary, modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp))
+                            }
+                        }
+                    }
+                }
                 Column(horizontalAlignment = Alignment.End) {
                     if (row.debt.signum() > 0) {
                         Text("− ${formatMoney(row.debt, "")}", color = ZakupColors.Danger, fontSize = 15.sp, fontWeight = FontWeight.Bold)
@@ -180,7 +183,7 @@ private fun SupplierCard(row: SupplierRow, onClick: () -> Unit) {
                         }
                         Text(label, fontSize = 11.5.sp, color = ZakupColors.TextTertiary)
                     } else {
-                        StatusBadge("Без долга", BadgeKind.Success)
+                        Text("Без долга", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = ZakupColors.Primary)
                     }
                 }
             }

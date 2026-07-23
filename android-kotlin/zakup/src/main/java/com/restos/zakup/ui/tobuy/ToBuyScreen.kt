@@ -1,5 +1,6 @@
 package com.restos.zakup.ui.tobuy
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,7 +18,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -46,13 +50,25 @@ import com.restos.zakup.util.formatQty
 @Composable
 fun ToBuyScreen(
     onBack: () -> Unit,
-    onCreateReceipt: () -> Unit = {},
+    onCreateReceipt: (List<String>) -> Unit = {},
     viewModel: ToBuyViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        ZakupTopBar("Что закупить", onBack = onBack)
+        ZakupTopBar("Что закупить", onBack = onBack) {
+            if (state.items.isNotEmpty()) {
+                Surface(shape = RoundedCornerShape(ZakupRadius.badge), color = ZakupColors.WarnSoft) {
+                    Text(
+                        "${state.items.size}",
+                        color = ZakupColors.Warn,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                    )
+                }
+            }
+        }
 
         when {
             state.loading -> LoadingState()
@@ -60,24 +76,31 @@ fun ToBuyScreen(
             state.items.isEmpty() -> EmptyState("Все позиции выше минимума 👍")
             else -> Box(Modifier.weight(1f)) {
                 LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     item {
-                        Text(
-                            "${state.items.size} позиций ниже минимума. Проверьте объёмы.",
-                            fontSize = 13.sp,
-                            color = ZakupColors.TextSecondary,
-                            modifier = Modifier.padding(vertical = 4.dp),
-                        )
+                        Surface(shape = RoundedCornerShape(ZakupRadius.tile), color = ZakupColors.WarnSoft, modifier = Modifier.fillMaxWidth()) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Icon(Icons.Outlined.WarningAmber, contentDescription = null, tint = ZakupColors.WarnText, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.size(8.dp))
+                                Text(
+                                    "${state.items.size} позиций ниже минимума. Проверьте объёмы.",
+                                    fontSize = 13.sp,
+                                    color = ZakupColors.WarnText,
+                                )
+                            }
+                        }
                     }
-                    items(state.items, key = { it.id }) { item -> BuyRow(item) }
+                    items(state.items, key = { it.id }) { item ->
+                        BuyRow(item, selected = item.id in state.selected, onToggle = { viewModel.toggleSelected(item.id) })
+                    }
                     item { Spacer(Modifier.height(72.dp)) }
                 }
 
                 CreateReceiptBar(
-                    count = state.items.size,
-                    onClick = onCreateReceipt,
+                    count = state.selected.size,
+                    onClick = { onCreateReceipt(state.selected.toList()) },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
@@ -86,9 +109,16 @@ fun ToBuyScreen(
 }
 
 @Composable
-private fun BuyRow(item: BuyItem) {
-    ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
+private fun BuyRow(item: BuyItem, selected: Boolean, onToggle: () -> Unit) {
+    ZakupCard(Modifier.fillMaxWidth().clickable(onClick = onToggle), padding = 14) {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                if (selected) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
+                contentDescription = null,
+                tint = if (selected) { if (item.isOut) ZakupColors.Danger else ZakupColors.Warn } else ZakupColors.Border,
+                modifier = Modifier.size(22.dp),
+            )
+            Spacer(Modifier.size(10.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(item.name, style = MaterialTheme.typography.titleMedium)
@@ -116,8 +146,9 @@ private fun CreateReceiptBar(count: Int, onClick: () -> Unit, modifier: Modifier
         Box(Modifier.padding(20.dp).navigationBarsPadding()) {
             Surface(
                 onClick = onClick,
+                enabled = count > 0,
                 shape = RoundedCornerShape(ZakupRadius.button),
-                color = ZakupColors.Primary,
+                color = if (count > 0) ZakupColors.Primary else ZakupColors.Primary.copy(alpha = 0.4f),
                 modifier = Modifier.fillMaxWidth().height(54.dp),
             ) {
                 Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {

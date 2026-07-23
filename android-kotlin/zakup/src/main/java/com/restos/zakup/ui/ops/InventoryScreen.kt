@@ -1,6 +1,7 @@
 package com.restos.zakup.ui.ops
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,9 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.ZakupCard
@@ -58,6 +63,17 @@ fun InventoryScreen(
     viewModel: InventoryViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    var confirmSubmit by remember { mutableStateOf(false) }
+
+    if (confirmSubmit) {
+        ConfirmDialog(
+            title = "Применить инвентаризацию?",
+            message = "Изменится ${state.changedCount} позиций. Остатки будут приведены к фактическим — действие нельзя отменить.",
+            confirmLabel = "Применить",
+            onConfirm = { confirmSubmit = false; viewModel.submit() },
+            onDismiss = { confirmSubmit = false },
+        )
+    }
 
     state.result?.let { r ->
         AlertDialog(
@@ -84,11 +100,17 @@ fun InventoryScreen(
             else -> Box(Modifier.weight(1f)) {
                 Column {
                     SummaryRow(state.visible.size, state.surplusCount, state.shortageValue)
-                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Внесите фактический остаток — расхождение считается автоматически.",
+                        fontSize = 12.sp,
+                        color = ZakupColors.TextTertiary,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                    Spacer(Modifier.height(4.dp))
                     TextField(
                         value = state.query,
                         onValueChange = viewModel::setQuery,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         placeholder = { Text("Поиск ингредиента", color = ZakupColors.TextTertiary, fontSize = 14.sp) },
                         leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ZakupColors.TextTertiary) },
                         singleLine = true,
@@ -114,7 +136,7 @@ fun InventoryScreen(
                         Spacer(Modifier.height(6.dp))
                     }
                     LazyColumn(
-                        contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         items(state.visible, key = { it.id }) { line -> InventoryRow(line, viewModel::setActual) }
@@ -129,7 +151,7 @@ fun InventoryScreen(
                     button = "Применить",
                     enabled = state.canSubmit,
                     submitting = state.submitting,
-                    onSubmit = viewModel::submit,
+                    onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
                 if (state.submitError != null) {
@@ -148,7 +170,7 @@ fun InventoryScreen(
 @Composable
 private fun Chips(items: List<String>, selected: String, onSelect: (String) -> Unit) {
     LazyRow(
-        contentPadding = PaddingValues(horizontal = 20.dp),
+        contentPadding = PaddingValues(horizontal = 16.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         items(items, key = { it }) { c ->
@@ -173,21 +195,23 @@ private fun Chips(items: List<String>, selected: String, onSelect: (String) -> U
 
 @Composable
 private fun SummaryRow(total: Int, surplus: Int, shortage: BigDecimal) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Stat("$total", "позиций", ZakupColors.TextPrimary, Modifier.weight(1f))
-        Stat("+$surplus", "излишки", ZakupColors.Primary, Modifier.weight(1f))
-        Stat("−${formatMoney(shortage, "")}", "недостача", ZakupColors.Danger, Modifier.weight(1f))
+    ZakupCard(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row {
+            Stat("$total", "позиций", ZakupColors.TextPrimary, Modifier.weight(1f))
+            Box(Modifier.width(1.dp).height(36.dp).background(ZakupColors.Border))
+            Stat("+$surplus", "излишки", ZakupColors.Primary, Modifier.weight(1f))
+            Box(Modifier.width(1.dp).height(36.dp).background(ZakupColors.Border))
+            Stat("−${formatMoney(shortage, "")}", "недостача", ZakupColors.Danger, Modifier.weight(1f))
+        }
     }
 }
 
 @Composable
 private fun Stat(value: String, label: String, color: Color, modifier: Modifier) {
-    ZakupCard(modifier, padding = 12) {
-        Column {
-            Text(value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = color)
-            Spacer(Modifier.size(2.dp))
-            Text(label, fontSize = 11.sp, color = ZakupColors.TextTertiary)
-        }
+    Column(modifier.padding(vertical = 12.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = color)
+        Spacer(Modifier.size(2.dp))
+        Text(label, fontSize = 11.sp, color = ZakupColors.TextTertiary)
     }
 }
 

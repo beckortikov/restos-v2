@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ShoppingCart
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -57,18 +59,23 @@ fun OverviewScreen(
     onOpenToBuy: () -> Unit = {},
     onOpenHistory: () -> Unit = {},
     onOpenSuppliers: () -> Unit = {},
+    onOpenNotifications: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize()) {
-        OverviewHeader(dateLabel = todayLabel(), restaurantName = restaurantName)
+        OverviewHeader(
+            dateLabel = todayLabel(),
+            restaurantName = restaurantName,
+            onOpenNotifications = onOpenNotifications,
+        )
 
         when {
             state.loading -> LoadingState()
             state.error != null -> ErrorState(state.error!!, onRetry = viewModel::load)
             else -> LazyColumn(
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
@@ -145,9 +152,9 @@ fun OverviewScreen(
 }
 
 @Composable
-private fun OverviewHeader(dateLabel: String, restaurantName: String?) {
+private fun OverviewHeader(dateLabel: String, restaurantName: String?, onOpenNotifications: () -> Unit) {
     androidx.compose.foundation.layout.Row(
-        Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 12.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
@@ -155,6 +162,18 @@ private fun OverviewHeader(dateLabel: String, restaurantName: String?) {
             Spacer(Modifier.height(2.dp))
             Text("Обзор закупок", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
         }
+        Surface(
+            onClick = onOpenNotifications,
+            shape = androidx.compose.foundation.shape.CircleShape,
+            color = ZakupColors.Surface,
+            border = androidx.compose.foundation.BorderStroke(1.dp, ZakupColors.Border),
+            modifier = Modifier.size(42.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Notifications, contentDescription = "Уведомления", tint = ZakupColors.TextPrimary, modifier = Modifier.size(20.dp))
+            }
+        }
+        Spacer(Modifier.size(10.dp))
         if (!restaurantName.isNullOrBlank()) {
             com.restos.zakup.ui.components.Avatar(com.restos.zakup.util.initialsOf(restaurantName), size = 40)
         }
@@ -185,9 +204,9 @@ private fun MetricCard(
 ) {
     ZakupCard(if (onClick != null) modifier.clickable(onClick = onClick) else modifier, padding = 16) {
         Column {
-            IconTile(icon = icon, tint = tint, bg = bg, size = 36)
-            Spacer(Modifier.height(14.dp))
-            Text(value, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
+            IconTile(icon = icon, tint = tint, bg = bg, size = 34)
+            Spacer(Modifier.height(12.dp))
+            Text(value, fontSize = 24.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
             Spacer(Modifier.height(2.dp))
             Text(label, fontSize = 12.5.sp, color = ZakupColors.TextTertiary)
         }
@@ -213,13 +232,21 @@ private fun NewReceiptButton(onClick: () -> Unit) {
 @Composable
 private fun ToBuyRowView(row: ToBuyRow) {
     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        val danger = row.urgency == BuyUrgency.Out
+        IconTile(
+            icon = Icons.Outlined.ShoppingCart,
+            tint = if (danger) ZakupColors.Danger else ZakupColors.Warn,
+            bg = if (danger) ZakupColors.DangerSoft else ZakupColors.WarnSoft,
+            size = 38,
+        )
+        Spacer(Modifier.size(12.dp))
         Column(Modifier.weight(1f)) {
             Text(row.name, style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.size(2.dp))
             val left = if (row.qty.signum() <= 0) "Остаток 0" else "Осталось ${formatQty(row.qty, null)}"
             Text("$left · мин ${formatQty(row.minQty, row.unit)}", fontSize = 12.5.sp, color = ZakupColors.TextTertiary)
         }
-        if (row.urgency == BuyUrgency.Out) StatusBadge("Нет", BadgeKind.Danger)
+        if (danger) StatusBadge("Нет", BadgeKind.Danger)
         else StatusBadge("Мало", BadgeKind.Warn)
     }
 }
@@ -227,6 +254,8 @@ private fun ToBuyRowView(row: ToBuyRow) {
 @Composable
 private fun RecentReceiptRow(row: ReceiptRow) {
     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconTile(icon = Icons.Outlined.ReceiptLong, tint = ZakupColors.TextSecondary, bg = ZakupColors.SurfaceMuted, size = 38)
+        Spacer(Modifier.size(12.dp))
         Column(Modifier.weight(1f)) {
             Text(row.supplierName, style = MaterialTheme.typography.titleMedium, maxLines = 1)
             Spacer(Modifier.size(2.dp))

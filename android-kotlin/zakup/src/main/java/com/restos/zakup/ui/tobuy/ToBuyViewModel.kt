@@ -30,6 +30,7 @@ data class ToBuyUiState(
     val loading: Boolean = true,
     val error: String? = null,
     val items: List<BuyItem> = emptyList(),
+    val selected: Set<String> = emptySet(),
 )
 
 @HiltViewModel
@@ -51,12 +52,18 @@ class ToBuyViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching { api.listAllIngredients(low = true).map { it.toBuyItem() } }
                 .onSuccess { items ->
-                    _state.update { it.copy(loading = false, items = items.sortedByDescending { i -> i.isOut }) }
+                    val sorted = items.sortedByDescending { i -> i.isOut }
+                    _state.update { it.copy(loading = false, items = sorted, selected = sorted.map { i -> i.id }.toSet()) }
                 }
                 .onFailure { e ->
                     _state.update { it.copy(loading = false, error = e.message ?: "Не удалось загрузить список") }
                 }
         }
+    }
+
+    /** Выбор позиций для будущей приёмки (чекбокс в строке) — по умолчанию выбраны все. */
+    fun toggleSelected(id: String) = _state.update {
+        it.copy(selected = if (id in it.selected) it.selected - id else it.selected + id)
     }
 
     private fun IngredientDto.toBuyItem(): BuyItem {
