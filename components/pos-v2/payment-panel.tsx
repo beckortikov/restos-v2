@@ -91,7 +91,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
   function handleErr(e: unknown) {
     const code = e instanceof V4Error ? (e.envelope() as { code?: string } | null)?.code : undefined
     if (code === 'DISCOUNT_REQUIRES_APPROVAL') {
-      toast.error('Скидка ≥10% требует одобрения менеджера', { description: 'Уменьшите скидку или проведите через менеджера.', duration: 6000 })
+      toast.error('Скидка требует одобрения менеджера', { description: 'Скидка выше порога ресторана — уменьшите её или проведите через менеджера.', duration: 6000 })
       return
     }
     toast.error(`Оплата не прошла: ${humanizeError(e)}`)

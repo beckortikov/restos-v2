@@ -4192,6 +4192,7 @@ components:
         phone: { type: string }
         currency: { type: string }
         service_percent: { $ref: "#/components/schemas/Decimal" }
+        discount_approval_threshold: { $ref: "#/components/schemas/Decimal" }
         timezone: { type: string }
         enforce_stock_check: { type: boolean }
         tech_cards_enabled: { type: boolean }
@@ -4218,6 +4219,7 @@ components:
         phone: { type: string }
         currency: { type: string }
         service_percent: { $ref: "#/components/schemas/Decimal" }
+        discount_approval_threshold: { $ref: "#/components/schemas/Decimal", description: "Скидка выше этого % требует одобрения менеджера/владельца (default 10)" }
         timezone: { type: string }
         enforce_stock_check: { type: boolean }
         tech_cards_enabled: { type: boolean }

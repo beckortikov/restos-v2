@@ -24,25 +24,28 @@ type RestaurantsService struct{ r *repo.Repo }
 func NewRestaurantsService(r *repo.Repo) *RestaurantsService { return &RestaurantsService{r: r} }
 
 type RestaurantCreateInput struct {
-	Name               *string `json:"name,omitempty"`
-	Slug               *string `json:"slug,omitempty"`
-	LogoURL            *string `json:"logo_url,omitempty"`
-	Address            *string `json:"address,omitempty"`
-	Phone              *string `json:"phone,omitempty"`
-	Currency           *string `json:"currency,omitempty"`
-	ServicePercent     *string `json:"service_percent,omitempty"`
-	Timezone           *string `json:"timezone,omitempty"`
-	EnforceStockCheck  *bool   `json:"enforce_stock_check,omitempty"`
-	TechCardsEnabled   *bool   `json:"tech_cards_enabled,omitempty"`
-	AutoReadyMode      *bool   `json:"auto_ready_mode,omitempty"`
-	AutoReadyBufferMin *int    `json:"auto_ready_buffer_min,omitempty"`
-	PinLockEnabled     *bool   `json:"pin_lock_enabled,omitempty"`
-	PinLockTimeoutMin  *int    `json:"pin_lock_timeout_min,omitempty"`
-	SupplyAllowNeg     *bool   `json:"supply_allow_negative,omitempty"`
-	OnScreenKbdEnabled *bool   `json:"on_screen_keyboard_enabled,omitempty"`
-	TablesEnabled      *bool   `json:"tables_enabled,omitempty"`
-	KitchenOnPay       *bool   `json:"kitchen_on_pay,omitempty"`
-	PosV2Default       *bool   `json:"pos_v2_default,omitempty"`
+	Name           *string `json:"name,omitempty"`
+	Slug           *string `json:"slug,omitempty"`
+	LogoURL        *string `json:"logo_url,omitempty"`
+	Address        *string `json:"address,omitempty"`
+	Phone          *string `json:"phone,omitempty"`
+	Currency       *string `json:"currency,omitempty"`
+	ServicePercent *string `json:"service_percent,omitempty"`
+	// DiscountApprovalThreshold — скидка выше этого % требует одобрения
+	// менеджера/владельца. Строка (decimal), как service_percent.
+	DiscountApprovalThreshold *string `json:"discount_approval_threshold,omitempty"`
+	Timezone                  *string `json:"timezone,omitempty"`
+	EnforceStockCheck         *bool   `json:"enforce_stock_check,omitempty"`
+	TechCardsEnabled          *bool   `json:"tech_cards_enabled,omitempty"`
+	AutoReadyMode             *bool   `json:"auto_ready_mode,omitempty"`
+	AutoReadyBufferMin        *int    `json:"auto_ready_buffer_min,omitempty"`
+	PinLockEnabled            *bool   `json:"pin_lock_enabled,omitempty"`
+	PinLockTimeoutMin         *int    `json:"pin_lock_timeout_min,omitempty"`
+	SupplyAllowNeg            *bool   `json:"supply_allow_negative,omitempty"`
+	OnScreenKbdEnabled        *bool   `json:"on_screen_keyboard_enabled,omitempty"`
+	TablesEnabled             *bool   `json:"tables_enabled,omitempty"`
+	KitchenOnPay              *bool   `json:"kitchen_on_pay,omitempty"`
+	PosV2Default              *bool   `json:"pos_v2_default,omitempty"`
 	// Доставка (052).
 	DeliveryEnabled          *bool `json:"delivery_enabled,omitempty"`
 	DeliveryContactsRequired *bool `json:"delivery_contacts_required,omitempty"`
@@ -117,6 +120,13 @@ func (s *RestaurantsService) Create(ctx context.Context, in RestaurantCreateInpu
 		}
 		r.ServicePercent = d
 	}
+	if in.DiscountApprovalThreshold != nil {
+		d, err := decimal.FromString(*in.DiscountApprovalThreshold)
+		if err != nil || decimal.IsNegative(d) {
+			return nil, apperrors.Wrap("VALIDATION", "bad discount_approval_threshold", err)
+		}
+		r.DiscountApprovalThreshold = d
+	}
 	if err := s.r.Raw().WithContext(ctx).Create(r).Error; err != nil {
 		return nil, err
 	}
@@ -159,6 +169,13 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 			return nil, apperrors.Wrap("VALIDATION", "bad service_percent", err)
 		}
 		updates["service_percent"] = d
+	}
+	if in.DiscountApprovalThreshold != nil {
+		d, err := decimal.FromString(*in.DiscountApprovalThreshold)
+		if err != nil || decimal.IsNegative(d) {
+			return nil, apperrors.Wrap("VALIDATION", "bad discount_approval_threshold", err)
+		}
+		updates["discount_approval_threshold"] = d
 	}
 	if in.EnforceStockCheck != nil {
 		updates["enforce_stock_check"] = *in.EnforceStockCheck

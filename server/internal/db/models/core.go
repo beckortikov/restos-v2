@@ -10,17 +10,21 @@ import (
 
 // Restaurant — тенант. Все остальные таблицы фильтруются по restaurant_id.
 type Restaurant struct {
-	ID                string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	Name              string          `gorm:"not null" json:"name"`
-	Slug              *string         `gorm:"column:slug" json:"slug"`
-	LogoURL           *string         `gorm:"column:logo_url" json:"logo_url"`
-	Address           *string         `json:"address"`
-	Phone             *string         `json:"phone"`
-	Currency          *string         `gorm:"default:'TJS'" json:"currency"`
-	ServicePercent    decimal.Decimal `gorm:"type:numeric(14,4);default:10" json:"service_percent"`
-	Timezone          *string         `gorm:"default:'Asia/Dushanbe'" json:"timezone"`
-	EnforceStockCheck *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
-	TechCardsEnabled  *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
+	ID             string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name           string          `gorm:"not null" json:"name"`
+	Slug           *string         `gorm:"column:slug" json:"slug"`
+	LogoURL        *string         `gorm:"column:logo_url" json:"logo_url"`
+	Address        *string         `json:"address"`
+	Phone          *string         `json:"phone"`
+	Currency       *string         `gorm:"default:'TJS'" json:"currency"`
+	ServicePercent decimal.Decimal `gorm:"type:numeric(14,4);default:10" json:"service_percent"`
+	// DiscountApprovalThreshold — скидка ВЫШЕ этого % требует одобрения
+	// менеджера/владельца при закрытии заказа (см. orders_close.go). Владелец
+	// настраивает в настройках. DEFAULT 10 — прежнее захардкоженное поведение.
+	DiscountApprovalThreshold decimal.Decimal `gorm:"column:discount_approval_threshold;type:numeric(14,4);default:10" json:"discount_approval_threshold"`
+	Timezone                  *string         `gorm:"default:'Asia/Dushanbe'" json:"timezone"`
+	EnforceStockCheck         *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
+	TechCardsEnabled          *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
 	// ShiftBalanceCorrectedAt — маркер разовой коррекции балансов под фикс Н13
 	// (v3.16.94+). NULL = не выполнялась; заполнен = повтор запрещён.
 	ShiftBalanceCorrectedAt *time.Time `gorm:"column:shift_balance_corrected_at" json:"shift_balance_corrected_at,omitempty"`

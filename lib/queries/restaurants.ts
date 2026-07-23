@@ -43,6 +43,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   address: string
   phone: string
   servicePercent: number
+  discountApprovalThreshold: number
   enforceStockCheck: boolean
   techCardsEnabled: boolean
   autoReadyMode: boolean
@@ -68,6 +69,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   if (data.address !== undefined) updates.address = data.address
   if (data.phone !== undefined) updates.phone = data.phone
   if (data.servicePercent !== undefined) updates.service_percent = String(data.servicePercent)
+  if (data.discountApprovalThreshold !== undefined) updates.discount_approval_threshold = String(data.discountApprovalThreshold)
   if (data.enforceStockCheck !== undefined) updates.enforce_stock_check = data.enforceStockCheck
   if (data.techCardsEnabled !== undefined) updates.tech_cards_enabled = data.techCardsEnabled
   if (data.autoReadyMode !== undefined) updates.auto_ready_mode = data.autoReadyMode

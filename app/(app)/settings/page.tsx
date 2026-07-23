@@ -70,6 +70,7 @@ export default function SettingsPage() {
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
   const [servicePercent, setServicePercent] = useState(10)
+  const [discountApprovalThreshold, setDiscountApprovalThreshold] = useState(10)
   const [enforceStockCheck, setEnforceStockCheck] = useState(false)
   const [techCardsEnabled, setTechCardsEnabled] = useState(true)
   const [autoReadyMode, setAutoReadyMode] = useState(false)
@@ -102,6 +103,7 @@ export default function SettingsPage() {
           setAddress(r.address || '')
           setPhone(r.phone || '')
           setServicePercent(r.servicePercent)
+          setDiscountApprovalThreshold(r.discountApprovalThreshold ?? 10)
           setEnforceStockCheck(r.enforceStockCheck ?? false)
           setTechCardsEnabled(r.techCardsEnabled ?? true)
           setAutoReadyMode(r.autoReadyMode ?? false)
@@ -149,9 +151,9 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
+      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
+      const updated = { ...rest, name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -166,7 +168,7 @@ export default function SettingsPage() {
         tags: { component: 'settings.save' },
         extra: {
           restaurantId: rest.id,
-          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales },
+          payload: { name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales },
         },
       })
     } finally {
@@ -180,6 +182,7 @@ export default function SettingsPage() {
     setAddress(rest.address || '')
     setPhone(rest.phone || '')
     setServicePercent(rest.servicePercent)
+    setDiscountApprovalThreshold(rest.discountApprovalThreshold ?? 10)
     setEnforceStockCheck(rest.enforceStockCheck ?? false)
     setTechCardsEnabled(rest.techCardsEnabled ?? true)
     setAutoReadyMode(rest.autoReadyMode ?? false)
@@ -282,6 +285,16 @@ export default function SettingsPage() {
                 max={30}
                 value={servicePercent}
                 onChange={e => setServicePercent(Number(e.target.value))}
+                className={inputCls}
+              />
+            </Field>
+            <Field label="Скидка без одобрения (%)" hint="Скидку ВЫШЕ этого процента кассир не проведёт без одобрения менеджера/владельца. До этого значения включительно — свободно.">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={discountApprovalThreshold}
+                onChange={e => setDiscountApprovalThreshold(Number(e.target.value))}
                 className={inputCls}
               />
             </Field>

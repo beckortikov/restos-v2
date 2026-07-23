@@ -12055,6 +12055,7 @@ export interface components {
             phone?: string;
             currency?: string;
             service_percent?: components["schemas"]["Decimal"];
+            discount_approval_threshold?: components["schemas"]["Decimal"];
             timezone?: string;
             enforce_stock_check?: boolean;
             tech_cards_enabled?: boolean;
@@ -12083,6 +12084,8 @@ export interface components {
             phone?: string;
             currency?: string;
             service_percent?: components["schemas"]["Decimal"];
+            /** @description Скидка выше этого % требует одобрения менеджера/владельца (default 10) */
+            discount_approval_threshold?: components["schemas"]["Decimal"];
             timezone?: string;
             enforce_stock_check?: boolean;
             tech_cards_enabled?: boolean;

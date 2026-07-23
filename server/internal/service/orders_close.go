@@ -314,10 +314,11 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				return apperrors.Wrap("VALIDATION", "discount exceeds order.total", nil)
 			}
 
-			// БАГ #1 — backend approval-gate для скидок ≥10%.
-			// Вычисляем эффективный процент: для percent — discountValue,
-			// для fixed — (discountAmount / order.Total) * 100. Если subtotal=0
-			// — гейт пропускаем (вырожденный case).
+			// Backend approval-gate: скидка ВЫШЕ настраиваемого порога ресторана
+			// (restaurants.discount_approval_threshold, default 10%) требует
+			// approved_by менеджера/владельца. Вычисляем эффективный процент: для
+			// percent — discountValue, для fixed — (discountAmount / order.Total)
+			// * 100. Если subtotal=0 — гейт пропускаем (вырожденный case).
 			effectivePct := decimal.Zero
 			if *in.DiscountType == "percent" {
 				effectivePct = discountValue
@@ -327,11 +328,12 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 					decimal.FromInt(100),
 				)
 			}
-			if effectivePct.GreaterThan(decimal.FromInt(10)) {
+			approvalThreshold := s.discountApprovalThreshold(tx, rid)
+			if effectivePct.GreaterThan(approvalThreshold) {
 				if in.ApprovedBy == nil || *in.ApprovedBy == "" {
 					return apperrors.Wrap(
 						"DISCOUNT_REQUIRES_APPROVAL",
-						"discount ≥10% requires approved_by (manager/owner)",
+						"discount above "+approvalThreshold.String()+"% requires approved_by (manager/owner)",
 						nil,
 					)
 				}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/escpos"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
 // loadOrderPrintMeta — догружает имена стола, зоны и официанта/кассира для
@@ -181,6 +182,20 @@ func (s *OrdersService) deliveryContactsRequired(tx *gorm.DB, restaurantID strin
 		return false
 	}
 	return on
+}
+
+// discountApprovalThreshold — порог (%), ВЫШЕ которого скидка требует одобрения
+// менеджера/владельца (restaurants.discount_approval_threshold). Владелец задаёт
+// в настройках. При ошибке/NULL — 10 (прежнее захардкоженное поведение).
+func (s *OrdersService) discountApprovalThreshold(tx *gorm.DB, restaurantID string) decimal.Decimal {
+	var thr decimal.Decimal
+	if err := tx.Model(&models.Restaurant{}).
+		Select("COALESCE(discount_approval_threshold, 10)").
+		Where("id = ?", restaurantID).
+		Scan(&thr).Error; err != nil {
+		return decimal.FromInt(10)
+	}
+	return thr
 }
 
 // receiptPrinterFor — конфиг чекового принтера ресторана (кодовая страница,

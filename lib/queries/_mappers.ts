@@ -187,6 +187,9 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     // сторону — недосчитать обслуживание заметят, лишние 10% в чеке гостя
     // заметят хуже и позже.
     servicePercent: r.service_percent != null ? Number(r.service_percent) : 0,
+    // Порог одобрения скидки: дефолт 10 (прежнее захардкоженное поведение),
+    // если бэк не прислал.
+    discountApprovalThreshold: r.discount_approval_threshold != null ? Number(r.discount_approval_threshold) : 10,
     timezone: r.timezone || 'Asia/Dushanbe',
     enforceStockCheck: r.enforce_stock_check ?? false,
     techCardsEnabled: r.tech_cards_enabled ?? true,

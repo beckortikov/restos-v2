@@ -35,6 +35,8 @@ export interface Restaurant {
   phone?: string
   currency: string
   servicePercent: number
+  // Скидка ВЫШЕ этого % требует одобрения менеджера/владельца (default 10).
+  discountApprovalThreshold?: number
   timezone: string
   enforceStockCheck: boolean
   techCardsEnabled?: boolean
