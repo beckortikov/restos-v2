@@ -4,10 +4,11 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Utensils, LayoutGrid, Wallet, ChefHat,
-  Settings, LogOut, OctagonX, PackageCheck, CookingPot, Lock,
+  Settings, LogOut, OctagonX, PackageCheck, CookingPot, Lock, RefreshCw,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 import { isPosV2EnabledFor } from '@/lib/pos-v2/flag'
+import { useDesktopUpdate, triggerDesktopUpdate, desktopUpdateLabel, desktopUpdatePending } from '@/hooks/use-desktop-update'
 import { fetchActiveShift } from '@/lib/queries'
 import { FailedPrintsButton } from '@/components/order/failed-prints-button'
 
@@ -48,6 +49,9 @@ export default function PosV2Launcher() {
   // экран PIN. Иначе pos2 открыт как бета-превью из старого POS — «Выход»
   // возвращает туда. Условие зеркалит homeRoute (та же isPosV2EnabledFor).
   const posV2Home = isPosV2EnabledFor(!!restaurant?.posV2Default)
+  // Обновление кассы (Electron): скачанное/доступное подсвечиваем бейджем в
+  // шапке, чтобы кассир поставил апдейт не заходя в настройки.
+  const update = useDesktopUpdate()
   // Владелец/менеджер видят всё; кассир/официант — только разделы по своим
   // правам (hasAccess мапит /pos2-плитку на старый маршрут). owner/manager → всё.
   const tiles = TILES.filter(t => hasAccess(t.req))
@@ -131,6 +135,19 @@ export default function PosV2Launcher() {
               {user?.name || 'Кассир'}
             </span>
           </div>
+          {/* Апдейт кассы скачан/доступен — заметный бейдж, тап ставит установку
+              (перезапуск) либо запускает проверку. */}
+          {desktopUpdatePending(update) && (
+            <button
+              onClick={() => triggerDesktopUpdate(update.status)}
+              className="flex items-center gap-2 rounded-xl transition-transform active:scale-95 shrink-0"
+              style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.55rem,0.8vw,0.8rem) clamp(0.75rem,1.1vw,1.1rem)' }}
+              title={desktopUpdateLabel(update)}
+            >
+              <RefreshCw style={{ width: 'clamp(1.05rem,1.4vw,1.25rem)', height: 'clamp(1.05rem,1.4vw,1.25rem)' }} />
+              <span className="font-semibold whitespace-nowrap hidden sm:block" style={{ fontSize: 'var(--pv-ctl)' }}>{update.status === 'ready' ? 'Установить' : 'Обновление'}</span>
+            </button>
+          )}
           {/* Блокировка экрана PIN'ом — вручную из меню (виден при включённом
               PIN-локе). Шлёт событие, LockGate в PosV2Layout ставит блок. */}
           {pinLockEnabled && (

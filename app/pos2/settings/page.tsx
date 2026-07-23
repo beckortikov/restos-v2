@@ -2,11 +2,12 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store, QrCode, Smartphone, Grid3x3, UtensilsCrossed } from 'lucide-react'
+import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store, QrCode, Smartphone, Grid3x3, UtensilsCrossed, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { updateRestaurant as updateRestaurantQuery } from '@/lib/queries'
 import { usePosV2Flag } from '@/lib/pos-v2/flag'
+import { useDesktopUpdate, triggerDesktopUpdate, desktopUpdateLabel, desktopUpdatePending } from '@/hooks/use-desktop-update'
 import { useMenuGrid, MENU_GRID_OPTIONS, menuGridLabel, sameGrid, type MenuGrid } from '@/lib/pos-v2/menu-grid'
 import type { PermissionKey } from '@/lib/types'
 
@@ -15,6 +16,8 @@ export default function PosV2Settings() {
   const { restaurant, user, canDo, canAccessRoles, logout, updateRestaurant: updateAuthRestaurant } = useAuth()
   const [posV2On, setPosV2On] = usePosV2Flag()
   const [menuGrid, setMenuGridState] = useMenuGrid()
+  const update = useDesktopUpdate()
+  const desktopVersion = typeof window !== 'undefined' ? (window as any).restosDesktop?.version : undefined
   // Режим обслуживания — настройка РЕСТОРАНА (не кассы), поэтому только
   // владелец/менеджер: кассир не должен переключать столы/фастфуд всему залу.
   const canEditMode = canAccessRoles(['owner', 'manager'])
@@ -179,6 +182,28 @@ export default function PosV2Settings() {
             </div>
             <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.3rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{user?.name || 'Кассир'}</span>
           </div>
+
+          {/* Обновление приложения — только в Electron (в LAN-браузере моста нет).
+              Раньше кнопка обновления жила лишь в старых настройках кассира и
+              футере админ-сайдбара — из pos2 недостижимо. */}
+          {update.isDesktop && (
+            <button
+              onClick={() => triggerDesktopUpdate(update.status)}
+              className="rounded-2xl flex items-center gap-3 text-left active:scale-[0.98] transition-transform"
+              style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.5vw,1.4rem)' }}
+            >
+              <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-brand-soft)', width: 'clamp(2.6rem,3.4vw,3.2rem)', height: 'clamp(2.6rem,3.4vw,3.2rem)' }}>
+                <RefreshCw className={update.status === 'checking' || update.status === 'downloading' ? 'animate-spin' : ''} style={{ width: '55%', height: '55%', color: 'var(--pv-brand)' }} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>Обновление приложения</div>
+                <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{desktopUpdateLabel(update)}{desktopVersion ? ` · v${desktopVersion}` : ''}</div>
+              </div>
+              {desktopUpdatePending(update) && (
+                <span className="rounded-full shrink-0 font-bold" style={{ background: 'var(--pv-brand)', color: '#fff', padding: '0.2rem 0.7rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Обновить</span>
+              )}
+            </button>
+          )}
 
           {/* Разделы */}
           {links.length > 0 && (
