@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -143,35 +144,59 @@ func (s *ShiftsService) AddExpense(ctx context.Context, shiftID string, in Shift
 }
 
 // DeleteExpense — DELETE /api/v1/shifts/{id}/expenses/{op_id}.
-// Удаляет операцию только если смена открыта.
+//
+// Обычный расход — удалить можно, только пока смена открыта (иначе меняли бы
+// уже зафиксированный Z-отчёт задним числом).
+//
+// Исключение — фантомное авто-зеркало (__auto_mirror__): его разрешено убирать
+// ДАЖЕ из закрытой смены. Причина: до фикса recordShiftCashOutIfActive
+// (v3.16.162) бэкдейтнутая ДДС-операция могла ошибочно зеркалиться не в ту
+// смену — владелец обнаруживает это только после того, как смена уже закрыта
+// (инцидент 23.07.2026). Это безопасно: reverseShiftAccountDebit для
+// auto_mirror — no-op (счёт эта запись никогда не дебетовала, деньги списаны
+// исходной ДДС-операцией в другом месте), значит удаление не трогает баланс
+// счёта — только выправляет искажённый expected_cash ЭТОЙ смены. Для закрытой
+// смены expected_cash — застывший снэпшот на момент Close(), поэтому его нужно
+// пересчитать и сохранить явно, иначе список операций обновится, а
+// зафиксированная цифра в Z-отчёте — нет.
 func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string) error {
+	if err := requirePermFor(ctx, s.r, "shifts.manage"); err != nil {
+		return err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return err
 	}
 	return s.r.Raw().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var shift models.CashShift
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, shiftID).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, shiftID).
 			First(&shift).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.ErrNotFound
 			}
 			return err
 		}
-		if shift.Status == nil || *shift.Status != "open" {
-			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
-		}
-		// Грузим операцию — нужно знать, дебетовала ли она счёт (Н13).
+		isOpen := shift.Status != nil && *shift.Status == "open"
+
+		// Грузим операцию — нужно знать, дебетовала ли она счёт (Н13) и её категорию.
 		var op models.CashShiftOperation
-		if err := tx.Where("id = ? AND shift_id = ?", opID, shiftID).First(&op).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND shift_id = ?", opID, shiftID).First(&op).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.ErrNotFound
 			}
 			return err
 		}
+		isAutoMirror := op.Category != nil && *op.Category == autoMirrorCategory
+		if !isOpen && !isAutoMirror {
+			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
+		}
+
 		// Реверс связанной financial_operation (если это был расход с
 		// категорией — см. AddOperation), иначе удалённый расход остался бы
-		// висеть в ОПиУ/ДДС.
+		// висеть в ОПиУ/ДДС. У auto_mirror такой финоперации нет (собственный
+		// source_ref не совпадает) — Delete по WHERE ничего не находит, no-op.
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
 			return err
@@ -188,6 +213,17 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 		}
 		if res.RowsAffected == 0 {
 			return apperrors.ErrNotFound
+		}
+
+		if !isOpen {
+			expected, err := computeExpectedCash(tx, shiftID, &shift)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&models.CashShift{}).Where("id = ?", shiftID).
+				Updates(map[string]any{"expected_cash": expected, "updated_at": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})

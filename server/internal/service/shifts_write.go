@@ -168,32 +168,10 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 			}, nil)
 		}
 
-		// Сумма shift-операций (внос/изъятие) — для expected_cash.
-		var opSum decimal.Decimal
-		var ops []models.CashShiftOperation
-		if err := tx.Where("shift_id = ?", shiftID).Find(&ops).Error; err != nil {
+		expected, err := computeExpectedCash(tx, shiftID, &shift)
+		if err != nil {
 			return err
 		}
-		opSum = decimal.Zero
-		for _, op := range ops {
-			if op.Type == nil {
-				continue
-			}
-			// Безналичная операция (счёт ≠ счёту смены) наличный ящик не трогает —
-			// деньги ушли/пришли не через кассу, а через банк-счёт.
-			if !opTouchesDrawer(op.AccountID, shift.AccountID) {
-				continue
-			}
-			switch *op.Type {
-			case "cash_in":
-				opSum = decimal.Add(opSum, op.Amount)
-			case "cash_out":
-				opSum = decimal.Sub(opSum, op.Amount)
-			}
-		}
-		expected := decimal.Normalize(
-			decimal.Add(decimal.Add(shift.OpeningBalance, shift.CashRevenue), opSum),
-		)
 
 		now := time.Now().UTC()
 		status := "closed"
@@ -374,6 +352,37 @@ func opTouchesDrawer(opAccountID, shiftAccountID *string) bool {
 		return false
 	}
 	return *opAccountID == *shiftAccountID
+}
+
+// computeExpectedCash — expected_cash = opening_balance + cash_revenue +
+// Σcash_in − Σcash_out (только операции, касающиеся наличного ящика — см.
+// opTouchesDrawer). Общий расчёт для Close() и для пересчёта уже закрытой
+// смены после удаления фантомного __auto_mirror__ (см. DeleteExpense в
+// shifts_extras.go) — без него список операций и сохранённая цифра в Z-отчёте
+// расходятся.
+func computeExpectedCash(tx *gorm.DB, shiftID string, shift *models.CashShift) (decimal.Decimal, error) {
+	var ops []models.CashShiftOperation
+	if err := tx.Where("shift_id = ?", shiftID).Find(&ops).Error; err != nil {
+		return decimal.Zero, err
+	}
+	opSum := decimal.Zero
+	for _, op := range ops {
+		if op.Type == nil {
+			continue
+		}
+		if !opTouchesDrawer(op.AccountID, shift.AccountID) {
+			continue
+		}
+		switch *op.Type {
+		case "cash_in":
+			opSum = decimal.Add(opSum, op.Amount)
+		case "cash_out":
+			opSum = decimal.Sub(opSum, op.Amount)
+		}
+	}
+	return decimal.Normalize(
+		decimal.Add(decimal.Add(shift.OpeningBalance, shift.CashRevenue), opSum),
+	), nil
 }
 
 // AddOperation вносит cash_in / cash_out в смену.
