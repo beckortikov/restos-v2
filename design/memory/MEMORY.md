@@ -1,0 +1,1 @@
+- [Zakup app design](zakup-app-design.md) — buyer/procurement phone app in app_zakup.pen (emerald accent, PIN auth)
