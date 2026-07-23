@@ -91,10 +91,12 @@ class OpeningBalanceViewModel @Inject constructor(
             runCatching {
                 opsApi.openingBalance(OpeningBalanceInput(
                     lines = s.lines.map {
+                        val p = it.price.toDecimalOrZero()
                         OpeningBalanceLineInput(
                             ingredientId = it.id,
                             qty = it.qty.toDecimalOrZero().toPlainString(),
-                            price = it.price.toDecimalOrZero().toPlainString(),
+                            // Пустую/нулевую цену не шлём — бэк оставит текущую цену ингредиента.
+                            price = if (p.signum() > 0) p.toPlainString() else null,
                         )
                     },
                 ))

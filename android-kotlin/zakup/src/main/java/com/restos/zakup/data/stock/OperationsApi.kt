@@ -80,7 +80,7 @@ data class OpeningBalanceInput(
 data class OpeningBalanceLineInput(
     @SerialName("ingredient_id") val ingredientId: String,
     val qty: String,
-    val price: String,
+    val price: String? = null, // null → бэк оставит текущую цену ингредиента (не обнулит)
 )
 
 @Serializable
