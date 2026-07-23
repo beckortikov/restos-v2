@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Светлая тема-контейнер окна; UI рисует Compose (ZakupTheme). Фон
+         страницы #F4F5F7 из макета app_zakup.pen. -->
+    <style name="Theme.RestosZakup" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F4F5F7</item>
+        <item name="android:statusBarColor">#F4F5F7</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
