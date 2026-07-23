@@ -196,14 +196,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Прочие поля заполняются после /users/{id} ниже (lazy).
       } as User
 
+      // X-Skip-Auth-Expire: транзиентный 401 этих дозагрузок не должен
+      // выкидывать только что вошедшего кассира обратно на PIN.
+      const bg = { headers: { 'X-Skip-Auth-Expire': '1' } }
+
+      // Ресторан грузим ДО setUser: homeRoute (новый POS vs старый) решается по
+      // restaurant.posV2Default. Если пометить залогиненным раньше загрузки
+      // ресторана, первый редирект (login-страница по появлению user) уходит в
+      // старый POS, а после подгрузки ресторана повторного редиректа уже нет —
+      // фастфуд-касса с «Новый POS по умолчанию» застревала в старом интерфейсе
+      // (гонка). Один быстрый LAN-запрос — редирект решается по факту, без
+      // мигания старым POS. Оффлайн/ошибка → restaurant=null, деградируем в
+      // старый POS (фоновый refresh на mount догонит).
+      try {
+        const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } }, ...bg }))
+        if (restResp) {
+          const rest = mapResponseRestaurant(restResp)
+          setRestaurant(rest)
+          localStorage.setItem(RESTAURANT_STORAGE_KEY, JSON.stringify(rest))
+        }
+      } catch {}
+
       setUser(mapped)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(mapped))
       Sentry.setUser({ id: mapped.id, username: mapped.name, extra: { role: mapped.role, restaurantId: mapped.restaurantId } })
 
-      // Подтянуть детальный профиль (permissions) + ресторан в фоне.
-      // X-Skip-Auth-Expire: транзиентный 401 этих фоновых дозагрузок не должен
-      // выкидывать только что вошедшего кассира обратно на PIN.
-      const bg = { headers: { 'X-Skip-Auth-Expire': '1' } }
+      // Детальный профиль (permissions) — в фоне, редирект его не ждёт.
       void (async () => {
         try {
           const userResp: any = await unwrap(api.GET('/api/v1/users/{id}', { params: { path: { id: mapped.id } }, ...bg }))
@@ -211,14 +229,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const full = { ...mapped, ...mapResponseUser(userResp) }
             setUser(full)
             localStorage.setItem(STORAGE_KEY, JSON.stringify(full))
-          }
-        } catch {}
-        try {
-          const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } }, ...bg }))
-          if (restResp) {
-            const rest = mapResponseRestaurant(restResp)
-            setRestaurant(rest)
-            localStorage.setItem(RESTAURANT_STORAGE_KEY, JSON.stringify(rest))
           }
         } catch {}
       })()
