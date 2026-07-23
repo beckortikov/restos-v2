@@ -9,19 +9,29 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import com.restos.zakup.ui.auth.AuthGateViewModel
 import com.restos.zakup.ui.auth.AuthStatus
+import com.restos.zakup.ui.history.HistoryScreen
 import com.restos.zakup.ui.login.PinLoginScreen
 import com.restos.zakup.ui.onboarding.OnboardingScreen
 import com.restos.zakup.ui.shell.ZakupShell
+import com.restos.zakup.ui.supplier.SupplierDetailScreen
+import com.restos.zakup.ui.tobuy.ToBuyScreen
 
 object Routes {
     const val ONBOARDING = "onboarding"
     const val LOGIN = "login"
     const val APP = "app"
+    const val SUPPLIER_DETAIL = "supplier/{id}"
+    const val HISTORY = "history"
+    const val TO_BUY = "to-buy"
+
+    fun supplier(id: String) = "supplier/$id"
 }
 
 @Composable
@@ -75,7 +85,24 @@ fun ZakupNavGraph(
                         popUpTo(Routes.APP) { inclusive = true }
                     }
                 },
+                onOpenSupplier = { id -> navController.navigate(Routes.supplier(id)) },
+                onOpenHistory = { navController.navigate(Routes.HISTORY) },
+                onOpenToBuy = { navController.navigate(Routes.TO_BUY) },
+                // Новая приёмка — Ф2.
+                onNewReceipt = {},
             )
+        }
+        composable(
+            route = Routes.SUPPLIER_DETAIL,
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) {
+            SupplierDetailScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.HISTORY) {
+            HistoryScreen(onBack = { navController.popBackStack() })
+        }
+        composable(Routes.TO_BUY) {
+            ToBuyScreen(onBack = { navController.popBackStack() })
         }
     }
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -55,6 +56,10 @@ enum class ZakupTab(val title: String, val icon: ImageVector) {
 @Composable
 fun ZakupShell(
     onLoggedOut: () -> Unit,
+    onOpenSupplier: (String) -> Unit = {},
+    onOpenHistory: () -> Unit = {},
+    onOpenToBuy: () -> Unit = {},
+    onNewReceipt: () -> Unit = {},
     viewModel: ZakupShellViewModel = hiltViewModel(),
 ) {
     val me by viewModel.me.collectAsStateWithLifecycle()
@@ -70,11 +75,16 @@ fun ZakupShell(
             )
         },
     ) { inner ->
-        Box(Modifier.fillMaxSize().padding(inner)) {
+        Box(Modifier.fillMaxSize().padding(inner).statusBarsPadding()) {
             when (tab) {
-                ZakupTab.Overview -> OverviewScreen(restaurantName = me?.restaurant?.name)
+                ZakupTab.Overview -> OverviewScreen(
+                    restaurantName = me?.restaurant?.name,
+                    onNewReceipt = onNewReceipt,
+                    onOpenToBuy = onOpenToBuy,
+                    onOpenHistory = onOpenHistory,
+                )
                 ZakupTab.Stock -> StockScreen()
-                ZakupTab.Suppliers -> SuppliersScreen()
+                ZakupTab.Suppliers -> SuppliersScreen(onOpenSupplier = onOpenSupplier)
                 ZakupTab.More -> MoreScreen(
                     me = me,
                     onLogout = { viewModel.logout(onLoggedOut) },
