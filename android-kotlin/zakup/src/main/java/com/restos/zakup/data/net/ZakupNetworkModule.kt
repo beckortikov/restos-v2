@@ -5,6 +5,7 @@ import com.restos.zakup.data.receipts.ReceiptsApi
 import com.restos.zakup.data.stock.OperationsApi
 import com.restos.zakup.data.stock.StockApi
 import com.restos.zakup.data.suppliers.SuppliersApi
+import com.restos.zakup.data.update.ZakupAppApi
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -43,4 +44,9 @@ object ZakupNetworkModule {
     @Singleton
     fun provideOperationsApi(retrofit: Retrofit): OperationsApi =
         retrofit.create(OperationsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideZakupAppApi(retrofit: Retrofit): ZakupAppApi =
+        retrofit.create(ZakupAppApi::class.java)
 }

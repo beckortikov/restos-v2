@@ -19,7 +19,6 @@ import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.CleaningServices
 import androidx.compose.material.icons.outlined.Inbox
-import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LocalShipping
@@ -73,9 +72,11 @@ fun MoreScreen(
 
         Section("ПРИЛОЖЕНИЕ") {
             MoreRow(Icons.Outlined.Notifications, "Уведомления")
-            MoreRow(Icons.Outlined.Language, "Язык", trailing = "Русский")
-            MoreRow(Icons.Outlined.Info, "О приложении", trailing = "v1.0", last = true)
+            MoreRow(Icons.Outlined.Language, "Язык", trailing = "Русский", last = true)
         }
+
+        Spacer(Modifier.size(12.dp))
+        com.restos.zakup.ui.update.AppUpdateRow()
 
         Spacer(Modifier.size(16.dp))
 
