@@ -11,6 +11,7 @@ import com.restos.zakup.data.suppliers.SuppliersApi
 import com.restos.zakup.ui.receipts.ReceiptRow
 import com.restos.zakup.ui.receipts.toReceiptRow
 import com.restos.zakup.util.toDecimalOrZero
+import com.restos.zakup.ui.live.observeStockEvents
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,12 +47,16 @@ class OverviewViewModel @Inject constructor(
     private val stockApi: StockApi,
     private val suppliersApi: SuppliersApi,
     private val receiptsApi: ReceiptsApi,
+    eventBus: com.restos.core.events.EventBus,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(OverviewUiState())
     val state: StateFlow<OverviewUiState> = _state.asStateFlow()
 
-    init { load() }
+    init {
+        load()
+        observeStockEvents(eventBus, ::load)
+    }
 
     fun load() {
         _state.update { it.copy(loading = true, error = null) }

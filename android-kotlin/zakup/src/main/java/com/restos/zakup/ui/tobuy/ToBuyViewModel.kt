@@ -6,6 +6,7 @@ import com.restos.zakup.data.stock.IngredientDto
 import com.restos.zakup.data.stock.StockApi
 import com.restos.zakup.data.stock.listAllIngredients
 import com.restos.zakup.util.toDecimalOrZero
+import com.restos.zakup.ui.live.observeStockEvents
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -34,12 +35,16 @@ data class ToBuyUiState(
 @HiltViewModel
 class ToBuyViewModel @Inject constructor(
     private val api: StockApi,
+    eventBus: com.restos.core.events.EventBus,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ToBuyUiState())
     val state: StateFlow<ToBuyUiState> = _state.asStateFlow()
 
-    init { load() }
+    init {
+        load()
+        observeStockEvents(eventBus, ::load)
+    }
 
     fun load() {
         _state.update { it.copy(loading = true, error = null) }
