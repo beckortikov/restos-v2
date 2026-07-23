@@ -83,6 +83,7 @@ fun ZakupShell(
                     onNewReceipt = onNewReceipt,
                     onOpenToBuy = onOpenToBuy,
                     onOpenHistory = onOpenHistory,
+                    onOpenSuppliers = { currentTab = ZakupTab.Suppliers.ordinal },
                 )
                 ZakupTab.Stock -> StockScreen()
                 ZakupTab.Suppliers -> SuppliersScreen(onOpenSupplier = onOpenSupplier)
@@ -90,14 +91,15 @@ fun ZakupShell(
                     me = me,
                     onLogout = { viewModel.logout(onLoggedOut) },
                     onOperation = onOperation,
+                    onOpenSuppliers = { currentTab = ZakupTab.Suppliers.ordinal },
                 )
             }
         }
     }
 }
 
-/** Плавающая пилюля-навигация из макета: активный таб — эмеральд-soft подложка
- *  + эмеральд иконка/лейбл, остальные — серые. */
+/** Нижняя навигация: иконка + подпись у КАЖДОГО таба (читабельно), активный —
+ *  эмеральд + soft-подложка, остальные — серые. */
 @Composable
 private fun ZakupBottomBar(
     current: ZakupTab,
@@ -108,41 +110,41 @@ private fun ZakupBottomBar(
         shadowElevation = 0.dp,
         modifier = Modifier.fillMaxWidth(),
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            ZakupTab.entries.forEach { t ->
-                val selected = t == current
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                        .background(
-                            color = if (selected) ZakupColors.PrimarySoft else ZakupColors.Surface,
-                            shape = RoundedCornerShape(ZakupRadius.pill),
+        Column {
+            Box(Modifier.fillMaxWidth().height(1.dp).background(ZakupColors.Border))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 8.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ZakupTab.entries.forEach { t ->
+                    val selected = t == current
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(
+                                color = if (selected) ZakupColors.PrimarySoft else ZakupColors.Surface,
+                                shape = RoundedCornerShape(ZakupRadius.tile),
+                            )
+                            .clickable { onSelect(t) }
+                            .padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Icon(
+                            t.icon,
+                            contentDescription = t.title,
+                            tint = if (selected) ZakupColors.Primary else ZakupColors.TextTertiary,
+                            modifier = Modifier.size(22.dp),
                         )
-                        .clickable { onSelect(t) },
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        t.icon,
-                        contentDescription = t.title,
-                        tint = if (selected) ZakupColors.Primary else ZakupColors.TextTertiary,
-                        modifier = Modifier.size(20.dp),
-                    )
-                    if (selected) {
-                        Spacer(Modifier.width(6.dp))
+                        Spacer(Modifier.height(3.dp))
                         Text(
                             t.title,
-                            color = ZakupColors.Primary,
-                            fontSize = 12.5.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            color = if (selected) ZakupColors.Primary else ZakupColors.TextTertiary,
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                         )
                     }
                 }

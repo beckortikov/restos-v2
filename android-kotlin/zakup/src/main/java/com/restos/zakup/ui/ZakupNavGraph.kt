@@ -120,6 +120,8 @@ fun ZakupNavGraph(
                 MoreOps.OPENING_BALANCE -> OpeningBalanceScreen(onBack = back, onDone = done)
                 MoreOps.MOVEMENTS -> MovementsScreen(onBack = back)
                 MoreOps.RETURNS -> ReturnsListScreen(onBack = back)
+                MoreOps.WAREHOUSES -> com.restos.zakup.ui.reference.WarehousesScreen(onBack = back)
+                MoreOps.CATEGORIES -> com.restos.zakup.ui.reference.CategoriesScreen(onBack = back)
             }
         }
         composable(Routes.NEW_RECEIPT) {

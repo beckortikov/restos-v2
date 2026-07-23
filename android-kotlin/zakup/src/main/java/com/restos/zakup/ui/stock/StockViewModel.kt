@@ -4,10 +4,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.restos.zakup.data.stock.IngredientDto
 import com.restos.zakup.data.stock.StockApi
+import com.restos.zakup.data.stock.WarehouseDto
 import com.restos.zakup.data.stock.listAllIngredients
-import com.restos.zakup.util.toDecimalOrZero
 import com.restos.zakup.ui.live.observeStockEvents
+import com.restos.zakup.util.toDecimalOrZero
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,10 +20,15 @@ import javax.inject.Inject
 
 enum class StockLevel { Ok, Low, Out }
 
+enum class StockStatusFilter(val label: String) { All("Все"), Low("Мало"), Out("Нет") }
+
+data class WarehouseTab(val id: String?, val name: String)
+
 data class StockRow(
     val id: String,
     val name: String,
     val category: String,
+    val warehouseId: String?,
     val qty: BigDecimal,
     val unit: String?,
     val minQty: BigDecimal,
@@ -31,13 +38,14 @@ data class StockRow(
 data class StockUiState(
     val loading: Boolean = true,
     val error: String? = null,
-    val categories: List<String> = listOf(ALL),
-    val selected: String = ALL,
+    val warehouses: List<WarehouseTab> = listOf(WarehouseTab(null, "Все склады")),
+    val selectedWarehouse: String? = null,
+    val status: StockStatusFilter = StockStatusFilter.All,
     val query: String = "",
     val rows: List<StockRow> = emptyList(),
-) {
-    companion object { const val ALL = "Все" }
-}
+    val lowCount: Int = 0,
+    val outCount: Int = 0,
+)
 
 @HiltViewModel
 class StockViewModel @Inject constructor(
@@ -59,16 +67,20 @@ class StockViewModel @Inject constructor(
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             runCatching {
-                val cats = runCatching { api.listCategories().data }.getOrDefault(emptyList())
-                val items = api.listAllIngredients()
-                cats to items
-            }.onSuccess { (cats, items) ->
+                val whD = async { runCatching { api.listWarehouses().data }.getOrDefault(emptyList()) }
+                val ingD = async { api.listAllIngredients() }
+                whD.await() to ingD.await()
+            }.onSuccess { (warehouses, items) ->
                 all = items.map { it.toRow() }
+                val tabs = listOf(WarehouseTab(null, "Все склады")) +
+                    warehouses.map { WarehouseTab(it.id, warehouseName(it)) }
                 _state.update {
                     it.copy(
                         loading = false,
-                        categories = listOf(StockUiState.ALL) + cats,
-                        rows = applyFilters(it.selected, it.query),
+                        warehouses = tabs,
+                        rows = apply(it.selectedWarehouse, it.status, it.query),
+                        lowCount = all.count { r -> r.level == StockLevel.Low },
+                        outCount = all.count { r -> r.level == StockLevel.Out },
                     )
                 }
             }.onFailure { e ->
@@ -77,19 +89,26 @@ class StockViewModel @Inject constructor(
         }
     }
 
-    fun selectCategory(cat: String) {
-        _state.update { it.copy(selected = cat, rows = applyFilters(cat, it.query)) }
-    }
+    fun selectWarehouse(id: String?) = _state.update { it.copy(selectedWarehouse = id, rows = apply(id, it.status, it.query)) }
+    fun setStatus(s: StockStatusFilter) = _state.update { it.copy(status = s, rows = apply(it.selectedWarehouse, s, it.query)) }
+    fun setQuery(q: String) = _state.update { it.copy(query = q, rows = apply(it.selectedWarehouse, it.status, q)) }
 
-    fun setQuery(q: String) {
-        _state.update { it.copy(query = q, rows = applyFilters(it.selected, q)) }
-    }
-
-    private fun applyFilters(cat: String, query: String): List<StockRow> {
+    private fun apply(warehouse: String?, status: StockStatusFilter, query: String): List<StockRow> {
         val q = query.trim().lowercase()
         return all.filter { row ->
-            (cat == StockUiState.ALL || row.category == cat) &&
-                (q.isEmpty() || row.name.lowercase().contains(q))
+            (warehouse == null || row.warehouseId == warehouse) &&
+                (q.isEmpty() || row.name.lowercase().contains(q)) &&
+                when (status) {
+                    StockStatusFilter.All -> true
+                    StockStatusFilter.Low -> row.level == StockLevel.Low
+                    StockStatusFilter.Out -> row.level == StockLevel.Out
+                }
+        }
+    }
+
+    private fun warehouseName(w: WarehouseDto): String = w.name.ifBlank {
+        when (w.kind) {
+            "products" -> "Продукты"; "purchased" -> "Покупные"; "supplies" -> "Хозтовары"; else -> "Склад"
         }
     }
 
@@ -105,6 +124,7 @@ class StockViewModel @Inject constructor(
             id = id,
             name = name?.takeIf { it.isNotBlank() } ?: "—",
             category = category?.takeIf { it.isNotBlank() } ?: "—",
+            warehouseId = warehouseId,
             qty = q,
             unit = unit,
             minQty = min,

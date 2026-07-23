@@ -1,6 +1,7 @@
 package com.restos.zakup.ui.overview
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,6 +56,7 @@ fun OverviewScreen(
     onNewReceipt: () -> Unit = {},
     onOpenToBuy: () -> Unit = {},
     onOpenHistory: () -> Unit = {},
+    onOpenSuppliers: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -78,6 +80,7 @@ fun OverviewScreen(
                             bg = ZakupColors.WarnSoft,
                             value = state.lowCount.toString(),
                             label = "позиций ниже мин.",
+                            onClick = onOpenToBuy,
                         )
                         MetricCard(
                             modifier = Modifier.weight(1f),
@@ -85,7 +88,8 @@ fun OverviewScreen(
                             tint = ZakupColors.Danger,
                             bg = ZakupColors.DangerSoft,
                             value = formatCompactMoney(state.totalDebt),
-                            label = "поставщикам, сум",
+                            label = "поставщикам, с.",
+                            onClick = onOpenSuppliers,
                         )
                     }
                 }
@@ -177,8 +181,9 @@ private fun MetricCard(
     bg: androidx.compose.ui.graphics.Color,
     value: String,
     label: String,
+    onClick: (() -> Unit)? = null,
 ) {
-    ZakupCard(modifier, padding = 16) {
+    ZakupCard(if (onClick != null) modifier.clickable(onClick = onClick) else modifier, padding = 16) {
         Column {
             IconTile(icon = icon, tint = tint, bg = bg, size = 36)
             Spacer(Modifier.height(14.dp))

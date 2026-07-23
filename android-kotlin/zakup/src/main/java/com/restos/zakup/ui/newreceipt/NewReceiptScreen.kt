@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -23,6 +24,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -183,7 +185,7 @@ private fun LineCard(line: DraftLine, onQty: (String) -> Unit, onPrice: (String)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 NumField(line.qty, onQty, placeholder = "кол-во", suffix = line.unit, modifier = Modifier.weight(1f))
                 Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
-                NumField(line.price, onPrice, placeholder = "цена", suffix = "сум", modifier = Modifier.weight(1.3f))
+                NumField(line.price, onPrice, placeholder = "цена", suffix = "с.", modifier = Modifier.weight(1.3f))
             }
         }
     }
@@ -309,11 +311,32 @@ private fun SupplierPicker(suppliers: List<SupplierDto>, onPick: (SupplierDto) -
         containerColor = ZakupColors.Surface,
         shape = RoundedCornerShape(topStart = ZakupRadius.sheet, topEnd = ZakupRadius.sheet),
     ) {
+        var query by remember { mutableStateOf("") }
+        val filtered = if (query.isBlank()) suppliers
+        else suppliers.filter { it.name.contains(query.trim(), ignoreCase = true) || (it.contactPerson ?: "").contains(query.trim(), true) }
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp).navigationBarsPadding()) {
             Text("Поставщик", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
             Spacer(Modifier.height(12.dp))
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(suppliers, key = { it.id }) { s ->
+            TextField(
+                value = query,
+                onValueChange = { query = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Поиск поставщика", color = ZakupColors.TextTertiary, fontSize = 14.sp) },
+                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ZakupColors.TextTertiary) },
+                singleLine = true,
+                shape = RoundedCornerShape(ZakupRadius.tile),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = ZakupColors.SurfaceMuted,
+                    unfocusedContainerColor = ZakupColors.SurfaceMuted,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    focusedTextColor = ZakupColors.TextPrimary,
+                    unfocusedTextColor = ZakupColors.TextPrimary,
+                ),
+            )
+            Spacer(Modifier.height(10.dp))
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.heightIn(max = 440.dp)) {
+                items(filtered, key = { it.id }) { s ->
                     Surface(
                         onClick = { onPick(s) },
                         shape = RoundedCornerShape(ZakupRadius.tile),

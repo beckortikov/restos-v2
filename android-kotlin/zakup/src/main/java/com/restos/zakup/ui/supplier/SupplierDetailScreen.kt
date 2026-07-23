@@ -201,7 +201,7 @@ private fun DebtCard(state: SupplierDetailUiState, onPay: () -> Unit) {
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(formatMoney(state.debt, ""), color = ZakupColors.OnDark, fontSize = 24.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.size(6.dp))
-                        Text("сум", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
+                        Text("с.", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
                     }
                 }
                 if (state.agingDays != null) {

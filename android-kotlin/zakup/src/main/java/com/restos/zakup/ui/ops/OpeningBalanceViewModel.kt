@@ -100,7 +100,7 @@ class OpeningBalanceViewModel @Inject constructor(
                 ))
             }.onSuccess { _state.update { it.copy(submitting = false, done = true) } }
                 .onFailure { e ->
-                    val msg = (e as? ApiException)?.apiError?.message ?: "Не удалось провести остаток"
+                    val msg = (e as? ApiException)?.apiError?.message ?: e.message ?: "Не удалось провести остаток"
                     _state.update { it.copy(submitting = false, submitError = msg) }
                 }
         }

@@ -49,6 +49,7 @@ fun MoreScreen(
     me: MeData?,
     onLogout: () -> Unit,
     onOperation: (String) -> Unit = {},
+    onOpenSuppliers: () -> Unit = {},
 ) {
     Column(
         Modifier
@@ -69,9 +70,9 @@ fun MoreScreen(
         }
 
         Section("СПРАВОЧНИКИ") {
-            MoreRow(Icons.Outlined.Warehouse, "Склады", trailing = "3")
-            MoreRow(Icons.Outlined.Category, "Категории ингредиентов")
-            MoreRow(Icons.Outlined.LocalShipping, "Все поставщики", last = true)
+            MoreRow(Icons.Outlined.Warehouse, "Склады") { onOperation(MoreOps.WAREHOUSES) }
+            MoreRow(Icons.Outlined.Category, "Категории ингредиентов") { onOperation(MoreOps.CATEGORIES) }
+            MoreRow(Icons.Outlined.LocalShipping, "Все поставщики", last = true) { onOpenSuppliers() }
         }
 
         Section("ПРИЛОЖЕНИЕ") {
@@ -179,6 +180,8 @@ object MoreOps {
     const val MOVEMENTS = "movements"
     const val SUPPLY_EXPENSE = "supply-expense"
     const val OPENING_BALANCE = "opening-balance"
+    const val WAREHOUSES = "warehouses"
+    const val CATEGORIES = "categories"
 }
 
 @Composable

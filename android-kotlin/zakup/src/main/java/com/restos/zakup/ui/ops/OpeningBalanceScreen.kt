@@ -85,7 +85,7 @@ fun OpeningBalanceScreen(
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     OpNumField(line.qty, { viewModel.setQty(line.id, it) }, "кол-во", line.unit, Modifier.weight(1f))
                                     Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
-                                    OpNumField(line.price, { viewModel.setPrice(line.id, it) }, "цена", "сум", Modifier.weight(1.3f))
+                                    OpNumField(line.price, { viewModel.setPrice(line.id, it) }, "цена", "с.", Modifier.weight(1.3f))
                                 }
                             }
                         }

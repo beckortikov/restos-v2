@@ -100,7 +100,7 @@ fun PayDebtSheet(
                             color = ZakupColors.TextPrimary,
                             modifier = Modifier.weight(1f),
                         )
-                        Text("сум", fontSize = 13.sp, color = ZakupColors.TextTertiary)
+                        Text("с.", fontSize = 13.sp, color = ZakupColors.TextTertiary)
                     }
                 }
 

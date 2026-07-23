@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.restos.zakup.ui.components.EmptyState
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.ZakupCard
@@ -45,7 +46,7 @@ import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatQty
 
-/** Экран 03 «Склад» — остатки с поиском, чипами категорий и уровнем запаса. */
+/** Экран 03 «Склад» — остатки с выбором склада, быстрым фильтром и поиском. */
 @Composable
 fun StockScreen(viewModel: StockViewModel = hiltViewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -53,23 +54,23 @@ fun StockScreen(viewModel: StockViewModel = hiltViewModel()) {
     Column(Modifier.fillMaxSize()) {
         ZakupScreenHeader(title = "Склад")
 
-        SearchField(
-            value = state.query,
-            onChange = viewModel::setQuery,
-            modifier = Modifier.padding(horizontal = 20.dp),
-        )
-        Spacer(Modifier.height(12.dp))
+        SearchField(state.query, viewModel::setQuery, Modifier.padding(horizontal = 20.dp))
+        Spacer(Modifier.height(10.dp))
 
-        CategoryChips(
-            categories = state.categories,
-            selected = state.selected,
-            onSelect = viewModel::selectCategory,
-        )
-        Spacer(Modifier.height(12.dp))
+        // Быстрый фильтр по остатку (#4): Все / Мало / Нет.
+        StatusChips(state.status, state.lowCount, state.outCount, viewModel::setStatus)
+        Spacer(Modifier.height(8.dp))
+
+        // Выбор склада (#5).
+        if (state.warehouses.size > 1) {
+            WarehouseChips(state.warehouses, state.selectedWarehouse, viewModel::selectWarehouse)
+            Spacer(Modifier.height(8.dp))
+        }
 
         when {
             state.loading -> LoadingState()
             state.error != null -> ErrorState(state.error!!, onRetry = viewModel::load)
+            state.rows.isEmpty() -> EmptyState("Ничего не найдено")
             else -> LazyColumn(
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -102,21 +103,50 @@ private fun SearchField(value: String, onChange: (String) -> Unit, modifier: Mod
 }
 
 @Composable
-private fun CategoryChips(categories: List<String>, selected: String, onSelect: (String) -> Unit) {
+private fun StatusChips(selected: StockStatusFilter, low: Int, out: Int, onSelect: (StockStatusFilter) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        StockStatusFilter.entries.forEach { f ->
+            val active = f == selected
+            val count = when (f) { StockStatusFilter.All -> null; StockStatusFilter.Low -> low; StockStatusFilter.Out -> out }
+            val accent = when (f) { StockStatusFilter.Low -> ZakupColors.Warn; StockStatusFilter.Out -> ZakupColors.Danger; else -> ZakupColors.TextPrimary }
+            Surface(
+                shape = RoundedCornerShape(ZakupRadius.pill),
+                color = if (active) accent else ZakupColors.Surface,
+                border = if (active) null else BorderStroke(1.dp, ZakupColors.Border),
+                modifier = Modifier.weight(1f).clickable { onSelect(f) },
+            ) {
+                Row(Modifier.padding(vertical = 9.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        f.label + (count?.let { " $it" } ?: ""),
+                        color = if (active) Color.White else ZakupColors.TextSecondary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WarehouseChips(tabs: List<WarehouseTab>, selected: String?, onSelect: (String?) -> Unit) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 20.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(categories, key = { it }) { cat ->
-            val active = cat == selected
+        items(tabs, key = { it.id ?: "all" }) { tab ->
+            val active = tab.id == selected
             Surface(
                 shape = RoundedCornerShape(ZakupRadius.pill),
                 color = if (active) ZakupColors.TextPrimary else ZakupColors.Surface,
                 border = if (active) null else BorderStroke(1.dp, ZakupColors.Border),
-                modifier = Modifier.clickable { onSelect(cat) },
+                modifier = Modifier.clickable { onSelect(tab.id) },
             ) {
                 Text(
-                    cat,
+                    tab.name,
                     color = if (active) Color.White else ZakupColors.TextSecondary,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.SemiBold,

@@ -111,7 +111,7 @@ private fun DebtSummaryCard(total: BigDecimal, count: Int, withDebt: Int, overdu
                     Row(verticalAlignment = Alignment.Bottom) {
                         Text(formatMoney(total, ""), color = ZakupColors.OnDark, fontSize = 27.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.size(6.dp))
-                        Text("сум", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
+                        Text("с.", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 4.dp))
                     }
                 }
                 if (withDebt > 0) {
