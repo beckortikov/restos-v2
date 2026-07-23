@@ -90,7 +90,8 @@ class MovementsViewModel @Inject constructor(private val api: StockApi) : ViewMo
     }
 }
 
-private fun kindLabel(type: String): String = when (type) {
+/** Не private — переиспользуется в OverviewViewModel («Последние операции»). */
+fun kindLabel(type: String): String = when (type) {
     "receipt" -> "Приёмка"
     "writeoff" -> "Списание"
     "return_supplier" -> "Возврат поставщику"
@@ -103,7 +104,7 @@ private fun kindLabel(type: String): String = when (type) {
 }
 
 private val monthsMov = listOf("янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек")
-private fun dateLabel(createdAt: String?): String {
+fun dateLabel(createdAt: String?): String {
     val dt = createdAt?.let { runCatching { OffsetDateTime.parse(it) }.getOrNull() } ?: return ""
     val d = dt.toLocalDate()
     val today = LocalDate.now()

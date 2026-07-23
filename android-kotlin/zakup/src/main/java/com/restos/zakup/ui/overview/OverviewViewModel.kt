@@ -6,10 +6,15 @@ import com.restos.zakup.data.receipts.ReceiptsApi
 import com.restos.zakup.data.receipts.StockReceiptDto
 import com.restos.zakup.data.stock.IngredientDto
 import com.restos.zakup.data.stock.StockApi
+import com.restos.zakup.data.stock.StockMovementDto
 import com.restos.zakup.data.stock.listAllIngredients
 import com.restos.zakup.data.suppliers.SuppliersApi
+import com.restos.zakup.ui.ops.MovementRow
+import com.restos.zakup.ui.ops.dateLabel
+import com.restos.zakup.ui.ops.kindLabel
 import com.restos.zakup.ui.receipts.ReceiptRow
 import com.restos.zakup.ui.receipts.toReceiptRow
+import com.restos.zakup.util.formatQty
 import com.restos.zakup.util.toDecimalOrZero
 import com.restos.zakup.ui.live.observeStockEvents
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -40,6 +45,9 @@ data class OverviewUiState(
     val totalDebt: BigDecimal = BigDecimal.ZERO,
     val toBuy: List<ToBuyRow> = emptyList(),
     val recent: List<ReceiptRow> = emptyList(),
+    /** Последние операции (#3) — списания/возвраты/инвентаризация/остаток/хозрасход,
+     *  отдельно от «Последние приёмки» (это про приёмки от поставщиков). */
+    val recentOps: List<MovementRow> = emptyList(),
 )
 
 @HiltViewModel
@@ -65,10 +73,15 @@ class OverviewViewModel @Inject constructor(
                 val lowD = async { stockApi.listAllIngredients(low = true) }
                 val supD = async { suppliersApi.listSuppliers().data }
                 val recD = async { receiptsApi.listReceipts(limit = 5).data }
-                Triple(lowD.await(), supD.await(), recD.await())
-            }.onSuccess { (low, suppliers, receipts) ->
+                val movD = async { runCatching { stockApi.listMovements(limit = 30).data }.getOrDefault(emptyList()) }
+                Quad(lowD.await(), supD.await(), recD.await(), movD.await())
+            }.onSuccess { (low, suppliers, receipts, movements) ->
                 val toBuy = low.map { it.toBuyRow() }.sortedBy { it.urgency == BuyUrgency.Low }
                 val debt = suppliers.fold(BigDecimal.ZERO) { acc, s -> acc + s.currentDebt.toDecimalOrZero() }
+                val ops = movements
+                    .filter { it.type != "receipt" && it.type != "order_deduct" }
+                    .take(3)
+                    .map { it.toMovementRow() }
                 _state.update {
                     it.copy(
                         loading = false,
@@ -76,12 +89,26 @@ class OverviewViewModel @Inject constructor(
                         totalDebt = debt,
                         toBuy = toBuy.take(3),
                         recent = receipts.take(3).map(StockReceiptDto::toReceiptRow),
+                        recentOps = ops,
                     )
                 }
             }.onFailure { e ->
                 _state.update { it.copy(loading = false, error = e.message ?: "Не удалось загрузить обзор") }
             }
         }
+    }
+
+    private fun StockMovementDto.toMovementRow(): MovementRow {
+        val q = qty.toDecimalOrZero()
+        val positive = q.signum() >= 0
+        return MovementRow(
+            id = id,
+            title = ingredientName?.takeIf { it.isNotBlank() } ?: description?.takeIf { it.isNotBlank() } ?: "—",
+            kindLabel = kindLabel(type),
+            dateLabel = dateLabel(createdAt),
+            qtyText = (if (positive) "+" else "−") + formatQty(q.abs(), unit),
+            positive = positive,
+        )
     }
 
     private fun IngredientDto.toBuyRow(): ToBuyRow {
@@ -96,3 +123,5 @@ class OverviewViewModel @Inject constructor(
         )
     }
 }
+
+private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)

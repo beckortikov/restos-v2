@@ -16,8 +16,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Assignment
+import androidx.compose.material.icons.automirrored.outlined.CompareArrows
+import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Add
+import androidx.compose.material.icons.outlined.CleaningServices
+import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material.icons.outlined.ShoppingCart
@@ -60,6 +66,7 @@ fun OverviewScreen(
     onOpenHistory: () -> Unit = {},
     onOpenSuppliers: () -> Unit = {},
     onOpenNotifications: () -> Unit = {},
+    onOpenMovements: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel(),
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -140,6 +147,26 @@ fun OverviewScreen(
                                 state.recent.forEachIndexed { i, row ->
                                     RecentReceiptRow(row)
                                     if (i < state.recent.lastIndex) RowDivider()
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(Modifier.height(4.dp))
+                    SectionHeader(title = "Последние операции", actionLabel = "Все", onAction = onOpenMovements)
+                    Spacer(Modifier.height(2.dp))
+                }
+                if (state.recentOps.isEmpty()) {
+                    item { InfoCard("Операций пока нет") }
+                } else {
+                    item {
+                        ZakupCard(Modifier.fillMaxWidth()) {
+                            Column {
+                                state.recentOps.forEachIndexed { i, row ->
+                                    RecentOpRow(row)
+                                    if (i < state.recentOps.lastIndex) RowDivider()
                                 }
                             }
                         }
@@ -266,6 +293,34 @@ private fun RecentReceiptRow(row: ReceiptRow) {
             Spacer(Modifier.size(4.dp))
             StatusBadge(row.status.label, row.status.kind)
         }
+    }
+}
+
+@Composable
+private fun RecentOpRow(row: com.restos.zakup.ui.ops.MovementRow) {
+    val icon = when (row.kindLabel) {
+        "Списание" -> Icons.Outlined.DeleteOutline
+        "Возврат поставщику" -> Icons.AutoMirrored.Outlined.KeyboardReturn
+        "Инвентаризация" -> Icons.AutoMirrored.Outlined.Assignment
+        "Начальный остаток" -> Icons.Outlined.Inbox
+        "Расход хозтоваров" -> Icons.Outlined.CleaningServices
+        "Перемещение" -> Icons.AutoMirrored.Outlined.CompareArrows
+        else -> Icons.Outlined.ReceiptLong
+    }
+    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconTile(icon = icon, tint = ZakupColors.TextSecondary, bg = ZakupColors.SurfaceMuted, size = 38)
+        Spacer(Modifier.size(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(row.title, style = MaterialTheme.typography.titleMedium, maxLines = 1)
+            Spacer(Modifier.size(2.dp))
+            Text("${row.kindLabel} · ${row.dateLabel}", fontSize = 12.5.sp, color = ZakupColors.TextTertiary)
+        }
+        Text(
+            row.qtyText,
+            fontSize = 14.5.sp,
+            fontWeight = FontWeight.Bold,
+            color = if (row.positive) ZakupColors.Primary else ZakupColors.Danger,
+        )
     }
 }
 

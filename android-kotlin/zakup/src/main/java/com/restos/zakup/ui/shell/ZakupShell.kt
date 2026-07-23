@@ -88,6 +88,7 @@ fun ZakupShell(
                     onOpenToBuy = onOpenToBuy,
                     onOpenHistory = onOpenHistory,
                     onOpenSuppliers = { currentTab = ZakupTab.Suppliers.ordinal },
+                    onOpenMovements = { onOperation(com.restos.zakup.ui.more.MoreOps.MOVEMENTS) },
                 )
                 ZakupTab.Stock -> StockScreen(onBuyIngredient = onNewReceipt)
                 ZakupTab.Suppliers -> SuppliersScreen(onOpenSupplier = onOpenSupplier)
