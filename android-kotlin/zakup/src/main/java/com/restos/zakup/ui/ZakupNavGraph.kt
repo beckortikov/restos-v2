@@ -18,6 +18,7 @@ import com.restos.zakup.ui.auth.AuthGateViewModel
 import com.restos.zakup.ui.auth.AuthStatus
 import com.restos.zakup.ui.history.HistoryScreen
 import com.restos.zakup.ui.login.PinLoginScreen
+import com.restos.zakup.ui.newreceipt.NewReceiptScreen
 import com.restos.zakup.ui.onboarding.OnboardingScreen
 import com.restos.zakup.ui.shell.ZakupShell
 import com.restos.zakup.ui.supplier.SupplierDetailScreen
@@ -30,6 +31,7 @@ object Routes {
     const val SUPPLIER_DETAIL = "supplier/{id}"
     const val HISTORY = "history"
     const val TO_BUY = "to-buy"
+    const val NEW_RECEIPT = "receipt/new"
 
     fun supplier(id: String) = "supplier/$id"
 }
@@ -88,8 +90,17 @@ fun ZakupNavGraph(
                 onOpenSupplier = { id -> navController.navigate(Routes.supplier(id)) },
                 onOpenHistory = { navController.navigate(Routes.HISTORY) },
                 onOpenToBuy = { navController.navigate(Routes.TO_BUY) },
-                // Новая приёмка — Ф2.
-                onNewReceipt = {},
+                onNewReceipt = { navController.navigate(Routes.NEW_RECEIPT) },
+            )
+        }
+        composable(Routes.NEW_RECEIPT) {
+            NewReceiptScreen(
+                onBack = { navController.popBackStack() },
+                onCreated = {
+                    navController.navigate(Routes.HISTORY) {
+                        popUpTo(Routes.APP)
+                    }
+                },
             )
         }
         composable(
@@ -102,7 +113,10 @@ fun ZakupNavGraph(
             HistoryScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.TO_BUY) {
-            ToBuyScreen(onBack = { navController.popBackStack() })
+            ToBuyScreen(
+                onBack = { navController.popBackStack() },
+                onCreateReceipt = { navController.navigate(Routes.NEW_RECEIPT) },
+            )
         }
     }
 }

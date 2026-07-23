@@ -1,5 +1,6 @@
 package com.restos.zakup.data.net
 
+import com.restos.zakup.data.finance.FinanceApi
 import com.restos.zakup.data.receipts.ReceiptsApi
 import com.restos.zakup.data.stock.StockApi
 import com.restos.zakup.data.suppliers.SuppliersApi
@@ -31,4 +32,9 @@ object ZakupNetworkModule {
     @Singleton
     fun provideReceiptsApi(retrofit: Retrofit): ReceiptsApi =
         retrofit.create(ReceiptsApi::class.java)
+
+    @Provides
+    @Singleton
+    fun provideFinanceApi(retrofit: Retrofit): FinanceApi =
+        retrofit.create(FinanceApi::class.java)
 }

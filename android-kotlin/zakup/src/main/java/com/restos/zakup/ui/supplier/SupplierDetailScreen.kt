@@ -24,6 +24,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -55,6 +58,20 @@ fun SupplierDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    var showPay by remember { mutableStateOf(false) }
+
+    if (showPay && state.debt.signum() > 0) {
+        com.restos.zakup.ui.paydebt.PayDebtSheet(
+            supplierId = state.supplierId,
+            supplierName = state.name,
+            debt = state.debt,
+            onDismiss = { showPay = false },
+            onPaid = {
+                showPay = false
+                viewModel.load()
+            },
+        )
+    }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
         ZakupTopBar("Поставщик", onBack = onBack)
@@ -91,7 +108,7 @@ fun SupplierDetailScreen(
                     }
                 }
 
-                item { DebtCard(state) }
+                item { DebtCard(state, onPay = { showPay = true }) }
 
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -158,7 +175,7 @@ private fun ContactAction(label: String, icon: ImageVector, enabled: Boolean, mo
 }
 
 @Composable
-private fun DebtCard(state: SupplierDetailUiState) {
+private fun DebtCard(state: SupplierDetailUiState, onPay: () -> Unit) {
     val hasDebt = state.debt.signum() > 0
     Surface(
         shape = RoundedCornerShape(ZakupRadius.card),
@@ -168,16 +185,35 @@ private fun DebtCard(state: SupplierDetailUiState) {
     ) {
         Column(Modifier.padding(18.dp)) {
             val onc = if (hasDebt) ZakupColors.OnPrimary else ZakupColors.TextSecondary
-            Text("Текущий долг", color = if (hasDebt) ZakupColors.OnPrimary.copy(alpha = 0.85f) else ZakupColors.TextTertiary, fontSize = 13.sp)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                if (hasDebt) formatMoney(state.debt) else "Без долга",
-                color = if (hasDebt) ZakupColors.OnPrimary else ZakupColors.TextPrimary,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Bold,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Текущий долг", color = if (hasDebt) ZakupColors.OnPrimary.copy(alpha = 0.85f) else ZakupColors.TextTertiary, fontSize = 13.sp)
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        if (hasDebt) formatMoney(state.debt) else "Без долга",
+                        color = if (hasDebt) ZakupColors.OnPrimary else ZakupColors.TextPrimary,
+                        fontSize = 24.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+                if (hasDebt) {
+                    Surface(
+                        onClick = onPay,
+                        shape = RoundedCornerShape(ZakupRadius.chip),
+                        color = ZakupColors.OnPrimary,
+                    ) {
+                        Text(
+                            "Погасить",
+                            color = ZakupColors.Primary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        )
+                    }
+                }
+            }
             if (state.creditLimit.signum() > 0 || state.termsDays > 0) {
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(10.dp))
                 Text(
                     "Лимит ${formatMoney(state.creditLimit)} · отсрочка ${state.termsDays} дн",
                     color = onc.copy(alpha = 0.9f),

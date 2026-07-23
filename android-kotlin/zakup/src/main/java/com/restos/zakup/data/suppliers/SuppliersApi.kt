@@ -2,7 +2,10 @@ package com.restos.zakup.data.suppliers
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.POST
+import retrofit2.http.Path
 import retrofit2.http.Query
 
 /** Поставщики. Контракт — openapi tag admin, модель suppliers. */
@@ -11,7 +14,20 @@ interface SuppliersApi {
     suspend fun listSuppliers(
         @Query("limit") limit: Int = 200,
     ): SuppliersEnvelope
+
+    /** Гашение долга FIFO по всем накладным поставщика. Idempotency-Key — авто. */
+    @POST("api/v1/suppliers/{id}/pay-debt")
+    suspend fun payDebt(
+        @Path("id") id: String,
+        @Body body: PayDebtInput,
+    ): SupplierDto
 }
+
+@Serializable
+data class PayDebtInput(
+    val amount: String,
+    @SerialName("account_id") val accountId: String,
+)
 
 @Serializable
 data class SuppliersEnvelope(val data: List<SupplierDto> = emptyList())

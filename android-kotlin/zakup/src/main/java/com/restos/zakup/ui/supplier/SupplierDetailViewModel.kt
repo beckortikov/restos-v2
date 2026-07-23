@@ -22,6 +22,7 @@ import javax.inject.Inject
 data class SupplierDetailUiState(
     val loading: Boolean = true,
     val error: String? = null,
+    val supplierId: String = "",
     val name: String = "",
     val contact: String? = null,
     val phone: String? = null,
@@ -64,6 +65,7 @@ class SupplierDetailViewModel @Inject constructor(
                 _state.update {
                     it.copy(
                         loading = false,
+                        supplierId = supplier.id,
                         name = supplier.name.ifBlank { "—" },
                         contact = supplier.contactPerson?.takeIf { c -> c.isNotBlank() },
                         phone = supplier.phone?.takeIf { p -> p.isNotBlank() },
