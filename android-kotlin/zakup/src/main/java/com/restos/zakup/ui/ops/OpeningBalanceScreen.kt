@@ -1,5 +1,6 @@
 package com.restos.zakup.ui.ops
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,11 +37,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.zakup.ui.components.ConfirmDialog
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
+import com.restos.zakup.ui.components.RowDivider
 import com.restos.zakup.ui.components.ZakupCard
 import com.restos.zakup.ui.components.ZakupTopBar
 import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatMoney
+import com.restos.zakup.util.formatQty
+import com.restos.zakup.util.toDecimalOrZero
 
 /** Экран 15 «Начальный остаток» — заводится один раз, взнос собственника. */
 @Composable
@@ -52,6 +56,7 @@ fun OpeningBalanceScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     var showPicker by remember { mutableStateOf(false) }
     var confirmSubmit by remember { mutableStateOf(false) }
+    var expandedLineId by remember { mutableStateOf<String?>(null) }
     LaunchedEffectDone(state.done, onDone)
 
     if (showPicker) {
@@ -94,20 +99,21 @@ fun OpeningBalanceScreen(
                             }
                         }
                     }
-                    items(state.lines, key = { it.id }) { line ->
-                        ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
-                            Column {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(line.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                                    Text(formatMoney(line.lineValue, ""), fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
-                                    Spacer(Modifier.size(8.dp))
-                                    RemoveBtn { viewModel.remove(line.id) }
-                                }
-                                Spacer(Modifier.size(10.dp))
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    OpNumField(line.qty, { viewModel.setQty(line.id, it) }, "кол-во", line.unit, Modifier.weight(1f))
-                                    Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
-                                    OpNumField(line.price, { viewModel.setPrice(line.id, it) }, "цена", "с.", Modifier.weight(1.3f))
+                    if (state.lines.isNotEmpty()) {
+                        item {
+                            ZakupCard(Modifier.fillMaxWidth()) {
+                                Column {
+                                    state.lines.forEachIndexed { i, line ->
+                                        OpeningLineRow(
+                                            line = line,
+                                            expanded = line.id == expandedLineId,
+                                            onToggle = { expandedLineId = if (expandedLineId == line.id) null else line.id },
+                                            onQty = { viewModel.setQty(line.id, it) },
+                                            onPrice = { viewModel.setPrice(line.id, it) },
+                                            onRemove = { viewModel.remove(line.id) },
+                                        )
+                                        if (i < state.lines.lastIndex) RowDivider()
+                                    }
                                 }
                             }
                         }
@@ -126,6 +132,52 @@ fun OpeningBalanceScreen(
                     onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
+            }
+        }
+    }
+}
+
+/** Компактная строка позиции — тап разворачивает кол-во/цену (тот же приём, что в 05). */
+@Composable
+private fun OpeningLineRow(
+    line: OpeningLine,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onQty: (String) -> Unit,
+    onPrice: (String) -> Unit,
+    onRemove: () -> Unit,
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onToggle).padding(horizontal = 14.dp, vertical = 13.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(line.name, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextPrimary, maxLines = 1)
+                Spacer(Modifier.size(2.dp))
+                val hasQty = line.qty.toDecimalOrZero().signum() > 0
+                if (hasQty) {
+                    Text(
+                        "${formatQty(line.qty.toDecimalOrZero(), line.unit)} × ${formatMoney(line.price.toDecimalOrZero(), "")}",
+                        fontSize = 12.5.sp,
+                        color = ZakupColors.TextTertiary,
+                    )
+                } else {
+                    Text("Укажите кол-во и цену", fontSize = 12.5.sp, color = ZakupColors.Warn)
+                }
+            }
+            Text(formatMoney(line.lineValue, ""), fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
+        }
+        if (expanded) {
+            Row(
+                Modifier.fillMaxWidth().padding(start = 14.dp, end = 14.dp, bottom = 13.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                OpNumField(line.qty, onQty, "кол-во", line.unit, Modifier.weight(1f))
+                Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
+                OpNumField(line.price, onPrice, "цена", "сум", Modifier.weight(1.3f))
+                Spacer(Modifier.size(8.dp))
+                RemoveBtn(onRemove)
             }
         }
     }

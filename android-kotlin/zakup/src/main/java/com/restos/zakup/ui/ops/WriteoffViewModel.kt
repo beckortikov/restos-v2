@@ -6,13 +6,16 @@ import com.restos.core.net.ApiException
 import com.restos.zakup.data.stock.IngredientDto
 import com.restos.zakup.data.stock.OperationsApi
 import com.restos.zakup.data.stock.StockApi
+import com.restos.zakup.data.stock.WarehouseDto
 import com.restos.zakup.data.stock.WriteoffInput
 import com.restos.zakup.data.stock.WriteoffLineInput
 import com.restos.zakup.data.stock.listAllIngredients
+import com.restos.zakup.ui.stock.WarehouseTab
 import com.restos.zakup.util.formatMoney
 import com.restos.zakup.util.formatQty
 import com.restos.zakup.util.toDecimalOrZero
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -40,6 +43,8 @@ data class WriteoffUiState(
     val done: Boolean = false,
     val reason: String = REASONS.first(),
     val available: List<IngredientDto> = emptyList(),
+    val warehouses: List<WarehouseTab> = listOf(WarehouseTab(null, "Все склады")),
+    val selectedWarehouse: String? = null,
     val lines: List<WriteoffLine> = emptyList(),
 ) {
     val loss: BigDecimal get() = lines.fold(BigDecimal.ZERO) { a, l -> a + l.lineLoss }
@@ -63,21 +68,39 @@ class WriteoffViewModel @Inject constructor(
     fun load() {
         _state.update { it.copy(loading = true, loadError = null) }
         viewModelScope.launch {
-            runCatching { stockApi.listAllIngredients() }
-                .onSuccess { items -> _state.update { it.copy(loading = false, available = items) } }
-                .onFailure { e -> _state.update { it.copy(loading = false, loadError = e.message ?: "Ошибка загрузки") } }
+            runCatching {
+                val whD = async { runCatching { stockApi.listWarehouses().data }.getOrDefault(emptyList()) }
+                val ingD = async { stockApi.listAllIngredients() }
+                whD.await() to ingD.await()
+            }.onSuccess { (warehouses, items) ->
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        available = items,
+                        warehouses = listOf(WarehouseTab(null, "Все склады")) + warehouses.map { w -> WarehouseTab(w.id, whName(w)) },
+                    )
+                }
+            }.onFailure { e -> _state.update { it.copy(loading = false, loadError = e.message ?: "Ошибка загрузки") } }
         }
     }
 
-    fun pickItems(): List<PickItem> = _state.value.available.map { ing ->
-        val stock = ing.qty.toDecimalOrZero()
-        val price = ing.pricePerUnit.toDecimalOrZero()
-        PickItem(
-            id = ing.id,
-            name = ing.name?.takeIf { it.isNotBlank() } ?: "—",
-            unit = ing.unit,
-            secondary = "остаток ${formatQty(stock, ing.unit)} · ${formatMoney(price, "")}/${ing.unit ?: ""}",
-        )
+    fun selectWarehouse(id: String?) = _state.update { it.copy(selectedWarehouse = id) }
+
+    fun pickItems(): List<PickItem> = _state.value.available
+        .filter { _state.value.selectedWarehouse == null || it.warehouseId == _state.value.selectedWarehouse }
+        .map { ing ->
+            val stock = ing.qty.toDecimalOrZero()
+            val price = ing.pricePerUnit.toDecimalOrZero()
+            PickItem(
+                id = ing.id,
+                name = ing.name?.takeIf { it.isNotBlank() } ?: "—",
+                unit = ing.unit,
+                secondary = "остаток ${formatQty(stock, ing.unit)} · ${formatMoney(price, "")}/${ing.unit ?: ""}",
+            )
+        }
+
+    private fun whName(w: WarehouseDto) = w.name.ifBlank {
+        when (w.kind) { "products" -> "Продукты"; "purchased" -> "Покупные"; "supplies" -> "Хозтовары"; else -> "Склад" }
     }
 
     fun setReason(r: String) = _state.update { it.copy(reason = r) }

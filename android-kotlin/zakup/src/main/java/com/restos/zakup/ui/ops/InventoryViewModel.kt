@@ -41,6 +41,8 @@ data class InventoryUiState(
     val loading: Boolean = true,
     val loadError: String? = null,
     val submitting: Boolean = false,
+    val savingDraft: Boolean = false,
+    val draftSaved: Boolean = false,
     val submitError: String? = null,
     val result: InvResult? = null,
     val query: String = "",
@@ -118,6 +120,27 @@ class InventoryViewModel @Inject constructor(
         s.copy(lines = s.lines.map { if (it.id == id) it.copy(actual = v.opSanitize()) else it })
     }
     fun dismissResult() = _state.update { it.copy(result = null) }
+    fun dismissDraftSaved() = _state.update { it.copy(draftSaved = false) }
+
+    /** «Черновик» — только создаёт проверку (status=draft) на бэке, без применения. */
+    fun saveDraft() {
+        val s = _state.value
+        val changed = s.lines.filter { it.changed }
+        if (s.savingDraft || changed.isEmpty()) return
+        _state.update { it.copy(savingDraft = true, submitError = null) }
+        viewModelScope.launch {
+            runCatching {
+                opsApi.createInventory(InventoryInput(
+                    lines = changed.map { InventoryLineInput(ingredientId = it.id, actualQty = it.actual.toDecimalOrZero().toPlainString()) },
+                ))
+            }.onSuccess {
+                _state.update { it.copy(savingDraft = false, draftSaved = true) }
+            }.onFailure { e ->
+                val msg = (e as? ApiException)?.apiError?.message ?: e.message ?: "Не удалось сохранить черновик"
+                _state.update { it.copy(savingDraft = false, submitError = msg) }
+            }
+        }
+    }
 
     fun submit() {
         val s = _state.value

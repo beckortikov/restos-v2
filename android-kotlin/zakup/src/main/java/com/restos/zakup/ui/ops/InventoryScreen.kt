@@ -64,6 +64,7 @@ fun InventoryScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var confirmSubmit by remember { mutableStateOf(false) }
+    var confirmDraft by remember { mutableStateOf(false) }
 
     if (confirmSubmit) {
         ConfirmDialog(
@@ -72,6 +73,23 @@ fun InventoryScreen(
             confirmLabel = "Применить",
             onConfirm = { confirmSubmit = false; viewModel.submit() },
             onDismiss = { confirmSubmit = false },
+        )
+    }
+    if (confirmDraft) {
+        ConfirmDialog(
+            title = "Сохранить как черновик?",
+            message = "${state.changedCount} позиций сохранятся без применения — остатки не изменятся сейчас.",
+            confirmLabel = "Сохранить",
+            onConfirm = { confirmDraft = false; viewModel.saveDraft() },
+            onDismiss = { confirmDraft = false },
+        )
+    }
+    if (state.draftSaved) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissDraftSaved(); onDone() },
+            confirmButton = { TextButton(onClick = { viewModel.dismissDraftSaved(); onDone() }) { Text("Готово") } },
+            title = { Text("Черновик сохранён", fontWeight = FontWeight.Bold) },
+            text = { Text("Инвентаризация сохранена без применения к остаткам.", fontSize = 14.sp, color = ZakupColors.TextSecondary) },
         )
     }
 
@@ -93,7 +111,11 @@ fun InventoryScreen(
     }
 
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        ZakupTopBar("Инвентаризация", onBack = onBack)
+        ZakupTopBar("Инвентаризация", onBack = onBack) {
+            if (state.warehouses.size > 1) {
+                WarehouseChip(state.warehouses, state.selectedWarehouse, viewModel::selectWarehouse)
+            }
+        }
         when {
             state.loading -> LoadingState()
             state.loadError != null -> ErrorState(state.loadError!!, onRetry = viewModel::load)
@@ -125,12 +147,6 @@ fun InventoryScreen(
                         ),
                     )
                     Spacer(Modifier.height(8.dp))
-                    if (state.warehouses.size > 1) {
-                        Chips(state.warehouses.map { it.name }, state.warehouses.firstOrNull { it.id == state.selectedWarehouse }?.name ?: "Все склады") { label ->
-                            viewModel.selectWarehouse(state.warehouses.firstOrNull { it.name == label }?.id)
-                        }
-                        Spacer(Modifier.height(6.dp))
-                    }
                     if (state.categories.size > 1) {
                         Chips(state.categories, state.selectedCategory) { viewModel.selectCategory(it) }
                         Spacer(Modifier.height(6.dp))
@@ -153,6 +169,8 @@ fun InventoryScreen(
                     submitting = state.submitting,
                     onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
+                    secondaryButton = "Черновик",
+                    onSecondary = { confirmDraft = true },
                 )
                 if (state.submitError != null) {
                     Text(
@@ -235,7 +253,12 @@ private fun InventoryRow(line: InventoryLine, onActual: (String, String) -> Unit
                 )
                 Spacer(Modifier.size(10.dp))
             }
-            OpNumField(line.actual, { onActual(line.id, it) }, "факт", line.unit, Modifier.width(120.dp))
+            val borderColor = when {
+                !line.changed -> null
+                diff.signum() > 0 -> ZakupColors.Primary
+                else -> ZakupColors.Danger
+            }
+            OpNumField(line.actual, { onActual(line.id, it) }, "факт", line.unit, Modifier.width(120.dp), borderColor = borderColor)
         }
     }
 }

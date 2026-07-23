@@ -18,6 +18,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -44,6 +45,8 @@ import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatMoney
 import com.restos.zakup.util.formatQty
+import com.restos.zakup.util.toDecimalOrZero
+import java.math.BigDecimal
 
 /** Экран 10 «Списание» — убыток, для брака от поставщика — возврат. */
 @Composable
@@ -106,26 +109,39 @@ fun WriteoffScreen(
                     item { OpLabel("Причина") }
                     item { ReasonChips(WriteoffUiState.REASONS, state.reason, viewModel::setReason) }
 
+                    if (state.warehouses.size > 1) {
+                        item { OpLabel("Склад") }
+                        item { WarehouseSelectorRow(state.warehouses, state.selectedWarehouse, viewModel::selectWarehouse) }
+                    }
+
                     item { OpLabel("Позиции к списанию · ${state.lines.size}") }
                     items(state.lines, key = { it.id }) { line ->
+                        val qty = line.qty.toDecimalOrZero()
                         ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
-                            Column {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(line.name, style = MaterialTheme.typography.titleMedium)
-                                        Spacer(Modifier.size(2.dp))
-                                        Text(
-                                            "остаток ${formatQty(line.stock, line.unit)} · ${formatMoney(line.cost, "")}/${line.unit ?: ""}",
-                                            fontSize = 12.sp,
-                                            color = ZakupColors.TextTertiary,
-                                        )
-                                    }
-                                    Text(formatMoney(line.lineLoss, ""), fontSize = 14.5.sp, fontWeight = FontWeight.Bold, color = ZakupColors.Danger)
-                                    Spacer(Modifier.size(8.dp))
-                                    RemoveBtn { viewModel.remove(line.id) }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(line.name, style = MaterialTheme.typography.titleMedium)
+                                    Spacer(Modifier.size(2.dp))
+                                    Text(
+                                        "остаток ${formatQty(line.stock, line.unit)} · ${formatMoney(line.cost, "")}/${line.unit ?: ""}",
+                                        fontSize = 12.sp,
+                                        color = ZakupColors.TextTertiary,
+                                    )
                                 }
-                                Spacer(Modifier.size(10.dp))
-                                OpNumField(line.qty, { viewModel.setQty(line.id, it) }, "кол-во", line.unit, Modifier.fillMaxWidth())
+                                CheckStepperRow(
+                                    checked = true,
+                                    qtyLabel = formatQty(qty, line.unit),
+                                    checkedColor = ZakupColors.Danger,
+                                    onToggle = { viewModel.remove(line.id) },
+                                    onDec = {
+                                        val next = (qty - BigDecimal.ONE).coerceAtLeast(BigDecimal.ZERO)
+                                        viewModel.setQty(line.id, next.stripTrailingZeros().toPlainString())
+                                    },
+                                    onInc = {
+                                        val next = (qty + BigDecimal.ONE).coerceAtMost(line.stock)
+                                        viewModel.setQty(line.id, next.stripTrailingZeros().toPlainString())
+                                    },
+                                )
                             }
                         }
                     }
@@ -143,6 +159,7 @@ fun WriteoffScreen(
                     onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
                     accentColor = ZakupColors.Danger,
+                    icon = Icons.Outlined.DeleteOutline,
                 )
             }
         }

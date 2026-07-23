@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
 import androidx.compose.material.icons.outlined.ReceiptLong
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -47,6 +48,8 @@ import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatMoney
 import com.restos.zakup.util.formatQty
+import com.restos.zakup.util.toDecimalOrZero
+import java.math.BigDecimal
 
 /** Экран 09 «Возврат поставщику». */
 @Composable
@@ -86,9 +89,9 @@ fun ReturnScreen(
                                 IconTile(icon = Icons.Outlined.ReceiptLong, tint = ZakupColors.TextSecondary, bg = ZakupColors.SurfaceMuted, size = 38)
                                 Spacer(Modifier.size(12.dp))
                                 Column {
-                                    Text("Накладная", fontSize = 12.sp, color = ZakupColors.TextTertiary)
+                                    Text("Накладная", style = MaterialTheme.typography.titleMedium)
                                     Spacer(Modifier.size(2.dp))
-                                    Text("${state.supplierName} · ${state.receiptDate}", style = MaterialTheme.typography.titleMedium)
+                                    Text("${state.supplierName} · ${state.receiptDate}", fontSize = 12.5.sp, color = ZakupColors.TextTertiary)
                                 }
                             }
                         }
@@ -106,6 +109,8 @@ fun ReturnScreen(
 
                     item { OpLabel("Что возвращаем") }
                     items(state.lines, key = { it.receiptLineId }) { line ->
+                        val qty = line.qty.toDecimalOrZero()
+                        val checked = qty.signum() > 0
                         ZakupCard(Modifier.fillMaxWidth(), padding = 14) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
@@ -117,7 +122,22 @@ fun ReturnScreen(
                                         color = ZakupColors.TextTertiary,
                                     )
                                 }
-                                OpNumField(line.qty, { viewModel.setQty(line.receiptLineId, it) }, "0", line.unit, Modifier.width(110.dp))
+                                CheckStepperRow(
+                                    checked = checked,
+                                    qtyLabel = formatQty(qty, line.unit),
+                                    checkedColor = ZakupColors.Danger,
+                                    onToggle = {
+                                        viewModel.setQty(line.receiptLineId, if (checked) "0" else line.available.stripTrailingZeros().toPlainString())
+                                    },
+                                    onDec = {
+                                        val next = (qty - BigDecimal.ONE).coerceAtLeast(BigDecimal.ZERO)
+                                        viewModel.setQty(line.receiptLineId, next.stripTrailingZeros().toPlainString())
+                                    },
+                                    onInc = {
+                                        val next = (qty + BigDecimal.ONE).coerceAtMost(line.available)
+                                        viewModel.setQty(line.receiptLineId, next.stripTrailingZeros().toPlainString())
+                                    },
+                                )
                             }
                         }
                     }
@@ -162,6 +182,7 @@ fun ReturnScreen(
                     onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
                     accentColor = ZakupColors.Danger,
+                    icon = Icons.AutoMirrored.Outlined.KeyboardReturn,
                 )
             }
         }
