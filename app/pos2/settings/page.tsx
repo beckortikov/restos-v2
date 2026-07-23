@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store, QrCode, Smartphone, Grid3x3, UtensilsCrossed, RefreshCw } from 'lucide-react'
+import { LayoutGrid, Sparkles, Printer, BookOpen, Users, Upload, LogOut, Copy, ChevronRight, Store, QrCode, Smartphone, ShoppingBasket, Grid3x3, UtensilsCrossed, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { updateRestaurant as updateRestaurantQuery } from '@/lib/queries'
@@ -50,6 +50,7 @@ export default function PosV2Settings() {
     { icon: Users, label: 'Клиенты', sub: 'База гостей и скидки', to: '/settings/customers', gate: 'customers.manage' },
     { icon: QrCode, label: 'Подключить официантов', sub: 'QR для APK по локальной сети', to: '/show-qr' },
     { icon: Smartphone, label: 'Приложение официанта', sub: 'Загрузка и раздача APK', to: '/settings/waiter-app' },
+    { icon: ShoppingBasket, label: 'Приложение закупщика', sub: 'Загрузка и раздача APK', to: '/settings/zakup-app' },
     { icon: Upload, label: 'Импорт данных', sub: 'Меню, остатки, клиенты', to: '/settings/import', gate: 'data.import' },
   ]
   const links = linksAll.filter(l => !l.gate || canDo(l.gate))
