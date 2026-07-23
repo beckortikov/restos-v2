@@ -2543,7 +2543,7 @@ paths:
     get:
       tags: [settings]
       summary: Состояние APK официанта (есть ли, версия, размер, дата)
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaiterAppInfo" } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
     post:
       tags: [settings]
       summary: Загрузить новый APK официанта (multipart "file", optional "version")
@@ -2556,11 +2556,36 @@ paths:
               properties:
                 file: { type: string, format: binary }
                 version: { type: string }
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaiterAppInfo" } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
   /download/waiter.apk:
     get:
       tags: [settings]
       summary: Публичное скачивание APK официанта (по QR в LAN, без авторизации)
+      responses:
+        "200": { description: APK файл, content: { application/vnd.android.package-archive: { schema: { type: string, format: binary } } } }
+        "404": { description: APK ещё не загружен }
+  /api/v1/zakup-app:
+    get:
+      tags: [settings]
+      summary: Состояние APK закупщика (есть ли, версия, размер, дата)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
+    post:
+      tags: [settings]
+      summary: Загрузить новый APK закупщика (multipart "file", optional "version")
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                version: { type: string }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
+  /download/zakup.apk:
+    get:
+      tags: [settings]
+      summary: Публичное скачивание APK закупщика (по QR в LAN, без авторизации)
       responses:
         "200": { description: APK файл, content: { application/vnd.android.package-archive: { schema: { type: string, format: binary } } } }
         "404": { description: APK ещё не загружен }
@@ -4077,7 +4102,7 @@ components:
       properties:
         name: { type: string }
         username: { type: string }
-        role: { type: string, enum: [cashier, cook, waiter, manager, owner] }
+        role: { type: string, enum: [cashier, cook, waiter, manager, owner, storekeeper, accountant] }
         pin: { type: string }
         password: { type: string }
         phone: { type: string }
@@ -4773,7 +4798,7 @@ components:
         to:       { type: string, format: date-time }
         insights: { type: array, items: { $ref: "#/components/schemas/Insight" } }
 
-    WaiterAppInfo:
+    AppDistInfo:
       type: object
       properties:
         available:     { type: boolean }

@@ -118,6 +118,9 @@ func (c *Config) BackupsDir() string { return filepath.Join(c.DataDir, "backups"
 // переживает перезапуск и обновляется без пересборки приложения.
 func (c *Config) WaiterAppPath() string { return filepath.Join(c.DataDir, "waiter-app.apk") }
 
+// ZakupAppPath — путь к загруженному APK закупщика (аналогично официанту).
+func (c *Config) ZakupAppPath() string { return filepath.Join(c.DataDir, "zakup-app.apk") }
+
 // EmbeddedDSN — DSN для подключения к локальному embedded-postgres.
 func (c *Config) EmbeddedDSN() string {
 	return fmt.Sprintf("host=127.0.0.1 port=%d user=%s password=%s dbname=%s sslmode=disable",

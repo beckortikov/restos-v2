@@ -1,7 +1,9 @@
 package handlers
 
-// Waiter-app handler — раздача APK официанта по LAN/QR + загрузка нового APK
-// через настройки кассы (вариант C, см. service/waiter_app.go).
+// App-dist handler — раздача APK-приложений по LAN/QR + загрузка нового APK
+// через настройки кассы (вариант C, см. service/app_dist.go). Один экземпляр
+// хендлера на вариант (официант, закупщик): маршрут скачивания и имя файла
+// приходят из сервиса.
 
 import (
 	"net/http"
@@ -13,17 +15,17 @@ import (
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
 
-type WaiterAppHandler struct {
-	svc *service.WaiterAppService
+type AppDistHandler struct {
+	svc *service.AppDistService
 }
 
-func NewWaiterApp(svc *service.WaiterAppService) *WaiterAppHandler {
-	return &WaiterAppHandler{svc: svc}
+func NewAppDist(svc *service.AppDistService) *AppDistHandler {
+	return &AppDistHandler{svc: svc}
 }
 
-// Download — GET /download/waiter.apk (ПУБЛИЧНЫЙ, без авторизации: телефон
-// официанта качает APK по QR ещё до логина).
-func (h *WaiterAppHandler) Download(w http.ResponseWriter, r *http.Request) {
+// Download — публичный GET <downloadPath> (без авторизации: телефон качает APK
+// по QR ещё до логина).
+func (h *AppDistHandler) Download(w http.ResponseWriter, r *http.Request) {
 	p := h.svc.Path()
 	if p == "" {
 		respond.NotFound(w, "APK ещё не загружен")
@@ -40,18 +42,19 @@ func (h *WaiterAppHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 	fi, _ := f.Stat()
+	name := h.svc.AttachmentName()
 	w.Header().Set("Content-Type", "application/vnd.android.package-archive")
-	w.Header().Set("Content-Disposition", `attachment; filename="restos-waiter.apk"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	modTime := time.Time{}
 	if fi != nil {
 		modTime = fi.ModTime()
 	}
 	// ServeContent — поддерживает Range (докачка) + Content-Length.
-	http.ServeContent(w, r, "restos-waiter.apk", modTime, f)
+	http.ServeContent(w, r, name, modTime, f)
 }
 
-// Info — GET /api/v1/waiter-app — состояние APK для UI кассы.
-func (h *WaiterAppHandler) Info(w http.ResponseWriter, r *http.Request) {
+// Info — GET /api/v1/<variant>-app — состояние APK для UI кассы.
+func (h *AppDistHandler) Info(w http.ResponseWriter, r *http.Request) {
 	info, err := h.svc.Info()
 	if err != nil {
 		respond.Error(w, err)
@@ -60,8 +63,8 @@ func (h *WaiterAppHandler) Info(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, info)
 }
 
-// Upload — POST /api/v1/waiter-app (multipart "file") — загрузка нового APK.
-func (h *WaiterAppHandler) Upload(w http.ResponseWriter, r *http.Request) {
+// Upload — POST /api/v1/<variant>-app (multipart "file") — загрузка нового APK.
+func (h *AppDistHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(128 << 20); err != nil { // 128 MB cap
 		respond.BadRequest(w, "ожидается multipart/form-data с полем file")
 		return

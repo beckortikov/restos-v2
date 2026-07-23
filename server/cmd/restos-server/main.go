@@ -187,6 +187,7 @@ func main() {
 			Hub:              hub,
 			NTPChecker:       ntpChecker,
 			WaiterAPKPath:    cfg.WaiterAppPath(),
+			ZakupAPKPath:     cfg.ZakupAppPath(),
 			BackupCfg: service.BackupServiceConfig{
 				BackupsDir:   cfg.BackupsDir(),
 				DesktopDir:   cfg.DesktopBackupsDir(),

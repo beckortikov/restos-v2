@@ -42,6 +42,8 @@ type Deps struct {
 	// WaiterAPKPath — путь к загруженному APK официанта (раздаётся по QR/LAN).
 	// Пусто → раздача/загрузка APK недоступна (dev/тест без DataDir).
 	WaiterAPKPath string
+	// ZakupAPKPath — путь к загруженному APK закупщика (аналогично официанту).
+	ZakupAPKPath string
 }
 
 // BuildInfo пробрасывается из main для GET /healthz.
@@ -152,6 +154,7 @@ func NewRouter(deps Deps) http.Handler {
 	analyticsSvc := service.NewAnalyticsService(rep)
 	trendsSvc := service.NewTrendsService(reportsSvc, finReportsSvc)
 	waiterAppSvc := service.NewWaiterAppService(deps.WaiterAPKPath)
+	zakupAppSvc := service.NewZakupAppService(deps.ZakupAPKPath)
 	salarySvc := service.NewSalaryService(rep)
 	stopListSvc := service.NewStopListService(rep).WithPublisher(pub)
 	insightsSvc := service.NewInsightsService(rep, analyticsSvc, stopListSvc)
@@ -205,7 +208,8 @@ func NewRouter(deps Deps) http.Handler {
 	analyticsH := handlers.NewAnalytics(analyticsSvc)
 	trendsH := handlers.NewTrends(trendsSvc)
 	insightsH := handlers.NewInsights(insightsSvc)
-	waiterAppH := handlers.NewWaiterApp(waiterAppSvc)
+	waiterAppH := handlers.NewAppDist(waiterAppSvc)
+	zakupAppH := handlers.NewAppDist(zakupAppSvc)
 	salaryH := handlers.NewSalary(salarySvc)
 	stopListH := handlers.NewStopList(stopListSvc)
 	batchH := handlers.NewBatchCooking(batchSvc)
@@ -413,9 +417,11 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/trends.xlsx", trendsH.Export)
 			g.Get("/analytics/insights", insightsH.Insights)
 
-			// APK официанта — состояние + загрузка нового (раздача по QR — публично).
+			// APK официанта/закупщика — состояние + загрузка нового (раздача по QR — публично).
 			g.Get("/waiter-app", waiterAppH.Info)
 			g.Post("/waiter-app", waiterAppH.Upload)
+			g.Get("/zakup-app", zakupAppH.Info)
+			g.Post("/zakup-app", zakupAppH.Upload)
 			g.Get("/analytics/forecast", analyticsH.Forecast)
 			g.Get("/analytics/abc-inventory", analyticsH.ABCInventory)
 			g.Get("/finance/salary/report", salaryH.SalaryReport)
@@ -686,9 +692,10 @@ func NewRouter(deps Deps) http.Handler {
 	// .xlsx (иначе Excel: «формат или расширение не являются допустимыми»).
 	r.Handle("/docs/*", DocsHandler())
 
-	// APK официанта — ПУБЛИЧНО (телефон качает по QR ещё до логина). Вне
-	// /api/v1 и до SPA-fallback, чтобы NotFound не перехватил.
+	// APK официанта/закупщика — ПУБЛИЧНО (телефон качает по QR ещё до логина).
+	// Вне /api/v1 и до SPA-fallback, чтобы NotFound не перехватил.
 	r.Get(service.WaiterAppDownloadPath, waiterAppH.Download)
+	r.Get(service.ZakupAppDownloadPath, zakupAppH.Download)
 
 	// SPA static — отдаёт embedded React build на всех не-API путях.
 	// Любой браузер в LAN, открывший http://<касса-ip>:3001, получает UI.

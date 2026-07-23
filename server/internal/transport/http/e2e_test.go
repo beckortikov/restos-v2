@@ -106,6 +106,7 @@ func setupE2E(t *testing.T) *e2eFixture {
 		DB:            gdb,
 		Build:         httpx.BuildInfo{Version: "test"},
 		WaiterAPKPath: filepath.Join(t.TempDir(), "waiter-app.apk"),
+		ZakupAPKPath:  filepath.Join(t.TempDir(), "zakup-app.apk"),
 	})
 	srv := httptest.NewServer(router)
 

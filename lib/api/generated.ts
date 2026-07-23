@@ -8932,7 +8932,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["WaiterAppInfo"];
+                        "application/json": components["schemas"]["AppDistInfo"];
                     };
                 };
             };
@@ -8962,7 +8962,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["WaiterAppInfo"];
+                        "application/json": components["schemas"]["AppDistInfo"];
                     };
                 };
             };
@@ -8981,6 +8981,113 @@ export interface paths {
             cookie?: never;
         };
         /** Публичное скачивание APK официанта (по QR в LAN, без авторизации) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description APK файл */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/vnd.android.package-archive": string;
+                    };
+                };
+                /** @description APK ещё не загружен */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/zakup-app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Состояние APK закупщика (есть ли, версия, размер, дата) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppDistInfo"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Загрузить новый APK закупщика (multipart "file", optional "version") */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /** Format: binary */
+                        file?: string;
+                        version?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppDistInfo"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/download/zakup.apk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Публичное скачивание APK закупщика (по QR в LAN, без авторизации) */
         get: {
             parameters: {
                 query?: never;
@@ -11844,7 +11951,7 @@ export interface components {
             name?: string;
             username?: string;
             /** @enum {string} */
-            role?: "cashier" | "cook" | "waiter" | "manager" | "owner";
+            role?: "cashier" | "cook" | "waiter" | "manager" | "owner" | "storekeeper" | "accountant";
             pin?: string;
             password?: string;
             phone?: string;
@@ -12614,7 +12721,7 @@ export interface components {
             to?: string;
             insights?: components["schemas"]["Insight"][];
         };
-        WaiterAppInfo: {
+        AppDistInfo: {
             available?: boolean;
             /** @description versionName из APK, напр. 0.2.16 */
             version?: string;
