@@ -13,16 +13,22 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
-// TestDeleteExpense_RemovesPhantomAutoMirror_WithoutTouchingAccountBalance —
+// TestDeleteOperation_RemovesPhantomAutoMirror_WithoutTouchingAccountBalance —
 // эмпирическая проверка штатного способа убрать УЖЕ СОЗДАННОЕ (до фикса
 // v3.16.162) фантомное зеркало __auto_mirror__ из ТЕКУЩЕЙ открытой смены:
-// DELETE /shifts/{id}/expenses/{op_id}.
+// DELETE /api/v1/cash-shift-operations/{id} — ЭТО и есть реальный путь,
+// которым пользуется фронт (кнопка «Удалить расход», см.
+// lib/queries/shifts.ts deleteShiftExpense). Отдельный DeleteExpense
+// (/shifts/{id}/expenses/{op_id}) существует в бэке, но фронтом НЕ
+// вызывается — v3.16.164 по ошибке чинил только его, кнопка на реальной
+// кассе продолжала падать «нельзя удалить авто-операцию смены». Тест
+// нацелен на реально используемый эндпоинт.
 //
 // Ожидание: запись удаляется из cash_shift_operations БЕЗ ошибки и БЕЗ
 // восстановления баланса счёта (деньги по исходной ДДС-операции реально
 // потрачены — счёт трогать нельзя, иначе баланс задвоится). Эффект — только
 // снятие искажения с expected_cash ЭТОЙ смены.
-func TestDeleteExpense_RemovesPhantomAutoMirror_WithoutTouchingAccountBalance(t *testing.T) {
+func TestDeleteOperation_RemovesPhantomAutoMirror_WithoutTouchingAccountBalance(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	gdb, _, shiftID, accountID := seedForWrite(t, f)
@@ -51,10 +57,10 @@ func TestDeleteExpense_RemovesPhantomAutoMirror_WithoutTouchingAccountBalance(t 
 
 	balanceBefore := decimal.MustFromString("5000")
 
-	// ─── Удаляем фантомное зеркало через штатный DELETE ──────────────────────
-	r, b := f.del(t, "/api/v1/shifts/"+shiftID+"/expenses/"+mirrorID, tok, uuid.NewString())
+	// ─── Удаляем фантомное зеркало через РЕАЛЬНЫЙ путь кнопки ────────────────
+	r, b := f.del(t, "/api/v1/cash-shift-operations/"+mirrorID, tok, uuid.NewString())
 	if r.StatusCode != http.StatusOK && r.StatusCode != http.StatusNoContent {
-		t.Fatalf("DELETE expense (auto_mirror): %d %s — кнопка «Удалить расход» упадёт с ошибкой на реальной кассе", r.StatusCode, b)
+		t.Fatalf("DELETE cash-shift-operations (auto_mirror): %d %s — кнопка «Удалить расход» упадёт с ошибкой на реальной кассе", r.StatusCode, b)
 	}
 
 	// Запись реально удалена.

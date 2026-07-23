@@ -261,15 +261,29 @@ func reverseShiftAccountDebit(tx *gorm.DB, rid string, shift *models.CashShift, 
 
 // DeleteOperation — DELETE /api/v1/cash-shift-operations/{id}.
 // Резолвит shift_id из самой операции, применяет tenant-проверку через
-// смену-родителя. Удаление разрешено только если смена открыта.
+// смену-родителя. Это ЕДИНСТВЕННЫЙ путь, которым реально пользуется фронт
+// (кнопка «Удалить расход», см. lib/queries/shifts.ts deleteShiftExpense) —
+// DeleteExpense (/shifts/{id}/expenses/{op_id}) существует, но фронтом не
+// вызывается; правило здесь обязано быть идентично ей.
+//
+// Обычный расход — только пока смена открыта (иначе меняли бы уже
+// зафиксированный Z-отчёт). Фантомное авто-зеркало (__auto_mirror__) —
+// разрешено удалять И из закрытой смены (безопасно: reverseShiftAccountDebit
+// для auto_mirror — no-op, счёт эта запись никогда не дебетовала). Для
+// закрытой смены expected_cash — застывший снэпшот, пересчитываем и сохраняем
+// явно (см. computeExpectedCash в shifts_write.go).
 func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error {
+	if err := requirePermFor(ctx, s.r, "shifts.manage"); err != nil {
+		return err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return err
 	}
 	return s.r.Raw().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var op models.CashShiftOperation
-		if err := tx.Where("id = ?", opID).First(&op).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", opID).First(&op).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.ErrNotFound
 			}
@@ -278,30 +292,29 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		if op.ShiftID == nil {
 			return apperrors.ErrNotFound
 		}
-		// #28: авто-зеркало (отражение оттока со счёта — зарплата/возврат/ручной
-		// расход) удалять нельзя: деньги со счёта уже ушли, а удаление подняло бы
-		// expected_cash → фантомный излишек.
-		if op.Category != nil && *op.Category == autoMirrorCategory {
-			return apperrors.Wrap("CONFLICT", "нельзя удалить авто-операцию смены (отражение расхода со счёта)", nil)
-		}
 		var shift models.CashShift
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *op.ShiftID).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, *op.ShiftID).
 			First(&shift).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.ErrNotFound
 			}
 			return err
 		}
-		if shift.Status == nil || *shift.Status != "open" {
+		isOpen := shift.Status != nil && *shift.Status == "open"
+		isAutoMirror := op.Category != nil && *op.Category == autoMirrorCategory
+		if !isOpen && !isAutoMirror {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
-		// Реверс связанной financial_operation (см. DeleteExpense).
+		// Реверс связанной financial_operation (см. DeleteExpense). У auto_mirror
+		// такой финоперации нет (собственный source_ref не совпадает) — no-op.
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
 			return err
 		}
-		// Н13: вернуть деньги на счёт (см. reverseShiftAccountDebit). Авто-зеркала
-		// сюда не доходят — их удаление отбито выше (#28).
+		// Н13: вернуть деньги на счёт, если операция его дебетовала. Авто-зеркала
+		// счёт не дебетовали (баланс уже списан исходной операцией в другом
+		// месте) — reverseShiftAccountDebit для них no-op.
 		if err := reverseShiftAccountDebit(tx, rid, &shift, &op); err != nil {
 			return err
 		}
@@ -311,6 +324,16 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		}
 		if res.RowsAffected == 0 {
 			return apperrors.ErrNotFound
+		}
+		if !isOpen {
+			expected, err := computeExpectedCash(tx, *op.ShiftID, &shift)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&models.CashShift{}).Where("id = ?", *op.ShiftID).
+				Updates(map[string]any{"expected_cash": expected, "updated_at": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})

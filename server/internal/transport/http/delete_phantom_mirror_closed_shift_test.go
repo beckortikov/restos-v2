@@ -14,13 +14,18 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
-// TestDeleteExpense_ClosedShift_AutoMirrorAllowed_RealExpenseBlocked —
-// v3.16.164: фантомное __auto_mirror__, обнаруженное ПОСЛЕ закрытия смены
+// TestDeleteOperation_ClosedShift_AutoMirrorAllowed_RealExpenseBlocked —
+// v3.16.165: фантомное __auto_mirror__, обнаруженное ПОСЛЕ закрытия смены
 // (типичный случай — владелец заметил искажение на следующий день), теперь
-// можно убрать. Обычный (не-авто) расход в закрытой смене по-прежнему
-// защищён — иначе кассир мог бы задним числом переписывать уже утверждённый
-// Z-отчёт.
-func TestDeleteExpense_ClosedShift_AutoMirrorAllowed_RealExpenseBlocked(t *testing.T) {
+// можно убрать ЧЕРЕЗ РЕАЛЬНЫЙ путь кнопки — DELETE
+// /api/v1/cash-shift-operations/{id} (см. lib/queries/shifts.ts
+// deleteShiftExpense). v3.16.164 чинил соседний, фронтом не используемый
+// DeleteExpense (/shifts/{id}/expenses/{op_id}) — кнопка на кассе продолжала
+// падать «нельзя удалить авто-операцию смены».
+//
+// Обычный (не-авто) расход в закрытой смене по-прежнему защищён — иначе
+// кассир мог бы задним числом переписывать уже утверждённый Z-отчёт.
+func TestDeleteOperation_ClosedShift_AutoMirrorAllowed_RealExpenseBlocked(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	gdb, _, shiftID, accountID := seedForWrite(t, f)
@@ -76,13 +81,13 @@ func TestDeleteExpense_ClosedShift_AutoMirrorAllowed_RealExpenseBlocked(t *testi
 	}
 
 	// ─── Обычный расход в ЗАКРЫТОЙ смене — по-прежнему запрещён ──────────────
-	r, b = f.del(t, "/api/v1/shifts/"+shiftID+"/expenses/"+realOpID, tok, uuid.NewString())
+	r, b = f.del(t, "/api/v1/cash-shift-operations/"+realOpID, tok, uuid.NewString())
 	if r.StatusCode == http.StatusOK || r.StatusCode == http.StatusNoContent {
 		t.Fatalf("удаление ОБЫЧНОГО расхода из закрытой смены прошло (%d) — дыра для переписывания Z-отчёта задним числом: %s", r.StatusCode, b)
 	}
 
 	// ─── Фантомное зеркало из ЗАКРЫТОЙ смены — теперь можно убрать ──────────
-	r, b = f.del(t, "/api/v1/shifts/"+shiftID+"/expenses/"+mirrorID, tok, uuid.NewString())
+	r, b = f.del(t, "/api/v1/cash-shift-operations/"+mirrorID, tok, uuid.NewString())
 	if r.StatusCode != http.StatusOK && r.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE auto_mirror из закрытой смены: %d %s", r.StatusCode, b)
 	}
