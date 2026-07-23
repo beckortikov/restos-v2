@@ -402,12 +402,21 @@ if (!gotTheLock) {
     // 0.5) v3.8.4: best-effort добавление firewall rule (installer его уже
     //      добавил, но если юзер выключал firewall — restore при старте).
     ensureWindowsFirewallRule()
-    // 1) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
-    //    освободить порты 3002 (HTTP API) и 54330 (embedded PG).
+
+    // 1) Окно со СПЛЭШЕМ показываем СРАЗУ — не ждём бэк. Иначе пользователь весь
+    //    холодный старт (очистка портов + подъём embedded-PG, 15-40с, а при
+    //    первой распаковке дольше) видит пустоту и думает, что касса не
+    //    запускается. Реальный SPA грузится в loadApp() по готовности бэка.
+    createWindow()
+    setupTray()
+    setupAutoUpdater()
+
+    // 2) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
+    //    освободить порты 3002 (HTTP API) и 54330 (embedded PG). Идёт под сплэшем.
     killStaleSidecars()
     await ensurePortFree(API_PORT)
     await ensurePortFree(54330)
-    // 2) Стартуем sidecar.
+    // 3) Стартуем sidecar.
     startSidecar()
     // 130 с > 90 с StartTimeout embedded-postgres: холодный старт / WAL-recovery
     // после апдейта должен успеть завершиться до показа ошибки.
@@ -422,9 +431,12 @@ if (!gotTheLock) {
         `Бэкенд не запустился за ${Math.round(BACKEND_TIMEOUT_MS / 1000)} секунд.\n\nВозможные причины:\n• Не хватает интернета для скачивания PostgreSQL (~80 МБ) при первом запуске\n• Антивирус блокирует embedded-postgres или restos-server.exe\n• Порт ${API_PORT} занят другой программой\n\nЧто попробовать: закройте RestOS полностью и запустите заново (или перезагрузите ПК) — это освободит зависшие процессы прошлой версии.\n\nЛог: ${path.join(app.getPath('userData'), 'logs', 'main.log')}`,
       )
     }
-    createWindow()
-    setupTray()
-    setupAutoUpdater()
+    // 4) Подменяем сплэш реальным SPA. ВСЕГДА, даже если healthz не поднялся за
+    //    таймаут: SPA сам ретраит бэк (login/loading-экран), а sidecar
+    //    авто-рестартует (goProc.on('exit')). Иначе касса зависла бы на сплэше —
+    //    это соответствует прежнему поведению (createWindow вызывался после
+    //    try/catch независимо от исхода).
+    loadApp()
   })
 
   app.on('window-all-closed', () => {
@@ -441,6 +453,13 @@ if (!gotTheLock) {
 }
 
 // ─── Window ────────────────────────────────────────────────────────────────
+const SPLASH_PATH = path.join(__dirname, 'splash.html')
+const INDEX_PATH = path.join(__dirname, 'frontend', 'index.html')
+// Что перезагружать при did-fail-load / крэше рендерера: до готовности бэка —
+// сплэш, после loadApp() — реальный SPA. Иначе ретрай грузил бы SPA поверх
+// сплэша ещё до подъёма бэка.
+let currentLoadTarget = SPLASH_PATH
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -449,6 +468,9 @@ function createWindow() {
     minHeight: 600,
     title: 'RestOS',
     icon: path.join(__dirname, 'assets', 'icon.png'),
+    // Фон окна = фон сплэша: пока сплэш/SPA рисуются (и в момент подмены сплэша
+    // на SPA) не мелькает белый прямоугольник.
+    backgroundColor: '#f5f3f0',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -470,10 +492,11 @@ function createWindow() {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setFullScreen(!!on)
   })
 
-  // Load the bundled SPA from disk (file://). The SPA fetches API from 127.0.0.1:3001.
-  const indexPath = path.join(__dirname, 'frontend', 'index.html')
-  mainWindow.loadFile(indexPath).catch((e) => {
-    console.error('[main] loadFile error:', e)
+  // Сплэш грузим СРАЗУ (локальный файл, бэк не нужен) — окно появляется мгновенно.
+  // Реальный SPA подменяет loadApp() по готовности бэка. did-fail-load ниже
+  // перезагружает currentLoadTarget (сплэш до готовности, SPA после).
+  mainWindow.loadFile(SPLASH_PATH).catch((e) => {
+    console.error('[main] splash load error:', e)
   })
 
   mainWindow.once('ready-to-show', () => {
@@ -507,7 +530,7 @@ function createWindow() {
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.log(`[renderer] did-fail-load: ${code} ${desc} ${url}`)
     setTimeout(() => {
-      try { mainWindow?.loadFile(indexPath) } catch {}
+      try { mainWindow?.loadFile(currentLoadTarget) } catch {}
     }, 1500)
   })
 
@@ -522,6 +545,18 @@ function createWindow() {
       mainWindow.hide()
     }
   })
+}
+
+// loadApp — подменяет сплэш реальным SPA. Вызывается из app.ready по готовности
+// бэка (healthz OK). Окно уже показано (ready-to-show на сплэше), поэтому подмена
+// бесшовна: backgroundColor окна = фон сплэша, белого мелькания нет.
+function loadApp() {
+  currentLoadTarget = INDEX_PATH
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.loadFile(INDEX_PATH).catch((e) => {
+      console.error('[main] app load error:', e)
+    })
+  }
 }
 
 // ─── Tray ──────────────────────────────────────────────────────────────────
