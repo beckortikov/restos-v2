@@ -2,6 +2,7 @@ package com.restos.zakup.ui.supplier
 
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -18,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Message
 import androidx.compose.material.icons.outlined.Call
+import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -37,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.zakup.ui.components.Avatar
+import com.restos.zakup.ui.components.BadgeKind
 import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.RowDivider
@@ -96,12 +99,16 @@ fun SupplierDetailScreen(
                                 }
                             }
                             Spacer(Modifier.height(14.dp))
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 ContactAction("Позвонить", Icons.Outlined.Call, enabled = state.phone != null, modifier = Modifier.weight(1f)) {
                                     state.phone?.let { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$it"))) }
                                 }
                                 ContactAction("SMS", Icons.AutoMirrored.Outlined.Message, enabled = state.phone != null, modifier = Modifier.weight(1f)) {
                                     state.phone?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("smsto:$it"))) }
+                                }
+                                ContactAction("На карте", Icons.Outlined.Place, enabled = true, modifier = Modifier.weight(1f)) {
+                                    val q = Uri.encode(state.name)
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=$q"))) }
                                 }
                             }
                         }
@@ -114,17 +121,9 @@ fun SupplierDetailScreen(
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         StatCard("${state.receiptsCount}", "приёмок", Modifier.weight(1f))
                         StatCard(formatCompactMoney(state.turnover), "оборот", Modifier.weight(1f))
-                    }
-                }
-
-                if (state.categories.isNotEmpty()) {
-                    item {
-                        Text(
-                            state.categories.joinToString(" · "),
-                            fontSize = 12.5.sp,
-                            color = ZakupColors.TextSecondary,
-                            modifier = Modifier.padding(start = 4.dp),
-                        )
+                        val cat = state.categories.firstOrNull() ?: "—"
+                        val extra = if (state.categories.size > 1) "+${state.categories.size - 1} кат." else "категория"
+                        StatCard(cat, extra, Modifier.weight(1f))
                     }
                 }
 
@@ -177,48 +176,51 @@ private fun ContactAction(label: String, icon: ImageVector, enabled: Boolean, mo
 @Composable
 private fun DebtCard(state: SupplierDetailUiState, onPay: () -> Unit) {
     val hasDebt = state.debt.signum() > 0
+    if (!hasDebt) {
+        // Без долга — светлая карточка.
+        ZakupCard(Modifier.fillMaxWidth(), padding = 18) {
+            Column {
+                Text("Текущий долг", color = ZakupColors.TextTertiary, fontSize = 13.sp)
+                Spacer(Modifier.height(6.dp))
+                Text("Без долга", color = ZakupColors.TextPrimary, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+        return
+    }
+    // Есть долг — тёмная карта (как в макете).
     Surface(
         shape = RoundedCornerShape(ZakupRadius.card),
-        color = if (hasDebt) ZakupColors.Primary else ZakupColors.Surface,
-        border = if (hasDebt) null else androidx.compose.foundation.BorderStroke(1.dp, ZakupColors.Border),
+        color = ZakupColors.SurfaceDark,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(Modifier.padding(18.dp)) {
-            val onc = if (hasDebt) ZakupColors.OnPrimary else ZakupColors.TextSecondary
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.Top) {
                 Column(Modifier.weight(1f)) {
-                    Text("Текущий долг", color = if (hasDebt) ZakupColors.OnPrimary.copy(alpha = 0.85f) else ZakupColors.TextTertiary, fontSize = 13.sp)
+                    Text("Текущий долг", color = ZakupColors.OnDarkMuted, fontSize = 13.sp)
                     Spacer(Modifier.height(6.dp))
-                    Text(
-                        if (hasDebt) formatMoney(state.debt) else "Без долга",
-                        color = if (hasDebt) ZakupColors.OnPrimary else ZakupColors.TextPrimary,
-                        fontSize = 24.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                }
-                if (hasDebt) {
-                    Surface(
-                        onClick = onPay,
-                        shape = RoundedCornerShape(ZakupRadius.chip),
-                        color = ZakupColors.OnPrimary,
-                    ) {
-                        Text(
-                            "Погасить",
-                            color = ZakupColors.Primary,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                        )
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(formatMoney(state.debt, ""), color = ZakupColors.OnDark, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.size(6.dp))
+                        Text("сум", color = ZakupColors.OnDarkMuted, fontSize = 13.sp, modifier = Modifier.padding(bottom = 3.dp))
                     }
                 }
+                if (state.agingDays != null) {
+                    StatusBadge("${state.agingDays} дней", BadgeKind.Danger)
+                }
             }
-            if (state.creditLimit.signum() > 0 || state.termsDays > 0) {
-                Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
+            androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(1.dp).background(ZakupColors.DarkTile))
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "Лимит ${formatMoney(state.creditLimit)} · отсрочка ${state.termsDays} дн",
-                    color = onc.copy(alpha = 0.9f),
+                    "Лимит ${formatMoney(state.creditLimit, "")} · отсрочка ${state.termsDays} дн",
+                    color = ZakupColors.OnDarkMuted,
                     fontSize = 12.sp,
+                    modifier = Modifier.weight(1f),
                 )
+                Surface(onClick = onPay, shape = RoundedCornerShape(ZakupRadius.chip), color = ZakupColors.Primary) {
+                    Text("Погасить", color = ZakupColors.OnPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                }
             }
         }
     }

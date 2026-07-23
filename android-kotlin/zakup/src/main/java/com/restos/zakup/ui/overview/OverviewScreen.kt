@@ -60,7 +60,7 @@ fun OverviewScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(Modifier.fillMaxSize()) {
-        ZakupScreenHeader(title = "Обзор закупок", subtitle = restaurantName ?: "RestOS")
+        OverviewHeader(dateLabel = todayLabel(), restaurantName = restaurantName)
 
         when {
             state.loading -> LoadingState()
@@ -138,6 +138,35 @@ fun OverviewScreen(
             }
         }
     }
+}
+
+@Composable
+private fun OverviewHeader(dateLabel: String, restaurantName: String?) {
+    androidx.compose.foundation.layout.Row(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 8.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(dateLabel, fontSize = 12.5.sp, color = ZakupColors.TextTertiary, fontWeight = FontWeight.Medium)
+            Spacer(Modifier.height(2.dp))
+            Text("Обзор закупок", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
+        }
+        if (!restaurantName.isNullOrBlank()) {
+            com.restos.zakup.ui.components.Avatar(com.restos.zakup.util.initialsOf(restaurantName), size = 40)
+        }
+    }
+}
+
+private val monthsGen = listOf(
+    "января", "февраля", "марта", "апреля", "мая", "июня",
+    "июля", "августа", "сентября", "октября", "ноября", "декабря",
+)
+private val weekdays = listOf("Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье")
+
+private fun todayLabel(): String {
+    val d = java.time.LocalDate.now()
+    val wd = weekdays[d.dayOfWeek.value - 1]
+    return "$wd, ${d.dayOfMonth} ${monthsGen[d.monthValue - 1]}"
 }
 
 @Composable

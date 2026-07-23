@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.math.BigDecimal
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 
 data class SupplierDetailUiState(
@@ -30,6 +32,7 @@ data class SupplierDetailUiState(
     val debt: BigDecimal = BigDecimal.ZERO,
     val creditLimit: BigDecimal = BigDecimal.ZERO,
     val termsDays: Int = 0,
+    val agingDays: Int? = null,
     val receiptsCount: Int = 0,
     val turnover: BigDecimal = BigDecimal.ZERO,
     val receipts: List<ReceiptRow> = emptyList(),
@@ -62,6 +65,13 @@ class SupplierDetailViewModel @Inject constructor(
                     return@onSuccess
                 }
                 val rows = receipts.map { it.toReceiptRow() }
+                // Возраст долга: дней с самой ранней due_date среди неоплаченных накладных.
+                val today = LocalDate.now()
+                val earliestDue = receipts
+                    .filter { it.debtAmount.toDecimalOrZero().signum() > 0 }
+                    .mapNotNull { parseDate(it.dueDate) }
+                    .minOrNull()
+                val aging = earliestDue?.let { ChronoUnit.DAYS.between(it, today).toInt().coerceAtLeast(0) }
                 _state.update {
                     it.copy(
                         loading = false,
@@ -73,6 +83,7 @@ class SupplierDetailViewModel @Inject constructor(
                         debt = supplier.currentDebt.toDecimalOrZero(),
                         creditLimit = supplier.creditLimit.toDecimalOrZero(),
                         termsDays = supplier.paymentTermsDays,
+                        agingDays = aging,
                         receiptsCount = rows.size,
                         turnover = rows.fold(BigDecimal.ZERO) { a, r -> a + r.amount },
                         receipts = rows,
@@ -83,4 +94,7 @@ class SupplierDetailViewModel @Inject constructor(
             }
         }
     }
+
+    private fun parseDate(s: String?): LocalDate? =
+        s?.take(10)?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
 }

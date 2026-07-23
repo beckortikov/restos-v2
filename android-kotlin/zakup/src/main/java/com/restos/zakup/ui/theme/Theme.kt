@@ -38,6 +38,12 @@ object ZakupColors {
     val PrimarySoft = Color(0xFFE6F6EF)
     val OnPrimary = Color(0xFFFFFFFF)
 
+    // Тёмная поверхность (карточка долга в 04/07) — near-black из макета.
+    val SurfaceDark = Color(0xFF15171C)
+    val OnDark = Color(0xFFFFFFFF)
+    val OnDarkMuted = Color(0xFF9AA2AE)
+    val DarkTile = Color(0x14FFFFFF) // светлая плитка-счётчик поверх тёмной карты
+
     // Статус: долг / нет остатка
     val Danger = Color(0xFFE5484D)
     val DangerSoft = Color(0xFFFCEBEC)

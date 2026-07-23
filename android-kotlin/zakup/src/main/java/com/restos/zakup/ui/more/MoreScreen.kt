@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.KeyboardReturn
 import androidx.compose.material.icons.automirrored.outlined.Logout
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.CleaningServices
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LocalShipping
 import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.RemoveCircleOutline
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Warehouse
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
@@ -58,8 +60,10 @@ fun MoreScreen(
         ProfileCard(me)
 
         Section("ОПЕРАЦИИ") {
-            MoreRow(Icons.Outlined.Inventory2, "Инвентаризация") { onOperation(MoreOps.INVENTORY) }
-            MoreRow(Icons.Outlined.RemoveCircleOutline, "Списание") { onOperation(MoreOps.WRITEOFF) }
+            MoreRow(Icons.Outlined.Inventory2, "Инвентаризации") { onOperation(MoreOps.INVENTORY) }
+            MoreRow(Icons.Outlined.RemoveCircleOutline, "Списания") { onOperation(MoreOps.WRITEOFF) }
+            MoreRow(Icons.AutoMirrored.Outlined.KeyboardReturn, "Возвраты поставщикам") { onOperation(MoreOps.RETURNS) }
+            MoreRow(Icons.Outlined.SwapVert, "Движения склада") { onOperation(MoreOps.MOVEMENTS) }
             MoreRow(Icons.Outlined.CleaningServices, "Расход хозтоваров") { onOperation(MoreOps.SUPPLY_EXPENSE) }
             MoreRow(Icons.Outlined.Inbox, "Начальный остаток", last = true) { onOperation(MoreOps.OPENING_BALANCE) }
         }
@@ -171,6 +175,8 @@ private fun Section(label: String, content: @Composable () -> Unit) {
 object MoreOps {
     const val INVENTORY = "inventory"
     const val WRITEOFF = "writeoff"
+    const val RETURNS = "returns"
+    const val MOVEMENTS = "movements"
     const val SUPPLY_EXPENSE = "supply-expense"
     const val OPENING_BALANCE = "opening-balance"
 }

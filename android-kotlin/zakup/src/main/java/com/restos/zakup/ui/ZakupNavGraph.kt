@@ -22,8 +22,10 @@ import com.restos.zakup.ui.more.MoreOps
 import com.restos.zakup.ui.newreceipt.NewReceiptScreen
 import com.restos.zakup.ui.onboarding.OnboardingScreen
 import com.restos.zakup.ui.ops.InventoryScreen
+import com.restos.zakup.ui.ops.MovementsScreen
 import com.restos.zakup.ui.ops.OpeningBalanceScreen
 import com.restos.zakup.ui.ops.ReturnScreen
+import com.restos.zakup.ui.ops.ReturnsListScreen
 import com.restos.zakup.ui.ops.SupplyExpenseScreen
 import com.restos.zakup.ui.ops.WriteoffScreen
 import com.restos.zakup.ui.shell.ZakupShell
@@ -116,6 +118,8 @@ fun ZakupNavGraph(
                 MoreOps.INVENTORY -> InventoryScreen(onBack = back, onDone = done)
                 MoreOps.SUPPLY_EXPENSE -> SupplyExpenseScreen(onBack = back, onDone = done)
                 MoreOps.OPENING_BALANCE -> OpeningBalanceScreen(onBack = back, onDone = done)
+                MoreOps.MOVEMENTS -> MovementsScreen(onBack = back)
+                MoreOps.RETURNS -> ReturnsListScreen(onBack = back)
             }
         }
         composable(Routes.NEW_RECEIPT) {

@@ -26,7 +26,44 @@ interface StockApi {
 
     @GET("api/v1/warehouses")
     suspend fun listWarehouses(): PagedEnvelope<WarehouseDto>
+
+    @GET("api/v1/stock/movements")
+    suspend fun listMovements(
+        @Query("warehouse_id") warehouseId: String? = null,
+        @Query("limit") limit: Int = 100,
+        @Query("cursor") cursor: String? = null,
+    ): PagedEnvelope<StockMovementDto>
+
+    @GET("api/v1/stock/returns")
+    suspend fun listReturns(
+        @Query("limit") limit: Int = 100,
+        @Query("cursor") cursor: String? = null,
+    ): PagedEnvelope<StockReturnDto>
 }
+
+@Serializable
+data class StockMovementDto(
+    val id: String,
+    val type: String = "",
+    @SerialName("ingredient_name") val ingredientName: String? = null,
+    val qty: String = "0",
+    val unit: String? = null,
+    val description: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+)
+
+@Serializable
+data class StockReturnDto(
+    val id: String,
+    @SerialName("receipt_id") val receiptId: String? = null,
+    @SerialName("supplier_name") val supplierName: String? = null,
+    val date: String? = null,
+    val reason: String = "",
+    @SerialName("total_amount") val totalAmount: String = "0",
+    @SerialName("refund_type") val refundType: String = "",
+    @SerialName("cancelled_at") val cancelledAt: String? = null,
+    @SerialName("created_at") val createdAt: String? = null,
+)
 
 @Serializable
 data class StringListEnvelope(val data: List<String> = emptyList())
