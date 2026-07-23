@@ -47,9 +47,18 @@ function ensureWindowsFirewallRule() {
   try {
     // Try add (silently). Если правило уже есть — добавит ещё одно с тем же
     // именем, что не вредит (Windows их объединит).
+    //
+    // АСИНХРОННО (spawn, не execSync): netsh на части конфигов Windows тормозит
+    // до нескольких секунд, а execSync блокировал старт (и сплэш) синхронно до
+    // 5с КАЖДЫЙ запуск. Правило нужно только когда планшет официанта
+    // подключится (секунды/минуты спустя), installer его уже добавил — это
+    // best-effort повтор, блокировать им старт незачем. Fire-and-forget, shell
+    // разбирает кавычки в name как раньше execSync.
     const cmd = `netsh advfirewall firewall add rule name="RestOS v2 HTTP" dir=in action=allow protocol=TCP localport=${API_PORT} profile=any`
-    execSync(cmd, { stdio: 'ignore', windowsHide: true, timeout: 5000 })
-    console.log('[firewall] rule for port', API_PORT, 'ensured')
+    const child = spawn(cmd, { stdio: 'ignore', windowsHide: true, shell: true })
+    child.on('error', (e) => console.log('[firewall] netsh spawn error:', e.message || ''))
+    child.unref()
+    console.log('[firewall] rule add (async) for port', API_PORT)
   } catch (e) {
     // Молча — без админских прав netsh может не сработать. Installer уже
     // покрыл этот случай при установке.
@@ -356,7 +365,7 @@ function stopSidecar() {
   } catch {}
 }
 
-// Wait for backend /healthz to respond OK before showing window.
+// Ждём healthz OK перед подменой сплэша на SPA (окно со сплэшем уже показано).
 function waitForBackend(timeoutMs = 90000) {
   const start = Date.now()
   return new Promise((resolve, reject) => {
@@ -377,7 +386,10 @@ function waitForBackend(timeoutMs = 90000) {
         reject(new Error(`backend not ready within ${timeoutMs}ms`))
         return
       }
-      setTimeout(poll, 500)
+      // 150мс вместо 500мс: бэк после разведения PG-бинарей поднимается ~250мс,
+      // и на 500мс-гранулярности мы до полсекунды зря ждём следующего пинга.
+      // healthz дешёвый, лишние пинги при старте ничего не стоят.
+      setTimeout(poll, 150)
     }
     poll()
   })
