@@ -439,6 +439,10 @@ type ZReport struct {
 	// показывать все расходы независимо от счёта (иначе безнал-закупка выпадает).
 	ExpensesTotalAll   decimal.Decimal            `json:"expenses_total_all"`
 	ExpensesByCategory []ZReportExpenseByCategory `json:"expenses_by_category"`
+	// ExpensesByCategoryAll — разбивка ВСЕХ расходов (нал+безнал) по категориям.
+	// Для печатного Z-отчёта («Расходы» с безналом). Наличная ExpensesByCategory —
+	// для расчёта «Ожидается в кассе».
+	ExpensesByCategoryAll []ZReportExpenseByCategory `json:"expenses_by_category_all"`
 	// Возвраты покупателям за смену (из financial_operations category='refund',
 	// покрывает нал+безнал). RefundsTotal — общая сумма, RefundsCount — сколько
 	// возвратов (чеков). Кассовое зеркало возврата исключено из ExpensesTotal,
@@ -508,6 +512,8 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	out.ExpensesTotalAll = decimal.Zero
 	expByCat := map[string]*ZReportExpenseByCategory{}
 	catOrder := []string{}
+	expByCatAll := map[string]*ZReportExpenseByCategory{}
+	catOrderAll := []string{}
 	for _, op := range ops {
 		t := ""
 		if op.Type != nil {
@@ -515,7 +521,8 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		}
 		// «Все расходы бизнеса» (нал+безнал) — считаем ДО фильтра наличного ящика,
 		// чтобы безналичная закупка (счёт ≠ счёту смены) тоже попала в сводку
-		// «Расход»/«Итог». Возврат-зеркало исключаем (он в RefundsTotal).
+		// «Расход»/«Итог» и в печатный Z-отчёт. Возврат-зеркало исключаем (он в
+		// RefundsTotal).
 		if t == "cash_out" {
 			catAll := ""
 			if op.Category != nil {
@@ -527,7 +534,19 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 			}
 			isRefundMirror := catAll == autoMirrorCategory && strings.HasPrefix(descAll, refundOpDescPrefix)
 			if catAll != "" && !isRefundMirror {
+				labelAll := catAll
+				if labelAll == autoMirrorCategory {
+					labelAll = "Списание со счёта"
+				}
 				out.ExpensesTotalAll = decimal.Add(out.ExpensesTotalAll, op.Amount)
+				rowAll, ok := expByCatAll[labelAll]
+				if !ok {
+					rowAll = &ZReportExpenseByCategory{Category: labelAll}
+					expByCatAll[labelAll] = rowAll
+					catOrderAll = append(catOrderAll, labelAll)
+				}
+				rowAll.Count++
+				rowAll.Amount = decimal.Add(rowAll.Amount, op.Amount)
 			}
 		}
 		// Z-отчёт — наличный ящик. Безналичные операции (счёт ≠ счёту смены)
@@ -583,6 +602,11 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		row := expByCat[cat]
 		row.Amount = decimal.Normalize(row.Amount)
 		out.ExpensesByCategory = append(out.ExpensesByCategory, *row)
+	}
+	for _, cat := range catOrderAll {
+		row := expByCatAll[cat]
+		row.Amount = decimal.Normalize(row.Amount)
+		out.ExpensesByCategoryAll = append(out.ExpensesByCategoryAll, *row)
 	}
 
 	// Возвраты покупателям за смену — из financial_operations (category='refund'),

@@ -103,7 +103,11 @@ func (s *ShiftsService) printReport(ctx context.Context, shiftID, jobType string
 		CashIn:         zr.CashIn,
 		Withdrawals:    zr.Withdrawals,
 	}
-	for _, e := range zr.ExpensesByCategory {
+	// «Расходы» в печати — ВСЕ расходы бизнеса (нал+безнал), чтобы безналичные
+	// закупки тоже были видны. «Ожидается в кассе» ниже считается по наличной
+	// ExpensesByCategory (безнал ящик не трогает) — печатная строка расходов и
+	// касса-остаток намеренно про разное.
+	for _, e := range zr.ExpensesByCategoryAll {
 		in.Expenses = append(in.Expenses, escpos.ReportExpenseLine{Category: e.Category, Amount: e.Amount})
 	}
 	// Безнал в разрезе счетов: под строкой «Безнал. выручка» печатаем каждую
