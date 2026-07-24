@@ -213,7 +213,14 @@ class NewReceiptViewModel @Inject constructor(
         unit = unit,
         price = pricePerUnit.toDecimalOrZero(),
         stock = qty.toDecimalOrZero(),
-        kind = warehouseId?.let { kindByWarehouse[it] } ?: if (!isFood) WarehouseKind.Supplies else WarehouseKind.Products,
+        // Хозтовары определяем ЕДИНО по is_food=false — так же, как экран «Расход хозтоваров»,
+        // и как трактует бэк (BeforeCreate: не-еда → склад supplies). Продукты/Покупные (оба еда)
+        // разделяем по виду склада. Так вкладка «Хозтовары» в приёмке = список Расхода хозтоваров.
+        kind = when {
+            !isFood -> WarehouseKind.Supplies
+            warehouseId?.let { kindByWarehouse[it] } == WarehouseKind.Purchased -> WarehouseKind.Purchased
+            else -> WarehouseKind.Products
+        },
     )
 }
 
