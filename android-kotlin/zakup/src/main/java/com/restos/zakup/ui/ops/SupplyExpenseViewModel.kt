@@ -31,8 +31,13 @@ data class SupplyExpenseUiState(
     val available: List<IngredientDto> = emptyList(),
     val lines: List<ExpenseLine> = emptyList(),
 ) {
-    val canSubmit: Boolean
-        get() = !submitting && lines.isNotEmpty() && lines.all { it.qty.toDecimalOrZero().signum() > 0 }
+    val validationHint: String?
+        get() = when {
+            lines.isEmpty() -> "Добавьте хозтовары"
+            lines.any { it.qty.toDecimalOrZero().signum() <= 0 } -> "Укажите количество для всех позиций"
+            else -> null
+        }
+    val canSubmit: Boolean get() = !submitting && validationHint == null
 
     companion object {
         // Зеркало SUPPLY_EXPENSE_REASONS (lib/types.ts).
@@ -77,7 +82,7 @@ class SupplyExpenseViewModel @Inject constructor(
         if (s.lines.any { it.id == item.id }) s.copy(lines = s.lines.filterNot { it.id == item.id })
         else {
             val ing = s.available.first { it.id == item.id }
-            s.copy(lines = s.lines + ExpenseLine(ing.id, item.name, ing.unit, formatQty(ing.qty.toDecimalOrZero(), ing.unit)))
+            s.copy(lines = s.lines + ExpenseLine(ing.id, item.name, ing.unit, formatQty(ing.qty.toDecimalOrZero(), ing.unit), qty = "1"))
         }
     }
 

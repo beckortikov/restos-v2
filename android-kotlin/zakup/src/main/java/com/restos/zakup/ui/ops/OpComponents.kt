@@ -139,12 +139,17 @@ fun OpSubmitBar(
     icon: ImageVector? = null,
     secondaryButton: String? = null,
     onSecondary: (() -> Unit)? = null,
+    hint: String? = null,
 ) {
     Surface(color = ZakupColors.Bg, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp).navigationBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(bottom = if (hint != null && !submitting) 8.dp else 10.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(totalLabel, fontSize = 14.sp, color = ZakupColors.TextSecondary, modifier = Modifier.weight(1f))
                 Text(totalValue, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = totalColor)
+            }
+            // Подсказка, почему кнопка ещё не активна — вместо немого отключения.
+            if (hint != null && !submitting) {
+                Text(hint, fontSize = 12.5.sp, color = ZakupColors.Warn, modifier = Modifier.padding(bottom = 8.dp))
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (secondaryButton != null && onSecondary != null) {

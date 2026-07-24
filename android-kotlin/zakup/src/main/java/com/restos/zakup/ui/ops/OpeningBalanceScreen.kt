@@ -131,6 +131,7 @@ fun OpeningBalanceScreen(
                     submitting = state.submitting,
                     onSubmit = { confirmSubmit = true },
                     modifier = Modifier.align(Alignment.BottomCenter),
+                    hint = state.validationHint,
                 )
             }
         }

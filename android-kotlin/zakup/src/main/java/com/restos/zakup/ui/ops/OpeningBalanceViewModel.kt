@@ -39,8 +39,13 @@ data class OpeningBalanceUiState(
     val lines: List<OpeningLine> = emptyList(),
 ) {
     val total: BigDecimal get() = lines.fold(BigDecimal.ZERO) { a, l -> a + l.lineValue }
-    val canSubmit: Boolean
-        get() = !submitting && lines.isNotEmpty() && lines.all { it.qty.toDecimalOrZero().signum() > 0 }
+    val validationHint: String?
+        get() = when {
+            lines.isEmpty() -> "Добавьте ингредиенты в остаток"
+            lines.any { it.qty.toDecimalOrZero().signum() <= 0 } -> "Укажите количество для всех позиций"
+            else -> null
+        }
+    val canSubmit: Boolean get() = !submitting && validationHint == null
 }
 
 @HiltViewModel
@@ -72,7 +77,8 @@ class OpeningBalanceViewModel @Inject constructor(
         else {
             val ing = s.available.first { it.id == item.id }
             val price = ing.pricePerUnit.toDecimalOrZero()
-            s.copy(lines = s.lines + OpeningLine(ing.id, item.name, ing.unit, price = if (price.signum() > 0) price.stripTrailingZeros().toPlainString() else ""))
+            // qty=1 по умолчанию (сразу валидно; правится в развёрнутой строке), цена — из меню.
+            s.copy(lines = s.lines + OpeningLine(ing.id, item.name, ing.unit, qty = "1", price = if (price.signum() > 0) price.stripTrailingZeros().toPlainString() else ""))
         }
     }
 

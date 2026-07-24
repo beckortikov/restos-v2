@@ -160,6 +160,7 @@ fun WriteoffScreen(
                     modifier = Modifier.align(Alignment.BottomCenter),
                     accentColor = ZakupColors.Danger,
                     icon = Icons.Outlined.DeleteOutline,
+                    hint = state.validationHint,
                 )
             }
         }

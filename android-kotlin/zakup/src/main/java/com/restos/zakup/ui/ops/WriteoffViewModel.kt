@@ -48,8 +48,13 @@ data class WriteoffUiState(
     val lines: List<WriteoffLine> = emptyList(),
 ) {
     val loss: BigDecimal get() = lines.fold(BigDecimal.ZERO) { a, l -> a + l.lineLoss }
-    val canSubmit: Boolean
-        get() = !submitting && lines.isNotEmpty() && lines.all { it.qty.toDecimalOrZero().signum() > 0 }
+    val validationHint: String?
+        get() = when {
+            lines.isEmpty() -> "Добавьте позиции к списанию"
+            lines.any { it.qty.toDecimalOrZero().signum() <= 0 } -> "Укажите количество для всех позиций"
+            else -> null
+        }
+    val canSubmit: Boolean get() = !submitting && validationHint == null
 
     companion object { val REASONS = listOf("Порча", "Просрочка", "Бой", "Другое") }
 }
@@ -117,6 +122,7 @@ class WriteoffViewModel @Inject constructor(
                     unit = ing.unit,
                     cost = ing.pricePerUnit.toDecimalOrZero(),
                     stock = ing.qty.toDecimalOrZero(),
+                    qty = "1", // сразу валидно (списываем 1 ед.), пользователь правит степпером
                 ))
             }
         }
