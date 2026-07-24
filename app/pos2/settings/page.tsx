@@ -10,6 +10,7 @@ import { usePosV2Flag } from '@/lib/pos-v2/flag'
 import { useDesktopUpdate, triggerDesktopUpdate, desktopUpdateLabel, desktopUpdatePending } from '@/hooks/use-desktop-update'
 import { useMenuGrid, MENU_GRID_OPTIONS, menuGridLabel, sameGrid, type MenuGrid } from '@/lib/pos-v2/menu-grid'
 import type { PermissionKey } from '@/lib/types'
+import { WaiterQrModal } from './waiter-qr-modal'
 
 export default function PosV2Settings() {
   const navigate = useNavigate()
@@ -22,6 +23,7 @@ export default function PosV2Settings() {
   // владелец/менеджер: кассир не должен переключать столы/фастфуд всему залу.
   const canEditMode = canAccessRoles(['owner', 'manager'])
   const [savingMode, setSavingMode] = useState(false)
+  const [qrOpen, setQrOpen] = useState(false)
   const tablesEnabled = restaurant?.tablesEnabled ?? true
   const deliveryEnabled = restaurant?.deliveryEnabled ?? false
   const deliveryContactsRequired = restaurant?.deliveryContactsRequired ?? true
@@ -212,8 +214,11 @@ export default function PosV2Settings() {
               <div style={{ display: 'grid', gap: 'var(--pv-gap)', gridTemplateColumns: 'repeat(auto-fill, minmax(clamp(14rem,22vw,20rem), 1fr))' }}>
                 {links.map(l => {
                   const Icon = l.icon
+                  // «Подключить официантов» — pos2-нативный QR-модал, а не уход в
+                  // классический /show-qr (иначе кажется, что «перекидывает на старый ПОС»).
+                  const open = () => (l.to === '/show-qr' ? setQrOpen(true) : navigate(l.to))
                   return (
-                    <button key={l.to} onClick={() => navigate(l.to)} className="rounded-2xl flex items-center gap-3 text-left active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.3rem)' }}>
+                    <button key={l.to} onClick={open} className="rounded-2xl flex items-center gap-3 text-left active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.3rem)' }}>
                       <div className="rounded-xl flex items-center justify-center shrink-0" style={{ background: 'var(--pv-bg)', width: 'clamp(2.4rem,3vw,2.9rem)', height: 'clamp(2.4rem,3vw,2.9rem)' }}>
                         <Icon style={{ width: '52%', height: '52%', color: 'var(--pv-brand)' }} />
                       </div>
@@ -236,6 +241,8 @@ export default function PosV2Settings() {
           </button>
         </div>
       </div>
+
+      {qrOpen && <WaiterQrModal onClose={() => setQrOpen(false)} />}
     </div>
   )
 }
