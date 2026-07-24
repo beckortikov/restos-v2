@@ -34,7 +34,9 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -68,6 +70,19 @@ fun ItemSearchScreen(
             (state.searchQuery.isBlank() || item.name.contains(state.searchQuery.trim(), ignoreCase = true))
     }
     val addedCount = state.lines.size
+    var showNewItem by remember { mutableStateOf(false) }
+
+    if (showNewItem) {
+        NewItemSheet(
+            initialName = state.searchQuery,
+            creating = state.creatingItem,
+            error = state.newItemError,
+            onDismiss = { showNewItem = false; viewModel.clearNewItemError() },
+            onCreate = { name, unit, isFood, price ->
+                viewModel.createIngredient(name, unit, isFood, price) { showNewItem = false }
+            },
+        )
+    }
 
     Surface(Modifier.fillMaxSize(), color = ZakupColors.Bg) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
@@ -81,23 +96,40 @@ fun ItemSearchScreen(
                 )
             }
 
-            TextField(
-                value = state.searchQuery,
-                onValueChange = viewModel::setSearchQuery,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                placeholder = { Text("Поиск ингредиента", color = ZakupColors.TextTertiary, fontSize = 14.sp) },
-                leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ZakupColors.TextTertiary) },
-                singleLine = true,
-                shape = RoundedCornerShape(ZakupRadius.tile),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = ZakupColors.Surface,
-                    unfocusedContainerColor = ZakupColors.Surface,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    focusedTextColor = ZakupColors.TextPrimary,
-                    unfocusedTextColor = ZakupColors.TextPrimary,
-                ),
-            )
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextField(
+                    value = state.searchQuery,
+                    onValueChange = viewModel::setSearchQuery,
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("Поиск ингредиента", color = ZakupColors.TextTertiary, fontSize = 14.sp) },
+                    leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = ZakupColors.TextTertiary) },
+                    singleLine = true,
+                    shape = RoundedCornerShape(ZakupRadius.tile),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = ZakupColors.Surface,
+                        unfocusedContainerColor = ZakupColors.Surface,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent,
+                        focusedTextColor = ZakupColors.TextPrimary,
+                        unfocusedTextColor = ZakupColors.TextPrimary,
+                    ),
+                )
+                Spacer(Modifier.size(8.dp))
+                // Нет в списке? Создать новый товар (продукт/хозтовар).
+                Surface(
+                    onClick = { showNewItem = true },
+                    shape = RoundedCornerShape(ZakupRadius.tile),
+                    color = ZakupColors.PrimarySoft,
+                    modifier = Modifier.size(52.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(Icons.Outlined.Add, contentDescription = "Новый товар", tint = ZakupColors.Primary, modifier = Modifier.size(24.dp))
+                    }
+                }
+            }
             Spacer(Modifier.height(12.dp))
 
             WarehouseTabs(

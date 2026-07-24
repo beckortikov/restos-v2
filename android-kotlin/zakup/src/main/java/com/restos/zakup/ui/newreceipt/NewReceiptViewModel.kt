@@ -72,6 +72,9 @@ data class NewReceiptUiState(
     val searchItems: List<SearchItem> = emptyList(),
     val searchQuery: String = "",
     val searchTab: WarehouseKind? = null, // null = Все
+    // Создание нового товара из поиска
+    val creatingItem: Boolean = false,
+    val newItemError: String? = null,
 ) {
     val total: BigDecimal get() = lines.fold(BigDecimal.ZERO) { a, l -> a + l.lineTotal }
 
@@ -149,6 +152,36 @@ class NewReceiptViewModel @Inject constructor(
 
     fun setSearchQuery(q: String) = _state.update { it.copy(searchQuery = q) }
     fun setSearchTab(kind: WarehouseKind?) = _state.update { it.copy(searchTab = kind) }
+    fun clearNewItemError() = _state.update { it.copy(newItemError = null) }
+
+    /**
+     * Создать новый товар (продукт/хозтовар) и сразу добавить в приёмку.
+     * Склад бэк назначит по is_food (еда→Продукты, не-еда→Хозтовары).
+     */
+    fun createIngredient(name: String, unit: String?, isFood: Boolean, price: String?, onCreated: () -> Unit) {
+        if (_state.value.creatingItem) return
+        _state.update { it.copy(creatingItem = true, newItemError = null) }
+        viewModelScope.launch {
+            runCatching {
+                stockApi.createIngredient(
+                    com.restos.zakup.data.stock.IngredientInput(
+                        name = name.trim(),
+                        unit = unit?.trim()?.takeIf { it.isNotEmpty() },
+                        isFood = isFood,
+                        pricePerUnit = price?.trim()?.takeIf { it.isNotEmpty() },
+                    ),
+                )
+            }.onSuccess { dto ->
+                val item = dto.toSearchItem()
+                _state.update { s -> s.copy(creatingItem = false, searchItems = s.searchItems + item) }
+                addItem(item) // сразу в приёмку с qty=1
+                onCreated()
+            }.onFailure { e ->
+                val msg = (e as? ApiException)?.apiError?.message ?: e.message ?: "Не удалось создать товар"
+                _state.update { it.copy(creatingItem = false, newItemError = msg) }
+            }
+        }
+    }
 
     fun addItem(item: SearchItem) {
         _state.update { s ->

@@ -3,7 +3,9 @@ package com.restos.zakup.data.stock
 import com.restos.core.common.PagedEnvelope
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import retrofit2.http.Body
 import retrofit2.http.GET
+import retrofit2.http.POST
 import retrofit2.http.Query
 
 /**
@@ -23,6 +25,10 @@ interface StockApi {
 
     @GET("api/v1/stock/ingredient-categories")
     suspend fun listCategories(): StringListEnvelope
+
+    /** Создать ингредиент (продукт/хозтовар). Склад назначается бэком по is_food. */
+    @POST("api/v1/stock/ingredients")
+    suspend fun createIngredient(@Body body: IngredientInput): IngredientDto
 
     @GET("api/v1/warehouses")
     suspend fun listWarehouses(): PagedEnvelope<WarehouseDto>
@@ -67,6 +73,17 @@ data class StockReturnDto(
 
 @Serializable
 data class StringListEnvelope(val data: List<String> = emptyList())
+
+/** Тело создания ингредиента (IngredientInput в service/stock_extra.go). name обязателен. */
+@Serializable
+data class IngredientInput(
+    val name: String,
+    val category: String? = null,
+    val unit: String? = null,
+    @SerialName("is_food") val isFood: Boolean,
+    @SerialName("min_qty") val minQty: String? = null,
+    @SerialName("price_per_unit") val pricePerUnit: String? = null,
+)
 
 @Serializable
 data class IngredientDto(
