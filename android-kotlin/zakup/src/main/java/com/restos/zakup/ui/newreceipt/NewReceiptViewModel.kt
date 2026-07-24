@@ -74,10 +74,21 @@ data class NewReceiptUiState(
     val searchTab: WarehouseKind? = null, // null = Все
 ) {
     val total: BigDecimal get() = lines.fold(BigDecimal.ZERO) { a, l -> a + l.lineTotal }
-    val canSubmit: Boolean
-        get() = !submitting && supplierId != null && lines.isNotEmpty() &&
-            lines.all { it.qty.toDecimalOrZero().signum() > 0 } &&
-            (payment == PaymentType.Credit || accountId != null)
+
+    /** Причина, по которой приёмку ещё нельзя провести (для подсказки под кнопкой). null = всё готово. */
+    val validationHint: String?
+        get() = when {
+            supplierId == null -> "Выберите поставщика"
+            lines.isEmpty() -> "Добавьте хотя бы одну позицию"
+            lines.any { it.qty.toDecimalOrZero().signum() <= 0 } -> "Укажите количество для всех позиций"
+            payment == PaymentType.Paid && accountId == null -> "Выберите счёт оплаты или переключитесь на «В долг»"
+            else -> null
+        }
+
+    /** Первая позиция без количества — её разворачиваем при попытке провести. */
+    val firstLineMissingQty: String? get() = lines.firstOrNull { it.qty.toDecimalOrZero().signum() <= 0 }?.ingredientId
+
+    val canSubmit: Boolean get() = !submitting && validationHint == null
 }
 
 @HiltViewModel
@@ -142,7 +153,8 @@ class NewReceiptViewModel @Inject constructor(
     fun addItem(item: SearchItem) {
         _state.update { s ->
             if (s.lines.any { it.ingredientId == item.id }) return@update s
-            s.copy(lines = s.lines + DraftLine(item.id, item.name, item.unit, qty = "", price = item.price.toPlainStringOrEmpty()))
+            // qty по умолчанию = 1 (позиция сразу валидна, как «добавить в корзину»); цену тянем из меню.
+            s.copy(lines = s.lines + DraftLine(item.id, item.name, item.unit, qty = "1", price = item.price.toPlainStringOrEmpty()))
         }
     }
 

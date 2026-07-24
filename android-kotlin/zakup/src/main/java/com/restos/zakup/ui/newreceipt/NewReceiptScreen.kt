@@ -160,9 +160,14 @@ fun NewReceiptScreen(
 
                 SubmitBar(
                     total = state.total,
-                    enabled = state.canSubmit,
+                    canSubmit = state.canSubmit,
+                    hint = state.validationHint,
                     submitting = state.submitting,
-                    onSubmit = { confirmSubmit = true },
+                    onSubmit = {
+                        if (state.canSubmit) confirmSubmit = true
+                        // Не готово: разворачиваем первую позицию без кол-ва, чтобы её сразу заполнить.
+                        else state.firstLineMissingQty?.let { expandedLineId = it }
+                    },
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
             }
@@ -365,18 +370,30 @@ private fun AccountRow(state: NewReceiptUiState, onSelect: (String) -> Unit) {
 }
 
 @Composable
-private fun SubmitBar(total: java.math.BigDecimal, enabled: Boolean, submitting: Boolean, onSubmit: () -> Unit, modifier: Modifier) {
+private fun SubmitBar(
+    total: java.math.BigDecimal,
+    canSubmit: Boolean,
+    hint: String?,
+    submitting: Boolean,
+    onSubmit: () -> Unit,
+    modifier: Modifier,
+) {
     Surface(color = ZakupColors.Bg, modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp).navigationBarsPadding()) {
-            Row(Modifier.fillMaxWidth().padding(bottom = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text("Итого", fontSize = 14.sp, color = ZakupColors.TextSecondary, modifier = Modifier.weight(1f))
                 Text(formatMoney(total), fontSize = 18.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary)
             }
+            // Подсказка, почему кнопка ещё не активна (вместо «нажимаю — ничего»).
+            if (hint != null && !submitting) {
+                Text(hint, fontSize = 12.5.sp, color = ZakupColors.Warn, modifier = Modifier.padding(bottom = 8.dp))
+            }
+            // Кнопка кликабельна всегда (кроме отправки): если рано — подсветит недостающее.
             Surface(
                 onClick = onSubmit,
-                enabled = enabled,
+                enabled = !submitting,
                 shape = RoundedCornerShape(ZakupRadius.button),
-                color = if (enabled) ZakupColors.Primary else ZakupColors.Primary.copy(alpha = 0.4f),
+                color = if (canSubmit) ZakupColors.Primary else ZakupColors.Primary.copy(alpha = 0.4f),
                 modifier = Modifier.fillMaxWidth().height(52.dp),
             ) {
                 Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
