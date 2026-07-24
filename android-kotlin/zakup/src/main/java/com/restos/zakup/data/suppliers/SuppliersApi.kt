@@ -15,6 +15,12 @@ interface SuppliersApi {
         @Query("limit") limit: Int = 200,
     ): SuppliersEnvelope
 
+    /** Создание нового поставщика. name обязателен. Idempotency-Key — авто. */
+    @POST("api/v1/suppliers")
+    suspend fun createSupplier(
+        @Body body: SupplierInput,
+    ): SupplierDto
+
     /** Гашение долга FIFO по всем накладным поставщика. Idempotency-Key — авто. */
     @POST("api/v1/suppliers/{id}/pay-debt")
     suspend fun payDebt(
@@ -22,6 +28,17 @@ interface SuppliersApi {
         @Body body: PayDebtInput,
     ): SupplierDto
 }
+
+/** Тело создания/правки поставщика (SupplierInput в service/admin.go). */
+@Serializable
+data class SupplierInput(
+    val name: String,
+    @SerialName("contact_person") val contactPerson: String? = null,
+    val phone: String? = null,
+    val categories: List<String>? = null,
+    @SerialName("payment_terms_days") val paymentTermsDays: Int? = null,
+    @SerialName("credit_limit") val creditLimit: String? = null,
+)
 
 @Serializable
 data class PayDebtInput(

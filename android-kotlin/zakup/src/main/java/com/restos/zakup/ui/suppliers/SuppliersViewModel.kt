@@ -2,8 +2,10 @@ package com.restos.zakup.ui.suppliers
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.restos.core.net.ApiException
 import com.restos.zakup.data.receipts.ReceiptsApi
 import com.restos.zakup.data.suppliers.SupplierDto
+import com.restos.zakup.data.suppliers.SupplierInput
 import com.restos.zakup.data.suppliers.SuppliersApi
 import com.restos.zakup.util.toDecimalOrZero
 import com.restos.zakup.ui.live.observeStockEvents
@@ -38,8 +40,12 @@ data class SuppliersUiState(
     val withDebt: Int = 0,
     val overdueCount: Int = 0,
     val rows: List<SupplierRow> = emptyList(),
+    val saving: Boolean = false,
+    val saveError: String? = null,
 ) {
     val topDebtor: SupplierRow? get() = rows.firstOrNull { it.debt.signum() > 0 }
+    /** Уже использованные категории — как подсказки-чипы в форме нового поставщика. */
+    val knownCategories: List<String> get() = rows.flatMap { it.categories }.distinct().sorted()
 }
 
 @HiltViewModel
@@ -96,6 +102,27 @@ class SuppliersViewModel @Inject constructor(
             }.onFailure { e ->
                 _state.update { it.copy(loading = false, error = e.message ?: "Не удалось загрузить поставщиков") }
             }
+        }
+    }
+
+    /** Сброс ошибки формы (при повторном открытии/правке полей). */
+    fun clearSaveError() = _state.update { it.copy(saveError = null) }
+
+    /** Создать поставщика и обновить список. onCreated — закрыть форму. */
+    fun createSupplier(input: SupplierInput, onCreated: () -> Unit) {
+        if (_state.value.saving) return
+        _state.update { it.copy(saving = true, saveError = null) }
+        viewModelScope.launch {
+            runCatching { api.createSupplier(input) }
+                .onSuccess {
+                    _state.update { it.copy(saving = false) }
+                    onCreated()
+                    load()
+                }
+                .onFailure { e ->
+                    val msg = (e as? ApiException)?.apiError?.message ?: e.message ?: "Не удалось создать поставщика"
+                    _state.update { it.copy(saving = false, saveError = msg) }
+                }
         }
     }
 

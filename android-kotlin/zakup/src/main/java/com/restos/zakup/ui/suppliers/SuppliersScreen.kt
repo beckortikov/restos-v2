@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -39,7 +40,6 @@ import com.restos.zakup.ui.components.ErrorState
 import com.restos.zakup.ui.components.LoadingState
 import com.restos.zakup.ui.components.RowDivider
 import com.restos.zakup.ui.components.ZakupCard
-import com.restos.zakup.ui.shell.ZakupScreenHeader
 import com.restos.zakup.ui.theme.ZakupColors
 import com.restos.zakup.ui.theme.ZakupRadius
 import com.restos.zakup.util.formatCompactMoney
@@ -55,6 +55,7 @@ fun SuppliersScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var payFor by remember { mutableStateOf<SupplierRow?>(null) }
+    var showCreate by remember { mutableStateOf(false) }
 
     payFor?.let { row ->
         com.restos.zakup.ui.paydebt.PayDebtSheet(
@@ -66,8 +67,18 @@ fun SuppliersScreen(
         )
     }
 
+    if (showCreate) {
+        NewSupplierSheet(
+            saving = state.saving,
+            error = state.saveError,
+            knownCategories = state.knownCategories,
+            onDismiss = { showCreate = false; viewModel.clearSaveError() },
+            onSave = { input -> viewModel.createSupplier(input) { showCreate = false } },
+        )
+    }
+
     Column(Modifier.fillMaxSize()) {
-        ZakupScreenHeader(title = "Поставщики")
+        SuppliersHeader(onAdd = { showCreate = true })
 
         when {
             state.loading -> LoadingState()
@@ -89,6 +100,27 @@ fun SuppliersScreen(
                 items(state.rows, key = { it.id }) { row ->
                     SupplierCard(row, onClick = { onOpenSupplier(row.id) })
                 }
+            }
+        }
+    }
+}
+
+/** Шапка «Поставщики» + чёрная кнопка «+» для нового поставщика (как в макете). */
+@Composable
+private fun SuppliersHeader(onAdd: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 8.dp, bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text("Поставщики", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = ZakupColors.TextPrimary, modifier = Modifier.weight(1f))
+        Surface(
+            onClick = onAdd,
+            shape = RoundedCornerShape(ZakupRadius.tile),
+            color = ZakupColors.TextPrimary,
+            modifier = Modifier.size(40.dp),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Add, contentDescription = "Новый поставщик", tint = ZakupColors.OnDark, modifier = Modifier.size(22.dp))
             }
         }
     }
