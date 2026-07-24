@@ -185,7 +185,7 @@ fun NewSupplierSheet(
                 Spacer(Modifier.size(12.dp))
                 Column(Modifier.weight(1f)) {
                     FieldLabel("Лимит долга")
-                    FormField(creditLimit, { creditLimit = it.filter { c -> c.isDigit() || c == '.' } }, placeholder = "0", keyboardType = KeyboardType.Number, suffix = "сум")
+                    FormField(creditLimit, { creditLimit = it.filter { c -> c.isDigit() || c == '.' } }, placeholder = "0", keyboardType = KeyboardType.Number, suffix = "с.")
                 }
             }
 

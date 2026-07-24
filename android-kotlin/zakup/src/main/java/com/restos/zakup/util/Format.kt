@@ -19,8 +19,8 @@ fun formatAmount(value: BigDecimal): String {
     return ruGroup.format(rounded)
 }
 
-/** «1 240 000 сум». */
-fun formatMoney(value: BigDecimal, currency: String = "сум"): String =
+/** «1 240 000 с.». */
+fun formatMoney(value: BigDecimal, currency: String = "с."): String =
     "${formatAmount(value)} $currency"
 
 /** Крупные суммы компактно: «4.85 млн», «860 тыс», «1 240 000». Для метрик-плиток. */

@@ -57,7 +57,7 @@ fun StockScreen(onBuyIngredient: (String) -> Unit = {}, viewModel: StockViewMode
             // Стоимость остатков выбранного склада (#4).
             Surface(shape = RoundedCornerShape(ZakupRadius.pill), color = ZakupColors.SurfaceMuted) {
                 Text(
-                    "${formatCompactMoney(state.warehouseValue)} сум",
+                    "${formatCompactMoney(state.warehouseValue)} с.",
                     fontSize = 12.5.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = ZakupColors.TextSecondary,

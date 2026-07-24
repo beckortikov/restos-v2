@@ -176,7 +176,7 @@ private fun OpeningLineRow(
             ) {
                 OpNumField(line.qty, onQty, "кол-во", line.unit, Modifier.weight(1f))
                 Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
-                OpNumField(line.price, onPrice, "цена", "сум", Modifier.weight(1.3f))
+                OpNumField(line.price, onPrice, "цена", "с.", Modifier.weight(1.3f))
                 Spacer(Modifier.size(8.dp))
                 RemoveBtn(onRemove)
             }

@@ -116,7 +116,7 @@ fun NewItemSheet(
 
             Spacer(Modifier.height(14.dp))
             Label("Цена за единицу (необязательно)")
-            Field(price, { price = it.filter { c -> c.isDigit() || c == '.' } }, "0", keyboardType = KeyboardType.Number, suffix = "сум")
+            Field(price, { price = it.filter { c -> c.isDigit() || c == '.' } }, "0", keyboardType = KeyboardType.Number, suffix = "с.")
 
             if (error != null) {
                 Spacer(Modifier.height(10.dp))

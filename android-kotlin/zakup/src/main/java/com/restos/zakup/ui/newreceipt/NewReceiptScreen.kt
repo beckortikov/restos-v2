@@ -254,7 +254,7 @@ private fun CompactLineRow(
             ) {
                 NumField(line.qty, onQty, placeholder = "кол-во", suffix = line.unit, modifier = Modifier.weight(1f))
                 Text("×", fontSize = 15.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(horizontal = 10.dp))
-                NumField(line.price, onPrice, placeholder = "цена", suffix = "сум", modifier = Modifier.weight(1.3f))
+                NumField(line.price, onPrice, placeholder = "цена", suffix = "с.", modifier = Modifier.weight(1.3f))
                 Spacer(Modifier.size(8.dp))
                 Surface(onClick = onRemove, shape = RoundedCornerShape(ZakupRadius.badge), color = ZakupColors.SurfaceMuted, modifier = Modifier.size(28.dp)) {
                     Box(contentAlignment = Alignment.Center) {

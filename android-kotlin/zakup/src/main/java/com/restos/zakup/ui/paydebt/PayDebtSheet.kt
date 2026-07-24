@@ -153,7 +153,7 @@ fun PayDebtSheet(
                                 unfocusedIndicatorColor = Color.Transparent,
                             ),
                         )
-                        Text("сум", fontSize = 13.sp, color = ZakupColors.TextTertiary)
+                        Text("с.", fontSize = 13.sp, color = ZakupColors.TextTertiary)
                     }
                 }
 
