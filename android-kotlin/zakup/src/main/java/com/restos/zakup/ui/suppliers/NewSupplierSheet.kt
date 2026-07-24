@@ -156,26 +156,24 @@ fun NewSupplierSheet(
                     }
                 }
             }
-            // Подсказки — уже используемые категории, ещё не выбранные.
-            val suggestions = knownCategories.filter { s -> categories.none { it.equals(s, ignoreCase = true) } }
-            if (suggestions.isNotEmpty()) {
-                Spacer(Modifier.height(8.dp))
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    suggestions.forEach { s ->
-                        Surface(
-                            onClick = { addCategory(s) },
-                            shape = RoundedCornerShape(ZakupRadius.badge),
-                            color = ZakupColors.Surface,
-                            border = BorderStroke(1.dp, ZakupColors.Border),
-                        ) {
-                            Text("+ $s", fontSize = 12.5.sp, color = ZakupColors.TextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
-                        }
-                    }
+            // Подсказки-чипы: предопределённые группы (как в основной программе) +
+            // ранее использованные категории. Уже выбранные не показываем.
+            fun notSelected(list: List<String>) = list.filter { s -> categories.none { it.equals(s, ignoreCase = true) } }
+            SUPPLIER_CATEGORY_GROUPS.forEach { group ->
+                val chips = notSelected(group.items)
+                if (chips.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(group.label, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextTertiary, modifier = Modifier.padding(bottom = 6.dp))
+                    SuggestionChips(chips, onPick = { addCategory(it) })
                 }
+            }
+            // Ранее использованные — то, чего нет в предопределённых группах.
+            val presetAll = SUPPLIER_CATEGORY_GROUPS.flatMap { it.items }
+            val known = notSelected(knownCategories).filter { k -> presetAll.none { it.equals(k, ignoreCase = true) } }
+            if (known.isNotEmpty()) {
+                Spacer(Modifier.height(10.dp))
+                Text("Ранее использованные", fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold, color = ZakupColors.TextTertiary, modifier = Modifier.padding(bottom = 6.dp))
+                SuggestionChips(known, onPick = { addCategory(it) })
             }
 
             Spacer(Modifier.height(14.dp))
@@ -268,3 +266,61 @@ private fun FormField(
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SuggestionChips(items: List<String>, onPick: (String) -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        items.forEach { s ->
+            Surface(
+                onClick = { onPick(s) },
+                shape = RoundedCornerShape(ZakupRadius.badge),
+                color = ZakupColors.Surface,
+                border = BorderStroke(1.dp, ZakupColors.Border),
+            ) {
+                Text("+ $s", fontSize = 12.5.sp, color = ZakupColors.TextSecondary, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp))
+            }
+        }
+    }
+}
+
+private data class CategoryGroup(val label: String, val items: List<String>)
+
+/** Предопределённые категории поставщика — зеркало web-формы suppliers/new. */
+private val SUPPLIER_CATEGORY_GROUPS = listOf(
+    CategoryGroup(
+        "Продукты питания",
+        listOf(
+            "Мясо", "Птица", "Рыба", "Морепродукты",
+            "Овощи", "Фрукты", "Зелень", "Грибы",
+            "Крупы", "Бобовые", "Макароны",
+            "Мука", "Хлеб", "Выпечка",
+            "Молочные", "Сыры", "Яйца",
+            "Масла", "Специи", "Соусы",
+            "Напитки", "Чай", "Кофе", "Соки",
+            "Заморозка", "Консервы",
+            "Сухофрукты", "Орехи",
+            "Кондитерские", "Сахар", "Мёд",
+            "Прочие продукты",
+        ),
+    ),
+    CategoryGroup(
+        "Хозяйственные товары",
+        listOf(
+            "Салфетки", "Бумажные полотенца", "Туалетная бумага",
+            "Зубочистки", "Трубочки",
+            "Одноразовая посуда", "Одноразовые стаканы",
+            "Моющие средства", "Дезинфекция",
+            "Губки", "Тряпки",
+            "Перчатки", "Фартуки",
+            "Мусорные мешки",
+            "Упаковка", "Пакеты", "Контейнеры",
+            "Инвентарь",
+            "Прочие хозтовары",
+        ),
+    ),
+)
