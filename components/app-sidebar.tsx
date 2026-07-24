@@ -51,6 +51,8 @@ import {
   Plus,
   Minus,
   ShieldCheck,
+  Boxes,
+  ListChecks,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -243,17 +245,12 @@ const NAV: NavItem[] = [
     label: 'Склад',
     icon: Package,
     children: [
+      // Редизайн: 4 раздела вместо 11 плоских пунктов. Частые действия — на
+      // «Обзоре», редкие документы/справочники — в «Операциях».
+      { label: 'Обзор', href: '/warehouse', icon: Boxes },
       { label: 'Остатки', href: '/warehouse/inventory', icon: Package },
-      { label: 'Накладные', href: '/warehouse/receipts', icon: ScrollText },
-      { label: 'Возвраты', href: '/warehouse/returns', icon: Undo2 },
-      { label: 'Полуфабрикаты', href: '/warehouse/semi', icon: FlaskConical },
-      { label: 'Меню / Техкарты', href: '/warehouse/menu', icon: BookOpen },
       { label: 'Поставщики', href: '/warehouse/suppliers', icon: Truck },
-      { label: 'Списания', href: '/warehouse/writeoffs', icon: Trash2 },
-      { label: 'Расход хозтоваров', href: '/warehouse/supply-expenses', icon: PackageMinus },
-      { label: 'Инвентаризация', href: '/warehouse/inventory-check', icon: ClipboardCheck },
-      { label: 'Начальный остаток', href: '/warehouse/opening-balance', icon: PackagePlus },
-      { label: 'История движений', href: '/warehouse/history', icon: History },
+      { label: 'Операции', href: '/warehouse/operations', icon: ListChecks },
     ],
   },
   {

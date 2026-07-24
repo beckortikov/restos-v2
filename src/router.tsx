@@ -58,6 +58,8 @@ const Shifts = () => L(() => import('@/app/(app)/operations/shifts/page'))
 const Showcase = () => L(() => import('@/app/(app)/operations/showcase/page'))
 
 // Warehouse
+const WarehouseHome = () => L(() => import('@/app/(app)/warehouse/page'))
+const WarehouseOperations = () => L(() => import('@/app/(app)/warehouse/operations/page'))
 const Inventory = () => L(() => import('@/app/(app)/warehouse/inventory/page'))
 const Menu = () => L(() => import('@/app/(app)/warehouse/menu/page'))
 const MenuNew = () => L(() => import('@/app/(app)/warehouse/menu/new/page'))
@@ -155,6 +157,8 @@ export function AppRouter() {
         <Route path="/operations/showcase" element={<Showcase />} />
 
         {/* Warehouse */}
+        <Route path="/warehouse" element={<WarehouseHome />} />
+        <Route path="/warehouse/operations" element={<WarehouseOperations />} />
         <Route path="/warehouse/inventory" element={<Inventory />} />
         <Route path="/warehouse/menu" element={<Menu />} />
         <Route path="/warehouse/menu/new" element={<MenuNew />} />
