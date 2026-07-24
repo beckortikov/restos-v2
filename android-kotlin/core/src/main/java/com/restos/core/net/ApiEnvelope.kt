@@ -28,4 +28,6 @@ data class ApiError(
     val detail: String? = null,
 )
 
-class ApiException(val apiError: ApiError) : RuntimeException(apiError.message)
+// IOException (не RuntimeException): чтобы OkHttp-интерцептор мог бросить его
+// на не-2xx ответ, и он корректно долетел до suspend Retrofit-вызова.
+class ApiException(val apiError: ApiError) : java.io.IOException(apiError.message)
