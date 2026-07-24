@@ -117,10 +117,10 @@ function ClosedShiftZBreakdown({ z, loading }: { z: ShiftZReport | null; loading
                 <span className="text-muted-foreground">Выручка</span>
                 <span className="font-medium tabular-nums">{formatCurrency(revenueTotal)}</span>
               </div>
-              {z.expensesTotal > 0 && (
+              {z.expensesTotalAll > 0 && (
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Расход</span>
-                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.expensesTotal)}</span>
+                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.expensesTotalAll)}</span>
                 </div>
               )}
               {z.withdrawals > 0 && (
@@ -137,7 +137,7 @@ function ClosedShiftZBreakdown({ z, loading }: { z: ShiftZReport | null; loading
               )}
               <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
                 <span>Итог</span>
-                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotal - z.withdrawals - z.refundsTotal)}</span>
+                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotalAll - z.withdrawals - z.refundsTotal)}</span>
               </div>
             </div>
           )}

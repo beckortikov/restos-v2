@@ -142,6 +142,10 @@ export interface ShiftZReport {
   cashIn: number
   withdrawals: number
   expensesTotal: number
+  // expensesTotalAll — все расходы бизнеса (нал+безнал, кроме возврата-зеркала).
+  // expensesTotal — только наличные (для кассовой панели «Ожидается в кассе»);
+  // сводка «Расход»/«Итог» показывает все расходы независимо от счёта.
+  expensesTotalAll: number
   expensesByCategory: { category: string; count: number; amount: number }[]
   // Возвраты покупателям за смену (нал+безнал). Показываются отдельной строкой;
   // кассовое зеркало возврата исключено из expensesTotal, чтобы не задваивать.
@@ -193,6 +197,9 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
     cashIn: Number(r?.cash_in ?? 0),
     withdrawals: Number(r?.withdrawals ?? 0),
     expensesTotal: Number(r?.expenses_total ?? 0),
+    // Фолбэк на expenses_total (старый бэк без поля) — тогда безнал не выделится,
+    // но поведение не хуже прежнего.
+    expensesTotalAll: Number(r?.expenses_total_all ?? r?.expenses_total ?? 0),
     expensesByCategory: (r?.expenses_by_category ?? []).map((e: any) => ({
       category: String(e.category ?? '—'),
       count: Number(e.count ?? 0),
