@@ -104,7 +104,7 @@ export default function ReceiptsPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[
           { label: 'Всего накладных', value: receipts.length, icon: CheckCircle, color: 'text-primary' },
-          { label: 'Итого по приходу', value: formatCurrency(receipts.reduce((s, r) => s + r.totalAmount, 0)), icon: CreditCard, color: 'text-blue-600' },
+          { label: 'Итого по приходу', value: formatCurrency(receipts.reduce((s, r) => s + r.totalAmount - (r.returnedTotal ?? 0), 0)), icon: CreditCard, color: 'text-blue-600' },
           { label: 'Задолженность', value: formatCurrency(receipts.reduce((s, r) => s + r.debtAmount, 0)), icon: Clock, color: 'text-destructive' },
         ].map((stat) => (
           <div key={stat.label} className="bg-card rounded-xl border border-border p-4 flex items-center gap-3">
@@ -192,7 +192,15 @@ export default function ReceiptsPage() {
                   </p>
                 </div>
                 <div className="flex flex-col items-end gap-1 shrink-0">
-                  <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</span>
+                  {returned > 0.005 ? (
+                    // Есть возврат — показываем сумму «по факту» (нетто), исходную зачёркиваем.
+                    <div className="flex items-baseline gap-1.5">
+                      <span className="text-xs text-muted-foreground line-through tabular-nums">{formatCurrency(r.totalAmount)}</span>
+                      <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount - returned)}</span>
+                    </div>
+                  ) : (
+                    <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</span>
+                  )}
                   <div className="flex items-center gap-1.5">
                     {r.debtAmount > 0.005 && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-destructive/10 text-destructive">долг {formatCurrency(r.debtAmount)}</span>
@@ -286,6 +294,14 @@ export default function ReceiptsPage() {
                           </div>
                         )
                       })}
+                    </div>
+                  )}
+
+                  {/* Сумма по факту — счёт минус действующие возвраты */}
+                  {returned > 0.005 && (
+                    <div className="flex items-center justify-between rounded-lg bg-muted/40 px-3 py-2.5">
+                      <span className="text-sm font-semibold text-foreground">По факту (после возвратов)</span>
+                      <span className="text-base font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount - returned)}</span>
                     </div>
                   )}
                 </div>
