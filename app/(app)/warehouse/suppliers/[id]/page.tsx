@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2 } from 'lucide-react'
 import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns } from '@/lib/queries'
@@ -519,110 +519,72 @@ export default function EditSupplierPage() {
               У этого поставщика ещё нет накладных
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border/60">
-                    <th className="text-left font-semibold py-2 pr-3">Дата</th>
-                    <th className="text-left font-semibold py-2 pr-3">Оплата</th>
-                    <th className="text-right font-semibold py-2 pr-3">Сумма</th>
-                    <th className="text-right font-semibold py-2 pr-3">Оплачено</th>
-                    <th className="text-right font-semibold py-2 pr-3">Возврат</th>
-                    <th className="text-right font-semibold py-2">Долг</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedReceipts.map((r) => {
-                    const badge = PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid
-                    const itemsCount = r.lines?.length ?? 0
-                    const open = expandedReceipt === r.id
-                    return (
-                      <React.Fragment key={r.id}>
-                      <tr
-                        onClick={() => itemsCount > 0 && setExpandedReceipt(open ? null : r.id)}
-                        className={`border-b border-border/40 last:border-0 transition-colors ${itemsCount > 0 ? 'cursor-pointer hover:bg-muted/30' : ''} ${open ? 'bg-muted/40' : ''}`}
-                      >
-                        <td className="py-2.5 pr-3">
-                          <div className="flex items-center gap-1.5">
-                            {itemsCount > 0
-                              ? (open ? <ChevronDown className="size-3.5 text-muted-foreground shrink-0" /> : <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />)
-                              : <span className="size-3.5 shrink-0" />}
-                            <div>
-                              <div className="font-medium text-foreground tabular-nums">{r.date || '—'}</div>
-                              {itemsCount > 0 && <div className="text-[11px] text-muted-foreground">{itemsCount} позиц.</div>}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-2.5 pr-3">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${badge.cls}`}>
-                            {badge.label}
+            <div className="space-y-2">
+              {sortedReceipts.map((r) => {
+                const badge = PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid
+                const itemsCount = r.lines?.length ?? 0
+                const open = expandedReceipt === r.id
+                const ret = returnsByReceipt.get(r.id) ?? 0
+                const origDebt = r.totalAmount - r.paidAmount
+                const debtReduced = r.debtAmount > 0.005 && origDebt > r.debtAmount + 0.005
+                return (
+                  <div key={r.id} className="rounded-lg border border-border overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => itemsCount > 0 && setExpandedReceipt(open ? null : r.id)}
+                      className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${itemsCount > 0 ? 'hover:bg-muted/40' : ''} ${open ? 'bg-muted/30' : ''}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-foreground tabular-nums">{r.date || '—'}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badge.cls}`}>{badge.label}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground mt-1">
+                          {itemsCount > 0 && <span>{itemsCount} позиц.</span>}
+                          {r.paidAmount > 0.005 && <span>оплачено {formatCurrency(r.paidAmount)}</span>}
+                          {ret > 0.005 && (
+                            <span className="text-orange-600 dark:text-orange-400 inline-flex items-center gap-0.5">
+                              <Undo2 className="size-2.5" />возврат {formatCurrency(ret)}
+                            </span>
+                          )}
+                          {r.debtAmount > 0.005 && (
+                            <span className="text-rose-600 dark:text-rose-400 font-medium inline-flex items-baseline gap-1">
+                              долг
+                              {debtReduced && <span className="line-through opacity-60">{formatCurrency(origDebt)}</span>}
+                              <span className="font-bold">{formatCurrency(r.debtAmount)}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {ret > 0.005 ? (
+                          <span className="flex items-baseline gap-1 whitespace-nowrap">
+                            <span className="text-xs text-muted-foreground line-through tabular-nums">{formatCurrency(r.totalAmount)}</span>
+                            <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount - ret)}</span>
                           </span>
-                        </td>
-                        <td className="py-2.5 pr-3 text-right font-semibold text-foreground tabular-nums">
-                          {(returnsByReceipt.get(r.id) ?? 0) > 0.005 ? (
-                            // Есть возврат — сумма «по факту» (нетто), исходная зачёркнута.
-                            <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
-                              <span className="text-xs text-muted-foreground line-through font-normal">{formatCurrency(r.totalAmount)}</span>
-                              <span>{formatCurrency(r.totalAmount - (returnsByReceipt.get(r.id) ?? 0))}</span>
-                            </span>
-                          ) : formatCurrency(r.totalAmount)}
-                        </td>
-                        <td className="py-2.5 pr-3 text-right text-muted-foreground tabular-nums">{formatCurrency(r.paidAmount)}</td>
-                        <td className="py-2.5 pr-3 text-right tabular-nums">
-                          {(returnsByReceipt.get(r.id) ?? 0) > 0.005 ? (
-                            <span className="inline-flex items-center gap-1 text-orange-600 dark:text-orange-400 font-medium">
-                              <Undo2 className="size-3" />
-                              {formatCurrency(returnsByReceipt.get(r.id) ?? 0)}
-                            </span>
-                          ) : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        <td className="py-2.5 text-right tabular-nums font-medium">
-                          {r.debtAmount > 0.005 ? (() => {
-                            const origDebt = r.totalAmount - r.paidAmount
-                            const reduced = origDebt > r.debtAmount + 0.005
-                            return (
-                              <span className="inline-flex items-baseline gap-1 whitespace-nowrap text-rose-600 dark:text-rose-400">
-                                {reduced && <span className="text-xs line-through opacity-60 font-normal">{formatCurrency(origDebt)}</span>}
-                                <span>{formatCurrency(r.debtAmount)}</span>
-                              </span>
-                            )
-                          })() : <span className="text-muted-foreground">0</span>}
-                        </td>
-                      </tr>
-                      {open && (
-                        <tr className="bg-muted/20">
-                          <td colSpan={6} className="px-3 pb-3 pt-1">
-                            <div className="rounded-lg border border-border/60 overflow-hidden">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/40">
-                                    <th className="text-left font-semibold px-3 py-1.5">Товар</th>
-                                    <th className="text-right font-semibold px-3 py-1.5">Кол-во</th>
-                                    <th className="text-right font-semibold px-3 py-1.5">Цена</th>
-                                    <th className="text-right font-semibold px-3 py-1.5">Сумма</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {(r.lines ?? []).map((l, i) => (
-                                    <tr key={i} className="border-t border-border/40">
-                                      <td className="px-3 py-1.5 text-foreground">{l.name}</td>
-                                      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{l.qty} {l.unit}</td>
-                                      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{formatCurrency(l.pricePerUnit)}</td>
-                                      <td className="px-3 py-1.5 text-right font-medium text-foreground tabular-nums">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                            {r.note && <p className="text-[11px] text-muted-foreground mt-2">Примечание: {r.note}</p>}
-                          </td>
-                        </tr>
-                      )}
-                      </React.Fragment>
-                    )
-                  })}
-                </tbody>
-              </table>
+                        ) : (
+                          <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</span>
+                        )}
+                        {itemsCount > 0 && (open
+                          ? <ChevronDown className="size-4 text-muted-foreground" />
+                          : <ChevronRight className="size-4 text-muted-foreground" />)}
+                      </div>
+                    </button>
+                    {open && (
+                      <div className="border-t border-border bg-muted/20 divide-y divide-border/60">
+                        {(r.lines ?? []).map((l, i) => (
+                          <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                            <span className="flex-1 text-foreground truncate">{l.name}</span>
+                            <span className="text-muted-foreground tabular-nums whitespace-nowrap">{l.qty} {l.unit} × {formatCurrency(l.pricePerUnit)}</span>
+                            <span className="font-medium text-foreground tabular-nums w-20 text-right">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</span>
+                          </div>
+                        ))}
+                        {r.note && <p className="text-[11px] text-muted-foreground px-3 py-2">Примечание: {r.note}</p>}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>
