@@ -19,10 +19,14 @@ data class ReceiptRow(
     val supplierName: String,
     val dateLabel: String,
     val dayKey: String,      // YYYY-MM-DD для группировки в истории
-    val amount: BigDecimal,
+    val amount: BigDecimal,          // «по факту» — сумма счёта минус возвраты
+    val grossAmount: BigDecimal,     // исходная сумма счёта (для зачёркивания)
+    val returnedTotal: BigDecimal,   // сумма действующих возвратов
     val status: ReceiptStatus,
     val lineCount: Int?,
-)
+) {
+    val hasReturn: Boolean get() = returnedTotal.signum() > 0
+}
 
 private val months = listOf(
     "января", "февраля", "марта", "апреля", "мая", "июня",
@@ -58,12 +62,19 @@ fun StockReceiptDto.toReceiptRow(): ReceiptRow {
         else -> ReceiptStatus.Debt
     }
     val (label, key) = dateLabelOf(date, createdAt)
+    val gross = totalAmount.toDecimalOrZero()
+    val returned = returnedTotal.toDecimalOrZero()
+    // «По факту» = счёт минус возвраты. Оборот поставщика и суммы в списках
+    // считаются по этому нетто, иначе возврат не уменьшает у поставщика.
+    val net = (gross - returned).coerceAtLeast(BigDecimal.ZERO)
     return ReceiptRow(
         id = id,
         supplierName = supplierName?.takeIf { it.isNotBlank() } ?: "Без поставщика",
         dateLabel = label,
         dayKey = key,
-        amount = totalAmount.toDecimalOrZero(),
+        amount = net,
+        grossAmount = gross,
+        returnedTotal = returned,
         status = status,
         lineCount = lines?.size,
     )

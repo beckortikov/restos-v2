@@ -56,6 +56,9 @@ data class StockReceiptDto(
     @SerialName("payment_type") val paymentType: String? = null,
     @SerialName("paid_amount") val paidAmount: String = "0",
     @SerialName("debt_amount") val debtAmount: String = "0",
+    // Сумма действующих возвратов по накладной — чтобы показывать сумму «по факту»
+    // (нетто) и не завышать оборот поставщика.
+    @SerialName("returned_total") val returnedTotal: String = "0",
     @SerialName("due_date") val dueDate: String? = null,
     @SerialName("created_at") val createdAt: String? = null,
     val lines: List<ReceiptLineDto>? = null,
