@@ -5,11 +5,12 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { type Supplier, type FinancialAccount } from '@/lib/types'
-import { fetchSuppliers, deleteSupplier, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
+import { fetchSuppliers, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
 import { useDataSync } from '@/hooks/use-data-sync'
-import { Phone, User, AlertTriangle, Plus, Search, ChevronRight, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Plus, Search, ChevronRight, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 type DebtFilter = 'all' | 'with_debt' | 'no_debt' | 'over_limit'
 
@@ -110,17 +111,6 @@ export default function SuppliersPage() {
   }, [suppliers])
 
 
-
-  async function handleDelete(sup: Supplier) {
-    if (!confirm(`Удалить поставщика "${sup.name}"? Это действие необратимо.`)) return
-    try {
-      await deleteSupplier(sup.id)
-      toast.success('Поставщик удалён')
-      await reload()
-    } catch {
-      toast.error('Ошибка удаления. Возможно, есть связанные накладные.')
-    }
-  }
 
   async function handlePayDebt() {
     if (!payingId || payAmount <= 0) return
@@ -333,181 +323,135 @@ export default function SuppliersPage() {
         </div>
       )}
 
-      {/* Supplier list */}
-      <div className="space-y-3">
-        {filtered.map((sup) => {
-          const debtPct = sup.creditLimit > 0 ? Math.min(100, (sup.currentDebt / sup.creditLimit) * 100) : 0
-          const isOverLimit = sup.creditLimit > 0 && sup.currentDebt > sup.creditLimit
-          const isPaying = payingId === sup.id
-
-          return (
-            <div key={sup.id} className={`bg-card rounded-xl border-2 transition-colors ${isOverLimit ? 'border-destructive/30' : 'border-border hover:border-primary/40'}`}>
-              {/* Main row — клик по карточке открывает историю закупок поставщика.
-                  Кнопки/ссылки внутри гасят всплытие, чтобы не навигировать. */}
+      {/* Supplier list — компактные строки-карточки; тап открывает детали.
+          Оплата и удаление — без раздувания строки (диалог / детальная страница). */}
+      {filtered.length > 0 && (
+        <div className="bg-card rounded-xl border border-border overflow-hidden divide-y divide-border">
+          {filtered.map((sup) => {
+            const isOverLimit = sup.creditLimit > 0 && sup.currentDebt > sup.creditLimit
+            const subtitle = sup.categories.length > 0
+              ? sup.categories.join(', ')
+              : (sup.contactPerson?.trim() || sup.phone?.trim() || 'без категорий')
+            return (
               <div
+                key={sup.id}
                 onClick={() => navigate('/warehouse/suppliers/' + sup.id)}
-                title="Открыть историю закупок"
-                className="p-4 md:p-5 cursor-pointer"
+                className="flex items-center gap-3 px-4 py-3 hover:bg-muted/40 cursor-pointer transition-colors"
               >
-                <div className="flex flex-col md:flex-row md:items-start gap-4">
-                  {/* Left: info */}
-                  <div className="flex-1 min-w-0 space-y-2.5">
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <h3 className="font-semibold text-foreground text-base">{sup.name}</h3>
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1.5">
-                          <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
-                            <User className="size-3.5 shrink-0" />
-                            {sup.contactPerson}
-                          </span>
-                          <a href={`tel:${sup.phone}`} onClick={e => e.stopPropagation()} className="flex items-center gap-1.5 text-sm text-primary hover:underline">
-                            <Phone className="size-3.5 shrink-0" />
-                            {sup.phone}
-                          </a>
-                        </div>
-                      </div>
-                      {isOverLimit && (
-                        <span className="flex items-center gap-1 text-xs text-destructive font-medium bg-destructive/10 px-2 py-1 rounded-lg shrink-0">
-                          <AlertTriangle className="size-3" />
-                          Сверх лимита
-                        </span>
-                      )}
-                    </div>
-
-                    {/* Categories + terms */}
-                    <div className="flex flex-wrap gap-1.5">
-                      {sup.categories.map((c) => (
-                        <span key={c} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-md font-medium">{c}</span>
-                      ))}
-                      <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-md">
-                        {sup.paymentTermsDays === 0 ? 'Без отсрочки' : `Отсрочка ${sup.paymentTermsDays} дн.`}
+                <div className={`size-9 rounded-full flex items-center justify-center text-sm font-bold shrink-0 ${sup.currentDebt > 0 ? 'bg-destructive/10 text-destructive' : 'bg-primary/10 text-primary'}`}>
+                  {sup.name.charAt(0).toUpperCase() || '?'}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-foreground truncate">{sup.name}</p>
+                    {isOverLimit && (
+                      <span className="shrink-0 flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-destructive/10 text-destructive">
+                        <AlertTriangle className="size-2.5" /> лимит
                       </span>
-                    </div>
-                  </div>
-
-                  {/* Right: debt info + actions */}
-                  <div className="flex flex-row md:flex-col items-end md:items-end gap-3 md:gap-2 shrink-0">
-                    <div className="text-right">
-                      <p className="text-xs text-muted-foreground">Наш долг</p>
-                      <p className={`text-lg font-bold ${sup.currentDebt > 0 ? 'text-destructive' : 'text-emerald-600'}`}>
-                        {formatCurrency(sup.currentDebt)}
-                      </p>
-                      {sup.creditLimit > 0 && (
-                        <p className="text-xs text-muted-foreground">из {formatCurrency(sup.creditLimit)}</p>
-                      )}
-                    </div>
-
-                    {/* Actions — тап по карточке уже открывает детали, поэтому
-                        «глаз» убран; оплата долга вынесена в явную кнопку. */}
-                    {isManager && (
-                      <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
-                        {sup.currentDebt > 0 && (
-                          <button
-                            onClick={() => { setPayingId(isPaying ? null : sup.id); setPayAmount(sup.currentDebt) }}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isPaying ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary hover:bg-primary/15'}`}
-                          >
-                            <Banknote className="size-3.5" />
-                            Оплатить
-                          </button>
-                        )}
-                        <button
-                          onClick={() => handleDelete(sup)}
-                          title="Удалить"
-                          className="p-1.5 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                        >
-                          <Trash2 className="size-4" />
-                        </button>
-                      </div>
                     )}
                   </div>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {subtitle}{sup.paymentTermsDays > 0 ? ` · отсрочка ${sup.paymentTermsDays} дн.` : ''}
+                  </p>
                 </div>
-
-                {/* Debt progress bar */}
-                {sup.creditLimit > 0 && sup.currentDebt > 0 && (
-                  <div className="mt-3">
-                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                      <div
-                        className={`h-full rounded-full transition-all ${debtPct > 90 ? 'bg-destructive' : debtPct > 60 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                        style={{ width: `${debtPct}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Подсказка «карточка открывается» — вся плитка кликабельна,
-                    внутри детали: история накладных, возвраты, оплаты. */}
-                <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">История закупок · возвраты · оплаты</span>
-                  <span className="flex items-center gap-0.5 text-xs text-primary font-medium">
-                    Открыть <ChevronRight className="size-3.5" />
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className={`text-sm font-bold tabular-nums ${sup.currentDebt > 0 ? 'text-destructive' : 'text-emerald-600'}`}>
+                    {sup.currentDebt > 0 ? formatCurrency(sup.currentDebt) : 'оплачен'}
                   </span>
+                  {isManager && sup.currentDebt > 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setPayingId(sup.id); setPayAmount(sup.currentDebt) }}
+                      className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/15 transition-colors"
+                    >
+                      <Banknote className="size-3.5" />
+                      <span className="hidden sm:inline">Оплатить</span>
+                    </button>
+                  )}
+                  <ChevronRight className="size-4 text-muted-foreground" />
                 </div>
               </div>
+            )
+          })}
+        </div>
+      )}
 
-              {/* Pay debt form */}
-              {isPaying && (
-                <div className="px-4 md:px-5 pb-4 md:pb-5">
-                  <div className="bg-muted/50 rounded-xl p-4 space-y-3">
-                    <p className="text-sm font-medium text-foreground">Оплата поставщику: {sup.name}</p>
-                    <div>
-                      <label className="text-xs text-muted-foreground block mb-1">Счёт списания</label>
-                      <select
-                        value={payAccountId}
-                        onChange={e => setPayAccountId(e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+      {/* Оплата долга поставщику — компактный диалог вместо inline-формы */}
+      <Dialog open={!!payingId} onOpenChange={(v) => { if (!v) setPayingId(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          {(() => {
+            const sup = suppliers.find(s => s.id === payingId)
+            if (!sup) return null
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2">
+                    <Banknote className="size-4" />
+                    Оплата · {sup.name}
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="space-y-3 py-1">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Наш долг</span>
+                    <span className="font-bold text-destructive tabular-nums">{formatCurrency(sup.currentDebt)}</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">Счёт списания</label>
+                    <select
+                      value={payAccountId}
+                      onChange={e => setPayAccountId(e.target.value)}
+                      className="w-full px-3 py-2 bg-card border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    >
+                      {accounts.length === 0 && <option value="">Нет счетов</option>}
+                      {accounts.map(a => (
+                        <option key={a.id} value={a.id}>
+                          {a.name} · {formatCurrency(a.balance)}{a.type === 'cash' ? '' : a.type === 'bank' ? ' (банк)' : ` (${a.type})`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-medium text-muted-foreground">Сумма</label>
+                    <div className="flex items-center gap-2">
+                      <DecimalInput
+                        min={0}
+                        max={sup.currentDebt}
+                        value={payAmount}
+                        onChange={v => setPayAmount(v)}
+                        className="flex-1 px-3 py-2 bg-card border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      />
+                      <button
+                        onClick={() => setPayAmount(sup.currentDebt)}
+                        className="px-3 py-2 text-xs font-medium text-primary border border-primary/30 rounded-lg hover:bg-primary/5 transition-colors whitespace-nowrap"
                       >
-                        {accounts.length === 0 && <option value="">Нет счетов</option>}
-                        {accounts.map(a => (
-                          <option key={a.id} value={a.id}>
-                            {a.name} · {formatCurrency(a.balance)}{a.type === 'cash' ? '' : a.type === 'bank' ? ' (банк)' : ` (${a.type})`}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                      <div className="flex-1">
-                        <DecimalInput
-                          min={0}
-                          max={sup.currentDebt}
-                          value={payAmount}
-                          onChange={v => setPayAmount(v)}
-                          className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => setPayAmount(sup.currentDebt)}
-                          className="px-3 py-2 text-xs font-medium text-primary border border-primary/30 rounded-lg hover:bg-primary/5 transition-colors"
-                        >
-                          Всё ({formatCurrency(sup.currentDebt)})
-                        </button>
-                        <button
-                          onClick={handlePayDebt}
-                          disabled={payAmount <= 0 || payAmount > sup.currentDebt || !payAccountId}
-                          className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
-                        >
-                          Оплатить
-                        </button>
-                        <button
-                          onClick={() => setPayingId(null)}
-                          className="px-3 py-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
-                        >
-                          Отмена
-                        </button>
-                      </div>
+                        Всё
+                      </button>
                     </div>
                     {payAmount > 0 && payAmount < sup.currentDebt && (
-                      <p className="text-xs text-muted-foreground">
-                        Останется долг: {formatCurrency(sup.currentDebt - payAmount)}
-                      </p>
+                      <p className="text-xs text-muted-foreground">Останется долг: {formatCurrency(sup.currentDebt - payAmount)}</p>
                     )}
                   </div>
                 </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+                <DialogFooter>
+                  <button
+                    onClick={() => setPayingId(null)}
+                    className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    onClick={handlePayDebt}
+                    disabled={payAmount <= 0 || payAmount > sup.currentDebt || !payAccountId}
+                    className="px-4 py-2 bg-primary text-primary-foreground text-sm font-medium rounded-lg hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    <Banknote className="size-4" />
+                    Оплатить {formatCurrency(payAmount)}
+                  </button>
+                </DialogFooter>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
 
 
     </div>
