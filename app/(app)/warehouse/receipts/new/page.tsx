@@ -25,7 +25,7 @@ import {
   TableRow,
   TableCell,
 } from '@/components/ui/table'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSub, dSum } from '@/lib/decimal'
 import {
   type ReceiptPaymentType,
@@ -524,36 +524,46 @@ export default function NewReceiptPage() {
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
                 {filteredIngredients.map((ing) => {
-                  const inReceipt = lines.some((l) => l.ingredientId === ing.id)
+                  const line = lines.find((l) => l.ingredientId === ing.id)
+                  const inReceipt = !!line
                   return (
                     <button
                       key={ing.id}
                       type="button"
                       onClick={() => addOrIncrementIngredient(ing)}
-                      className={`group flex flex-col items-start gap-1.5 p-3 text-left rounded-xl border transition-all ${
+                      className={`group text-left p-3.5 rounded-xl border-2 transition-all relative overflow-hidden flex flex-col justify-between h-28 ${
                         inReceipt
-                          ? 'bg-primary/10 border-primary'
-                          : 'bg-card border-border hover:border-primary/60 hover:bg-muted/40'
+                          ? 'border-primary bg-primary/5 hover:bg-primary/10 shadow-sm'
+                          : 'border-border bg-card hover:border-primary/50 hover:bg-muted/30 hover:shadow-sm'
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 w-full">
-                        {ing.isFood === false ? (
-                          <Box className="size-3.5 text-amber-600 shrink-0" />
-                        ) : (
-                          <Package className="size-3.5 text-emerald-600 shrink-0" />
-                        )}
-                        <span className="text-xs font-semibold text-foreground truncate flex-1">
+                      <div>
+                        <p className="font-semibold text-sm text-foreground leading-tight group-hover:text-primary transition-colors truncate">
                           {ing.name}
+                        </p>
+                        <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground mt-1 block truncate">
+                          {ing.category || (ing.isFood === false ? 'Хозтовары' : 'Продукты')}
                         </span>
                       </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {formatCurrency(ing.pricePerUnit)} / {ing.unit}
+
+                      <div className="flex items-end justify-between mt-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Остаток</p>
+                          <p className={`text-xs font-bold ${ing.qty <= 0 ? 'text-destructive' : 'text-foreground'}`}>
+                            {formatNum(ing.qty)} {ing.unit}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-muted-foreground">Цена</p>
+                          <p className="text-xs font-bold text-foreground">{formatCurrency(ing.pricePerUnit)}</p>
+                        </div>
                       </div>
+
                       {inReceipt && (
-                        <div className="text-[10px] font-medium text-primary">
-                          Добавлено
+                        <div className="absolute top-2 right-2 bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm">
+                          {formatNum(line.qty)} {ing.unit}
                         </div>
                       )}
                     </button>
