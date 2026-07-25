@@ -6,14 +6,16 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub } from '@/lib/decimal'
 import { type MenuItem, type MenuStation, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
-import { fetchMenuItems, toggleMenuAvailability, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
+import { fetchMenuItems, toggleMenuAvailability, updateMenuItem, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
 import { type MenuCategory } from '@/lib/queries'
-import { Search, ChevronDown, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X, Ruler } from 'lucide-react'
+import { Search, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X, Ruler, Trash2, Check } from 'lucide-react'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { ManageSizeScalesDialog } from '@/components/dialogs/manage-size-scales-dialog'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { DecimalInput } from '@/components/ui/decimal-input'
 
 export default function MenuPage() {
   const navigate = useNavigate()
@@ -23,7 +25,10 @@ export default function MenuPage() {
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [station, setStation] = useState<'all' | MenuStation>('all')
-  const [expanded, setExpanded] = useState<string | null>(null)
+  const [actionItem, setActionItem] = useState<MenuItem | null>(null)
+  const [quickPrice, setQuickPrice] = useState<number>(0)
+  const [savingPrice, setSavingPrice] = useState(false)
+  const [deletingItem, setDeletingItem] = useState(false)
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [menuCategoriesFull, setMenuCategoriesFull] = useState<MenuCategory[]>([])
@@ -59,11 +64,50 @@ export default function MenuPage() {
     if (!item) return
     const newVal = !item.isAvailable
     setMenuItems((prev) => prev.map((m) => m.id === id ? { ...m, isAvailable: newVal } : m))
+    setActionItem((a) => a && a.id === id ? { ...a, isAvailable: newVal } : a)
     try {
       await toggleMenuAvailability(id, newVal)
     } catch {
       // revert on error
       setMenuItems((prev) => prev.map((m) => m.id === id ? { ...m, isAvailable: !newVal } : m))
+      setActionItem((a) => a && a.id === id ? { ...a, isAvailable: !newVal } : a)
+    }
+  }
+
+  function openSheet(item: MenuItem) {
+    setActionItem(item)
+    setQuickPrice(item.price)
+  }
+
+  // Быстрая правка цены прямо из карточки-листа — без захода в полный редактор.
+  async function handleQuickPriceSave() {
+    if (!actionItem || savingPrice || quickPrice === actionItem.price) return
+    setSavingPrice(true)
+    try {
+      await updateMenuItem(actionItem.id, { price: quickPrice })
+      setMenuItems((prev) => prev.map((m) => m.id === actionItem.id ? { ...m, price: quickPrice } : m))
+      setActionItem((a) => a ? { ...a, price: quickPrice } : a)
+      toast.success('Цена обновлена')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось обновить цену'))
+    } finally {
+      setSavingPrice(false)
+    }
+  }
+
+  async function handleDeleteItem() {
+    if (!actionItem || deletingItem) return
+    if (!window.confirm(`Удалить блюдо «${actionItem.name}»? Действие необратимо.`)) return
+    setDeletingItem(true)
+    try {
+      await deleteMenuItem(actionItem.id)
+      setMenuItems((prev) => prev.filter((m) => m.id !== actionItem.id))
+      setActionItem(null)
+      toast.success('Блюдо удалено')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось удалить — возможно, есть история заказов'))
+    } finally {
+      setDeletingItem(false)
     }
   }
 
@@ -397,103 +441,56 @@ export default function MenuPage() {
         </div>
       )}
 
-      {/* List view for manager/accountant/storekeeper/owner */}
+      {/* List view for manager/accountant/storekeeper/owner — тап открывает
+          карточку блюда (техкарта, быстрая цена, действия) */}
       {canSeeFinancials && (
         <div className="bg-card rounded-xl border border-border overflow-hidden divide-y divide-border">
           {filtered.map((item) => (
-            <div key={item.id}>
-              <div
-                onClick={() => setExpanded(expanded === item.id ? null : item.id)}
-                className="flex items-center justify-between px-4 py-3.5 hover:bg-muted/30 cursor-pointer transition-colors"
-              >
-                <div className="flex items-center gap-3">
-                  <DishImage imageUrl={item.imageUrl} emoji={item.emoji} name={item.name} size="sm" />
-                  <div>
-                    <p className="font-medium text-foreground text-sm">
-                      {item.name}
-                      {(variantCountByParent.get(item.id) ?? 0) > 0 && (
-                        <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-primary/10 text-primary rounded font-medium">{variantCountByParent.get(item.id)} вар.</span>
-                      )}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {item.category} · {item.techCard.length} ингр.{item.cookTimeMin ? ` · ⏱ ${item.cookTimeMin} мин` : ''}
-                      {item.isBatchCooking && <span className="ml-1 px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">Заготовка · {item.preparedQty} порц.</span>}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-foreground">{priceLabel(item)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {variantsByParent.has(item.id)
-                        ? 'с/с: по вариантам'
-                        : `с/с: ${formatCurrency(item.cogs)} (${item.price > 0 ? dRound(dMul(dDiv(item.cogs, item.price), 100), 0) : 0}%)`}
-                    </p>
-                  </div>
-                  {canEdit ? (
-                    <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      <span className={`text-xs font-medium ${item.isAvailable ? 'text-emerald-600' : 'text-destructive'}`}>
-                        {item.isAvailable ? 'В наличии' : 'СТОП'}
-                      </span>
-                      <button
-                        onClick={() => handleToggleAvailability(item.id)}
-                        className={`relative w-10 h-[22px] rounded-full transition-colors duration-200 ${
-                          item.isAvailable ? 'bg-emerald-500' : 'bg-muted-foreground/30'
-                        }`}
-                      >
-                        <span className={`absolute top-[2px] left-[2px] size-[18px] bg-white rounded-full shadow-sm transition-transform duration-200 ${
-                          item.isAvailable ? 'translate-x-[18px]' : 'translate-x-0'
-                        }`} />
-                      </button>
-                    </div>
-                  ) : (
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${item.isAvailable ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
-                      {item.isAvailable ? 'В наличии' : 'СТОП'}
-                    </span>
-                  )}
-                  {expanded === item.id ? <ChevronDown className="size-4 text-muted-foreground" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+            <div
+              key={item.id}
+              onClick={() => openSheet(item)}
+              className="flex items-center justify-between gap-3 px-4 py-3.5 hover:bg-muted/30 cursor-pointer transition-colors"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <DishImage imageUrl={item.imageUrl} emoji={item.emoji} name={item.name} size="sm" />
+                <div className="min-w-0">
+                  <p className="font-medium text-foreground text-sm truncate">
+                    {item.name}
+                    {(variantCountByParent.get(item.id) ?? 0) > 0 && (
+                      <span className="ml-1.5 text-[10px] px-1.5 py-0.5 bg-primary/10 text-primary rounded font-medium">{variantCountByParent.get(item.id)} вар.</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {item.category} · {item.techCard.length} ингр.{item.cookTimeMin ? ` · ⏱ ${item.cookTimeMin} мин` : ''}
+                    {item.isBatchCooking && <span className="ml-1 px-1.5 py-0.5 bg-amber-100 dark:bg-amber-500/15 text-amber-700 rounded text-[10px] font-medium">Заготовка · {item.preparedQty} порц.</span>}
+                  </p>
                 </div>
               </div>
-
-              {/* Техкарта */}
-              {expanded === item.id && (
-                <div className="px-6 py-4 bg-muted/20 border-t border-border">
-                  <div className="flex items-center gap-2 mb-3">
-                    <BookOpen className="size-4 text-primary" />
-                    <p className="text-sm font-semibold text-foreground">Техкарта: {item.name}</p>
-                  </div>
-                  <div className="space-y-1.5 max-w-sm">
-                    {item.techCard.map((line, i) => (
-                      <div key={i} className="flex items-center justify-between text-sm">
-                        <div className="flex items-center gap-2">
-                          <div className={`size-1.5 rounded-full ${line.semiId ? 'bg-primary' : 'bg-muted-foreground'}`} />
-                          <span className="text-foreground">{line.name}</span>
-                          {line.semiId && <span className="text-xs bg-primary/10 text-primary px-1.5 rounded">п/ф</span>}
-                        </div>
-                        <span className="text-muted-foreground">{formatNum(line.qty)} {line.unit}</span>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="mt-3 pt-3 border-t border-border flex flex-wrap items-center gap-6 text-xs">
-                    <span className="text-muted-foreground">Цена продажи: <span className="font-semibold text-foreground">{priceLabel(item)}</span></span>
-                    {!variantsByParent.has(item.id) && (
-                      <>
-                        <span className="text-muted-foreground">Себестоимость: <span className="font-semibold text-foreground">{formatCurrency(item.cogs)}</span></span>
-                        <span className="text-muted-foreground">Маржа: <span className="font-semibold text-emerald-600">{item.price > 0 ? dRound(dMul(dDiv(dSub(item.price, item.cogs), item.price), 100), 0) : 0}%</span></span>
-                      </>
-                    )}
-                    {canEdit && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); navigate(`/warehouse/menu/${item.id}`) }}
-                        className="flex items-center gap-1 ml-auto text-xs text-primary hover:underline"
-                      >
-                        <Pencil className="size-3" />
-                        Редактировать
-                      </button>
-                    )}
-                  </div>
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-foreground tabular-nums">{priceLabel(item)}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {variantsByParent.has(item.id)
+                      ? 'с/с: по вариантам'
+                      : `с/с ${formatCurrency(item.cogs)} · ${item.price > 0 ? dRound(dMul(dDiv(item.cogs, item.price), 100), 0) : 0}%`}
+                  </p>
                 </div>
-              )}
+                {canEdit ? (
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleToggleAvailability(item.id) }}
+                    title={item.isAvailable ? 'В наличии — нажмите, чтобы поставить на стоп' : 'СТОП — нажмите, чтобы вернуть'}
+                    className={`relative w-10 h-[22px] rounded-full transition-colors duration-200 shrink-0 ${item.isAvailable ? 'bg-emerald-500' : 'bg-muted-foreground/30'}`}
+                  >
+                    <span className={`absolute top-[2px] left-[2px] size-[18px] bg-white rounded-full shadow-sm transition-transform duration-200 ${item.isAvailable ? 'translate-x-[18px]' : 'translate-x-0'}`} />
+                  </button>
+                ) : (
+                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${item.isAvailable ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>
+                    {item.isAvailable ? 'В наличии' : 'СТОП'}
+                  </span>
+                )}
+                <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+              </div>
             </div>
           ))}
         </div>
@@ -501,6 +498,131 @@ export default function MenuPage() {
 
       </>
       )}
+
+      {/* Карточка блюда — тап по строке: техкарта, быстрая цена, действия */}
+      <Dialog open={!!actionItem} onOpenChange={(v) => { if (!v) setActionItem(null) }}>
+        <DialogContent className="sm:max-w-lg rounded-xl max-h-[88vh] overflow-y-auto">
+          {actionItem && (() => {
+            const it = actionItem
+            const hasVariants = variantsByParent.has(it.id)
+            const margin = it.price > 0 ? dRound(dMul(dDiv(dSub(it.price, it.cogs), it.price), 100), 0) : 0
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2.5">
+                    <DishImage imageUrl={it.imageUrl} emoji={it.emoji} name={it.name} size="sm" />
+                    <span className="truncate">{it.name}</span>
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="space-y-3 py-1">
+                  {/* Инфо-чипы */}
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="px-2 py-0.5 rounded bg-muted text-foreground/70 font-medium">{it.category}</span>
+                    <span className="px-2 py-0.5 rounded bg-muted text-foreground/70 font-medium">{STATION_LABELS[it.station] ?? it.station}</span>
+                    {it.cookTimeMin ? <span className="px-2 py-0.5 rounded bg-muted text-foreground/70 font-medium">⏱ {it.cookTimeMin} мин</span> : null}
+                    <span className={`px-2 py-0.5 rounded font-medium ${it.isAvailable ? 'bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-500' : 'bg-red-100 dark:bg-red-500/15 text-destructive'}`}>
+                      {it.isAvailable ? 'В наличии' : 'СТОП'}
+                    </span>
+                  </div>
+
+                  {/* Быстрая правка цены (без вариантов) */}
+                  {!hasVariants && canEdit ? (
+                    <div className="rounded-lg border border-border p-3 space-y-2">
+                      <label className="text-xs font-medium text-muted-foreground">Цена продажи</label>
+                      <div className="flex items-center gap-2">
+                        <DecimalInput
+                          value={quickPrice}
+                          min={0}
+                          onChange={setQuickPrice}
+                          className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleQuickPriceSave}
+                          disabled={savingPrice || quickPrice === it.price}
+                          className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                        >
+                          <Check className="size-4" />
+                          {savingPrice ? '…' : 'Сохранить'}
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        с/с {formatCurrency(it.cogs)} · маржа <span className="text-emerald-600 font-medium">{margin}%</span>
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                      <span className="text-sm text-muted-foreground">Цена</span>
+                      <span className="text-base font-bold text-primary">{priceLabel(it)}</span>
+                    </div>
+                  )}
+
+                  {/* Техкарта */}
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <BookOpen className="size-4 text-primary" />
+                      <p className="text-sm font-semibold text-foreground">Техкарта</p>
+                      <span className="text-xs text-muted-foreground">({it.techCard.length})</span>
+                    </div>
+                    {it.techCard.length === 0 ? (
+                      <p className="text-xs text-muted-foreground px-1 py-2">Техкарта пуста — добавьте ингредиенты в редакторе.</p>
+                    ) : (
+                      <div className="rounded-lg border border-border overflow-hidden divide-y divide-border">
+                        {it.techCard.map((line, i) => (
+                          <div key={i} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span className={`size-1.5 rounded-full shrink-0 ${line.semiId ? 'bg-primary' : 'bg-muted-foreground'}`} />
+                              <span className="text-foreground truncate">{line.name}</span>
+                              {line.semiId && <span className="text-[10px] bg-primary/10 text-primary px-1.5 rounded shrink-0">п/ф</span>}
+                            </div>
+                            <span className="text-muted-foreground tabular-nums whitespace-nowrap">{formatNum(line.qty)} {line.unit}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <DialogFooter className="flex-col-reverse sm:flex-row sm:justify-between gap-2">
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={handleDeleteItem}
+                      disabled={deletingItem}
+                      className="flex items-center justify-center gap-1.5 px-3.5 py-2 text-sm font-medium text-destructive bg-destructive/10 hover:bg-destructive/15 rounded-lg disabled:opacity-50"
+                    >
+                      <Trash2 className="size-4" />
+                      Удалить
+                    </button>
+                  )}
+                  <div className="flex gap-2">
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => handleToggleAvailability(it.id)}
+                        className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+                      >
+                        <OctagonX className="size-4" />
+                        {it.isAvailable ? 'На стоп' : 'Снять стоп'}
+                      </button>
+                    )}
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/warehouse/menu/${it.id}`)}
+                        className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90"
+                      >
+                        <Pencil className="size-4" />
+                        Править
+                      </button>
+                    )}
+                  </div>
+                </DialogFooter>
+              </>
+            )
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
