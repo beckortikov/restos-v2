@@ -5,8 +5,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul } from '@/lib/decimal'
-import { type StockReceipt, type Supplier } from '@/lib/types'
-import { fetchReceipts, fetchSuppliers } from '@/lib/queries'
+import { type StockReceipt, type Supplier, type StockReturn, RETURN_REASON_LABELS } from '@/lib/types'
+import { fetchReceipts, fetchSuppliers, fetchStockReturns } from '@/lib/queries'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { Plus, CheckCircle, Clock, CreditCard, Undo2, Search } from 'lucide-react'
 import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
@@ -33,11 +33,24 @@ export default function ReceiptsPage() {
   const [payFor, setPayFor] = useState<StockReceipt | null>(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<ReceiptFilter>('all')
+  const [returns, setReturns] = useState<StockReturn[]>([])
 
   const reload = useCallback(async () => {
-    const [r, s] = await Promise.all([fetchReceipts(), fetchSuppliers()])
-    setReceipts(r); setSuppliers(s)
+    const [r, s, ret] = await Promise.all([fetchReceipts(), fetchSuppliers(), fetchStockReturns()])
+    setReceipts(r); setSuppliers(s); setReturns(ret)
   }, [])
+
+  // Возвраты, сгруппированные по накладной — чтобы в развёрнутой накладной было
+  // видно, какие позиции и на сколько вернули (в т.ч. частичный возврат).
+  const returnsByReceipt = useMemo(() => {
+    const m = new Map<string, StockReturn[]>()
+    for (const ret of returns) {
+      const arr = m.get(ret.receiptId) ?? []
+      arr.push(ret)
+      m.set(ret.receiptId, arr)
+    }
+    return m
+  }, [returns])
 
   useEffect(() => {
     reload().finally(() => setLoading(false))
@@ -260,6 +273,41 @@ export default function ReceiptsPage() {
                             </tfoot>
                           </table>
                         </div>
+
+                        {/* Возвраты по этой накладной — какие позиции и на сколько
+                            вернули (в т.ч. частичный). Отменённые — зачёркнуты. */}
+                        {(returnsByReceipt.get(r.id) ?? []).length > 0 && (
+                          <div className="mt-3 max-w-3xl space-y-2">
+                            <p className="text-xs font-semibold text-orange-600 dark:text-orange-400 flex items-center gap-1.5">
+                              <Undo2 className="size-3.5" /> Возвраты по накладной
+                            </p>
+                            {(returnsByReceipt.get(r.id) ?? []).map((ret) => {
+                              const cancelled = !!ret.cancelledAt
+                              return (
+                                <div key={ret.id} className={`rounded-lg border border-border bg-card overflow-hidden ${cancelled ? 'opacity-55' : ''}`}>
+                                  <div className="flex items-center justify-between px-3 py-2 bg-orange-50 dark:bg-orange-500/10 border-b border-border">
+                                    <span className="text-xs font-medium text-foreground">
+                                      {ret.date} · {RETURN_REASON_LABELS[ret.reason]}
+                                      {cancelled && <span className="ml-1.5 text-muted-foreground">(отменён)</span>}
+                                    </span>
+                                    <span className={`text-xs font-bold tabular-nums ${cancelled ? 'line-through text-muted-foreground' : 'text-orange-600 dark:text-orange-400'}`}>
+                                      −{formatCurrency(ret.totalAmount)}
+                                    </span>
+                                  </div>
+                                  <div className="divide-y divide-border">
+                                    {ret.lines.map((l) => (
+                                      <div key={l.id} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                                        <span className="flex-1 text-foreground truncate">{l.name}</span>
+                                        <span className="text-muted-foreground tabular-nums whitespace-nowrap">{formatNum(l.qty)} {l.unit}</span>
+                                        <span className="font-medium text-foreground tabular-nums w-20 text-right">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   )}
@@ -278,7 +326,7 @@ export default function ReceiptsPage() {
         receipt={returnFor}
         open={!!returnFor}
         onOpenChange={(v) => { if (!v) setReturnFor(null) }}
-        onSuccess={() => { fetchReceipts().then(setReceipts).catch(() => {}) }}
+        onSuccess={() => { void reload() }}
       />
 
       {/* Оплата долга по накладной — списание со счёта, долг накладной и поставщика вниз */}
