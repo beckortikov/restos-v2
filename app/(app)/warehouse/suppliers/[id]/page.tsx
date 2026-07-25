@@ -558,7 +558,15 @@ export default function EditSupplierPage() {
                             {badge.label}
                           </span>
                         </td>
-                        <td className="py-2.5 pr-3 text-right font-semibold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</td>
+                        <td className="py-2.5 pr-3 text-right font-semibold text-foreground tabular-nums">
+                          {(returnsByReceipt.get(r.id) ?? 0) > 0.005 ? (
+                            // Есть возврат — сумма «по факту» (нетто), исходная зачёркнута.
+                            <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+                              <span className="text-xs text-muted-foreground line-through font-normal">{formatCurrency(r.totalAmount)}</span>
+                              <span>{formatCurrency(r.totalAmount - (returnsByReceipt.get(r.id) ?? 0))}</span>
+                            </span>
+                          ) : formatCurrency(r.totalAmount)}
+                        </td>
                         <td className="py-2.5 pr-3 text-right text-muted-foreground tabular-nums">{formatCurrency(r.paidAmount)}</td>
                         <td className="py-2.5 pr-3 text-right tabular-nums">
                           {(returnsByReceipt.get(r.id) ?? 0) > 0.005 ? (
