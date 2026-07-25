@@ -7,7 +7,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { type Supplier, type FinancialAccount } from '@/lib/types'
 import { fetchSuppliers, deleteSupplier, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
 import { useDataSync } from '@/hooks/use-data-sync'
-import { Phone, User, AlertTriangle, Plus, Search, Eye, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
+import { Phone, User, AlertTriangle, Plus, Search, ChevronRight, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
 
@@ -397,29 +397,23 @@ export default function SuppliersPage() {
                       )}
                     </div>
 
-                    {/* Actions */}
+                    {/* Actions — тап по карточке уже открывает детали, поэтому
+                        «глаз» убран; оплата долга вынесена в явную кнопку. */}
                     {isManager && (
-                      <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
                         {sup.currentDebt > 0 && (
                           <button
                             onClick={() => { setPayingId(isPaying ? null : sup.id); setPayAmount(sup.currentDebt) }}
-                            title="Оплатить долг"
-                            className={`p-2 rounded-lg transition-colors ${isPaying ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground'}`}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${isPaying ? 'bg-primary text-primary-foreground' : 'bg-primary/10 text-primary hover:bg-primary/15'}`}
                           >
-                            <Banknote className="size-4" />
+                            <Banknote className="size-3.5" />
+                            Оплатить
                           </button>
                         )}
                         <button
-                          onClick={() => navigate('/warehouse/suppliers/' + sup.id)}
-                          title="Открыть — история закупок"
-                          className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
-                        >
-                          <Eye className="size-4" />
-                        </button>
-                        <button
                           onClick={() => handleDelete(sup)}
                           title="Удалить"
-                          className="p-2 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                          className="p-1.5 rounded-lg text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
                         >
                           <Trash2 className="size-4" />
                         </button>
@@ -439,6 +433,15 @@ export default function SuppliersPage() {
                     </div>
                   </div>
                 )}
+
+                {/* Подсказка «карточка открывается» — вся плитка кликабельна,
+                    внутри детали: история накладных, возвраты, оплаты. */}
+                <div className="mt-3 pt-3 border-t border-border/60 flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">История закупок · возвраты · оплаты</span>
+                  <span className="flex items-center gap-0.5 text-xs text-primary font-medium">
+                    Открыть <ChevronRight className="size-3.5" />
+                  </span>
+                </div>
               </div>
 
               {/* Pay debt form */}
