@@ -4,7 +4,8 @@ import { useState, useEffect, useMemo } from 'react'
 import { formatTime, formatNum } from '@/lib/helpers'
 import type { StockMovementType, StockMovement, Warehouse } from '@/lib/types'
 import { fetchStockMovements, fetchWarehouses } from '@/lib/queries'
-import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, Undo2 } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, Undo2, Search } from 'lucide-react'
+import { DateFilter, inRange, type DateFilterValue } from '@/components/warehouse/date-filter'
 
 const TYPE_META: Record<StockMovementType, { label: string; color: string; bg: string; Icon: React.ElementType }> = {
   in:    { label: 'Приход',        color: 'text-emerald-600', bg: 'bg-emerald-100', Icon: ArrowDownToLine },
@@ -30,6 +31,8 @@ export default function HistoryPage() {
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [movements, setMovements] = useState<StockMovement[]>([])
   const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [dateRange, setDateRange] = useState<DateFilterValue>(null)
 
   useEffect(() => { fetchWarehouses().then(setWarehouses).catch(() => {}) }, [])
 
@@ -48,7 +51,18 @@ export default function HistoryPage() {
     [warehouses],
   )
 
-  const filtered = movements.filter((m) => filter === 'all' || m.type === filter)
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return movements.filter((m) => {
+      if (filter !== 'all' && m.type !== filter) return false
+      if (!inRange(m.timestamp, dateRange)) return false
+      if (q && !(
+        (m.ingredientName ?? '').toLowerCase().includes(q) ||
+        (m.description ?? '').toLowerCase().includes(q)
+      )) return false
+      return true
+    })
+  }, [movements, filter, dateRange, search])
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -56,6 +70,20 @@ export default function HistoryPage() {
         <h1 className="text-xl font-bold text-foreground">История движений</h1>
         <p className="text-muted-foreground text-sm mt-0.5">Все операции прихода, списания и производства — по складам</p>
       </div>
+
+      {/* Поиск по товару / описанию */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Поиск по товару или описанию…"
+          className="w-full pl-10 pr-3 py-2.5 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      </div>
+
+      {/* Фильтр по датам */}
+      <DateFilter value={dateRange} onChange={setDateRange} />
 
       {/* Фильтр по складу (мультисклад): у каждого склада свой отчёт движений */}
       {orderedWh.length > 0 && (
