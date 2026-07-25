@@ -71,7 +71,12 @@ export const EVENT_FANOUT: Record<string, string[]> = {
   'order.item.voided': ['order_voids', 'order_items', 'orders'],
   'shift.opened':      ['cash_shifts'],
   'shift.closed':      ['cash_shifts'],
-  'stock.movement':    ['ingredients', 'stock_movements'],
+  // Любая складская мутация (приёмка/возврат/списание/хозрасход/продажа) шлёт
+  // stock.movement. Раньше фанаут будил только остатки и историю; теперь и
+  // документные списки склада — чтобы Обзор/Накладные/Возвраты/Списания/
+  // Поставщики обновлялись в реальном времени, а не только при заходе. Пачки
+  // событий (продажи в час пик) схлопывает debounce 600мс в useDataSync.
+  'stock.movement':    ['ingredients', 'stock_movements', 'stock_receipts', 'stock_returns', 'stock_writeoffs', 'supply_expenses', 'suppliers'],
   'license.updated':   ['license'],
   // Повар поставил/снял стоп с кухни — меню кассы должно обновиться сразу,
   // иначе стоп-блюдо видно до следующего перезапроса.

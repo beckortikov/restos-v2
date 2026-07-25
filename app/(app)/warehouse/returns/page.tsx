@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSum } from '@/lib/decimal'
 import { type StockReturn, type StockReceipt, RETURN_REASON_LABELS } from '@/lib/types'
 import { fetchStockReturns, cancelStockReturn, fetchReceipts } from '@/lib/queries'
 import { useAuth } from '@/lib/auth-store'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
 import {
   Undo2, Wallet, Receipt, RotateCcw, Plus, Search, ChevronRight, X,
@@ -44,15 +45,18 @@ export default function ReturnsPage() {
   const [pickerSearch, setPickerSearch] = useState('')
   const [returnFor, setReturnFor] = useState<StockReceipt | null>(null) // накладная → CreateReturnDialog
 
-  async function reload() {
+  const reload = useCallback(async () => {
     const [r, rc] = await Promise.all([fetchStockReturns(), fetchReceipts()])
     setReturns(r)
     setReceipts(rc)
-  }
+  }, [])
 
   useEffect(() => {
     reload().finally(() => setLoading(false))
-  }, [])
+  }, [reload])
+
+  // Real-time: возврат/накладная/движение на другом терминале → перезагрузка.
+  useDataSync(['stock_returns', 'stock_receipts', 'ingredients'], reload)
 
   // Отмена возврата: товар назад на склад, деньги/долг откатываются. Документ
   // остаётся в истории зачёркнутым — так видно и ошибку, и её исправление.

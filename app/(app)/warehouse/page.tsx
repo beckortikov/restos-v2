@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { fetchIngredients, fetchSuppliers } from '@/lib/queries'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import type { Ingredient, Supplier } from '@/lib/types'
 import {
@@ -40,6 +41,9 @@ export default function WarehouseOverviewPage() {
   }, [])
 
   useEffect(() => { load() }, [load])
+
+  // Real-time: любая складская мутация обновляет сводку без перезахода.
+  useDataSync(['ingredients', 'stock_receipts', 'stock_returns', 'stock_writeoffs', 'suppliers'], load)
 
   const kpi = useMemo(() => {
     let value = 0

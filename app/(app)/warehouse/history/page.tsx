@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { formatTime, formatNum } from '@/lib/helpers'
 import type { StockMovementType, StockMovement, Warehouse } from '@/lib/types'
 import { fetchStockMovements, fetchWarehouses } from '@/lib/queries'
 import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, Undo2, Search } from 'lucide-react'
 import { DateFilter, inRange, type DateFilterValue } from '@/components/warehouse/date-filter'
+import { useDataSync } from '@/hooks/use-data-sync'
 
 const TYPE_META: Record<StockMovementType, { label: string; color: string; bg: string; Icon: React.ElementType }> = {
   in:    { label: 'Приход',        color: 'text-emerald-600', bg: 'bg-emerald-100', Icon: ArrowDownToLine },
@@ -72,12 +73,18 @@ export default function HistoryPage() {
 
   // Фильтр по складу — серверный (у каждого склада свой отчёт движений): при
   // смене склада перезапрашиваем его последние движения (не режем клиентом).
+  const fetchMovements = useCallback(async () => {
+    const data = await fetchStockMovements({ warehouseId: whId === 'all' ? undefined : whId })
+    setMovements(data)
+  }, [whId])
+
   useEffect(() => {
     setLoading(true)
-    fetchStockMovements({ warehouseId: whId === 'all' ? undefined : whId })
-      .then((data) => { setMovements(data); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [whId])
+    fetchMovements().finally(() => setLoading(false))
+  }, [fetchMovements])
+
+  // Real-time: новое движение (продажа/приёмка/списание) втекает без спиннера.
+  useDataSync(['stock_movements'], fetchMovements)
 
   const warehouseById = useMemo(() => new Map(warehouses.map(w => [w.id, w])), [warehouses])
   const orderedWh = useMemo(

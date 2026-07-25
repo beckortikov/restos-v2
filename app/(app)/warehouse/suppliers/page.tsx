@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { type Supplier, type FinancialAccount } from '@/lib/types'
 import { fetchSuppliers, deleteSupplier, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { Phone, User, AlertTriangle, Plus, Search, Eye, Trash2, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
@@ -28,10 +29,10 @@ export default function SuppliersPage() {
   const [payAccountId, setPayAccountId] = useState<string>('')
   const [recomputing, setRecomputing] = useState(false)
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     const data = await fetchSuppliers()
     setSuppliers(data)
-  }
+  }, [])
 
   async function handleRecompute() {
     if (recomputing) return
@@ -59,6 +60,9 @@ export default function SuppliersPage() {
       })
       .catch(() => {})
   }, [])
+
+  // Real-time: приёмка в долг / возврат / оплата обновляют долги без перезахода.
+  useDataSync(['suppliers', 'stock_receipts', 'stock_returns'], reload)
 
   // Stats
   const totalDebt = suppliers.reduce((s, sup) => s + sup.currentDebt, 0)

@@ -1,12 +1,13 @@
 'use client'
 
-import React, { useState, useEffect, useMemo } from 'react'
+import React, { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul } from '@/lib/decimal'
 import { type StockReceipt, type Supplier } from '@/lib/types'
 import { fetchReceipts, fetchSuppliers } from '@/lib/queries'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { Plus, CheckCircle, Clock, CreditCard, Undo2, Search } from 'lucide-react'
 import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
 import { PayReceiptDialog } from '@/components/dialogs/pay-receipt-dialog'
@@ -33,11 +34,17 @@ export default function ReceiptsPage() {
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<ReceiptFilter>('all')
 
-  useEffect(() => {
-    Promise.all([fetchReceipts(), fetchSuppliers()])
-      .then(([r, s]) => { setReceipts(r); setSuppliers(s); setLoading(false) })
-      .catch(() => setLoading(false))
+  const reload = useCallback(async () => {
+    const [r, s] = await Promise.all([fetchReceipts(), fetchSuppliers()])
+    setReceipts(r); setSuppliers(s)
   }, [])
+
+  useEffect(() => {
+    reload().finally(() => setLoading(false))
+  }, [reload])
+
+  // Real-time: приёмка/возврат/оплата долга на другом терминале.
+  useDataSync(['stock_receipts', 'stock_returns', 'suppliers'], reload)
 
   const isReturned = (r: StockReceipt) => (r.returnedTotal ?? 0) > 0
   const counts = useMemo(() => ({

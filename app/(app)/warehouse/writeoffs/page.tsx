@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { type StockWriteoff, type WriteoffReason, WRITEOFF_REASON_LABELS } from '@/lib/types'
 import { fetchWriteoffs } from '@/lib/queries'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { Trash2, Plus, ChevronRight, Search } from 'lucide-react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -33,11 +34,14 @@ export default function WriteoffsPage() {
   const [dateRange, setDateRange] = useState<DateFilterValue>(null)
   const [actionItem, setActionItem] = useState<StockWriteoff | null>(null)
 
-  useEffect(() => {
-    fetchWriteoffs()
-      .then(data => { setWriteoffs(data); setLoading(false) })
-      .catch(() => setLoading(false))
+  const reload = useCallback(async () => {
+    try { setWriteoffs(await fetchWriteoffs()) } finally { setLoading(false) }
   }, [])
+
+  useEffect(() => { reload() }, [reload])
+
+  // Real-time: списание на другом терминале появляется без перезахода.
+  useDataSync(['stock_writeoffs', 'ingredients'], reload)
 
   // База — после поиска и дат (но ДО фильтра по причине, чтобы плитки причин
   // показывали корректные счётчики и оставались переключаемыми).
