@@ -577,9 +577,16 @@ export default function EditSupplierPage() {
                           ) : <span className="text-muted-foreground">—</span>}
                         </td>
                         <td className="py-2.5 text-right tabular-nums font-medium">
-                          {r.debtAmount > 0.005
-                            ? <span className="text-rose-600 dark:text-rose-400">{formatCurrency(r.debtAmount)}</span>
-                            : <span className="text-muted-foreground">0</span>}
+                          {r.debtAmount > 0.005 ? (() => {
+                            const origDebt = r.totalAmount - r.paidAmount
+                            const reduced = origDebt > r.debtAmount + 0.005
+                            return (
+                              <span className="inline-flex items-baseline gap-1 whitespace-nowrap text-rose-600 dark:text-rose-400">
+                                {reduced && <span className="text-xs line-through opacity-60 font-normal">{formatCurrency(origDebt)}</span>}
+                                <span>{formatCurrency(r.debtAmount)}</span>
+                              </span>
+                            )
+                          })() : <span className="text-muted-foreground">0</span>}
                         </td>
                       </tr>
                       {open && (

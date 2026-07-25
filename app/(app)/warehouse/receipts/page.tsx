@@ -201,12 +201,20 @@ export default function ReceiptsPage() {
                   ) : (
                     <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</span>
                   )}
-                  <div className="flex items-center gap-1.5">
-                    {r.debtAmount > 0.005 && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-destructive/10 text-destructive">долг {formatCurrency(r.debtAmount)}</span>
-                    )}
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badge.color}`}>{badge.label}</span>
-                  </div>
+                  {/* Остаток долга — «напротив», нетто: если возврат уменьшил долг,
+                      исходный (сумма − оплачено) зачёркнут, остаток жирным. */}
+                  {r.debtAmount > 0.005 && (() => {
+                    const origDebt = r.totalAmount - r.paidAmount
+                    const reduced = origDebt > r.debtAmount + 0.005
+                    return (
+                      <div className="flex items-baseline gap-1 text-destructive">
+                        <span className="text-[11px] font-medium">долг</span>
+                        {reduced && <span className="text-[11px] line-through opacity-60 tabular-nums">{formatCurrency(origDebt)}</span>}
+                        <span className="text-sm font-bold tabular-nums">{formatCurrency(r.debtAmount)}</span>
+                      </div>
+                    )
+                  })()}
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badge.color}`}>{badge.label}</span>
                 </div>
                 <ChevronRight className="size-4 text-muted-foreground shrink-0" />
               </button>
@@ -239,9 +247,17 @@ export default function ReceiptsPage() {
                   <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
                     <span>{r.date}</span>
                     <span className={`text-[11px] px-1.5 py-0.5 rounded font-medium ${badge.color}`}>{badge.label}</span>
-                    {r.debtAmount > 0.005 && (
-                      <span className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-destructive/10 text-destructive">долг {formatCurrency(r.debtAmount)}</span>
-                    )}
+                    {r.debtAmount > 0.005 && (() => {
+                      const origDebt = r.totalAmount - r.paidAmount
+                      const reduced = origDebt > r.debtAmount + 0.005
+                      return (
+                        <span className="text-[11px] px-1.5 py-0.5 rounded font-medium bg-destructive/10 text-destructive inline-flex items-baseline gap-1">
+                          долг
+                          {reduced && <span className="line-through opacity-60 tabular-nums">{formatCurrency(origDebt)}</span>}
+                          <span className="font-bold tabular-nums">{formatCurrency(r.debtAmount)}</span>
+                        </span>
+                      )
+                    })()}
                     {isOverdue && <span className="text-[11px] text-destructive font-medium">просрочка {r.dueDate}</span>}
                   </div>
                   {r.note && <p className="text-xs text-muted-foreground">Примечание: {r.note}</p>}
