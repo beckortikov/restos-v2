@@ -25,6 +25,40 @@ const WH_BADGE: Record<string, string> = {
 }
 const KIND_ORDER = ['products', 'purchased', 'supplies']
 
+// Описание движения в БД — это сырой source-ref «prefix:<uuid>» (writeoff:…,
+// receipt:…, order:…). Показывать UUID пользователю бессмысленно, а бейдж типа
+// схлопывает разные источники в один («Списание» = writeoff / хозрасход / заказ),
+// поэтому подпись из префикса реально уточняет, откуда движение.
+const REF_LABELS: Record<string, string> = {
+  receipt: 'Приход от поставщика',
+  writeoff: 'Списание (брак / порча)',
+  supply_expense: 'Расход хозтоваров',
+  return: 'Возврат поставщику',
+  order: 'Списание на заказ',
+  order_refund: 'Возврат по заказу',
+  batch: 'Приготовление блюда',
+  batch_out: 'Приготовление блюда',
+  batch_in: 'Готовое блюдо',
+  semi: 'Производство п/ф',
+  semi_out: 'Производство п/ф',
+  semi_in: 'Производство п/ф',
+  semi_consume: 'Расход на п/ф',
+  inventory: 'Инвентаризация',
+  inventory_correction: 'Инвентаризация',
+  adj: 'Корректировка',
+}
+
+function movementSubtitle(desc: string): string {
+  if (!desc) return ''
+  const i = desc.indexOf(':')
+  if (i <= 0) return desc
+  const label = REF_LABELS[desc.slice(0, i)]
+  const rest = desc.slice(i + 1)
+  // Заменяем только «сырой» ref (prefix:id без пробелов). Рукописные заметки
+  // (в них есть пробелы или нет известного префикса) показываем как есть.
+  return label && rest.length > 0 && !/\s/.test(rest) ? label : desc
+}
+
 export default function HistoryPage() {
   const [filter, setFilter] = useState<StockMovementType | 'all'>('all')
   const [whId, setWhId] = useState<string>('all')
@@ -161,7 +195,7 @@ export default function HistoryPage() {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{m.description}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{movementSubtitle(m.description)}</p>
                   </div>
                   <div className="text-right shrink-0">
                     <p className={`text-sm font-semibold ${m.qty > 0 ? 'text-emerald-600' : 'text-destructive'}`}>
