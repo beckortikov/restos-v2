@@ -193,6 +193,7 @@ export default function NewReceiptPage() {
   const [accountId, setAccountId] = useState('')
 
   const [filter, setFilter] = useState<CategoryFilter>('all')
+  const [catFilter, setCatFilter] = useState<string>('all') // категория товара — чипы под поиском
   const [search, setSearch] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -244,11 +245,12 @@ export default function NewReceiptPage() {
     const q = search.trim().toLowerCase()
     return ingredients.filter((ing) => {
       if (filter !== 'all' && kindOf(ing) !== filter) return false
+      if (catFilter !== 'all' && (ing.category || '') !== catFilter) return false
       if (q && !ing.name.toLowerCase().includes(q)) return false
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ingredients, filter, search, warehouseById])
+  }, [ingredients, filter, catFilter, search, warehouseById])
 
   const countByKind = useMemo(() => {
     const c: Record<'products' | 'purchased' | 'supplies', number> = { products: 0, purchased: 0, supplies: 0 }
@@ -256,6 +258,17 @@ export default function NewReceiptPage() {
     return c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ingredients, warehouseById])
+
+  // Категории товаров текущего склада — для чипов-фильтров под поиском.
+  const categories = useMemo(() => {
+    const set = new Set<string>()
+    for (const ing of ingredients) {
+      if (filter !== 'all' && kindOf(ing) !== filter) continue
+      if (ing.category) set.add(ing.category)
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredients, filter, warehouseById])
 
   function addOrIncrementIngredient(ing: Ingredient) {
     setLines((prev) => {
@@ -467,7 +480,7 @@ export default function NewReceiptPage() {
                   <button
                     key={t.v}
                     type="button"
-                    onClick={() => setFilter(t.v)}
+                    onClick={() => { setFilter(t.v); setCatFilter('all') }}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                       active
                         ? 'bg-primary text-primary-foreground border-primary'
@@ -505,6 +518,40 @@ export default function NewReceiptPage() {
               />
             </div>
 
+            {/* Категории товара — чипы-фильтры под поиском (как склады). */}
+            {categories.length > 1 && (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCatFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    catFilter === 'all'
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-card border-border text-foreground hover:bg-muted'
+                  }`}
+                >
+                  Все категории
+                </button>
+                {categories.map((cat) => {
+                  const active = catFilter === cat
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setCatFilter(active ? 'all' : cat)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                        active
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-card border-border text-foreground hover:bg-muted'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
             {/* Ingredient grid */}
             {filteredIngredients.length === 0 ? (
               <div className="py-10 text-center space-y-3">
@@ -540,12 +587,9 @@ export default function NewReceiptPage() {
                       }`}
                     >
                       <div>
-                        <p className="font-semibold text-sm text-foreground leading-tight group-hover:text-primary transition-colors truncate">
+                        <p className="font-semibold text-sm text-foreground leading-tight group-hover:text-primary transition-colors line-clamp-2">
                           {ing.name}
                         </p>
-                        <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground mt-1 block truncate">
-                          {ing.category || (ing.isFood === false ? 'Хозтовары' : 'Продукты')}
-                        </span>
                       </div>
 
                       <div className="flex items-end justify-between mt-3">
