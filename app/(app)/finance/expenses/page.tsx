@@ -49,6 +49,12 @@ function bucketKeyOf(iso: string, gran: Gran): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
+/** Подпись значения в тултипе: сумма + доля от итога периода. */
+function tooltipValue(value: number, sum: number): string {
+  const pct = sum > 0 ? (value / sum) * 100 : 0
+  return `${formatCurrency(value)} · ${pct.toFixed(1)}%`
+}
+
 function bucketLabelOf(key: string, gran: Gran): string {
   const [y, m, dd] = key.split('-')
   const mi = Number(m) - 1
@@ -160,9 +166,14 @@ export default function ExpensesByCategoryPage() {
   }, [expenses, gran, catToSeries])
 
   const barData = useMemo(() => buckets.map((k) => {
-    const row: Record<string, string | number> = { bucket: bucketLabelOf(k, gran) }
+    const row: Record<string, string | number | null> = { bucket: bucketLabelOf(k, gran) }
     const cell = matrix.get(k)
-    for (const c of topCategories) row[c] = cell?.get(c) ?? 0
+    // Нулевые статьи кладём как null: сегмент не рисуется, и recharts (filterNull)
+    // не показывает их строками «0,00 с. · 0.0%» в подсказке.
+    for (const c of topCategories) {
+      const v = cell?.get(c) ?? 0
+      row[c] = v > 0 ? v : null
+    }
     return row
   }), [buckets, matrix, topCategories, gran])
 
@@ -370,10 +381,19 @@ export default function ExpensesByCategoryPage() {
               <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
               <XAxis dataKey="bucket" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} width={70} />
-              <Tooltip formatter={(v: number) => formatCurrency(v)} />
+              <Tooltip
+                formatter={(v: number, n: string, item: { payload?: Record<string, unknown> }) => {
+                  const row = item?.payload ?? {}
+                  const rowTotal = topCategories.reduce((s, c) => s + (Number(row[c]) || 0), 0)
+                  return [tooltipValue(v, rowTotal), n]
+                }}
+              />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               {topCategories.map((c, i) => (
-                <Bar key={c} dataKey={c} stackId="exp" fill={CHART_COLORS[i % CHART_COLORS.length]} />
+                // isAnimationActive=false: при переключении вида recharts создаёт
+                // пустые recharts-bar-rectangle без path (анимация не стартует)
+                // и график остаётся пустым — как было и с круговыми.
+                <Bar key={c} dataKey={c} stackId="exp" fill={CHART_COLORS[i % CHART_COLORS.length]} isAnimationActive={false} />
               ))}
             </BarChart>
           </ResponsiveContainer>
@@ -415,7 +435,7 @@ export default function ExpensesByCategoryPage() {
                           <Cell key={d.name} fill={CHART_COLORS[Math.max(0, topCategories.indexOf(d.name)) % CHART_COLORS.length]} />
                         ))}
                       </Pie>
-                      <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                      <Tooltip formatter={(v: number, n: string) => [tooltipValue(v, b.total), n]} />
                     </PieChart>
                   </ResponsiveContainer>
                 </div>
@@ -439,7 +459,7 @@ export default function ExpensesByCategoryPage() {
                 >
                   {pieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
                 </Pie>
-                <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                <Tooltip formatter={(v: number, n: string) => [tooltipValue(v, total), n]} />
               </PieChart>
             </ResponsiveContainer>
           )}
