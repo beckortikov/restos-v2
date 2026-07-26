@@ -75,6 +75,31 @@ export default function ExpensesByCategoryPage() {
 
   const range = useMemo(() => getPresetRange(preset, customFrom, customTo), [preset, customFrom, customTo])
 
+  // Быстрые «скользящие» диапазоны для сравнения месяцев: последние N полных
+  // месяцев включая текущий. Пресеты общего компонента дают только
+  // календарный месяц/квартал/год, а для сравнения нужен именно ряд месяцев.
+  const setRollingMonths = useCallback((months: number) => {
+    const now = new Date()
+    const start = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1)
+    const from = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-01`
+    const to = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+    setCustomFrom(from)
+    setCustomTo(to)
+    setPreset('custom')
+    setGran('month')
+  }, [])
+
+  // Какой из быстрых диапазонов сейчас активен (для подсветки чипа).
+  const activeRolling = useMemo(() => {
+    if (preset !== 'custom' || !customFrom) return 0
+    for (const m of [3, 6, 12]) {
+      const now = new Date()
+      const start = new Date(now.getFullYear(), now.getMonth() - (m - 1), 1)
+      if (customFrom === `${start.getFullYear()}-${pad(start.getMonth() + 1)}-01`) return m
+    }
+    return 0
+  }, [preset, customFrom])
+
   // Расходы выбранного периода (type=out; переводы между счетами не расход).
   const expenses = useMemo(() => {
     return ops.filter((o) => {
@@ -145,6 +170,23 @@ export default function ExpensesByCategoryPage() {
     .filter(([, v]) => v > 0)
     .map(([name, value]) => ({ name, value })), [byCategory])
 
+  // Отдельная круговая на каждый период (месяц/неделю/день) — чтобы сравнивать
+  // структуру расходов между периодами, а не только суммарную за весь диапазон.
+  // Цвет статьи берём по её индексу в topCategories, поэтому один и тот же цвет
+  // означает одну и ту же статью на всех диаграммах и в гистограмме.
+  const pieByBucket = useMemo(() => buckets.map((k) => {
+    const cell = matrix.get(k)
+    const data = topCategories
+      .map((name) => ({ name, value: cell?.get(name) ?? 0 }))
+      .filter((d) => d.value > 0)
+    return {
+      key: k,
+      label: bucketLabelOf(k, gran),
+      total: data.reduce((s, d) => s + d.value, 0),
+      data,
+    }
+  }), [buckets, matrix, topCategories, gran])
+
   // Итог по каждому ведру + Δ к предыдущему — для таблицы и KPI.
   const bucketTotals = useMemo(() => buckets.map((k) => {
     const cell = matrix.get(k)
@@ -210,14 +252,34 @@ export default function ExpensesByCategoryPage() {
       </div>
 
       {/* Период */}
-      <DateRangePresets
-        value={preset}
-        onChange={(p) => setPreset(p)}
-        customFrom={customFrom}
-        customTo={customTo}
-        onCustomFromChange={setCustomFrom}
-        onCustomToChange={setCustomTo}
-      />
+      <div className="space-y-2">
+        <DateRangePresets
+          value={preset}
+          onChange={(p) => setPreset(p)}
+          customFrom={customFrom}
+          customTo={customTo}
+          onCustomFromChange={setCustomFrom}
+          onCustomToChange={setCustomTo}
+        />
+        {/* Сравнение месяцев: скользящий ряд последних N месяцев */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">Сравнить:</span>
+          {[3, 6, 12].map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setRollingMonths(m)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                activeRolling === m
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-card border-border text-foreground hover:bg-muted'
+              }`}
+            >
+              {m} мес.
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* KPI */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -318,35 +380,83 @@ export default function ExpensesByCategoryPage() {
         </div>
       ) : view === 'pie' ? (
         <div className="bg-card rounded-xl border border-border p-4">
-          <h2 className="text-sm font-semibold text-foreground mb-4">Структура расходов за период</h2>
-          <ResponsiveContainer width="100%" height={360}>
-            <PieChart>
-              <Pie
-                data={pieData}
-                cx="50%"
-                cy="50%"
-                innerRadius={70}
-                outerRadius={125}
-                paddingAngle={2}
-                dataKey="value"
-                nameKey="name"
-                label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
-                style={{ fontSize: 11 }}
-              >
-                {pieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
-              </Pie>
-              <Tooltip formatter={(v: number) => formatCurrency(v)} />
-            </PieChart>
-          </ResponsiveContainer>
+          <h2 className="text-sm font-semibold text-foreground mb-1">
+            {pieByBucket.length > 1 ? 'Структура расходов по периодам' : 'Структура расходов за период'}
+          </h2>
+          {pieByBucket.length > 1 && (
+            <p className="text-xs text-muted-foreground mb-4">
+              Отдельная диаграмма на каждый период — один цвет = одна статья
+            </p>
+          )}
+
+          {pieByBucket.length > 1 ? (
+            // Несколько периодов — сетка круговых для сравнения структуры
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pieByBucket.map((b) => (
+                <div key={b.key} className="rounded-lg border border-border p-3">
+                  <div className="flex items-baseline justify-between gap-2 mb-1">
+                    <span className="text-sm font-semibold text-foreground">{b.label}</span>
+                    <span className="text-xs font-bold text-foreground tabular-nums">{formatCurrency(b.total)}</span>
+                  </div>
+                  <ResponsiveContainer width="100%" height={200}>
+                    <PieChart>
+                      <Pie
+                        data={b.data}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={42}
+                        outerRadius={72}
+                        paddingAngle={2}
+                        dataKey="value"
+                        nameKey="name"
+                        isAnimationActive={false}
+                      >
+                        {b.data.map((d) => (
+                          <Cell key={d.name} fill={CHART_COLORS[Math.max(0, topCategories.indexOf(d.name)) % CHART_COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={360}>
+              <PieChart>
+                <Pie
+                  data={pieData}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={70}
+                  outerRadius={125}
+                  paddingAngle={2}
+                  dataKey="value"
+                  nameKey="name"
+                  label={({ name, percent }) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}
+                  style={{ fontSize: 11 }}
+                  isAnimationActive={false}
+                >
+                  {pieData.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                </Pie>
+                <Tooltip formatter={(v: number) => formatCurrency(v)} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+
+          {/* Общая легенда: цвет = статья (тот же, что на всех диаграммах) */}
           <div className="mt-3 divide-y divide-border border-t border-border">
-            {byCategory.map(([name, value], i) => (
-              <div key={name} className="flex items-center gap-3 py-2">
-                <span className="size-2.5 rounded-full shrink-0" style={{ background: CHART_COLORS[i % CHART_COLORS.length] }} />
-                <span className="text-sm text-foreground flex-1 truncate">{name}</span>
-                <span className="text-xs text-muted-foreground tabular-nums">{total > 0 ? Math.round((value / total) * 100) : 0}%</span>
-                <span className="text-sm font-semibold text-foreground tabular-nums w-28 text-right">{formatCurrency(value)}</span>
-              </div>
-            ))}
+            {byCategory.map(([name, value]) => {
+              const ci = Math.max(0, topCategories.indexOf(catToSeries(name)))
+              return (
+                <div key={name} className="flex items-center gap-3 py-2">
+                  <span className="size-2.5 rounded-full shrink-0" style={{ background: CHART_COLORS[ci % CHART_COLORS.length] }} />
+                  <span className="text-sm text-foreground flex-1 truncate">{name}</span>
+                  <span className="text-xs text-muted-foreground tabular-nums">{total > 0 ? Math.round((value / total) * 100) : 0}%</span>
+                  <span className="text-sm font-semibold text-foreground tabular-nums w-28 text-right">{formatCurrency(value)}</span>
+                </div>
+              )
+            })}
           </div>
         </div>
       ) : (
@@ -359,27 +469,51 @@ export default function ExpensesByCategoryPage() {
                   {buckets.map((k) => (
                     <th key={k} className="text-right font-semibold px-3 py-2 whitespace-nowrap">{bucketLabelOf(k, gran)}</th>
                   ))}
+                  {buckets.length >= 2 && (
+                    <th className="text-right font-semibold px-3 py-2 whitespace-nowrap" title="Изменение последнего периода к предыдущему">Δ</th>
+                  )}
                   <th className="text-right font-semibold px-3 py-2">Итого</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {byCategory.map(([cat, catTotal]) => (
-                  <tr key={cat} className="hover:bg-muted/30 transition-colors">
-                    <td className="px-3 py-2 text-foreground sticky left-0 bg-card">{cat}</td>
-                    {buckets.map((k) => {
-                      const v = matrix.get(k)?.get(catToSeries(cat)) ?? 0
-                      // При схлопывании в «Прочее» ячейка общая для хвоста —
-                      // показываем её только у самой статьи, чтобы не дублировать.
-                      const show = categories.length <= TOP_N || categories.indexOf(cat) < TOP_N
-                      return (
-                        <td key={k} className="px-3 py-2 text-right tabular-nums text-muted-foreground whitespace-nowrap">
-                          {show ? (v > 0 ? formatCurrency(v) : '—') : '·'}
+                {byCategory.map(([cat, catTotal]) => {
+                  // Δ по статье: последний период против предыдущего — сразу видно,
+                  // что именно выросло/упало, а не только общий итог.
+                  const series = catToSeries(cat)
+                  const inTop = categories.length <= TOP_N || categories.indexOf(cat) < TOP_N
+                  const last = buckets.length >= 1 ? (matrix.get(buckets[buckets.length - 1])?.get(series) ?? 0) : 0
+                  const prev = buckets.length >= 2 ? (matrix.get(buckets[buckets.length - 2])?.get(series) ?? 0) : 0
+                  const diff = last - prev
+                  const diffPct = prev > 0 ? (diff / prev) * 100 : null
+                  return (
+                    <tr key={cat} className="hover:bg-muted/30 transition-colors">
+                      <td className="px-3 py-2 text-foreground sticky left-0 bg-card">{cat}</td>
+                      {buckets.map((k) => {
+                        const v = matrix.get(k)?.get(series) ?? 0
+                        // При схлопывании в «Прочее» ячейка общая для хвоста —
+                        // показываем её только у самой статьи, чтобы не дублировать.
+                        return (
+                          <td key={k} className="px-3 py-2 text-right tabular-nums text-muted-foreground whitespace-nowrap">
+                            {inTop ? (v > 0 ? formatCurrency(v) : '—') : '·'}
+                          </td>
+                        )
+                      })}
+                      {buckets.length >= 2 && (
+                        <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+                          {!inTop || (last === 0 && prev === 0) ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <span className={diff > 0 ? 'text-destructive font-medium' : diff < 0 ? 'text-emerald-600 font-medium' : 'text-muted-foreground'}>
+                              {diff > 0 ? '+' : ''}{formatCurrency(diff)}
+                              {diffPct != null && <span className="ml-1 text-[11px] opacity-70">{diff > 0 ? '+' : ''}{diffPct.toFixed(0)}%</span>}
+                            </span>
+                          )}
                         </td>
-                      )
-                    })}
-                    <td className="px-3 py-2 text-right font-semibold text-foreground tabular-nums whitespace-nowrap">{formatCurrency(catTotal)}</td>
-                  </tr>
-                ))}
+                      )}
+                      <td className="px-3 py-2 text-right font-semibold text-foreground tabular-nums whitespace-nowrap">{formatCurrency(catTotal)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
               <tfoot>
                 <tr className="bg-muted/20 border-t border-border font-semibold">
@@ -387,6 +521,20 @@ export default function ExpensesByCategoryPage() {
                   {bucketTotals.map((v, i) => (
                     <td key={i} className="px-3 py-2 text-right tabular-nums text-foreground whitespace-nowrap">{formatCurrency(v)}</td>
                   ))}
+                  {buckets.length >= 2 && (() => {
+                    const last = bucketTotals[bucketTotals.length - 1]
+                    const prev = bucketTotals[bucketTotals.length - 2]
+                    const diff = last - prev
+                    const pct = prev > 0 ? (diff / prev) * 100 : null
+                    return (
+                      <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+                        <span className={diff > 0 ? 'text-destructive' : diff < 0 ? 'text-emerald-600' : 'text-muted-foreground'}>
+                          {diff > 0 ? '+' : ''}{formatCurrency(diff)}
+                          {pct != null && <span className="ml-1 text-[11px] opacity-70">{diff > 0 ? '+' : ''}{pct.toFixed(0)}%</span>}
+                        </span>
+                      </td>
+                    )
+                  })()}
                   <td className="px-3 py-2 text-right tabular-nums text-foreground whitespace-nowrap">{formatCurrency(total)}</td>
                 </tr>
               </tfoot>
