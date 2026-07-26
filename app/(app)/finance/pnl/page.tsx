@@ -33,8 +33,40 @@ const PAYMENT_METHOD_RU: Record<string, string> = {
 // без знака +/−, чтобы не читалась как ещё одно поступление.
 type PnlRow = { label: string; value: number; bold: boolean; method?: boolean }
 
+// Строки структуры P&L. Вынесено из компонента, чтобы теми же подписями
+// построить прошлый период и посчитать Δ по каждой строке.
+function buildPnlRows(report: PnLReport | null): PnlRow[] {
+  if (!report) return []
+  const rows: PnlRow[] = [
+    { label: 'Выручка', value: report.revenue.total, bold: true },
+  ]
+  // Разбивка выручки по методам оплаты — подстроками под «Выручкой», на русском.
+  // 'split' на сервере уже разложен на реальные методы (наличные/карта), так что
+  // псевдо-счёта «split» здесь быть не должно.
+  for (const m of report.revenue.by_method) {
+    if (!m.amount) continue
+    rows.push({ label: PAYMENT_METHOD_RU[m.method] ?? m.method, value: m.amount, bold: false, method: true })
+  }
+  rows.push({ label: '— Себестоимость (COGS)', value: -report.cogs.total, bold: false })
+  if (report.writeoffs > 0) {
+    rows.push({ label: '— Списания (брак/порча)', value: -report.writeoffs, bold: false })
+  }
+  rows.push({ label: 'Валовая прибыль', value: report.gross_profit, bold: true })
+  const sortedOpex = [...report.opex.by_category].sort((a, b) => b.amount - a.amount)
+  for (const { category, amount } of sortedOpex) {
+    // Авто-коды (refund и т.п.) → русские подписи; ручные категории — как есть.
+    rows.push({ label: `— ${finopCategoryLabel(category)}`, value: -amount, bold: false })
+  }
+  rows.push({ label: 'Чистая прибыль', value: report.net_profit, bold: true })
+  return rows
+}
+
 export default function PnlPage() {
   const [report, setReport] = useState<PnLReport | null>(null)
+  const [prevReport, setPrevReport] = useState<PnLReport | null>(null)
+  const [compare, setCompare] = useState(() => {
+    try { return localStorage.getItem('pnl:compare') === '1' } catch { return false }
+  })
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>(() => {
     try {
@@ -60,6 +92,10 @@ export default function PnlPage() {
   }, [operationalOnly])
 
   useEffect(() => {
+    try { localStorage.setItem('pnl:compare', compare ? '1' : '0') } catch {}
+  }, [compare])
+
+  useEffect(() => {
     setLoading(true)
     const { from, to } = getDateRange(period, customFrom, customTo)
     fetchPnLReport({ from: from ?? undefined, to: to ?? undefined, operationalOnly })
@@ -68,31 +104,28 @@ export default function PnlPage() {
       .finally(() => setLoading(false))
   }, [period, customFrom, customTo, operationalOnly])
 
-  const PNL_ROWS = useMemo(() => {
-    if (!report) return [] as PnlRow[]
-    const rows: PnlRow[] = [
-      { label: 'Выручка', value: report.revenue.total, bold: true },
-    ]
-    // Разбивка выручки по методам оплаты — подстроками под «Выручкой», на русском.
-    // 'split' на сервере уже разложен на реальные методы (наличные/карта), так что
-    // псевдо-счёта «split» здесь быть не должно.
-    for (const m of report.revenue.by_method) {
-      if (!m.amount) continue
-      rows.push({ label: PAYMENT_METHOD_RU[m.method] ?? m.method, value: m.amount, bold: false, method: true })
-    }
-    rows.push({ label: '— Себестоимость (COGS)', value: -report.cogs.total, bold: false })
-    if (report.writeoffs > 0) {
-      rows.push({ label: '— Списания (брак/порча)', value: -report.writeoffs, bold: false })
-    }
-    rows.push({ label: 'Валовая прибыль', value: report.gross_profit, bold: true })
-    const sortedOpex = [...report.opex.by_category].sort((a, b) => b.amount - a.amount)
-    for (const { category, amount } of sortedOpex) {
-      // Авто-коды (refund и т.п.) → русские подписи; ручные категории — как есть.
-      rows.push({ label: `— ${finopCategoryLabel(category)}`, value: -amount, bold: false })
-    }
-    rows.push({ label: 'Чистая прибыль', value: report.net_profit, bold: true })
-    return rows
-  }, [report])
+  // Сравнение с прошлым периодом: тот же по длине отрезок непосредственно перед
+  // текущим (месяц → предыдущий месяц). Грузим только когда включено — лишний
+  // запрос отчёта не бесплатный.
+  useEffect(() => {
+    if (!compare) { setPrevReport(null); return }
+    const { from, to } = getDateRange(period, customFrom, customTo)
+    if (!from || !to) { setPrevReport(null); return }
+    const lenMs = to.getTime() - from.getTime()
+    const prevTo = new Date(from.getTime() - 86400000)
+    const prevFrom = new Date(prevTo.getTime() - lenMs)
+    fetchPnLReport({ from: prevFrom, to: prevTo, operationalOnly })
+      .then(setPrevReport)
+      .catch(() => setPrevReport(null))
+  }, [compare, period, customFrom, customTo, operationalOnly])
+
+  const PNL_ROWS = useMemo(() => buildPnlRows(report), [report])
+  // Строки прошлого периода по тем же подписям — для колонки Δ.
+  const prevByLabel = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of buildPnlRows(prevReport)) m.set(r.label, r.value)
+    return m
+  }, [prevReport])
 
   const expensePieData = useMemo(() => {
     if (!report) return [] as { name: string; value: number }[]
@@ -127,6 +160,19 @@ export default function PnlPage() {
           <p className="text-muted-foreground text-sm mt-0.5">Расчёт на сервере</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={compare}
+            onClick={() => setCompare(v => !v)}
+            title="Показать изменение к предыдущему периоду такой же длины (месяц → прошлый месяц)"
+            className={`flex items-center gap-2 px-3 py-2 text-xs font-medium border rounded-lg transition-colors whitespace-nowrap shrink-0 ${compare ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border hover:bg-muted text-muted-foreground'}`}
+          >
+            <span className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${compare ? 'bg-primary' : 'bg-muted-foreground/30'}`}>
+              <span className={`inline-block size-3 rounded-full bg-white transition-transform ${compare ? 'translate-x-3.5' : 'translate-x-0.5'}`} />
+            </span>
+            Сравнить с прошлым
+          </button>
           <button
             type="button"
             role="switch"
@@ -214,14 +260,33 @@ export default function PnlPage() {
           <h2 className="text-sm font-semibold text-foreground">Структура P&L</h2>
         </div>
         <div className="divide-y divide-border">
-          {PNL_ROWS.map((row, idx) => (
+          {PNL_ROWS.map((row, idx) => {
+            // Δ к прошлому периоду по этой же строке. Для расходов (значения
+            // отрицательные) рост = ухудшение, поэтому цвет считаем по влиянию
+            // на прибыль: больше — зелёный, меньше — красный.
+            const prev = compare ? prevByLabel.get(row.label) : undefined
+            const diff = prev !== undefined ? row.value - prev : null
+            const diffPct = prev !== undefined && prev !== 0 ? ((row.value - prev) / Math.abs(prev)) * 100 : null
+            return (
             <div
               key={`${row.label}-${idx}`}
-              className={`flex items-center justify-between px-5 py-3 ${row.bold ? 'bg-muted/30' : ''} ${row.method ? 'py-2' : ''}`}
+              className={`flex items-center justify-between gap-3 px-5 py-3 ${row.bold ? 'bg-muted/30' : ''} ${row.method ? 'py-2' : ''}`}
             >
               <span className={`text-sm ${row.bold ? 'font-semibold text-foreground' : 'text-muted-foreground'} ${row.method ? 'pl-4 text-xs' : ''}`}>
                 {row.method ? `• ${row.label}` : row.label}
               </span>
+              {compare && (
+                <span className="text-xs tabular-nums whitespace-nowrap shrink-0 min-w-[7rem] text-right">
+                  {diff === null || (diff === 0 && prev === 0) ? (
+                    <span className="text-muted-foreground">—</span>
+                  ) : (
+                    <span className={diff > 0 ? 'text-emerald-600' : diff < 0 ? 'text-destructive' : 'text-muted-foreground'}>
+                      {diff > 0 ? '+' : ''}{formatCurrency(diff)}
+                      {diffPct !== null && <span className="ml-1 opacity-70">{diffPct > 0 ? '+' : ''}{diffPct.toFixed(0)}%</span>}
+                    </span>
+                  )}
+                </span>
+              )}
               {row.method ? (
                 // Разбивка выручки — нейтрально, без знака (не поступление сверху).
                 <span className="text-xs font-medium text-muted-foreground tabular-nums">
@@ -240,7 +305,8 @@ export default function PnlPage() {
                 </span>
               )}
             </div>
-          ))}
+            )
+          })}
         </div>
       </div>
     </div>
