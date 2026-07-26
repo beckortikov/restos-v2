@@ -16,6 +16,7 @@ import {
   ClipboardCheck,
   History,
   TrendingDown,
+  PieChart,
   TrendingUp,
   Scale,
   Wallet,
@@ -258,6 +259,7 @@ const NAV: NavItem[] = [
     icon: DollarSign,
     children: [
       { label: 'ДДС', href: '/finance/cashflow', icon: TrendingDown },
+      { label: 'Расходы по статьям', href: '/finance/expenses', icon: PieChart },
       { label: 'ОПиУ', href: '/finance/pnl', icon: TrendingUp },
       { label: 'Баланс', href: '/finance/balance', icon: Scale },
       { label: 'Счета и касса', href: '/finance/accounts', icon: Wallet },
