@@ -45,10 +45,15 @@ const (
 	EventStopListUpdated = "stop_list.updated" // блюдо поставили/сняли со стопа (кухня → касса/официант)
 	EventTableUpdated    = "table.updated"
 	EventStockMovement   = "stock.movement"
-	EventShiftOpened     = "shift.opened"
-	EventShiftClosed     = "shift.closed"
-	EventLicenseUpdated  = "license.updated" // state changed (грейс/локед) или активирован
-	EventLicenseWarning  = "license.warning" // clock drift / NTP mismatch (v2.6.0)
+	// Финансовая операция создана вручную (приход/расход/перевод). Складские и
+	// заказные проводки уже покрыты stock.movement / order.closed; это событие
+	// закрывает ручной ввод — без него остатки на счетах и реестр ДДС на других
+	// терминалах не обновлялись до F5.
+	EventFinanceOperation = "finance.operation"
+	EventShiftOpened      = "shift.opened"
+	EventShiftClosed      = "shift.closed"
+	EventLicenseUpdated   = "license.updated" // state changed (грейс/локед) или активирован
+	EventLicenseWarning   = "license.warning" // clock drift / NTP mismatch (v2.6.0)
 )
 
 // EventBuffer накапливает события внутри транзакции.

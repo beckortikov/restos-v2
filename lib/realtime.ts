@@ -82,6 +82,9 @@ export const EVENT_FANOUT: Record<string, string[]> = {
   // Поставщики обновлялись в реальном времени, а не только при заходе. Пачки
   // событий (продажи в час пик) схлопывает debounce 600мс в useDataSync.
   'stock.movement':    ['ingredients', 'stock_movements', 'stock_receipts', 'stock_returns', 'stock_writeoffs', 'supply_expenses', 'suppliers', 'financial_operations', 'financial_accounts'],
+  // Ручная финоперация (приход/расход/перевод) — бэк шлёт finance.operation
+  // (service/finance.go). Складские и заказные проводки покрыты событиями выше.
+  'finance.operation': ['financial_operations', 'financial_accounts'],
   'license.updated':   ['license'],
   // Повар поставил/снял стоп с кухни — меню кассы должно обновиться сразу,
   // иначе стоп-блюдо видно до следующего перезапроса.

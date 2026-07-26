@@ -331,10 +331,19 @@ func (s *FinancialAccountsService) Transfer(ctx context.Context, in AccountTrans
 // FinancialOperations — paged list + manual create
 // ═══════════════════════════════════════════════════════════════════════════
 
-type FinancialOperationsService struct{ r *repo.Repo }
+type FinancialOperationsService struct {
+	r   *repo.Repo
+	pub *EventPublisher
+}
 
 func NewFinancialOperationsService(r *repo.Repo) *FinancialOperationsService {
 	return &FinancialOperationsService{r: r}
+}
+
+// WithPublisher (как в других сервисах).
+func (s *FinancialOperationsService) WithPublisher(pub *EventPublisher) *FinancialOperationsService {
+	s.pub = pub
+	return s
 }
 
 type FinancialOperationsFilter struct {
@@ -510,6 +519,17 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Публикуем ПОСЛЕ успешного коммита: подписчики (счета, ДДС, баланс)
+	// перезапрашивают данные и должны увидеть уже зафиксированную операцию.
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventFinanceOperation, map[string]any{
+			"id":         op.ID,
+			"type":       in.Type,
+			"account_id": in.AccountID,
+		})
+		s.pub.Flush(ctx, ridStr, buf)
 	}
 	return &op, nil
 }
