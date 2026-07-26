@@ -5,9 +5,8 @@ import { FinanceTabs } from '@/components/finance/finance-tabs'
 import { lazy, Suspense } from 'react'
 import { useState, useEffect, useCallback } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { type BudgetLine } from '@/lib/types'
-import { fetchBudgetLines, createBudgetLine, updateBudgetLine, deleteBudgetLine } from '@/lib/queries'
-import { DatePeriodFilter, type PeriodKey } from '@/components/date-period-filter'
+import { type BudgetLine, type FinancialOperation, finopCategoryLabel } from '@/lib/types'
+import { fetchBudgetLines, createBudgetLine, updateBudgetLine, deleteBudgetLine, fetchFinancialOperations } from '@/lib/queries'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
 import { Plus, Pencil, Trash2, Check, X } from 'lucide-react'
@@ -113,9 +112,10 @@ function EditableRow({ line, onSave, onCancel }: { line: BudgetLine; onSave: (id
 
 // ─── Budget table ─────────────────────────────────────────────────────────────
 
-function BudgetTable({ title, lines, bgClass, canEdit, editingId, onEdit, onSaveEdit, onCancelEdit, onDelete }: {
+function BudgetTable({ title, lines, bgClass, canEdit, editingId, factOf, onEdit, onSaveEdit, onCancelEdit, onDelete }: {
   title: string
   lines: BudgetLine[]
+  factOf: (b: BudgetLine) => number
   bgClass: string
   canEdit: boolean
   editingId: string | null
@@ -146,16 +146,19 @@ function BudgetTable({ title, lines, bgClass, canEdit, editingId, onEdit, onSave
                 <tr key={b.id} className="border-b border-border last:border-0 hover:bg-muted/20 group">
                   <td className="px-4 py-3 text-sm text-foreground">{b.category}</td>
                   <td className="px-4 py-3 text-sm text-muted-foreground">{formatCurrency(b.planAmount)}</td>
-                  <td className="px-4 py-3 text-sm font-medium text-foreground">{formatCurrency(b.factAmount)}</td>
-                  <td className="px-4 py-3 w-36">
-                    {canEdit ? (
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => onEdit(b.id)} className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Редактировать"><Pencil className="size-3.5" /></button>
-                        <button onClick={() => onDelete(b.id)} className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" title="Удалить"><Trash2 className="size-3.5" /></button>
-                      </div>
-                    ) : (
-                      <ProgressBar plan={b.planAmount} fact={b.factAmount} />
-                    )}
+                  <td className="px-4 py-3 text-sm font-medium text-foreground">{formatCurrency(factOf(b))}</td>
+                  <td className="px-4 py-3 w-48">
+                    {/* Прогресс план/факт виден всегда — раньше его показывали
+                        только тем, кто не может редактировать. */}
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 min-w-[70px]"><ProgressBar plan={b.planAmount} fact={factOf(b)} /></div>
+                      {canEdit && (
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <button onClick={() => onEdit(b.id)} className="p-1.5 rounded hover:bg-muted text-muted-foreground hover:text-foreground transition-colors" title="Редактировать"><Pencil className="size-3.5" /></button>
+                          <button onClick={() => onDelete(b.id)} className="p-1.5 rounded hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors" title="Удалить"><Trash2 className="size-3.5" /></button>
+                        </div>
+                      )}
+                    </div>
                   </td>
                 </tr>
               )
@@ -177,18 +180,19 @@ export default function BudgetPage() {
   const canEdit = canDo('finance.manage')
 
   const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([])
+  const [operations, setOperations] = useState<FinancialOperation[]>([])
   const [loading, setLoading] = useState(true)
-  const [period, setPeriod] = useState<PeriodKey>('all')
-  const [customFrom, setCustomFrom] = useState('')
-  const [customTo, setCustomTo] = useState('')
+  // Месяц бюджета «YYYY-MM». Раньше стоял общий фильтр периода, но строки
+  // бюджета и так помесячные — нужен именно выбор месяца.
+  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7))
   const [showAddForm, setShowAddForm] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const loadData = useCallback(() => {
     setLoading(true)
-    fetchBudgetLines()
-      .then(setBudgetLines)
+    Promise.all([fetchBudgetLines(), fetchFinancialOperations()])
+      .then(([lines, ops]) => { setBudgetLines(lines); setOperations(ops) })
       .catch(() => toast.error('Ошибка загрузки бюджета'))
       .finally(() => setLoading(false))
   }, [])
@@ -240,13 +244,28 @@ export default function BudgetPage() {
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
-  const incomeLines = budgetLines.filter((b) => b.type === 'in')
-  const expenseLines = budgetLines.filter((b) => b.type === 'out')
+  // Факт считается из реальных операций выбранного месяца по статье и типу —
+  // раньше его вбивали руками, хотя все операции уже есть в базе. Если по
+  // статье операций нет, показываем ранее введённый вручную факт (legacy-строки).
+  const factByKey = new Map<string, number>()
+  for (const op of operations) {
+    if (op.type !== 'in' && op.type !== 'out') continue
+    if ((op.date ?? '').slice(0, 7) !== month) continue
+    const key = `${op.type}:${finopCategoryLabel(op.category) || op.category}`
+    factByKey.set(key, (factByKey.get(key) ?? 0) + op.amount)
+  }
+  const factOf = (b: BudgetLine) =>
+    factByKey.get(`${b.type}:${finopCategoryLabel(b.category) || b.category}`) ?? b.factAmount
+
+  // Строки только выбранного месяца (period в БД был всегда, но терялся в маппере).
+  const monthLines = budgetLines.filter((b) => !b.period || b.period.slice(0, 7) === month)
+  const incomeLines = monthLines.filter((b) => b.type === 'in')
+  const expenseLines = monthLines.filter((b) => b.type === 'out')
 
   const totalPlanIncome = incomeLines.reduce((s, b) => s + b.planAmount, 0)
-  const totalFactIncome = incomeLines.reduce((s, b) => s + b.factAmount, 0)
+  const totalFactIncome = incomeLines.reduce((s, b) => s + factOf(b), 0)
   const totalPlanExpense = expenseLines.reduce((s, b) => s + b.planAmount, 0)
-  const totalFactExpense = expenseLines.reduce((s, b) => s + b.factAmount, 0)
+  const totalFactExpense = expenseLines.reduce((s, b) => s + factOf(b), 0)
 
   const planProfit = totalPlanIncome - totalPlanExpense
   const factProfit = totalFactIncome - totalFactExpense
@@ -254,7 +273,7 @@ export default function BudgetPage() {
   const chartData = expenseLines.map((b) => ({
     name: b.category.length > 20 ? b.category.slice(0, 18) + '...' : b.category,
     План: b.planAmount,
-    Факт: b.factAmount,
+    Факт: factOf(b),
   }))
 
   return (
@@ -264,7 +283,7 @@ export default function BudgetPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Бюджет</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">План / Факт</p>
+          <p className="text-muted-foreground text-sm mt-0.5">План вводится вручную, факт считается из операций месяца</p>
         </div>
         <div className="flex items-center gap-3">
           {canEdit && (
@@ -276,7 +295,13 @@ export default function BudgetPage() {
               Добавить строку
             </button>
           )}
-          <DatePeriodFilter period={period} onPeriodChange={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFromChange={setCustomFrom} onCustomToChange={setCustomTo} />
+          <input
+            type="month"
+            value={month}
+            onChange={(e) => setMonth(e.target.value)}
+            className="h-9 px-3 rounded-md border border-border bg-card text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            title="Месяц бюджета"
+          />
         </div>
       </div>
 
@@ -312,6 +337,7 @@ export default function BudgetPage() {
         <BudgetTable
           title="Доходы"
           lines={incomeLines}
+          factOf={factOf}
           bgClass="bg-emerald-500/5"
           canEdit={canEdit}
           editingId={editingId}
@@ -323,6 +349,7 @@ export default function BudgetPage() {
         <BudgetTable
           title="Расходы"
           lines={expenseLines}
+          factOf={factOf}
           bgClass="bg-destructive/5"
           canEdit={canEdit}
           editingId={editingId}

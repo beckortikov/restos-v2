@@ -527,6 +527,9 @@ export interface BudgetLine {
   type: 'in' | 'out'
   planAmount: number
   factAmount: number
+  // Месяц бюджета «YYYY-MM». В БД поле было всегда, но маппер его терял —
+  // из-за этого строки разных месяцев показывались вперемешку.
+  period: string
 }
 
 // RecurringPayment — шаблон повторяющегося платежа (модуль «Платежи»).

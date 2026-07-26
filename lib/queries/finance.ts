@@ -743,6 +743,7 @@ function mapBudgetLine(r: any): BudgetLine {
     type: r.type,
     planAmount: Number(r.plan_amount ?? 0),
     factAmount: Number(r.fact_amount ?? 0),
+    period: String(r.period ?? ''),
   } as BudgetLine
 }
 
