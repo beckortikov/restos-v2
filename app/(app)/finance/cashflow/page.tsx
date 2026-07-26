@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { exportToExcel } from '@/lib/export-excel'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
+import { readSharedPeriod, writeSharedPeriod, readSharedCustomRange } from '@/lib/finance-period'
 import { useDataSync } from '@/hooks/use-data-sync'
 import {
   PieChart, Pie, Cell,
@@ -47,8 +48,11 @@ export default function CashflowPage() {
   const { canDo } = useAuth()
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [activityFilter, setActivityFilter] = useState<FinancialActivity | 'all'>('all')
-  const [preset, setPreset] = useState<RangePreset>(() => readStoredPreset('cashflow:preset', 'month'))
-  const initialRange = preset === 'custom' ? { from: '', to: '' } : getPresetRange(preset)
+  // Период общий с ОПиУ (вкладки «Отчёты»): выбрал месяц — на соседней вкладке
+  // те же границы. Свой ключ страницы остаётся запасным.
+  const [preset, setPreset] = useState<RangePreset>(() =>
+    readSharedPeriod<RangePreset>(['today', 'yesterday', 'week', 'month', 'quarter', 'year', 'custom'], readStoredPreset('cashflow:preset', 'month')))
+  const initialRange = preset === 'custom' ? readSharedCustomRange() : getPresetRange(preset)
   const [dateFrom, setDateFrom] = useState(initialRange.from)
   const [dateTo, setDateTo] = useState(initialRange.to)
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -237,11 +241,11 @@ export default function CashflowPage() {
       <div className="flex flex-wrap gap-3 items-center">
         <DateRangePresets
           value={preset}
-          onChange={(p, r) => { setPreset(p); setDateFrom(r.from); setDateTo(r.to) }}
+          onChange={(p, r) => { setPreset(p); setDateFrom(r.from); setDateTo(r.to); writeSharedPeriod(p, r.from, r.to) }}
           customFrom={dateFrom}
           customTo={dateTo}
-          onCustomFromChange={(v) => { setPreset('custom'); setDateFrom(v) }}
-          onCustomToChange={(v) => { setPreset('custom'); setDateTo(v) }}
+          onCustomFromChange={(v) => { setPreset('custom'); setDateFrom(v); writeSharedPeriod('custom', v, dateTo) }}
+          onCustomToChange={(v) => { setPreset('custom'); setDateTo(v); writeSharedPeriod('custom', dateFrom, v) }}
           storageKey="cashflow:preset"
         />
         <div className="flex gap-1.5">

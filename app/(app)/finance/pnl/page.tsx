@@ -4,6 +4,7 @@ import { FinanceTabs } from '@/components/finance/finance-tabs'
 
 import { useState, useEffect, useMemo } from 'react'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { readSharedPeriod, writeSharedPeriod, readSharedCustomRange } from '@/lib/finance-period'
 import { formatCurrency } from '@/lib/helpers'
 import {
   PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend,
@@ -68,15 +69,19 @@ export default function PnlPage() {
     try { return localStorage.getItem('pnl:compare') === '1' } catch { return false }
   })
   const [loading, setLoading] = useState(true)
+  // Период общий с ДДС (вкладки «Отчёты»). Значения, которых нет в PeriodKey
+  // (напр. 'yesterday' из ДДС), откатываются на 'month'.
   const [period, setPeriod] = useState<PeriodKey>(() => {
+    let own: PeriodKey = 'month'
     try {
       const v = localStorage.getItem('pnl:period') as PeriodKey | null
-      if (v) return v
+      if (v) own = v
     } catch {}
-    return 'month'
+    return readSharedPeriod<PeriodKey>(['today', 'week', 'month', 'quarter', 'year', 'all', 'custom'], own)
   })
-  const [customFrom, setCustomFrom] = useState('')
-  const [customTo, setCustomTo] = useState('')
+  const sharedRange = readSharedCustomRange()
+  const [customFrom, setCustomFrom] = useState(sharedRange.from)
+  const [customTo, setCustomTo] = useState(sharedRange.to)
   const [operationalOnly, setOperationalOnly] = useState(() => {
     try { return localStorage.getItem('pnl:operationalOnly') === '1' } catch { return false }
   })
@@ -85,7 +90,9 @@ export default function PnlPage() {
     if (period !== 'custom') {
       try { localStorage.setItem('pnl:period', period) } catch {}
     }
-  }, [period])
+    // Делимся выбором с ДДС (соседняя вкладка «Отчётов»).
+    writeSharedPeriod(period, customFrom, customTo)
+  }, [period, customFrom, customTo])
 
   useEffect(() => {
     try { localStorage.setItem('pnl:operationalOnly', operationalOnly ? '1' : '0') } catch {}
