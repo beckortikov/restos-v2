@@ -3,6 +3,7 @@
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { fetchUsers, fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchShifts } from '@/lib/queries'
@@ -130,6 +131,10 @@ export default function ServiceReportPage() {
 
   useEffect(() => { load() }, [load])
 
+  // Сервисный сбор начисляется при закрытии заказа и выплачивается финопой —
+  // подписываемся, чтобы «к выплате» не отставало от кассы.
+  useDataSync(['orders', 'financial_operations', 'cash_shifts'], load)
+
   const totals = useMemo(() => ({
     orders: rows.reduce((s, r) => s + r.ordersCount, 0),
     accrued: rows.reduce((s, r) => s + r.accrued, 0),
@@ -239,54 +244,46 @@ export default function ServiceReportPage() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[700px]">
-            <thead>
-              <tr className="border-b border-border bg-muted/40">
-                <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase">Официант</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Заказов</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Начислено</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Выплачено</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Остаток</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Загрузка...</td></tr>
-              )}
-              {!loading && rows.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
-              )}
-              {!loading && rows.map(r => (
-                <tr key={r.waiterId ?? 'none'} className="border-b border-border last:border-0 hover:bg-muted/30">
-                  <td className="px-4 py-3">
-                    <span className={`font-medium ${r.waiterId ? 'text-foreground' : 'text-muted-foreground italic'}`}>{r.waiterName}</span>
-                  </td>
-                  <td className="px-4 py-3 text-right text-muted-foreground">{r.ordersCount}</td>
-                  <td className="px-4 py-3 text-right text-blue-700 font-medium">{r.accrued > 0 ? formatCurrency(r.accrued) : '—'}</td>
-                  <td className="px-4 py-3 text-right text-emerald-600">{r.paid > 0 ? formatCurrency(r.paid) : '—'}</td>
-                  <td className="px-4 py-3 text-right">
-                    {r.remaining > 0 ? <span className="font-bold text-amber-600">{formatCurrency(r.remaining)}</span> : <span className="text-muted-foreground">—</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-            {rows.length > 0 && (
-              <tfoot>
-                <tr className="bg-muted/40 border-t border-border">
-                  <td className="px-4 py-3 text-xs font-bold text-muted-foreground uppercase">Итого</td>
-                  <td className="px-4 py-3 text-right font-bold text-foreground">{totals.orders}</td>
-                  <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totals.accrued)}</td>
-                  <td className="px-4 py-3 text-right font-bold text-emerald-600">{formatCurrency(totals.paid)}</td>
-                  <td className="px-4 py-3 text-right font-bold text-amber-600">{formatCurrency(totals.remaining)}</td>
-                </tr>
-              </tfoot>
-            )}
-          </table>
+      {/* Карточки официантов — таблица на 5 колонок уезжала вбок на телефоне */}
+      {loading ? (
+        <div className="bg-card rounded-xl border border-border p-10 text-center text-sm text-muted-foreground">Загрузка…</div>
+      ) : rows.length === 0 ? (
+        <div className="bg-card rounded-xl border border-border p-10 text-center text-sm text-muted-foreground">Нет данных за выбранный период</div>
+      ) : (
+        <div className="bg-card rounded-xl border border-border overflow-hidden divide-y divide-border">
+          {rows.map(r => (
+            <div key={r.waiterId ?? 'none'} className="flex items-center gap-3 px-4 py-3 hover:bg-muted/30 transition-colors">
+              <div className="size-9 rounded-full bg-primary/10 text-primary flex items-center justify-center text-sm font-bold shrink-0">
+                {(r.waiterName || '?').charAt(0).toUpperCase()}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className={`text-sm font-medium truncate ${r.waiterId ? 'text-foreground' : 'text-muted-foreground italic'}`}>{r.waiterName}</p>
+                <p className="text-xs text-muted-foreground">
+                  {r.ordersCount} заказ(ов) · начислено <span className="text-blue-700 font-medium">{formatCurrency(r.accrued)}</span>
+                  {r.paid > 0 && <> · выплачено <span className="text-emerald-600 font-medium">{formatCurrency(r.paid)}</span></>}
+                </p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-[10px] text-muted-foreground uppercase tracking-wide">К выплате</p>
+                <p className={`text-sm font-bold tabular-nums ${r.remaining > 0 ? 'text-amber-600' : 'text-muted-foreground'}`}>
+                  {r.remaining > 0 ? formatCurrency(r.remaining) : '—'}
+                </p>
+              </div>
+            </div>
+          ))}
+          {/* Итог по всем официантам */}
+          <div className="flex items-center gap-3 px-4 py-3 bg-muted/30">
+            <span className="text-xs font-bold text-muted-foreground uppercase tracking-wide flex-1">
+              Итого · {totals.orders} заказ(ов)
+            </span>
+            <span className="text-xs text-muted-foreground">
+              начислено <span className="text-blue-700 font-semibold">{formatCurrency(totals.accrued)}</span>
+              {totals.paid > 0 && <> · выплачено <span className="text-emerald-600 font-semibold">{formatCurrency(totals.paid)}</span></>}
+            </span>
+            <span className="text-sm font-bold text-amber-600 tabular-nums shrink-0">{formatCurrency(totals.remaining)}</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

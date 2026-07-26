@@ -3,6 +3,7 @@
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 
 import { useState, useEffect, useCallback } from 'react'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dAdd, dMul, dSum } from '@/lib/decimal'
@@ -228,6 +229,10 @@ export default function BalancePage() {
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // Баланс пересчитывается от операций, счетов, склада и смен — без подписки
+  // цифры устаревали до ручного F5 (продажа/приёмка/закрытие смены их двигают).
+  useDataSync(['financial_operations', 'financial_accounts', 'cash_shifts', 'ingredients'], loadData)
 
   // ─── CRUD handlers ────────────────────────────────────────────────────────
 
