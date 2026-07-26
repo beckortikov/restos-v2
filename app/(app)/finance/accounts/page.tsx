@@ -2,7 +2,8 @@
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { useAuth } from '@/lib/auth-store'
 import { DatePeriodFilter, filterByDateRange, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { formatCurrency } from '@/lib/helpers'
@@ -59,11 +60,19 @@ export default function AccountsPage() {
   const [balanceHistory, setBalanceHistory] = useState<AccountBalanceHistory | null>(null)
   const [historyLoading, setHistoryLoading] = useState(false)
 
-  useEffect(() => {
-    Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
-      .then(([accs, ops]) => { setAccounts(accs); setOperations(ops) })
-      .finally(() => setLoading(false))
+  const reloadAccounts = useCallback(async () => {
+    const [accs, ops] = await Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
+    setAccounts(accs)
+    setOperations(ops)
   }, [])
+
+  useEffect(() => {
+    reloadAccounts().finally(() => setLoading(false))
+  }, [reloadAccounts])
+
+  // Live-баланс: приёмка, оплата долга, закрытие смены и операции с другого
+  // терминала меняют остатки — без этого цифры на карточках врали до F5.
+  useDataSync(['financial_operations', 'financial_accounts', 'cash_shifts'], reloadAccounts)
 
   // Перезапрашиваем при смене периода. Для «всё время» истории по дням не
   // строим — ряд был бы неограниченным, а карточки показывают текущий остаток.
