@@ -1,5 +1,7 @@
 'use client'
 
+import { FinanceTabs } from '@/components/finance/finance-tabs'
+
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
@@ -540,6 +542,7 @@ export default function PayrollPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-5">
+      <FinanceTabs />
       {/* Header + Tabs */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-4">

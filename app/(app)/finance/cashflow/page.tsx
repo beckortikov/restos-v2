@@ -1,5 +1,7 @@
 'use client'
 
+import { FinanceTabs } from '@/components/finance/finance-tabs'
+
 import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
@@ -133,6 +135,7 @@ export default function CashflowPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+      <FinanceTabs />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Движение денежных средств (ДДС)</h1>

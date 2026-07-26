@@ -1,5 +1,7 @@
 'use client'
 
+import { FinanceTabs } from '@/components/finance/finance-tabs'
+
 import { lazy, Suspense } from 'react'
 import { useState, useEffect, useCallback } from 'react'
 import { formatCurrency } from '@/lib/helpers'
@@ -257,6 +259,7 @@ export default function BudgetPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
+      <FinanceTabs />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>

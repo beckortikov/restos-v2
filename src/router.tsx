@@ -79,6 +79,7 @@ const InventoryCheck = () => L(() => import('@/app/(app)/warehouse/inventory-che
 const OpeningBalance = () => L(() => import('@/app/(app)/warehouse/opening-balance/page'))
 
 // Finance
+const FinanceOverview = () => L(() => import('@/app/(app)/finance/overview/page'))
 const Cashflow = () => L(() => import('@/app/(app)/finance/cashflow/page'))
 const ExpensesByCategory = () => L(() => import('@/app/(app)/finance/expenses/page'))
 const PnL = () => L(() => import('@/app/(app)/finance/pnl/page'))
@@ -179,6 +180,7 @@ export function AppRouter() {
         <Route path="/warehouse/opening-balance" element={<OpeningBalance />} />
 
         {/* Finance */}
+        <Route path="/finance/overview" element={<FinanceOverview />} />
         <Route path="/finance/cashflow" element={<Cashflow />} />
         <Route path="/finance/expenses" element={<ExpensesByCategory />} />
         <Route path="/finance/pnl" element={<PnL />} />

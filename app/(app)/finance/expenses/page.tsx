@@ -1,5 +1,7 @@
 'use client'
 
+import { FinanceTabs } from '@/components/finance/finance-tabs'
+
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { formatCurrency } from '@/lib/helpers'
 import { type FinancialOperation, finopCategoryLabel } from '@/lib/types'
@@ -245,6 +247,7 @@ export default function ExpensesByCategoryPage() {
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5 max-w-6xl mx-auto">
+      <FinanceTabs />
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
