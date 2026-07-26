@@ -5,7 +5,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2 } from 'lucide-react'
 import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, formatNum } from '@/lib/helpers'
+import { RETURN_REASON_LABELS } from '@/lib/types'
 import { dMul } from '@/lib/decimal'
 import { toast } from 'sonner'
 import type { Supplier, StockReceipt, StockReturn } from '@/lib/types'
@@ -96,6 +97,18 @@ export default function EditSupplierPage() {
     for (const r of activeReturns) m.set(r.receiptId, (m.get(r.receiptId) ?? 0) + r.totalAmount)
     return m
   }, [activeReturns])
+  // Сами документы возвратов по накладной — чтобы в раскрытой накладной было
+  // видно, ЧТО и сколько вернули (а не только итоговую сумму). Отменённые тоже
+  // показываем — зачёркнутыми, чтобы ошибка и её исправление были видны.
+  const returnDocsByReceipt = useMemo(() => {
+    const m = new Map<string, StockReturn[]>()
+    for (const r of returns) {
+      const arr = m.get(r.receiptId) ?? []
+      arr.push(r)
+      m.set(r.receiptId, arr)
+    }
+    return m
+  }, [returns])
   const sortedReceipts = useMemo(
     () => [...receipts].sort((a, b) => (b.date || '').localeCompare(a.date || '')),
     [receipts],
@@ -571,15 +584,53 @@ export default function EditSupplierPage() {
                       </div>
                     </button>
                     {open && (
-                      <div className="border-t border-border bg-muted/20 divide-y divide-border/60">
-                        {(r.lines ?? []).map((l, i) => (
-                          <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
-                            <span className="flex-1 text-foreground truncate">{l.name}</span>
-                            <span className="text-muted-foreground tabular-nums whitespace-nowrap">{l.qty} {l.unit} × {formatCurrency(l.pricePerUnit)}</span>
-                            <span className="font-medium text-foreground tabular-nums w-20 text-right">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</span>
+                      <div className="border-t border-border bg-muted/20">
+                        <div className="divide-y divide-border/60">
+                          {(r.lines ?? []).map((l, i) => (
+                            <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                              <span className="flex-1 text-foreground truncate">{l.name}</span>
+                              <span className="text-muted-foreground tabular-nums whitespace-nowrap">{l.qty} {l.unit} × {formatCurrency(l.pricePerUnit)}</span>
+                              <span className="font-medium text-foreground tabular-nums w-20 text-right">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</span>
+                            </div>
+                          ))}
+                        </div>
+                        {r.note && <p className="text-[11px] text-muted-foreground px-3 py-2 border-t border-border/60">Примечание: {r.note}</p>}
+
+                        {/* Возвраты по этой накладной — какие позиции и на сколько
+                            вернули (в т.ч. частичный). Отменённые — зачёркнуты. */}
+                        {(returnDocsByReceipt.get(r.id) ?? []).length > 0 && (
+                          <div className="border-t border-border p-3 space-y-2">
+                            <p className="text-[11px] font-semibold text-orange-600 dark:text-orange-400 flex items-center gap-1.5">
+                              <Undo2 className="size-3" /> Возвраты по накладной
+                            </p>
+                            {(returnDocsByReceipt.get(r.id) ?? []).map((ret) => {
+                              const cancelled = !!ret.cancelledAt
+                              return (
+                                <div key={ret.id} className={`rounded-lg border border-border bg-card overflow-hidden ${cancelled ? 'opacity-55' : ''}`}>
+                                  <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-orange-50 dark:bg-orange-500/10 border-b border-border">
+                                    <span className="text-[11px] font-medium text-foreground">
+                                      {ret.date} · {RETURN_REASON_LABELS[ret.reason]}
+                                      {cancelled && <span className="ml-1.5 text-muted-foreground">(отменён)</span>}
+                                    </span>
+                                    <span className={`text-[11px] font-bold tabular-nums ${cancelled ? 'line-through text-muted-foreground' : 'text-orange-600 dark:text-orange-400'}`}>
+                                      −{formatCurrency(ret.totalAmount)}
+                                    </span>
+                                  </div>
+                                  <div className="divide-y divide-border/60">
+                                    {ret.lines.map((l) => (
+                                      <div key={l.id} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                                        <span className="flex-1 text-foreground truncate">{l.name}</span>
+                                        <span className="text-muted-foreground tabular-nums whitespace-nowrap">{formatNum(l.qty)} {l.unit}</span>
+                                        <span className="font-medium text-foreground tabular-nums w-20 text-right">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {ret.note && <p className="text-[11px] text-muted-foreground px-3 py-1.5 border-t border-border/60">Комментарий: {ret.note}</p>}
+                                </div>
+                              )
+                            })}
                           </div>
-                        ))}
-                        {r.note && <p className="text-[11px] text-muted-foreground px-3 py-2">Примечание: {r.note}</p>}
+                        )}
                       </div>
                     )}
                   </div>
