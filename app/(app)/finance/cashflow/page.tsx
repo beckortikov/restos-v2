@@ -15,7 +15,8 @@ import {
   fetchFinancialOperations, fetchFinancialAccounts, createFinancialOperation,
   fetchCashflowReport, type CashflowReport,
 } from '@/lib/queries'
-import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Download } from 'lucide-react'
+import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Download, Search, ChevronRight } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { exportToExcel } from '@/lib/export-excel'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
@@ -51,6 +52,8 @@ export default function CashflowPage() {
   const [dateFrom, setDateFrom] = useState(initialRange.from)
   const [dateTo, setDateTo] = useState(initialRange.to)
   const [dialogOpen, setDialogOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [detailFor, setDetailFor] = useState<FinancialOperation | null>(null)
   const [operations, setOperations] = useState<FinancialOperation[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [report, setReport] = useState<CashflowReport | null>(null)
@@ -103,12 +106,22 @@ export default function CashflowPage() {
 
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
+  const q = search.trim().toLowerCase()
   const filtered = operations.filter((op) => {
     const matchType = typeFilter === 'all' || op.type === typeFilter
     const matchActivity = activityFilter === 'all' || op.activity === activityFilter
     const matchDateFrom = !dateFrom || op.date >= dateFrom
     const matchDateTo = !dateTo || op.date <= dateTo
-    return matchType && matchActivity && matchDateFrom && matchDateTo
+    // Поиск по описанию / категории (с русской подписью) / счёту / контрагенту —
+    // раньше в реестре не было никакого способа найти операцию.
+    const matchSearch = !q || [
+      op.description,
+      op.category,
+      finopCategoryLabel(op.category),
+      op.accountName,
+      op.counterparty,
+    ].some((v) => (v ?? '').toLowerCase().includes(q))
+    return matchType && matchActivity && matchDateFrom && matchDateTo && matchSearch
   }).sort((a, b) => {
     // Реестр читается хронологически: новые сверху. Ключ — бизнес-дата (date),
     // а не порядок прихода с бэка: операция с задней датой раньше стояла вверху
@@ -210,6 +223,17 @@ export default function CashflowPage() {
       <CashflowCharts report={report} operations={filtered} />
 
       {/* Filters */}
+      {/* Поиск по реестру — в таблице его не было вовсе */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Поиск по описанию, категории, счёту…"
+          className="w-full pl-10 pr-3 py-2.5 bg-card border border-border rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      </div>
+
       <div className="flex flex-wrap gap-3 items-center">
         <DateRangePresets
           value={preset}
@@ -244,46 +268,102 @@ export default function CashflowPage() {
         </div>
       </div>
 
-      {/* Operations table */}
-      <div className="bg-card rounded-xl border border-border overflow-hidden">
-        <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[600px]">
-          <thead>
-            <tr className="border-b border-border bg-muted/40">
-              {['Дата', 'Описание', 'Категория', 'Счёт', 'Вид', 'Источник', 'Сумма'].map((h) => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((op) => (
-              <tr key={op.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">{op.date}</td>
-                <td className="px-4 py-3 text-sm text-foreground max-w-xs">
-                  <span className="truncate block">{String(op.description || finopCategoryLabel(op.category) || '')}</span>
-                </td>
-                <td className="px-4 py-3">
-                  <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{finopCategoryLabel(op.category)}</span>
-                </td>
-                <td className="px-4 py-3 text-xs text-muted-foreground">{String(op.accountName || '')}</td>
-                <td className="px-4 py-3">
-                  <span className={`text-xs px-2 py-0.5 rounded font-medium ${ACTIVITY_COLORS[op.activity]}`}>
-                    {ACTIVITY_LABELS[op.activity]}
-                  </span>
-                </td>
-                <td className="px-4 py-3 text-xs text-muted-foreground">{op.isAuto ? 'Авто' : 'Ручная'}</td>
-                <td className="px-4 py-3">
-                  {/* Н23: перевод между счетами — нейтрально (↔), не красный расход. */}
-                  <span className={`font-semibold text-sm ${op.type === 'in' ? 'text-emerald-600' : op.type === 'out' ? 'text-destructive' : 'text-muted-foreground'}`}>
-                    {op.type === 'in' ? '+' : op.type === 'out' ? '−' : '↔ '}{formatCurrency(op.amount)}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      {/* Реестр операций — тач-карточки; тап открывает детали.
+          Таблица с горизонтальным скроллом на узких экранах не читалась. */}
+      {filtered.length === 0 ? (
+        <div className="bg-card rounded-xl border border-border p-10 text-center">
+          <p className="text-sm text-muted-foreground">
+            {search ? `Ничего не найдено по запросу «${search}»` : 'Операций за период нет'}
+          </p>
         </div>
-      </div>
+      ) : (
+        <div className="bg-card rounded-xl border border-border overflow-hidden divide-y divide-border">
+          {filtered.map((op) => (
+            <button
+              key={op.id}
+              type="button"
+              onClick={() => setDetailFor(op)}
+              className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-muted/40 transition-colors"
+            >
+              <div className={`size-9 rounded-lg flex items-center justify-center shrink-0 ${
+                op.type === 'in'
+                  ? 'bg-emerald-100 dark:bg-emerald-500/15 text-emerald-600'
+                  : op.type === 'out'
+                    ? 'bg-red-100 dark:bg-red-500/15 text-destructive'
+                    : 'bg-muted text-muted-foreground'
+              }`}>
+                {op.type === 'in' ? <ArrowDownCircle className="size-4" /> : op.type === 'out' ? <ArrowUpCircle className="size-4" /> : <ArrowLeftRight className="size-4" />}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium text-foreground truncate">
+                  {String(op.description || finopCategoryLabel(op.category) || '—')}
+                </p>
+                <p className="text-xs text-muted-foreground truncate">
+                  {(op.date ?? '').slice(0, 10)} · {finopCategoryLabel(op.category)}
+                  {op.accountName ? ` · ${op.accountName}` : ''}
+                </p>
+              </div>
+              <div className="flex flex-col items-end gap-0.5 shrink-0">
+                {/* Н23: перевод между счетами — нейтрально (↔), не красный расход. */}
+                <span className={`text-sm font-bold tabular-nums ${op.type === 'in' ? 'text-emerald-600' : op.type === 'out' ? 'text-destructive' : 'text-muted-foreground'}`}>
+                  {op.type === 'in' ? '+' : op.type === 'out' ? '−' : '↔ '}{formatCurrency(op.amount)}
+                </span>
+                {!op.isAuto && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground">ручная</span>
+                )}
+              </div>
+              <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Детали операции */}
+      <Dialog open={!!detailFor} onOpenChange={(v) => { if (!v) setDetailFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          {detailFor && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="truncate">
+                  {String(detailFor.description || finopCategoryLabel(detailFor.category) || 'Операция')}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-3 py-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-muted-foreground">Сумма</span>
+                  <span className={`text-lg font-bold tabular-nums ${detailFor.type === 'in' ? 'text-emerald-600' : detailFor.type === 'out' ? 'text-destructive' : 'text-foreground'}`}>
+                    {detailFor.type === 'in' ? '+' : detailFor.type === 'out' ? '−' : '↔ '}{formatCurrency(detailFor.amount)}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-border divide-y divide-border text-sm">
+                  {[
+                    ['Дата', (detailFor.date ?? '').slice(0, 10)],
+                    ['Категория', finopCategoryLabel(detailFor.category)],
+                    ['Счёт', detailFor.accountName || '—'],
+                    ['Вид деятельности', ACTIVITY_LABELS[detailFor.activity]],
+                    ['Контрагент', detailFor.counterparty || '—'],
+                    ['Источник', detailFor.isAuto ? 'Создана автоматически' : 'Внесена вручную'],
+                  ].map(([k, v]) => (
+                    <div key={k} className="flex items-center justify-between gap-3 px-3 py-2">
+                      <span className="text-muted-foreground shrink-0">{k}</span>
+                      <span className="text-foreground text-right truncate">{v}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <DialogFooter>
+                <button
+                  type="button"
+                  onClick={() => setDetailFor(null)}
+                  className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+                >
+                  Закрыть
+                </button>
+              </DialogFooter>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <CreateOperationDialog
         open={dialogOpen}
