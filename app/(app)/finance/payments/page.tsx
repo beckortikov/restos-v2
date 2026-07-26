@@ -62,6 +62,30 @@ export default function PaymentsPage() {
     }
   }, [payments])
 
+  // Группировка по срочности: плоский список не отвечал на главный вопрос
+  // «что платить прямо сейчас» — просроченное тонуло среди будущих платежей.
+  const groups = useMemo(() => {
+    const overdue: RecurringPayment[] = []
+    const thisWeek: RecurringPayment[] = []
+    const later: RecurringPayment[] = []
+    const paused: RecurringPayment[] = []
+    for (const p of payments) {
+      if (!p.active) { paused.push(p); continue }
+      const d = daysUntil(p.nextDue)
+      if (d !== null && d < 0) overdue.push(p)
+      else if (d !== null && d <= 7) thisWeek.push(p)
+      else later.push(p)
+    }
+    // Внутри группы — по сроку: чем ближе дата, тем выше.
+    const byDue = (a: RecurringPayment, b: RecurringPayment) => (a.nextDue ?? '9999').localeCompare(b.nextDue ?? '9999')
+    return [
+      { key: 'overdue', title: 'Просрочены', tone: 'text-destructive', items: overdue.sort(byDue) },
+      { key: 'week', title: 'На этой неделе', tone: 'text-amber-600', items: thisWeek.sort(byDue) },
+      { key: 'later', title: 'Позже', tone: 'text-muted-foreground', items: later.sort(byDue) },
+      { key: 'paused', title: 'Приостановлены', tone: 'text-muted-foreground', items: paused.sort(byDue) },
+    ].filter(g => g.items.length > 0)
+  }, [payments])
+
   async function toggleActive(p: RecurringPayment) {
     try {
       await updateRecurringPayment(p.id, { active: !p.active })
@@ -126,10 +150,18 @@ export default function PaymentsPage() {
         </div>
       )}
 
-      {/* List */}
-      {payments.length > 0 && (
-        <div className="space-y-2">
-          {payments.map(p => {
+      {/* Список по группам срочности: сначала просроченное, потом эта неделя */}
+      {groups.map(group => (
+        <div key={group.key} className="space-y-2">
+          <div className="flex items-baseline justify-between gap-3 px-1">
+            <h2 className={`text-sm font-semibold ${group.tone}`}>
+              {group.title} <span className="text-muted-foreground font-normal">· {group.items.length}</span>
+            </h2>
+            <span className="text-xs font-medium text-muted-foreground tabular-nums">
+              {formatCurrency(group.items.reduce((s, p) => s + p.amount, 0))}
+            </span>
+          </div>
+          {group.items.map(p => {
             const st = dueStatus(p)
             return (
               <div
@@ -173,7 +205,7 @@ export default function PaymentsPage() {
             )
           })}
         </div>
-      )}
+      ))}
 
       <RecurringPaymentDialog payment={null} open={addOpen} onOpenChange={setAddOpen} onSuccess={load} />
       <RecurringPaymentDialog payment={editing} open={!!editing} onOpenChange={v => { if (!v) setEditing(null) }} onSuccess={load} />
