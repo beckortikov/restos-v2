@@ -183,7 +183,12 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	}
 	writeMeta("Дата", dateStr)
 	writeMeta("", in.TableLabel)
-	writeMeta("Официант", in.WaiterName)
+	// В фастфуде официантов нет — заказ принимает кассир за стойкой. Строка
+	// «Официант» на гостевом чеке дублировала бы «Кассир» тем же именем.
+	// Кухонный бегунок ниже прячет её по тому же признаку.
+	if !in.FastFood {
+		writeMeta("Официант", in.WaiterName)
+	}
 	writeMeta("Кассир", in.CashierName)
 	if in.GuestsCount > 0 {
 		writeMeta("Гостей", strconv.Itoa(in.GuestsCount))

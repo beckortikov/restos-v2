@@ -70,6 +70,11 @@ func TestGolden_Runner(t *testing.T) {
 
 // Фастфуд (tables_enabled=false): гость забирает заказ по номеру, поэтому
 // номер печатается крупно (6×) шапкой чека, а «Чек №» в мете не дублируется.
+// Фастфуд: официантов нет, заказ принимает кассир. WaiterName здесь задан
+// НАРОЧНО — в фастфуд-заказе он может быть проставлен (кассир числится
+// официантом), но на гостевой чек строка «Официант» печататься не должна:
+// она дублировала бы «Кассир» тем же именем. Эталон ниже эту строку не
+// содержит — если она вернётся в вывод, тест упадёт.
 func TestGolden_ReceiptFastFood(t *testing.T) {
 	in := ReceiptInput{
 		RestaurantName: "Бургер Хаус",
@@ -77,6 +82,7 @@ func TestGolden_ReceiptFastFood(t *testing.T) {
 		OrderNumber:    42,
 		OpenedAt:       fixedTime,
 		ClosedAt:       fixedTime.Add(4 * time.Minute),
+		WaiterName:     "Нафиса",
 		CashierName:    "Нафиса",
 		FastFood:       true,
 		Items: []ReceiptItem{

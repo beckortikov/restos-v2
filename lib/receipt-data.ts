@@ -127,7 +127,11 @@ export function buildReceiptData(
   const isHall = isHallType(order.type)
   const table = isHall && order.tableId ? ctx.tables?.find(t => t.id === order.tableId) : null
   const zone = isHall && table ? ctx.zones?.find(z => z.id === table.zone) : null
-  const waiter = order.waiterId ? ctx.users?.find(u => u.id === order.waiterId) : null
+  // В фастфуде (tablesEnabled=false) официантов нет — заказ принимает кассир,
+  // и строка «Официант» на чеке дублировала бы «Кассир» тем же именем.
+  // Тот же признак прячет её в ESC/POS (server/internal/escpos/layouts.go).
+  const isFastFood = ctx.restaurant?.tablesEnabled === false
+  const waiter = !isFastFood && order.waiterId ? ctx.users?.find(u => u.id === order.waiterId) : null
 
   return {
     orderId: order.id,

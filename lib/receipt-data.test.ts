@@ -135,6 +135,31 @@ describe('buildReceiptData — order type invariants', () => {
     expect(data.guestsCount).toBe(3)
   })
 
+  // Фастфуд (tablesEnabled=false): официантов нет, заказ принимает кассир.
+  // Строка «Официант» на чеке дублировала бы «Кассир» тем же именем, поэтому
+  // waiterId в заказе игнорируем. Тот же признак прячет её в ESC/POS —
+  // см. TestGolden_ReceiptFastFood.
+  it('фастфуд: официант не попадает на чек даже при waiterId в заказе', () => {
+    const order = mkOrder({ type: 'takeaway', waiterId: 'w1' })
+    const users = [{ id: 'w1', name: 'Нафиса' }] as any
+
+    const fastfood = buildReceiptData(
+      order,
+      { ...ctxEmpty, users, restaurant: { tablesEnabled: false } as any, currentUser: { name: 'Нафиса' } },
+      { isPreCheck: false },
+    )
+    expect(fastfood.waiterName).toBeUndefined()
+    expect(fastfood.cashierName).toBe('Нафиса')
+
+    // Контроль: тот же заказ в обычном режиме официанта показывает.
+    const normal = buildReceiptData(
+      order,
+      { ...ctxEmpty, users, restaurant: { tablesEnabled: true } as any },
+      { isPreCheck: false },
+    )
+    expect(normal.waiterName).toBe('Нафиса')
+  })
+
   it('hall без zone в ctx → fallback на "Зал"', () => {
     const data = buildReceiptData(
       mkOrder({ type: 'hall', tableId: 'tbl-2' }),
