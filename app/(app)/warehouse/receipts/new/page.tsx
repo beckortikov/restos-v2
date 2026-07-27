@@ -35,6 +35,7 @@ import {
   type Warehouse,
 } from '@/lib/types'
 import { fetchSuppliers, fetchIngredients, createReceipt, createSupplier, createIngredient, fetchFinancialAccounts, fetchWarehouses } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import {
   Dialog,
   DialogContent,
@@ -208,7 +209,7 @@ export default function NewReceiptPage() {
   const [creatingIngredient, setCreatingIngredient] = useState(false)
 
   useEffect(() => {
-    Promise.all([fetchSuppliers(), fetchIngredients(), fetchFinancialAccounts(), fetchWarehouses()])
+    Promise.all([fetchSuppliers(), fetchIngredients(), fetchFinancialAccounts().then(selectableAccounts), fetchWarehouses()])
       .then(([s, i, accs, whs]) => {
         setSuppliers(s)
         setIngredients(i)

@@ -8,6 +8,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
 import { type CashShift, type CashShiftOperation, type FinancialAccount, type Order } from '@/lib/types'
 import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, patchShiftAccount, printShiftZ, printShiftX, printShiftService, fetchOrders, cancelOrder, type ShiftZReport } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown, AlertTriangle, Ban } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
@@ -383,7 +384,7 @@ export default function ShiftsPage() {
 
   useEffect(() => {
     reload().finally(() => setLoading(false))
-    fetchFinancialAccounts().then(accs => {
+    fetchFinancialAccounts().then(selectableAccounts).then(accs => {
       // Раньше показывали ТОЛЬКО type='cash'. Но юзер мог создать счёт с
       // именем «Касса» но type='bank' (бывший default'ом в /finance/accounts
       // до v2.0.98), и форма смены показывала «Нет счёта типа Касса» даже

@@ -34,6 +34,8 @@ import {
   type Zone,
 } from '@/lib/types'
 import { fetchTables, fetchUsers, fetchZones, fetchFinancialAccounts, fetchMenuItems } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
+import type { FinancialAccount } from '@/lib/types'
 import { buildReceiptData } from '@/lib/receipt-data'
 import { useAuth } from '@/lib/auth-store'
 import { PrintReceipt, type ReceiptData } from '@/components/print-receipt'
@@ -58,13 +60,6 @@ import {
   Receipt,
   Loader2,
 } from 'lucide-react'
-
-interface FinancialAccount {
-  id: string
-  name: string
-  type: string
-  balance: number
-}
 
 export interface OrderActionData {
   paymentMethod?: PaymentMethod
@@ -196,7 +191,9 @@ export function OrderActionsBody({
 
   // Initial data load (one-shot). При смене order.id перезагружаем voids/splits ниже.
   useEffect(() => {
-    fetchFinancialAccounts().then(a => {
+    fetchFinancialAccounts().then(all => {
+      // Отключённые счета (миграция 063) к оплате не предлагаем.
+      const a = selectableAccounts(all)
       setAccounts(a)
       const cash = a.find(acc => acc.type === 'cash')
       if (cash) setSelectedAccountId(cash.id)

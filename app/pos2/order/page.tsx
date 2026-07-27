@@ -15,6 +15,7 @@ import { sortMenuItems } from '@/lib/menu-sort'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder, fetchMenuPopularity } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, startOfToday, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -345,7 +346,7 @@ export default function PosV2Order() {
     else { setSelectedTableId(''); setTableOrders([]) }
   }, [orderType, numberMode, loadQueue])
 
-  useEffect(() => { fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [])
+  useEffect(() => { fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}) }, [])
 
   // Разделённый заказ — грузим части (оплачиваются прямо в сайдбаре).
   useEffect(() => {

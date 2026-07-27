@@ -8,6 +8,7 @@ import {
   fetchActiveShift, fetchServiceAccrualByShift, fetchServicePayoutByShift,
   fetchUsers, fetchFinancialAccounts, payServiceCharge,
 } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { formatCurrency } from '@/lib/helpers'
 import { dSum } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
@@ -58,7 +59,7 @@ export default function PosV2Service() {
 
   useEffect(() => {
     load()
-    fetchFinancialAccounts().then(setAccounts).catch(() => {})
+    fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {})
   }, [load])
 
   const totalAccrued = useMemo(() => dSum(rows.map(r => r.accrued)), [rows])

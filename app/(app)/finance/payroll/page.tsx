@@ -14,6 +14,7 @@ import {
   fetchFinancialOperations, fetchSalaryReport, type SalaryReport,
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays } from 'lucide-react'
 import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
 import { exportToExcel } from '@/lib/export-excel'
@@ -162,7 +163,7 @@ export default function PayrollPage() {
   const reload = async () => {
     const [users, accs, accrual, payout, salPaid, accrualRows] = await Promise.all([
       fetchUsers(),
-      fetchFinancialAccounts(),
+      fetchFinancialAccounts().then(selectableAccounts),
       fetchServiceAccrualByWaiter(serviceFrom, serviceTo),
       fetchServicePayoutByWaiter(serviceFrom, serviceTo),
       loadSalaryPaid(),

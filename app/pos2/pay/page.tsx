@@ -6,6 +6,7 @@ import { LayoutGrid, RefreshCw, UtensilsCrossed, ShoppingBag } from 'lucide-reac
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { fetchTables, fetchOrders, fetchFinancialAccounts } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { formatCurrency } from '@/lib/helpers'
 import { payable as calcPayable } from '@/lib/pos-v2/pay'
 import { PosModal } from '@/components/pos-v2/pos-modal'
@@ -44,7 +45,7 @@ export default function PosV2Pay() {
     } finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { load(); fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [load])
+  useEffect(() => { load(); fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}) }, [load])
 
   // Приход с карты/сайдбара ?order=<id> → сразу открыть оплату этого заказа (один раз).
   const autoOpenRef = useRef(false)

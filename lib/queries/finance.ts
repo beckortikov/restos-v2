@@ -15,16 +15,43 @@ export async function fetchFinancialAccounts(): Promise<FinancialAccount[]> {
   return rows.map(mapFinancialAccount) as FinancialAccount[]
 }
 
+/**
+ * Счета, которые можно ВЫБРАТЬ при оплате или операции.
+ *
+ * Список из fetchFinancialAccounts намеренно возвращает и отключённые: их
+ * остаток продолжает учитываться в Балансе и на дашборде, а история операций
+ * должна показывать имя счёта. Поэтому фильтруем не при загрузке, а точечно —
+ * в каждом пикере. Агрегаты (Баланс, «Касса (все счета)», страница «Счета»,
+ * ДДС) этот хелпер НЕ используют — иначе деньги пропали бы из отчётов.
+ *
+ * @param kind 'cash' — только наличные, 'bank' — только безналичные.
+ */
+export function selectableAccounts(
+  accounts: FinancialAccount[],
+  kind?: 'cash' | 'bank',
+): FinancialAccount[] {
+  return accounts.filter((a) => {
+    if (!a.isEnabled) return false
+    if (kind === 'cash') return a.type === 'cash'
+    if (kind === 'bank') return a.type !== 'cash'
+    return true
+  })
+}
+
+/** Включить/отключить счёт. 409 — если счёт держит смену, платежи или он последний наличный. */
+export async function setFinancialAccountEnabled(id: string, enabled: boolean): Promise<FinancialAccount> {
+  const row: any = await unwrap(api.POST('/api/v1/finance/accounts/{id}/enabled', {
+    params: { path: { id } },
+    body: { enabled },
+  }))
+  return mapFinancialAccount(row)
+}
+
 export async function createFinancialAccount(data: { name: string; type: string }): Promise<FinancialAccount> {
   const row: any = await unwrap(api.POST('/api/v1/finance/accounts', {
     body: { name: data.name, type: data.type, balance: '0' } as any,
   }))
-  return {
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    balance: Number(row.balance ?? 0),
-  } as FinancialAccount
+  return mapFinancialAccount(row)
 }
 
 export async function updateFinancialAccount(id: string, patch: { name?: string; type?: string }): Promise<FinancialAccount> {
@@ -35,20 +62,18 @@ export async function updateFinancialAccount(id: string, patch: { name?: string;
     params: { path: { id } },
     body: body as any,
   }))
-  return {
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    balance: Number(row.balance ?? 0),
-  } as FinancialAccount
+  return mapFinancialAccount(row)
 }
 
 export async function deleteFinancialAccount(id: string): Promise<void> {
   try {
     await unwrap(api.DELETE('/api/v1/finance/accounts/{id}', { params: { path: { id } } }))
   } catch (e) {
+    // Показываем причину сервера: 409 приходит и на «есть операции», и на
+    // «ненулевой баланс» — раньше обе подменялись одним текстом, и владелец
+    // видел неверную причину.
     if (e instanceof V4Error && e.status === 409) {
-      throw new Error('Счёт используется в операциях')
+      throw new Error(e.message || 'Счёт используется в операциях')
     }
     throw e
   }
@@ -714,6 +739,9 @@ function mapFinancialAccount(r: any): FinancialAccount {
     name: r.name,
     type: r.type,
     balance: Number(r.balance ?? 0),
+    // Бэк без миграции 063 поля не отдаёт — читаем как включённый, иначе
+    // после апдейта фронта раньше бэка исчезли бы ВСЕ счета из оплаты.
+    isEnabled: r.is_enabled !== false,
   } as FinancialAccount
 }
 

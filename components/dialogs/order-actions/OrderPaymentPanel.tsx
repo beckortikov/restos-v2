@@ -7,10 +7,12 @@
  * State владелец — родитель; компонент пробрасывает callbacks обратно.
  */
 
+import { useMemo } from 'react'
 import { dRound, dDiv, dMul } from '@/lib/decimal'
 import { formatCurrency } from '@/lib/helpers'
 import { useAuth } from '@/lib/auth-store'
-import type { OrderPayment } from '@/lib/types'
+import { selectableAccounts } from '@/lib/queries/finance'
+import type { OrderPayment, FinancialAccount } from '@/lib/types'
 import {
   Banknote,
   CreditCard,
@@ -23,13 +25,6 @@ import {
   AlertTriangle,
   ArrowRightLeft,
 } from 'lucide-react'
-
-interface FinancialAccount {
-  id: string
-  name: string
-  type: string
-  balance: number
-}
 
 type PaymentType = 'cash' | 'noncash'
 
@@ -106,7 +101,7 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
     setIncludeService,
     servicePercent,
     setServicePercent,
-    accounts,
+    accounts: allAccounts,
     paymentType,
     setPaymentType,
     selectedAccountId,
@@ -123,6 +118,11 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
     setAddPaymentAmount,
     onPreCheck,
   } = props
+
+  // Отключённый счёт (миграция 063) не предлагаем к оплате — сервер такую
+  // проводку всё равно отклонит с 409. Дальше по файлу `accounts` — уже
+  // отфильтрованный список, отдельных проверок в пикерах не нужно.
+  const accounts = useMemo(() => selectableAccounts(allAccounts), [allAccounts])
 
   // Порог одобрения скидки — настройка ресторана (default 10). Скидку ВЫШЕ него
   // бэк не проведёт без approved_by менеджера/владельца (orders_close.go).

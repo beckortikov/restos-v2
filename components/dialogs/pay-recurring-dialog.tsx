@@ -5,6 +5,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { payRecurringPayment, fetchFinancialAccounts } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { randomId } from '@/lib/random-id'
 import { formatCurrency } from '@/lib/helpers'
 import { type RecurringPayment, type FinancialAccount } from '@/lib/types'
@@ -31,7 +32,7 @@ export function PayRecurringDialog({ payment, open, onOpenChange, onSuccess }: {
     if (!open || !payment) return
     setAmount(String(payment.amount ?? 0))
     setIdemKey(randomId())
-    fetchFinancialAccounts()
+    fetchFinancialAccounts().then(selectableAccounts)
       .then(accs => {
         setAccounts(accs)
         setAccountId(payment.accountId || accs.find(a => a.type === 'cash')?.id || accs[0]?.id || '')

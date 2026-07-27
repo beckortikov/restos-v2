@@ -13,6 +13,7 @@ import {
   fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchUsers, payServiceCharge,
   deleteShiftExpense,
 } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
 import { PosModal } from '@/components/pos-v2/pos-modal'
@@ -108,7 +109,7 @@ export default function PosV2Shift() {
 
   useEffect(() => {
     load()
-    fetchFinancialAccounts().then(setAccounts).catch(() => {})
+    fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {})
   }, [load])
 
   // Наличный ящик трогают только операции без своего счёта или на счёте смены.

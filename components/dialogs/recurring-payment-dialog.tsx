@@ -7,6 +7,7 @@ import {
 import {
   createRecurringPayment, updateRecurringPayment, fetchFinancialAccounts,
 } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { type RecurringPayment, type FinancialAccount } from '@/lib/types'
 import { CalendarClock } from 'lucide-react'
 import { toast } from 'sonner'
@@ -33,7 +34,7 @@ export function RecurringPaymentDialog({ payment, open, onOpenChange, onSuccess 
 
   useEffect(() => {
     if (!open) return
-    fetchFinancialAccounts()
+    fetchFinancialAccounts().then(selectableAccounts)
       .then(accs => {
         setAccounts(accs)
         setAccountId(payment?.accountId || accs.find(a => a.type === 'cash')?.id || accs[0]?.id || '')

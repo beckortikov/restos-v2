@@ -27,6 +27,7 @@ import {
 // чтобы каждый раз идти прямо в API. Размер списка voids на заказ — единицы
 // строк, кэш тут не выигрывает.
 import { fetchVoidsForOrder } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { buildReceiptData } from '@/lib/receipt-data'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -239,8 +240,12 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   // Initial load -----------------------------------------------------------
   useEffect(() => {
     let cancelled = false
-    fetchFinancialAccounts().then(a => {
+    fetchFinancialAccounts().then(all => {
       if (cancelled) return
+      // Отсекаем отключённые счета (миграция 063) прямо на входе — ниже по
+      // компоненту `accounts` используется только для выбора счёта оплаты,
+      // агрегатов здесь нет.
+      const a = selectableAccounts(all)
       setAccounts(a)
       const cash = a.find(acc => acc.type === 'cash')
       if (cash) setSelectedAccountId(cash.id)

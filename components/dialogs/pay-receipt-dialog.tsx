@@ -5,6 +5,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { payReceipt, fetchFinancialAccounts } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { randomId } from '@/lib/random-id'
 import { formatCurrency } from '@/lib/helpers'
 import { type StockReceipt, type FinancialAccount } from '@/lib/types'
@@ -37,7 +38,7 @@ export function PayReceiptDialog({ receipt, open, onOpenChange, onSuccess }: {
     setAmount(String(receipt.debtAmount ?? 0))
     setIdemKey(randomId())
     setLoading(true)
-    fetchFinancialAccounts()
+    fetchFinancialAccounts().then(selectableAccounts)
       .then(accs => {
         setAccounts(accs)
         // Какой счёт оплачивал накладную изначально — неизвестно (у stock_receipts

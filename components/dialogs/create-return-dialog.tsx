@@ -5,6 +5,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { createStockReturn, fetchFinancialAccounts, fetchSuppliers } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { randomId } from '@/lib/random-id'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSub, dSum } from '@/lib/decimal'
@@ -60,7 +61,7 @@ export function CreateReturnDialog({ receipt, open, onOpenChange, onSuccess }: {
     setReason('spoilage')
     setIdemKey(randomId())
     setLoading(true)
-    Promise.all([fetchFinancialAccounts(), fetchSuppliers()])
+    Promise.all([fetchFinancialAccounts().then(selectableAccounts), fetchSuppliers()])
       .then(([accs, suppliers]) => {
         setAccounts(accs)
         const debt = suppliers.find(s => s.id === receipt.supplierId)?.currentDebt ?? 0

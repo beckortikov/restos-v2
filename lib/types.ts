@@ -502,6 +502,13 @@ export interface FinancialAccount {
   name: string
   type: 'cash' | 'bank'
   balance: number
+  /**
+   * Счёт участвует в оплате и операциях. Отключённый счёт остаётся со всей
+   * историей и остатком (остаток продолжает считаться в Балансе), но исчезает
+   * из выбора — см. selectableAccounts() в lib/queries/finance.ts.
+   * Старые ответы бэка без поля читаются как включённый.
+   */
+  isEnabled: boolean
 }
 
 export interface FinancialOperation {

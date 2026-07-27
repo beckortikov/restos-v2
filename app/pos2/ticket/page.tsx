@@ -6,6 +6,7 @@ import { LayoutGrid, RefreshCw, Plus, Minus, CreditCard, XCircle, Trash2, X, Arr
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, assignWaiter, fetchUsers, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote, fetchActiveShift } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { formatCurrency, calcLineTotal, calcOrderDisplayTotal } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
@@ -71,7 +72,7 @@ export default function PosV2Ticket() {
 
   useEffect(() => {
     load()
-    fetchFinancialAccounts().then(setAccounts).catch(() => {})
+    fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {})
     fetchUsers().then(u => setWaiters(u.filter(x => x.role === 'waiter'))).catch(() => {})
   }, [load])
 

@@ -6,6 +6,7 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { type Supplier, type FinancialAccount } from '@/lib/types'
 import { fetchSuppliers, paySupplierDebt, fetchFinancialAccounts, recomputeSupplierDebts } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { AlertTriangle, Plus, Search, ChevronRight, Banknote, Package, TrendingDown, ShieldAlert, CheckCircle2, Users, RefreshCw } from 'lucide-react'
 import { toast } from 'sonner'
@@ -53,7 +54,7 @@ export default function SuppliersPage() {
     fetchSuppliers()
       .then(data => { setSuppliers(data); setLoading(false) })
       .catch(() => setLoading(false))
-    fetchFinancialAccounts()
+    fetchFinancialAccounts().then(selectableAccounts)
       .then(accs => {
         setAccounts(accs)
         const cash = accs.find(a => a.type === 'cash') ?? accs[0]

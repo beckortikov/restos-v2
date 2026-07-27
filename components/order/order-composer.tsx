@@ -31,6 +31,7 @@ import {
 // в @/lib/queries возвращает stale до того, как фоновое обновление
 // допишет новые строки в Dexie (см. cache.ts cachedQuery, stale-while-revalidate).
 import { fetchVoidsForOrder } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { fetchStopList } from '@/lib/queries'
 import { fetchBatchAvailability } from '@/lib/queries/batch_cooking'
 import { V4Error } from '@/lib/api'
@@ -926,7 +927,7 @@ export function OrderComposer(props: OrderComposerProps) {
           let accId: string | undefined = (shift as { accountId?: string } | null)?.accountId
           let accName: string | undefined = (shift as { accountName?: string } | null)?.accountName
           if (!accId) {
-            const accs = await fetchFinancialAccounts().catch(() => [])
+            const accs = await fetchFinancialAccounts().then(selectableAccounts).catch(() => [])
             const cash = accs.find(a => a.type === 'cash')
             accId = cash?.id
             accName = cash?.name
