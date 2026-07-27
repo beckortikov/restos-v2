@@ -290,6 +290,9 @@ export async function paySalaryFull(
   employeeName: string,
   kind: 'salary' | 'advance' = 'salary',
   period?: string, // YYYY-MM — включает серверный кап (без него кап отключён)
+  // override — выплатить сумму выше расчётного остатка осознанно (бонус,
+  // доплата, коррекция) вместо блокировки сервером; requires overrideReason.
+  opts?: { override?: boolean; overrideReason?: string },
 ) {
   void accountName
   const label = kind === 'advance' ? 'Аванс' : 'Зарплата'
@@ -302,9 +305,19 @@ export async function paySalaryFull(
       kind,
       ...(period ? { period } : {}),
       description: `${label} ${employeeName}`,
+      ...(opts?.override ? { override: true, override_reason: opts.overrideReason } : {}),
     } as any,
   }))
-  logAction('payroll.pay', 'payroll', userId, employeeName, { amount, kind })
+  logAction('payroll.pay', 'payroll', userId, employeeName, { amount, kind, override: opts?.override ?? false })
+}
+
+/** Удержание с обязательной причиной (ЗП-4) — заменяет прежний счётчик без следа. */
+export async function addSalaryDeduction(userId: string, amount: number, reason: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/finance/salary/deductions', {
+    body: { user_id: userId, amount: String(amount), reason },
+    headers: { 'Idempotency-Key': randomId() },
+  }))
+  logAction('payroll.deduction', 'payroll', userId, undefined, { amount, reason })
 }
 
 // ─── Отработанные дни (059): табель + ручные отметки ────────────────────────
@@ -449,6 +462,8 @@ export interface SalaryPayoutRow {
   accountId?: string
   accountName?: string
   description?: string
+  /** Выплата выше расчётного остатка, проведённая осознанно (ЗП-4). */
+  isOverride?: boolean
 }
 
 export interface SalaryReportRow {
@@ -510,6 +525,7 @@ export async function fetchSalaryReport(from: string, to: string): Promise<Salar
       accountId: p.account_id || undefined,
       accountName: p.account_name || undefined,
       description: p.description || undefined,
+      isOverride: Boolean(p.is_override),
     })),
     totals: {
       salaryPaid: Number(res?.totals?.salary_paid ?? 0),
@@ -581,8 +597,11 @@ export async function payServiceCharge(args: {
   periodFrom: string
   periodTo: string
   shiftId?: string
+  // override — см. paySalaryFull. Тот же принцип для обслуживания (ЗП-4).
+  override?: boolean
+  overrideReason?: string
 }) {
-  const { waiterId, waiterName, amount, accountId, accountName, periodFrom, periodTo, shiftId } = args
+  const { waiterId, waiterName, amount, accountId, accountName, periodFrom, periodTo, shiftId, override, overrideReason } = args
   void accountName
   const periodLabel = periodFrom.slice(0, 10) === periodTo.slice(0, 10)
     ? periodFrom.slice(0, 10)
@@ -598,9 +617,10 @@ export async function payServiceCharge(args: {
       description,
       // Привязка к смене — иначе выплата не попадёт в отчёт по смене.
       shift_id: shiftId,
+      ...(override ? { override: true, override_reason: overrideReason } : {}),
     } as any,
   }))
-  logAction('payroll.service_pay', 'payroll', waiterId, waiterName, { amount, periodFrom, periodTo, shiftId })
+  logAction('payroll.service_pay', 'payroll', waiterId, waiterName, { amount, periodFrom, periodTo, shiftId, override: override ?? false })
 }
 
 export async function transferBetweenAccounts(fromId: string, toId: string, amount: number, fromName: string, toName: string) {
