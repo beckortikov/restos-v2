@@ -64,6 +64,13 @@ func (s *ShiftsService) Open(ctx context.Context, in OpenShiftInput) (*models.Ca
 	if decimal.IsNegative(open) {
 		return nil, apperrors.Wrap("VALIDATION", "opening_balance must be >= 0", nil)
 	}
+	// Смену нельзя открыть на отключённый счёт — вся наличная выручка пошла бы
+	// на счёт, который владелец вывел из оборота.
+	if in.AccountID != nil {
+		if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+			return nil, err
+		}
+	}
 	actor, _ := audit.ActorFromContext(ctx)
 
 	var shift *models.CashShift
@@ -292,6 +299,9 @@ func (s *ShiftsService) UpdateAccount(ctx context.Context, shiftID string, in Up
 	if in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
 	}
+	if err := MustBeEnabled(ctx, s.r, in.AccountID); err != nil {
+		return nil, err
+	}
 
 	var updated *models.CashShift
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -400,6 +410,14 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 	}
 	if !decimal.IsPositive(amt) {
 		return nil, apperrors.Wrap("VALIDATION", "amount must be > 0", nil)
+	}
+	// Безналичный расход из смены целится в конкретный банк-счёт — он должен
+	// быть включён. Пустой account_id = наличный ящик (счёт смены), он уже
+	// проверен при открытии смены.
+	if a := strings.TrimSpace(in.AccountID); a != "" {
+		if err := MustBeEnabled(ctx, s.r, a); err != nil {
+			return nil, err
+		}
 	}
 	actor, _ := audit.ActorFromContext(ctx)
 

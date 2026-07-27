@@ -13,8 +13,13 @@ type FinancialAccount struct {
 	Type         *string         `gorm:"default:'cash'" json:"type"`
 	Balance      decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"balance"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// IsEnabled — счёт предлагается при оплате и в операциях. Отключённый счёт
+	// остаётся в системе со всей историей и остатком (см. миграцию 063), но
+	// исчезает из пикеров, и сервер не даёт провести на него деньги.
+	IsEnabled  bool       `gorm:"column:is_enabled;default:true" json:"is_enabled"`
+	DisabledAt *time.Time `gorm:"column:disabled_at" json:"disabled_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 func (FinancialAccount) TableName() string { return "financial_accounts" }

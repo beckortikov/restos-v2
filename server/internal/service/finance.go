@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -75,7 +76,7 @@ func (s *FinancialAccountsService) Create(ctx context.Context, in FinancialAccou
 	now := time.Now().UTC()
 	a := &models.FinancialAccount{
 		ID: uuid.NewString(), Name: in.Name, Type: in.Type,
-		RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+		RestaurantID: &rid, IsEnabled: true, CreatedAt: now, UpdatedAt: now,
 	}
 	initial := decimal.Zero
 	if in.Balance != nil {
@@ -160,6 +161,149 @@ func (s *FinancialAccountsService) Patch(ctx context.Context, id string, in Fina
 	return &out, nil
 }
 
+// SetEnabled — включить/отключить счёт. Отключение заменяет удаление: строка
+// остаётся, вся история и остаток целы, но счёт перестаёт предлагаться при
+// оплате, и MustBeEnabled ниже не даёт провести на него деньги.
+//
+// Баланс НЕ проверяем осознанно: это не удаление, деньги никуда не деваются и
+// продолжают считаться в Балансе. Владельцу не нужно сначала обнулять счёт.
+//
+// Гварды — только там, где отключение реально ломает работу кассы.
+func (s *FinancialAccountsService) SetEnabled(ctx context.Context, id string, enabled bool) (*models.FinancialAccount, error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var existing models.FinancialAccount
+	if err := scoped.Where("id = ?", id).First(&existing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	if existing.IsEnabled == enabled {
+		return &existing, nil // идемпотентно
+	}
+
+	if !enabled {
+		if err := s.checkCanDisable(ctx, existing); err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now().UTC()
+	updates := map[string]any{"is_enabled": enabled, "updated_at": now}
+	if enabled {
+		updates["disabled_at"] = nil
+	} else {
+		updates["disabled_at"] = now
+	}
+	scopedUpd, _ := s.r.ForTenant(ctx)
+	if err := scopedUpd.Model(&models.FinancialAccount{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	scopedOut, _ := s.r.ForTenant(ctx)
+	var out models.FinancialAccount
+	if err := scopedOut.Where("id = ?", id).First(&out).Error; err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// checkCanDisable — три случая, когда отключение оставит кассу нерабочей.
+func (s *FinancialAccountsService) checkCanDisable(ctx context.Context, acc models.FinancialAccount) error {
+	// 1. Счёт открытой смены: смена уже пишет в него выручку, отключение
+	//    посреди смены оставит кассира без счёта до её закрытия.
+	scopedShift, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var openShifts int64
+	if err := scopedShift.Model(&models.CashShift{}).
+		Where("account_id = ? AND status = ?", acc.ID, "open").Count(&openShifts).Error; err != nil {
+		return err
+	}
+	if openShifts > 0 {
+		return apperrors.Wrap("CONFLICT", "счёт используется в открытой смене — закройте смену", nil)
+	}
+
+	// 2. Последний включённый наличный счёт: pos2 при открытии смены фильтрует
+	//    строго по type='cash' без фолбэка — без единого наличного счёта смена
+	//    просто не откроется.
+	if acc.Type != nil && *acc.Type == "cash" {
+		scopedCash, err := s.r.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		var otherCash int64
+		if err := scopedCash.Model(&models.FinancialAccount{}).
+			Where("id <> ? AND type = ? AND is_enabled = true", acc.ID, "cash").
+			Count(&otherCash).Error; err != nil {
+			return err
+		}
+		if otherCash == 0 {
+			return apperrors.Wrap("CONFLICT", "это единственный включённый наличный счёт — без него не открыть смену", nil)
+		}
+	}
+
+	// 3. Активные регулярные платежи: шаблон продолжил бы списывать с
+	//    отключённого счёта. Перечисляем их, чтобы владелец перепривязал.
+	scopedRec, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var pays []models.RecurringPayment
+	if err := scopedRec.Where("account_id = ? AND active = true", acc.ID).
+		Order("name ASC").Limit(5).Find(&pays).Error; err != nil {
+		return err
+	}
+	if len(pays) > 0 {
+		names := make([]string, 0, len(pays))
+		for _, p := range pays {
+			if p.Name != nil && *p.Name != "" {
+				names = append(names, *p.Name)
+			}
+		}
+		msg := "на счёт настроены регулярные платежи — перепривяжите их к другому счёту"
+		if len(names) > 0 {
+			msg += ": " + strings.Join(names, ", ")
+		}
+		return apperrors.Wrap("CONFLICT", msg, nil)
+	}
+	return nil
+}
+
+// MustBeEnabled — гвард для любой проводки денег. Вызывается из сервисов,
+// которые дебетуют/кредитуют счёт (операции, оплата заказа, приёмка, оплата
+// долга, ЗП, перевод). Страховка на случай пропущенного пикера на фронте или
+// старой сборки APK закупщика, которая ещё не знает про отключённые счета.
+//
+// Пустой id пропускаем — «счёт не указан» валидируется вызывающим кодом.
+func MustBeEnabled(ctx context.Context, r *repo.Repo, accountID string) error {
+	if accountID == "" {
+		return nil
+	}
+	scoped, err := r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var acc models.FinancialAccount
+	if err := scoped.Where("id = ?", accountID).First(&acc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return apperrors.Wrap("VALIDATION", "счёт не найден", nil)
+		}
+		return err
+	}
+	if !acc.IsEnabled {
+		name := ""
+		if acc.Name != nil {
+			name = " «" + *acc.Name + "»"
+		}
+		return apperrors.Wrap("CONFLICT", "счёт"+name+" отключён — выберите другой счёт", nil)
+	}
+	return nil
+}
+
 // Delete — 409 если есть FinancialOperation на этот аккаунт.
 func (s *FinancialAccountsService) Delete(ctx context.Context, id string) error {
 	scoped, err := s.r.ForTenant(ctx)
@@ -217,6 +361,12 @@ func (s *FinancialAccountsService) Transfer(ctx context.Context, in AccountTrans
 	amount, err := decimal.FromString(*in.Amount)
 	if err != nil || !decimal.IsPositive(amount) {
 		return nil, apperrors.Wrap("VALIDATION", "amount must be positive decimal", err)
+	}
+	// Принимающий счёт должен быть включён — новые деньги на отключённый счёт
+	// не заводим. Счёт-источник проверять НЕ надо осознанно: перевод — это
+	// штатный способ забрать остаток с уже отключённого счёта.
+	if err := MustBeEnabled(ctx, s.r, *in.ToID); err != nil {
+		return nil, err
 	}
 
 	var result AccountTransferResult
@@ -440,6 +590,11 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 	}
 	if in.AccountID == nil || *in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	// Отключённый счёт не участвует в операциях — ни приход, ни расход.
+	// Забрать с него остаток можно переводом (см. Transfer ниже).
+	if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	date := now.Format("2006-01-02")
@@ -1506,6 +1661,10 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 	}
 	if in.AccountID == nil || *in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	// Общая точка обеих выплат — PaySalary и PayServiceCharge.
+	if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	date := now.Format("2006-01-02")

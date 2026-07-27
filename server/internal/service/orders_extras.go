@@ -168,6 +168,11 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 			}
 			return err
 		}
+		// Счёт уже под блокировкой — проверяем его флаг здесь, без лишнего
+		// запроса в горячем пути оплаты.
+		if !acc.IsEnabled {
+			return apperrors.Wrap("CONFLICT", "счёт отключён — выберите другой счёт", nil)
+		}
 
 		// 2b. Требуем открытую смену — как и /close. Продажа (в т.ч. через
 		// разделение счёта) без открытой смены не допускается.

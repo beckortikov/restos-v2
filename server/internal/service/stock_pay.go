@@ -54,6 +54,9 @@ func (s *StockService) PayReceipt(ctx context.Context, id string, in ReceiptPayI
 	if in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
 	}
+	if err := MustBeEnabled(ctx, s.r, in.AccountID); err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 
 	var out *models.StockReceipt

@@ -73,6 +73,28 @@ func (h *FinancialAccountsHandler) Patch(w http.ResponseWriter, r *http.Request)
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// SetEnabled — POST /api/v1/finance/accounts/{id}/enabled  {"enabled": false}
+// Отключение счёта вместо удаления: см. FinancialAccountsService.SetEnabled.
+func (h *FinancialAccountsHandler) SetEnabled(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	if in.Enabled == nil {
+		respond.BadRequest(w, "enabled is required")
+		return
+	}
+	out, err := h.svc.SetEnabled(r.Context(), chi.URLParam(r, "id"), *in.Enabled)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *FinancialAccountsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
 		respond.Error(w, err)

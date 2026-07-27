@@ -7892,6 +7892,57 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/finance/accounts/{id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Включить / отключить счёт
+         * @description Отключение вместо удаления. Счёт остаётся в системе со всей историей и остатком (остаток продолжает учитываться в Балансе), но исчезает из выбора при оплате, и сервер не даёт провести на него деньги. 409, если счёт используется в открытой смене, это последний включённый наличный счёт, или на него настроены активные регулярные платежи.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        enabled: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialAccount"];
+                    };
+                };
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/accounts/transfer": {
         parameters: {
             query?: never;
@@ -12396,6 +12447,10 @@ export interface components {
             /** @enum {string} */
             type?: "cash" | "bank" | "card" | "other";
             balance?: components["schemas"]["Decimal"];
+            /** @description Счёт предлагается при оплате и в операциях. Отключённый счёт остаётся со всей историей и остатком, но исчезает из выбора. */
+            is_enabled?: boolean;
+            /** Format: date-time */
+            disabled_at?: string | null;
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */

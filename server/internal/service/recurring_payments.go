@@ -250,6 +250,12 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 			Where("restaurant_id = ? AND id = ?", rid, accID).First(&acc).Error; err != nil {
 			return apperrors.Wrap("VALIDATION", "account not found", err)
 		}
+		// Счёт мог быть отключён после создания шаблона. SetEnabled не даёт
+		// отключить счёт с активными платежами, но шаблон могли создать/
+		// переключить позже — проверяем на месте оплаты.
+		if !acc.IsEnabled {
+			return apperrors.Wrap("CONFLICT", "счёт платежа отключён — выберите другой счёт", nil)
+		}
 		newBal := decimal.Normalize(decimal.Sub(acc.Balance, amount))
 		if decimal.IsNegative(newBal) {
 			return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)

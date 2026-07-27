@@ -2337,6 +2337,31 @@ paths:
       responses:
         "204": { description: No content }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/finance/accounts/{id}/enabled:
+    post:
+      tags: [finance]
+      summary: Включить / отключить счёт
+      description: >
+        Отключение вместо удаления. Счёт остаётся в системе со всей историей и
+        остатком (остаток продолжает учитываться в Балансе), но исчезает из
+        выбора при оплате, и сервер не даёт провести на него деньги.
+        409, если счёт используется в открытой смене, это последний включённый
+        наличный счёт, или на него настроены активные регулярные платежи.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialAccount" } } } }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/finance/accounts/transfer:
     post:
       tags: [finance]
@@ -4478,6 +4503,12 @@ components:
         name: { type: string }
         type: { type: string, enum: [cash, bank, card, other] }
         balance: { $ref: "#/components/schemas/Decimal" }
+        is_enabled:
+          type: boolean
+          description: >
+            Счёт предлагается при оплате и в операциях. Отключённый счёт остаётся
+            со всей историей и остатком, но исчезает из выбора.
+        disabled_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     FinancialAccountInput:

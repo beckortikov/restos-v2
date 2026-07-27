@@ -146,6 +146,12 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&a).Error; err != nil {
 				return apperrors.Wrap("VALIDATION", "account not found", err)
 			}
+			// Деньги от поставщика на отключённый счёт не заводим. Сторно уже
+			// проведённого возврата (ниже по файлу) этой проверки НЕ имеет
+			// осознанно — иначе деньги застряли бы на отключённом счёте.
+			if !a.IsEnabled {
+				return apperrors.Wrap("CONFLICT", "счёт отключён — выберите другой счёт", nil)
+			}
 			acc = &a
 		}
 

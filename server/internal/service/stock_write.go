@@ -202,6 +202,9 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 				Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&a).Error; err != nil {
 				return apperrors.Wrap("VALIDATION", "account not found", err)
 			}
+			if !a.IsEnabled {
+				return apperrors.Wrap("CONFLICT", "счёт отключён — выберите другой счёт", nil)
+			}
 			acc = &a
 		}
 

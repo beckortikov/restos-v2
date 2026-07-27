@@ -658,6 +658,9 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/finance/accounts", finAccountsH.Create)
 			g.Patch("/finance/accounts/{id}", finAccountsH.Patch)
 			g.Delete("/finance/accounts/{id}", finAccountsH.Delete)
+			// Отключение счёта вместо удаления (миграция 063). Статический
+			// сегмент /transfer объявлен ниже — chi разводит его с {id}.
+			g.Post("/finance/accounts/{id}/enabled", finAccountsH.SetEnabled)
 			g.Post("/finance/accounts/transfer", finAccountsH.Transfer)
 			g.Post("/finance/operations", finOpsH.Create)
 			g.Post("/finance/recurring-payments", recurringPaymentsH.Create)

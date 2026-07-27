@@ -328,6 +328,9 @@ func (s *LiabilitiesService) Pay(ctx context.Context, id string, in LiabilityPay
 	if in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
 	}
+	if err := MustBeEnabled(ctx, s.r, in.AccountID); err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	var out *models.Liability
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {

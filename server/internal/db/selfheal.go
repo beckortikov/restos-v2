@@ -43,6 +43,10 @@ var schemaSelfHealStmts = []string{
 	`ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS warehouse_id      UUID`,
 	`ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS from_warehouse_id UUID`,
 	`ALTER TABLE stock_movements ADD COLUMN IF NOT EXISTS to_warehouse_id   UUID`,
+	// 063: отключение счетов. Без is_enabled любой SELECT по счетам падает
+	// с "column does not exist" — а счета читает каждая оплата заказа.
+	`ALTER TABLE financial_accounts ADD COLUMN IF NOT EXISTS is_enabled  BOOLEAN NOT NULL DEFAULT true`,
+	`ALTER TABLE financial_accounts ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ`,
 }
 
 // backfillSelfHealStmts — best-effort раскладка: 3 фиксированных склада на

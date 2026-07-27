@@ -827,6 +827,9 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 			Where("restaurant_id = ? AND id = ?", rid, in.AccountID).First(&acc).Error; err != nil {
 			return apperrors.Wrap("VALIDATION", "account not found", err)
 		}
+		if !acc.IsEnabled {
+			return apperrors.Wrap("CONFLICT", "счёт отключён — выберите другой счёт", nil)
+		}
 		newBal := decimal.Normalize(decimal.Sub(acc.Balance, pay))
 		if decimal.IsNegative(newBal) {
 			return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)

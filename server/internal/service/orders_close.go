@@ -525,14 +525,22 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 				accIDs = append(accIDs, in.AccountID)
 			}
 			for _, aid := range accIDs {
-				var cnt int64
-				if err := tx.Model(&models.FinancialAccount{}).
-					Where("restaurant_id = ? AND id = ?", rid, aid).
-					Count(&cnt).Error; err != nil {
+				var acc models.FinancialAccount
+				if err := tx.Where("restaurant_id = ? AND id = ?", rid, aid).
+					First(&acc).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return apperrors.Wrap("VALIDATION", "financial account not found: "+aid, nil)
+					}
 					return err
 				}
-				if cnt == 0 {
-					return apperrors.Wrap("VALIDATION", "financial account not found: "+aid, nil)
+				// Тем же запросом — отключённый счёт (миграция 063). Выручка на
+				// выведенный из оборота счёт не постится.
+				if !acc.IsEnabled {
+					name := aid
+					if acc.Name != nil && *acc.Name != "" {
+						name = *acc.Name
+					}
+					return apperrors.Wrap("CONFLICT", "счёт «"+name+"» отключён — выберите другой счёт", nil)
 				}
 			}
 
