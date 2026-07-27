@@ -6,13 +6,17 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchUsers, fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchShifts } from '@/lib/queries'
-import type { User, CashShift } from '@/lib/types'
+import {
+  fetchUsers, fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchShifts,
+  fetchFinancialAccounts, selectableAccounts,
+} from '@/lib/queries'
+import type { User, CashShift, FinancialAccount } from '@/lib/types'
 import { exportToExcel } from '@/lib/export-excel'
-import { HandCoins, Download } from 'lucide-react'
+import { HandCoins, Download, Wallet } from 'lucide-react'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
+import { PayEmployeeDialog } from '@/components/dialogs/pay-employee-dialog'
 
 // Локальная ISO-строка без TZ-конверсии. toISOString() сдвигает в UTC и в
 // таймзонах с положительным смещением (UTC+5 для TJ) локальное 02.05 00:00
@@ -83,18 +87,26 @@ export default function ServiceReportPage() {
   // shift_id — ровно как в Z-отчёте, без «непришедших» из соседних смен).
   const [shiftId, setShiftId] = useState('')
   const [shifts, setShifts] = useState<CashShift[]>([])
+  const [users, setUsers] = useState<User[]>([])
+  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  // Строка, для которой открыт диалог выплаты (ЗП-6b) — единственное место
+  // (кроме карточки сотрудника), где обслуживание ещё можно выплатить после
+  // того, как ЗП-6a убрал это действие из общей таблицы Зарплаты.
+  const [payRow, setPayRow] = useState<Row | null>(null)
 
   useEffect(() => { fetchShifts(30).then(setShifts).catch(() => {}) }, [])
+  useEffect(() => { fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}) }, [])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [accrual, payout, users] = await Promise.all([
+      const [accrual, payout, fetchedUsers] = await Promise.all([
         shiftId ? fetchServiceAccrualByShift(shiftId) : fetchServiceAccrualByWaiter(from, to),
         shiftId ? fetchServicePayoutByShift(shiftId) : fetchServicePayoutByWaiter(from, to),
         fetchUsers(),
       ])
-      const userMap = new Map<string, User>(users.map(u => [u.id, u]))
+      setUsers(fetchedUsers)
+      const userMap = new Map<string, User>(fetchedUsers.map(u => [u.id, u]))
       const built: Row[] = accrual.map(r => {
         const wid = r.waiterId
         const paid = wid ? (payout[wid] ?? 0) : 0
@@ -269,6 +281,12 @@ export default function ServiceReportPage() {
                   {r.remaining > 0 ? formatCurrency(r.remaining) : '—'}
                 </p>
               </div>
+              {r.remaining > 0 && r.waiterId && canDo('payroll.manage') && (
+                <button onClick={() => setPayRow(r)} title="Выплатить обслуживание"
+                  className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors shrink-0">
+                  <Wallet className="size-3" />Оплатить
+                </button>
+              )}
             </div>
           ))}
           {/* Итог по всем официантам */}
@@ -284,6 +302,19 @@ export default function ServiceReportPage() {
           </div>
         </div>
       )}
+
+      <PayEmployeeDialog
+        employee={payRow?.waiterId ? (users.find(u => u.id === payRow.waiterId) ?? null) : null}
+        action={payRow ? 'service' : null}
+        accounts={accounts}
+        serviceAccrued={payRow?.accrued}
+        servicePaidThisPeriod={payRow?.paid}
+        serviceFrom={from}
+        serviceTo={to}
+        shiftId={shiftId || undefined}
+        onClose={() => setPayRow(null)}
+        onSaved={load}
+      />
     </div>
   )
 }
