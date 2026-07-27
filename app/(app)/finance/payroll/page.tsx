@@ -91,8 +91,10 @@ export default function PayrollPage() {
   const [servicePayout, setServicePayout] = useState<Record<string, number>>({})
   // Выплаченная зарплата/аванс за период (из реальных операций «Зарплата» по
   // кассе, сгруппированы по сотруднику). Раньше выплата минусовала счёт, но в
-  // разделе не отражалась — теперь читаем её и показываем.
+  // разделе не отражалась — теперь читаем её и показываем. combined — для
+  // display «Выплачено (ЗП)»; salaryOnly — для расчёта остатка (см. loadSalaryPaid).
   const [salaryPaid, setSalaryPaid] = useState<Record<string, number>>({})
+  const [salaryOnlyPaid, setSalaryOnlyPaid] = useState<Record<string, number>>({})
 
   // ─── Accrual state (054) ───────────────────────────────────────────────────
   // Начислено за период: для оклада — сумма из карточки, для дневной оплаты —
@@ -116,24 +118,29 @@ export default function PayrollPage() {
   const [editBreak, setEditBreak] = useState(0)
   const elapsed = useElapsed(myActiveEntry?.clockIn, !!myActiveEntry)
 
-  // salaryPaidMap — Σ операций category='Зарплата' (выплаты ЗП и авансы) по
-  // sourceRef=сотрудник за выбранный период. Источник правды по выплаченному —
-  // те же операции, что минусуют кассу.
+  // loadSalaryPaid — два РАЗНЫХ по смыслу среза за период, легко перепутать:
+  //  - combined («Зарплата»+«Аванс») — сколько всего человек ПОЛУЧИЛ на руки
+  //    за период. Для отображения (колонка/Excel «Выплачено (ЗП)»).
+  //  - salaryOnly (только «Зарплата») — для расчёта ОСТАТКА. Аванс уже
+  //    вычитается через emp.advance (счётчик); вычесть его ЕЩЁ и через
+  //    combined значило бы вычесть дважды — ровно то, от чего сервер
+  //    специально уберёгся (см. комментарий #7 в PaySalary). Баг был
+  //    реальным: аванс, выданный внутри текущего периода, срезал «К выплате»
+  //    вдвое больше положенного (проверено на живых данных).
   const loadSalaryPaid = useCallback(async () => {
     const fromD = serviceFrom.slice(0, 10)
     const toD = serviceTo.slice(0, 10)
     const ops = await fetchFinancialOperations()
-    const sp: Record<string, number> = {}
+    const combined: Record<string, number> = {}
+    const salaryOnly: Record<string, number> = {}
     for (const op of ops) {
-      // Категории «Зарплата» И «Аванс»: с разделением категорий фильтр только
-      // по «Зарплата» перестал бы видеть авансы, и колонка «Выплачено»
-      // занизилась бы ровно на сумму авансов.
       if ((op.category !== 'Зарплата' && op.category !== 'Аванс') || !op.sourceRef) continue
       const d = (op.date || '').slice(0, 10)
       if (d && (d < fromD || d > toD)) continue
-      sp[op.sourceRef] = (sp[op.sourceRef] ?? 0) + op.amount
+      combined[op.sourceRef] = (combined[op.sourceRef] ?? 0) + op.amount
+      if (op.category === 'Зарплата') salaryOnly[op.sourceRef] = (salaryOnly[op.sourceRef] ?? 0) + op.amount
     }
-    return sp
+    return { combined, salaryOnly }
   }, [serviceFrom, serviceTo])
 
   // loadAccrual — начисления за тот же период, что и обслуживание.
@@ -163,7 +170,8 @@ export default function PayrollPage() {
     for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
     setServiceAccrual(accrualMap)
     setServicePayout(payout)
-    setSalaryPaid(salPaid)
+    setSalaryPaid(salPaid.combined)
+    setSalaryOnlyPaid(salPaid.salaryOnly)
     setAccrualByUser(accrualRows)
   }
 
@@ -213,7 +221,8 @@ export default function PayrollPage() {
       for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
       setServiceAccrual(accrualMap)
       setServicePayout(payout)
-      setSalaryPaid(salPaid)
+      setSalaryPaid(salPaid.combined)
+      setSalaryOnlyPaid(salPaid.salaryOnly)
       setAccrualByUser(accrualRows)
     }).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -364,10 +373,15 @@ export default function PayrollPage() {
   const totalAdvance = withSalary.reduce((s, e) => s + (e.advance ?? 0), 0)
   const totalDeductions = withSalary.reduce((s, e) => s + (e.deductions ?? 0), 0)
   const totalSalaryPaid = Object.values(salaryPaid).reduce((s, v) => s + v, 0)
-  // Пропущенное вычитание уже выплаченного: после полной выплаты оклада эта
-  // цифра всё ещё показывала бы весь оклад как «к выплате» — сервер платить
-  // бы не дал (кап), но подсказка вводила в заблуждение.
-  const totalToPay = totalSalary - totalAdvance - totalDeductions - totalSalaryPaid
+  const totalSalaryOnlyPaid = Object.values(salaryOnlyPaid).reduce((s, v) => s + v, 0)
+  // «К выплате» считаем ТОЧНО как сервер (accrued − advance − deductions −
+  // paid[категория «Зарплата» СТРОГО]) — иначе получаем один из двух багов:
+  // без вычитания paid вообще — после полной выплаты оклада всё ещё
+  // показывало бы его целиком; с вычитанием combined (Зарплата+Аванс) —
+  // аванс, выданный внутри периода, срезался бы дважды (он уже вычтен через
+  // totalAdvance = Σ emp.advance). totalSalaryPaid (combined) — только для
+  // display «Выплачено (ЗП)», в этой формуле участвовать не должен.
+  const totalToPay = totalSalary - totalAdvance - totalDeductions - totalSalaryOnlyPaid
   const totalServiceAccrued = Object.values(serviceAccrual).reduce((s, r) => s + r.accrued, 0)
   const totalServicePaid = Object.values(servicePayout).reduce((s, v) => s + v, 0)
   const totalServiceToPay = Math.max(0, totalServiceAccrued - totalServicePaid)
@@ -466,7 +480,8 @@ export default function PayrollPage() {
                       advance: e.advance ?? 0,
                       deductions: e.deductions ?? 0,
                       salaryPaidPeriod: salaryPaid[e.id] ?? 0,
-                      toPay: (e.salary ?? 0) - (e.advance ?? 0) - (e.deductions ?? 0) - (salaryPaid[e.id] ?? 0),
+                      // salaryOnlyPaid, не combined — иначе аванс внутри периода вычтется дважды.
+                      toPay: (e.salary ?? 0) - (e.advance ?? 0) - (e.deductions ?? 0) - (salaryOnlyPaid[e.id] ?? 0),
                       serviceAccrued: accrued,
                       servicePaid: paidSv,
                       serviceToPay: Math.max(0, accrued - paidSv),
@@ -624,14 +639,18 @@ export default function PayrollPage() {
                     const salary = emp.salary ?? 0
                     const advance = emp.advance ?? 0
                     const deductions = emp.deductions ?? 0
+                    // combined — для колонки «Выплачено (ЗП)» (оклад+аванс на руки).
                     const paidSalary = salaryPaid[emp.id] ?? 0
+                    // salaryOnly — для «К выплате»: аванс уже вычтен через emp.advance,
+                    // вычитать его ещё раз через combined значило бы вычесть дважды.
+                    const paidSalaryOnly = salaryOnlyPaid[emp.id] ?? 0
                     // Начислено за период: оклад или ставка × отработанные дни.
                     // Пока начисления не загрузились — откатываемся на оклад,
                     // чтобы таблица не мигала нулями.
                     const acc = accrualByUser[emp.id]
                     const isDaily = acc?.payType === 'daily' || emp.payType === 'daily'
                     const accruedPay = acc ? acc.accrued : salary
-                    const toPay = accruedPay - advance - deductions - paidSalary
+                    const toPay = accruedPay - advance - deductions - paidSalaryOnly
                     const accrued = serviceAccrual[emp.id]?.accrued ?? 0
                     const paidService = servicePayout[emp.id] ?? 0
                     const serviceToPay = Math.max(0, accrued - paidService)
@@ -1145,12 +1164,15 @@ export default function PayrollPage() {
       )}
 
       {/* ═══ Salary Dialog ═══ */}
+      {/* salaryPaidThisPeriod — salaryOnlyPaid, не salaryPaid (combined):
+          иначе аванс, выданный внутри периода, вычтется из «К выплате»
+          дважды — он уже вычтен через employee.advance. */}
       <PayEmployeeDialog
         employee={selectedEmp}
         action={payAction}
         accounts={accounts}
         accrual={selectedEmp ? accrualByUser[selectedEmp.id] : undefined}
-        salaryPaidThisPeriod={selectedEmp ? salaryPaid[selectedEmp.id] : undefined}
+        salaryPaidThisPeriod={selectedEmp ? salaryOnlyPaid[selectedEmp.id] : undefined}
         serviceAccrued={selectedEmp ? serviceAccrual[selectedEmp.id]?.accrued : undefined}
         servicePaidThisPeriod={selectedEmp ? servicePayout[selectedEmp.id] : undefined}
         serviceFrom={serviceFrom}
