@@ -7,16 +7,17 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { ROLE_LABELS, type User, type FinancialAccount, type TimeEntry } from '@/lib/types'
 import {
-  fetchUsers, fetchFinancialAccounts, paySalaryFull, updateUser,
+  fetchUsers, fetchFinancialAccounts,
   fetchTimeEntries, fetchActiveClockIn, clockIn as apiClockIn, clockOut as apiClockOut,
   updateTimeEntry, deleteTimeEntry,
-  fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, payServiceCharge,
+  fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter,
   fetchFinancialOperations, fetchSalaryReport, type SalaryReport,
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
-import { selectableAccounts, addSalaryDeduction } from '@/lib/queries/finance'
-import { Users, Wallet, CheckCircle, Banknote, CreditCard, X, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays } from 'lucide-react'
+import { selectableAccounts } from '@/lib/queries/finance'
+import { Users, Wallet, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays } from 'lucide-react'
 import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
+import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -30,20 +31,7 @@ function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string 
   return { from: start.toISOString(), to: end.toISOString() }
 }
 
-type PayAction = 'salary' | 'advance' | 'deduction' | 'edit_salary' | 'service'
 type TabKey = 'salary' | 'report' | 'timesheet'
-
-const PAYOUT_KIND_LABELS: Record<'salary' | 'advance' | 'service', string> = {
-  salary: 'Зарплата',
-  advance: 'Аванс',
-  service: 'Обслуживание',
-}
-
-const PAYOUT_KIND_TONE: Record<'salary' | 'advance' | 'service', string> = {
-  salary: 'bg-emerald-100 text-emerald-700',
-  advance: 'bg-amber-100 text-amber-700',
-  service: 'bg-blue-100 text-blue-700',
-}
 
 // ─── Elapsed timer hook ──────────────────────────────────────────────────────
 
@@ -84,23 +72,9 @@ export default function PayrollPage() {
   const [selectedEmp, setSelectedEmp] = useState<User | null>(null)
   // Диалог отметки отработанных дней (дневная оплата, 059).
   const [workedDaysEmp, setWorkedDaysEmp] = useState<User | null>(null)
-  const [payAmount, setPayAmount] = useState(0)
-  const [deductionReason, setDeductionReason] = useState('')
-  // ЗП-4: явный выбор между «По начислению» (сумма по формуле, сервер
-  // капает как раньше) и «Свободная сумма» (любая сумма, но обязательная
-  // причина — попадает в описание проводки, is_override=true в отчёте).
-  // Раньше выбора не было: аванс/обслуживание были свободны СЛУЧАЙНО (баг —
-  // period/shift_id не передавались), а зарплата с окладом капилась намертво
-  // без возможности переопределить.
-  const [payMode, setPayMode] = useState<'accrual' | 'override'>('accrual')
-  const [overrideReason, setOverrideReason] = useState('')
-  const [selectedAccountId, setSelectedAccountId] = useState('')
-  // Форма «Оплата труда» (054): тип + ставка за день.
-  const [formPayType, setFormPayType] = useState<'monthly' | 'daily'>('monthly')
   // Отметка явки за другого сотрудника (054).
   const [attendanceEmpId, setAttendanceEmpId] = useState('')
   const [markingAttendance, setMarkingAttendance] = useState(false)
-  const [paying, setPaying] = useState(false)
   const [search, setSearch] = useState('')
   const [roleFilter, setRoleFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState<'all' | 'with_salary' | 'no_salary' | 'has_advance' | 'has_deduction'>('all')
@@ -289,134 +263,15 @@ export default function PayrollPage() {
 
   // ─── Salary helpers ────────────────────────────────────────────────────────
 
+  // Логика выплаты/удержания/правки оклада — в PayEmployeeDialog (ЗП-5,
+  // извлечена для переиспользования на карточке сотрудника). Здесь только
+  // «какой диалог открыт для кого» — сама форма ничего не знает про список.
   const openDialog = (emp: User, action: PayAction) => {
     setSelectedEmp(emp)
     setPayAction(action)
-    setDeductionReason('')
-    setPayMode('accrual')
-    setOverrideReason('')
-    // Счёт выбирается заново на каждую выплату — см. комментарий в reload().
-    setSelectedAccountId('')
-    if (action === 'advance') {
-      setPayAmount(0)
-    } else if (action === 'deduction') {
-      setPayAmount(0)
-    } else if (action === 'edit_salary') {
-      const pt = emp.payType === 'daily' ? 'daily' : 'monthly'
-      setFormPayType(pt)
-      setPayAmount(pt === 'daily' ? (emp.dailyRate ?? 0) : (emp.salary ?? 0))
-    } else if (action === 'service') {
-      const accrued = serviceAccrual[emp.id]?.accrued ?? 0
-      const paid = servicePayout[emp.id] ?? 0
-      setPayAmount(Math.max(0, accrued - paid))
-    } else {
-      // Остаток к выплате — от начисленного за период, а не от оклада:
-      // у сотрудника на дневной оплате оклад нулевой. Вычитаем и уже
-      // выплаченное за период (было пропущено — после полной выплаты
-      // подсказка всё равно предлагала весь оклад заново).
-      const accrued = accrualByUser[emp.id]?.accrued ?? (emp.salary ?? 0)
-      const paid = salaryPaid[emp.id] ?? 0
-      setPayAmount(Math.max(0, accrued - (emp.advance ?? 0) - (emp.deductions ?? 0) - paid))
-    }
   }
 
   const closeDialog = () => { setPayAction(null); setSelectedEmp(null) }
-
-  const handleSubmit = async () => {
-    if (!selectedEmp || !payAction) return
-    setPaying(true)
-    try {
-      if (payAction === 'edit_salary') {
-        // Пишем и тип, и соответствующую ему сумму. Второе поле обнуляем,
-        // чтобы не осталось «оклад 3000 + ставка 120» — по такой карточке
-        // непонятно, за что человеку платят.
-        await updateUser(selectedEmp.id, formPayType === 'daily'
-          ? { pay_type: 'daily', daily_rate: payAmount, salary: 0 }
-          : { pay_type: 'monthly', salary: payAmount, daily_rate: 0 })
-        toast.success(formPayType === 'daily'
-          ? `${selectedEmp.name}: ${formatCurrency(payAmount)} за день`
-          : `Оклад ${selectedEmp.name}: ${formatCurrency(payAmount)}`)
-      } else if (payAction === 'advance') {
-        if (payAmount <= 0) { setPaying(false); return }
-        if (payMode === 'override' && !overrideReason.trim()) { toast.error('Укажите причину свободной выплаты'); setPaying(false); return }
-        const account = accounts.find(a => a.id === selectedAccountId)
-        // period=месяц — ЗП-4: раньше аванс никогда не передавал period и кап
-        // молча не срабатывал (случайно «свободно», а не осознанно). Теперь
-        // капается той же формулой, что и зарплата (accrued − advance −
-        // deductions − paid) — превышение доступно только через override.
-        // Период — ТЕКУЩИЙ календарный месяц, а не начало выбранного в UI
-        // диапазона (serviceFrom): сервер всегда датирует созданную проводку
-        // сегодняшним днём (payout()), поэтому «уже выплачено» ищет по этому
-        // же префиксу. Диапазон отчёта — «Квартал»/«Год» и т.п. — может
-        // начинаться в другом месяце; period=serviceFrom тогда не совпадал бы
-        // с датой проводки, и кап молча переставал видеть прошлые выплаты
-        // (баг воспроизведён: 2 выплаты подряд без причины прошли обе).
-        const payPeriod = new Date().toISOString().slice(0, 7)
-        const opts = payMode === 'override' ? { override: true, overrideReason: overrideReason.trim() } : undefined
-        // Create financial operation FIRST (cash payout), then update advance counter.
-        // This way if updateUser fails (e.g. legacy schema), the payout is still recorded.
-        await paySalaryFull(selectedEmp.id, payAmount, selectedAccountId, account?.name ?? '', selectedEmp.name, 'advance', payPeriod, opts)
-        const newAdvance = (selectedEmp.advance ?? 0) + payAmount
-        try { await updateUser(selectedEmp.id, { advance: newAdvance }) } catch (e) { console.warn('advance counter update failed:', e) }
-        toast.success(`Аванс ${formatCurrency(payAmount)}: ${selectedEmp.name}`)
-      } else if (payAction === 'deduction') {
-        if (payAmount <= 0) { setPaying(false); return }
-        if (!deductionReason.trim()) { toast.error('Укажите причину удержания'); setPaying(false); return }
-        // ЗП-4: реальная запись (salary_deductions) вместо счётчика без следа —
-        // причина раньше терялась в тосте сразу после ввода.
-        await addSalaryDeduction(selectedEmp.id, payAmount, deductionReason.trim())
-        toast.success(`Удержание ${formatCurrency(payAmount)}: ${selectedEmp.name} — ${deductionReason.trim()}`)
-      } else if (payAction === 'service') {
-        if (payAmount <= 0) { setPaying(false); return }
-        if (payMode === 'override' && !overrideReason.trim()) { toast.error('Укажите причину свободной выплаты'); setPaying(false); return }
-        const account = accounts.find(a => a.id === selectedAccountId)
-        await payServiceCharge({
-          waiterId: selectedEmp.id,
-          waiterName: selectedEmp.name,
-          amount: payAmount,
-          accountId: selectedAccountId,
-          accountName: account?.name ?? '',
-          periodFrom: serviceFrom,
-          periodTo: serviceTo,
-          ...(payMode === 'override' ? { override: true, overrideReason: overrideReason.trim() } : {}),
-        })
-        toast.success(`Обслуживание ${formatCurrency(payAmount)}: ${selectedEmp.name}`)
-      } else {
-        if (payAmount <= 0) { setPaying(false); return }
-        if (payMode === 'override' && !overrideReason.trim()) { toast.error('Укажите причину свободной выплаты'); setPaying(false); return }
-        const account = accounts.find(a => a.id === selectedAccountId)
-        // period=месяц включает серверный кап (не переплатить сверх начисленного).
-        // Для сотрудника без оклада/ставки начислено 0 → сервер платит свободно.
-        // Период — ТЕКУЩИЙ календарный месяц, а не начало выбранного в UI
-        // диапазона (serviceFrom): сервер всегда датирует созданную проводку
-        // сегодняшним днём (payout()), поэтому «уже выплачено» ищет по этому
-        // же префиксу. Диапазон отчёта — «Квартал»/«Год» и т.п. — может
-        // начинаться в другом месяце; period=serviceFrom тогда не совпадал бы
-        // с датой проводки, и кап молча переставал видеть прошлые выплаты
-        // (баг воспроизведён: 2 выплаты подряд без причины прошли обе).
-        const payPeriod = new Date().toISOString().slice(0, 7)
-        const opts = payMode === 'override' ? { override: true, overrideReason: overrideReason.trim() } : undefined
-        await paySalaryFull(selectedEmp.id, payAmount, selectedAccountId, account?.name ?? '', selectedEmp.name, 'salary', payPeriod, opts)
-        try { await updateUser(selectedEmp.id, { advance: 0, deductions: 0 }) } catch (e) { console.warn('reset counters failed:', e) }
-        toast.success(`Зарплата ${formatCurrency(payAmount)}: ${selectedEmp.name}`)
-      }
-      closeDialog()
-      await reload()
-    } catch (e) {
-      const msg = humanizeError(e, 'Ошибка')
-      // Кап сработал в режиме «По начислению» — подсказываем явный выход,
-      // а не просто показываем отказ: ровно то, чего не хватало (ЗП-4).
-      if (payMode === 'accrual' && /превышает остаток/.test(msg) && needsPayment(payAction)) {
-        toast.error(msg, {
-          description: 'Если это осознанно (бонус, доплата, коррекция) — переключитесь на «Свободная сумма».',
-          action: { label: 'Свободная сумма', onClick: () => setPayMode('override') },
-          duration: 8000,
-        })
-      } else {
-        toast.error(msg)
-      }
-    } finally { setPaying(false) }
-  }
 
   // ─── Timesheet helpers ─────────────────────────────────────────────────────
 
@@ -539,30 +394,6 @@ export default function PayrollPage() {
   })
 
   const roleStats = employees.reduce<Record<string, number>>((acc, e) => { acc[e.role] = (acc[e.role] || 0) + 1; return acc }, {})
-
-  const needsPayment = (action: PayAction): boolean => action === 'salary' || action === 'advance' || action === 'service'
-  const dialogTitle: Record<PayAction, string> = {
-    salary: 'Выплатить зарплату',
-    advance: 'Выдать аванс',
-    deduction: 'Внести удержание',
-    edit_salary: 'Оплата труда',
-    service: 'Выплатить обслуживание',
-  }
-  const dialogColor: Record<PayAction, string> = {
-    salary: 'bg-emerald-600 hover:bg-emerald-700',
-    advance: 'bg-amber-600 hover:bg-amber-700',
-    deduction: 'bg-destructive hover:bg-destructive/90',
-    edit_salary: 'bg-primary hover:bg-primary/90',
-    service: 'bg-blue-600 hover:bg-blue-700',
-  }
-  const dialogBtnText = (): string => {
-    if (paying) return 'Обработка...'
-    if (payAction === 'edit_salary') return 'Сохранить'
-    if (payAction === 'deduction') return `Удержать ${payAmount > 0 ? formatCurrency(payAmount) : ''}`
-    if (payAction === 'advance') return `Выдать аванс ${payAmount > 0 ? formatCurrency(payAmount) : ''}`
-    if (payAction === 'service') return `Выплатить обсл. ${payAmount > 0 ? formatCurrency(payAmount) : ''}`
-    return `Выплатить ${payAmount > 0 ? formatCurrency(payAmount) : ''}`
-  }
 
   // ─── Timesheet computed ────────────────────────────────────────────────────
 
@@ -1314,186 +1145,19 @@ export default function PayrollPage() {
       )}
 
       {/* ═══ Salary Dialog ═══ */}
-      {payAction && selectedEmp && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={closeDialog}>
-          <div className="bg-card rounded-2xl border border-border shadow-xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-5 border-b border-border">
-              <h2 className="text-lg font-bold text-foreground">{dialogTitle[payAction]}</h2>
-              <button onClick={closeDialog} className="p-1 text-muted-foreground hover:text-foreground"><X className="size-5" /></button>
-            </div>
-
-            <div className="p-5 space-y-4">
-              <div className="bg-muted/30 rounded-xl p-4">
-                <p className="font-semibold text-foreground">{selectedEmp.name}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{selectedEmp.position || ROLE_LABELS[selectedEmp.role]}</p>
-                {payAction !== 'edit_salary' && (
-                  <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
-                    <div>
-                      <p className="text-muted-foreground">Оклад</p>
-                      <p className="font-bold text-foreground">{formatCurrency(selectedEmp.salary ?? 0)}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground">Аванс</p>
-                      <p className="font-bold text-amber-600">{formatCurrency(selectedEmp.advance ?? 0)}</p>
-                    </div>
-                    <div>
-                      <p className="text-muted-foreground">К выплате</p>
-                      <p className="font-bold text-emerald-600">
-                        {formatCurrency((selectedEmp.salary ?? 0) - (selectedEmp.advance ?? 0) - (selectedEmp.deductions ?? 0))}
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Тип оплаты труда (054). Переключатель только в «Оплата труда»:
-                  в выплатах/авансах менять его нельзя — это настройка карточки,
-                  а не свойство конкретной операции. */}
-              {payAction === 'edit_salary' && (
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Как платим</label>
-                  <div className="flex rounded-lg border border-border overflow-hidden">
-                    {([
-                      ['monthly', 'Оклад за месяц'],
-                      ['daily', 'Ставка за день'],
-                    ] as const).map(([v, label]) => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => {
-                          setFormPayType(v)
-                          setPayAmount(v === 'daily' ? (selectedEmp.dailyRate ?? 0) : (selectedEmp.salary ?? 0))
-                        }}
-                        className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
-                          formPayType === v ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  {formPayType === 'daily' && (
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      Начисление считается автоматически: ставка × дни с отметкой в табеле.
-                      {(() => {
-                        const d = accrualByUser[selectedEmp.id]?.daysWorked ?? 0
-                        return d > 0 ? ` За выбранный период отмечено ${d} дн.` : ' За выбранный период отметок пока нет.'
-                      })()}
-                    </p>
-                  )}
-                </div>
-              )}
-
-              <div>
-                <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                  {payAction === 'edit_salary' ? (formPayType === 'daily' ? 'Ставка за день (TJS)' : 'Оклад за месяц (TJS)') :
-                   payAction === 'deduction' ? 'Сумма удержания (TJS)' :
-                   payAction === 'advance' ? 'Сумма аванса (TJS)' : 'Сумма выплаты (TJS)'}
-                </label>
-                <input type="number" min={0} value={payAmount || ''} onChange={e => setPayAmount(Number(e.target.value))}
-                  className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-lg font-bold text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
-                {payAction === 'advance' && (selectedEmp.advance ?? 0) > 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">Текущий аванс: {formatCurrency(selectedEmp.advance ?? 0)} + {formatCurrency(payAmount)} = {formatCurrency((selectedEmp.advance ?? 0) + payAmount)}</p>
-                )}
-                {payAction === 'deduction' && (selectedEmp.deductions ?? 0) > 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">Текущие удержания: {formatCurrency(selectedEmp.deductions ?? 0)} + {formatCurrency(payAmount)} = {formatCurrency((selectedEmp.deductions ?? 0) + payAmount)}</p>
-                )}
-              </div>
-
-              {payAction === 'deduction' && (
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Причина <span className="text-destructive">*</span>
-                  </label>
-                  <input value={deductionReason} onChange={e => setDeductionReason(e.target.value)} placeholder="Штраф, порча, опоздание..."
-                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-                </div>
-              )}
-
-              {/* ЗП-4: явный выбор между суммой по формуле (сервер капает как
-                  раньше) и свободной суммой (любая, но с обязательной
-                  причиной). Раньше выбора не было — превышение либо
-                  блокировалось намертво (оклад настроен), либо проходило
-                  случайно без предупреждения (аванс/обслуживание — баг). */}
-              {needsPayment(payAction) && (
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Режим выплаты</label>
-                  <div className="flex rounded-lg border border-border overflow-hidden">
-                    {([
-                      ['accrual', 'По начислению'],
-                      ['override', 'Свободная сумма'],
-                    ] as const).map(([v, label]) => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => setPayMode(v)}
-                        className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
-                          payMode === v ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  {payMode === 'override' ? (
-                    <div className="mt-2">
-                      <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                        Причина свободной выплаты <span className="text-destructive">*</span>
-                      </label>
-                      <input value={overrideReason} onChange={e => setOverrideReason(e.target.value)} placeholder="Бонус, доплата, коррекция..."
-                        className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-                      <p className="text-[11px] text-muted-foreground mt-1">
-                        Сумма любая — сервер не проверяет остаток. Причина попадёт в описание проводки и в отчёт.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                      Сервер не даст выплатить больше расчётного остатка.
-                    </p>
-                  )}
-                </div>
-              )}
-
-              {needsPayment(payAction) && (
-                <div>
-                  <label className="text-xs font-medium text-muted-foreground mb-1 block">
-                    Со счёта {!selectedAccountId && <span className="text-destructive">— выберите</span>}
-                  </label>
-                  <div className="space-y-1.5">
-                    {accounts.map(acc => (
-                      <button key={acc.id} onClick={() => setSelectedAccountId(acc.id)}
-                        className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border-2 text-left transition-all ${
-                          selectedAccountId === acc.id ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground/30'
-                        }`}>
-                        {acc.type === 'cash' ? <Banknote className="size-4 text-muted-foreground" /> : <CreditCard className="size-4 text-muted-foreground" />}
-                        <div className="flex-1">
-                          <p className="text-sm font-medium">{acc.name}</p>
-                          <p className="text-xs text-muted-foreground">{formatCurrency(acc.balance)}</p>
-                        </div>
-                        {selectedAccountId === acc.id && <CheckCircle className="size-4 text-primary" />}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="flex gap-2 p-5 border-t border-border">
-              <button onClick={closeDialog} className="flex-1 px-4 py-2.5 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted">Отмена</button>
-              <button onClick={handleSubmit}
-                disabled={
-                  paying || payAmount <= 0 ||
-                  (needsPayment(payAction) && !selectedAccountId) ||
-                  (needsPayment(payAction) && payMode === 'override' && !overrideReason.trim()) ||
-                  (payAction === 'deduction' && !deductionReason.trim())
-                }
-                className={`flex-1 px-4 py-2.5 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 ${dialogColor[payAction]}`}>
-                {dialogBtnText()}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <PayEmployeeDialog
+        employee={selectedEmp}
+        action={payAction}
+        accounts={accounts}
+        accrual={selectedEmp ? accrualByUser[selectedEmp.id] : undefined}
+        salaryPaidThisPeriod={selectedEmp ? salaryPaid[selectedEmp.id] : undefined}
+        serviceAccrued={selectedEmp ? serviceAccrual[selectedEmp.id]?.accrued : undefined}
+        servicePaidThisPeriod={selectedEmp ? servicePayout[selectedEmp.id] : undefined}
+        serviceFrom={serviceFrom}
+        serviceTo={serviceTo}
+        onClose={closeDialog}
+        onSaved={reload}
+      />
 
       {/* Отметка отработанных дней (дневная оплата, 059) */}
       {workedDaysEmp && (
