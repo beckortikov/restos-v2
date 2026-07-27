@@ -3,6 +3,7 @@
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import { ROLE_LABELS, type User, type FinancialAccount, type TimeEntry } from '@/lib/types'
@@ -61,6 +62,7 @@ function ElapsedBadge({ since }: { since: string }) {
 }
 
 export default function PayrollPage() {
+  const navigate = useNavigate()
   const { user: currentUser, canDo, canAccessRoles, restaurant } = useAuth()
   const [tab, setTab] = useState<TabKey>('salary')
   const [employees, setEmployees] = useState<User[]>([])
@@ -656,7 +658,8 @@ export default function PayrollPage() {
                     const serviceToPay = Math.max(0, accrued - paidService)
 
                     return (
-                      <tr key={emp.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
+                      <tr key={emp.id} onClick={() => navigate('/finance/payroll/' + emp.id)}
+                        className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer">
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
                             <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
@@ -672,7 +675,7 @@ export default function PayrollPage() {
                           <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{emp.position || ROLE_LABELS[emp.role]}</span>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button onClick={() => openDialog(emp, 'edit_salary')} className="group inline-flex flex-col items-end gap-0.5">
+                          <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'edit_salary') }} className="group inline-flex flex-col items-end gap-0.5">
                             <span className="inline-flex items-center gap-1">
                               {accruedPay > 0 ? (
                                 <>
@@ -726,28 +729,28 @@ export default function PayrollPage() {
                               <div className="flex items-center justify-center gap-1 flex-wrap">
                                 {/* Дневная оплата: отметить отработанные дни (059) */}
                                 {isDaily && (
-                                  <button onClick={() => setWorkedDaysEmp(emp)} title="Отметить отработанные дни"
+                                  <button onClick={(e) => { e.stopPropagation(); setWorkedDaysEmp(emp) }} title="Отметить отработанные дни"
                                     className="px-2 py-1 text-[11px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-md hover:bg-primary/20 transition-colors inline-flex items-center gap-1">
                                     <CalendarDays className="size-3" />Дни
                                   </button>
                                 )}
-                                <button onClick={() => openDialog(emp, 'advance')} title="Аванс"
+                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'advance') }} title="Аванс"
                                   className="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors">
                                   Аванс
                                 </button>
                                 {/* Выплатить доступно ВСЕГДА: есть начисление → сервер капит,
                                     нет оклада/ставки → свободная выплата любой суммы. */}
-                                <button onClick={() => openDialog(emp, 'salary')} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
+                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
                                   className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-colors">
                                   Выплатить
                                 </button>
-                                <button onClick={() => openDialog(emp, 'deduction')} title="Удержание"
+                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'deduction') }} title="Удержание"
                                   className="px-2 py-1 text-[11px] font-medium text-destructive bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors">
                                   Удерж.
                                 </button>
                               </div>
                               {serviceToPay > 0 && (
-                                <button onClick={() => openDialog(emp, 'service')} title="Выплатить обслуживание"
+                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'service') }} title="Выплатить обслуживание"
                                   className="px-2 py-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors">
                                   Выпл. обсл.
                                 </button>
