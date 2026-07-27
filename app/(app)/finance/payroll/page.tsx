@@ -2,7 +2,7 @@
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
@@ -11,17 +11,20 @@ import {
   fetchUsers, fetchFinancialAccounts,
   fetchTimeEntries, fetchActiveClockIn, clockIn as apiClockIn, clockOut as apiClockOut,
   updateTimeEntry, deleteTimeEntry,
-  fetchFinancialOperations, fetchSalaryReport, type SalaryReport,
+  fetchFinancialOperations, fetchSalaryReport, type SalaryReport, type SalaryPayoutRow,
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { Users, Wallet, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays } from 'lucide-react'
+import { Users, Wallet, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
 import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { DateRangePresets, getPresetRange, readStoredPreset, type RangePreset } from '@/components/finance/date-range-presets'
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts'
 
 function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string } {
   const [fy, fm, fd] = fromYmd.split('-').map(Number)
@@ -30,6 +33,26 @@ function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string 
   const end = new Date(ty, (tm || 1) - 1, td || 1, 23, 59, 59, 999)
   return { from: start.toISOString(), to: end.toISOString() }
 }
+
+// Тренд ФОТ по месяцам (ЗП-7) — та же связка monthKey/monthLabel, что и в
+// карточке сотрудника (payroll/[id]), но по факту выплаченного ВСЕЙ команде.
+const TREND_MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
+function trendMonthKey(dateStr: string): string {
+  const d = new Date(dateStr)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+function trendMonthLabel(key: string): string {
+  const [y, m] = key.split('-')
+  return `${TREND_MONTHS_SHORT[Number(m) - 1] ?? m} ${y}`
+}
+/** Подпись значения в тултипе: сумма + доля от итога месяца (как в Расходах). */
+function trendTooltipValue(value: number, sum: number): string {
+  const pct = sum > 0 ? (value / sum) * 100 : 0
+  return `${formatCurrency(value)} · ${pct.toFixed(1)}%`
+}
+const TREND_MAX_MONTHS = 12
+type TrendRow = { key: string; label: string; salary: number; advance: number; service: number; total: number }
 
 type TabKey = 'salary' | 'report' | 'timesheet'
 
@@ -105,6 +128,14 @@ export default function PayrollPage() {
   // «Выплачено» тянуло на клиент всю историю операций и фильтровало её в цикле.
   const [report, setReport] = useState<SalaryReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+
+  // ─── Trend state (ЗП-7) ─────────────────────────────────────────────────────
+  // Тренд по месяцам — НЕЗАВИСИМ от выбора периода выше (тот может быть
+  // «Сегодня»): всегда тянем последние TREND_MAX_MONTHS, а 3/6/12 переключают
+  // только то, сколько из уже загруженного показываем (без перезапроса).
+  const [trendPayouts, setTrendPayouts] = useState<SalaryPayoutRow[]>([])
+  const [trendLoading, setTrendLoading] = useState(false)
+  const [trendMonths, setTrendMonths] = useState<3 | 6 | 12>(6)
 
   // ─── Timesheet state ───────────────────────────────────────────────────────
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([])
@@ -235,6 +266,61 @@ export default function PayrollPage() {
   useEffect(() => {
     if (tab === 'report') loadReport()
   }, [tab, loadReport])
+
+  // Тренд — своя независимая загрузка (последние TREND_MAX_MONTHS), не
+  // привязанная к выбору периода выше: тренд показывает динамику, а не
+  // «остаток на сейчас», поэтому «Сегодня»/«Неделя» не должны его резать.
+  const loadTrend = useCallback(async () => {
+    setTrendLoading(true)
+    try {
+      const now = new Date()
+      const from = new Date(now.getFullYear(), now.getMonth() - (TREND_MAX_MONTHS - 1), 1)
+      const rep = await fetchSalaryReport(
+        `${from.getFullYear()}-${String(from.getMonth() + 1).padStart(2, '0')}-01`,
+        now.toISOString().slice(0, 10),
+      )
+      setTrendPayouts(rep.payouts)
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось загрузить тренд'))
+    } finally {
+      setTrendLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (tab === 'report') loadTrend()
+  }, [tab, loadTrend])
+
+  const trendRows = useMemo<TrendRow[]>(() => {
+    const now = new Date()
+    const keys: string[] = []
+    for (let i = trendMonths - 1; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+      keys.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`)
+    }
+    const byKey = new Map<string, TrendRow>(
+      keys.map(k => [k, { key: k, label: trendMonthLabel(k), salary: 0, advance: 0, service: 0, total: 0 }])
+    )
+    for (const p of trendPayouts) {
+      const k = trendMonthKey(p.date)
+      const row = byKey.get(k)
+      if (!row) continue
+      if (p.kind === 'salary') row.salary += p.amount
+      else if (p.kind === 'advance') row.advance += p.amount
+      else if (p.kind === 'service') row.service += p.amount
+      row.total += p.amount
+    }
+    return keys.map(k => byKey.get(k)!)
+  }, [trendPayouts, trendMonths])
+
+  // Δ последнего полного месяца к предыдущему — быстрый индикатор роста ФОТ.
+  const trendDelta = useMemo(() => {
+    if (trendRows.length < 2) return null
+    const last = trendRows[trendRows.length - 1]
+    const prev = trendRows[trendRows.length - 2]
+    if (prev.total <= 0) return null
+    return ((last.total - prev.total) / prev.total) * 100
+  }, [trendRows])
 
   const exportReport = () => {
     if (!report) return
@@ -716,6 +802,66 @@ export default function PayrollPage() {
       {/* ═══════════════════════════ REPORT TAB ═══════════════════════════════ */}
       {tab === 'report' && (
         <>
+          {/* Тренд ФОТ по месяцам (ЗП-7) — независим от периода выше, всегда
+              последние 3/6/12 месяцев по всей команде. */}
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div className="flex items-center gap-2">
+                <h2 className="text-sm font-semibold text-foreground">Тренд ФОТ по месяцам</h2>
+                {trendDelta != null && (
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium ${
+                    trendDelta > 0 ? 'bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-400' : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400'
+                  }`}>
+                    {trendDelta > 0 ? <TrendingUp className="size-3" /> : <TrendingDown className="size-3" />}
+                    {trendDelta > 0 ? '+' : ''}{trendDelta.toFixed(1)}% к прошлому мес.
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                {([3, 6, 12] as const).map(m => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setTrendMonths(m)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      trendMonths === m ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {m} мес.
+                  </button>
+                ))}
+              </div>
+            </div>
+            {trendLoading ? (
+              <p className="py-16 text-center text-sm text-muted-foreground">Загружаем…</p>
+            ) : trendRows.every(r => r.total === 0) ? (
+              <div className="py-16 text-center">
+                <TrendingUp className="size-10 text-muted-foreground/30 mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">За последние {trendMonths} мес. выплат не было</p>
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height={300}>
+                <BarChart data={trendRows} margin={{ top: 5, right: 5, bottom: 5, left: 10 }} barCategoryGap="25%" maxBarSize={64}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.2} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} width={70} />
+                  <Tooltip
+                    formatter={(v: number, n: string, item: { payload?: TrendRow }) => [trendTooltipValue(v, item?.payload?.total ?? 0), n]}
+                  />
+                  <Legend
+                    wrapperStyle={{ fontSize: 11 }}
+                    formatter={(v: string) => (v === 'salary' ? 'Зарплата' : v === 'advance' ? 'Аванс' : 'Обслуживание')}
+                  />
+                  {/* isAnimationActive=false — как в Расходах: иначе на переключении
+                      3/6/12 recharts иногда рисует пустые bar-rectangle без path. */}
+                  <Bar dataKey="salary" name="salary" stackId="fot" fill="#059669" isAnimationActive={false} />
+                  <Bar dataKey="advance" name="advance" stackId="fot" fill="#d97706" isAnimationActive={false} />
+                  <Bar dataKey="service" name="service" stackId="fot" fill="#2563eb" isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </div>
+
           {/* Итоги периода */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             {[
