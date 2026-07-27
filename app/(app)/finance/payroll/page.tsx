@@ -11,7 +11,6 @@ import {
   fetchUsers, fetchFinancialAccounts,
   fetchTimeEntries, fetchActiveClockIn, clockIn as apiClockIn, clockOut as apiClockOut,
   updateTimeEntry, deleteTimeEntry,
-  fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter,
   fetchFinancialOperations, fetchSalaryReport, type SalaryReport,
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
@@ -63,7 +62,7 @@ function ElapsedBadge({ since }: { since: string }) {
 
 export default function PayrollPage() {
   const navigate = useNavigate()
-  const { user: currentUser, canDo, canAccessRoles, restaurant } = useAuth()
+  const { user: currentUser, canDo, canAccessRoles } = useAuth()
   const [tab, setTab] = useState<TabKey>('salary')
   const [employees, setEmployees] = useState<User[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
@@ -89,8 +88,6 @@ export default function PayrollPage() {
   const [serviceTo, setServiceTo] = useState<string>(_initIso.to)
   const [serviceCustomFrom, setServiceCustomFrom] = useState<string>(getPresetRange('month').from)
   const [serviceCustomTo, setServiceCustomTo] = useState<string>(getPresetRange('month').to)
-  const [serviceAccrual, setServiceAccrual] = useState<Record<string, { accrued: number; ordersCount: number }>>({})
-  const [servicePayout, setServicePayout] = useState<Record<string, number>>({})
   // Выплаченная зарплата/аванс за период (из реальных операций «Зарплата» по
   // кассе, сгруппированы по сотруднику). Раньше выплата минусовала счёт, но в
   // разделе не отражалась — теперь читаем её и показываем. combined — для
@@ -152,11 +149,9 @@ export default function PayrollPage() {
   }, [serviceFrom, serviceTo])
 
   const reload = async () => {
-    const [users, accs, accrual, payout, salPaid, accrualRows] = await Promise.all([
+    const [users, accs, salPaid, accrualRows] = await Promise.all([
       fetchUsers(),
       fetchFinancialAccounts().then(selectableAccounts),
-      fetchServiceAccrualByWaiter(serviceFrom, serviceTo),
-      fetchServicePayoutByWaiter(serviceFrom, serviceTo),
       loadSalaryPaid(),
       loadAccrual(),
     ])
@@ -168,10 +163,6 @@ export default function PayrollPage() {
     // с того же счёта, что и прошлая. Деньги уходили не оттуда, откуда думал
     // кассир. Теперь выбор обязателен и делается заново на каждую выплату
     // (сброс — в openDialog).
-    const accrualMap: Record<string, { accrued: number; ordersCount: number }> = {}
-    for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
-    setServiceAccrual(accrualMap)
-    setServicePayout(payout)
     setSalaryPaid(salPaid.combined)
     setSalaryOnlyPaid(salPaid.salaryOnly)
     setAccrualByUser(accrualRows)
@@ -210,19 +201,13 @@ export default function PayrollPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Reload service data when period changes (already-loaded users/accounts are reused)
+  // Перезапрашиваем зарплатные данные при смене периода (users/accounts уже загружены).
   useEffect(() => {
     if (loading) return
     Promise.all([
-      fetchServiceAccrualByWaiter(serviceFrom, serviceTo),
-      fetchServicePayoutByWaiter(serviceFrom, serviceTo),
       loadSalaryPaid(),
       loadAccrual(),
-    ]).then(([accrual, payout, salPaid, accrualRows]) => {
-      const accrualMap: Record<string, { accrued: number; ordersCount: number }> = {}
-      for (const r of accrual) if (r.waiterId) accrualMap[r.waiterId] = { accrued: r.accrued, ordersCount: r.ordersCount }
-      setServiceAccrual(accrualMap)
-      setServicePayout(payout)
+    ]).then(([salPaid, accrualRows]) => {
       setSalaryPaid(salPaid.combined)
       setSalaryOnlyPaid(salPaid.salaryOnly)
       setAccrualByUser(accrualRows)
@@ -384,17 +369,6 @@ export default function PayrollPage() {
   // totalAdvance = Σ emp.advance). totalSalaryPaid (combined) — только для
   // display «Выплачено (ЗП)», в этой формуле участвовать не должен.
   const totalToPay = totalSalary - totalAdvance - totalDeductions - totalSalaryOnlyPaid
-  const totalServiceAccrued = Object.values(serviceAccrual).reduce((s, r) => s + r.accrued, 0)
-  const totalServicePaid = Object.values(servicePayout).reduce((s, v) => s + v, 0)
-  const totalServiceToPay = Math.max(0, totalServiceAccrued - totalServicePaid)
-
-  // Показывать блок «Обслуживание» (3 колонки + фильтр), только если ресторан
-  // берёт сервисный сбор ИЛИ за период есть его начисления/выплаты. Иначе это
-  // три колонки прочерков, которые выталкивают действия вправо за край.
-  const showService =
-    (restaurant?.servicePercent ?? 0) > 0 ||
-    Object.values(serviceAccrual).some(v => (v?.accrued ?? 0) > 0) ||
-    Object.values(servicePayout).some(v => (v ?? 0) > 0)
 
   const filtered = employees.filter(e => {
     if (roleFilter !== 'all' && e.role !== roleFilter) return false
@@ -472,23 +446,16 @@ export default function PayrollPage() {
             <button
               onClick={() => {
                 exportToExcel(
-                  filtered.map(e => {
-                    const accrued = serviceAccrual[e.id]?.accrued ?? 0
-                    const paidSv = servicePayout[e.id] ?? 0
-                    return {
-                      name: e.name,
-                      position: e.position || ROLE_LABELS[e.role],
-                      salary: e.salary ?? 0,
-                      advance: e.advance ?? 0,
-                      deductions: e.deductions ?? 0,
-                      salaryPaidPeriod: salaryPaid[e.id] ?? 0,
-                      // salaryOnlyPaid, не combined — иначе аванс внутри периода вычтется дважды.
-                      toPay: (e.salary ?? 0) - (e.advance ?? 0) - (e.deductions ?? 0) - (salaryOnlyPaid[e.id] ?? 0),
-                      serviceAccrued: accrued,
-                      servicePaid: paidSv,
-                      serviceToPay: Math.max(0, accrued - paidSv),
-                    }
-                  }),
+                  filtered.map(e => ({
+                    name: e.name,
+                    position: e.position || ROLE_LABELS[e.role],
+                    salary: e.salary ?? 0,
+                    advance: e.advance ?? 0,
+                    deductions: e.deductions ?? 0,
+                    salaryPaidPeriod: salaryPaid[e.id] ?? 0,
+                    // salaryOnlyPaid, не combined — иначе аванс внутри периода вычтется дважды.
+                    toPay: (e.salary ?? 0) - (e.advance ?? 0) - (e.deductions ?? 0) - (salaryOnlyPaid[e.id] ?? 0),
+                  })),
                   [
                     { key: 'name', header: 'Сотрудник' },
                     { key: 'position', header: 'Должность' },
@@ -497,9 +464,6 @@ export default function PayrollPage() {
                     { key: 'deductions', header: 'Удержания' },
                     { key: 'salaryPaidPeriod', header: 'Выплачено (ЗП)' },
                     { key: 'toPay', header: 'К выплате' },
-                    { key: 'serviceAccrued', header: 'Обсл. начислено' },
-                    { key: 'servicePaid', header: 'Обсл. выплачено' },
-                    { key: 'serviceToPay', header: 'Обсл. к выплате' },
                   ],
                   'Зарплата'
                 )
@@ -540,8 +504,10 @@ export default function PayrollPage() {
             />
           </div>
 
-          {/* KPI */}
-          <div className={`grid grid-cols-2 gap-3 ${showService ? 'xl:grid-cols-5' : 'xl:grid-cols-4'}`}>
+          {/* KPI — только оклад/аванс/удержания. Обслуживание — на своей
+              вкладке (/finance/service-report), эти же цифры показывались
+              бы второй раз (ЗП-6). */}
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
             <div className="bg-card rounded-xl border border-border p-4">
               <p className="text-xs text-muted-foreground">ФОТ (оклады)</p>
               <p className="text-2xl font-bold text-foreground mt-1">{formatCurrency(totalSalary)}</p>
@@ -558,13 +524,6 @@ export default function PayrollPage() {
               <p className="text-xs text-muted-foreground">К выплате (оклад)</p>
               <p className="text-2xl font-bold text-emerald-600 mt-1">{formatCurrency(totalToPay)}</p>
             </div>
-            {showService && (
-              <div className="bg-blue-50/60 rounded-xl border border-blue-200 p-4">
-                <p className="text-xs text-blue-700">Обслуживание (к выплате)</p>
-                <p className="text-2xl font-bold text-blue-700 mt-1">{formatCurrency(totalServiceToPay)}</p>
-                <p className="text-[10px] text-blue-600/80 mt-0.5">начислено {formatCurrency(totalServiceAccrued)} · выпл. {formatCurrency(totalServicePaid)}</p>
-              </div>
-            )}
           </div>
 
           {/* Filters */}
@@ -618,7 +577,7 @@ export default function PayrollPage() {
           {/* Table */}
           <div className="bg-card rounded-xl border border-border overflow-hidden">
             <div className="overflow-x-auto">
-              <table className={`w-full text-sm ${showService ? 'min-w-[1100px]' : 'min-w-[820px]'}`}>
+              <table className="w-full text-sm min-w-[820px]">
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
                     <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase">Сотрудник</th>
@@ -628,11 +587,6 @@ export default function PayrollPage() {
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Удержания</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 uppercase" title="Выплачено зарплаты/аванса из кассы за выбранный период">Выплачено (ЗП)</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">К выплате</th>
-                    {showService && <>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание начислено за выбранный период">Обсл. начисл.</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Обслуживание выплачено за выбранный период">Обсл. выпл.</th>
-                      <th className="px-4 py-3 text-right text-xs font-semibold text-blue-700 uppercase" title="Остаток обслуживания к выплате">К выпл. (обсл.)</th>
-                    </>}
                     <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase">Действия</th>
                   </tr>
                 </thead>
@@ -653,9 +607,6 @@ export default function PayrollPage() {
                     const isDaily = acc?.payType === 'daily' || emp.payType === 'daily'
                     const accruedPay = acc ? acc.accrued : salary
                     const toPay = accruedPay - advance - deductions - paidSalaryOnly
-                    const accrued = serviceAccrual[emp.id]?.accrued ?? 0
-                    const paidService = servicePayout[emp.id] ?? 0
-                    const serviceToPay = Math.max(0, accrued - paidService)
 
                     return (
                       <tr key={emp.id} onClick={() => navigate('/finance/payroll/' + emp.id)}
@@ -712,49 +663,30 @@ export default function PayrollPage() {
                             {accruedPay > 0 ? formatCurrency(toPay) : '—'}
                           </span>
                         </td>
-                        {showService && <>
-                        <td className="px-4 py-3 text-right">
-                          {accrued > 0 ? <span className="text-blue-700 font-medium">{formatCurrency(accrued)}</span> : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {paidService > 0 ? <span className="text-blue-600">{formatCurrency(paidService)}</span> : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {serviceToPay > 0 ? <span className="font-bold text-blue-700">{formatCurrency(serviceToPay)}</span> : <span className="text-muted-foreground">—</span>}
-                        </td>
-                        </>}
                         <td className="px-4 py-3">
                           {canDo('payroll.manage') && (
-                            <div className="flex flex-col items-center gap-1">
-                              <div className="flex items-center justify-center gap-1 flex-wrap">
-                                {/* Дневная оплата: отметить отработанные дни (059) */}
-                                {isDaily && (
-                                  <button onClick={(e) => { e.stopPropagation(); setWorkedDaysEmp(emp) }} title="Отметить отработанные дни"
-                                    className="px-2 py-1 text-[11px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-md hover:bg-primary/20 transition-colors inline-flex items-center gap-1">
-                                    <CalendarDays className="size-3" />Дни
-                                  </button>
-                                )}
-                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'advance') }} title="Аванс"
-                                  className="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors">
-                                  Аванс
-                                </button>
-                                {/* Выплатить доступно ВСЕГДА: есть начисление → сервер капит,
-                                    нет оклада/ставки → свободная выплата любой суммы. */}
-                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
-                                  className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-colors">
-                                  Выплатить
-                                </button>
-                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'deduction') }} title="Удержание"
-                                  className="px-2 py-1 text-[11px] font-medium text-destructive bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors">
-                                  Удерж.
-                                </button>
-                              </div>
-                              {serviceToPay > 0 && (
-                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'service') }} title="Выплатить обслуживание"
-                                  className="px-2 py-1 text-[11px] font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-md hover:bg-blue-100 transition-colors">
-                                  Выпл. обсл.
+                            <div className="flex items-center justify-center gap-1 flex-wrap">
+                              {/* Дневная оплата: отметить отработанные дни (059) */}
+                              {isDaily && (
+                                <button onClick={(e) => { e.stopPropagation(); setWorkedDaysEmp(emp) }} title="Отметить отработанные дни"
+                                  className="px-2 py-1 text-[11px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-md hover:bg-primary/20 transition-colors inline-flex items-center gap-1">
+                                  <CalendarDays className="size-3" />Дни
                                 </button>
                               )}
+                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'advance') }} title="Аванс"
+                                className="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors">
+                                Аванс
+                              </button>
+                              {/* Выплатить доступно ВСЕГДА: есть начисление → сервер капит,
+                                  нет оклада/ставки → свободная выплата любой суммы. */}
+                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
+                                className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-colors">
+                                Выплатить
+                              </button>
+                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'deduction') }} title="Удержание"
+                                className="px-2 py-1 text-[11px] font-medium text-destructive bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors">
+                                Удерж.
+                              </button>
                             </div>
                           )}
                         </td>
@@ -762,7 +694,7 @@ export default function PayrollPage() {
                     )
                   })}
                 </tbody>
-                {(withSalary.length > 0 || totalServiceAccrued > 0) && (
+                {withSalary.length > 0 && (
                   <tfoot>
                     <tr className="bg-muted/40 border-t border-border">
                       <td colSpan={2} className="px-4 py-3 text-xs font-bold text-muted-foreground uppercase">Итого ({withSalary.length} чел.)</td>
@@ -771,11 +703,6 @@ export default function PayrollPage() {
                       <td className="px-4 py-3 text-right font-bold text-destructive">{formatCurrency(totalDeductions)}</td>
                       <td className="px-4 py-3 text-right font-bold text-emerald-600">{formatCurrency(totalSalaryPaid)}</td>
                       <td className="px-4 py-3 text-right font-bold text-foreground">{formatCurrency(totalToPay)}</td>
-                      {showService && <>
-                        <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totalServiceAccrued)}</td>
-                        <td className="px-4 py-3 text-right font-bold text-blue-600">{formatCurrency(totalServicePaid)}</td>
-                        <td className="px-4 py-3 text-right font-bold text-blue-700">{formatCurrency(totalServiceToPay)}</td>
-                      </>}
                       <td></td>
                     </tr>
                   </tfoot>
@@ -1176,8 +1103,6 @@ export default function PayrollPage() {
         accounts={accounts}
         accrual={selectedEmp ? accrualByUser[selectedEmp.id] : undefined}
         salaryPaidThisPeriod={selectedEmp ? salaryOnlyPaid[selectedEmp.id] : undefined}
-        serviceAccrued={selectedEmp ? serviceAccrual[selectedEmp.id]?.accrued : undefined}
-        servicePaidThisPeriod={selectedEmp ? servicePayout[selectedEmp.id] : undefined}
         serviceFrom={serviceFrom}
         serviceTo={serviceTo}
         onClose={closeDialog}

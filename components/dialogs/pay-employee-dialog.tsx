@@ -62,13 +62,17 @@ export interface PayEmployeeDialogProps {
   servicePaidThisPeriod?: number
   serviceFrom: string
   serviceTo: string
+  /** Смена, если оплата привязана к конкретной (Обслуживание, фильтр «Смена»)
+   * — иначе выплата не попадёт в отчёт по этой смене, а честный кап (ЗП-4)
+   * посчитает остаток по periodFrom/periodTo вместо фактической смены. */
+  shiftId?: string
   onClose: () => void
   onSaved: () => void | Promise<void>
 }
 
 export function PayEmployeeDialog({
   employee, action, accounts, accrual, salaryPaidThisPeriod, serviceAccrued, servicePaidThisPeriod,
-  serviceFrom, serviceTo, onClose, onSaved,
+  serviceFrom, serviceTo, shiftId, onClose, onSaved,
 }: PayEmployeeDialogProps) {
   const [payAmount, setPayAmount] = useState(0)
   const [deductionReason, setDeductionReason] = useState('')
@@ -161,6 +165,7 @@ export function PayEmployeeDialog({
           accountName: acc?.name ?? '',
           periodFrom: serviceFrom,
           periodTo: serviceTo,
+          shiftId,
           ...(payMode === 'override' ? { override: true, overrideReason: overrideReason.trim() } : {}),
         })
         toast.success(`Обслуживание ${formatCurrency(payAmount)}: ${employee.name}`)
