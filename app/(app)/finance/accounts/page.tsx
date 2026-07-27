@@ -9,6 +9,7 @@ import { DatePeriodFilter, filterByDateRange, getDateRange, type PeriodKey } fro
 import { formatCurrency } from '@/lib/helpers'
 import { type FinancialAccount, type FinancialOperation, finopCategoryLabel } from '@/lib/types'
 import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
+import { selectableAccounts, setFinancialAccountEnabled } from '@/lib/queries/finance'
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { toast } from 'sonner'
@@ -55,6 +56,7 @@ export default function AccountsPage() {
   const [editName, setEditName] = useState('')
   const [editType, setEditType] = useState<'cash' | 'bank'>('cash')
   const [editSaving, setEditSaving] = useState(false)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
 
   // История остатков по дням — считает бэк (см. fetchAccountBalanceHistory).
   const [balanceHistory, setBalanceHistory] = useState<AccountBalanceHistory | null>(null)
@@ -132,6 +134,25 @@ export default function AccountsPage() {
       toast.error(humanizeError(e, 'Ошибка обновления'))
     } finally {
       setEditSaving(false)
+    }
+  }
+
+  // Отключение вместо удаления: строка счёта остаётся, история и остаток целы
+  // (остаток продолжает считаться в Балансе), но счёт исчезает из выбора при
+  // оплате. Сервер откажет с 409, если счёт держит открытую смену, это
+  // последний включённый наличный, или на него настроены регулярные платежи —
+  // текст причины показываем как есть.
+  async function handleToggleEnabled(acc: FinancialAccount) {
+    setTogglingId(acc.id)
+    try {
+      const updated = await setFinancialAccountEnabled(acc.id, !acc.isEnabled)
+      setAccounts(prev => prev.map(a => a.id === updated.id ? updated : a))
+      setEditingAccount(null)
+      toast.success(updated.isEnabled ? `Счёт «${updated.name}» включён` : `Счёт «${updated.name}» отключён`)
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось изменить счёт'))
+    } finally {
+      setTogglingId(null)
     }
   }
 
@@ -267,7 +288,7 @@ export default function AccountsPage() {
             <button
               key={acc.id}
               onClick={() => setSelectedAccount(acc.id)}
-              className={`relative text-left rounded-xl border p-4 transition-colors ${selectedAccount === acc.id ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-muted/30'}`}
+              className={`relative text-left rounded-xl border p-4 transition-colors ${selectedAccount === acc.id ? 'border-primary bg-primary/5' : 'border-border bg-card hover:bg-muted/30'} ${acc.isEnabled ? '' : 'opacity-60 border-dashed'}`}
             >
               <div className="flex items-center gap-2 mb-2">
                 {acc.type === 'cash' ? (
@@ -276,6 +297,13 @@ export default function AccountsPage() {
                   <CreditCard className="size-4 text-blue-600" />
                 )}
                 <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide">{acc.name}</span>
+                {/* Отключённый счёт остаётся на месте — его остаток реален и
+                    входит в Баланс, владелец должен видеть, где лежат деньги. */}
+                {!acc.isEnabled && (
+                  <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground border border-border rounded px-1.5 py-0.5">
+                    Отключён
+                  </span>
+                )}
                 {canDo('finance.manage') && (
                   <span
                     role="button"
@@ -483,6 +511,47 @@ export default function AccountsPage() {
                 </p>
               )}
             </div>
+
+            {/* Отключение вместо удаления. Удалить счёт нельзя: на него
+                ссылаются смены, возвраты, регулярные платежи и вся история
+                операций. Отключённый счёт просто перестаёт предлагаться. */}
+            {editingAccount && (
+              <div className="pt-3 border-t border-border space-y-2">
+                {editingAccount.isEnabled ? (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Счёт перестанет предлагаться при оплате и в операциях.
+                      История сохранится
+                      {editingAccount.balance !== 0 && (
+                        <>, остаток {formatCurrency(editingAccount.balance)} продолжит учитываться в Балансе</>
+                      )}.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleEnabled(editingAccount)}
+                      disabled={togglingId === editingAccount.id}
+                      className="w-full px-3 py-2 text-sm font-medium text-destructive bg-card border border-destructive/40 rounded-lg hover:bg-destructive/10 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                    >
+                      {togglingId === editingAccount.id ? 'Отключение…' : 'Отключить счёт'}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Счёт отключён — не предлагается при оплате и в операциях.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => handleToggleEnabled(editingAccount)}
+                      disabled={togglingId === editingAccount.id}
+                      className="w-full px-3 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50 disabled:pointer-events-none"
+                    >
+                      {togglingId === editingAccount.id ? 'Включение…' : 'Включить счёт'}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <button
@@ -569,6 +638,8 @@ export default function AccountsPage() {
           <div className="space-y-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-foreground">Со счёта</label>
+              {/* Источник — ВСЕ счета, включая отключённые: перевод это штатный
+                  способ забрать остаток с выведенного из оборота счёта. */}
               <select
                 value={transferFrom}
                 onChange={(e) => setTransferFrom(e.target.value)}
@@ -577,20 +648,22 @@ export default function AccountsPage() {
                 <option value="">Выберите счёт</option>
                 {accounts.map((a) => (
                   <option key={a.id} value={a.id}>
-                    {a.name} — {formatCurrency(a.balance)}
+                    {a.name}{a.isEnabled ? '' : ' (отключён)'} — {formatCurrency(a.balance)}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-foreground">На счёт</label>
+              {/* А вот получатель — только включённые: заводить новые деньги на
+                  отключённый счёт бессмысленно, сервер такой перевод и не примет. */}
               <select
                 value={transferTo}
                 onChange={(e) => setTransferTo(e.target.value)}
                 className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
               >
                 <option value="">Выберите счёт</option>
-                {accounts.map((a) => (
+                {selectableAccounts(accounts).map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.name} — {formatCurrency(a.balance)}
                   </option>
