@@ -138,6 +138,15 @@ export default function PayrollPage() {
   const [trendMonths, setTrendMonths] = useState<3 | 6 | 12>(6)
 
   // ─── Timesheet state ───────────────────────────────────────────────────────
+  // Табель — лента приходов/уходов, а не сумма за период: свой скользящий
+  // фильтр («последние 7/30 дней от сейчас»), НЕ общий календарный период
+  // выше (Сегодня/Неделя/Месяц/…, привязанный к serviceFrom/serviceTo для
+  // Зарплаты/Обслуживания/Отчёта). Объединять их не стоит — «Квартал»/«Год»
+  // вернули бы тысячи записей табеля без пагинации ради виртуального
+  // единообразия (ЗП-8). Ярлыки ниже — «7 дней»/«30 дней», НЕ «Неделя»/
+  // «Месяц»: те же слова у общего фильтра означают календарный период, а
+  // здесь — скользящее окно, путать пользователя одинаковыми подписями
+  // с разным смыслом ни к чему.
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([])
   const [myActiveEntry, setMyActiveEntry] = useState<TimeEntry | null>(null)
   const [timePeriod, setTimePeriod] = useState<'week' | 'month' | 'all'>('week')
@@ -1086,11 +1095,11 @@ export default function PayrollPage() {
           <div className="flex items-center gap-2">
             <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
               {([
-                ['week', 'Неделя'],
-                ['month', 'Месяц'],
+                ['week', '7 дней'],
+                ['month', '30 дней'],
                 ['all', 'Все'],
               ] as const).map(([key, label]) => (
-                <button key={key} onClick={() => setTimePeriod(key)}
+                <button key={key} onClick={() => setTimePeriod(key)} title="Скользящее окно от сегодня — не общий период страницы"
                   className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${timePeriod === key ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
                   {label}
                 </button>
