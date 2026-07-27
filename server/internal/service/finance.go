@@ -22,6 +22,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -1462,6 +1463,25 @@ type SalaryPayInput struct {
 	// «(аванс)» в имени контрагента, из-за чего отчёт не мог их разделить.
 	// Пусто → salary (совместимость со старыми клиентами).
 	Kind *string `json:"kind,omitempty"`
+	// Override — выплатить сумму выше расчётного остатка осознанно (бонус,
+	// доплата, ручная коррекция), а не быть заблокированным сервером. Требует
+	// непустой OverrideReason. Без Override превышение — 409, как раньше (ЗП-4).
+	Override *bool `json:"override,omitempty"`
+	// OverrideReason — обязательна при Override=true и реальном превышении
+	// кап-суммы. Уходит в описание проводки (см. mergeOverrideReason) — отчёт
+	// отличит осознанную "свободную" выплату от обычного расчёта по формуле.
+	OverrideReason *string `json:"override_reason,omitempty"`
+}
+
+// mergeOverrideReason — причина "свободной" выплаты в текст проводки.
+// Отдельного поля под причину в financial_operations нет (и не нужно — это
+// разовое пояснение, не структурный признак), is_override уже даёт признак
+// для фильтрации, а текст — для человека, читающего ленту операций.
+func mergeOverrideReason(base *string, reason string) string {
+	if base != nil && *base != "" {
+		return *base + " — свободная выплата: " + reason
+	}
+	return "Свободная выплата: " + reason
 }
 
 // Категории зарплатных проводок в financial_operations.
@@ -1483,6 +1503,12 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 	// дважды за период. Раньше amount брался от клиента без проверки: зарплату за
 	// период можно было выплатить сколько угодно раз, а аванс/удержания
 	// (User.Advance/Deductions) не вычитались вовсе.
+	//
+	// ЗП-4: превышение остатка теперь не глухая стена, а осознанный выбор —
+	// Override+OverrideReason проводит "свободную выплату" (бонус, доплата,
+	// коррекция), помечает is_override=true и кладёт причину в описание.
+	isOverride := false
+	overrideDesc := in.Description
 	if in.UserID != nil && *in.UserID != "" && in.Amount != nil && *in.Amount != "" && in.Period != nil && *in.Period != "" {
 		amount, perr := decimal.FromString(*in.Amount)
 		if perr != nil || !decimal.IsPositive(amount) {
@@ -1539,9 +1565,18 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			payable = decimal.Zero
 		}
 		if decimal.Sub(amount, payable).GreaterThan(decimal.MustFromString("0.01")) {
-			return nil, apperrors.Wrap("VALIDATION",
-				fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
-					amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+			if in.Override == nil || !*in.Override {
+				return nil, apperrors.Wrap("VALIDATION",
+					fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
+						amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+			}
+			reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
+			if reason == "" {
+				return nil, apperrors.Wrap("VALIDATION", "укажите причину свободной выплаты", nil)
+			}
+			isOverride = true
+			merged := mergeOverrideReason(in.Description, reason)
+			overrideDesc = &merged
 		}
 	}
 	sp := in
@@ -1552,7 +1587,8 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 		Counterparty: sp.EmployeeName,
 		Category:     salaryCategory(sp.Kind),
 		Period:       sp.Period,
-		Description:  sp.Description,
+		Description:  overrideDesc,
+		IsOverride:   isOverride,
 	})
 }
 
@@ -1566,6 +1602,11 @@ type ServiceChargePayInput struct {
 	// ShiftID — без него выплата не привязывается к смене и не видна в
 	// отчёте по смене (service-payout/by-shift).
 	ShiftID *string `json:"shift_id,omitempty"`
+	// Override/OverrideReason — см. SalaryPayInput. Тот же принцип: превышение
+	// расчётного остатка не блокируется намертво, а требует осознанного флага
+	// и причины (ЗП-4).
+	Override       *bool   `json:"override,omitempty"`
+	OverrideReason *string `json:"override_reason,omitempty"`
 }
 
 func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePayInput) (*models.FinancialOperation, error) {
@@ -1588,14 +1629,42 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 		}
 	}
 	// Кап суммы: выплатить нельзя больше, чем НАЧИСЛЕНО официанту минус уже
-	// ВЫПЛАЧЕНО (по этой смене). Прежде единственным гейтом было «хватает денег
-	// на счёте» — можно было вывести сверх заработанного. Скоуп — по shift_id
-	// (source of truth начисления). Допуск 0.01 на округление.
-	if in.ShiftID != nil && *in.ShiftID != "" && in.WaiterID != nil && *in.WaiterID != "" && in.Amount != nil {
+	// ВЫПЛАЧЕНО. Прежде единственным гейтом было «хватает денег на счёте» —
+	// можно было вывести сверх заработанного. Допуск 0.01 на округление.
+	//
+	// ЗП-4: раньше кап срабатывал ТОЛЬКО по ShiftID — а страница «Зарплата»
+	// шлёт period_from/period_to без shift_id, и кап там был фантомным (UI
+	// показывал «остаток», сервер его не проверял вообще). Теперь при
+	// отсутствии смены считаем тот же остаток за произвольный период —
+	// ровно то, что показано в интерфейсе, наконец действительно проверяется.
+	isOverride := false
+	overrideDesc := in.Description
+	if in.WaiterID != nil && *in.WaiterID != "" && in.Amount != nil {
 		if payAmt, perr := decimal.FromString(*in.Amount); perr == nil {
-			accrual, aerr := s.AccrualByWaiter(ctx, nil, nil, *in.ShiftID)
-			payouts, err2 := s.PayoutByWaiter(ctx, nil, nil, *in.ShiftID)
-			if aerr == nil && err2 == nil {
+			var accrual []ServiceAccrualRow
+			var payouts []ServicePayoutRow
+			var aerr, perr2 error
+			haveCapData := false
+			switch {
+			case in.ShiftID != nil && *in.ShiftID != "":
+				accrual, aerr = s.AccrualByWaiter(ctx, nil, nil, *in.ShiftID)
+				payouts, perr2 = s.PayoutByWaiter(ctx, nil, nil, *in.ShiftID)
+				haveCapData = aerr == nil && perr2 == nil
+			case in.PeriodFrom != nil && *in.PeriodFrom != "" && in.PeriodTo != nil && *in.PeriodTo != "":
+				from, ferr := timeutil.ParseLooseRFC3339(*in.PeriodFrom)
+				to, terr := timeutil.ParseLooseRFC3339(*in.PeriodTo)
+				if ferr == nil && terr == nil {
+					// Date-only `to` (без времени) — включительно весь день,
+					// как в parsePeriod (xlsx.go) для остальных отчётов.
+					if !strings.Contains(*in.PeriodTo, "T") {
+						to = to.AddDate(0, 0, 1)
+					}
+					accrual, aerr = s.AccrualByWaiter(ctx, &from, &to, "")
+					payouts, perr2 = s.PayoutByWaiter(ctx, &from, &to, "")
+					haveCapData = aerr == nil && perr2 == nil
+				}
+			}
+			if haveCapData {
 				accrued := decimal.Zero
 				for _, r := range accrual {
 					if r.WaiterID == *in.WaiterID {
@@ -1612,9 +1681,18 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 				}
 				remaining := decimal.Sub(accrued, paid)
 				if decimal.Sub(payAmt, remaining).GreaterThan(decimal.MustFromString("0.01")) {
-					return nil, apperrors.Wrap("VALIDATION",
-						fmt.Sprintf("сумма выплаты %s превышает остаток к выплате %s (начислено %s − выплачено %s)",
-							payAmt.String(), remaining.String(), accrued.String(), paid.String()), nil)
+					if in.Override == nil || !*in.Override {
+						return nil, apperrors.Wrap("VALIDATION",
+							fmt.Sprintf("сумма выплаты %s превышает остаток к выплате %s (начислено %s − выплачено %s)",
+								payAmt.String(), remaining.String(), accrued.String(), paid.String()), nil)
+					}
+					reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
+					if reason == "" {
+						return nil, apperrors.Wrap("VALIDATION", "укажите причину свободной выплаты", nil)
+					}
+					isOverride = true
+					merged := mergeOverrideReason(in.Description, reason)
+					overrideDesc = &merged
 				}
 			}
 		}
@@ -1628,8 +1706,9 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 		Counterparty: &cp,
 		Category:     "Сервис",
 		Period:       &period,
-		Description:  in.Description,
+		Description:  overrideDesc,
 		ShiftID:      in.ShiftID,
+		IsOverride:   isOverride,
 	})
 }
 
@@ -1642,6 +1721,9 @@ type payoutInput struct {
 	Period       *string
 	Description  *string
 	ShiftID      *string
+	// IsOverride — выплата выше расчётного остатка, проведённая осознанно
+	// (ЗП-4). false во всех путях, что не прошли через override-ветку.
+	IsOverride bool
 }
 
 func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.FinancialOperation, error) {
@@ -1721,6 +1803,7 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 			IsAuto:       &isAuto,
 			SourceRef:    &srcRef,
 			ShiftID:      in.ShiftID,
+			IsOverride:   in.IsOverride,
 			RestaurantID: &ridStr,
 			CreatedAt:    now,
 			UpdatedAt:    now,

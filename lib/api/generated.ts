@@ -9503,6 +9503,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/deductions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История удержаний сотрудника */
+        get: {
+            parameters: {
+                query: {
+                    user_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryDeductionList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Удержание из зарплаты с обязательной причиной
+         * @description Заменяет прежний счётчик users.deductions без единой записи о том, за что удержали. НЕ создаёт FinancialOperation — деньги не выданы, им неоткуда "выходить"; это только уменьшение будущей выплаты.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SalaryDeductionInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryDeduction"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/service-charge/pay": {
         parameters: {
             query?: never;
@@ -13034,6 +13102,10 @@ export interface components {
              * @enum {string}
              */
             kind?: "salary" | "advance";
+            /** @description Провести сумму выше расчётного остатка осознанно (бонус, доплата, коррекция) вместо блокировки сервером. Требует override_reason. */
+            override?: boolean;
+            /** @description Обязательна при override=true и реальном превышении остатка. */
+            override_reason?: string;
         };
         AccountBalanceHistory: {
             from?: string;
@@ -13119,6 +13191,8 @@ export interface components {
             account_id?: string;
             account_name?: string;
             description?: string;
+            /** @description Выплата выше расчётного остатка, проведённая осознанно (ЗП-4). */
+            is_override?: boolean;
         };
         SalaryReportTotals: {
             salary_paid?: components["schemas"]["Decimal"];
@@ -13137,6 +13211,32 @@ export interface components {
             period_from?: string;
             period_to?: string;
             description?: string;
+            /** Format: uuid */
+            shift_id?: string;
+            /** @description См. SalaryPayInput.override — тот же принцип для обслуживания. */
+            override?: boolean;
+            override_reason?: string;
+        };
+        SalaryDeduction: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            amount?: components["schemas"]["Decimal"];
+            reason?: string;
+            created_by?: string;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        SalaryDeductionInput: {
+            /** Format: uuid */
+            user_id: string;
+            amount: components["schemas"]["Decimal"];
+            /** @description Обязательна — единственная цель записи в том, чтобы не терять «за что удержали». */
+            reason: string;
+        };
+        SalaryDeductionList: {
+            data?: components["schemas"]["SalaryDeduction"][];
         };
         ServiceAccrual: {
             /** Format: uuid */

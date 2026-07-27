@@ -2698,6 +2698,23 @@ paths:
         - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
         - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryReport" } } } } }
+  /api/v1/finance/salary/deductions:
+    get:
+      tags: [finance, payroll]
+      summary: История удержаний сотрудника
+      parameters:
+        - { in: query, name: user_id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeductionList" } } } } }
+    post:
+      tags: [finance, payroll]
+      summary: Удержание из зарплаты с обязательной причиной
+      description: >
+        Заменяет прежний счётчик users.deductions без единой записи о том, за
+        что удержали. НЕ создаёт FinancialOperation — деньги не выданы, им
+        неоткуда "выходить"; это только уменьшение будущей выплаты.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeductionInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeduction" } } } } }
   /api/v1/finance/service-charge/pay:
     post:
       tags: [finance, payroll]
@@ -5074,6 +5091,14 @@ components:
             salary — окончательный расчёт (категория «Зарплата»), advance — аванс
             (категория «Аванс»). Пусто → salary. До разделения категорий оба вида
             писались как «Зарплата» и отчёт не мог их разделить.
+        override:
+          type: boolean
+          description: >
+            Провести сумму выше расчётного остатка осознанно (бонус, доплата,
+            коррекция) вместо блокировки сервером. Требует override_reason.
+        override_reason:
+          type: string
+          description: "Обязательна при override=true и реальном превышении остатка."
     AccountBalanceHistory:
       type: object
       properties:
@@ -5157,6 +5182,9 @@ components:
         account_id: { type: string }
         account_name: { type: string }
         description: { type: string }
+        is_override:
+          type: boolean
+          description: "Выплата выше расчётного остатка, проведённая осознанно (ЗП-4)."
     SalaryReportTotals:
       type: object
       properties:
@@ -5176,6 +5204,31 @@ components:
         period_from: { type: string }
         period_to: { type: string }
         description: { type: string }
+        shift_id: { type: string, format: uuid }
+        override:
+          type: boolean
+          description: "См. SalaryPayInput.override — тот же принцип для обслуживания."
+        override_reason: { type: string }
+
+    SalaryDeduction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        reason: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+    SalaryDeductionInput:
+      type: object
+      required: [user_id, amount, reason]
+      properties:
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        reason:
+          type: string
+          description: "Обязательна — единственная цель записи в том, чтобы не терять «за что удержали»."
+    SalaryDeductionList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryDeduction" } } } }
 
     ServiceAccrual:
       type: object

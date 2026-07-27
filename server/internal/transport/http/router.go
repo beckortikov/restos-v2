@@ -431,6 +431,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/finance/service-accrual/by-shift/{shift_id}", salaryH.AccrualByShift)
 			g.Get("/finance/service-payout/by-waiter", salaryH.PayoutByWaiter)
 			g.Get("/finance/service-payout/by-shift/{shift_id}", salaryH.PayoutByShift)
+			g.Get("/finance/salary/deductions", salaryH.ListDeductions)
 
 			// Restaurants (global, Phase 10).
 			g.Get("/restaurants", restaurantsH.List)
@@ -672,6 +673,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/finance/salary/pay", salaryH.PaySalary)
 			g.Put("/finance/salary/worked-days", salaryH.SetWorkedDays)
 			g.Post("/finance/service-charge/pay", salaryH.PayServiceCharge)
+			g.Post("/finance/salary/deductions", salaryH.AddDeduction)
 
 			// Restaurants write (Phase 10).
 			g.Post("/restaurants", restaurantsH.Create)

@@ -57,6 +57,9 @@ type SalaryPayoutRow struct {
 	AccountID   string          `json:"account_id,omitempty"`
 	AccountName string          `json:"account_name,omitempty"`
 	Description string          `json:"description,omitempty"`
+	// IsOverride — выплата выше расчётного остатка, проведённая осознанно
+	// (ЗП-4) — отличает "свободную" выплату от обычного расчёта по формуле.
+	IsOverride bool `json:"is_override"`
 }
 
 type SalaryReportTotals struct {
@@ -107,6 +110,7 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 		AccountID    string          `gorm:"column:account_id"`
 		AccountName  string          `gorm:"column:account_name"`
 		Description  string          `gorm:"column:description"`
+		IsOverride   bool            `gorm:"column:is_override"`
 		UserName     string          `gorm:"column:user_name"`
 		Position     string          `gorm:"column:position"`
 		Role         string          `gorm:"column:role"`
@@ -123,7 +127,7 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 		        COALESCE(fo.category,'') AS category, COALESCE(fo.counterparty,'') AS counterparty,
 		        COALESCE(fo.source_ref,'') AS source_ref,
 		        COALESCE(fo.account_id,'') AS account_id, COALESCE(fo.account_name,'') AS account_name,
-		        COALESCE(fo.description,'') AS description,
+		        COALESCE(fo.description,'') AS description, COALESCE(fo.is_override,false) AS is_override,
 		        COALESCE(u.name,'') AS user_name, COALESCE(u.position,'') AS position,
 		        COALESCE(u.role,'') AS role, COALESCE(u.salary,0) AS salary`).
 		Joins("LEFT JOIN users u ON u.id::text = fo.source_ref").
@@ -164,6 +168,7 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 			AccountID:   op.AccountID,
 			AccountName: op.AccountName,
 			Description: op.Description,
+			IsOverride:  op.IsOverride,
 		})
 
 		row, ok := byUser[op.SourceRef]

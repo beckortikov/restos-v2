@@ -47,6 +47,20 @@ var schemaSelfHealStmts = []string{
 	// с "column does not exist" — а счета читает каждая оплата заказа.
 	`ALTER TABLE financial_accounts ADD COLUMN IF NOT EXISTS is_enabled  BOOLEAN NOT NULL DEFAULT true`,
 	`ALTER TABLE financial_accounts ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ`,
+	// 064: честный выбор режима выплаты ЗП/аванса/обслуживания + удержания
+	// с сохранённой причиной. financial_operations читается на каждом
+	// экране финансов — без is_enabled колонки SELECT падает целиком.
+	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS is_override BOOLEAN NOT NULL DEFAULT false`,
+	`CREATE TABLE IF NOT EXISTS salary_deductions (
+		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		restaurant_id TEXT,
+		user_id       UUID NOT NULL,
+		amount        NUMERIC(14,4) NOT NULL CHECK (amount > 0),
+		reason        TEXT NOT NULL,
+		created_by    TEXT,
+		created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_salary_deductions_user ON salary_deductions (user_id, created_at DESC)`,
 }
 
 // backfillSelfHealStmts — best-effort раскладка: 3 фиксированных склада на

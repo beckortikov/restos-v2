@@ -299,6 +299,38 @@ func (h *SalaryHandler) PaySalary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusCreated, out)
 }
 
+// AddDeduction — POST /api/v1/finance/salary/deductions
+// Удержание с сохранённой причиной (ЗП-4) — заменяет прежний счётчик
+// users.deductions без единой записи о том, за что удержали.
+func (h *SalaryHandler) AddDeduction(w http.ResponseWriter, r *http.Request) {
+	var in service.DeductionInput
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.AddDeduction(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, out)
+}
+
+// ListDeductions — GET /api/v1/finance/salary/deductions?user_id=
+func (h *SalaryHandler) ListDeductions(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		respond.BadRequest(w, "user_id is required")
+		return
+	}
+	rows, err := h.svc.ListDeductions(r.Context(), userID)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(rows, ""))
+}
+
 // SalaryReport — GET /api/v1/finance/salary/report?from=&to=
 // «Кому сколько выдали и когда» за период: сводка по сотрудникам + плоский
 // список выплат с датой, суммой и счётом.

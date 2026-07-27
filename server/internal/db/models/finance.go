@@ -41,8 +41,12 @@ type FinancialOperation struct {
 	SourceRef    *string         `gorm:"column:source_ref" json:"source_ref"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	ShiftID      *string         `gorm:"column:shift_id;index" json:"shift_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// IsOverride — выплата ЗП/аванса/обслуживания выше расчётного остатка,
+	// проведённая осознанно (владелец подтвердил + указал причину), а не
+	// заблокированная сервером. См. миграцию 064 и SalaryService.payout.
+	IsOverride bool      `gorm:"column:is_override;default:false" json:"is_override"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func (FinancialOperation) TableName() string { return "financial_operations" }
