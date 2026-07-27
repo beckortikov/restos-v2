@@ -103,6 +103,11 @@ fun ZakupNavGraph(
                 onOpenToBuy = { navController.navigate(Routes.TO_BUY) },
                 onNewReceipt = { ingredientId -> navController.navigate(Routes.newReceipt(ingredientId)) },
                 onOperation = { op -> navController.navigate("op/$op") },
+                onResetServer = {
+                    navController.navigate(Routes.ONBOARDING) {
+                        popUpTo(Routes.APP) { inclusive = true }
+                    }
+                },
             )
         }
         composable(

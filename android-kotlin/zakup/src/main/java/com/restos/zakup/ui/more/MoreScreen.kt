@@ -25,12 +25,19 @@ import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.LocalShipping
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.Sell
 import androidx.compose.material.icons.outlined.Warehouse
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -51,7 +58,25 @@ fun MoreScreen(
     onLogout: () -> Unit,
     onOperation: (String) -> Unit = {},
     onOpenSuppliers: () -> Unit = {},
+    onResetServer: () -> Unit = {},
 ) {
+    var confirmResetServer by remember { mutableStateOf(false) }
+
+    if (confirmResetServer) {
+        AlertDialog(
+            onDismissRequest = { confirmResetServer = false },
+            title = { Text("Пересканировать сервер?", fontWeight = FontWeight.SemiBold) },
+            text = { Text("Привязка к кассе и текущая сессия будут сброшены. Нужно будет заново подключиться (QR / IP).") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmResetServer = false
+                    onResetServer()
+                }) { Text("Сканировать", color = ZakupColors.Danger) }
+            },
+            dismissButton = { TextButton(onClick = { confirmResetServer = false }) { Text("Отмена") } },
+        )
+    }
+
     Column(
         Modifier
             .fillMaxWidth()
@@ -78,7 +103,8 @@ fun MoreScreen(
 
         Section("ПРИЛОЖЕНИЕ") {
             MoreRow(Icons.Outlined.Notifications, "Уведомления")
-            MoreRow(Icons.Outlined.Language, "Язык", trailing = "Русский", last = true)
+            MoreRow(Icons.Outlined.Language, "Язык", trailing = "Русский")
+            MoreRow(Icons.Outlined.QrCodeScanner, "Сканировать сервер заново", last = true) { confirmResetServer = true }
         }
 
         Spacer(Modifier.size(12.dp))

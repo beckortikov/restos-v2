@@ -65,6 +65,7 @@ fun ZakupShell(
     onOpenToBuy: () -> Unit = {},
     onNewReceipt: (String?) -> Unit = {},
     onOperation: (String) -> Unit = {},
+    onResetServer: () -> Unit = {},
     viewModel: ZakupShellViewModel = hiltViewModel(),
 ) {
     val me by viewModel.me.collectAsStateWithLifecycle()
@@ -97,6 +98,7 @@ fun ZakupShell(
                     onLogout = { viewModel.logout(onLoggedOut) },
                     onOperation = onOperation,
                     onOpenSuppliers = { currentTab = ZakupTab.Suppliers.ordinal },
+                    onResetServer = { viewModel.resetServer(onResetServer) },
                 )
             }
         }

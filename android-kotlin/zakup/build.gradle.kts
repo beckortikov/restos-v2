@@ -20,8 +20,8 @@ android {
         applicationId = "com.restos.zakup"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Backend URL — реальный host подменяется HostRedirectInterceptor из
@@ -63,6 +63,13 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // LAN-приложение раздаётся сайдлоадом (не через Play) — lintVitalRelease не
+    // нужен и сильно замедляет release-сборку (~половина времени). Lint остаётся
+    // доступным вручную (./gradlew :zakup:lint), но не блокирует assembleRelease.
+    lint {
+        checkReleaseBuilds = false
     }
 
     packaging {
