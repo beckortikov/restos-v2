@@ -320,6 +320,31 @@ export async function addSalaryDeduction(userId: string, amount: number, reason:
   logAction('payroll.deduction', 'payroll', userId, undefined, { amount, reason })
 }
 
+export interface SalaryDeductionRow {
+  id: string
+  userId: string
+  amount: number
+  reason: string
+  createdBy?: string
+  createdAt: string
+}
+
+/** История удержаний сотрудника, новые сверху (ЗП-5, карточка сотрудника). */
+export async function fetchSalaryDeductions(userId: string): Promise<SalaryDeductionRow[]> {
+  const res: any = await unwrap(api.GET('/api/v1/finance/salary/deductions', {
+    params: { query: { user_id: userId } },
+  }))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+  return rows.map((r) => ({
+    id: r.id ?? '',
+    userId: r.user_id ?? '',
+    amount: Number(r.amount ?? 0),
+    reason: r.reason ?? '',
+    createdBy: r.created_by || undefined,
+    createdAt: r.created_at ?? '',
+  }))
+}
+
 // ─── Отработанные дни (059): табель + ручные отметки ────────────────────────
 
 export interface WorkedDaysResult {
