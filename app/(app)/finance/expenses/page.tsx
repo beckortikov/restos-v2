@@ -441,6 +441,23 @@ export default function ExpensesByCategoryPage() {
                       <Tooltip formatter={(v: number, n: string) => [tooltipValue(v, b.total), n]} />
                     </PieChart>
                   </ResponsiveContainer>
+                  {/* Своя разбивка под каждой диаграммой — иначе под тремя
+                      периодами читалась одна общая легенда (сумма за весь
+                      диапазон), и сравнить периоды по статьям было нельзя. */}
+                  <div className="mt-2 divide-y divide-border border-t border-border">
+                    {b.data.map((d) => {
+                      const ci = Math.max(0, topCategories.indexOf(d.name))
+                      const pct = b.total > 0 ? Math.round((d.value / b.total) * 100) : 0
+                      return (
+                        <div key={d.name} className="flex items-center gap-2 py-1.5 text-xs">
+                          <span className="size-2 rounded-full shrink-0" style={{ background: CHART_COLORS[ci % CHART_COLORS.length] }} />
+                          <span className="text-foreground flex-1 truncate">{d.name}</span>
+                          <span className="text-muted-foreground tabular-nums">{pct}%</span>
+                          <span className="font-semibold text-foreground tabular-nums">{formatCurrency(d.value)}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               ))}
             </div>
@@ -467,20 +484,24 @@ export default function ExpensesByCategoryPage() {
             </ResponsiveContainer>
           )}
 
-          {/* Общая легенда: цвет = статья (тот же, что на всех диаграммах) */}
-          <div className="mt-3 divide-y divide-border border-t border-border">
-            {byCategory.map(([name, value]) => {
-              const ci = Math.max(0, topCategories.indexOf(catToSeries(name)))
-              return (
-                <div key={name} className="flex items-center gap-3 py-2">
-                  <span className="size-2.5 rounded-full shrink-0" style={{ background: CHART_COLORS[ci % CHART_COLORS.length] }} />
-                  <span className="text-sm text-foreground flex-1 truncate">{name}</span>
-                  <span className="text-xs text-muted-foreground tabular-nums">{total > 0 ? Math.round((value / total) * 100) : 0}%</span>
-                  <span className="text-sm font-semibold text-foreground tabular-nums w-28 text-right">{formatCurrency(value)}</span>
-                </div>
-              )
-            })}
-          </div>
+          {/* Общая легенда только для одного периода — при нескольких у каждой
+              диаграммы уже есть своя разбивка выше, а эта показывала бы сумму
+              по всему диапазону под видом «текущих» цифр. */}
+          {pieByBucket.length <= 1 && (
+            <div className="mt-3 divide-y divide-border border-t border-border">
+              {byCategory.map(([name, value]) => {
+                const ci = Math.max(0, topCategories.indexOf(catToSeries(name)))
+                return (
+                  <div key={name} className="flex items-center gap-3 py-2">
+                    <span className="size-2.5 rounded-full shrink-0" style={{ background: CHART_COLORS[ci % CHART_COLORS.length] }} />
+                    <span className="text-sm text-foreground flex-1 truncate">{name}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">{total > 0 ? Math.round((value / total) * 100) : 0}%</span>
+                    <span className="text-sm font-semibold text-foreground tabular-nums w-28 text-right">{formatCurrency(value)}</span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       ) : (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
