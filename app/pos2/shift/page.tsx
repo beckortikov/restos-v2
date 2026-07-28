@@ -15,6 +15,7 @@ import {
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
 import { useDataSync } from '@/hooks/use-data-sync'
+import { confirmDialog } from '@/lib/confirm'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
 import { PosModal } from '@/components/pos-v2/pos-modal'
@@ -172,11 +173,22 @@ export default function PosV2Shift() {
   }
   async function deleteExpense(opId: string) {
     if (busyRef.current) return
-    if (typeof window !== 'undefined' && !window.confirm('Удалить этот расход? Баланс счёта смены откорректируется.')) return
-    busyRef.current = true; setBusy(true)
-    try { await deleteShiftExpense(opId); toast.success('Расход удалён'); await load() }
-    catch (e) { toast.error(humanizeError(e)) }
-    finally { busyRef.current = false; setBusy(false) }
+    // busyRef — сразу, до confirmDialog: диалог асинхронный (в отличие от
+    // синхронного window.confirm), и второй тап по той же корзине, пока
+    // первый диалог ещё висит, открывал бы второй диалог поверх первого.
+    busyRef.current = true
+    try {
+      if (!(await confirmDialog({
+        title: 'Удалить расход?',
+        message: 'Баланс счёта смены будет скорректирован. Действие нельзя отменить.',
+        confirmLabel: 'Удалить',
+        danger: true,
+      }))) return
+      setBusy(true)
+      try { await deleteShiftExpense(opId); toast.success('Расход удалён'); await load() }
+      catch (e) { toast.error(humanizeError(e)) }
+      finally { setBusy(false) }
+    } finally { busyRef.current = false }
   }
   const guests = zr?.guestsCount ?? 0
   const perGuest = guests > 0 ? curRevenue / guests : 0
@@ -254,11 +266,26 @@ export default function PosV2Shift() {
   }
 
   async function cancelStuck(orderId: string) {
-    if (!window.confirm('Отменить этот заказ? Он мешает закрыть смену.')) return
-    setCancellingId(orderId)
-    try { await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены'); setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId)); toast.success('Заказ отменён') }
-    catch (e) { toast.error(humanizeError(e)) }
-    finally { setCancellingId(null) }
+    // busyRef — сразу, до confirmDialog: раньше здесь не было синхронного
+    // гварда вообще (только cancellingId-state, который выставлялся уже
+    // ПОСЛЕ synchronous window.confirm — тогда это было безопасно). С async
+    // confirmDialog второй тап по той же строке, пока первый диалог ещё
+    // висит, открыл бы второй диалог поверх первого.
+    if (busyRef.current) return
+    busyRef.current = true
+    try {
+      if (!(await confirmDialog({
+        title: 'Отменить заказ?',
+        message: 'Он мешает закрыть смену.',
+        confirmLabel: 'Отменить заказ',
+        cancelLabel: 'Оставить',
+        danger: true,
+      }))) return
+      setCancellingId(orderId)
+      try { await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены'); setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId)); toast.success('Заказ отменён') }
+      catch (e) { toast.error(humanizeError(e)) }
+      finally { setCancellingId(null) }
+    } finally { busyRef.current = false }
   }
 
   async function attachAccount() {

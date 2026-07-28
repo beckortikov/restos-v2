@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { OwnerPinGate } from '@/components/owner-pin-gate'
@@ -17,6 +17,7 @@ import { V4Error } from '@/lib/api'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
+import { confirmDialog } from '@/lib/confirm'
 
 const EXPENSE_CATEGORIES = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
 
@@ -304,6 +305,10 @@ export default function ShiftsPage() {
   // подгружаем их отдельно и даём отменить прямо здесь.
   const [stuckOrders, setStuckOrders] = useState<Order[] | null>(null)
   const [cancellingStuckId, setCancellingStuckId] = useState<string | null>(null)
+  // Синхронный гвард поверх confirmDialog(): в отличие от window.confirm()
+  // (блокировал JS-поток сам), async-диалог не мешает второму тапу открыть
+  // второй диалог поверх первого, пока первый ещё висит.
+  const confirmBusyRef = useRef(false)
 
   // Cash operation form
   const [showOp, setShowOp] = useState<'cash_in' | 'cash_out' | null>(null)
@@ -566,28 +571,46 @@ export default function ShiftsPage() {
   }
 
   const handleDeleteExpense = async (opId: string, amount: number, description?: string) => {
-    const ok = window.confirm(
-      `Удалить расход «${description ?? 'Расход'}» на сумму ${formatCurrency(amount)}? ` +
-      `Это действие нельзя отменить, баланс счёта будет скорректирован.`
-    )
-    if (!ok) return
+    // НЕ window.confirm: нативный диалог в Electron ломает фокус инпутов
+    // после закрытия (electron/electron#19977 и класс дублей — экранная
+    // клавиатура, живущая только на focusin, переставала открываться).
+    if (confirmBusyRef.current) return
+    confirmBusyRef.current = true
     try {
-      await deleteShiftExpense(opId)
-      toast.success('Расход удалён')
-      await reload()
-    } catch (e) {
-      toast.error(humanizeError(e, 'Ошибка удаления расхода'))
-    }
+      const ok = await confirmDialog({
+        title: 'Удалить расход?',
+        message: `«${description ?? 'Расход'}» на сумму ${formatCurrency(amount)}. ` +
+          `Действие нельзя отменить, баланс счёта будет скорректирован.`,
+        confirmLabel: 'Удалить',
+        danger: true,
+      })
+      if (!ok) return
+      try {
+        await deleteShiftExpense(opId)
+        toast.success('Расход удалён')
+        await reload()
+      } catch (e) {
+        toast.error(humanizeError(e, 'Ошибка удаления расхода'))
+      }
+    } finally { confirmBusyRef.current = false }
   }
 
   const handleClose = async () => {
     if (!activeShift || !user) return
+    if (confirmBusyRef.current) return
     const unpaidService = waiterServiceRows.reduce((s, r) => s + r.toPay, 0)
     if (unpaidService > 0) {
-      const ok = window.confirm(
-        `Не выплачено обслуживание официантам: ${formatCurrency(unpaidService)}.\n` +
-        `Закрыть смену без выплаты? Сумма останется в отчёте «Обслуживание».`
-      )
+      confirmBusyRef.current = true
+      let ok: boolean
+      try {
+        ok = await confirmDialog({
+          title: 'Закрыть смену без выплаты?',
+          message: `Не выплачено обслуживание официантам: ${formatCurrency(unpaidService)}.\n` +
+            `Сумма останется в отчёте «Обслуживание».`,
+          confirmLabel: 'Закрыть смену',
+          danger: true,
+        })
+      } finally { confirmBusyRef.current = false }
       if (!ok) return
     }
     setStuckOrders(null)
@@ -629,17 +652,28 @@ export default function ShiftsPage() {
   }
 
   const handleCancelStuckOrder = async (orderId: string) => {
-    if (!window.confirm('Отменить этот заказ? Он мешает закрыть смену — отмена нужна, чтобы освободить смену.')) return
-    setCancellingStuckId(orderId)
+    if (confirmBusyRef.current) return
+    confirmBusyRef.current = true
     try {
-      await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены')
-      setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId))
-      toast.success('Заказ отменён')
-    } catch (e) {
-      toast.error(humanizeError(e, 'Не удалось отменить заказ'))
-    } finally {
-      setCancellingStuckId(null)
-    }
+      const ok = await confirmDialog({
+        title: 'Отменить заказ?',
+        message: 'Он мешает закрыть смену — отмена нужна, чтобы освободить смену.',
+        confirmLabel: 'Отменить заказ',
+        cancelLabel: 'Оставить',
+        danger: true,
+      })
+      if (!ok) return
+      setCancellingStuckId(orderId)
+      try {
+        await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены')
+        setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId))
+        toast.success('Заказ отменён')
+      } catch (e) {
+        toast.error(humanizeError(e, 'Не удалось отменить заказ'))
+      } finally {
+        setCancellingStuckId(null)
+      }
+    } finally { confirmBusyRef.current = false }
   }
 
   const handlePrintZ = async (shiftId: string) => {
