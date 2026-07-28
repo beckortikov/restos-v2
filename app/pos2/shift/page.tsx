@@ -25,6 +25,15 @@ import { V4Error } from '@/lib/api'
 import type { CashShift, CashShiftOperation, FinancialAccount, Order } from '@/lib/types'
 
 const EXPENSE_CATS = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
+// Авто-зеркало возврата заказа (описание «Возврат заказа #…») — уже показано
+// отдельной строкой «Возвраты» (zr.refundsCount/refundsTotal с бэка), в
+// «Расходы из смены» его исключаем, как и старый экран «Смены» (см. AUTO_MIRROR_CAT
+// там же): иначе сырая категория "__auto_mirror__" лезет в список как обычный
+// удаляемый расход — а удалять этот системный зеркальный row нельзя, он держит
+// баланс смены синхронным с историей возврата заказа.
+const AUTO_MIRROR_CAT = '__auto_mirror__'
+const REFUND_DESC_PREFIX = 'Возврат заказа #'
+
 interface SvcRow { waiterId: string; waiterName: string; ordersCount: number; accrued: number; paid: number; toPay: number }
 type Action = 'cash_in' | 'cash_out' | 'expense' | 'close'
 const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
@@ -119,9 +128,16 @@ export default function PosV2Shift() {
   const touchesDrawer = useCallback((o: CashShiftOperation) => !o.accountId || o.accountId === shift?.accountId, [shift?.accountId])
   const cashIn = useMemo(() => dSum(ops.filter(o => o.type === 'cash_in' && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
   const withdraw = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !o.category && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
-  // «Расходы» карточка — все расходы бизнеса (нал + безнал). Для наличного
-  // ящика ниже берём только наличные (cashExpenses).
-  const expenses = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !!o.category).map(o => Number(o.amount))), [ops])
+  // Авто-зеркало возврата заказа исключаем из СПИСКА/бэйджа «Расходы из смены»
+  // (оно уже показано отдельной строкой «Возвраты» с бэка) — но НЕ из
+  // cashExpenses/expected ниже: реальные деньги из ящика ушли, кассовая
+  // математика должна их учитывать в любом случае.
+  const expenseOps = ops.filter(o => o.type === 'cash_out' && !!o.category
+    && !(o.category === AUTO_MIRROR_CAT && (o.description ?? '').startsWith(REFUND_DESC_PREFIX)))
+  // «Расходы» карточка — все расходы бизнеса (нал + безнал), без авто-зеркала
+  // возврата (см. expenseOps выше). Для наличного ящика ниже — cashExpenses,
+  // который зеркало намеренно НЕ исключает.
+  const expenses = useMemo(() => dSum(expenseOps.map(o => Number(o.amount))), [expenseOps])
   const cashExpenses = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !!o.category && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
   const openingBalance = shift?.openingBalance ?? 0
   const expected = useMemo(
@@ -164,7 +180,6 @@ export default function PosV2Shift() {
   }
   const guests = zr?.guestsCount ?? 0
   const perGuest = guests > 0 ? curRevenue / guests : 0
-  const expenseOps = ops.filter(o => o.type === 'cash_out' && !!o.category)
 
   async function openHistory() {
     setHistOpen(true)
