@@ -1,21 +1,23 @@
 'use client'
 
-import { useState, useEffect, memo, useCallback } from 'react'
+import { useState, useEffect, memo, useCallback, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency } from '@/lib/helpers'
 import {
   type User, type UserPermissions, type PermissionKey, type UserRole as UserRoleType,
   ROLE_LABELS, PERMISSION_GROUPS, PERMISSION_LABELS, ALL_PERMISSIONS,
-  ROLE_DEFAULT_PERMISSIONS, buildNavFromPermissions,
+  ROLE_DEFAULT_PERMISSIONS, buildNavFromPermissions, COMMON_STAFF_POSITIONS,
 } from '@/lib/types'
 import {
   type User as UserType2, type UserPermissions as UP2,
   ALL_STATIONS, STATION_LABELS, STATION_ICONS, type MenuStation,
 } from '@/lib/types'
 import { fetchUsersByRestaurant, updateUserPermissions, createUserForRestaurant, deleteUser, updateUser, generateUniquePin } from '@/lib/queries'
-import { Shield, Save, RotateCcw, Check, Minus, Plus, Trash2, Users, Search, Pencil, Grid3X3, List, X, KeyRound } from 'lucide-react'
+import { Shield, Save, RotateCcw, Check, Minus, Plus, Trash2, Users, Search, Pencil, Grid3X3, List, X, KeyRound, ChevronsUpDown } from 'lucide-react'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command'
 
 type PermMap = Record<string, Record<string, boolean>>
 type Tab = 'staff' | 'matrix'
@@ -93,6 +95,16 @@ export default function UserPermissionsPage() {
   const roleStats = employees.reduce<Record<string, number>>((acc, e) => { acc[e.role] = (acc[e.role] || 0) + 1; return acc }, {})
   const shiftStats = employees.reduce<Record<string, number>>((acc, e) => { const k = e.shiftNumber ? String(e.shiftNumber) : 'none'; acc[k] = (acc[k] || 0) + 1; return acc }, {})
 
+  // Подсказки для комбобокса «Должность»: стандартный набор + всё, что уже
+  // реально сохранено у сотрудников ресторана. Как только должность сохранена
+  // хотя бы раз — она сама появляется здесь для следующих сотрудников.
+  // useMemo на [employees] — ссылка стабильна между не относящимися к этому
+  // ре-рендерами (тогглы прав и т.п.), иначе сломает memo() у AddUserForm.
+  const knownPositions = useMemo(() => {
+    const used = employees.map(e => (e.position || '').trim()).filter(Boolean)
+    return Array.from(new Set([...COMMON_STAFF_POSITIONS, ...used])).sort((a, b) => a.localeCompare(b, 'ru'))
+  }, [employees])
+
   // ─── Permission matrix actions ──────────────────────────────────────────
   const togglePerm = (userId: string, key: PermissionKey) => {
     setPermMatrix(prev => ({ ...prev, [userId]: { ...prev[userId], [key]: !prev[userId]?.[key] } }))
@@ -144,6 +156,7 @@ export default function UserPermissionsPage() {
         restaurantId: user.restaurantId,
         salary: form.salary,
         password: form.password || '1234',
+        position: form.position.trim() || undefined,
       })
       toast.success(`${form.name.trim()} добавлен`)
       setShowAddUser(false)
@@ -258,6 +271,7 @@ export default function UserPermissionsPage() {
           submitting={addingUser}
           onSubmit={handleAddUser}
           onCancel={handleCancelAdd}
+          existingPositions={knownPositions}
         />
       )}
 
@@ -606,8 +620,8 @@ export default function UserPermissionsPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Должность</label>
-                  <input value={editForm.position} onChange={e => setEditForm(p => ({ ...p, position: e.target.value }))} placeholder="Салатчи (старший)"
-                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+                  <PositionCombobox value={editForm.position} onChange={v => setEditForm(p => ({ ...p, position: v }))}
+                    suggestions={knownPositions} placeholder="Салатчик (старший)" />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-muted-foreground mb-1 block">Дата рождения</label>
@@ -690,12 +704,14 @@ type AddUserFormValues = {
   password: string
   role: UserRoleType
   salary: number
+  position: string
 }
 
 type AddUserFormProps = {
   submitting: boolean
   onSubmit: (values: AddUserFormValues) => void
   onCancel: () => void
+  existingPositions: string[]
 }
 
 const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'other']
@@ -706,7 +722,11 @@ const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook'
 // сочетание input + контекст-провайдер пересоздающий value. Uncontrolled
 // inputs полностью иммунны к re-render → пользовательский ввод никогда не
 // теряется. На submit читаем все поля одним FormData(form).
-const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel }: AddUserFormProps) {
+// Исключение — «Должность»: комбобокс не нативный form-элемент, ему нужен
+// свой state (PositionCombobox). Ре-рендер от него локален для AddUserForm
+// и не задевает родителя — список сотрудников/матрица прав не фризятся.
+const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel, existingPositions }: AddUserFormProps) {
+  const [position, setPosition] = useState('')
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const fd = new FormData(e.currentTarget)
@@ -716,12 +736,13 @@ const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel }
       password: String(fd.get('password') || '') || '1234',
       role: (String(fd.get('role') || 'waiter')) as UserRoleType,
       salary: Number(fd.get('salary') || 0),
+      position,
     })
   }
   return (
     <form onSubmit={handleSubmit} className="bg-card rounded-xl border border-border p-5 space-y-3">
       <h3 className="text-sm font-semibold text-foreground">Новый сотрудник</h3>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Имя <span className="text-destructive">*</span></label>
           <input name="name" required autoFocus defaultValue="" placeholder="Иванов Иван" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
@@ -741,6 +762,10 @@ const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel }
           </select>
         </div>
         <div>
+          <label className="text-xs text-muted-foreground block mb-1">Должность</label>
+          <PositionCombobox value={position} onChange={setPosition} suggestions={existingPositions} placeholder="Официант" />
+        </div>
+        <div>
           <label className="text-xs text-muted-foreground block mb-1">Зарплата</label>
           <input name="salary" type="number" min={0} defaultValue="" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
         </div>
@@ -755,3 +780,58 @@ const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel }
     </form>
   )
 })
+
+// ─── PositionCombobox ───────────────────────────────────────────────────────
+// «Должность» — выбери из списка или впиши свою. Список = стандартный набор
+// (COMMON_STAFF_POSITIONS) + всё, что уже реально сохранено у сотрудников
+// ресторана (knownPositions в родителе). Отдельно сохранять новую должность
+// никуда не нужно: как только сотрудник с ней сохранён, она сама попадёт в
+// knownPositions при следующем открытии формы (учится из employees).
+function PositionCombobox({ value, onChange, suggestions, placeholder }: {
+  value: string
+  onChange: (v: string) => void
+  suggestions: string[]
+  placeholder?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const filtered = q ? suggestions.filter(s => s.toLowerCase().includes(q)) : suggestions
+  const hasExactMatch = suggestions.some(s => s.toLowerCase() === q)
+
+  return (
+    <Popover open={open} onOpenChange={o => { setOpen(o); setQuery(o ? value : '') }}>
+      <PopoverTrigger asChild>
+        <button type="button"
+          className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm text-left flex items-center justify-between gap-2 hover:bg-muted/40 transition-colors">
+          <span className={`truncate ${value ? 'text-foreground' : 'text-muted-foreground'}`}>{value || placeholder || 'Выбрать или вписать...'}</span>
+          <ChevronsUpDown className="size-3.5 text-muted-foreground shrink-0" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="p-0 w-[var(--radix-popover-trigger-width)]">
+        <Command shouldFilter={false}>
+          <CommandInput value={query} onValueChange={setQuery} placeholder="Найти или вписать новую..." />
+          <CommandList>
+            <CommandEmpty>Не найдено</CommandEmpty>
+            <CommandGroup>
+              {filtered.map(s => (
+                <CommandItem key={s} value={s} onSelect={() => { onChange(s); setOpen(false) }}>
+                  <Check className={`mr-2 size-4 ${value === s ? 'opacity-100' : 'opacity-0'}`} />
+                  {s}
+                </CommandItem>
+              ))}
+            </CommandGroup>
+            {query.trim() && !hasExactMatch && (
+              <CommandGroup>
+                <CommandItem value={`__create__${query.trim()}`} onSelect={() => { onChange(query.trim()); setOpen(false) }}>
+                  <Plus className="mr-2 size-4" />
+                  Добавить «{query.trim()}»
+                </CommandItem>
+              </CommandGroup>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
