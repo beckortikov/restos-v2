@@ -8,7 +8,7 @@
 // split-payment, чаевые, реopen) остаются в OrderActionsDialog — он
 // открывается из этой панели через кнопку «Дополнительно».
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CreditCard, X, Tag, Trash2, Settings2, Receipt, AlertTriangle, FileText, Printer, ChevronDown, ChevronLeft, User as UserIcon, Clock, CheckCircle2, Pencil, Plus, Minus } from 'lucide-react'
 import { toast } from 'sonner'
@@ -28,6 +28,7 @@ import {
 // строк, кэш тут не выигрывает.
 import { fetchVoidsForOrder } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { buildReceiptData } from '@/lib/receipt-data'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -237,23 +238,34 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
   const [cancelReasonCustom, setCancelReasonCustom] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
+  // Отсекаем отключённые счета (миграция 063) прямо на входе — ниже по
+  // компоненту `accounts` используется только для выбора счёта оплаты,
+  // агрегатов здесь нет. Переиспользуется и на mount, и на SSE-рефреш
+  // (useDataSync ниже) — поэтому уже выбранный счёт трогаем, только если он
+  // пропал из списка (например, его отключили), а не на каждый рефреш.
+  const loadAccounts = useCallback(() => {
+    return fetchFinancialAccounts().then(all => {
+      const a = selectableAccounts(all)
+      setAccounts(a)
+      setSelectedAccountId(prev => {
+        if (prev && a.some(acc => acc.id === prev)) return prev
+        const cash = a.find(acc => acc.type === 'cash')
+        return cash ? cash.id : (a[0]?.id ?? '')
+      })
+    }).catch(() => {})
+  }, [])
+
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
+
   // Initial load -----------------------------------------------------------
   useEffect(() => {
     let cancelled = false
-    fetchFinancialAccounts().then(all => {
-      if (cancelled) return
-      // Отсекаем отключённые счета (миграция 063) прямо на входе — ниже по
-      // компоненту `accounts` используется только для выбора счёта оплаты,
-      // агрегатов здесь нет.
-      const a = selectableAccounts(all)
-      setAccounts(a)
-      const cash = a.find(acc => acc.type === 'cash')
-      if (cash) setSelectedAccountId(cash.id)
-      else if (a.length > 0) setSelectedAccountId(a[0].id)
-    }).catch(() => {})
+    loadAccounts()
     fetchVoidsForOrder(order.id).then(v => { if (!cancelled) setVoids(v) }).catch(() => {})
     return () => { cancelled = true }
-  }, [order.id])
+  }, [order.id, loadAccounts])
 
   // Derived totals ---------------------------------------------------------
   // visibleItems: только живые позиции — в счёт идут они и они же определяют

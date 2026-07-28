@@ -6,6 +6,7 @@ import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 import { useInactivityTimer } from '@/hooks/use-inactivity-timer'
 import { PinLockScreen } from '@/components/pin-lock-screen'
 import { Toaster } from '@/components/ui/sonner'
+import { RealtimeCacheBridge } from '@/components/realtime-cache-bridge'
 // Скоуп-токены нового интерфейса (только под `.pos-v2`).
 import '../../styles/pos-v2.css'
 
@@ -84,6 +85,11 @@ export function PosV2Layout() {
                 под AppLayout) уведомления не показывались — напр. «Смена не открыта»
                 при оплате молчало. */}
             <Toaster richColors position="top-center" />
+            {/* Та же история, что и с Toaster'ом выше: pos2 не под AppLayout, поэтому
+                не получает SSE вообще — ни одно бизнес-событие (заказ закрыт, счёт
+                отключили и т.п.) не долетало до useDataSync на экранах pos2 до
+                следующего F5. См. components/realtime-cache-bridge.tsx. */}
+            <RealtimeCacheBridge />
           </div>
         </LockGate>
       </LicenseGate>

@@ -346,7 +346,11 @@ export default function PosV2Order() {
     else { setSelectedTableId(''); setTableOrders([]) }
   }, [orderType, numberMode, loadQueue])
 
-  useEffect(() => { fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}) }, [])
+  const loadAccounts = useCallback(() => fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}), [])
+  useEffect(() => { loadAccounts() }, [loadAccounts])
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
 
   // Разделённый заказ — грузим части (оплачиваются прямо в сайдбаре).
   useEffect(() => {

@@ -34,6 +34,7 @@ import {
   type Zone,
 } from '@/lib/types'
 import { fetchTables, fetchUsers, fetchZones, fetchFinancialAccounts, fetchMenuItems } from '@/lib/queries'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { selectableAccounts } from '@/lib/queries/finance'
 import type { FinancialAccount } from '@/lib/types'
 import { buildReceiptData } from '@/lib/receipt-data'
@@ -189,16 +190,28 @@ export function OrderActionsBody({
   const [addPaymentAmount, setAddPaymentAmount] = useState('')
   const [reprinting, setReprinting] = useState(false)
 
-  // Initial data load (one-shot). При смене order.id перезагружаем voids/splits ниже.
-  useEffect(() => {
-    fetchFinancialAccounts().then(all => {
-      // Отключённые счета (миграция 063) к оплате не предлагаем.
+  // Отключённые счета (миграция 063) к оплате не предлагаем. Переиспользуется
+  // и на mount, и на SSE-рефреш (useDataSync ниже) — уже выбранный счёт
+  // трогаем только если он пропал из списка (его отключили), не на каждый рефреш.
+  const loadAccounts = useCallback(() => {
+    return fetchFinancialAccounts().then(all => {
       const a = selectableAccounts(all)
       setAccounts(a)
-      const cash = a.find(acc => acc.type === 'cash')
-      if (cash) setSelectedAccountId(cash.id)
-      else if (a.length > 0) setSelectedAccountId(a[0].id)
+      setSelectedAccountId(prev => {
+        if (prev && a.some(acc => acc.id === prev)) return prev
+        const cash = a.find(acc => acc.type === 'cash')
+        return cash ? cash.id : (a[0]?.id ?? '')
+      })
     }).catch(() => {})
+  }, [])
+
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
+
+  // Initial data load (one-shot). При смене order.id перезагружаем voids/splits ниже.
+  useEffect(() => {
+    loadAccounts()
     if (!dataLoaded) {
       fetchTables().then(t => setTables(t)).catch(() => {})
       fetchZones().then(z => setZones(z)).catch(() => {})

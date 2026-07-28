@@ -147,7 +147,7 @@ func NewRouter(deps Deps) http.Handler {
 	stockReadsSvc := service.NewStockReadsService(rep)
 	inventoryReadsSvc := service.NewInventoryReadsService(rep)
 	supplyExpensesSvc := service.NewSupplyExpensesService(rep)
-	finAccountsSvc := service.NewFinancialAccountsService(rep)
+	finAccountsSvc := service.NewFinancialAccountsService(rep).WithPublisher(pub)
 	finOpsSvc := service.NewFinancialOperationsService(rep).WithPublisher(pub)
 	customCatsSvc := service.NewCustomCategoriesService(rep)
 	finReportsSvc := service.NewFinanceReportsService(rep)

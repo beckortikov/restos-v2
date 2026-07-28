@@ -14,6 +14,7 @@ import {
   deleteShiftExpense,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
 import { PosModal } from '@/components/pos-v2/pos-modal'
@@ -107,10 +108,11 @@ export default function PosV2Shift() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    load()
-    fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {})
-  }, [load])
+  const loadAccounts = useCallback(() => fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}), [])
+  useEffect(() => { load(); loadAccounts() }, [load, loadAccounts])
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
 
   // Наличный ящик трогают только операции без своего счёта или на счёте смены.
   // Безналичный расход (accountId = банк-счёт) в кассовую математику не идёт.

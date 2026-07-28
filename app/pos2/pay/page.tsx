@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { fetchTables, fetchOrders, fetchFinancialAccounts } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { formatCurrency } from '@/lib/helpers'
 import { payable as calcPayable } from '@/lib/pos-v2/pay'
 import { PosModal } from '@/components/pos-v2/pos-modal'
@@ -45,7 +46,11 @@ export default function PosV2Pay() {
     } finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { load(); fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}) }, [load])
+  const loadAccounts = useCallback(() => fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}), [])
+  useEffect(() => { load(); loadAccounts() }, [load, loadAccounts])
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
 
   // Приход с карты/сайдбара ?order=<id> → сразу открыть оплату этого заказа (один раз).
   const autoOpenRef = useRef(false)

@@ -85,6 +85,9 @@ export const EVENT_FANOUT: Record<string, string[]> = {
   // Ручная финоперация (приход/расход/перевод) — бэк шлёт finance.operation
   // (service/finance.go). Складские и заказные проводки покрыты событиями выше.
   'finance.operation': ['financial_operations', 'financial_accounts'],
+  // Счёт включили/отключили (is_enabled) — POS-пикеры должны сразу перестать
+  // предлагать отключённый счёт, а не только после перезахода на экран.
+  'finance.account.updated': ['financial_accounts'],
   'license.updated':   ['license'],
   // Повар поставил/снял стоп с кухни — меню кассы должно обновиться сразу,
   // иначе стоп-блюдо видно до следующего перезапроса.

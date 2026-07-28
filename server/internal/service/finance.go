@@ -30,10 +30,19 @@ import (
 // FinancialAccount CRUD + transfer
 // ═══════════════════════════════════════════════════════════════════════════
 
-type FinancialAccountsService struct{ r *repo.Repo }
+type FinancialAccountsService struct {
+	r   *repo.Repo
+	pub *EventPublisher
+}
 
 func NewFinancialAccountsService(r *repo.Repo) *FinancialAccountsService {
 	return &FinancialAccountsService{r: r}
+}
+
+// WithPublisher (как в других сервисах).
+func (s *FinancialAccountsService) WithPublisher(pub *EventPublisher) *FinancialAccountsService {
+	s.pub = pub
+	return s
 }
 
 type FinancialAccountInput struct {
@@ -207,6 +216,19 @@ func (s *FinancialAccountsService) SetEnabled(ctx context.Context, id string, en
 	var out models.FinancialAccount
 	if err := scopedOut.Where("id = ?", id).First(&out).Error; err != nil {
 		return nil, err
+	}
+	// Публикуем ПОСЛЕ успешного обновления — открытые POS-терминалы
+	// перезапрашивают список счетов и перестают предлагать отключённый.
+	if s.pub != nil {
+		rid, err := tenant.MustRestaurantID(ctx)
+		if err == nil {
+			buf := NewBuffer()
+			buf.Add(EventFinanceAccountUpdated, map[string]any{
+				"id":         out.ID,
+				"is_enabled": out.IsEnabled,
+			})
+			s.pub.Flush(ctx, rid, buf)
+		}
 	}
 	return &out, nil
 }
