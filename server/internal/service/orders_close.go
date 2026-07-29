@@ -460,6 +460,12 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
+		// Sync-дельта (ADR-003 Фаза 5): central сети видит закрытый заказ
+		// филиала — основа P&L/аналитики «просмотр филиала» (не связано с
+		// revenue-FO ниже, та реплицируется отдельно своим хуком).
+		if err := recordOrderSync(tx, &order, "insert"); err != nil {
+			return err
+		}
 
 		// 5. Revenue financial_operations (один или несколько split-ов).
 		opType := "in"

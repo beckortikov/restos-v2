@@ -92,6 +92,10 @@ func (s *OrdersService) Cancel(ctx context.Context, orderID string, in CancelOrd
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
+		// Sync-дельта (ADR-003 Фаза 5) — заказ стал терминальным (cancelled).
+		if err := recordOrderSync(tx, &order, "insert"); err != nil {
+			return err
+		}
 
 		// v3.9.25 (вариант 1): отменяем ещё НЕ напечатанные runner-задачи этого
 		// заказа — они не должны выйти на принтер. Без этого отменённый «с собой»
@@ -359,6 +363,10 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 			order.CancelledTotal = &cTotal
 			order.UpdatedAt = now
 			if err := tx.Save(&order).Error; err != nil {
+				return err
+			}
+			// Sync-дельта (ADR-003 Фаза 5) — заказ стал терминальным (auto-cancel).
+			if err := recordOrderSync(tx, &order, "insert"); err != nil {
 				return err
 			}
 

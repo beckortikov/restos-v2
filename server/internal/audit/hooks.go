@@ -42,6 +42,14 @@ func Register(db *gorm.DB) error {
 
 func makeHook(action string) func(*gorm.DB) {
 	return func(tx *gorm.DB) {
+		// SkipHooks — сессия sync_ingest.go (applyOrder/applyTransfer/
+		// applyFinancialOp): реплицированные с филиала строки не аудируем
+		// повторно. GORM сам SkipHooks на struct-хуки (BeforeCreate и т.п.) не
+		// распространяет на кастомные db.Callback()-колбэки вроде этого —
+		// проверяем явно.
+		if tx.Statement.SkipHooks {
+			return
+		}
 		// Игнорируем ошибочные мутации (gorm не дёргает After-хуки если был
 		// Error до этого, но на всякий случай).
 		if tx.Error != nil {

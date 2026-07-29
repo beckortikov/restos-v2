@@ -132,6 +132,11 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
+		// Sync-дельта (ADR-003 Фаза 5) — заказ вернулся к терминальному
+		// снимку (частичный/полный refund).
+		if err := recordOrderSync(tx, &order, "update"); err != nil {
+			return err
+		}
 
 		// financial_operation: возврат — type='out', activity='operational'.
 		// account_id — снимаем со счёта первой записи приёма (если знаем),

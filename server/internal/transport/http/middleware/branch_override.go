@@ -26,6 +26,21 @@ import (
 //
 // Работает осмысленно на узле, где есть данные филиалов (центральный узел /
 // одна общая БД). На отдельной БД филиала чужих данных всё равно нет.
+
+// branchDataAvailable — пути, чьи данные ПОЛНОСТЬЮ реплицируются с филиала на
+// central (ADR-003 Фаза 2 — financial_operations; Фаза 5.1 — orders/order_items),
+// поэтому просмотр через X-Branch-Id для них даёт корректные, а не тихо-нулевые
+// цифры. Список сознательно консервативен: аналитика (ABC-меню, продажи и т.п.)
+// тоже читает orders/order_items, но местами джойнит ингредиенты/столы/официантов
+// (не реплицированы) — не добавляем её сюда, пока это не проверено построчно по
+// каждому хендлеру. Пусто здесь = баннер «недоступно» вместо риска показать
+// правдоподобную, но неполную цифру.
+var branchDataAvailable = map[string]bool{
+	"/api/v1/network/summary":         true,
+	"/api/v1/finance/cashflow":        true,
+	"/api/v1/finance/monthly-revenue": true,
+}
+
 func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,6 +63,7 @@ func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
 				AccountID *string
 			}
 			var rows []row
+			overridden := false
 			if err := db.WithContext(ctx).Model(&models.Restaurant{}).
 				Select("id, account_id").
 				Where("id IN ?", []string{cur, target}).
@@ -63,7 +79,14 @@ func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
 				}
 				if curAcc != nil && *curAcc != "" && tgtAcc != nil && *curAcc == *tgtAcc {
 					ctx = tenant.WithRestaurant(ctx, target)
+					overridden = true
 				}
+			}
+			// Сигнал фронту: просмотр филиала активен, но эти данные сюда ещё не
+			// доезжают — фронт покажет баннер вместо того, чтобы тихо отрисовать
+			// нули как «у филиала так и есть». См. lib/api/v4-typed.ts.
+			if overridden && !branchDataAvailable[r.URL.Path] {
+				w.Header().Set("X-Branch-Data-Scope", "unavailable")
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

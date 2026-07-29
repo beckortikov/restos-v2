@@ -14,6 +14,8 @@
 //   • authMiddleware    — на каждом запросе подставляет Bearer из localStorage
 //   • idemMiddleware    — для write-методов добавляет Idempotency-Key (UUID)
 //   • authExpiredMiddleware — на 401 шлёт CustomEvent('restos:auth:expired')
+//   • branchDataScopeMiddleware — на X-Branch-Data-Scope:unavailable шлёт
+//     CustomEvent('restos:branch-data:unavailable')
 //
 // Это решает проблему «stale token» старой proxy-реализации, которая
 // требовала пересоздавать клиент при смене токена.
@@ -81,6 +83,22 @@ const branchMiddleware: Middleware = {
   },
 }
 
+// branchDataScopeMiddleware — сигнал «данные этого филиала сюда ещё не
+// доехали» (ADR-003 Фаза 5, см. middleware.BranchOverride на бэке). Вместо
+// того чтобы отчёт тихо отрисовал нули (выглядит как «у филиала нет данных»,
+// а не «эти данные пока не реплицируются») — баннер в UI. Слушатель события
+// смонтирован там же, где <BranchSelector> (app/(app)/layout.tsx).
+const branchDataScopeMiddleware: Middleware = {
+  async onResponse({ request, response }) {
+    if (typeof window !== 'undefined' && response.headers.get('X-Branch-Data-Scope') === 'unavailable') {
+      let path = request.url
+      try { path = new URL(request.url).pathname } catch {}
+      window.dispatchEvent(new CustomEvent('restos:branch-data:unavailable', { detail: { path } }))
+    }
+    return response
+  },
+}
+
 const authExpiredMiddleware: Middleware = {
   async onResponse({ request, response }) {
     // Фоновые/некритичные дозагрузки (профиль, ресторан сразу после логина)
@@ -113,6 +131,7 @@ export const api = createClient<paths>({ baseUrl: getBaseURL() })
 api.use(authMiddleware)
 api.use(idemMiddleware)
 api.use(branchMiddleware)
+api.use(branchDataScopeMiddleware)
 api.use(authExpiredMiddleware)
 
 // Re-export типов, которые чаще всего нужны компонентам.

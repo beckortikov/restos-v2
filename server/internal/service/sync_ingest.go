@@ -82,6 +82,11 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "orders":
+			if err := s.applyOrder(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
@@ -170,6 +175,35 @@ func (s *SyncService) applyTransfer(ctx context.Context, e SyncEntry, updateAll 
 		for i := range lines {
 			l := lines[i]
 			if err := tx.Clauses(conflict).Create(&l).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// applyOrder — upsert заказа + его позиций из payload (ADR-003 Фаза 5).
+// Central получает точную копию терминального снимка заказа филиала
+// (closed/cancelled/refunded); это голый upsert двух таблиц, а не вызов
+// OrdersService — списание склада и создание financial_operations здесь
+// НЕ выполняются повторно (у Order/OrderItem нет GORM-хуков, только
+// императивный код внутри Close()/Cancel()/Refund() на филиале).
+func (s *SyncService) applyOrder(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var p orderSyncPayload
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid orders payload", err)
+	}
+	if p.ID == "" {
+		return apperrors.Wrap("VALIDATION", "orders payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&p.Order).Error; err != nil {
+			return err
+		}
+		for i := range p.Items {
+			if err := tx.Clauses(conflict).Create(&p.Items[i]).Error; err != nil {
 				return err
 			}
 		}

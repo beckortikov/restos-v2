@@ -9,6 +9,8 @@ import { AutoReadyWatcher } from '@/components/auto-ready-watcher'
 import { RealtimeCacheBridge } from '@/components/realtime-cache-bridge'
 import { LicenseGate } from '@/components/license-gate'
 import { LicenseWarningBanner } from '@/components/license-warning-banner'
+import { BranchSelector } from '@/components/branch-selector'
+import { BranchDataUnavailableBanner } from '@/components/branch-data-unavailable-banner'
 import { useQuerySseBridge } from '@/hooks/use-query-sse-bridge'
 
 function AppContent() {
@@ -57,6 +59,11 @@ function AppContent() {
         <div className="flex-1 flex flex-col overflow-hidden">
           <MobileHeader />
           <MobileSidebar />
+          {/* Селектор филиала для владельца сети (self-hides → empty:hidden). */}
+          <div className="shrink-0 flex justify-end px-4 py-1.5 border-b border-border empty:hidden">
+            <BranchSelector />
+          </div>
+          <BranchDataUnavailableBanner />
           <main className="flex-1 overflow-y-auto">
             <Outlet />
           </main>
