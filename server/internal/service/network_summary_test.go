@@ -55,9 +55,9 @@ func TestNetworkSummary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	mk(centralID, &in, &rev, "100")     // учитывается
+	mk(centralID, &in, &rev, "100")       // учитывается
 	mk(centralID, &out, &purchase, "999") // НЕ выручка → не учитывается
-	mk(outletID, &in, &rev, "50")       // учитывается
+	mk(outletID, &in, &rev, "50")         // учитывается
 
 	svc := service.NewNetworkService(repo.New(gdb))
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
