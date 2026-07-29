@@ -27,6 +27,19 @@ func (h *PrintersHandler) List(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, makeList[models.Printer](rows, ""))
 }
 
+// SystemQueues — GET /api/v1/printers/system-queues.
+//
+// Список очередей печати ОС для driver=system. Статический сегмент пути
+// приоритетнее {id} в chi, так что с /printers/{id} не конфликтует.
+func (h *PrintersHandler) SystemQueues(w http.ResponseWriter, r *http.Request) {
+	qs, err := h.svc.SystemQueues(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(qs, ""))
+}
+
 // Get — GET /api/v1/printers/{id}.
 func (h *PrintersHandler) Get(w http.ResponseWriter, r *http.Request) {
 	p, err := h.svc.Get(r.Context(), chi.URLParam(r, "id"))
@@ -65,6 +78,19 @@ func (h *PrintersHandler) Patch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, p)
+}
+
+// CodepageProbe — POST /api/v1/printers/{id}/codepage-probe.
+// Печать пробы кодовых страниц: одна русская строка несколькими таблицами
+// подряд с подписью номера — чтобы подобрать номер для принтера, который
+// печатает вместо кириллицы мусор.
+func (h *PrintersHandler) CodepageProbe(w http.ResponseWriter, r *http.Request) {
+	j, err := h.svc.CodepageProbe(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusAccepted, j)
 }
 
 // Delete — DELETE /api/v1/printers/{id}.

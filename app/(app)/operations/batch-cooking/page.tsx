@@ -624,7 +624,7 @@ export default function BatchCookingPage() {
                   <p className="text-xs text-amber-700 mt-0.5">Ингредиентов не хватает — можно приготовить, склад уйдёт в минус.</p>
                 )}
                 {portionCalc.ingredients.filter(i => i.isBottleneck).map(i => (
-                  <p key={i.ingredientId} className="text-xs text-muted-foreground mt-0.5">
+                  <p key={i.ingredientId ?? i.semiTypeId} className="text-xs text-muted-foreground mt-0.5">
                     Ограничение: {i.name} — {i.stockQty.toFixed(1)} {i.unit} на складе
                   </p>
                 ))}
@@ -737,7 +737,7 @@ export default function BatchCookingPage() {
                       const deductStock = ing.stockQtyPerPortion * qty
                       const pct = ing.stockQty > 0 ? Math.round(deductStock / ing.stockQty * 100) : 100
                       return (
-                        <div key={ing.ingredientId} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs ${
+                        <div key={ing.ingredientId ?? ing.semiTypeId} className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs ${
                           ing.isBottleneck ? 'bg-amber-50 border border-amber-200' : 'bg-muted/50'
                         }`}>
                           <span className="text-foreground font-medium">{ing.name}</span>

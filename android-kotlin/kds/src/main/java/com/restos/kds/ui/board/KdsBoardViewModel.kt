@@ -103,8 +103,9 @@ class KdsBoardViewModel @Inject constructor(
             refresh()
             return
         }
-        // Вызов официанта — это событие ДЛЯ официанта, кухне доску обновлять не надо.
-        if (evt is ServerEvent.WaiterCalled) return
+        // Вызов официанта — событие ДЛЯ официанта; стоп-лист — про меню.
+        // Доску они не меняют, перезапрашивать её незачем.
+        if (evt is ServerEvent.WaiterCalled || evt is ServerEvent.StopListUpdated) return
         // Новое блюдо — по дифу в refresh (надёжнее, чем гадать по типу события).
         refresh()
     }

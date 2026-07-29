@@ -4,14 +4,19 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Utensils, LayoutGrid, Wallet, ChefHat,
-  Settings, LogOut, OctagonX, PackageCheck, CookingPot, Lock,
+  Settings, LogOut, OctagonX, PackageCheck, CookingPot, Lock, RefreshCw,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
+import { isPosV2EnabledFor } from '@/lib/pos-v2/flag'
+import { useDesktopUpdate, triggerDesktopUpdate, desktopUpdateLabel, desktopUpdatePending } from '@/hooks/use-desktop-update'
 import { fetchActiveShift } from '@/lib/queries'
 import { FailedPrintsButton } from '@/components/order/failed-prints-button'
 
 // Вшивается Vite (define в vite.config.ts) из desktop/package.json.
+// typeof-guard обязателен: в контекстах без define (vitest, SSR-подобные прогоны)
+// голая ссылка падает с ReferenceError и роняет весь лаунчер.
 declare const __APP_VERSION__: string
+const BUILD_VERSION: string = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''
 
 // Плитки ведут ТОЛЬКО на экраны /pos2/*. Плитка «Кухня (KDS)» убрана — она вела
 // на старый POS (/operations/kitchen), из-за чего кассир проваливался в старый
@@ -38,7 +43,15 @@ const TILES: Array<{
 
 export default function PosV2Launcher() {
   const navigate = useNavigate()
-  const { user, restaurant, hasAccess } = useAuth()
+  const { user, restaurant, hasAccess, logout } = useAuth()
+  // pos2 — «дом» этой кассы (флаг устройства pos_ui_v2 или дефолт ресторана
+  // posV2Default). Тогда старого POS для неё нет: «Выход» = завершить сеанс →
+  // экран PIN. Иначе pos2 открыт как бета-превью из старого POS — «Выход»
+  // возвращает туда. Условие зеркалит homeRoute (та же isPosV2EnabledFor).
+  const posV2Home = isPosV2EnabledFor(!!restaurant?.posV2Default)
+  // Обновление кассы (Electron): скачанное/доступное подсвечиваем бейджем в
+  // шапке, чтобы кассир поставил апдейт не заходя в настройки.
+  const update = useDesktopUpdate()
   // Владелец/менеджер видят всё; кассир/официант — только разделы по своим
   // правам (hasAccess мапит /pos2-плитку на старый маршрут). owner/manager → всё.
   const tiles = TILES.filter(t => hasAccess(t.req))
@@ -47,7 +60,7 @@ export default function PosV2Launcher() {
   // сборке (__APP_VERSION__ из desktop/package.json), чтобы показывалась и в LAN-браузере.
   const posVersion = (typeof window !== 'undefined'
     ? (window as unknown as { restosDesktop?: { version?: string } }).restosDesktop?.version
-    : undefined) ?? __APP_VERSION__
+    : undefined) ?? BUILD_VERSION
   // Ручная блокировка экрана доступна только при включённом PIN-локе.
   const pinLockEnabled = restaurant?.pinLockEnabled ?? false
   // Реальный статус смены вместо захардкоженного «Смена открыта» (вводил в
@@ -89,7 +102,7 @@ export default function PosV2Launcher() {
               className="truncate hidden sm:block"
               style={{ color: 'var(--pv-text-3)', fontSize: 'clamp(0.7rem,0.95vw,0.9rem)' }}
             >
-              {`Терминал кассира · v${posVersion}`}
+              {posVersion ? `Терминал кассира · v${posVersion}` : 'Терминал кассира · новый интерфейс'}
             </div>
           </div>
         </div>
@@ -122,6 +135,19 @@ export default function PosV2Launcher() {
               {user?.name || 'Кассир'}
             </span>
           </div>
+          {/* Апдейт кассы скачан/доступен — заметный бейдж, тап ставит установку
+              (перезапуск) либо запускает проверку. */}
+          {desktopUpdatePending(update) && (
+            <button
+              onClick={() => triggerDesktopUpdate(update.status)}
+              className="flex items-center gap-2 rounded-xl transition-transform active:scale-95 shrink-0"
+              style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.55rem,0.8vw,0.8rem) clamp(0.75rem,1.1vw,1.1rem)' }}
+              title={desktopUpdateLabel(update)}
+            >
+              <RefreshCw style={{ width: 'clamp(1.05rem,1.4vw,1.25rem)', height: 'clamp(1.05rem,1.4vw,1.25rem)' }} />
+              <span className="font-semibold whitespace-nowrap hidden sm:block" style={{ fontSize: 'var(--pv-ctl)' }}>{update.status === 'ready' ? 'Установить' : 'Обновление'}</span>
+            </button>
+          )}
           {/* Блокировка экрана PIN'ом — вручную из меню (виден при включённом
               PIN-локе). Шлёт событие, LockGate в PosV2Layout ставит блок. */}
           {pinLockEnabled && (
@@ -136,7 +162,7 @@ export default function PosV2Launcher() {
             </button>
           )}
           <button
-            onClick={() => navigate('/operations/pos')}
+            onClick={() => { if (posV2Home) logout(); else navigate('/operations/pos') }}
             className="flex items-center gap-2 rounded-xl transition-transform active:scale-95 shrink-0"
             style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: 'clamp(0.55rem,0.8vw,0.8rem) clamp(0.75rem,1.1vw,1.1rem)' }}
           >
@@ -211,7 +237,9 @@ export default function PosV2Launcher() {
         className="hidden lg:block shrink-0"
         style={{ padding: '0.75rem var(--pv-pad-x)', color: 'var(--pv-text-3)', fontSize: '0.72rem' }}
       >
-        Бета-интерфейс. «Выход» возвращает в классическую кассу. Экраны открываются в текущем дизайне и по мере готовности заменяются новыми.
+        {posV2Home
+          ? '«Выход» завершает сеанс кассира — возврат к вводу PIN. Экраны открываются в текущем дизайне и по мере готовности заменяются новыми.'
+          : 'Бета-интерфейс. «Выход» возвращает в классическую кассу. Экраны открываются в текущем дизайне и по мере готовности заменяются новыми.'}
       </footer>
     </div>
   )

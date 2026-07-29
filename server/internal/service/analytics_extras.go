@@ -150,7 +150,7 @@ func (s *AnalyticsService) FoodCostMonthly(ctx context.Context, f PeriodFilter) 
 		Select(`to_char(closed_at, 'YYYY-MM') AS month,
 		        COALESCE(SUM(total_with_service), 0) AS revenue,
 		        COUNT(*) AS orders`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("closed_at >= ?", *f.From)
 	}
@@ -172,7 +172,7 @@ func (s *AnalyticsService) FoodCostMonthly(ctx context.Context, f PeriodFilter) 
 		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
+		Where("o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q2 = q2.Where("o.closed_at >= ?", *f.From)
 	}
@@ -261,7 +261,7 @@ func (s *AnalyticsService) Forecast(ctx context.Context, f PeriodFilter) (*Forec
 	q := scoped.Table("orders").
 		Select(`to_char(closed_at, 'YYYY-MM') AS month,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("closed_at >= ?", *f.From)
 	}
@@ -289,7 +289,7 @@ func (s *AnalyticsService) Forecast(ctx context.Context, f PeriodFilter) (*Forec
 		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", "closed")
+		Where("o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q2 = q2.Where("o.closed_at >= ?", *f.From)
 	}
@@ -346,13 +346,18 @@ func (s *AnalyticsService) Forecast(ctx context.Context, f PeriodFilter) (*Forec
 		q3 = q3.Where("created_at < ?", *f.To)
 	}
 	// Исключаем COGS и закупки на уровне SQL.
-	excl := make([]string, 0, len(forecastExcludedExpense)+len(forecastStockPurchase))
+	excl := make([]string, 0, len(forecastExcludedExpense)+len(forecastStockPurchase)+len(opexExcludedCategories))
 	for k := range forecastExcludedExpense {
 		excl = append(excl, k)
 	}
 	for k := range forecastStockPurchase {
 		excl = append(excl, k)
 	}
+	// Н25: авто-коды закупок/долгов/обязательств (приёмка со счёта, гашение
+	// долга поставщику, гашение обязательства) — не постоянные расходы, это
+	// движение запасов/пассива. Раньше они текли в fixed_costs и завышали
+	// точку безубыточности. Тот же список исключений, что в ОПиУ/Динамике.
+	excl = append(excl, opexExcludedCategories...)
 	q3 = q3.Where("COALESCE(category, '') NOT IN ?", excl)
 	var opexRows []opexRow
 	_ = q3.Group("month").Scan(&opexRows).Error
@@ -508,7 +513,24 @@ func (s *AnalyticsService) ABCInventory(ctx context.Context, f PeriodFilter) (*A
 	}
 
 	// 3. Сборка enriched rows + сортировка по consumption value desc.
+	// Н19: при пустом периоде берём реальный разброс дат расходных движений
+	// (иначе periodDays=1 и days_of_stock кратно занижается на «всём времени»).
 	periodDays := computePeriodDays(f.From, f.To)
+	if f.From == nil || f.To == nil {
+		var span struct {
+			MinAt *time.Time `gorm:"column:min_at"`
+			MaxAt *time.Time `gorm:"column:max_at"`
+		}
+		spanScoped, _ := s.r.ForTenant(ctx)
+		if err := spanScoped.Table("stock_movements").
+			Select("MIN(created_at) AS min_at, MAX(created_at) AS max_at").
+			Where("type IN ?", []string{"out", "batch", "semi"}).
+			Scan(&span).Error; err == nil && span.MinAt != nil && span.MaxAt != nil {
+			if d := span.MaxAt.Sub(*span.MinAt).Hours() / 24; d >= 1 {
+				periodDays = int(d + 0.999)
+			}
+		}
+	}
 	if periodDays < 1 {
 		periodDays = 1
 	}

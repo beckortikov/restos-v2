@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -106,6 +107,9 @@ type ShiftExpenseInput struct {
 	// Category — категория расхода. Для type=expense/cash_out сохраняется в
 	// cash_shift_operations.category (структурно, не в тексте описания).
 	Category *string `json:"category,omitempty"`
+	// AccountID — счёт расхода. Пусто → счёт смены (наличный). id банк-счёта →
+	// безналичный расход: дебетует его, наличный ящик не трогает.
+	AccountID *string `json:"account_id,omitempty"`
 }
 
 // AddExpense — POST /api/v1/shifts/{id}/expenses.
@@ -126,38 +130,80 @@ func (s *ShiftsService) AddExpense(ctx context.Context, shiftID string, in Shift
 	if in.Category != nil {
 		category = *in.Category
 	}
+	accountID := ""
+	if in.AccountID != nil {
+		accountID = *in.AccountID
+	}
 	return s.AddOperation(ctx, shiftID, ShiftOperationInput{
 		Type:        typ,
 		Amount:      in.Amount,
 		Description: desc,
 		Category:    category,
+		AccountID:   accountID,
 	})
 }
 
 // DeleteExpense — DELETE /api/v1/shifts/{id}/expenses/{op_id}.
-// Удаляет операцию только если смена открыта.
+//
+// Обычный расход — удалить можно, только пока смена открыта (иначе меняли бы
+// уже зафиксированный Z-отчёт задним числом).
+//
+// Исключение — фантомное авто-зеркало (__auto_mirror__): его разрешено убирать
+// ДАЖЕ из закрытой смены. Причина: до фикса recordShiftCashOutIfActive
+// (v3.16.162) бэкдейтнутая ДДС-операция могла ошибочно зеркалиться не в ту
+// смену — владелец обнаруживает это только после того, как смена уже закрыта
+// (инцидент 23.07.2026). Это безопасно: reverseShiftAccountDebit для
+// auto_mirror — no-op (счёт эта запись никогда не дебетовала, деньги списаны
+// исходной ДДС-операцией в другом месте), значит удаление не трогает баланс
+// счёта — только выправляет искажённый expected_cash ЭТОЙ смены. Для закрытой
+// смены expected_cash — застывший снэпшот на момент Close(), поэтому его нужно
+// пересчитать и сохранить явно, иначе список операций обновится, а
+// зафиксированная цифра в Z-отчёте — нет.
 func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string) error {
+	if err := requirePermFor(ctx, s.r, "shifts.manage"); err != nil {
+		return err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return err
 	}
 	return s.r.Raw().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var shift models.CashShift
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, shiftID).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, shiftID).
 			First(&shift).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.ErrNotFound
 			}
 			return err
 		}
-		if shift.Status == nil || *shift.Status != "open" {
+		isOpen := shift.Status != nil && *shift.Status == "open"
+
+		// Грузим операцию — нужно знать, дебетовала ли она счёт (Н13) и её категорию.
+		var op models.CashShiftOperation
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND shift_id = ?", opID, shiftID).First(&op).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		isAutoMirror := op.Category != nil && *op.Category == autoMirrorCategory
+		if !isOpen && !isAutoMirror {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
+
 		// Реверс связанной financial_operation (если это был расход с
 		// категорией — см. AddOperation), иначе удалённый расход остался бы
-		// висеть в ОПиУ/ДДС.
+		// висеть в ОПиУ/ДДС. У auto_mirror такой финоперации нет (собственный
+		// source_ref не совпадает) — Delete по WHERE ничего не находит, no-op.
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
+			return err
+		}
+		// Н13: вернуть деньги на счёт, если операция его дебетовала (cash_out с
+		// реальной категорией). Авто-зеркала счёт не дебетовали — их исключаем.
+		if err := reverseShiftAccountDebit(tx, rid, &shift, &op); err != nil {
 			return err
 		}
 		res := tx.Where("id = ? AND shift_id = ?", opID, shiftID).
@@ -168,21 +214,76 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 		if res.RowsAffected == 0 {
 			return apperrors.ErrNotFound
 		}
+
+		if !isOpen {
+			expected, err := computeExpectedCash(tx, shiftID, &shift)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&models.CashShift{}).Where("id = ?", shiftID).
+				Updates(map[string]any{"expected_cash": expected, "updated_at": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }
 
+// reverseShiftAccountDebit возвращает деньги на счёт смены при удалении
+// cash_out-операции, которая ранее дебетовала счёт (Н13). No-op для операций
+// без категории (счёт не трогали) и для авто-зеркал (__auto_mirror__) — их
+// САМ CashShiftOperation удалить МОЖНО (DeleteExpense это не блокирует, см.
+// v3.16.163), а вот баланс счёта восстанавливать нельзя: счёт дебетовался
+// НЕ этим зеркалом, а исходной финоперацией в другом месте (зарплата/возврат/
+// ручной расход ДДС) — восстановление здесь задвоило бы деньги. Именно так
+// штатно чистят фантомные зеркала от бэкдейтнутых ДДС-операций, случайно
+// попавшие не в ту смену (см. recordShiftCashOutIfActive).
+func reverseShiftAccountDebit(tx *gorm.DB, rid string, shift *models.CashShift, op *models.CashShiftOperation) error {
+	if op.Type == nil || *op.Type != "cash_out" || op.Category == nil || *op.Category == autoMirrorCategory {
+		return nil
+	}
+	// Возвращаем на ТОТ счёт, который операция дебетовала: банк-счёт у
+	// безналичного расхода, иначе счёт смены (наличный ящик).
+	target := shift.AccountID
+	if op.AccountID != nil && *op.AccountID != "" {
+		target = op.AccountID
+	}
+	if target == nil || *target == "" {
+		return nil
+	}
+	return tx.Model(&models.FinancialAccount{}).
+		Where("restaurant_id = ? AND id = ?", rid, *target).
+		Updates(map[string]any{
+			"balance":    gorm.Expr("balance + ?", op.Amount),
+			"updated_at": time.Now().UTC(),
+		}).Error
+}
+
 // DeleteOperation — DELETE /api/v1/cash-shift-operations/{id}.
 // Резолвит shift_id из самой операции, применяет tenant-проверку через
-// смену-родителя. Удаление разрешено только если смена открыта.
+// смену-родителя. Это ЕДИНСТВЕННЫЙ путь, которым реально пользуется фронт
+// (кнопка «Удалить расход», см. lib/queries/shifts.ts deleteShiftExpense) —
+// DeleteExpense (/shifts/{id}/expenses/{op_id}) существует, но фронтом не
+// вызывается; правило здесь обязано быть идентично ей.
+//
+// Обычный расход — только пока смена открыта (иначе меняли бы уже
+// зафиксированный Z-отчёт). Фантомное авто-зеркало (__auto_mirror__) —
+// разрешено удалять И из закрытой смены (безопасно: reverseShiftAccountDebit
+// для auto_mirror — no-op, счёт эта запись никогда не дебетовала). Для
+// закрытой смены expected_cash — застывший снэпшот, пересчитываем и сохраняем
+// явно (см. computeExpectedCash в shifts_write.go).
 func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error {
+	if err := requirePermFor(ctx, s.r, "shifts.manage"); err != nil {
+		return err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return err
 	}
 	return s.r.Raw().WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var op models.CashShiftOperation
-		if err := tx.Where("id = ?", opID).First(&op).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ?", opID).First(&op).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.ErrNotFound
 			}
@@ -192,19 +293,29 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 			return apperrors.ErrNotFound
 		}
 		var shift models.CashShift
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *op.ShiftID).
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, *op.ShiftID).
 			First(&shift).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.ErrNotFound
 			}
 			return err
 		}
-		if shift.Status == nil || *shift.Status != "open" {
+		isOpen := shift.Status != nil && *shift.Status == "open"
+		isAutoMirror := op.Category != nil && *op.Category == autoMirrorCategory
+		if !isOpen && !isAutoMirror {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
-		// Реверс связанной financial_operation (см. DeleteExpense).
+		// Реверс связанной financial_operation (см. DeleteExpense). У auto_mirror
+		// такой финоперации нет (собственный source_ref не совпадает) — no-op.
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
+			return err
+		}
+		// Н13: вернуть деньги на счёт, если операция его дебетовала. Авто-зеркала
+		// счёт не дебетовали (баланс уже списан исходной операцией в другом
+		// месте) — reverseShiftAccountDebit для них no-op.
+		if err := reverseShiftAccountDebit(tx, rid, &shift, &op); err != nil {
 			return err
 		}
 		res := tx.Where("id = ?", opID).Delete(&models.CashShiftOperation{})
@@ -213,6 +324,16 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		}
 		if res.RowsAffected == 0 {
 			return apperrors.ErrNotFound
+		}
+		if !isOpen {
+			expected, err := computeExpectedCash(tx, *op.ShiftID, &shift)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&models.CashShift{}).Where("id = ?", *op.ShiftID).
+				Updates(map[string]any{"expected_cash": expected, "updated_at": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -309,10 +430,25 @@ type ZReport struct {
 	//   CashIn       — внесения (cash_in)
 	//   Withdrawals  — изъятия/инкассация (cash_out БЕЗ категории)
 	//   ExpensesTotal/ExpensesByCategory — расходы (cash_out С категорией)
-	CashIn             decimal.Decimal            `json:"cash_in"`
-	Withdrawals        decimal.Decimal            `json:"withdrawals"`
-	ExpensesTotal      decimal.Decimal            `json:"expenses_total"`
+	CashIn        decimal.Decimal `json:"cash_in"`
+	Withdrawals   decimal.Decimal `json:"withdrawals"`
+	ExpensesTotal decimal.Decimal `json:"expenses_total"`
+	// ExpensesTotalAll — ВСЕ расходы бизнеса за смену (наличные + безналичные, кроме
+	// возврата-зеркала). ExpensesTotal — только вышедшее из наличного ящика (для
+	// свода кассы и «Ожидается в кассе»); сводка «Расход»/«Итог» на UI должна
+	// показывать все расходы независимо от счёта (иначе безнал-закупка выпадает).
+	ExpensesTotalAll   decimal.Decimal            `json:"expenses_total_all"`
 	ExpensesByCategory []ZReportExpenseByCategory `json:"expenses_by_category"`
+	// ExpensesByCategoryAll — разбивка ВСЕХ расходов (нал+безнал) по категориям.
+	// Для печатного Z-отчёта («Расходы» с безналом). Наличная ExpensesByCategory —
+	// для расчёта «Ожидается в кассе».
+	ExpensesByCategoryAll []ZReportExpenseByCategory `json:"expenses_by_category_all"`
+	// Возвраты покупателям за смену (из financial_operations category='refund',
+	// покрывает нал+безнал). RefundsTotal — общая сумма, RefundsCount — сколько
+	// возвратов (чеков). Кассовое зеркало возврата исключено из ExpensesTotal,
+	// чтобы возврат не задваивался.
+	RefundsTotal decimal.Decimal `json:"refunds_total"`
+	RefundsCount int             `json:"refunds_count"`
 	// Previous — выжимка предыдущей закрытой смены (для delta-chip на UI).
 	// nil, если это первая смена ресторана.
 	Previous *PreviousSummary `json:"previous,omitempty"`
@@ -373,12 +509,51 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	out.CashIn = decimal.Zero
 	out.Withdrawals = decimal.Zero
 	out.ExpensesTotal = decimal.Zero
+	out.ExpensesTotalAll = decimal.Zero
 	expByCat := map[string]*ZReportExpenseByCategory{}
 	catOrder := []string{}
+	expByCatAll := map[string]*ZReportExpenseByCategory{}
+	catOrderAll := []string{}
 	for _, op := range ops {
 		t := ""
 		if op.Type != nil {
 			t = *op.Type
+		}
+		// «Все расходы бизнеса» (нал+безнал) — считаем ДО фильтра наличного ящика,
+		// чтобы безналичная закупка (счёт ≠ счёту смены) тоже попала в сводку
+		// «Расход»/«Итог» и в печатный Z-отчёт. Возврат-зеркало исключаем (он в
+		// RefundsTotal).
+		if t == "cash_out" {
+			catAll := ""
+			if op.Category != nil {
+				catAll = strings.TrimSpace(*op.Category)
+			}
+			descAll := ""
+			if op.Description != nil {
+				descAll = *op.Description
+			}
+			isRefundMirror := catAll == autoMirrorCategory && strings.HasPrefix(descAll, refundOpDescPrefix)
+			if catAll != "" && !isRefundMirror {
+				labelAll := catAll
+				if labelAll == autoMirrorCategory {
+					labelAll = "Списание со счёта"
+				}
+				out.ExpensesTotalAll = decimal.Add(out.ExpensesTotalAll, op.Amount)
+				rowAll, ok := expByCatAll[labelAll]
+				if !ok {
+					rowAll = &ZReportExpenseByCategory{Category: labelAll}
+					expByCatAll[labelAll] = rowAll
+					catOrderAll = append(catOrderAll, labelAll)
+				}
+				rowAll.Count++
+				rowAll.Amount = decimal.Add(rowAll.Amount, op.Amount)
+			}
+		}
+		// Z-отчёт — наличный ящик. Безналичные операции (счёт ≠ счёту смены)
+		// в кассовые агрегаты не идут: expected_cash из них не считается.
+		// Сами операции остаются в out.Operations — на смене их видно.
+		if !opTouchesDrawer(op.AccountID, shift.AccountID) {
+			continue
 		}
 		switch t {
 		case "cash_in":
@@ -388,9 +563,25 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 			if op.Category != nil {
 				cat = strings.TrimSpace(*op.Category)
 			}
+			desc := ""
+			if op.Description != nil {
+				desc = *op.Description
+			}
+			// Возврат-зеркало (cash_out авто-зеркала с описанием «Возврат заказа
+			// #…») — не расход: возвраты идут отдельной строкой RefundsTotal, иначе
+			// двойной учёт (сумма и в «Расходах», и в «Возвратах»). Операция при этом
+			// остаётся в out.Operations — на смене возврат виден как операция.
+			if cat == autoMirrorCategory && strings.HasPrefix(desc, refundOpDescPrefix) {
+				continue
+			}
 			if cat == "" {
 				out.Withdrawals = decimal.Add(out.Withdrawals, op.Amount)
 				continue
+			}
+			// Внутреннюю метку авто-зеркала (выплаты/списания со счёта) не показываем
+			// сырой — заменяем на человекочитаемую.
+			if cat == autoMirrorCategory {
+				cat = "Списание со счёта"
 			}
 			out.ExpensesTotal = decimal.Add(out.ExpensesTotal, op.Amount)
 			row, ok := expByCat[cat]
@@ -406,10 +597,38 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 	out.CashIn = decimal.Normalize(out.CashIn)
 	out.Withdrawals = decimal.Normalize(out.Withdrawals)
 	out.ExpensesTotal = decimal.Normalize(out.ExpensesTotal)
+	out.ExpensesTotalAll = decimal.Normalize(out.ExpensesTotalAll)
 	for _, cat := range catOrder {
 		row := expByCat[cat]
 		row.Amount = decimal.Normalize(row.Amount)
 		out.ExpensesByCategory = append(out.ExpensesByCategory, *row)
+	}
+	for _, cat := range catOrderAll {
+		row := expByCatAll[cat]
+		row.Amount = decimal.Normalize(row.Amount)
+		out.ExpensesByCategoryAll = append(out.ExpensesByCategoryAll, *row)
+	}
+
+	// Возвраты покупателям за смену — из financial_operations (category='refund'),
+	// покрывает и наличные, и безналичные возвраты (безнал-зеркала в кассовой
+	// смене нет). Сумма + количество чеков. Кассовое зеркало нал-возврата уже
+	// исключено из ExpensesTotal выше — двойного учёта нет.
+	{
+		type refAgg struct {
+			Cnt int             `gorm:"column:cnt"`
+			Sum decimal.Decimal `gorm:"column:sum"`
+		}
+		var ra refAgg
+		if err := s.r.Raw().WithContext(ctx).
+			Table("financial_operations").
+			Select("COUNT(*) AS cnt, COALESCE(SUM(amount), 0) AS sum").
+			Where("restaurant_id = ? AND shift_id = ? AND category = ? AND type = ?",
+				rid, shiftID, "refund", "out").
+			Scan(&ra).Error; err != nil {
+			return nil, err
+		}
+		out.RefundsCount = ra.Cnt
+		out.RefundsTotal = decimal.Normalize(ra.Sum)
 	}
 
 	// Revenue по конкретному счёту оплаты — из financial_operations (revenue),

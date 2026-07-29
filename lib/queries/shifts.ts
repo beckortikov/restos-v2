@@ -84,8 +84,7 @@ export async function addShiftOperation(shiftId: string, type: 'cash_in' | 'cash
   logAction(type === 'cash_in' ? 'shift.cash_in' : 'shift.cash_out', 'shift', shiftId, type === 'cash_in' ? 'Внесение наличных' : 'Изъятие наличных', { amount, description })
 }
 
-export async function createShiftExpense(shiftId: string, amount: number, category: string, description: string, createdBy?: string) {
-  void createdBy
+export async function createShiftExpense(shiftId: string, amount: number, category: string, description: string, accountId?: string) {
   await unwrap(api.POST('/api/v1/shifts/{id}/expenses', {
     params: { path: { id: shiftId } },
     body: {
@@ -95,9 +94,12 @@ export async function createShiftExpense(shiftId: string, amount: number, catego
       // префиксом в description. Позволяет агрегировать в своде/экспорте/X-Z.
       category,
       description: description || null,
+      // account_id — счёт расхода. Пусто → счёт смены (наличный). Банк-счёт →
+      // безналичный расход: дебетует его, наличный ящик не трогает.
+      ...(accountId ? { account_id: accountId } : {}),
     } as any,
   }))
-  logAction('shift.expense', 'shift', shiftId, `Расход из смены: ${category}`, { amount, category, description })
+  logAction('shift.expense', 'shift', shiftId, `Расход из смены: ${category}`, { amount, category, description, accountId })
 }
 
 export async function deleteShiftExpense(opId: string) {
@@ -140,7 +142,15 @@ export interface ShiftZReport {
   cashIn: number
   withdrawals: number
   expensesTotal: number
+  // expensesTotalAll — все расходы бизнеса (нал+безнал, кроме возврата-зеркала).
+  // expensesTotal — только наличные (для кассовой панели «Ожидается в кассе»);
+  // сводка «Расход»/«Итог» показывает все расходы независимо от счёта.
+  expensesTotalAll: number
   expensesByCategory: { category: string; count: number; amount: number }[]
+  // Возвраты покупателям за смену (нал+безнал). Показываются отдельной строкой;
+  // кассовое зеркало возврата исключено из expensesTotal, чтобы не задваивать.
+  refundsTotal: number
+  refundsCount: number
   previous?: ShiftZReportPrevious | null
 }
 
@@ -187,11 +197,16 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
     cashIn: Number(r?.cash_in ?? 0),
     withdrawals: Number(r?.withdrawals ?? 0),
     expensesTotal: Number(r?.expenses_total ?? 0),
+    // Фолбэк на expenses_total (старый бэк без поля) — тогда безнал не выделится,
+    // но поведение не хуже прежнего.
+    expensesTotalAll: Number(r?.expenses_total_all ?? r?.expenses_total ?? 0),
     expensesByCategory: (r?.expenses_by_category ?? []).map((e: any) => ({
       category: String(e.category ?? '—'),
       count: Number(e.count ?? 0),
       amount: Number(e.amount ?? 0),
     })),
+    refundsTotal: Number(r?.refunds_total ?? 0),
+    refundsCount: Number(r?.refunds_count ?? 0),
     previous: r?.previous
       ? {
           revenue: Number(r.previous.revenue ?? 0),
@@ -244,6 +259,7 @@ function mapShiftOperation(r: any, fallbackShiftId: string): CashShiftOperation 
     amount: Number(r.amount ?? 0),
     description: r.description ?? undefined,
     category: r.category ?? undefined,
+    accountId: r.account_id ?? undefined,
     createdBy: r.created_by ?? undefined,
     createdByName: undefined,
     createdAt: r.created_at,

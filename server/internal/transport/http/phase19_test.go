@@ -210,7 +210,7 @@ func TestPhase19_DeductGuardStrict(t *testing.T) {
 	}
 	// Ranges of dead-letter prints — ничего из stock_movements не должно быть для этого заказа.
 	var mvCount int64
-	_ = gdb.Model(&models.StockMovement{}).Where("description = ?", "order:"+created.ID).Count(&mvCount).Error
+	_ = gdb.Model(&models.StockMovement{}).Where("description LIKE ?", "order:"+created.ID+"%").Count(&mvCount).Error
 	if mvCount != 0 {
 		t.Errorf("stock_movements should be rolled back, got %d", mvCount)
 	}

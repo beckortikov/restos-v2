@@ -132,8 +132,19 @@ func LoadFromFlags() (*Config, error) {
 // PGDataDir — каталог с физическими файлами Postgres.
 func (c *Config) PGDataDir() string { return filepath.Join(c.DataDir, "pgdata") }
 
-// PGRuntimeDir — каталог, куда распаковывается дистрибутив embedded-postgres.
+// PGRuntimeDir — рабочий (скретч) каталог embedded-postgres. Библиотека на
+// каждом Start() делает os.RemoveAll(RuntimePath), поэтому здесь НЕ должно быть
+// ничего ценного: ни данных (они в PGDataDir), ни бинарей (они в PGBinariesDir).
 func (c *Config) PGRuntimeDir() string { return filepath.Join(c.DataDir, "pg-runtime") }
+
+// PGBinariesDir — каталог с распакованными бинарями Postgres, ОТДЕЛЬНЫЙ от
+// PGRuntimeDir. Раньше бинари лежали в PGRuntimeDir, который библиотека стирает
+// на каждом Start() → их зря удаляло и распаковывало заново каждый запуск
+// (~9с распаковки + скан антивирусом на Windows, отсюда StartTimeout=90с).
+// Здесь бинари переживают старт и распаковываются один раз. Версионируем
+// каталогом: смена версии PG форсирует чистую распаковку новой, а старые данные
+// (pgdata) продолжают переиспользоваться (тот же major).
+func (c *Config) PGBinariesDir() string { return filepath.Join(c.DataDir, "pg-bin", c.PGVersion) }
 
 // BackupsDir — каталог для pg_dump-бэкапов.
 func (c *Config) BackupsDir() string { return filepath.Join(c.DataDir, "backups") }
@@ -142,6 +153,9 @@ func (c *Config) BackupsDir() string { return filepath.Join(c.DataDir, "backups"
 // Менеджер загружает новый APK через настройки кассы → файл живёт в userData,
 // переживает перезапуск и обновляется без пересборки приложения.
 func (c *Config) WaiterAppPath() string { return filepath.Join(c.DataDir, "waiter-app.apk") }
+
+// ZakupAppPath — путь к загруженному APK закупщика (аналогично официанту).
+func (c *Config) ZakupAppPath() string { return filepath.Join(c.DataDir, "zakup-app.apk") }
 
 // EmbeddedDSN — DSN для подключения к локальному embedded-postgres.
 func (c *Config) EmbeddedDSN() string {

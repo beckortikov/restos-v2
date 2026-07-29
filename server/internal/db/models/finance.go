@@ -13,8 +13,13 @@ type FinancialAccount struct {
 	Type         *string         `gorm:"default:'cash'" json:"type"`
 	Balance      decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"balance"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// IsEnabled — счёт предлагается при оплате и в операциях. Отключённый счёт
+	// остаётся в системе со всей историей и остатком (см. миграцию 063), но
+	// исчезает из пикеров, и сервер не даёт провести на него деньги.
+	IsEnabled  bool       `gorm:"column:is_enabled;default:true" json:"is_enabled"`
+	DisabledAt *time.Time `gorm:"column:disabled_at" json:"disabled_at,omitempty"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 func (FinancialAccount) TableName() string { return "financial_accounts" }
@@ -36,8 +41,12 @@ type FinancialOperation struct {
 	SourceRef    *string         `gorm:"column:source_ref" json:"source_ref"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	ShiftID      *string         `gorm:"column:shift_id;index" json:"shift_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// IsOverride — выплата ЗП/аванса/обслуживания выше расчётного остатка,
+	// проведённая осознанно (владелец подтвердил + указал причину), а не
+	// заблокированная сервером. См. миграцию 064 и SalaryService.payout.
+	IsOverride bool      `gorm:"column:is_override;default:false" json:"is_override"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func (FinancialOperation) TableName() string { return "financial_operations" }
@@ -73,7 +82,12 @@ type CashShiftOperation struct {
 	Description *string         `json:"description"`
 	// Category — категория расхода (Закупка/Зарплата/Хозтовары…). Заполнена
 	// только для расходов (cash_out с категорией). NULL → изъятие/внесение.
-	Category  *string   `json:"category"`
+	Category *string `json:"category"`
+	// AccountID — счёт, с которого прошла операция. NULL → счёт смены (наличный
+	// ящик, legacy). Не-NULL и ≠ счёту смены → безналичный расход: дебетует свой
+	// счёт, но наличный ящик (expected_cash) не трогает — зеркалит приход, где
+	// нал идёт на кассу, а карта на банк-счёт.
+	AccountID *string   `gorm:"column:account_id;type:uuid" json:"account_id"`
 	CreatedBy *string   `gorm:"column:created_by" json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -145,3 +159,27 @@ type BudgetLine struct {
 }
 
 func (BudgetLine) TableName() string { return "budget_lines" }
+
+// RecurringPayment — шаблон повторяющегося платежа (аренда, коммуналка, оклад).
+// Не авто-списание: напоминает и подставляет сумму/счёт, деньги уходят по
+// кнопке «Оплатить». next_due — следующая дата платежа (двигается на месяц
+// вперёд при каждой оплате).
+type RecurringPayment struct {
+	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name         *string         `json:"name"`
+	Category     *string         `json:"category"`
+	Amount       decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"amount"`
+	AccountID    *string         `gorm:"column:account_id" json:"account_id"`
+	Activity     *string         `gorm:"default:'operational'" json:"activity"`
+	Counterparty *string         `json:"counterparty"`
+	DayOfMonth   int             `gorm:"column:day_of_month;default:1" json:"day_of_month"`
+	NextDue      *string         `gorm:"column:next_due" json:"next_due"`
+	LastPaidAt   *time.Time      `gorm:"column:last_paid_at" json:"last_paid_at"`
+	Active       bool            `gorm:"default:true" json:"active"`
+	Note         *string         `json:"note"`
+	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time       `json:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at"`
+}
+
+func (RecurringPayment) TableName() string { return "recurring_payments" }

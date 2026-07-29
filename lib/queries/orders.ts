@@ -278,11 +278,21 @@ export async function updateOrderTable(orderId: string, newTableId: string): Pro
   return
 }
 
-export async function patchOrder(id: string, data: Partial<{ guestsCount: number; comment: string; customerId: string }>): Promise<void> {
+export async function patchOrder(id: string, data: Partial<{
+  guestsCount: number
+  comment: string
+  customerId: string
+  // Контакты доставки (052) — сохраняются перед открытием панели оплаты,
+  // бэкенд читает их на close и печатает на бегунке курьеру.
+  deliveryPhone: string
+  deliveryAddress: string
+}>): Promise<void> {
   const body: Record<string, unknown> = {}
   if (data.guestsCount !== undefined) body.guests_count = data.guestsCount
   if (data.comment !== undefined) body.comment = data.comment
   if (data.customerId !== undefined) body.customer_id = data.customerId
+  if (data.deliveryPhone !== undefined) body.delivery_phone = data.deliveryPhone
+  if (data.deliveryAddress !== undefined) body.delivery_address = data.deliveryAddress
   if (Object.keys(body).length === 0) return
   await unwrap(api.PATCH('/api/v1/orders/{id}', { params: { path: { id } }, body: body as any }))
 }
@@ -658,10 +668,15 @@ export async function fetchVoidsForOrders(orderIds: string[]): Promise<Map<strin
 
 // ─── Refund / Reprint ──────────────────────────────────────────────────────
 
-export async function refundOrder(orderId: string, reason: string, amount?: number): Promise<void> {
+export async function refundOrder(orderId: string, reason: string, amount?: number, idempotencyKey?: string): Promise<void> {
   const body: any = { reason }
   if (amount != null) body.amount = String(amount)
+  // #3: частичный возврат не идемпотентен на бэке (source_ref с unixnano всегда
+  // новый). Middleware дедупит по Idempotency-Key, но генерит новый на каждый
+  // fetch — поэтому сетевой ретрай удваивал возврат. Стабильный ключ на попытку
+  // (диалог генерит один) → повтор получает кэшированный ответ первого.
   await unwrap(api.POST('/api/v1/orders/{id}/refund' as any, {
+    ...(idempotencyKey ? { headers: { 'Idempotency-Key': idempotencyKey } } : {}),
     params: { path: { id: orderId } as any },
     body: body as any,
   } as any))

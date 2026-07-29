@@ -47,9 +47,18 @@ function ensureWindowsFirewallRule() {
   try {
     // Try add (silently). Если правило уже есть — добавит ещё одно с тем же
     // именем, что не вредит (Windows их объединит).
+    //
+    // АСИНХРОННО (spawn, не execSync): netsh на части конфигов Windows тормозит
+    // до нескольких секунд, а execSync блокировал старт (и сплэш) синхронно до
+    // 5с КАЖДЫЙ запуск. Правило нужно только когда планшет официанта
+    // подключится (секунды/минуты спустя), installer его уже добавил — это
+    // best-effort повтор, блокировать им старт незачем. Fire-and-forget, shell
+    // разбирает кавычки в name как раньше execSync.
     const cmd = `netsh advfirewall firewall add rule name="RestOS v2 HTTP" dir=in action=allow protocol=TCP localport=${API_PORT} profile=any`
-    execSync(cmd, { stdio: 'ignore', windowsHide: true, timeout: 5000 })
-    console.log('[firewall] rule for port', API_PORT, 'ensured')
+    const child = spawn(cmd, { stdio: 'ignore', windowsHide: true, shell: true })
+    child.on('error', (e) => console.log('[firewall] netsh spawn error:', e.message || ''))
+    child.unref()
+    console.log('[firewall] rule add (async) for port', API_PORT)
   } catch (e) {
     // Молча — без админских прав netsh может не сработать. Installer уже
     // покрыл этот случай при установке.
@@ -302,8 +311,17 @@ function startSidecar() {
     goReady = false
     if (!app.isQuitting) {
       Sentry.captureMessage(`Go sidecar exited unexpectedly: code=${code} signal=${signal}`)
-      // Restart after a short delay.
-      setTimeout(() => { if (!app.isQuitting) startSidecar() }, 2000)
+      // Перед рестартом освобождаем порт PG. Если бэк упал ПОСЛЕ старта
+      // embedded-postgres (напр., на миграции), PG мог осиротеть и держать 54330
+      // — тогда каждый следующий старт падает с «process already listening on
+      // port 54330», и касса не поднимается никогда (инцидент 22.07.2026).
+      // ensurePortFree добьёт зомби-PG перед новым стартом. Стартовый cleanup в
+      // app.on('ready') такой рестарт-путь не покрывал.
+      setTimeout(async () => {
+        if (app.isQuitting) return
+        await ensurePortFree(54330)
+        if (!app.isQuitting) startSidecar()
+      }, 2000)
     }
   })
   goProc.on('error', (err) => {
@@ -347,7 +365,7 @@ function stopSidecar() {
   } catch {}
 }
 
-// Wait for backend /healthz to respond OK before showing window.
+// Ждём healthz OK перед подменой сплэша на SPA (окно со сплэшем уже показано).
 function waitForBackend(timeoutMs = 90000) {
   const start = Date.now()
   return new Promise((resolve, reject) => {
@@ -368,7 +386,10 @@ function waitForBackend(timeoutMs = 90000) {
         reject(new Error(`backend not ready within ${timeoutMs}ms`))
         return
       }
-      setTimeout(poll, 500)
+      // 150мс вместо 500мс: бэк после разведения PG-бинарей поднимается ~250мс,
+      // и на 500мс-гранулярности мы до полсекунды зря ждём следующего пинга.
+      // healthz дешёвый, лишние пинги при старте ничего не стоят.
+      setTimeout(poll, 150)
     }
     poll()
   })
@@ -393,12 +414,21 @@ if (!gotTheLock) {
     // 0.5) v3.8.4: best-effort добавление firewall rule (installer его уже
     //      добавил, но если юзер выключал firewall — restore при старте).
     ensureWindowsFirewallRule()
-    // 1) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
-    //    освободить порты 3002 (HTTP API) и 54330 (embedded PG).
+
+    // 1) Окно со СПЛЭШЕМ показываем СРАЗУ — не ждём бэк. Иначе пользователь весь
+    //    холодный старт (очистка портов + подъём embedded-PG, 15-40с, а при
+    //    первой распаковке дольше) видит пустоту и думает, что касса не
+    //    запускается. Реальный SPA грузится в loadApp() по готовности бэка.
+    createWindow()
+    setupTray()
+    setupAutoUpdater()
+
+    // 2) Убить zombie sidecar'ы (restos-server + postgres) от прошлого crash,
+    //    освободить порты 3002 (HTTP API) и 54330 (embedded PG). Идёт под сплэшем.
     killStaleSidecars()
     await ensurePortFree(API_PORT)
     await ensurePortFree(54330)
-    // 2) Стартуем sidecar.
+    // 3) Стартуем sidecar.
     startSidecar()
     // 130 с > 90 с StartTimeout embedded-postgres: холодный старт / WAL-recovery
     // после апдейта должен успеть завершиться до показа ошибки.
@@ -413,9 +443,12 @@ if (!gotTheLock) {
         `Бэкенд не запустился за ${Math.round(BACKEND_TIMEOUT_MS / 1000)} секунд.\n\nВозможные причины:\n• Не хватает интернета для скачивания PostgreSQL (~80 МБ) при первом запуске\n• Антивирус блокирует embedded-postgres или restos-server.exe\n• Порт ${API_PORT} занят другой программой\n\nЧто попробовать: закройте RestOS полностью и запустите заново (или перезагрузите ПК) — это освободит зависшие процессы прошлой версии.\n\nЛог: ${path.join(app.getPath('userData'), 'logs', 'main.log')}`,
       )
     }
-    createWindow()
-    setupTray()
-    setupAutoUpdater()
+    // 4) Подменяем сплэш реальным SPA. ВСЕГДА, даже если healthz не поднялся за
+    //    таймаут: SPA сам ретраит бэк (login/loading-экран), а sidecar
+    //    авто-рестартует (goProc.on('exit')). Иначе касса зависла бы на сплэше —
+    //    это соответствует прежнему поведению (createWindow вызывался после
+    //    try/catch независимо от исхода).
+    loadApp()
   })
 
   app.on('window-all-closed', () => {
@@ -432,6 +465,13 @@ if (!gotTheLock) {
 }
 
 // ─── Window ────────────────────────────────────────────────────────────────
+const SPLASH_PATH = path.join(__dirname, 'splash.html')
+const INDEX_PATH = path.join(__dirname, 'frontend', 'index.html')
+// Что перезагружать при did-fail-load / крэше рендерера: до готовности бэка —
+// сплэш, после loadApp() — реальный SPA. Иначе ретрай грузил бы SPA поверх
+// сплэша ещё до подъёма бэка.
+let currentLoadTarget = SPLASH_PATH
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -440,6 +480,9 @@ function createWindow() {
     minHeight: 600,
     title: 'RestOS',
     icon: path.join(__dirname, 'assets', 'icon.png'),
+    // Фон окна = фон сплэша: пока сплэш/SPA рисуются (и в момент подмены сплэша
+    // на SPA) не мелькает белый прямоугольник.
+    backgroundColor: '#f5f3f0',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
@@ -461,10 +504,11 @@ function createWindow() {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.setFullScreen(!!on)
   })
 
-  // Load the bundled SPA from disk (file://). The SPA fetches API from 127.0.0.1:3001.
-  const indexPath = path.join(__dirname, 'frontend', 'index.html')
-  mainWindow.loadFile(indexPath).catch((e) => {
-    console.error('[main] loadFile error:', e)
+  // Сплэш грузим СРАЗУ (локальный файл, бэк не нужен) — окно появляется мгновенно.
+  // Реальный SPA подменяет loadApp() по готовности бэка. did-fail-load ниже
+  // перезагружает currentLoadTarget (сплэш до готовности, SPA после).
+  mainWindow.loadFile(SPLASH_PATH).catch((e) => {
+    console.error('[main] splash load error:', e)
   })
 
   mainWindow.once('ready-to-show', () => {
@@ -498,7 +542,7 @@ function createWindow() {
   mainWindow.webContents.on('did-fail-load', (_e, code, desc, url) => {
     console.log(`[renderer] did-fail-load: ${code} ${desc} ${url}`)
     setTimeout(() => {
-      try { mainWindow?.loadFile(indexPath) } catch {}
+      try { mainWindow?.loadFile(currentLoadTarget) } catch {}
     }, 1500)
   })
 
@@ -513,6 +557,18 @@ function createWindow() {
       mainWindow.hide()
     }
   })
+}
+
+// loadApp — подменяет сплэш реальным SPA. Вызывается из app.ready по готовности
+// бэка (healthz OK). Окно уже показано (ready-to-show на сплэше), поэтому подмена
+// бесшовна: backgroundColor окна = фон сплэша, белого мелькания нет.
+function loadApp() {
+  currentLoadTarget = INDEX_PATH
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.loadFile(INDEX_PATH).catch((e) => {
+      console.error('[main] app load error:', e)
+    })
+  }
 }
 
 // ─── Tray ──────────────────────────────────────────────────────────────────

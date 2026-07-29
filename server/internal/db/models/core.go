@@ -10,22 +10,29 @@ import (
 
 // Restaurant — тенант. Все остальные таблицы фильтруются по restaurant_id.
 type Restaurant struct {
-	ID                 string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	Name               string          `gorm:"not null" json:"name"`
-	Slug               *string         `gorm:"column:slug" json:"slug"`
-	LogoURL            *string         `gorm:"column:logo_url" json:"logo_url"`
-	Address            *string         `json:"address"`
-	Phone              *string         `json:"phone"`
-	Currency           *string         `gorm:"default:'TJS'" json:"currency"`
-	ServicePercent     decimal.Decimal `gorm:"type:numeric(14,4);default:10" json:"service_percent"`
-	Timezone           *string         `gorm:"default:'Asia/Dushanbe'" json:"timezone"`
-	EnforceStockCheck  *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
-	TechCardsEnabled   *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
-	AutoReadyMode      *bool           `gorm:"column:auto_ready_mode;default:false" json:"auto_ready_mode"`
-	AutoReadyBufferMin *int            `gorm:"column:auto_ready_buffer_min;default:5" json:"auto_ready_buffer_min"`
-	LocalServerIP      *string         `gorm:"column:local_server_ip" json:"local_server_ip"`
-	LicenseKey         *string         `gorm:"column:license_key" json:"license_key"`
-	LicenseExpiresAt   *time.Time      `gorm:"column:license_expires_at" json:"license_expires_at"`
+	ID             string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name           string          `gorm:"not null" json:"name"`
+	Slug           *string         `gorm:"column:slug" json:"slug"`
+	LogoURL        *string         `gorm:"column:logo_url" json:"logo_url"`
+	Address        *string         `json:"address"`
+	Phone          *string         `json:"phone"`
+	Currency       *string         `gorm:"default:'TJS'" json:"currency"`
+	ServicePercent decimal.Decimal `gorm:"type:numeric(14,4);default:10" json:"service_percent"`
+	// DiscountApprovalThreshold — скидка ВЫШЕ этого % требует одобрения
+	// менеджера/владельца при закрытии заказа (см. orders_close.go). Владелец
+	// настраивает в настройках. DEFAULT 10 — прежнее захардкоженное поведение.
+	DiscountApprovalThreshold decimal.Decimal `gorm:"column:discount_approval_threshold;type:numeric(14,4);default:10" json:"discount_approval_threshold"`
+	Timezone                  *string         `gorm:"default:'Asia/Dushanbe'" json:"timezone"`
+	EnforceStockCheck         *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
+	TechCardsEnabled          *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
+	// ShiftBalanceCorrectedAt — маркер разовой коррекции балансов под фикс Н13
+	// (v3.16.94+). NULL = не выполнялась; заполнен = повтор запрещён.
+	ShiftBalanceCorrectedAt *time.Time `gorm:"column:shift_balance_corrected_at" json:"shift_balance_corrected_at,omitempty"`
+	AutoReadyMode           *bool      `gorm:"column:auto_ready_mode;default:false" json:"auto_ready_mode"`
+	AutoReadyBufferMin      *int       `gorm:"column:auto_ready_buffer_min;default:5" json:"auto_ready_buffer_min"`
+	LocalServerIP           *string    `gorm:"column:local_server_ip" json:"local_server_ip"`
+	LicenseKey              *string    `gorm:"column:license_key" json:"license_key"`
+	LicenseExpiresAt        *time.Time `gorm:"column:license_expires_at" json:"license_expires_at"`
 	// LicenseIssuedAt — когда выписан токен (v2.6.0+). Используется для
 	// clock-skew check: если now() < issued_at → tampered clock → lock.
 	// Legacy-рестораны до v2.6.0 имеют NULL → skip check (backward compat).
@@ -49,9 +56,23 @@ type Restaurant struct {
 	PinLockTimeoutMin *int       `gorm:"column:pin_lock_timeout_min;default:5" json:"pin_lock_timeout_min"`
 	// OnScreenKeyboardEnabled — экранная клавиатура (iiko-style) на POS/смене/зале.
 	// Default false: нужна только на тач-терминалах без физической клавиатуры.
-	OnScreenKeyboardEnabled *bool     `gorm:"column:on_screen_keyboard_enabled;default:false" json:"on_screen_keyboard_enabled"`
-	CreatedAt               time.Time `json:"created_at"`
-	UpdatedAt               time.Time `json:"updated_at"`
+	OnScreenKeyboardEnabled *bool `gorm:"column:on_screen_keyboard_enabled;default:false" json:"on_screen_keyboard_enabled"`
+	// Режим обслуживания (041). TablesEnabled=false → фастфуд «в зал по номеру»
+	// без столов. KitchenOnPay=true → кухонный бегунок печатается на оплате.
+	// PosV2Default=true → новый POS по умолчанию на кассах.
+	TablesEnabled *bool `gorm:"column:tables_enabled;not null;default:true" json:"tables_enabled"`
+	KitchenOnPay  *bool `gorm:"column:kitchen_on_pay;not null;default:false" json:"kitchen_on_pay"`
+	PosV2Default  *bool `gorm:"column:pos_v2_default;not null;default:false" json:"pos_v2_default"`
+	// Доставка (052). DeliveryEnabled=false → в POS только «Зал» и «С собой».
+	// DeliveryContactsRequired=true → перед оплатой заказа-доставки касса
+	// спрашивает телефон и адрес.
+	DeliveryEnabled          *bool `gorm:"column:delivery_enabled;not null;default:false" json:"delivery_enabled"`
+	DeliveryContactsRequired *bool `gorm:"column:delivery_contacts_required;not null;default:true" json:"delivery_contacts_required"`
+	// MenuSortBySales — сортировать меню в POS/pos2 по продаваемости (окно 30
+	// дней), хиты вверху категории. Default false → алфавит (060).
+	MenuSortBySales *bool     `gorm:"column:menu_sort_by_sales;not null;default:false" json:"menu_sort_by_sales"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (Restaurant) TableName() string { return "restaurants" }
@@ -105,11 +126,17 @@ type User struct {
 	ShiftNumber  *int            `gorm:"column:shift_number" json:"shift_number"`
 	Salary       decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"salary"`
 	HourlyRate   decimal.Decimal `gorm:"column:hourly_rate;type:numeric(14,4);default:0" json:"hourly_rate"`
-	Advance      decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"advance"`
-	Deductions   decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"deductions"`
-	Permissions  datatypes.JSON  `gorm:"type:jsonb" json:"permissions"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// Тип оплаты труда (054). monthly → начисление = Salary. daily →
+	// DailyRate × число дней с отметкой в табеле за период. Дни не хранятся
+	// отдельно: источник правды — time_entries, чтобы расчёт всегда сходился
+	// с тем, что видно в табеле.
+	PayType     *string         `gorm:"column:pay_type;not null;default:'monthly'" json:"pay_type"`
+	DailyRate   decimal.Decimal `gorm:"column:daily_rate;type:numeric(14,4);not null;default:0" json:"daily_rate"`
+	Advance     decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"advance"`
+	Deductions  decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"deductions"`
+	Permissions datatypes.JSON  `gorm:"type:jsonb" json:"permissions"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 func (User) TableName() string { return "users" }

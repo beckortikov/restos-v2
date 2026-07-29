@@ -21,6 +21,7 @@ import {
   type Supplier,
   type User,
   type MenuItem,
+  type RecurringPayment,
 } from '@/lib/types'
 import {
   fetchOrders,
@@ -32,6 +33,7 @@ import {
   fetchSuppliers,
   fetchUsers,
   fetchMenuItems,
+  fetchRecurringPayments,
 } from '@/lib/queries'
 import {
   TrendingUp,
@@ -52,6 +54,7 @@ import {
   BarChart3,
   Banknote,
   Truck,
+  CalendarClock,
 } from 'lucide-react'
 
 const RevenueChart = lazy(() => import('@/components/charts/revenue-chart'))
@@ -196,6 +199,7 @@ export default function DashboardPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [users, setUsers] = useState<User[]>([])
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
+  const [recurringPayments, setRecurringPayments] = useState<RecurringPayment[]>([])
   const [loading, setLoading] = useState(true)
   // Выбранный период (по умолчанию — сегодня: from === to). Все показатели
   // считаются за него фильтром по дате из уже загруженных заказов/операций.
@@ -207,10 +211,12 @@ export default function DashboardPage() {
       fetchOrders(), fetchFinancialAccounts(), fetchIngredients(),
       fetchFinancialOperations(), fetchTables(), fetchZones(),
       fetchSuppliers(), fetchUsers(), fetchMenuItems(),
-    ]).then(([o, fa, ing, fo, t, z, s, u, mi]) => {
+      fetchRecurringPayments().catch(() => [] as RecurringPayment[]),
+    ]).then(([o, fa, ing, fo, t, z, s, u, mi, rp]) => {
       setOrders(o); setAccounts(fa); setIngredients(ing)
       setOperations(fo); setTables(t); setZones(z)
       setSuppliers(s); setUsers(u); setMenuItems(mi)
+      setRecurringPayments(rp)
     }).finally(() => setLoading(false))
   }, [])
 
@@ -243,7 +249,10 @@ export default function DashboardPage() {
   // Сервис начисляется на чек целиком, поэтому корректно входит и в выручку, и в
   // средний чек, и в разбивки по чеку (часы/официанты). Donut по блюдам — отдельно,
   // там база item-level (сервис не привязан к конкретному блюду).
-  const orderRevenue = (o: typeof todayOrders[number]) => o.totalWithService ?? o.total
+  // #15: вычитаем возвраты. Полный возврат мапится в статус 'done' и несёт
+  // refundedTotal — без вычитания «Выручка сегодня» завышалась на всю сумму
+  // возвращённых заказов (ОПиУ-эндпоинт это уже учитывает, а дашборд считал сам).
+  const orderRevenue = (o: typeof todayOrders[number]) => (o.totalWithService ?? o.total) - (o.refundedTotal ?? 0)
   const todayRevenue = useMemo(() => todayOrders.reduce((s, o) => s + orderRevenue(o), 0), [todayOrders])
   const todayOrdersCount = useMemo(() => orders.filter(o => inRange(o.createdAt)).length, [orders, dateFrom, dateTo])
   const avgCheck = todayOrders.length > 0 ? todayRevenue / todayOrders.length : 0
@@ -264,6 +273,19 @@ export default function DashboardPage() {
   }), [orders])
   const overdueSuppliers = useMemo(() => suppliers.filter(s => s.currentDebt > 0), [suppliers])
   const billRequested = useMemo(() => tables.filter(t => t.status === 'bill_requested'), [tables])
+  // Регулярные платежи «к оплате»: активные, срок ≤ 7 дней (включая просроченные).
+  const duePayments = useMemo(() => {
+    const now = new Date()
+    const todayMs = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
+    return recurringPayments.filter(p => {
+      if (!p.active || !p.nextDue) return false
+      const [y, m, d] = p.nextDue.split('-').map(Number)
+      if (!y || !m || !d) return false
+      const days = Math.round((Date.UTC(y, m - 1, d) - todayMs) / 86400000)
+      return days <= 7
+    })
+  }, [recurringPayments])
+  const duePaymentsTotal = useMemo(() => duePayments.reduce((s, p) => s + p.amount, 0), [duePayments])
 
   // Active orders
   const activeOrders = useMemo(() => orders.filter(o => o.status !== 'done'), [orders])
@@ -341,7 +363,7 @@ export default function DashboardPage() {
   // Orders by type (chart 3)
   const ordersByType = useMemo(() => {
     const todayAll = orders.filter(o => inRange(o.createdAt))
-    const labels: Record<string, string> = { hall: 'Зал', delivery: 'Доставка', takeaway: 'Самовывоз' }
+    const labels: Record<string, string> = { hall: 'Зал', delivery: 'Доставка', takeaway: 'С собой' }
     const counts: Record<string, number> = { hall: 0, delivery: 0, takeaway: 0 }
     todayAll.forEach(o => { if (counts[o.type] !== undefined) counts[o.type]++ })
     return Object.entries(counts).filter(([, v]) => v > 0).map(([k, v]) => ({ name: labels[k], value: v }))
@@ -448,7 +470,7 @@ export default function DashboardPage() {
       </div>
 
       {/* ═══ Требует внимания — компактный баннер на всю ширину ═══ */}
-      {(lowStock.length > 0 || longCooking.length > 0 || overdueSuppliers.length > 0 || billRequested.length > 0) && (
+      {(lowStock.length > 0 || longCooking.length > 0 || overdueSuppliers.length > 0 || billRequested.length > 0 || duePayments.length > 0) && (
         <div className="bg-card rounded-xl border border-amber-200/70 dark:border-amber-900/40 p-3.5 md:p-4">
           <h2 className="text-sm font-semibold text-foreground mb-2.5 flex items-center gap-2">
             <AlertTriangle className="size-4 text-amber-500" />
@@ -485,6 +507,14 @@ export default function DashboardPage() {
                 text={`${billRequested.length} стол${billRequested.length > 1 ? 'ов' : ''} ждут оплату`}
                 severity="info"
                 href="/operations/table-map"
+              />
+            )}
+            {duePayments.length > 0 && (
+              <AlertItem
+                icon={CalendarClock}
+                text={`К оплате: ${duePayments.length} платеж(ей) на ${formatCurrency(duePaymentsTotal)}`}
+                severity="warn"
+                href="/finance/payments"
               />
             )}
           </div>
@@ -539,7 +569,7 @@ export default function DashboardPage() {
                           {ORDER_STATUS_LABELS[o.status]}
                         </span>
                         <span className="text-foreground font-medium truncate">
-                          {table?.name || (o.type === 'delivery' ? 'Доставка' : 'Самовывоз')}
+                          {table?.name || (o.type === 'delivery' ? 'Доставка' : 'С собой')}
                         </span>
                         <span className="text-muted-foreground">{o.items.length} поз.</span>
                       </div>

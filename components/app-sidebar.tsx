@@ -16,9 +16,11 @@ import {
   ClipboardCheck,
   History,
   TrendingDown,
+  PieChart,
   TrendingUp,
   Scale,
   Wallet,
+  CalendarClock,
   DollarSign,
   BarChart3,
   LineChart,
@@ -33,6 +35,7 @@ import {
   LogOut,
   Building2,
   Trash2,
+  Undo2,
   Monitor,
   Printer,
   Shield,
@@ -53,6 +56,7 @@ import {
   Boxes,
   Network,
   RefreshCw,
+  ListChecks,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -224,6 +228,12 @@ interface NavItem {
   href?: string
   icon?: React.ElementType
   children?: NavItem[]
+  /**
+   * Пункт-группа: внутри страницы переключаются вкладками (см. FinanceTabs).
+   * Показываем пункт, если доступна ЛЮБАЯ из вкладок, и ведём на первую
+   * доступную — иначе роль с частичным доступом теряла бы весь раздел.
+   */
+  group?: string[]
 }
 
 const NAV: NavItem[] = [
@@ -245,32 +255,40 @@ const NAV: NavItem[] = [
     label: 'Склад',
     icon: Package,
     children: [
+      // Редизайн: 4 раздела вместо 11 плоских пунктов. Частые действия — на
+      // «Обзоре», редкие документы/справочники — в «Операциях».
+      { label: 'Обзор', href: '/warehouse', icon: Boxes },
       { label: 'Остатки', href: '/warehouse/inventory', icon: Package },
-      { label: 'Накладные', href: '/warehouse/receipts', icon: ScrollText },
-      { label: 'Полуфабрикаты', href: '/warehouse/semi', icon: FlaskConical },
-      { label: 'Меню / Техкарты', href: '/warehouse/menu', icon: BookOpen },
       { label: 'Поставщики', href: '/warehouse/suppliers', icon: Truck },
-      { label: 'Списания', href: '/warehouse/writeoffs', icon: Trash2 },
-      { label: 'Расход хозтоваров', href: '/warehouse/supply-expenses', icon: PackageMinus },
-      { label: 'Инвентаризация', href: '/warehouse/inventory-check', icon: ClipboardCheck },
+      { label: 'Операции', href: '/warehouse/operations', icon: ListChecks },
       { label: 'Перемещения', href: '/warehouse/transfers', icon: ArrowLeftRight },
       { label: 'Номенклатура сети', href: '/warehouse/nomenclature', icon: Boxes },
       { label: 'Меню сети', href: '/network/menu', icon: BookOpen },
-      { label: 'Начальный остаток', href: '/warehouse/opening-balance', icon: PackagePlus },
-      { label: 'История движений', href: '/warehouse/history', icon: History },
     ],
   },
   {
     label: 'Финансы',
     icon: DollarSign,
     children: [
-      { label: 'ДДС', href: '/finance/cashflow', icon: TrendingDown },
-      { label: 'ОПиУ', href: '/finance/pnl', icon: TrendingUp },
-      { label: 'Баланс', href: '/finance/balance', icon: Scale },
-      { label: 'Счета и касса', href: '/finance/accounts', icon: Wallet },
-      { label: 'Зарплата', href: '/finance/payroll', icon: Users },
-      { label: 'Обслуживание', href: '/finance/service-report', icon: HandCoins },
-      { label: 'Бюджет', href: '/finance/budget', icon: Target },
+      // 5 пунктов вместо 9: связанные экраны собраны в группы и переключаются
+      // вкладками внутри (FINANCE_GROUPS). URL страниц не менялись.
+      { label: 'Обзор', href: '/finance/overview', icon: LayoutDashboard },
+      {
+        label: 'Отчёты', href: '/finance/cashflow', icon: TrendingUp,
+        group: ['/finance/cashflow', '/finance/pnl', '/finance/balance'],
+      },
+      {
+        label: 'Деньги', href: '/finance/accounts', icon: Wallet,
+        group: ['/finance/accounts', '/finance/payments'],
+      },
+      {
+        label: 'Расходы и бюджет', href: '/finance/expenses', icon: PieChart,
+        group: ['/finance/expenses', '/finance/budget'],
+      },
+      {
+        label: 'Персонал', href: '/finance/payroll', icon: Users,
+        group: ['/finance/payroll', '/finance/service-report'],
+      },
       { label: 'Сводка по сети', href: '/network/summary', icon: Network },
     ],
   },
@@ -328,9 +346,13 @@ function NavGroup({
   const { pathname } = useLocation()
   // Exact match for leaf items that have sibling routes (e.g. /settings vs /settings/users)
   const hasChildren = item.children && item.children.length > 0
-  const isActive = item.href ? (hasChildren ? pathname.startsWith(item.href) : pathname === item.href) : false
+  // Пункт-группа активен на любой своей вкладке (на /finance/pnl горит «Отчёты»).
+  const inGroup = (it: NavItem) =>
+    !!it.group?.some((p) => pathname === p || pathname.startsWith(p + '/'))
+  const isActive = inGroup(item)
+    || (item.href ? (hasChildren ? pathname.startsWith(item.href) : pathname === item.href) : false)
   const hasActiveChild = item.children?.some(
-    (c) => c.href && (pathname === c.href || pathname.startsWith(c.href + '/'))
+    (c) => inGroup(c) || (c.href && (pathname === c.href || pathname.startsWith(c.href + '/')))
   )
   const [open, setOpen] = useState(hasActiveChild || false)
 
@@ -413,14 +435,24 @@ function SidebarContent({
   const [logoutOpen, setLogoutOpen] = useState(false)
 
   // Filter nav items by user's access
-  const filteredNav = NAV.map((item) => {
+  // Пункт-группа доступен, если открыта ХОТЯ БЫ одна вкладка; ведёт на первую
+  // доступную. Обычный пункт — по своему href, как раньше.
+  const resolveItem = (item: NavItem): NavItem | null => {
+    if (item.group) {
+      const firstAllowed = item.group.find((p) => hasAccess(p))
+      return firstAllowed ? { ...item, href: firstAllowed } : null
+    }
     if (item.href) return hasAccess(item.href) ? item : null
+    return item
+  }
+
+  const filteredNav = NAV.map((item) => {
     if (item.children) {
-      const children = item.children.filter((c) => c.href && hasAccess(c.href))
+      const children = item.children.map(resolveItem).filter(Boolean) as NavItem[]
       if (children.length === 0) return null
       return { ...item, children }
     }
-    return item
+    return resolveItem(item)
   }).filter(Boolean) as NavItem[]
 
   const initials = user ? user.name.split(' ').map(n => n[0]).join('') : '??'

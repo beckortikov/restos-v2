@@ -8,6 +8,8 @@ import {
   fetchActiveShift, fetchServiceAccrualByShift, fetchServicePayoutByShift,
   fetchUsers, fetchFinancialAccounts, payServiceCharge,
 } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { formatCurrency } from '@/lib/helpers'
 import { dSum } from '@/lib/decimal'
 import { humanizeError } from '@/lib/errors'
@@ -56,10 +58,11 @@ export default function PosV2Service() {
     }
   }, [])
 
-  useEffect(() => {
-    load()
-    fetchFinancialAccounts().then(setAccounts).catch(() => {})
-  }, [load])
+  const loadAccounts = useCallback(() => fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}), [])
+  useEffect(() => { load(); loadAccounts() }, [load, loadAccounts])
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
 
   const totalAccrued = useMemo(() => dSum(rows.map(r => r.accrued)), [rows])
   const totalPaid = useMemo(() => dSum(rows.map(r => r.paid)), [rows])

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Корзина закупок (белая на эмеральд-фоне) — иконка из app_zakup.pen. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="1.6" android:scaleY="1.6" android:pivotX="54" android:pivotY="54">
+        <!-- Ручки корзины -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2.4"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M48,46 L52,38 M60,46 L56,38" />
+        <!-- Корпус корзины -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M42.5,47 h23 a2,2 0 0 1 1.96,2.42 l-2.4,11.2 a3,3 0 0 1 -2.94,2.38 h-13.2 a3,3 0 0 1 -2.94,-2.38 l-2.4,-11.2 a2,2 0 0 1 1.96,-2.42 Z M50,52 v6 M54,52 v6 M58,52 v6" />
+    </group>
+</vector>

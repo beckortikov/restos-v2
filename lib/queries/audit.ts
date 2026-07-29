@@ -79,7 +79,7 @@ export async function fetchAuditLog(limit = 100, offset = 0): Promise<AuditLogEn
 // mapPrintJobEntry — конвертирует row из /api/v1/print/jobs (PrintJob schema)
 // в UI-shape PrintJournalEntry. Поля привычные для legacy UI-фильтров
 // (action='print.runner|receipt|cancel') синтезируются из PrintJob.type.
-function mapPrintJobEntry(r: any): PrintJournalEntry {
+export function mapPrintJobEntry(r: any): PrintJournalEntry {
   const type = String(r?.type ?? '')
   const status = String(r?.status ?? '')
   let action: PrintJournalEntry['action'] = 'print.receipt'
@@ -92,6 +92,11 @@ function mapPrintJobEntry(r: any): PrintJournalEntry {
   else if (status === 'failed') uiStatus = 'failed'
   // pending|running остаются 'mock' (промежуточный визуальный статус,
   // UI не различает их в журнале).
+  // Сервер помечает «Не актуально» как status='dismissed' (терминальный).
+  // FailedPrintsButton прячет по булеву entry.dismissed — без этого маппинга
+  // отменённое задание проходило фильтр (status!=='success' && !dismissed) и
+  // ВОЗВРАЩАЛОСЬ в drawer на следующем polls. Fix: тянем булеву из статуса.
+  const isDismissed = status === 'dismissed'
 
   const orderId: string | undefined = r?.order_id ?? undefined
   const lastError: string | undefined = r?.last_error ?? undefined
@@ -121,7 +126,7 @@ function mapPrintJobEntry(r: any): PrintJournalEntry {
     createdAt: String(r?.created_at ?? ''),
     attempts: typeof r?.attempts === 'number' ? r.attempts : undefined,
     maxAttempts: undefined,
-    dismissed: false,
+    dismissed: isDismissed,
     orderNumber,
   }
 }

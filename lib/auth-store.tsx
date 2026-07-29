@@ -8,6 +8,7 @@ import {
   type User, type UserRole, type UserPermissions, type Restaurant, type PermissionKey,
 } from '@/lib/types'
 import { api, unwrap, setV4Token, clearV4Token, getV4Token, getV4RestaurantId, clearV4RestaurantId, v4ErrorMessage } from '@/lib/api'
+import { isPosV2EnabledFor, syncPosV2Default } from '@/lib/pos-v2/flag'
 import { mapRestaurantRow } from '@/lib/queries/_mappers'
 import * as Sentry from '@sentry/react'
 import { queryClient } from '@/lib/query-client'
@@ -168,6 +169,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener('restos:auth:expired', onExpired)
   }, [])
 
+  // Дефолт нового POS (owner-настройка posV2Default) → localStorage, чтобы
+  // isPosV2Enabled() без пропсов (кнопка «Новый POS», настройки кассы) видел его.
+  // homeRoute считается напрямую из restaurant — без гонки с этим синком.
+  useEffect(() => { syncPosV2Default(!!restaurant?.posV2Default) }, [restaurant?.posV2Default])
+
   async function login(pin: string) {
     const rid = getV4RestaurantId()
     if (!rid) {
@@ -190,14 +196,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Прочие поля заполняются после /users/{id} ниже (lazy).
       } as User
 
+      // X-Skip-Auth-Expire: транзиентный 401 этих дозагрузок не должен
+      // выкидывать только что вошедшего кассира обратно на PIN.
+      const bg = { headers: { 'X-Skip-Auth-Expire': '1' } }
+
+      // Ресторан грузим ДО setUser: homeRoute (новый POS vs старый) решается по
+      // restaurant.posV2Default. Если пометить залогиненным раньше загрузки
+      // ресторана, первый редирект (login-страница по появлению user) уходит в
+      // старый POS, а после подгрузки ресторана повторного редиректа уже нет —
+      // фастфуд-касса с «Новый POS по умолчанию» застревала в старом интерфейсе
+      // (гонка). Один быстрый LAN-запрос — редирект решается по факту, без
+      // мигания старым POS. Оффлайн/ошибка → restaurant=null, деградируем в
+      // старый POS (фоновый refresh на mount догонит).
+      try {
+        const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } }, ...bg }))
+        if (restResp) {
+          const rest = mapResponseRestaurant(restResp)
+          setRestaurant(rest)
+          localStorage.setItem(RESTAURANT_STORAGE_KEY, JSON.stringify(rest))
+        }
+      } catch {}
+
       setUser(mapped)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(mapped))
       Sentry.setUser({ id: mapped.id, username: mapped.name, extra: { role: mapped.role, restaurantId: mapped.restaurantId } })
 
-      // Подтянуть детальный профиль (permissions) + ресторан в фоне.
-      // X-Skip-Auth-Expire: транзиентный 401 этих фоновых дозагрузок не должен
-      // выкидывать только что вошедшего кассира обратно на PIN.
-      const bg = { headers: { 'X-Skip-Auth-Expire': '1' } }
+      // Детальный профиль (permissions) — в фоне, редирект его не ждёт.
       void (async () => {
         try {
           const userResp: any = await unwrap(api.GET('/api/v1/users/{id}', { params: { path: { id: mapped.id } }, ...bg }))
@@ -205,14 +229,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const full = { ...mapped, ...mapResponseUser(userResp) }
             setUser(full)
             localStorage.setItem(STORAGE_KEY, JSON.stringify(full))
-          }
-        } catch {}
-        try {
-          const restResp: any = await unwrap(api.GET('/api/v1/restaurants/{id}', { params: { path: { id: rid } }, ...bg }))
-          if (restResp) {
-            const rest = mapResponseRestaurant(restResp)
-            setRestaurant(rest)
-            localStorage.setItem(RESTAURANT_STORAGE_KEY, JSON.stringify(rest))
           }
         } catch {}
       })()
@@ -276,6 +292,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   let homeRoute = user ? ROLE_HOME[user.role] : '/login'
+  // Новый POS по умолчанию (owner-настройка posV2Default): кассир при логине/
+  // загрузке попадает СРАЗУ в /pos2, без промежуточной кнопки «Новый POS».
+  // Явный выбор кассы (pos_ui_v2 в её настройках) главнее дефолта ресторана.
+  if (user?.role === 'cashier' && isPosV2EnabledFor(!!restaurant?.posV2Default)) {
+    homeRoute = '/pos2'
+  }
   if (user?.role === 'waiter' && typeof window !== 'undefined') {
     try {
       const pref = localStorage.getItem('restos-waiter-home-screen')

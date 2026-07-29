@@ -43,6 +43,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   address: string
   phone: string
   servicePercent: number
+  discountApprovalThreshold: number
   enforceStockCheck: boolean
   techCardsEnabled: boolean
   autoReadyMode: boolean
@@ -51,6 +52,12 @@ export async function updateRestaurant(id: string, data: Partial<{
   pinLockTimeoutMin: number
   supplyAllowNegative: boolean
   onScreenKeyboardEnabled: boolean
+  tablesEnabled: boolean
+  kitchenOnPay: boolean
+  posV2Default: boolean
+  menuSortBySales: boolean
+  deliveryEnabled: boolean
+  deliveryContactsRequired: boolean
   isBlocked: boolean
   blockReason: string
   licenseKey: string
@@ -62,6 +69,7 @@ export async function updateRestaurant(id: string, data: Partial<{
   if (data.address !== undefined) updates.address = data.address
   if (data.phone !== undefined) updates.phone = data.phone
   if (data.servicePercent !== undefined) updates.service_percent = String(data.servicePercent)
+  if (data.discountApprovalThreshold !== undefined) updates.discount_approval_threshold = String(data.discountApprovalThreshold)
   if (data.enforceStockCheck !== undefined) updates.enforce_stock_check = data.enforceStockCheck
   if (data.techCardsEnabled !== undefined) updates.tech_cards_enabled = data.techCardsEnabled
   if (data.autoReadyMode !== undefined) updates.auto_ready_mode = data.autoReadyMode
@@ -70,6 +78,12 @@ export async function updateRestaurant(id: string, data: Partial<{
   if (data.pinLockTimeoutMin !== undefined) updates.pin_lock_timeout_min = data.pinLockTimeoutMin
   if (data.supplyAllowNegative !== undefined) updates.supply_allow_negative = data.supplyAllowNegative
   if (data.onScreenKeyboardEnabled !== undefined) updates.on_screen_keyboard_enabled = data.onScreenKeyboardEnabled
+  if (data.tablesEnabled !== undefined) updates.tables_enabled = data.tablesEnabled
+  if (data.kitchenOnPay !== undefined) updates.kitchen_on_pay = data.kitchenOnPay
+  if (data.posV2Default !== undefined) updates.pos_v2_default = data.posV2Default
+  if (data.menuSortBySales !== undefined) updates.menu_sort_by_sales = data.menuSortBySales
+  if (data.deliveryEnabled !== undefined) updates.delivery_enabled = data.deliveryEnabled
+  if (data.deliveryContactsRequired !== undefined) updates.delivery_contacts_required = data.deliveryContactsRequired
   if (Object.keys(updates).length > 0) {
     await unwrap(api.PATCH('/api/v1/restaurants/{id}', { params: { path: { id } }, body: updates as any }))
   }

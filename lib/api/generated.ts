@@ -562,6 +562,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/menu/popularity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Продано штук по позициям за окно (для сортировки меню) */
+        get: {
+            parameters: {
+                query?: {
+                    days?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: {
+                                menu_item_id?: string;
+                                qty?: components["schemas"]["Decimal"];
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/menu/categories": {
         parameters: {
             query?: never;
@@ -691,6 +734,135 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["MenuCategory"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/v1/size-scales": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Шкалы размеров + их значения */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SizeScalesList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Создать шкалу размеров (Manager) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SizeScaleInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SizeScaleWithValues"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/size-scales/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SizeScaleInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SizeScaleWithValues"];
                     };
                 };
             };
@@ -1236,7 +1408,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/stock/receipts/{id}/confirm": {
+    "/api/v1/stock/receipts/{id}/pay": {
         parameters: {
             query?: never;
             header?: never;
@@ -1245,7 +1417,16 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Подтвердить приёмку. Для credit — создаст Liability, при account_id — FinancialOperation. */
+        /**
+         * Оплата долга по конкретной накладной
+         * @description Адресный платёж именно этой накладной (в отличие от
+         *     `/suppliers/{id}/pay-debt`, который гасит долг поставщику FIFO по всем
+         *     накладным). Атомарно: списывает `amount` со счёта `account_id`, на
+         *     накладной `debt_amount −amount` / `paid_amount +amount` и пересчитывает
+         *     `payment_type` (paid/partial), у поставщика `current_debt −amount`, и
+         *     создаёт financial_operation out (category='supplier_payment', исключён
+         *     из opex ОПиУ). Сумма клампится к остатку долга накладной.
+         */
         post: {
             parameters: {
                 query?: never;
@@ -1260,7 +1441,7 @@ export interface paths {
             };
             requestBody: {
                 content: {
-                    "application/json": components["schemas"]["ConfirmReceiptInput"];
+                    "application/json": components["schemas"]["SupplierPayDebtInput"];
                 };
             };
             responses: {
@@ -1271,6 +1452,149 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["StockReceipt"];
+                    };
+                };
+                /** @description По накладной нет долга; либо на счёте недостаточно денег. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/returns": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Список возвратов поставщикам. */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: components["parameters"]["Limit"];
+                    /** @description base64url-token из next_cursor предыдущего ответа */
+                    cursor?: components["parameters"]["Cursor"];
+                    supplier_id?: string;
+                    receipt_id?: string;
+                    from?: string;
+                    to?: string;
+                    include?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReturnsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Возврат поставщику (создаёт stock_movements −qty + возвращает деньги/долг) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReturnInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReturn"];
+                    };
+                };
+                /** @description Возврат больше, чем пришло по строке накладной; больше фактического остатка на складе; либо refund_type не соответствует остатку долга (debt при погашенном долге / money при непогашенном). */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/returns/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Сторно возврата — товар назад на склад, деньги/долг откатываются.
+         * @description Строка не удаляется (документы append-only): проставляется cancelled_at, а компенсация проводится отдельными движениями склада и встречной финоперацией — история читается целиком. Отменённый возврат перестаёт считаться в guard'е «нельзя вернуть больше, чем пришло»: товар вернулся, значит его снова можно возвращать. Склад принимает товар по формуле приёмки (средневзвешенная вперёд) — для входящего товара это корректно.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReturn"];
+                    };
+                };
+                /** @description Возврат уже отменён; либо на счёте не хватает денег вернуть их поставщику. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
                     };
                 };
             };
@@ -2601,6 +2925,11 @@ export interface paths {
                         type: "cash_in" | "cash_out";
                         amount: string;
                         description?: string;
+                        /**
+                         * Format: uuid
+                         * @description Счёт операции. Пусто → счёт смены (наличный ящик). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает.
+                         */
+                        account_id?: string;
                     };
                 };
             };
@@ -2954,6 +3283,9 @@ export interface paths {
                         comment?: string;
                         /** Format: uuid */
                         customer_id?: string;
+                        /** @description Контакты доставки — касса сохраняет их перед открытием панели оплаты */
+                        delivery_phone?: string;
+                        delivery_address?: string;
                     };
                 };
             };
@@ -3123,6 +3455,13 @@ export interface paths {
                          * @description Кассир, закрывший заказ. Пишется в order.cashier_id.
                          */
                         cashier_id?: string;
+                        /**
+                         * @description Телефон клиента для заказа type='delivery'. Обязателен, если
+                         *     restaurants.delivery_contacts_required=true — иначе 400 VALIDATION.
+                         */
+                        delivery_phone?: string;
+                        /** @description Адрес доставки. Те же правила, что у delivery_phone. */
+                        delivery_address?: string;
                         /**
                          * @description Тип скидки. Применяется к order.total ДО формирования financial_operation.
                          * @enum {string}
@@ -4725,6 +5064,89 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/printers/system-queues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Очереди печати ОС (для driver=system)
+         * @description Список очередей печати, зарегистрированных в ОС той машины, где работает Go-бэк (касса). Используется в настройках, чтобы выбрать встроенный USB-принтер моноблока из списка, а не вбивать имя очереди руками.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SystemPrintQueuesList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/printers/{id}/codepage-probe": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Проба кодовых страниц (подбор номера для кириллицы)
+         * @description Печатает одну и ту же русскую строку несколькими таблицами символов подряд, подписывая номер каждой латиницей. Нужна, когда принтер печатает вместо кириллицы мусор: единой нумерации в ESC/POS нет, а самотест со списком таблиц печатают не все модели.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Accepted */
+                202: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PrintJob"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/printers/{id}/test": {
         parameters: {
             query?: never;
@@ -5040,6 +5462,73 @@ export interface paths {
                             accepted?: number;
                         };
                     };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/maintenance/shift-balance-fix": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Н13 — превью разовой коррекции балансов счетов (без изменений) */
+        get: {
+            parameters: {
+                query?: {
+                    cutoff?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShiftBalanceFixResult"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Н13 — применить коррекцию балансов РОВНО ОДИН РАЗ (маркер) */
+        post: {
+            parameters: {
+                query?: {
+                    cutoff?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ShiftBalanceFixResult"];
+                    };
+                };
+                /** @description Уже применена */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
                 };
             };
         };
@@ -6975,6 +7464,67 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/liabilities/{id}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Погашение обязательства — списывает деньги со счёта, создаёт проводку.
+         * @description Списывает amount со счёта account_id, создаёт financial_operation (type=out, category=liability_payment — гашение пассива, НЕ opex ОПиУ), уменьшает remaining_amount. Переплатить нельзя (клампится к остатку). Прямой PATCH paid_amount запрещён — так обязательство уменьшалось без списания со счёта, и капитал рос из воздуха.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        amount: components["schemas"]["Decimal"];
+                        /** Format: uuid */
+                        account_id: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["Liability"];
+                    };
+                };
+                /** @description Обязательство погашено или недостаточно средств */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/equity": {
         parameters: {
             query?: never;
@@ -8038,6 +8588,57 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/finance/accounts/{id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Включить / отключить счёт
+         * @description Отключение вместо удаления. Счёт остаётся в системе со всей историей и остатком (остаток продолжает учитываться в Балансе), но исчезает из выбора при оплате, и сервер не даёт провести на него деньги. 409, если счёт используется в открытой смене, это последний включённый наличный счёт, или на него настроены активные регулярные платежи.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        enabled: boolean;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialAccount"];
+                    };
+                };
+                409: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/accounts/transfer": {
         parameters: {
             query?: never;
@@ -8270,6 +8871,8 @@ export interface paths {
                 query?: {
                     from?: components["parameters"]["From"];
                     to?: components["parameters"]["To"];
+                    /** @description true → в opex только операционная активность (без капвложений и финансовой), чтобы разовая покупка оборудования не проваливала операционную прибыль */
+                    operational_only?: boolean;
                 };
                 header?: never;
                 path?: never;
@@ -8404,6 +9007,188 @@ export interface paths {
         };
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/recurring-payments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Список регулярных платежей (модуль «Платежи») */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPaymentsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Создать регулярный платёж (шаблон) */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecurringPaymentInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPayment"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/recurring-payments/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Удалить регулярный платёж */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No Content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        /** Изменить регулярный платёж */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["RecurringPaymentInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPayment"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/v1/finance/recurring-payments/{id}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Провести платёж по шаблону
+         * @description Списывает сумму со счёта и создаёт financial_operation out. Сумма/счёт по
+         *     умолчанию из шаблона, но переопределяются в теле (коммуналка меняется
+         *     помесячно). next_due двигается на следующий месяц, ставится last_paid_at.
+         *     Обычный операционный расход (в отличие от гашения долга поставщику).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": components["schemas"]["RecurringPaymentPayInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["RecurringPayment"];
+                    };
+                };
+                /** @description На счёте недостаточно денег. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
         delete?: never;
         options?: never;
         head?: never;
@@ -8593,6 +9378,45 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["TablesAnalyticsReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/analytics/sales-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Отчёт продаж (строки дата×час×блюдо, скидки учтены, closed+refunded) */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalesReportResult"];
                     };
                 };
             };
@@ -8855,7 +9679,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["WaiterAppInfo"];
+                        "application/json": components["schemas"]["AppDistInfo"];
                     };
                 };
             };
@@ -8885,7 +9709,7 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content: {
-                        "application/json": components["schemas"]["WaiterAppInfo"];
+                        "application/json": components["schemas"]["AppDistInfo"];
                     };
                 };
             };
@@ -8904,6 +9728,113 @@ export interface paths {
             cookie?: never;
         };
         /** Публичное скачивание APK официанта (по QR в LAN, без авторизации) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description APK файл */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/vnd.android.package-archive": string;
+                    };
+                };
+                /** @description APK ещё не загружен */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/zakup-app": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Состояние APK закупщика (есть ли, версия, размер, дата) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppDistInfo"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Загрузить новый APK закупщика (multipart "file", optional "version") */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "multipart/form-data": {
+                        /** Format: binary */
+                        file?: string;
+                        version?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AppDistInfo"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/download/zakup.apk": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Публичное скачивание APK закупщика (по QR в LAN, без авторизации) */
         get: {
             parameters: {
                 query?: never;
@@ -9050,6 +9981,282 @@ export interface paths {
                     };
                     content: {
                         "application/json": components["schemas"]["FinancialOperation"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/accounts/balance-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Остаток по счетам на каждый день периода
+         * @description История остатков восстанавливается обратным ходом от текущего баланса (financial_accounts.balance — скаляр «сейчас», таблицы снимков нет): closing(D) = balance_now − Σ(приход − расход) за все дни после D. Период ограничен 400 днями.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description YYYY-MM-DD, по умолчанию 30 дней назад */
+                    from?: string;
+                    /** @description YYYY-MM-DD, по умолчанию сегодня */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["AccountBalanceHistory"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/accrual": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Начислено за период по сотрудникам
+         * @description Для оклада (pay_type=monthly) — сумма из карточки, от периода не зависит. Для дневной оплаты (daily) — daily_rate × число дней с отметкой в табеле: день считается отработанным, если в нём есть хотя бы одна отметка прихода (две отметки в один день = один день).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description YYYY-MM-DD включительно */
+                    from?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: components["schemas"]["SalaryAccrualRow"][];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/worked-days": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Отработанные дни сотрудника (табель + ручные отметки) за период */
+        get: {
+            parameters: {
+                query?: {
+                    user_id?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    from?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkedDaysResult"];
+                    };
+                };
+            };
+        };
+        /**
+         * Заменить ручные отметки дней сотрудника в периоде
+         * @description Идемпотентно заменяет РУЧНЫЕ отметки (salary_worked_days) в [from, to] на переданный набор dates. Табель (реальные приходы) не трогает.
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_id?: string;
+                        from?: string;
+                        to?: string;
+                        dates?: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkedDaysResult"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Отчёт по зарплате — кому сколько выдали и когда
+         * @description Агрегация financial_operations категорий «Зарплата», «Аванс» и «Сервис» за период: сводка по сотрудникам + плоский список выплат со счётом.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description YYYY-MM-DD включительно */
+                    from?: string;
+                    /** @description YYYY-MM-DD включительно */
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/deductions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История удержаний сотрудника */
+        get: {
+            parameters: {
+                query: {
+                    user_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryDeductionList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /**
+         * Удержание из зарплаты с обязательной причиной
+         * @description Заменяет прежний счётчик users.deductions без единой записи о том, за что удержали. НЕ создаёт FinancialOperation — деньги не выданы, им неоткуда "выходить"; это только уменьшение будущей выплаты.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SalaryDeductionInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryDeduction"];
                     };
                 };
             };
@@ -9346,6 +10553,10 @@ export interface paths {
                                 count?: number;
                                 amount?: string;
                             }[];
+                            /** @description Сумма возвратов покупателям за смену (нал+безнал) */
+                            refunds_total?: string;
+                            /** @description Количество возвратов (чеков) за смену */
+                            refunds_count?: number;
                             previous?: {
                                 revenue?: string;
                                 orders_count?: number;
@@ -9618,6 +10829,11 @@ export interface paths {
                         description?: string;
                         /** @description Категория расхода (только для expense/cash_out). Структурное поле для свода/экспорта/X-Z. */
                         category?: string;
+                        /**
+                         * Format: uuid
+                         * @description Счёт расхода. Пусто → счёт смены (наличный). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает.
+                         */
+                        account_id?: string;
                     };
                 };
             };
@@ -10789,6 +12005,11 @@ export interface components {
             menu_item_id?: string;
             name?: string;
             sort_order?: number;
+            /**
+             * Format: uuid
+             * @description Если задан — значения зеркалятся из шкалы размеров, а не вводятся вручную.
+             */
+            size_scale_id?: string | null;
         };
         MenuAttributeValue: {
             /** Format: uuid */
@@ -10797,6 +12018,11 @@ export interface components {
             attribute_id?: string;
             label?: string;
             sort_order?: number;
+            /**
+             * Format: uuid
+             * @description Какое значение шкалы (SizeScaleValue) зеркалит эта строка.
+             */
+            size_scale_value_id?: string | null;
         };
         MenuAttributeWithValues: components["schemas"]["MenuAttribute"] & {
             values?: components["schemas"]["MenuAttributeValue"][];
@@ -10814,6 +12040,11 @@ export interface components {
                 /** Format: uuid */
                 id?: string;
                 name: string;
+                /**
+                 * Format: uuid
+                 * @description Если задан — values должен быть пустым: значения зеркалятся из шкалы размеров.
+                 */
+                size_scale_id?: string;
                 values: {
                     /** Format: uuid */
                     id?: string;
@@ -10838,6 +12069,43 @@ export interface components {
         };
         MenuCategoriesList: {
             data?: components["schemas"]["MenuCategory"][];
+        };
+        SizeScale: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        SizeScaleValue: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            size_scale_id?: string;
+            code?: string;
+            title?: string | null;
+            sort_order?: number;
+            is_default?: boolean;
+        };
+        SizeScaleWithValues: components["schemas"]["SizeScale"] & {
+            values?: components["schemas"]["SizeScaleValue"][];
+        };
+        SizeScaleInput: {
+            name?: string;
+            /** @description Если передан — полностью заменяет текущие значения шкалы (delete+recreate). */
+            values?: {
+                /** Format: uuid */
+                id?: string;
+                code: string;
+                title?: string;
+                sort_order?: number;
+                is_default?: boolean;
+            }[];
+        };
+        SizeScalesList: {
+            data?: components["schemas"]["SizeScaleWithValues"][];
         };
         Zone: {
             /** Format: uuid */
@@ -10952,15 +12220,13 @@ export interface components {
             data?: components["schemas"]["StockReceipt"][];
             next_cursor?: string;
         };
+        StockReturnsList: {
+            data?: components["schemas"]["StockReturn"][];
+            next_cursor?: string;
+        };
         StockWriteoffsList: {
             data?: components["schemas"]["StockWriteoff"][];
             next_cursor?: string;
-        };
-        ConfirmReceiptInput: {
-            /** Format: uuid */
-            account_id?: string;
-            /** @enum {string} */
-            payment_type?: "paid" | "credit";
         };
         InventoryChecksList: {
             data?: components["schemas"]["InventoryCheck"][];
@@ -11044,6 +12310,78 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+            /** @description Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части». */
+            returned_total?: components["schemas"]["Decimal"];
+            /** @description Только при ?include=lines. */
+            lines?: {
+                /** Format: uuid */
+                id?: string;
+                ingredient_id?: string | null;
+                name?: string | null;
+                qty?: components["schemas"]["Decimal"];
+                unit?: string | null;
+                price_per_unit?: components["schemas"]["Decimal"];
+                /** @description Сколько ещё можно вернуть поставщику по этой строке, В ЕДИНИЦАХ НАКЛАДНОЙ. Считает бэк по тому же правилу, что guard в POST /stock/returns: min(принято − Σ неотменённых возвратов, фактический остаток товара). Клиенту считать это самому нельзя: он не знает про отменённые возвраты и путает единицы склада с единицами накладной. */
+                available_to_return?: components["schemas"]["Decimal"];
+            }[];
+        };
+        /** @description Возврат поставщику испорченного/битого товара. Зеркало приёмки: склад −qty (stock_movements type=return_supplier), откат средневзвешенной себестоимости, возврат денег/долга. Не путать со списанием: списание — наш убыток и бьёт по прибыли, возврат — сторно закупки. */
+        ReturnInput: {
+            /**
+             * Format: uuid
+             * @description Накладная, по которой возвращаем. Цена возврата берётся из её строк, а не из средневзвешенной себестоимости склада — поставщик отдаёт ровно ту сумму, что взял.
+             */
+            receipt_id: string;
+            /** @description YYYY-MM-DD, по умолчанию сегодня */
+            date?: string;
+            /** @enum {string} */
+            reason: "spoilage" | "breakage" | "expired" | "other";
+            note?: string;
+            /**
+             * @description Ветки взаимоисключающие, выбор диктует остаток долга поставщику debtRoom = min(receipt.debt_amount, supplier.current_debt). debt — долг есть (debtRoom > 0): уменьшаются обе стороны — stock_receipts.debt_amount и suppliers.current_debt (RecomputeDebts считает current_debt как Σ debt_amount − Σ оплат, поэтому тронуть надо обе). 409, если гасить нечего или сумма больше debtRoom (смешанный случай — оформить двумя возвратами: на debtRoom в долг, остаток деньгами). money — долга нет: financial_accounts.balance += сумма и financial_operation (type=in, category=stock_purchase). 409, если по накладной есть непогашенный долг — иначе получили бы деньги за неоплаченный товар и остались должны. Категория stock_purchase, а не доход: возврат схлопывается с закупкой, ОПиУ не показывает фейковую выручку. Идемпотентность — на Idempotency-Key, не на source_ref.
+             * @enum {string}
+             */
+            refund_type: "debt" | "money";
+            /**
+             * Format: uuid
+             * @description Куда пришли деньги. Обязателен при refund_type=money.
+             */
+            account_id?: string;
+            lines: {
+                /**
+                 * Format: uuid
+                 * @description Строка накладной. Σ возвратов по ней не может превысить принятое qty (иначе 409).
+                 */
+                receipt_line_id: string;
+                qty: components["schemas"]["Decimal"];
+            }[];
+        };
+        StockReturn: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            receipt_id?: string;
+            /** Format: uuid */
+            supplier_id?: string | null;
+            supplier_name?: string | null;
+            date?: string | null;
+            /** @enum {string} */
+            reason?: "spoilage" | "breakage" | "expired" | "other";
+            note?: string | null;
+            total_amount?: components["schemas"]["Decimal"];
+            /** @enum {string} */
+            refund_type?: "debt" | "money";
+            /** Format: uuid */
+            account_id?: string | null;
+            created_by?: string | null;
+            /**
+             * Format: date-time
+             * @description Сторно: товар вернулся на склад, деньги/долг откатились
+             */
+            cancelled_at?: string | null;
+            cancelled_by?: string | null;
+            /** Format: date-time */
+            created_at?: string;
         };
         StockTransfersList: {
             data?: components["schemas"]["StockTransfer"][];
@@ -11199,6 +12537,8 @@ export interface components {
             lines: {
                 /** Format: uuid */
                 ingredient_id: string;
+                /** @enum {string} */
+                kind?: "ingredient" | "semi" | "batch";
                 actual_qty: components["schemas"]["Decimal"];
             }[];
         };
@@ -11247,6 +12587,11 @@ export interface components {
             description?: string;
             /** @description Категория расхода; NULL для внесения/изъятия */
             category?: string | null;
+            /**
+             * Format: uuid
+             * @description Счёт операции; NULL → счёт смены (наличный ящик). ≠ счёту смены → безналичная операция, наличный ящик не трогает.
+             */
+            account_id?: string | null;
         };
         ShiftsList: {
             data?: components["schemas"]["CashShift"][];
@@ -11297,6 +12642,20 @@ export interface components {
             kitchen_started_at?: string;
             is_split?: boolean;
             split_count?: number;
+            /** @description Контакты доставки — заполняются на оплате заказа type='delivery' */
+            delivery_phone?: string;
+            delivery_address?: string;
+            /** @description Состав оплаты. С 3.16.111 заполняется и для одиночной оплаты (один элемент), поэтому «чем и на какой счёт заплатили» доступно единообразно. */
+            payments?: components["schemas"]["OrderPaymentPart"][];
+        };
+        OrderPaymentPart: {
+            /** @enum {string} */
+            method?: "cash" | "card" | "transfer";
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+            /** @description Имя счёта на момент оплаты (денормализовано) */
+            account_name?: string;
         };
         PaymentSplit: {
             /** @enum {string} */
@@ -11377,6 +12736,13 @@ export interface components {
             service_amount?: components["schemas"]["Decimal"];
             /** Format: date-time */
             created_at?: string;
+            /** @description cash|card|transfer|split */
+            payment_method?: string;
+            is_split?: boolean;
+            /** @description Состав оплаты — заполнен и для одиночной оплаты (один элемент). */
+            payments?: components["schemas"]["OrderPaymentPart"][];
+            delivery_phone?: string;
+            delivery_address?: string;
             /** @description Заполняется только при ?include=items. Иначе отсутствует. */
             items?: components["schemas"]["OrderItem"][];
         };
@@ -11390,12 +12756,17 @@ export interface components {
             name?: string;
             /** @enum {string} */
             kind?: "receipt" | "station";
+            /** @description Legacy (до 053) — первый цех списка stations */
             station?: string;
+            /** @description Цехи станционного принтера (053) — их позиции печатаются одним бегунком */
+            stations?: string[];
             /** @enum {string} */
-            driver?: "tcp" | "usb" | "virtual" | "mock";
+            driver?: "tcp" | "usb" | "system" | "virtual" | "mock";
             target?: string;
             /** @description 32=58mm, 42-48=80mm */
             cols?: number;
+            /** @description Таблица символов ESC t n. 17=PC866 (дефолт). Часть принтеров держит кириллицу на другом номере */
+            codepage?: number;
             is_default?: boolean;
             enabled?: boolean;
             print_logo?: boolean;
@@ -11408,12 +12779,16 @@ export interface components {
             name?: string;
             /** @enum {string} */
             kind?: "receipt" | "station";
+            /** @description Legacy — эквивалент stations из одного цеха */
             station?: string;
+            /** @description Цехи станционного принтера; на PATCH список заменяется целиком. Цех может принадлежать максимум одному принтеру (409 при конфликте) */
+            stations?: string[];
             /** @enum {string} */
-            driver?: "tcp" | "usb" | "virtual" | "mock";
-            /** @description host[:port] — для tcp; :9100 добавляется автоматически если не указан */
+            driver?: "tcp" | "usb" | "system" | "virtual" | "mock";
+            /** @description tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues */
             target?: string;
             cols?: number;
+            codepage?: number;
             is_default?: boolean;
             enabled?: boolean;
             print_logo?: boolean;
@@ -11424,6 +12799,17 @@ export interface components {
         };
         PrintersList: {
             data?: components["schemas"]["Printer"][];
+        };
+        SystemPrintQueue: {
+            /** @description Имя очереди в ОС — оно же target принтера с driver=system */
+            name?: string;
+            /** @description Принтер по умолчанию в ОС */
+            is_default?: boolean;
+            /** @description idle/printing/offline — если ОС отдаёт состояние (CUPS); на Windows пусто */
+            status?: string;
+        };
+        SystemPrintQueuesList: {
+            data?: components["schemas"]["SystemPrintQueue"][];
         };
         PrintJob: {
             /** Format: uuid */
@@ -11494,12 +12880,18 @@ export interface components {
             station?: string;
             salary?: components["schemas"]["Decimal"];
             hourly_rate?: components["schemas"]["Decimal"];
+            /**
+             * @description Тип оплаты труда (054): оклад или ставка за день
+             * @enum {string}
+             */
+            pay_type?: "monthly" | "daily";
+            daily_rate?: components["schemas"]["Decimal"];
         };
         UserInput: {
             name?: string;
             username?: string;
             /** @enum {string} */
-            role?: "cashier" | "cook" | "waiter" | "manager" | "owner";
+            role?: "cashier" | "cook" | "waiter" | "manager" | "owner" | "storekeeper" | "accountant";
             pin?: string;
             password?: string;
             phone?: string;
@@ -11507,6 +12899,12 @@ export interface components {
             station?: string;
             salary?: components["schemas"]["Decimal"];
             hourly_rate?: components["schemas"]["Decimal"];
+            /**
+             * @description Тип оплаты труда (054): оклад или ставка за день
+             * @enum {string}
+             */
+            pay_type?: "monthly" | "daily";
+            daily_rate?: components["schemas"]["Decimal"];
         };
         UsersList: {
             data?: components["schemas"]["User"][];
@@ -11597,6 +12995,7 @@ export interface components {
             phone?: string;
             currency?: string;
             service_percent?: components["schemas"]["Decimal"];
+            discount_approval_threshold?: components["schemas"]["Decimal"];
             timezone?: string;
             enforce_stock_check?: boolean;
             tech_cards_enabled?: boolean;
@@ -11606,6 +13005,14 @@ export interface components {
             pin_lock_timeout_min?: number;
             supply_allow_negative?: boolean;
             on_screen_keyboard_enabled?: boolean;
+            tables_enabled?: boolean;
+            kitchen_on_pay?: boolean;
+            pos_v2_default?: boolean;
+            menu_sort_by_sales?: boolean;
+            /** @description Показывать «Доставка» третьим типом заказа в POS */
+            delivery_enabled?: boolean;
+            /** @description Спрашивать телефон и адрес перед оплатой заказа-доставки */
+            delivery_contacts_required?: boolean;
             /** Format: date-time */
             license_expires_at?: string;
             is_blocked?: boolean;
@@ -11617,6 +13024,8 @@ export interface components {
             phone?: string;
             currency?: string;
             service_percent?: components["schemas"]["Decimal"];
+            /** @description Скидка выше этого % требует одобрения менеджера/владельца (default 10) */
+            discount_approval_threshold?: components["schemas"]["Decimal"];
             timezone?: string;
             enforce_stock_check?: boolean;
             tech_cards_enabled?: boolean;
@@ -11626,6 +13035,12 @@ export interface components {
             pin_lock_timeout_min?: number;
             supply_allow_negative?: boolean;
             on_screen_keyboard_enabled?: boolean;
+            tables_enabled?: boolean;
+            kitchen_on_pay?: boolean;
+            pos_v2_default?: boolean;
+            menu_sort_by_sales?: boolean;
+            delivery_enabled?: boolean;
+            delivery_contacts_required?: boolean;
         };
         BootstrapInput: {
             restaurant_name: string;
@@ -11873,6 +13288,11 @@ export interface components {
             name?: string;
             output_unit?: string;
             yield_percent?: components["schemas"]["Decimal"];
+            /**
+             * Format: uuid
+             * @description Тег «это заготовка вот этого размера» (например «Тесто-30» → значение «30»).
+             */
+            size_scale_value_id?: string | null;
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
@@ -11882,6 +13302,8 @@ export interface components {
             name?: string;
             output_unit?: string;
             yield_percent?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            size_scale_value_id?: string;
         };
         SemiTypesList: {
             data?: components["schemas"]["SemiFinishedType"][];
@@ -11914,6 +13336,10 @@ export interface components {
             /** @enum {string} */
             type?: "cash" | "bank" | "card" | "other";
             balance?: components["schemas"]["Decimal"];
+            /** @description Счёт предлагается при оплате и в операциях. Отключённый счёт остаётся со всей историей и остатком, но исчезает из выбора. */
+            is_enabled?: boolean;
+            /** Format: date-time */
+            disabled_at?: string | null;
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */
@@ -11968,6 +13394,51 @@ export interface components {
         };
         FinancialOperationsList: {
             data?: components["schemas"]["FinancialOperation"][];
+            next_cursor?: string;
+        };
+        RecurringPayment: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            category?: string;
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+            /** @enum {string} */
+            activity?: "operational" | "investment" | "financial";
+            counterparty?: string;
+            day_of_month?: number;
+            /** @description YYYY-MM-DD — следующая дата платежа */
+            next_due?: string;
+            /** Format: date-time */
+            last_paid_at?: string;
+            active?: boolean;
+            note?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        RecurringPaymentInput: {
+            name?: string;
+            category?: string;
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+            activity?: string;
+            counterparty?: string;
+            day_of_month?: number;
+            active?: boolean;
+            note?: string;
+        };
+        /** @description amount/account_id необязательны — по умолчанию из шаблона. */
+        RecurringPaymentPayInput: {
+            amount?: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id?: string;
+        };
+        RecurringPaymentsList: {
+            data?: components["schemas"]["RecurringPayment"][];
             next_cursor?: string;
         };
         AccountTransferInput: {
@@ -12197,7 +13668,7 @@ export interface components {
             to?: string;
             insights?: components["schemas"]["Insight"][];
         };
-        WaiterAppInfo: {
+        AppDistInfo: {
             available?: boolean;
             /** @description versionName из APK, напр. 0.2.16 */
             version?: string;
@@ -12310,6 +13781,51 @@ export interface components {
             margin_percent?: components["schemas"]["Decimal"];
             rows?: components["schemas"]["FoodCostRow"][];
         };
+        SalesReportRow: {
+            date?: string;
+            hour?: number;
+            menu_item_id?: string | null;
+            name?: string;
+            category?: string;
+            is_purchased?: boolean;
+            qty?: components["schemas"]["Decimal"];
+            revenue?: components["schemas"]["Decimal"];
+        };
+        SalesReportDay: {
+            date?: string;
+            orders?: number;
+            qty?: components["schemas"]["Decimal"];
+            revenue?: components["schemas"]["Decimal"];
+        };
+        ShiftBalanceFixLine: {
+            account_id?: string;
+            account_name?: string;
+            balance_now?: components["schemas"]["Decimal"];
+            correction?: components["schemas"]["Decimal"];
+            balance_after?: components["schemas"]["Decimal"];
+            ops_count?: number;
+        };
+        ShiftBalanceFixResult: {
+            already_applied?: boolean;
+            /** Format: date-time */
+            applied_at?: string | null;
+            cutoff?: string;
+            total_correction?: components["schemas"]["Decimal"];
+            lines?: components["schemas"]["ShiftBalanceFixLine"][];
+        };
+        SalesReportResult: {
+            period?: {
+                from?: string;
+                to?: string;
+            };
+            rows?: components["schemas"]["SalesReportRow"][];
+            by_date?: components["schemas"]["SalesReportDay"][];
+            totals?: {
+                revenue?: components["schemas"]["Decimal"];
+                qty?: components["schemas"]["Decimal"];
+                orders?: number;
+            };
+        };
         FoodCostMonth: {
             /** @description YYYY-MM */
             month?: string;
@@ -12402,6 +13918,110 @@ export interface components {
             employee_name?: string;
             period?: string;
             description?: string;
+            /**
+             * @description salary — окончательный расчёт (категория «Зарплата»), advance — аванс (категория «Аванс»). Пусто → salary. До разделения категорий оба вида писались как «Зарплата» и отчёт не мог их разделить.
+             * @enum {string}
+             */
+            kind?: "salary" | "advance";
+            /** @description Провести сумму выше расчётного остатка осознанно (бонус, доплата, коррекция) вместо блокировки сервером. Требует override_reason. */
+            override?: boolean;
+            /** @description Обязательна при override=true и реальном превышении остатка. */
+            override_reason?: string;
+        };
+        AccountBalanceHistory: {
+            from?: string;
+            to?: string;
+            accounts?: components["schemas"]["AccountPeriodSummary"][];
+            days?: components["schemas"]["AccountBalanceDay"][];
+        };
+        AccountPeriodSummary: {
+            /** Format: uuid */
+            account_id?: string;
+            account_name?: string;
+            /** @enum {string} */
+            account_type?: "cash" | "bank";
+            current_balance?: components["schemas"]["Decimal"];
+            opening_balance?: components["schemas"]["Decimal"];
+            in?: components["schemas"]["Decimal"];
+            out?: components["schemas"]["Decimal"];
+            closing_balance?: components["schemas"]["Decimal"];
+        };
+        AccountBalanceDay: {
+            date?: string;
+            in?: components["schemas"]["Decimal"];
+            out?: components["schemas"]["Decimal"];
+            closing_balance?: components["schemas"]["Decimal"];
+            /** @description account_id → остаток на конец дня */
+            per_account?: {
+                [key: string]: components["schemas"]["Decimal"];
+            };
+        };
+        SalaryAccrualRow: {
+            /** Format: uuid */
+            user_id?: string;
+            user_name?: string;
+            position?: string;
+            role?: string;
+            /** @enum {string} */
+            pay_type?: "monthly" | "daily";
+            salary?: components["schemas"]["Decimal"];
+            daily_rate?: components["schemas"]["Decimal"];
+            /** @description Дней с отметкой в табеле за период */
+            days_worked?: number;
+            accrued?: components["schemas"]["Decimal"];
+            advance?: components["schemas"]["Decimal"];
+            deductions?: components["schemas"]["Decimal"];
+        };
+        WorkedDaysResult: {
+            /** @description Дни с приходом в табеле (снять нельзя) */
+            shift_dates?: string[];
+            /** @description Ручные отметки (toggleable) */
+            manual_dates?: string[];
+            /** @description Уникальных отработанных дней всего */
+            count?: number;
+        };
+        SalaryReport: {
+            from?: string;
+            to?: string;
+            rows?: components["schemas"]["SalaryReportRow"][];
+            payouts?: components["schemas"]["SalaryPayoutRow"][];
+            totals?: components["schemas"]["SalaryReportTotals"];
+        };
+        SalaryReportRow: {
+            user_id?: string;
+            user_name?: string;
+            position?: string;
+            role?: string;
+            salary?: components["schemas"]["Decimal"];
+            salary_paid?: components["schemas"]["Decimal"];
+            advance_paid?: components["schemas"]["Decimal"];
+            service_paid?: components["schemas"]["Decimal"];
+            total?: components["schemas"]["Decimal"];
+            payouts_count?: number;
+            last_payout_at?: string;
+        };
+        SalaryPayoutRow: {
+            /** Format: uuid */
+            id?: string;
+            date?: string;
+            user_id?: string;
+            user_name?: string;
+            /** @enum {string} */
+            kind?: "salary" | "advance" | "service";
+            amount?: components["schemas"]["Decimal"];
+            account_id?: string;
+            account_name?: string;
+            description?: string;
+            /** @description Выплата выше расчётного остатка, проведённая осознанно (ЗП-4). */
+            is_override?: boolean;
+        };
+        SalaryReportTotals: {
+            salary_paid?: components["schemas"]["Decimal"];
+            advance_paid?: components["schemas"]["Decimal"];
+            service_paid?: components["schemas"]["Decimal"];
+            total?: components["schemas"]["Decimal"];
+            employees?: number;
+            payouts?: number;
         };
         ServiceChargePayInput: {
             /** Format: uuid */
@@ -12412,6 +14032,32 @@ export interface components {
             period_from?: string;
             period_to?: string;
             description?: string;
+            /** Format: uuid */
+            shift_id?: string;
+            /** @description См. SalaryPayInput.override — тот же принцип для обслуживания. */
+            override?: boolean;
+            override_reason?: string;
+        };
+        SalaryDeduction: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            amount?: components["schemas"]["Decimal"];
+            reason?: string;
+            created_by?: string;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        SalaryDeductionInput: {
+            /** Format: uuid */
+            user_id: string;
+            amount: components["schemas"]["Decimal"];
+            /** @description Обязательна — единственная цель записи в том, чтобы не терять «за что удержали». */
+            reason: string;
+        };
+        SalaryDeductionList: {
+            data?: components["schemas"]["SalaryDeduction"][];
         };
         ServiceAccrual: {
             /** Format: uuid */

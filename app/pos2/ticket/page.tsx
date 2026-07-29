@@ -6,6 +6,8 @@ import { LayoutGrid, RefreshCw, Plus, Minus, CreditCard, XCircle, Trash2, X, Arr
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { fetchOrders, fetchTables, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, assignWaiter, fetchUsers, transferOrder, splitOrderEqual, splitOrderByItems, fetchOrderSplits, paySplit, cancelSplits, fetchFinancialAccounts, setOrderItemNote, fetchActiveShift } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
+import { useDataSync } from '@/hooks/use-data-sync'
 import { formatCurrency, calcLineTotal, calcOrderDisplayTotal } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { buildItemAssignments, isSplitValid } from '@/lib/pos-v2/split'
@@ -69,13 +71,17 @@ export default function PosV2Ticket() {
     } finally { setLoading(false) }
   }, [orderId])
 
+  const loadAccounts = useCallback(() => fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}), [])
   useEffect(() => {
     load()
-    fetchFinancialAccounts().then(setAccounts).catch(() => {})
+    loadAccounts()
     fetchUsers().then(u => setWaiters(u.filter(x => x.role === 'waiter'))).catch(() => {})
-  }, [load])
+  }, [load, loadAccounts])
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
 
-  const label = order ? (order.type === 'hall' ? `Стол ${order.tableId ? (tableNo.get(order.tableId) ?? '—') : '—'}` : 'С собой') : ''
+  const label = order ? (order.type === 'hall' ? `Стол ${order.tableId ? (tableNo.get(order.tableId) ?? '—') : '—'}` : order.type === 'delivery' ? 'Доставка' : 'С собой') : ''
   const items = order?.items ?? []
   const liveItems = items.filter(i => !i.cancelledAt)
 

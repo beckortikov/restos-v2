@@ -54,15 +54,23 @@ type ReceiptInput struct {
 	WaiterName     string
 	TableLabel     string
 	GuestsCount    int
-	Items          []ReceiptItem
-	Subtotal       decimal.Decimal
-	DiscountAmount decimal.Decimal
-	ServiceAmount  decimal.Decimal
-	TipAmount      decimal.Decimal
-	Total          decimal.Decimal
-	PaymentMethod  string
-	Cols           int
-	IsReprint      bool
+	// Контакты доставки (052) — печатаются на ГОСТЕВОМ чеке для type='delivery':
+	// чек уходит с едой, курьер берёт телефон и адрес отсюда. На кухонный
+	// бегунок они НЕ идут — повару адрес клиента не нужен. Пусто для зала/с собой.
+	DeliveryPhone   string
+	DeliveryAddress string
+	Items           []ReceiptItem
+	Subtotal        decimal.Decimal
+	DiscountAmount  decimal.Decimal
+	ServiceAmount   decimal.Decimal
+	TipAmount       decimal.Decimal
+	Total           decimal.Decimal
+	PaymentMethod   string
+	Cols            int
+	IsReprint       bool
+	// FastFood — ресторан работает без столов (restaurants.tables_enabled=false):
+	// гость забирает заказ по номеру. Включает крупный номер шапкой чека.
+	FastFood bool
 	// Content suppress-flags (миграция 015).
 	SuppressLogo     bool
 	SuppressDiscount bool
@@ -70,6 +78,10 @@ type ReceiptInput struct {
 	ShowTip          bool
 	ShowQRFeedback   bool
 	QRFeedbackURL    string
+	// Codepage — номер таблицы символов принтера (ESC t n). 0 → 17 (PC866).
+	// Вынесен в настройку, потому что единой нумерации нет: часть принтеров
+	// держит кириллицу на другом индексе и незнакомый номер игнорирует.
+	Codepage byte
 }
 
 // ReceiptItem — одна позиция в чеке.
@@ -106,7 +118,7 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	hrHeavy := strings.Repeat("=", cols)
 	hrLight := strings.Repeat("-", cols)
 
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 
 	// v1: bold ON для всего чека — на термопринтерах non-bold печатает блекло.
 	b.Bold(true)
@@ -122,6 +134,18 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 		if in.RestaurantAddr != "" {
 			b.TextLn(in.RestaurantAddr)
 		}
+		b.TextLn(hrHeavy)
+	}
+
+	// ── Фастфуд: крупный номер заказа шапкой ─────────────────────────────
+	// Гость забирает заказ по номеру, поэтому число идёт ПЕРВЫМ и самым
+	// крупным кеглем (6×) — читается через зал. В зале с официантами номер
+	// гостю не нужен, поэтому только при FastFood.
+	if in.FastFood {
+		b.TextLn("ВАШ НОМЕР")
+		b.FontBig()
+		b.TextLn(strconv.Itoa(in.OrderNumber))
+		b.FontNormal()
 		b.TextLn(hrHeavy)
 	}
 
@@ -153,13 +177,30 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 			b.TextLn(PadRow(k, v, cols))
 		}
 	}
-	writeMeta("Чек №", orderRef)
+	if !in.FastFood {
+		// В фастфуде номер уже напечатан крупно шапкой — не дублируем.
+		writeMeta("Чек №", orderRef)
+	}
 	writeMeta("Дата", dateStr)
 	writeMeta("", in.TableLabel)
-	writeMeta("Официант", in.WaiterName)
+	// В фастфуде официантов нет — заказ принимает кассир за стойкой. Строка
+	// «Официант» на гостевом чеке дублировала бы «Кассир» тем же именем.
+	// Кухонный бегунок ниже прячет её по тому же признаку.
+	if !in.FastFood {
+		writeMeta("Официант", in.WaiterName)
+	}
 	writeMeta("Кассир", in.CashierName)
 	if in.GuestsCount > 0 {
 		writeMeta("Гостей", strconv.Itoa(in.GuestsCount))
+	}
+	// Контакты доставки — на гостевом чеке (курьер забирает еду вместе с чеком).
+	// Телефон строкой meta, адрес — отдельной строкой на всю ширину (переносит
+	// сам принтер). Раньше этот блок печатался на кухонном бегунке — убрали.
+	if in.DeliveryPhone != "" {
+		writeMeta("Тел", in.DeliveryPhone)
+	}
+	if in.DeliveryAddress != "" {
+		writeMeta("", "Адрес: "+in.DeliveryAddress)
 	}
 
 	// ── Items header ──────────────────────────────────────────────────────
@@ -252,6 +293,16 @@ type RunnerInput struct {
 	Items       []RunnerItem
 	Comment     string
 	Cols        int // игнорируется, runner всегда 32 cols
+	// FastFood — крупный номер заказа вместо станции шапкой (см. ReceiptInput).
+	FastFood bool
+	// OrderType — «Зал» / «С собой» / «Доставка». В фастфуде печатается в шапке
+	// (время · ТИП) вместо станции: на одной кухне повару полезнее знать способ
+	// выдачи, чем цех. Пусто → печатается только время.
+	OrderType string
+	// Codepage — номер таблицы символов принтера (ESC t n). 0 → 17 (PC866).
+	// Вынесен в настройку, потому что единой нумерации нет: часть принтеров
+	// держит кириллицу на другом индексе и незнакомый номер игнорирует.
+	Codepage byte
 }
 
 // RunnerItem — позиция для повара.
@@ -294,6 +345,15 @@ func fmtWeightQty(q decimal.Decimal, unit string) string {
 
 // fmtRunnerQty — «x2» для штучных, «250г» / «1,5кг» для весовых.
 // Порт логики из v1 lib/print-service.ts:155-160.
+// runnerItemLine — строка позиции: имя слева, количество прижато вправо.
+func runnerItemLine(name, qty string, cols int) string {
+	pad := cols - visibleRuneCount(name) - visibleRuneCount(qty)
+	if pad < 1 {
+		pad = 1
+	}
+	return name + spaces(pad) + qty
+}
+
 func fmtRunnerQty(it RunnerItem) string {
 	switch it.Unit {
 	case "g", "kg":
@@ -311,66 +371,132 @@ func fmtRunnerQty(it RunnerItem) string {
 	}
 }
 
+// fmtRunnerQtyLead — количество как ВЕДУЩИЙ токен (фастфуд, количество впереди):
+// «2×» для штучных, вес — как есть («250г», «1,5кг × 3»). Отличается от
+// fmtRunnerQty порядком: там число прижато вправо строкой «x2».
+func fmtRunnerQtyLead(it RunnerItem) string {
+	switch it.Unit {
+	case "g", "kg":
+		return fmtRunnerQty(it)
+	default:
+		n := it.Qty
+		if it.Count > 1 {
+			n = it.Qty * it.Count
+		}
+		return strconv.Itoa(n) + "×"
+	}
+}
+
 // RunnerLayout — ранер на станцию. Порт buildEscPosRunner() из v1.
 //
-// КРИТИЧНО: используется FontTall (GS ! 01 = double-height, single-width)
-// для items, а НЕ FontDouble (GS ! 11). Иначе на 80mm бумаге длинные
-// названия блюд («Шашлык куриный») переносятся и обрезаются ножом до того
-// как принтер допечатал содержимое.
+// Позиции печатаются БЕЗ растяжения по осям (1×1). Прежний FontTall
+// (1× ширина × 2× высота) давал узкие вытянутые буквы: заголовок цеха,
+// набранный вдвое мельче, но естественными пропорциями, читался лучше самих
+// названий блюд. FontDouble (2×2) не берём — в 16 колонок не влезает почти
+// ни одно реальное название, и каждое пришлось бы переносить.
 func RunnerLayout(in RunnerInput) []byte {
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 
-	// ── Station header — центр, bold, double-height ──────────────────────
-	b.AlignCenter().Bold(true).FontTall()
-	b.TextLn(strings.ToUpper(in.Station))
-	b.FontNormal().Bold(false)
+	timeStr := in.CreatedAt.In(displayLoc).Format("15:04")
+
+	// ── Шапка ────────────────────────────────────────────────────────────
+	// Фастфуд: номер заказа ВМЕСТО станции — повару он нужен, чтобы собрать
+	// заказ и выкрикнуть его, поэтому число идёт первым и крупнее названий
+	// блюд (6×). Станция уходит подписью. В зале с официантами наоборот:
+	// станция важнее (несколько цехов), номер — служебная строка.
+	if in.FastFood {
+		b.AlignCenter().Bold(true)
+		b.FontBig()
+		b.TextLn(strconv.Itoa(in.OrderNumber))
+		b.FontNormal()
+		// Подпись под номером: время и ТИП заказа (Зал/С собой/Доставка).
+		// Станцию не печатаем — на фастфуде кухня одна, а тип важнее для выдачи.
+		sub := timeStr
+		if in.OrderType != "" {
+			sub = timeStr + " · " + strings.ToUpper(in.OrderType)
+		}
+		b.TextLn(sub)
+		b.Bold(false)
+	} else {
+		// 2×2, а не 1×2: заголовку тоже не нужны вытянутые буквы. Имя цеха
+		// короткое и в 16 колонок влезает, так что растягивать нечего.
+		b.AlignCenter().Bold(true).FontDouble()
+		b.TextLn(strings.ToUpper(in.Station))
+		b.FontNormal().Bold(false)
+	}
 
 	// Разделитель 32 char (v1 hard-coded).
 	b.TextLn("________________________________")
 
 	// ── Order info — left align ──────────────────────────────────────────
 	b.AlignLeft()
-	timeStr := in.CreatedAt.In(displayLoc).Format("15:04")
-	dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
-	if in.WaiterName != "" {
-		dateLine += " " + in.WaiterName
-	}
-	b.TextLn(dateLine)
-
-	// Стол + зона — bold
-	if in.TableLabel != "" {
-		b.Bold(true).TextLn(in.TableLabel).Bold(false)
-	}
-	b.TextLn("--------------------------------")
-
-	// ── Items — bold + double-height (НЕ double-width!) ──────────────────
-	b.FontTall().Bold(true)
-	for _, it := range in.Items {
-		qty := fmtRunnerQty(it)
-		name := it.Name
-		// padding до ширины 20 (v1: pad = max(0, 20 - len(name) - len(qty)))
-		nameLen := visibleRuneCount(name)
-		qtyLen := visibleRuneCount(qty)
-		pad := 20 - nameLen - qtyLen
-		if pad < 1 {
-			pad = 1
+	// В фастфуде шапка самодостаточна (номер + время + тип). Официант, кассир и
+	// число гостей повару не нужны — печать этих полей убрана из кухонного чека.
+	// В зале — служебная строка: время, номер заказа, официант, стол+зона.
+	if !in.FastFood {
+		dateLine := timeStr + " Зак: " + strconv.Itoa(in.OrderNumber)
+		if in.WaiterName != "" {
+			dateLine += " " + in.WaiterName
 		}
-		b.TextLn(name + spaces(pad) + qty)
+		b.TextLn(dateLine)
+		if in.TableLabel != "" {
+			b.Bold(true).TextLn(in.TableLabel).Bold(false)
+		}
+	}
+
+	// Контакты доставки (телефон/адрес) на кухонный бегунок НЕ печатаем — повару
+	// данные клиента не нужны, они уходят на гостевой чек (курьер забирает еду
+	// с чеком). См. ReceiptInput.DeliveryPhone/DeliveryAddress.
+	//
+	// Разделитель перед позициями: в зале — всегда; в фастфуде не нужен — шапку
+	// уже отделило подчёркивание, второй разделитель подряд = пустой шум сверху.
+	if !in.FastFood {
+		b.TextLn("--------------------------------")
+	}
+
+	// ── Items ────────────────────────────────────────────────────────────
+	// Зал (несколько цехов): имя слева, количество справа, растянутая высота
+	// (GS ! 0x01 — двойная высота, ОДИНАРНАЯ ширина, все 32 колонки ленты).
+	// Двойную ширину (2×2, как в фастфуде) сознательно не берём: в 16 колонок
+	// не влезает почти ни одно реальное название зального меню, пришлось бы
+	// переносить (пробовали и откатили в v3.16.121→122). FontTall даёт узкие
+	// вытянутые буквы — на фастфуде это признали нечитаемым и в v3.16.150
+	// заменили на 2×2, но там жалоба была именно про фастфуд-бегунок: на
+	// зальном 0x01 читался нормально, поэтому возвращаем его сюда явно.
+	//
+	// Фастфуд: имя блюда КРУПНО (2×2 — двойная ширина И высота) и жирным, как
+	// кухонный чек iiko: повар читает его через зал. Количество — ведущим
+	// токеном («2×»). Длинное имя (16 колонок в 2×) переносит сам принтер —
+	// это осознанно: крупно и читаемо важнее, чем «в одну строку». Между
+	// блюдами — пустая строка, чтобы список сканировался быстрее.
+	for i, it := range in.Items {
+		if in.FastFood {
+			if i > 0 {
+				b.LF()
+			}
+			b.FontDouble().Bold(true)
+			b.TextLn(fmtRunnerQtyLead(it) + " " + strings.ToUpper(it.Name))
+			b.FontNormal().Bold(false)
+		} else {
+			// Шрифт — на КАЖДОЙ позиции, а не один раз до цикла: иначе после
+			// модификаторов предыдущего блюда (они сбрасывают в FontNormal)
+			// имя следующего блюда молча печаталось бы мелким.
+			b.FontTall().Bold(true)
+			b.TextLn(runnerItemLine(it.Name, fmtRunnerQty(it), ColsRunner))
+			b.FontNormal().Bold(false)
+		}
 		if len(it.Modifiers) > 0 {
 			// Modifiers — normal size
 			b.FontNormal()
 			for _, m := range it.Modifiers {
 				b.TextLn("  + " + m)
 			}
-			b.FontTall()
 		}
 		if it.Comment != "" {
 			b.FontNormal()
 			b.TextLn("  ! " + it.Comment)
-			b.FontTall()
 		}
 	}
-	b.Bold(false).FontNormal()
 
 	// ── Comment ──────────────────────────────────────────────────────────
 	if in.Comment != "" {
@@ -398,16 +524,32 @@ type CancelRunnerInput struct {
 	Items       []RunnerItem
 	Reason      string
 	Cols        int
+	// FastFood — крупный номер заказа шапкой, как в обычном бегунке.
+	// Без него отмена приходила с мелким «Зак: 1», и повар не мог сопоставить
+	// её со стопкой чеков, где номера напечатаны 6× — а сопоставить надо
+	// быстро, блюдо уже в работе.
+	FastFood bool
+	// Codepage — номер таблицы символов принтера (ESC t n). 0 → 17 (PC866).
+	// Вынесен в настройку, потому что единой нумерации нет: часть принтеров
+	// держит кириллицу на другом индексе и незнакомый номер игнорирует.
+	Codepage byte
 }
 
 // CancelRunnerLayout — отмена. Порт buildEscPosCancellation() из v1.
 // БОЛЬШОЙ alert-блок (double-width + double-height + bold), чтобы повар
 // гарантированно увидел отмену.
 func CancelRunnerLayout(in CancelRunnerInput) []byte {
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 
 	// ── Section 1: station header centered ──────────────────────────────
+	// Фастфуд: номер заказа первым и крупно — тем же кеглем, что в обычном
+	// бегунке, иначе отмену не сопоставить со стопкой чеков на полке.
 	b.AlignCenter()
+	if in.FastFood {
+		b.Bold(true).FontBig()
+		b.TextLn(strconv.Itoa(in.OrderNumber))
+		b.FontNormal().Bold(false)
+	}
 	b.TextLn("(" + strings.ToUpper(in.Station) + ")")
 	b.TextLn("================================")
 
@@ -434,18 +576,19 @@ func CancelRunnerLayout(in CancelRunnerInput) []byte {
 	b.FontNormal().Bold(false).AlignLeft()
 	b.TextLn("--------------------------------")
 
-	// ── Section 4: items (bold + double-height) ─────────────────────────
-	b.FontTall().Bold(true)
+	// ── Section 4: items ────────────────────────────────────────────────
+	// Зал — тот же кегль, что в обычном бегунке (FontTall, см. RunnerLayout):
+	// повар сверяет отмену с бегунком, строки должны выглядеть одинаково,
+	// иначе сопоставлять их труднее. Фастфуд здесь не трогаем — формат его
+	// отмены не менялся.
+	if !in.FastFood {
+		b.FontTall().Bold(true)
+	} else {
+		b.FontNormal().Bold(true)
+	}
 	for _, it := range in.Items {
 		qty := fmtRunnerQty(it)
-		name := "X " + it.Name
-		nameLen := visibleRuneCount(name)
-		qtyLen := visibleRuneCount(qty)
-		pad := 20 - nameLen - qtyLen
-		if pad < 1 {
-			pad = 1
-		}
-		b.TextLn(name + spaces(pad) + qty)
+		b.TextLn(runnerItemLine("X "+it.Name, qty, ColsRunner))
 	}
 	b.Bold(false).FontNormal()
 	b.TextLn("--------------------------------")
@@ -491,6 +634,8 @@ type ReportInput struct {
 	// Безнал в разрезе счетов (Банк А / Банк Б). Сумма строк = CardRevenue.
 	CardByBank []ReportBankLine
 	Cols       int
+	// Codepage — таблица символов принтера (ESC t n). 0 → 17 (PC866).
+	Codepage byte
 }
 
 // XReportLayout — промежуточный отчёт.
@@ -515,6 +660,8 @@ type ServiceReportInput struct {
 	ClosedAt       time.Time
 	Waiters        []ServiceWaiterLine
 	Cols           int
+	// Codepage — таблица символов принтера (ESC t n). 0 → 17 (PC866).
+	Codepage byte
 }
 
 // ServiceReportLayout — чек по сервисному сбору за смену (рядом с X/Z).
@@ -523,7 +670,7 @@ func ServiceReportLayout(in ServiceReportInput) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 	b.Bold(true)
 	b.AlignCenter().FontTall().TextLn("ОБСЛУЖИВАНИЕ").FontNormal()
 	b.TextLn(in.RestaurantName)
@@ -566,7 +713,7 @@ func reportLayout(in ReportInput, title string, withClosing bool) []byte {
 	if cols == 0 {
 		cols = Cols80
 	}
-	b := NewBuilder().Init().DisableKanji().CodePageCP866().CharsetRussia()
+	b := beginPayload(in.Codepage)
 	b.Bold(true)
 
 	b.AlignCenter().FontTall().TextLn(title).FontNormal()

@@ -21,6 +21,20 @@ interface KdsApi {
 
     @GET("api/v1/kds/stations")
     suspend fun stations(): StationsResponse
+
+    /** Меню — для экрана стоп-листа кухни (постранично, MaxLimit=200). */
+    @GET("api/v1/menu/items")
+    suspend fun menuItems(
+        @Query("limit") limit: Int = 200,
+        @Query("cursor") cursor: String? = null,
+    ): MenuItemsResponse
+
+    /** Поставить/снять ручной стоп на блюдо (повар: «закончилось»). */
+    @POST("api/v1/stop-list/{id}/override")
+    suspend fun setStopOverride(
+        @Path("id") menuItemId: String,
+        @Body body: StopOverrideRequest,
+    ): MenuItemDto
 }
 
 interface BootstrapApi {

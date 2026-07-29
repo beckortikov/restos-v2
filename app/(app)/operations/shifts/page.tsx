@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { OwnerPinGate } from '@/components/owner-pin-gate'
@@ -8,6 +8,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { dAdd, dSub, dSum } from '@/lib/decimal'
 import { type CashShift, type CashShiftOperation, type FinancialAccount, type Order } from '@/lib/types'
 import { fetchActiveShift, fetchShifts, openShift, closeShift, addShiftOperation, createShiftExpense, deleteShiftExpense, fetchShiftOperations, fetchShiftRevenue, fetchShiftZReport, fetchFinancialAccounts, fetchUsers, fetchServiceAccrualByShift, fetchServicePayoutByShift, payServiceCharge, patchShiftAccount, printShiftZ, printShiftX, printShiftService, fetchOrders, cancelOrder, type ShiftZReport } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { Play, Square, ArrowDownToLine, ArrowUpFromLine, Clock, Receipt, ChevronDown, ChevronRight, ShoppingBag, Wallet, Banknote, HandCoins, FileDown, Trash2, Users, BarChart3, Tag, MapPin, CreditCard, Printer, ArrowUp, ArrowDown, AlertTriangle, Ban } from 'lucide-react'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { toast } from 'sonner'
@@ -16,8 +17,24 @@ import { V4Error } from '@/lib/api'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
+import { confirmDialog } from '@/lib/confirm'
 
 const EXPENSE_CATEGORIES = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
+
+// Внутренняя метка авто-зеркал cash_out (возврат/выплата/списание со счёта),
+// которую ставит бэк при оттоке денег со счёта открытой смены. Возврат-зеркало
+// (описание «Возврат заказа #…») выносим в отдельную строку «Возвраты», прочие
+// авто-зеркала показываем как «Списание со счёта» — сырую метку не светим.
+const AUTO_MIRROR_CAT = '__auto_mirror__'
+const REFUND_DESC_PREFIX = 'Возврат заказа #'
+
+// склонение слова «чек» по количеству (1 чек, 2 чека, 5 чеков).
+function checksWord(n: number): string {
+  const d = n % 10, dd = n % 100
+  if (d === 1 && dd !== 11) return 'чек'
+  if (d >= 2 && d <= 4 && (dd < 12 || dd > 14)) return 'чека'
+  return 'чеков'
+}
 
 // DeltaChip — маленький бейдж «↑ +5% к прошлой смене» под KPI-числом.
 // Серый «—» если предыдущее значение 0 (деление на ноль) или previous отсутствует.
@@ -102,15 +119,27 @@ function ClosedShiftZBreakdown({ z, loading }: { z: ShiftZReport | null; loading
                 <span className="text-muted-foreground">Выручка</span>
                 <span className="font-medium tabular-nums">{formatCurrency(revenueTotal)}</span>
               </div>
-              {z.expensesTotal > 0 && (
+              {z.expensesTotalAll > 0 && (
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Расход</span>
-                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.expensesTotal)}</span>
+                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.expensesTotalAll)}</span>
+                </div>
+              )}
+              {z.withdrawals > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Изъятия</span>
+                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.withdrawals)}</span>
+                </div>
+              )}
+              {z.refundsCount > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Возвраты · {z.refundsCount} чек{z.refundsCount === 1 ? '' : z.refundsCount < 5 ? 'а' : 'ов'}</span>
+                  <span className="font-medium tabular-nums text-destructive">−{formatCurrency(z.refundsTotal)}</span>
                 </div>
               )}
               <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
                 <span>Итог</span>
-                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotal)}</span>
+                <span className="tabular-nums">{formatCurrency(revenueTotal - z.expensesTotalAll - z.withdrawals - z.refundsTotal)}</span>
               </div>
             </div>
           )}
@@ -276,6 +305,10 @@ export default function ShiftsPage() {
   // подгружаем их отдельно и даём отменить прямо здесь.
   const [stuckOrders, setStuckOrders] = useState<Order[] | null>(null)
   const [cancellingStuckId, setCancellingStuckId] = useState<string | null>(null)
+  // Синхронный гвард поверх confirmDialog(): в отличие от window.confirm()
+  // (блокировал JS-поток сам), async-диалог не мешает второму тапу открыть
+  // второй диалог поверх первого, пока первый ещё висит.
+  const confirmBusyRef = useRef(false)
 
   // Cash operation form
   const [showOp, setShowOp] = useState<'cash_in' | 'cash_out' | null>(null)
@@ -291,6 +324,11 @@ export default function ShiftsPage() {
   const [expAmount, setExpAmount] = useState(0)
   const [expCategory, setExpCategory] = useState(EXPENSE_CATEGORIES[0])
   const [expDesc, setExpDesc] = useState('')
+  // Безналичные счета (банк/карта) — для безналичного расхода. Расход нал →
+  // счёт смены (ящик), безнал → выбранный банк-счёт (ящик не трогает).
+  const [nonCashAccounts, setNonCashAccounts] = useState<FinancialAccount[]>([])
+  const [expenseCash, setExpenseCash] = useState(true)
+  const [expenseBankId, setExpenseBankId] = useState('')
 
   // Service-charge accruals during the active shift
   const [waiterServiceRows, setWaiterServiceRows] = useState<Array<{
@@ -351,7 +389,7 @@ export default function ShiftsPage() {
 
   useEffect(() => {
     reload().finally(() => setLoading(false))
-    fetchFinancialAccounts().then(accs => {
+    fetchFinancialAccounts().then(selectableAccounts).then(accs => {
       // Раньше показывали ТОЛЬКО type='cash'. Но юзер мог создать счёт с
       // именем «Касса» но type='bank' (бывший default'ом в /finance/accounts
       // до v2.0.98), и форма смены показывала «Нет счёта типа Касса» даже
@@ -361,6 +399,9 @@ export default function ShiftsPage() {
       const list = cashOnly.length > 0 ? cashOnly : accs
       setCashAccounts(list)
       if (list.length > 0) setOpenAccountId(list[0].id)
+      const bank = accs.filter(a => a.type !== 'cash')
+      setNonCashAccounts(bank)
+      if (bank.length > 0) setExpenseBankId(prev => prev || bank[0].id)
     }).catch(() => {})
   }, [reload])
 
@@ -388,8 +429,11 @@ export default function ShiftsPage() {
 
   const expectedAtClose = useMemo(() => {
     if (!activeShift) return 0
-    const cashIn = dSum(shiftOps.filter(o => o.type === 'cash_in').map(o => o.amount))
-    const cashOut = dSum(shiftOps.filter(o => o.type === 'cash_out').map(o => o.amount))
+    // Наличный ящик трогают только операции без своего счёта или на счёте смены.
+    // Безналичный расход (accountId = банк-счёт) в кассовую математику не идёт.
+    const drawer = (o: CashShiftOperation) => !o.accountId || o.accountId === activeShift.accountId
+    const cashIn = dSum(shiftOps.filter(o => o.type === 'cash_in' && drawer(o)).map(o => o.amount))
+    const cashOut = dSum(shiftOps.filter(o => o.type === 'cash_out' && drawer(o)).map(o => o.amount))
     return dSub(dAdd(dAdd(activeShift.openingBalance, liveRevenue.cashRevenue), cashIn), cashOut)
   }, [activeShift, shiftOps, liveRevenue.cashRevenue])
 
@@ -398,12 +442,15 @@ export default function ShiftsPage() {
   const cashMovement = useMemo(() => {
     const cashIn = dSum(shiftOps.filter(o => o.type === 'cash_in').map(o => o.amount))
     const withdrawalOps = shiftOps.filter(o => o.type === 'cash_out' && !o.category)
-    const expenseOps = shiftOps.filter(o => o.type === 'cash_out' && !!o.category)
+    // Возврат-зеркало (авто-зеркало с описанием «Возврат заказа #…») исключаем из
+    // расходов — оно показывается отдельной строкой «Возвраты» (не задваиваем).
+    const expenseOps = shiftOps.filter(o => o.type === 'cash_out' && !!o.category
+      && !(o.category === AUTO_MIRROR_CAT && (o.description ?? '').startsWith(REFUND_DESC_PREFIX)))
     const withdrawals = dSum(withdrawalOps.map(o => o.amount))
     const expensesTotal = dSum(expenseOps.map(o => o.amount))
     const byCat = new Map<string, { amount: number; count: number }>()
     for (const o of expenseOps) {
-      const c = o.category || 'Прочее'
+      const c = o.category === AUTO_MIRROR_CAT ? 'Списание со счёта' : (o.category || 'Прочее')
       const cur = byCat.get(c) ?? { amount: 0, count: 0 }
       cur.amount += o.amount
       cur.count++
@@ -511,7 +558,7 @@ export default function ShiftsPage() {
   const handleExpense = async () => {
     if (!activeShift || expAmount <= 0) return
     try {
-      await createShiftExpense(activeShift.id, expAmount, expCategory, expDesc, user?.id)
+      await createShiftExpense(activeShift.id, expAmount, expCategory, expDesc, expenseCash ? undefined : expenseBankId)
       toast.success('Расход оформлен')
       setShowExpense(false)
       setExpAmount(0)
@@ -524,28 +571,46 @@ export default function ShiftsPage() {
   }
 
   const handleDeleteExpense = async (opId: string, amount: number, description?: string) => {
-    const ok = window.confirm(
-      `Удалить расход «${description ?? 'Расход'}» на сумму ${formatCurrency(amount)}? ` +
-      `Это действие нельзя отменить, баланс счёта будет скорректирован.`
-    )
-    if (!ok) return
+    // НЕ window.confirm: нативный диалог в Electron ломает фокус инпутов
+    // после закрытия (electron/electron#19977 и класс дублей — экранная
+    // клавиатура, живущая только на focusin, переставала открываться).
+    if (confirmBusyRef.current) return
+    confirmBusyRef.current = true
     try {
-      await deleteShiftExpense(opId)
-      toast.success('Расход удалён')
-      await reload()
-    } catch (e) {
-      toast.error(humanizeError(e, 'Ошибка удаления расхода'))
-    }
+      const ok = await confirmDialog({
+        title: 'Удалить расход?',
+        message: `«${description ?? 'Расход'}» на сумму ${formatCurrency(amount)}. ` +
+          `Действие нельзя отменить, баланс счёта будет скорректирован.`,
+        confirmLabel: 'Удалить',
+        danger: true,
+      })
+      if (!ok) return
+      try {
+        await deleteShiftExpense(opId)
+        toast.success('Расход удалён')
+        await reload()
+      } catch (e) {
+        toast.error(humanizeError(e, 'Ошибка удаления расхода'))
+      }
+    } finally { confirmBusyRef.current = false }
   }
 
   const handleClose = async () => {
     if (!activeShift || !user) return
+    if (confirmBusyRef.current) return
     const unpaidService = waiterServiceRows.reduce((s, r) => s + r.toPay, 0)
     if (unpaidService > 0) {
-      const ok = window.confirm(
-        `Не выплачено обслуживание официантам: ${formatCurrency(unpaidService)}.\n` +
-        `Закрыть смену без выплаты? Сумма останется в отчёте «Обслуживание».`
-      )
+      confirmBusyRef.current = true
+      let ok: boolean
+      try {
+        ok = await confirmDialog({
+          title: 'Закрыть смену без выплаты?',
+          message: `Не выплачено обслуживание официантам: ${formatCurrency(unpaidService)}.\n` +
+            `Сумма останется в отчёте «Обслуживание».`,
+          confirmLabel: 'Закрыть смену',
+          danger: true,
+        })
+      } finally { confirmBusyRef.current = false }
       if (!ok) return
     }
     setStuckOrders(null)
@@ -587,17 +652,28 @@ export default function ShiftsPage() {
   }
 
   const handleCancelStuckOrder = async (orderId: string) => {
-    if (!window.confirm('Отменить этот заказ? Он мешает закрыть смену — отмена нужна, чтобы освободить смену.')) return
-    setCancellingStuckId(orderId)
+    if (confirmBusyRef.current) return
+    confirmBusyRef.current = true
     try {
-      await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены')
-      setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId))
-      toast.success('Заказ отменён')
-    } catch (e) {
-      toast.error(humanizeError(e, 'Не удалось отменить заказ'))
-    } finally {
-      setCancellingStuckId(null)
-    }
+      const ok = await confirmDialog({
+        title: 'Отменить заказ?',
+        message: 'Он мешает закрыть смену — отмена нужна, чтобы освободить смену.',
+        confirmLabel: 'Отменить заказ',
+        cancelLabel: 'Оставить',
+        danger: true,
+      })
+      if (!ok) return
+      setCancellingStuckId(orderId)
+      try {
+        await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены')
+        setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId))
+        toast.success('Заказ отменён')
+      } catch (e) {
+        toast.error(humanizeError(e, 'Не удалось отменить заказ'))
+      } finally {
+        setCancellingStuckId(null)
+      }
+    } finally { confirmBusyRef.current = false }
   }
 
   const handlePrintZ = async (shiftId: string) => {
@@ -940,6 +1016,8 @@ export default function ShiftsPage() {
                     {(() => {
                       const revenueTotal = zReport.revenueByMethod.reduce((s, m) => s + m.total, 0)
                       const expenses = cashMovement.expensesTotal
+                      const refunds = zReport.refundsTotal
+                      const refundsN = zReport.refundsCount
                       return (
                         <>
                           <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between">
@@ -952,9 +1030,15 @@ export default function ShiftsPage() {
                               <span className="font-medium tabular-nums text-destructive">−{formatCurrency(expenses)}</span>
                             </div>
                           )}
+                          {refundsN > 0 && (
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Возвраты · {refundsN} {checksWord(refundsN)}</span>
+                              <span className="font-medium tabular-nums text-destructive">−{formatCurrency(refunds)}</span>
+                            </div>
+                          )}
                           <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between font-semibold">
                             <span>Итог</span>
-                            <span className="tabular-nums">{formatCurrency(revenueTotal - expenses)}</span>
+                            <span className="tabular-nums">{formatCurrency(revenueTotal - expenses - refunds)}</span>
                           </div>
                         </>
                       )
@@ -1089,7 +1173,7 @@ export default function ShiftsPage() {
 
           {/* Cash operations summary */}
           {shiftOps.length > 0 && (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <div className={`grid grid-cols-2 gap-3 ${zReport && zReport.refundsCount > 0 ? 'md:grid-cols-5' : 'md:grid-cols-4'}`}>
               <div className="bg-muted/50 rounded-lg p-3">
                 <p className="text-xs text-muted-foreground">Нач. остаток</p>
                 <p className="text-sm font-bold text-foreground">{formatCurrency(activeShift.openingBalance)}</p>
@@ -1106,6 +1190,12 @@ export default function ShiftsPage() {
                 <p className="text-xs text-muted-foreground">Расходы</p>
                 <p className="text-sm font-bold text-destructive">{formatCurrency(cashMovement.expensesTotal)}</p>
               </div>
+              {zReport && zReport.refundsCount > 0 && (
+                <div className="bg-muted/50 rounded-lg p-3">
+                  <p className="text-xs text-muted-foreground">Возвраты · {zReport.refundsCount} {checksWord(zReport.refundsCount)}</p>
+                  <p className="text-sm font-bold text-destructive">−{formatCurrency(zReport.refundsTotal)}</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1126,6 +1216,7 @@ export default function ShiftsPage() {
                   <div key={op.id} className="flex items-center justify-between gap-2 text-sm bg-white/60 dark:bg-black/20 rounded-lg px-3 py-2">
                     <div className="min-w-0">
                       <span className="font-medium text-foreground">{op.category}</span>
+                      {op.accountId && op.accountId !== activeShift.accountId && <span className="ml-1.5 rounded bg-primary/10 text-primary px-1.5 py-0.5 text-[10px] font-bold">безнал</span>}
                       {op.description && <span className="text-muted-foreground"> · {op.description}</span>}
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -1261,7 +1352,7 @@ export default function ShiftsPage() {
               <ArrowUpFromLine className="size-4" />Изъятие
             </button>
             <button
-              onClick={() => { setShowExpense(true); setExpAmount(0); setExpDesc(''); setExpCategory(EXPENSE_CATEGORIES[0]) }}
+              onClick={() => { setShowExpense(true); setExpAmount(0); setExpDesc(''); setExpCategory(EXPENSE_CATEGORIES[0]); setExpenseCash(true) }}
               disabled={!activeShift.accountId}
               title={!activeShift.accountId ? 'У смены не указан счёт' : ''}
               className="flex items-center justify-center gap-1.5 px-3 py-2.5 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 transition-colors disabled:opacity-50"
@@ -1321,7 +1412,27 @@ export default function ShiftsPage() {
                 <input value={expDesc} onChange={e => setExpDesc(e.target.value)} placeholder="Куда пошли деньги"
                   className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
               </div>
-              <p className="text-[11px] text-muted-foreground">Списание со счёта «{activeShift.accountName || 'Касса'}» и в журнал смены.</p>
+              {/* Наличные (счёт смены) или безналичные (банк-счёт). Безнал дебетует
+                  свой счёт, наличный ящик не трогает. Показываем только при наличии
+                  безналичного счёта. */}
+              {nonCashAccounts.length > 0 && (
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1">Откуда</label>
+                  <div className="flex gap-2">
+                    {([[true, 'Наличные'], [false, 'Безналичные']] as const).map(([isCash, lbl]) => (
+                      <button key={lbl} type="button" onClick={() => setExpenseCash(isCash)}
+                        className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${expenseCash === isCash ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground border-border hover:bg-muted'}`}>{lbl}</button>
+                    ))}
+                  </div>
+                  {!expenseCash && (
+                    <select value={expenseBankId} onChange={e => setExpenseBankId(e.target.value)}
+                      className="mt-2 w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30">
+                      {nonCashAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  )}
+                </div>
+              )}
+              <p className="text-[11px] text-muted-foreground">{expenseCash ? `Списание со счёта «${activeShift.accountName || 'Касса'}» и в журнал смены.` : 'Безналичный расход: списание с банк-счёта, наличный ящик не трогает.'}</p>
               <div className="flex gap-2">
                 <button onClick={handleExpense} disabled={expAmount <= 0}
                   className="px-4 py-2 bg-rose-600 text-white rounded-lg text-sm font-medium hover:bg-rose-700 disabled:opacity-50">

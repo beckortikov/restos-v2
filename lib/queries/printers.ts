@@ -11,7 +11,11 @@ type DBPrinter = {
   is_default: boolean
   target: string
   station?: string | null
+  // Цехи станционного принтера (053) — печатаются одним бегунком.
+  // station — legacy-поле, первый цех списка.
+  stations?: string[]
   cols?: number
+  codepage?: number
   print_logo?: boolean
   print_discount?: boolean
   print_service?: boolean
@@ -24,15 +28,33 @@ export async function listPrinters(): Promise<DBPrinter[]> {
   return res?.data ?? []
 }
 
+// SystemQueue — очередь печати, зарегистрированная в ОС кассы. Имя очереди —
+// это и есть target принтера с driver='system'.
+export type SystemQueue = {
+  name: string
+  is_default?: boolean
+  status?: string
+}
+
+// listSystemQueues — очереди печати машины, где работает Go-бэк (касса).
+// Не путать с принтерами того устройства, где открыт браузер: при заходе
+// через LAN Web Access список всё равно приходит с кассы.
+export async function listSystemQueues(): Promise<SystemQueue[]> {
+  const res: any = await unwrap(api.GET('/api/v1/printers/system-queues'))
+  return res?.data ?? []
+}
+
 export type PrinterFormPayload = {
   name?: string
   kind?: 'receipt' | 'station'
-  driver?: 'virtual' | 'tcp' | 'usb' | 'mock'
+  driver?: 'virtual' | 'tcp' | 'usb' | 'system' | 'mock'
   target?: string
   is_default?: boolean
   enabled?: boolean
   station?: string
+  stations?: string[]
   cols?: number
+  codepage?: number
   print_logo?: boolean
   print_discount?: boolean
   print_service?: boolean
@@ -51,6 +73,16 @@ export async function updatePrinter(
 ): Promise<DBPrinter> {
   const res: any = await unwrap(
     api.PATCH('/api/v1/printers/{id}', { params: { path: { id } }, body: input as any }),
+  )
+  return res
+}
+
+// probePrinterCodepage — POST /printers/{id}/codepage-probe. Печатает одну
+// русскую строку несколькими кодовыми таблицами с подписью номера: так
+// подбирается codepage для принтера, который печатает кириллицу мусором.
+export async function probePrinterCodepage(id: string): Promise<{ id: string; status: string }> {
+  const res: any = await unwrap(
+    api.POST('/api/v1/printers/{id}/codepage-probe', { params: { path: { id } } } as any),
   )
   return res
 }

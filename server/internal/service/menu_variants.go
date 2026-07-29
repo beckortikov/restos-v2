@@ -58,10 +58,14 @@ type comboPrice struct {
 }
 
 // MenuAttributeInput — атрибут в PUT-запросе. Порядок массивов = sort_order.
+// SizeScaleID переключает атрибут в режим «значения из шкалы размеров»:
+// Values в этом случае должен быть пустым — значения зеркалятся из шкалы
+// сервисом (см. syncAttributeDefs), а не приходят от клиента.
 type MenuAttributeInput struct {
-	ID     *string                   `json:"id,omitempty"`
-	Name   string                    `json:"name"`
-	Values []MenuAttributeValueInput `json:"values"`
+	ID          *string                   `json:"id,omitempty"`
+	Name        string                    `json:"name"`
+	Values      []MenuAttributeValueInput `json:"values"`
+	SizeScaleID *string                   `json:"size_scale_id,omitempty"`
 }
 
 // SyncAttributesInput — body PUT /menu/items/{id}/attributes.
@@ -209,7 +213,7 @@ func (s *MenuService) SyncAttributes(ctx context.Context, productID string, in S
 	prices := map[string]comboPrice{}
 	if len(in.Attributes) > 0 {
 		var perr error
-		if prices, perr = parseComboPrices(in); perr != nil {
+		if prices, perr = parsePricesMap(in); perr != nil {
 			return nil, perr
 		}
 	}
@@ -220,6 +224,17 @@ func (s *MenuService) SyncAttributes(ctx context.Context, productID string, in S
 		orderedAttrs, err := syncAttributeDefs(tx, rid, productID, in)
 		if err != nil {
 			return err
+		}
+		// Полнота комбинаций проверяется здесь, а не в validateAttributesInput:
+		// для scale-linked атрибутов количество/лейблы значений известны только
+		// после того, как syncAttributeDefs зеркалит их из шкалы размеров.
+		if err := validateComboCount(orderedAttrs); err != nil {
+			return err
+		}
+		if len(in.Attributes) > 0 {
+			if err := validateComboCompleteness(orderedAttrs, prices); err != nil {
+				return err
+			}
 		}
 		return s.syncVariants(tx, rid, &product, orderedAttrs, prices)
 	})
@@ -233,7 +248,6 @@ func validateAttributesInput(in SyncAttributesInput) error {
 	if len(in.Attributes) > maxAttributesPerItem {
 		return apperrors.Wrap("VALIDATION", "максимум 3 атрибута на товар", nil)
 	}
-	combos := 1
 	seenNames := map[string]bool{}
 	for _, a := range in.Attributes {
 		name := strings.TrimSpace(a.Name)
@@ -245,6 +259,16 @@ func validateAttributesInput(in SyncAttributesInput) error {
 			return apperrors.Wrap("VALIDATION", "атрибуты не могут повторяться: "+name, nil)
 		}
 		seenNames[key] = true
+
+		// Scale-linked: значения зеркалятся из шкалы (syncAttributeDefs), а не
+		// приходят от клиента — состав/количество проверяются после синка.
+		if a.SizeScaleID != nil && *a.SizeScaleID != "" {
+			if len(a.Values) > 0 {
+				return apperrors.Wrap("VALIDATION", "атрибут «"+name+"»: значения задаются шкалой размеров, values должен быть пустым", nil)
+			}
+			continue
+		}
+
 		if len(a.Values) == 0 {
 			return apperrors.Wrap("VALIDATION", "у атрибута «"+name+"» нет ни одного значения", nil)
 		}
@@ -263,14 +287,39 @@ func validateAttributesInput(in SyncAttributesInput) error {
 			}
 			seenLabels[lk] = true
 		}
-		combos *= len(a.Values)
+	}
+	return nil
+}
+
+// validateComboCount ограничивает число комбинаций (=произведение количества
+// значений по атрибутам) после того, как значения scale-linked атрибутов уже
+// разрешены из шкалы — до этого их количество неизвестно.
+func validateComboCount(orderedAttrs [][]syncedValue) error {
+	combos := 1
+	for _, vals := range orderedAttrs {
+		combos *= len(vals)
 	}
 	if combos > maxVariantsPerItem {
 		return apperrors.Wrap("VALIDATION", "слишком много комбинаций (максимум 60)", nil)
 	}
-	if len(in.Attributes) > 0 {
-		if _, err := parseComboPrices(in); err != nil {
-			return err
+	return nil
+}
+
+// validateComboCompleteness требует цену (> 0) для КАЖДОЙ комбинации
+// декартова произведения уже разрешённых значений (orderedAttrs), а не
+// исходных лейблов из payload'а — единообразно для freehand и scale-linked.
+func validateComboCompleteness(orderedAttrs [][]syncedValue, prices map[string]comboPrice) error {
+	if len(orderedAttrs) == 0 {
+		return nil
+	}
+	for _, combo := range cartesian(orderedAttrs) {
+		labels := make([]string, 0, len(combo))
+		for _, v := range combo {
+			labels = append(labels, v.Label)
+		}
+		cp, ok := prices[comboLabelKey(labels)]
+		if !ok || !cp.price.IsPositive() {
+			return apperrors.Wrap("VALIDATION", "не задана цена комбинации: "+strings.Join(labels, " "), nil)
 		}
 	}
 	return nil
@@ -285,9 +334,10 @@ func comboLabelKey(labels []string) string {
 	return strings.Join(trimmed, "\x1f")
 }
 
-// parseComboPrices валидирует combos[] и требует цену (> 0) для КАЖДОЙ
-// комбинации декартова произведения значений input'а.
-func parseComboPrices(in SyncAttributesInput) (map[string]comboPrice, error) {
+// parsePricesMap парсит combos[] в map по ключу лейблов. Полнота покрытия
+// (цена на каждую комбинацию) проверяется отдельно, validateComboCompleteness,
+// после того как значения атрибутов разрешены (см. SyncAttributes).
+func parsePricesMap(in SyncAttributesInput) (map[string]comboPrice, error) {
 	prices := make(map[string]comboPrice, len(in.Combos))
 	for _, c := range in.Combos {
 		key := comboLabelKey(c.Labels)
@@ -313,31 +363,6 @@ func parseComboPrices(in SyncAttributesInput) (map[string]comboPrice, error) {
 			cp.purchase = pp
 		}
 		prices[key] = cp
-	}
-	// Каждая комбинация должна получить цену > 0.
-	labelSets := make([][]string, 0, len(in.Attributes))
-	for _, a := range in.Attributes {
-		labels := make([]string, 0, len(a.Values))
-		for _, v := range a.Values {
-			labels = append(labels, strings.TrimSpace(v.Label))
-		}
-		labelSets = append(labelSets, labels)
-	}
-	comboLabels := [][]string{{}}
-	for _, labels := range labelSets {
-		next := make([][]string, 0, len(comboLabels)*len(labels))
-		for _, c := range comboLabels {
-			for _, l := range labels {
-				next = append(next, append(append([]string(nil), c...), l))
-			}
-		}
-		comboLabels = next
-	}
-	for _, labels := range comboLabels {
-		cp, ok := prices[comboLabelKey(labels)]
-		if !ok || !cp.price.IsPositive() {
-			return nil, apperrors.Wrap("VALIDATION", "не задана цена комбинации: "+strings.Join(labels, " "), nil)
-		}
 	}
 	return prices, nil
 }
@@ -367,7 +392,7 @@ func syncAttributeDefs(tx *gorm.DB, rid, productID string, in SyncAttributesInpu
 			}
 			if err := tx.Model(&models.MenuAttribute{}).
 				Where("id = ?", *ain.ID).
-				Updates(map[string]any{"name": name, "sort_order": i, "updated_at": now}).Error; err != nil {
+				Updates(map[string]any{"name": name, "sort_order": i, "size_scale_id": ain.SizeScaleID, "updated_at": now}).Error; err != nil {
 				return nil, err
 			}
 			keptAttrIDs[*ain.ID] = true
@@ -376,7 +401,7 @@ func syncAttributeDefs(tx *gorm.DB, rid, productID string, in SyncAttributesInpu
 		}
 		a := &models.MenuAttribute{
 			ID: uuid.NewString(), MenuItemID: productID, Name: name,
-			SortOrder: i, RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+			SortOrder: i, SizeScaleID: ain.SizeScaleID, RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(a).Error; err != nil {
 			return nil, err
@@ -405,10 +430,33 @@ func syncAttributeDefs(tx *gorm.DB, rid, productID string, in SyncAttributesInpu
 		existingValByID[v.ID] = v
 	}
 
+	// Зеркала scale-linked значений уже присутствующих у атрибута (для find-or-
+	// create по size_scale_value_id, вместо диффа по client-supplied id).
+	mirrorsByAttr := map[string]map[string]models.MenuAttributeValue{}
+	for _, v := range existingVals {
+		if v.SizeScaleValueID == nil {
+			continue
+		}
+		if mirrorsByAttr[v.AttributeID] == nil {
+			mirrorsByAttr[v.AttributeID] = map[string]models.MenuAttributeValue{}
+		}
+		mirrorsByAttr[v.AttributeID][*v.SizeScaleValueID] = v
+	}
+
 	orderedAttrs := make([][]syncedValue, 0, len(in.Attributes))
 	keptValIDs := map[string]bool{}
 	for ai, ain := range in.Attributes {
 		attrID := orderedAttrIDs[ai]
+
+		if ain.SizeScaleID != nil && *ain.SizeScaleID != "" {
+			vals, err := syncScaleLinkedValues(tx, rid, attrID, *ain.SizeScaleID, mirrorsByAttr[attrID], now, keptValIDs)
+			if err != nil {
+				return nil, err
+			}
+			orderedAttrs = append(orderedAttrs, vals)
+			continue
+		}
+
 		vals := make([]syncedValue, 0, len(ain.Values))
 		for vi, vin := range ain.Values {
 			label := strings.TrimSpace(vin.Label)
@@ -449,6 +497,51 @@ func syncAttributeDefs(tx *gorm.DB, rid, productID string, in SyncAttributesInpu
 		}
 	}
 	return orderedAttrs, nil
+}
+
+// syncScaleLinkedValues зеркалит значения шкалы размеров в menu_attribute_values
+// атрибута: find-or-create по size_scale_value_id (не по client id — клиент не
+// присылает values для scale-linked атрибута вовсе, см. validateAttributesInput).
+// Лейбл — Title шкалы, если задан, иначе Code («25»).
+func syncScaleLinkedValues(tx *gorm.DB, rid, attrID, scaleID string, mirrors map[string]models.MenuAttributeValue, now time.Time, keptValIDs map[string]bool) ([]syncedValue, error) {
+	var scaleValues []models.SizeScaleValue
+	if err := tx.Where("restaurant_id = ? AND size_scale_id = ?", rid, scaleID).
+		Order("sort_order ASC, created_at ASC").Find(&scaleValues).Error; err != nil {
+		return nil, err
+	}
+	if len(scaleValues) == 0 {
+		return nil, apperrors.Wrap("VALIDATION", "у выбранной шкалы размеров нет значений", nil)
+	}
+
+	vals := make([]syncedValue, 0, len(scaleValues))
+	for vi, sv := range scaleValues {
+		label := sv.Code
+		if sv.Title != nil && strings.TrimSpace(*sv.Title) != "" {
+			label = *sv.Title
+		}
+		if m, ok := mirrors[sv.ID]; ok {
+			if err := tx.Model(&models.MenuAttributeValue{}).
+				Where("id = ?", m.ID).
+				Updates(map[string]any{"label": label, "sort_order": vi, "updated_at": now}).Error; err != nil {
+				return nil, err
+			}
+			keptValIDs[m.ID] = true
+			vals = append(vals, syncedValue{ID: m.ID, Label: label})
+			continue
+		}
+		svID := sv.ID
+		v := &models.MenuAttributeValue{
+			ID: uuid.NewString(), AttributeID: attrID, Label: label,
+			SortOrder: vi, SizeScaleValueID: &svID, RestaurantID: &rid,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := tx.Create(v).Error; err != nil {
+			return nil, err
+		}
+		keptValIDs[v.ID] = true
+		vals = append(vals, syncedValue{ID: v.ID, Label: label})
+	}
+	return vals, nil
 }
 
 // comboKey — стабильный ключ комбинации: sorted value ids joined.
@@ -624,7 +717,166 @@ func (s *MenuService) syncVariants(tx *gorm.DB, rid string, product *models.Menu
 			return err
 		}
 	}
+
+	// Покупной продукт с вариациями: у каждого варианта — свой склад, у родителя
+	// нет. createVariant уже завёл ингредиенты новым вариантам; здесь досоздаём
+	// пропущенные (напр. вариации, жившие до конвертации в покупной) и снимаем
+	// фантом-ингредиент родителя, который создал CreateItem до знания об атрибутах.
+	if product.IsPurchased && len(combos) > 0 {
+		unitHint := parentBackingUnit(tx, rid, product.ID)
+		if err := s.ensureVariantsPurchasedBacking(tx, rid, product, unitHint, product.COGS, now); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// parentBackingUnit — единица backing-ингредиента продукта (для наследования
+// вариациями). Пусто → вызывающий подставит дефолт.
+func parentBackingUnit(tx *gorm.DB, rid, productID string) string {
+	var lines []models.TechCardLine
+	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", rid, productID).Find(&lines).Error; err != nil {
+		return ""
+	}
+	if len(lines) != 1 || lines[0].IngredientID == nil {
+		return ""
+	}
+	var ing models.Ingredient
+	if err := tx.Where("id = ?", *lines[0].IngredientID).First(&ing).Error; err != nil {
+		return ""
+	}
+	if ing.Unit != nil {
+		return *ing.Unit
+	}
+	return ""
+}
+
+// ensureVariantsPurchasedBacking гарантирует складской учёт покупного товара с
+// вариациями «по-вариантно»: у КАЖДОЙ живой вариации — свой ингредиент на складе
+// «Покупные» (0 остаток) + 1:1 техкарта, сама вариация помечена is_purchased.
+// Родительский backing-ингредиент (фантом «Кола») снимается — продукт с
+// вариациями напрямую не продаётся, склад под него не нужен.
+//
+// Идемпотентна: у вариации с готовым 1:1 покупным ингредиентом только
+// подтверждает склад/флаг, не плодит дубликаты. Вызывается из patchPurchased
+// (конвертация существующего блюда) и syncVariants (создание/досоздание
+// вариаций у покупного продукта).
+//
+// unitHint / priceFallback — единица и закупка для ВНОВЬ создаваемых
+// ингредиентов, если у вариации нет своей (cogs<=0).
+func (s *MenuService) ensureVariantsPurchasedBacking(tx *gorm.DB, rid string, product *models.MenuItem, unitHint string, priceFallback decimal.Decimal, now time.Time) error {
+	wid, err := resolveWarehouseID(tx, rid, false, true)
+	if err != nil {
+		return err
+	}
+	var variants []models.MenuItem
+	if err := tx.Where("restaurant_id = ? AND parent_id = ? AND is_deleted = ?", rid, product.ID, false).
+		Find(&variants).Error; err != nil {
+		return err
+	}
+	if len(variants) == 0 {
+		return nil // нет вариаций — этот путь не про нас
+	}
+	if unitHint == "" {
+		unitHint = "шт"
+	}
+	for i := range variants {
+		v := &variants[i]
+		nm := ""
+		if v.Name != nil {
+			nm = *v.Name
+		}
+		price := v.COGS
+		if !price.IsPositive() {
+			price = priceFallback
+		}
+		var lines []models.TechCardLine
+		if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", rid, v.ID).Find(&lines).Error; err != nil {
+			return err
+		}
+		if len(lines) == 1 && lines[0].IngredientID != nil {
+			// Уже есть 1:1 backing — только подтверждаем склад «Покупные».
+			if wid != nil {
+				if err := tx.Model(&models.Ingredient{}).Where("id = ?", *lines[0].IngredientID).
+					Update("warehouse_id", *wid).Error; err != nil {
+					return err
+				}
+			}
+		} else {
+			// Нет своего склада (обычная вариация до конвертации) — создаём
+			// ингредиент и заменяем техкарту на 1:1, как у одиночного покупного.
+			ing := &models.Ingredient{
+				ID: uuid.NewString(), Name: &nm, Category: product.Category,
+				Qty: decimal.Zero, MinQty: decimal.Zero, Unit: &unitHint, PricePerUnit: price,
+				WarehouseID: wid, RestaurantID: &rid,
+			}
+			if err := tx.Create(ing).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("menu_item_id = ?", v.ID).Delete(&models.TechCardLine{}).Error; err != nil {
+				return err
+			}
+			line := &models.TechCardLine{
+				ID: uuid.NewString(), MenuItemID: &v.ID, IngredientID: &ing.ID,
+				Name: &nm, Qty: decimal.MustFromString("1"), Unit: &unitHint, RestaurantID: &rid,
+			}
+			if err := tx.Create(line).Error; err != nil {
+				return err
+			}
+		}
+		// Вариация покупного продукта — тоже покупная (иначе POS/склад считают её
+		// готовящимся блюдом). cogs проставляем, если своей закупки не было.
+		vUpd := map[string]any{"updated_at": now}
+		if !v.IsPurchased {
+			vUpd["is_purchased"] = true
+		}
+		if !v.COGS.IsPositive() && price.IsPositive() {
+			vUpd["cogs"] = price
+		}
+		if len(vUpd) > 1 {
+			if err := tx.Model(&models.MenuItem{}).Where("id = ?", v.ID).Updates(vUpd).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return removeParentPhantomBacking(tx, rid, product.ID)
+}
+
+// removeParentPhantomBacking снимает backing-ингредиент продукта-контейнера
+// (у которого есть вариации): его создаёт CreateItem/patchPurchased до того, как
+// узнаёт про атрибуты, а продаётся только вариант. Удаляем ТОЛЬКО безопасный
+// фантом — пустой (qty 0) и без единого движения; со стоком/историей (была
+// приёмка или начальный остаток) ингредиент оставляем как есть.
+func removeParentPhantomBacking(tx *gorm.DB, rid, productID string) error {
+	var lines []models.TechCardLine
+	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", rid, productID).Find(&lines).Error; err != nil {
+		return err
+	}
+	if len(lines) != 1 || lines[0].IngredientID == nil {
+		return nil
+	}
+	ingID := *lines[0].IngredientID
+	var ing models.Ingredient
+	if err := tx.Where("id = ?", ingID).First(&ing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if ing.Qty.IsPositive() {
+		return nil
+	}
+	var mvCount int64
+	if err := tx.Model(&models.StockMovement{}).Where("ingredient_id = ?", ingID).Count(&mvCount).Error; err != nil {
+		return err
+	}
+	if mvCount > 0 {
+		return nil
+	}
+	if err := tx.Where("menu_item_id = ?", productID).Delete(&models.TechCardLine{}).Error; err != nil {
+		return err
+	}
+	return tx.Where("id = ?", ingID).Delete(&models.Ingredient{}).Error
 }
 
 // syncVariantIngredientPrice обновляет закупку backing-ингредиента варианта

@@ -42,12 +42,23 @@ const (
 	EventOrderItemVoided = "order.item.voided"
 	EventKDSItemUpdated  = "kds.item.updated"  // per-dish статус на кухне сменился (KDS)
 	EventKDSWaiterCalled = "kds.waiter.called" // повар вызвал официанта к кухне (KDS → официант)
+	EventStopListUpdated = "stop_list.updated" // блюдо поставили/сняли со стопа (кухня → касса/официант)
 	EventTableUpdated    = "table.updated"
 	EventStockMovement   = "stock.movement"
-	EventShiftOpened     = "shift.opened"
-	EventShiftClosed     = "shift.closed"
-	EventLicenseUpdated  = "license.updated" // state changed (грейс/локед) или активирован
-	EventLicenseWarning  = "license.warning" // clock drift / NTP mismatch (v2.6.0)
+	// Финансовая операция создана вручную (приход/расход/перевод). Складские и
+	// заказные проводки уже покрыты stock.movement / order.closed; это событие
+	// закрывает ручной ввод — без него остатки на счетах и реестр ДДС на других
+	// терминалах не обновлялись до F5.
+	EventFinanceOperation = "finance.operation"
+	// Счёт включён/отключён (is_enabled). Без этого открытые POS-терминалы
+	// держат счёт в памяти со старым состоянием до перезахода на экран —
+	// пикер продолжает предлагать уже отключённый счёт (сервер потом всё
+	// равно отклонит платёж через MustBeEnabled, но UX вводит в заблуждение).
+	EventFinanceAccountUpdated = "finance.account.updated"
+	EventShiftOpened           = "shift.opened"
+	EventShiftClosed           = "shift.closed"
+	EventLicenseUpdated        = "license.updated" // state changed (грейс/локед) или активирован
+	EventLicenseWarning        = "license.warning" // clock drift / NTP mismatch (v2.6.0)
 )
 
 // EventBuffer накапливает события внутри транзакции.

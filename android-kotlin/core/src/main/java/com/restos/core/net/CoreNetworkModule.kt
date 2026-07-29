@@ -44,6 +44,7 @@ object CoreNetworkModule {
     @Provides
     @Singleton
     fun provideOkHttpClient(
+        errorEnvelope: ErrorEnvelopeInterceptor,
         hostRedirect: HostRedirectInterceptor,
         authInterceptor: AuthInterceptor,
         idempotencyInterceptor: IdempotencyInterceptor,
@@ -56,6 +57,8 @@ object CoreNetworkModule {
             }
         }
         return OkHttpClient.Builder()
+            // Внешний: разбирает тело ошибки → ApiException с реальным сообщением.
+            .addInterceptor(errorEnvelope)
             .addInterceptor(hostRedirect)
             .addInterceptor(authInterceptor)
             .addInterceptor(idempotencyInterceptor)

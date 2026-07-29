@@ -92,11 +92,11 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 		Select(`oi.menu_item_id AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END), 0) AS qty,
-		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS revenue,
+		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)), 0) AS revenue,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL").
 		Where("oi.menu_item_id IS NOT NULL")
 	if f.From != nil {
@@ -274,7 +274,7 @@ func (s *AnalyticsService) PeakHours(ctx context.Context, f PeriodFilter) (*Peak
 		        EXTRACT(HOUR FROM closed_at)::int AS hour,
 		        COUNT(*) AS orders,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("closed_at >= ?", *f.From)
 	}
@@ -357,7 +357,7 @@ func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*Waiter
 		        COALESCE(SUM(o.tip_amount), 0) AS tip_amount,
 		        COALESCE(AVG(EXTRACT(EPOCH FROM (o.closed_at - o.created_at))), 0) AS avg_dur_sec`).
 		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed")
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("o.closed_at >= ?", *f.From)
 	}
@@ -378,7 +378,7 @@ func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*Waiter
 	qi := scoped2.Table("orders AS o").
 		Select("o.waiter_id AS waiter_id, COALESCE(SUM(oi.qty), 0) AS qty").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL")
 	if f.From != nil {
 		qi = qi.Where("o.closed_at >= ?", *f.From)
@@ -408,7 +408,7 @@ func (s *AnalyticsService) Waiters(ctx context.Context, f PeriodFilter) (*Waiter
 	qb := scoped3.Table("orders").
 		Select(`waiter_id, to_char(closed_at, 'YYYY-MM-DD') AS day,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		qb = qb.Where("closed_at >= ?", *f.From)
 	}
@@ -537,7 +537,7 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 		        COALESCE(SUM(o.guests_count), 0) AS guests_total`).
 		Joins("LEFT JOIN tables t ON t.id::text = o.table_id").
 		Joins("LEFT JOIN zones z ON z.id::text = t.zone_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed")
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"})
 	if f.From != nil {
 		q = q.Where("o.closed_at >= ?", *f.From)
 	}
@@ -575,9 +575,25 @@ func (s *AnalyticsService) Tables(ctx context.Context, f PeriodFilter) (*TablesR
 		}
 	}
 
-	// period_days для occupancy% — если from/to не заданы, используем
-	// разброс между min(closed_at) и max(closed_at), fallback = 1.
+	// period_days для occupancy% — если from/to не заданы, используем реальный
+	// разброс между min(closed_at) и max(closed_at) (Н19). Иначе periodDays=1 и
+	// occupancy кратно завышается (может быть >100% на «всём времени»).
 	periodDays := computePeriodDays(f.From, f.To)
+	if f.From == nil || f.To == nil {
+		var span struct {
+			MinAt *time.Time `gorm:"column:min_at"`
+			MaxAt *time.Time `gorm:"column:max_at"`
+		}
+		spanScoped, _ := s.r.ForTenant(ctx)
+		if err := spanScoped.Table("orders").
+			Select("MIN(closed_at) AS min_at, MAX(closed_at) AS max_at").
+			Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"}).
+			Scan(&span).Error; err == nil && span.MinAt != nil && span.MaxAt != nil {
+			if d := span.MaxAt.Sub(*span.MinAt).Hours() / 24; d >= 1 {
+				periodDays = int(d + 0.999)
+			}
+		}
+	}
 	totalRev := decimal.Zero
 	totalOrd := 0
 	sixty := decimal.FromInt(60)
@@ -700,12 +716,12 @@ func (s *AnalyticsService) FoodCost(ctx context.Context, f PeriodFilter) (*FoodC
 	q := scoped.Table("order_items AS oi").
 		Select(`oi.menu_item_id AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
-		        COALESCE(SUM(oi.qty), 0) AS qty,
-		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END), 0) AS revenue,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END), 0) AS qty,
+		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)), 0) AS revenue,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL").
 		Where("oi.menu_item_id IS NOT NULL")
 	if f.From != nil {

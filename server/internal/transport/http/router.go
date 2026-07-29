@@ -45,6 +45,8 @@ type Deps struct {
 	// SyncToken — общий секрет сети для межузлового auth /sync/* (Фаза 3).
 	// Пусто → /sync/* закрыт (узел не участвует в multi-branch sync).
 	SyncToken string
+	// ZakupAPKPath — путь к загруженному APK закупщика (аналогично официанту).
+	ZakupAPKPath string
 }
 
 // BuildInfo пробрасывается из main для GET /healthz.
@@ -127,6 +129,7 @@ func NewRouter(deps Deps) http.Handler {
 	usersSvc := service.NewUsersService(rep)
 	customersSvc := service.NewCustomersService(rep)
 	suppliersSvc := service.NewSuppliersService(rep)
+	recurringPaymentsSvc := service.NewRecurringPaymentsService(rep)
 	reservationsSvc := service.NewReservationsService(rep)
 	restaurantSvc := service.NewRestaurantService(rep)
 	bootstrapSvc := service.NewBootstrapService(rep)
@@ -139,6 +142,7 @@ func NewRouter(deps Deps) http.Handler {
 	modsSvc := service.NewModifiersService(rep)
 	techCardsSvc := service.NewTechCardsService(rep)
 	semiSvc := service.NewSemiFinishedService(rep)
+	sizeScalesSvc := service.NewSizeScaleService(rep)
 	zonesWriteSvc := service.NewZonesWriteService(rep)
 	tablesWriteSvc := service.NewTablesWriteService(rep).WithPublisher(pub)
 	restaurantsSvc := service.NewRestaurantsService(rep)
@@ -146,18 +150,20 @@ func NewRouter(deps Deps) http.Handler {
 	stockReadsSvc := service.NewStockReadsService(rep)
 	inventoryReadsSvc := service.NewInventoryReadsService(rep)
 	supplyExpensesSvc := service.NewSupplyExpensesService(rep)
-	finAccountsSvc := service.NewFinancialAccountsService(rep)
-	finOpsSvc := service.NewFinancialOperationsService(rep)
+	finAccountsSvc := service.NewFinancialAccountsService(rep).WithPublisher(pub)
+	finOpsSvc := service.NewFinancialOperationsService(rep).WithPublisher(pub)
 	customCatsSvc := service.NewCustomCategoriesService(rep)
 	finReportsSvc := service.NewFinanceReportsService(rep)
 	analyticsSvc := service.NewAnalyticsService(rep)
 	trendsSvc := service.NewTrendsService(reportsSvc, finReportsSvc)
 	waiterAppSvc := service.NewWaiterAppService(deps.WaiterAPKPath)
+	zakupAppSvc := service.NewZakupAppService(deps.ZakupAPKPath)
 	salarySvc := service.NewSalaryService(rep)
-	stopListSvc := service.NewStopListService(rep)
+	stopListSvc := service.NewStopListService(rep).WithPublisher(pub)
 	insightsSvc := service.NewInsightsService(rep, analyticsSvc, stopListSvc)
 	batchSvc := service.NewBatchCookingService(rep)
 	auditReadsSvc := service.NewAuditReadsService(rep)
+	maintenanceSvc := service.NewMaintenanceService(rep)
 
 	authH := handlers.NewAuth(authSvc, deps.DB)
 	menuH := handlers.NewMenu(menuSvc)
@@ -181,6 +187,7 @@ func NewRouter(deps Deps) http.Handler {
 	usersH := handlers.NewUsers(usersSvc)
 	customersH := handlers.NewCustomers(customersSvc)
 	suppliersH := handlers.NewSuppliers(suppliersSvc)
+	recurringPaymentsH := handlers.NewRecurringPayments(recurringPaymentsSvc)
 	reservationsH := handlers.NewReservations(reservationsSvc)
 	restaurantH := handlers.NewRestaurant(restaurantSvc)
 	bootstrapH := handlers.NewBootstrap(bootstrapSvc)
@@ -193,6 +200,7 @@ func NewRouter(deps Deps) http.Handler {
 	modsH := handlers.NewModifiers(modsSvc)
 	techCardsH := handlers.NewTechCards(techCardsSvc)
 	semiH := handlers.NewSemiFinished(semiSvc)
+	scalesH := handlers.NewSizeScales(sizeScalesSvc)
 	zonesWriteH := handlers.NewZonesWrite(zonesWriteSvc)
 	tablesWriteH := handlers.NewTablesWrite(tablesWriteSvc)
 	restaurantsH := handlers.NewRestaurants(restaurantsSvc)
@@ -207,11 +215,13 @@ func NewRouter(deps Deps) http.Handler {
 	analyticsH := handlers.NewAnalytics(analyticsSvc)
 	trendsH := handlers.NewTrends(trendsSvc)
 	insightsH := handlers.NewInsights(insightsSvc)
-	waiterAppH := handlers.NewWaiterApp(waiterAppSvc)
+	waiterAppH := handlers.NewAppDist(waiterAppSvc)
+	zakupAppH := handlers.NewAppDist(zakupAppSvc)
 	salaryH := handlers.NewSalary(salarySvc)
 	stopListH := handlers.NewStopList(stopListSvc)
 	batchH := handlers.NewBatchCooking(batchSvc)
 	auditReadsH := handlers.NewAuditReads(auditReadsSvc)
+	maintenanceH := handlers.NewMaintenance(maintenanceSvc)
 	waiterStatsH := handlers.NewWaiterStats(timeEntriesSvc)
 	eventsH := handlers.NewEvents(hub)
 	// maintFlag — взводится BackupService на время restore. Пока взведён,
@@ -288,6 +298,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/menu/items", menuH.ListItems)
 			g.Get("/menu/items/{id}/attributes", menuH.GetAttributes)
 			g.Get("/menu/categories", menuH.ListCategories)
+			g.Get("/menu/popularity", menuH.Popularity)
 
 			g.Get("/zones", tablesH.ListZones)
 			g.Get("/tables", tablesH.ListTables)
@@ -296,6 +307,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/warehouses", warehouseH.List)
 			g.Get("/stock/ingredient-categories", stockReadsH.ListCategories)
 			g.Get("/stock/receipts", stockReadsH.ListReceipts)
+			g.Get("/stock/returns", stockReadsH.ListReturns)
 			g.Get("/stock/writeoffs", stockReadsH.ListWriteoffs)
 			g.Get("/stock/movements", stockReadsH.ListMovements)
 			g.Get("/stock/transfers", transfersH.List)
@@ -328,6 +340,8 @@ func NewRouter(deps Deps) http.Handler {
 
 			// Admin: принтеры и очередь — read-only через эту же группу.
 			g.Get("/printers", printersH.List)
+			// Строго до /printers/{id}: очереди печати ОС для driver=system.
+			g.Get("/printers/system-queues", printersH.SystemQueues)
 			g.Get("/printers/{id}", printersH.Get)
 			g.Get("/print/jobs", printJobsH.List)
 			g.Get("/print/jobs/active-by-station", printJobsH.ActiveByStation)
@@ -350,6 +364,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/admin/shadow/reports", shadowH.Ingest)
 			g.Get("/admin/shadow/stats", shadowH.Stats)
 			g.Get("/admin/shadow/drifts", shadowH.RecentDrifts)
+			// Н13-ретро: превью коррекции балансов (чтение, без Idempotency).
+			g.Get("/admin/maintenance/shift-balance-fix", maintenanceH.ShiftBalanceFixPreview)
 
 			// Admin CRUD (reads + restaurant.get).
 			g.Get("/users", usersH.List)
@@ -371,6 +387,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/semi/types", semiH.ListTypes)
 			g.Get("/semi/types/{id}", semiH.GetType)
 			g.Get("/semi/stock", semiH.ListStock)
+			g.Get("/size-scales", scalesH.List)
 
 			// Stop-list (compute-on-read).
 			g.Get("/stop-list", stopListH.List)
@@ -393,12 +410,14 @@ func NewRouter(deps Deps) http.Handler {
 
 			// Finance: accounts, operations, custom categories, JSON reports, service accrual/payout.
 			g.Get("/finance/accounts", finAccountsH.List)
+			g.Get("/finance/accounts/balance-history", finAccountsH.BalanceHistory)
 			g.Get("/finance/operations", finOpsH.List)
 			g.Get("/finance/custom-categories", customCatsH.List)
 			g.Get("/finance/pnl", finReportsH.PnL)
 			g.Get("/finance/cashflow", finReportsH.Cashflow)
 			g.Get("/finance/balance", finReportsH.Balance)
 			g.Get("/finance/monthly-revenue", finReportsH.MonthlyRevenue)
+			g.Get("/finance/recurring-payments", recurringPaymentsH.List)
 
 			// Analytics aggregates — Phase 3.2, серверные отчёты для /analytics/*.
 			g.Get("/analytics/abc-menu", analyticsH.ABCMenu)
@@ -406,6 +425,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/weekday", analyticsH.Weekday)
 			g.Get("/analytics/waiters", analyticsH.Waiters)
 			g.Get("/analytics/tables", analyticsH.Tables)
+			g.Get("/analytics/sales-report", analyticsH.SalesReport)
 			g.Get("/analytics/food-cost", analyticsH.FoodCost)
 			g.Get("/analytics/food-cost/monthly", analyticsH.FoodCostMonthly)
 			g.Get("/analytics/ingredient-stock-value", analyticsH.IngredientStockValue)
@@ -413,15 +433,21 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/trends.xlsx", trendsH.Export)
 			g.Get("/analytics/insights", insightsH.Insights)
 
-			// APK официанта — состояние + загрузка нового (раздача по QR — публично).
+			// APK официанта/закупщика — состояние + загрузка нового (раздача по QR — публично).
 			g.Get("/waiter-app", waiterAppH.Info)
 			g.Post("/waiter-app", waiterAppH.Upload)
+			g.Get("/zakup-app", zakupAppH.Info)
+			g.Post("/zakup-app", zakupAppH.Upload)
 			g.Get("/analytics/forecast", analyticsH.Forecast)
 			g.Get("/analytics/abc-inventory", analyticsH.ABCInventory)
+			g.Get("/finance/salary/report", salaryH.SalaryReport)
+			g.Get("/finance/salary/accrual", salaryH.SalaryAccrual)
+			g.Get("/finance/salary/worked-days", salaryH.WorkedDays)
 			g.Get("/finance/service-accrual/by-waiter", salaryH.AccrualByWaiter)
 			g.Get("/finance/service-accrual/by-shift/{shift_id}", salaryH.AccrualByShift)
 			g.Get("/finance/service-payout/by-waiter", salaryH.PayoutByWaiter)
 			g.Get("/finance/service-payout/by-shift/{shift_id}", salaryH.PayoutByShift)
+			g.Get("/finance/salary/deductions", salaryH.ListDeductions)
 
 			// Restaurants (global, Phase 10).
 			g.Get("/restaurants", restaurantsH.List)
@@ -512,6 +538,8 @@ func NewRouter(deps Deps) http.Handler {
 			// Jobs
 			g.Post("/orders/auto-ready/check", ordersH.AutoReadyCheck)
 			g.Post("/admin/cleanup/orphan-orders", ordersH.CleanupOrphans)
+			// Н13-ретро: разовая коррекция балансов (write — с Idempotency).
+			g.Post("/admin/maintenance/shift-balance-fix", maintenanceH.ShiftBalanceFixApply)
 
 			g.Post("/shifts", shiftsH.Open)
 			g.Patch("/shifts/{id}", shiftsH.UpdateAccount)
@@ -525,7 +553,9 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/shifts/{id}/print-service", shiftsH.PrintService)
 
 			g.Post("/stock/receipts", stockH.CreateReceipt)
-			g.Post("/stock/receipts/{id}/confirm", stockH.ConfirmReceipt)
+			g.Post("/stock/receipts/{id}/pay", stockH.PayReceipt)
+			g.Post("/stock/returns", stockH.CreateReturn)
+			g.Post("/stock/returns/{id}/cancel", stockH.CancelReturn)
 			g.Post("/stock/writeoffs", stockH.CreateWriteoff)
 			g.Post("/stock/transfers", transfersH.Create)
 			g.Post("/stock/transfers/{id}/receive", transfersH.Receive)
@@ -561,6 +591,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Put("/printers/{id}", printersH.Patch)
 			g.Delete("/printers/{id}", printersH.Delete)
 			g.Post("/printers/{id}/test", printersH.Test)
+			g.Post("/printers/{id}/codepage-probe", printersH.CodepageProbe)
 			g.Post("/print/jobs/{id}/retry", printJobsH.Retry)
 			g.Post("/print/jobs/{id}/dismiss", printJobsH.Dismiss)
 
@@ -590,6 +621,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/assets/{id}", assetsH.Delete)
 			g.Post("/liabilities", liabilitiesH.Create)
 			g.Patch("/liabilities/{id}", liabilitiesH.Patch)
+			g.Post("/liabilities/{id}/pay", liabilitiesH.Pay)
 			g.Delete("/liabilities/{id}", liabilitiesH.Delete)
 			g.Post("/equity", equityH.Create)
 			g.Patch("/equity/{id}", equityH.Patch)
@@ -620,6 +652,11 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/semi/types/{id}", semiH.DeleteType)
 			g.Post("/semi/prepare", semiH.Prepare)
 			g.Post("/semi/consume", semiH.Consume)
+
+			// Size scales.
+			g.Post("/size-scales", scalesH.Create)
+			g.Patch("/size-scales/{id}", scalesH.Patch)
+			g.Delete("/size-scales/{id}", scalesH.Delete)
 
 			// Stop-list overrides.
 			g.Post("/stop-list/{menu_item_id}/override", stopListH.SetOverride)
@@ -656,12 +693,21 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/finance/accounts", finAccountsH.Create)
 			g.Patch("/finance/accounts/{id}", finAccountsH.Patch)
 			g.Delete("/finance/accounts/{id}", finAccountsH.Delete)
+			// Отключение счёта вместо удаления (миграция 063). Статический
+			// сегмент /transfer объявлен ниже — chi разводит его с {id}.
+			g.Post("/finance/accounts/{id}/enabled", finAccountsH.SetEnabled)
 			g.Post("/finance/accounts/transfer", finAccountsH.Transfer)
 			g.Post("/finance/operations", finOpsH.Create)
+			g.Post("/finance/recurring-payments", recurringPaymentsH.Create)
+			g.Patch("/finance/recurring-payments/{id}", recurringPaymentsH.Patch)
+			g.Delete("/finance/recurring-payments/{id}", recurringPaymentsH.Delete)
+			g.Post("/finance/recurring-payments/{id}/pay", recurringPaymentsH.Pay)
 			g.Post("/finance/custom-categories", customCatsH.Create)
 			g.Delete("/finance/custom-categories/{id}", customCatsH.Delete)
 			g.Post("/finance/salary/pay", salaryH.PaySalary)
+			g.Put("/finance/salary/worked-days", salaryH.SetWorkedDays)
 			g.Post("/finance/service-charge/pay", salaryH.PayServiceCharge)
+			g.Post("/finance/salary/deductions", salaryH.AddDeduction)
 
 			// Restaurants write (Phase 10).
 			g.Post("/restaurants", restaurantsH.Create)
@@ -685,9 +731,10 @@ func NewRouter(deps Deps) http.Handler {
 	// .xlsx (иначе Excel: «формат или расширение не являются допустимыми»).
 	r.Handle("/docs/*", DocsHandler())
 
-	// APK официанта — ПУБЛИЧНО (телефон качает по QR ещё до логина). Вне
-	// /api/v1 и до SPA-fallback, чтобы NotFound не перехватил.
+	// APK официанта/закупщика — ПУБЛИЧНО (телефон качает по QR ещё до логина).
+	// Вне /api/v1 и до SPA-fallback, чтобы NotFound не перехватил.
 	r.Get(service.WaiterAppDownloadPath, waiterAppH.Download)
+	r.Get(service.ZakupAppDownloadPath, zakupAppH.Download)
 
 	// SPA static — отдаёт embedded React build на всех не-API путях.
 	// Любой браузер в LAN, открывший http://<касса-ip>:3001, получает UI.

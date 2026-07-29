@@ -111,10 +111,13 @@ func (Modifier) TableName() string { return "modifiers" }
 // MenuAttribute — атрибут продукта («Размер», «Вкус»). Живёт на продукте-
 // родителе; из декартова произведения значений сервис генерирует варианты.
 type MenuAttribute struct {
-	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	MenuItemID   string    `gorm:"column:menu_item_id;type:uuid;not null;index" json:"menu_item_id"`
-	Name         string    `gorm:"not null" json:"name"`
-	SortOrder    int       `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	ID         string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	MenuItemID string `gorm:"column:menu_item_id;type:uuid;not null;index" json:"menu_item_id"`
+	Name       string `gorm:"not null" json:"name"`
+	SortOrder  int    `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	// SizeScaleID — если задан, значения атрибута зеркалятся из этой шкалы
+	// (см. syncAttributeDefs в menu_variants.go) вместо ручного ввода.
+	SizeScaleID  *string   `gorm:"column:size_scale_id;type:uuid" json:"size_scale_id"`
 	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -125,13 +128,17 @@ func (MenuAttribute) TableName() string { return "menu_attributes" }
 // MenuAttributeValue — значение атрибута («1 л») — чистый лейбл. Цена и
 // закупка живут на комбинации (строка варианта menu_items).
 type MenuAttributeValue struct {
-	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	AttributeID  string    `gorm:"column:attribute_id;type:uuid;not null;index" json:"attribute_id"`
-	Label        string    `gorm:"not null" json:"label"`
-	SortOrder    int       `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
-	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID          string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	AttributeID string `gorm:"column:attribute_id;type:uuid;not null;index" json:"attribute_id"`
+	Label       string `gorm:"not null" json:"label"`
+	SortOrder   int    `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	// SizeScaleValueID — какое значение шкалы (SizeScaleValue) зеркалит эта
+	// строка, когда родительский MenuAttribute.SizeScaleID задан. NULL — это
+	// обычный свободный лейбл (не связанный со шкалой).
+	SizeScaleValueID *string   `gorm:"column:size_scale_value_id;type:uuid" json:"size_scale_value_id"`
+	RestaurantID     *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (MenuAttributeValue) TableName() string { return "menu_attribute_values" }

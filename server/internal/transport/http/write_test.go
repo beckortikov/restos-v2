@@ -211,7 +211,7 @@ func TestWrite_CreateAddClose(t *testing.T) {
 	}
 
 	var movements []models.StockMovement
-	if err := gdb.Where("description = ?", "order:"+created.ID).Find(&movements).Error; err != nil {
+	if err := gdb.Where("description LIKE ?", "order:"+created.ID+"%").Find(&movements).Error; err != nil {
 		t.Fatal(err)
 	}
 	// Все позиции — одно и то же блюдо, поэтому iiko-merge сливает их в одну

@@ -62,17 +62,36 @@ function dispatchChange(raw: string) {
 // меняет `tables.status`, но backend openTableForOrder сейчас не публикует
 // table.updated. Этим fanout'ом мы заставляем все экраны, watch'ящие 'tables'
 // (включая POS table picker через useOrderData), refetch'ить столы.
+// Финансы: отдельного события по financial_operations бэк не шлёт, поэтому
+// подписываем счета/ДДС на события, которые ФАКТИЧЕСКИ двигают баланс:
+// закрытие заказа (выручка на счёт), складские мутации (приёмка, оплата долга
+// поставщику, возврат) и открытие/закрытие смены (инкассация, расход кассы).
+// Без этого остатки на карточках счетов врали до ручного F5.
 export const EVENT_FANOUT: Record<string, string[]> = {
   'order.created':     ['orders', 'tables'],
   'order.updated':     ['orders', 'tables'],
-  'order.closed':      ['orders', 'tables'],
-  'order.cancelled':   ['orders', 'tables'],
+  'order.closed':      ['orders', 'tables', 'financial_operations', 'financial_accounts'],
+  'order.cancelled':   ['orders', 'tables', 'financial_operations', 'financial_accounts'],
   'order.item.added':  ['order_items', 'orders'],
   'order.item.voided': ['order_voids', 'order_items', 'orders'],
-  'shift.opened':      ['cash_shifts'],
-  'shift.closed':      ['cash_shifts'],
-  'stock.movement':    ['ingredients', 'stock_movements'],
+  'shift.opened':      ['cash_shifts', 'financial_accounts'],
+  'shift.closed':      ['cash_shifts', 'financial_operations', 'financial_accounts'],
+  // Любая складская мутация (приёмка/возврат/списание/хозрасход/продажа) шлёт
+  // stock.movement. Раньше фанаут будил только остатки и историю; теперь и
+  // документные списки склада — чтобы Обзор/Накладные/Возвраты/Списания/
+  // Поставщики обновлялись в реальном времени, а не только при заходе. Пачки
+  // событий (продажи в час пик) схлопывает debounce 600мс в useDataSync.
+  'stock.movement':    ['ingredients', 'stock_movements', 'stock_receipts', 'stock_returns', 'stock_writeoffs', 'supply_expenses', 'suppliers', 'financial_operations', 'financial_accounts'],
+  // Ручная финоперация (приход/расход/перевод) — бэк шлёт finance.operation
+  // (service/finance.go). Складские и заказные проводки покрыты событиями выше.
+  'finance.operation': ['financial_operations', 'financial_accounts'],
+  // Счёт включили/отключили (is_enabled) — POS-пикеры должны сразу перестать
+  // предлагать отключённый счёт, а не только после перезахода на экран.
+  'finance.account.updated': ['financial_accounts'],
   'license.updated':   ['license'],
+  // Повар поставил/снял стоп с кухни — меню кассы должно обновиться сразу,
+  // иначе стоп-блюдо видно до следующего перезапроса.
+  'stop_list.updated': ['menu_items'],
 }
 
 function fanout(eventType: string) {

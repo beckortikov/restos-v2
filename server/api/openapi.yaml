@@ -285,6 +285,26 @@ paths:
           description: OK
           content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } }
 
+  /api/v1/menu/popularity:
+    get:
+      tags: [menu]
+      summary: Продано штук по позициям за окно (для сортировки меню)
+      parameters: [{ in: query, name: days, schema: { type: integer, default: 30 } }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        menu_item_id: { type: string }
+                        qty: { $ref: "#/components/schemas/Decimal" }
   /api/v1/menu/categories:
     get:
       tags: [menu]
@@ -332,6 +352,29 @@ paths:
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
         - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "204": { description: No content } }
+
+  # ─── Size scales (переиспользуемые шкалы размеров: «25/30/35») ──────────
+  /api/v1/size-scales:
+    get:
+      tags: [menu]
+      summary: Шкалы размеров + их значения
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScalesList" } } } } }
+    post:
+      tags: [menu]
+      summary: Создать шкалу размеров (Manager)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleWithValues" } } } } }
+  /api/v1/size-scales/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SizeScaleWithValues" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses: { "204": { description: No content } }
 
   # ─── Floor ──────────────────────────────────────────────────────────────
@@ -461,17 +504,76 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptInput" } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
 
-  /api/v1/stock/receipts/{id}/confirm:
+  /api/v1/stock/receipts/{id}/pay:
     post:
       tags: [stock]
-      summary: Подтвердить приёмку. Для credit — создаст Liability, при account_id — FinancialOperation.
+      summary: Оплата долга по конкретной накладной
+      description: |
+        Адресный платёж именно этой накладной (в отличие от
+        `/suppliers/{id}/pay-debt`, который гасит долг поставщику FIFO по всем
+        накладным). Атомарно: списывает `amount` со счёта `account_id`, на
+        накладной `debt_amount −amount` / `paid_amount +amount` и пересчитывает
+        `payment_type` (paid/partial), у поставщика `current_debt −amount`, и
+        создаёт financial_operation out (category='supplier_payment', исключён
+        из opex ОПиУ). Сумма клампится к остатку долга накладной.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
         - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierPayDebtInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } }
+        "409":
+          description: По накладной нет долга; либо на счёте недостаточно денег.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/stock/returns:
+    get:
+      tags: [stock]
+      summary: Список возвратов поставщикам.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+        - { in: query, name: supplier_id, schema: { type: string, format: uuid } }
+        - { in: query, name: receipt_id, schema: { type: string, format: uuid } }
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: include, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReturnsList" } } } } }
+    post:
+      tags: [stock]
+      summary: Возврат поставщику (создаёт stock_movements −qty + возвращает деньги/долг)
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody:
         required: true
-        content: { application/json: { schema: { $ref: "#/components/schemas/ConfirmReceiptInput" } } }
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReturnInput" } } }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReturn" } } } }
+        "409":
+          description: >
+            Возврат больше, чем пришло по строке накладной; больше фактического
+            остатка на складе; либо refund_type не соответствует остатку долга
+            (debt при погашенном долге / money при непогашенном).
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/stock/returns/{id}/cancel:
+    post:
+      tags: [stock]
+      summary: Сторно возврата — товар назад на склад, деньги/долг откатываются.
+      description: >
+        Строка не удаляется (документы append-only): проставляется cancelled_at,
+        а компенсация проводится отдельными движениями склада и встречной
+        финоперацией — история читается целиком. Отменённый возврат перестаёт
+        считаться в guard'е «нельзя вернуть больше, чем пришло»: товар вернулся,
+        значит его снова можно возвращать. Склад принимает товар по формуле
+        приёмки (средневзвешенная вперёд) — для входящего товара это корректно.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReturn" } } } }
+        "409":
+          description: Возврат уже отменён; либо на счёте не хватает денег вернуть их поставщику.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/stock/transfers:
     get:
@@ -885,6 +987,7 @@ paths:
                 type: { type: string, enum: [cash_in, cash_out] }
                 amount: { type: string }
                 description: { type: string }
+                account_id: { type: string, format: uuid, description: "Счёт операции. Пусто → счёт смены (наличный ящик). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает." }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
 
   # ─── Orders ─────────────────────────────────────────────────────────────
@@ -1035,6 +1138,8 @@ paths:
                 guests_count: { type: integer }
                 comment: { type: string }
                 customer_id: { type: string, format: uuid }
+                delivery_phone: { type: string, description: "Контакты доставки — касса сохраняет их перед открытием панели оплаты" }
+                delivery_address: { type: string }
       responses: { "200": { description: OK } }
 
   /api/v1/order-items/{id}:
@@ -1105,6 +1210,14 @@ paths:
                   type: string
                   format: uuid
                   description: Кассир, закрывший заказ. Пишется в order.cashier_id.
+                delivery_phone:
+                  type: string
+                  description: |
+                    Телефон клиента для заказа type='delivery'. Обязателен, если
+                    restaurants.delivery_contacts_required=true — иначе 400 VALIDATION.
+                delivery_address:
+                  type: string
+                  description: Адрес доставки. Те же правила, что у delivery_phone.
                 discount_type:
                   type: string
                   enum: [percent, fixed]
@@ -1713,6 +1826,30 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses: { "204": { description: No content } }
 
+  /api/v1/printers/system-queues:
+    get:
+      tags: [printers]
+      summary: Очереди печати ОС (для driver=system)
+      description: >
+        Список очередей печати, зарегистрированных в ОС той машины, где работает
+        Go-бэк (касса). Используется в настройках, чтобы выбрать встроенный
+        USB-принтер моноблока из списка, а не вбивать имя очереди руками.
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SystemPrintQueuesList" } } } } }
+
+  /api/v1/printers/{id}/codepage-probe:
+    post:
+      tags: [printers]
+      summary: Проба кодовых страниц (подбор номера для кириллицы)
+      description: >
+        Печатает одну и ту же русскую строку несколькими таблицами символов
+        подряд, подписывая номер каждой латиницей. Нужна, когда принтер печатает
+        вместо кириллицы мусор: единой нумерации в ESC/POS нет, а самотест со
+        списком таблиц печатают не все модели.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "202": { description: Accepted, content: { application/json: { schema: { $ref: "#/components/schemas/PrintJob" } } } } }
+
   /api/v1/printers/{id}/test:
     post:
       tags: [printers]
@@ -1782,6 +1919,19 @@ paths:
                 items: { type: array, items: { $ref: "#/components/schemas/ShadowReportItem" } }
       responses: { "202": { description: Accepted, content: { application/json: { schema: { type: object, properties: { accepted: { type: integer } } } } } } }
 
+  /api/v1/admin/maintenance/shift-balance-fix:
+    get:
+      tags: [admin]
+      summary: Н13 — превью разовой коррекции балансов счетов (без изменений)
+      parameters: [{ name: cutoff, in: query, schema: { type: string } }]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ShiftBalanceFixResult" } } } } }
+    post:
+      tags: [admin]
+      summary: Н13 — применить коррекцию балансов РОВНО ОДИН РАЗ (маркер)
+      parameters: [{ name: cutoff, in: query, schema: { type: string } }]
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ShiftBalanceFixResult" } } } }
+        "409": { description: Уже применена }
   /api/v1/admin/shadow/stats:
     get:
       tags: [shadow]
@@ -2163,6 +2313,31 @@ paths:
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses: { "204": { description: No content } }
 
+  /api/v1/liabilities/{id}/pay:
+    post:
+      tags: [finance]
+      summary: Погашение обязательства — списывает деньги со счёта, создаёт проводку.
+      description: >
+        Списывает amount со счёта account_id, создаёт financial_operation
+        (type=out, category=liability_payment — гашение пассива, НЕ opex ОПиУ),
+        уменьшает remaining_amount. Переплатить нельзя (клампится к остатку).
+        Прямой PATCH paid_amount запрещён — так обязательство уменьшалось без
+        списания со счёта, и капитал рос из воздуха.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, account_id]
+              properties:
+                amount: { $ref: "#/components/schemas/Decimal" }
+                account_id: { type: string, format: uuid }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Liability" } } } }
+        "409": { description: Обязательство погашено или недостаточно средств, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
+
   # ─── Finance: Equity ────────────────────────────────────────────────────
   /api/v1/equity:
     get:
@@ -2368,6 +2543,31 @@ paths:
       responses:
         "204": { description: No content }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/finance/accounts/{id}/enabled:
+    post:
+      tags: [finance]
+      summary: Включить / отключить счёт
+      description: >
+        Отключение вместо удаления. Счёт остаётся в системе со всей историей и
+        остатком (остаток продолжает учитываться в Балансе), но исчезает из
+        выбора при оплате, и сервер не даёт провести на него деньги.
+        409, если счёт используется в открытой смене, это последний включённый
+        наличный счёт, или на него настроены активные регулярные платежи.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enabled]
+              properties:
+                enabled: { type: boolean }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialAccount" } } } }
+        "409": { $ref: "#/components/responses/Error" }
   /api/v1/finance/accounts/transfer:
     post:
       tags: [finance]
@@ -2424,7 +2624,10 @@ paths:
     get:
       tags: [finance]
       summary: P&L отчёт (JSON) за период
-      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      parameters:
+        - { $ref: "#/components/parameters/From" }
+        - { $ref: "#/components/parameters/To" }
+        - { in: query, name: operational_only, required: false, schema: { type: boolean }, description: "true → в opex только операционная активность (без капвложений и финансовой), чтобы разовая покупка оборудования не проваливала операционную прибыль" }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PnLReport" } } } } }
   /api/v1/finance/cashflow:
     get:
@@ -2445,6 +2648,47 @@ paths:
         - { in: query, name: months, schema: { type: integer, default: 12, minimum: 1, maximum: 60 } }
         - { in: query, name: year, schema: { type: integer } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MonthlyRevenueList" } } } } }
+
+  /api/v1/finance/recurring-payments:
+    get:
+      tags: [finance]
+      summary: Список регулярных платежей (модуль «Платежи»)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentsList" } } } } }
+    post:
+      tags: [finance]
+      summary: Создать регулярный платёж (шаблон)
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPayment" } } } } }
+  /api/v1/finance/recurring-payments/{id}:
+    patch:
+      tags: [finance]
+      summary: Изменить регулярный платёж
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPayment" } } } } }
+    delete:
+      tags: [finance]
+      summary: Удалить регулярный платёж
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "204": { description: No Content } }
+  /api/v1/finance/recurring-payments/{id}/pay:
+    post:
+      tags: [finance]
+      summary: Провести платёж по шаблону
+      description: |
+        Списывает сумму со счёта и создаёт financial_operation out. Сумма/счёт по
+        умолчанию из шаблона, но переопределяются в теле (коммуналка меняется
+        помесячно). next_due двигается на следующий месяц, ставится last_paid_at.
+        Обычный операционный расход (в отличие от гашения долга поставщику).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: false, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPaymentPayInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/RecurringPayment" } } } }
+        "409":
+          description: На счёте недостаточно денег.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   # ─── Analytics: серверные агрегаты ───────────────────────────────────────
   /api/v1/analytics/abc-menu:
@@ -2477,6 +2721,12 @@ paths:
       summary: Оборачиваемость столов за период
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TablesAnalyticsReport" } } } } }
+  /api/v1/analytics/sales-report:
+    get:
+      tags: [analytics]
+      summary: Отчёт продаж (строки дата×час×блюдо, скидки учтены, closed+refunded)
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalesReportResult" } } } } }
   /api/v1/analytics/food-cost:
     get:
       tags: [analytics]
@@ -2524,7 +2774,7 @@ paths:
     get:
       tags: [settings]
       summary: Состояние APK официанта (есть ли, версия, размер, дата)
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaiterAppInfo" } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
     post:
       tags: [settings]
       summary: Загрузить новый APK официанта (multipart "file", optional "version")
@@ -2537,11 +2787,36 @@ paths:
               properties:
                 file: { type: string, format: binary }
                 version: { type: string }
-      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaiterAppInfo" } } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
   /download/waiter.apk:
     get:
       tags: [settings]
       summary: Публичное скачивание APK официанта (по QR в LAN, без авторизации)
+      responses:
+        "200": { description: APK файл, content: { application/vnd.android.package-archive: { schema: { type: string, format: binary } } } }
+        "404": { description: APK ещё не загружен }
+  /api/v1/zakup-app:
+    get:
+      tags: [settings]
+      summary: Состояние APK закупщика (есть ли, версия, размер, дата)
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
+    post:
+      tags: [settings]
+      summary: Загрузить новый APK закупщика (multipart "file", optional "version")
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                version: { type: string }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AppDistInfo" } } } } }
+  /download/zakup.apk:
+    get:
+      tags: [settings]
+      summary: Публичное скачивание APK закупщика (по QR в LAN, без авторизации)
       responses:
         "200": { description: APK файл, content: { application/vnd.android.package-archive: { schema: { type: string, format: binary } } } }
         "404": { description: APK ещё не загружен }
@@ -2566,6 +2841,86 @@ paths:
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryPayInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+  /api/v1/finance/accounts/balance-history:
+    get:
+      tags: [finance]
+      summary: Остаток по счетам на каждый день периода
+      description: >
+        История остатков восстанавливается обратным ходом от текущего баланса
+        (financial_accounts.balance — скаляр «сейчас», таблицы снимков нет):
+        closing(D) = balance_now − Σ(приход − расход) за все дни после D.
+        Период ограничен 400 днями.
+      parameters:
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD, по умолчанию 30 дней назад" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD, по умолчанию сегодня" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AccountBalanceHistory" } } } } }
+  /api/v1/finance/salary/accrual:
+    get:
+      tags: [finance, payroll]
+      summary: Начислено за период по сотрудникам
+      description: >
+        Для оклада (pay_type=monthly) — сумма из карточки, от периода не зависит.
+        Для дневной оплаты (daily) — daily_rate × число дней с отметкой в табеле:
+        день считается отработанным, если в нём есть хотя бы одна отметка прихода
+        (две отметки в один день = один день).
+      parameters:
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryAccrualRow" } } } } } } } }
+  /api/v1/finance/salary/worked-days:
+    get:
+      tags: [finance, payroll]
+      summary: Отработанные дни сотрудника (табель + ручные отметки) за период
+      parameters:
+        - { in: query, name: user_id, schema: { type: string } }
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WorkedDaysResult" } } } } }
+    put:
+      tags: [finance, payroll]
+      summary: Заменить ручные отметки дней сотрудника в периоде
+      description: >
+        Идемпотентно заменяет РУЧНЫЕ отметки (salary_worked_days) в [from, to] на
+        переданный набор dates. Табель (реальные приходы) не трогает.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string }
+                from: { type: string }
+                to: { type: string }
+                dates: { type: array, items: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WorkedDaysResult" } } } } }
+  /api/v1/finance/salary/report:
+    get:
+      tags: [finance, payroll]
+      summary: Отчёт по зарплате — кому сколько выдали и когда
+      description: >
+        Агрегация financial_operations категорий «Зарплата», «Аванс» и «Сервис»
+        за период: сводка по сотрудникам + плоский список выплат со счётом.
+      parameters:
+        - { in: query, name: from, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+        - { in: query, name: to, schema: { type: string }, description: "YYYY-MM-DD включительно" }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryReport" } } } } }
+  /api/v1/finance/salary/deductions:
+    get:
+      tags: [finance, payroll]
+      summary: История удержаний сотрудника
+      parameters:
+        - { in: query, name: user_id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeductionList" } } } } }
+    post:
+      tags: [finance, payroll]
+      summary: Удержание из зарплаты с обязательной причиной
+      description: >
+        Заменяет прежний счётчик users.deductions без единой записи о том, за
+        что удержали. НЕ создаёт FinancialOperation — деньги не выданы, им
+        неоткуда "выходить"; это только уменьшение будущей выплаты.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeductionInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeduction" } } } } }
   /api/v1/finance/service-charge/pay:
     post:
       tags: [finance, payroll]
@@ -2640,6 +2995,8 @@ paths:
                         category: { type: string }
                         count: { type: integer }
                         amount: { type: string }
+                  refunds_total: { type: string, description: "Сумма возвратов покупателям за смену (нал+безнал)" }
+                  refunds_count: { type: integer, description: "Количество возвратов (чеков) за смену" }
                   previous:
                     type: object
                     nullable: true
@@ -2750,6 +3107,7 @@ paths:
                 amount: { type: string }
                 description: { type: string }
                 category: { type: string, description: "Категория расхода (только для expense/cash_out). Структурное поле для свода/экспорта/X-Z." }
+                account_id: { type: string, format: uuid, description: "Счёт расхода. Пусто → счёт смены (наличный). id банк-счёта → безналичный расход: дебетует его, наличный ящик не трогает." }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/CashShiftOperation" } } } } }
 
   /api/v1/shifts/{id}/expenses/{op_id}:
@@ -3268,6 +3626,7 @@ components:
         menu_item_id: { type: string, format: uuid }
         name: { type: string }
         sort_order: { type: integer }
+        size_scale_id: { type: string, format: uuid, nullable: true, description: "Если задан — значения зеркалятся из шкалы размеров, а не вводятся вручную." }
     MenuAttributeValue:
       type: object
       properties:
@@ -3275,6 +3634,7 @@ components:
         attribute_id: { type: string, format: uuid }
         label: { type: string }
         sort_order: { type: integer }
+        size_scale_value_id: { type: string, format: uuid, nullable: true, description: "Какое значение шкалы (SizeScaleValue) зеркалит эта строка." }
     MenuAttributeWithValues:
       allOf:
         - $ref: "#/components/schemas/MenuAttribute"
@@ -3313,6 +3673,7 @@ components:
             properties:
               id: { type: string, format: uuid }
               name: { type: string }
+              size_scale_id: { type: string, format: uuid, description: "Если задан — values должен быть пустым: значения зеркалятся из шкалы размеров." }
               values:
                 type: array
                 items:
@@ -3340,6 +3701,48 @@ components:
       type: object
       properties: { id: { type: string, format: uuid }, name: { type: string }, sort_order: { type: integer } }
     MenuCategoriesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/MenuCategory" } } } }
+
+    SizeScale:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    SizeScaleValue:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        size_scale_id: { type: string, format: uuid }
+        code: { type: string }
+        title: { type: string, nullable: true }
+        sort_order: { type: integer }
+        is_default: { type: boolean }
+    SizeScaleWithValues:
+      allOf:
+        - $ref: "#/components/schemas/SizeScale"
+        - type: object
+          properties:
+            values:
+              type: array
+              items: { $ref: "#/components/schemas/SizeScaleValue" }
+    SizeScaleInput:
+      type: object
+      properties:
+        name: { type: string }
+        values:
+          type: array
+          description: Если передан — полностью заменяет текущие значения шкалы (delete+recreate).
+          items:
+            type: object
+            required: [code]
+            properties:
+              id: { type: string, format: uuid }
+              code: { type: string }
+              title: { type: string }
+              sort_order: { type: integer }
+              is_default: { type: boolean }
+    SizeScalesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SizeScaleWithValues" } } } }
 
     # ─── Floor ──
     Zone: { type: object, properties: { id: { type: string, format: uuid }, name: { type: string }, sort_order: { type: integer } } }
@@ -3415,12 +3818,8 @@ components:
         created_at: { type: string, format: date-time }
     StockMovementsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockMovement" } }, next_cursor: { type: string } } }
     StockReceiptsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReceipt" } }, next_cursor: { type: string } } }
+    StockReturnsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockReturn" } }, next_cursor: { type: string } } }
     StockWriteoffsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockWriteoff" } }, next_cursor: { type: string } } }
-    ConfirmReceiptInput:
-      type: object
-      properties:
-        account_id: { type: string, format: uuid }
-        payment_type: { type: string, enum: [paid, credit] }
     InventoryChecksList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/InventoryCheck" } }, next_cursor: { type: string } } }
     InventoryCheckLine:
       type: object
@@ -3503,6 +3902,100 @@ components:
         total_amount: { $ref: "#/components/schemas/Decimal" }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         debt_amount: { $ref: "#/components/schemas/Decimal" }
+        returned_total:
+          $ref: "#/components/schemas/Decimal"
+          description: "Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части»."
+        lines:
+          type: array
+          description: "Только при ?include=lines."
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              ingredient_id: { type: string, nullable: true }
+              name: { type: string, nullable: true }
+              qty: { $ref: "#/components/schemas/Decimal" }
+              unit: { type: string, nullable: true }
+              price_per_unit: { $ref: "#/components/schemas/Decimal" }
+              available_to_return:
+                $ref: "#/components/schemas/Decimal"
+                description: >
+                  Сколько ещё можно вернуть поставщику по этой строке, В ЕДИНИЦАХ
+                  НАКЛАДНОЙ. Считает бэк по тому же правилу, что guard в
+                  POST /stock/returns: min(принято − Σ неотменённых возвратов,
+                  фактический остаток товара). Клиенту считать это самому нельзя:
+                  он не знает про отменённые возвраты и путает единицы склада с
+                  единицами накладной.
+
+    ReturnInput:
+      type: object
+      required: [receipt_id, reason, refund_type, lines]
+      description: >
+        Возврат поставщику испорченного/битого товара. Зеркало приёмки: склад
+        −qty (stock_movements type=return_supplier), откат средневзвешенной
+        себестоимости, возврат денег/долга. Не путать со списанием: списание —
+        наш убыток и бьёт по прибыли, возврат — сторно закупки.
+      properties:
+        receipt_id:
+          type: string
+          format: uuid
+          description: >
+            Накладная, по которой возвращаем. Цена возврата берётся из её строк,
+            а не из средневзвешенной себестоимости склада — поставщик отдаёт
+            ровно ту сумму, что взял.
+        date: { type: string, description: "YYYY-MM-DD, по умолчанию сегодня" }
+        reason: { type: string, enum: [spoilage, breakage, expired, other] }
+        note: { type: string }
+        refund_type:
+          type: string
+          enum: [debt, money]
+          description: >
+            Ветки взаимоисключающие, выбор диктует остаток долга поставщику
+            debtRoom = min(receipt.debt_amount, supplier.current_debt).
+            debt — долг есть (debtRoom > 0): уменьшаются обе стороны —
+            stock_receipts.debt_amount и suppliers.current_debt (RecomputeDebts
+            считает current_debt как Σ debt_amount − Σ оплат, поэтому тронуть
+            надо обе). 409, если гасить нечего или сумма больше debtRoom
+            (смешанный случай — оформить двумя возвратами: на debtRoom в долг,
+            остаток деньгами).
+            money — долга нет: financial_accounts.balance += сумма и
+            financial_operation (type=in, category=stock_purchase). 409, если по
+            накладной есть непогашенный долг — иначе получили бы деньги за
+            неоплаченный товар и остались должны. Категория stock_purchase, а не
+            доход: возврат схлопывается с закупкой, ОПиУ не показывает фейковую
+            выручку. Идемпотентность — на Idempotency-Key, не на source_ref.
+        account_id:
+          type: string
+          format: uuid
+          description: "Куда пришли деньги. Обязателен при refund_type=money."
+        lines:
+          type: array
+          items:
+            type: object
+            required: [receipt_line_id, qty]
+            properties:
+              receipt_line_id:
+                type: string
+                format: uuid
+                description: "Строка накладной. Σ возвратов по ней не может превысить принятое qty (иначе 409)."
+              qty: { $ref: "#/components/schemas/Decimal" }
+    StockReturn:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        receipt_id: { type: string, format: uuid }
+        supplier_id: { type: string, format: uuid, nullable: true }
+        supplier_name: { type: string, nullable: true }
+        date: { type: string, nullable: true }
+        reason: { type: string, enum: [spoilage, breakage, expired, other] }
+        note: { type: string, nullable: true }
+        total_amount: { $ref: "#/components/schemas/Decimal" }
+        refund_type: { type: string, enum: [debt, money] }
+        account_id: { type: string, format: uuid, nullable: true }
+        created_by: { type: string, nullable: true }
+        cancelled_at: { type: string, format: date-time, nullable: true, description: "Сторно: товар вернулся на склад, деньги/долг откатились" }
+        cancelled_by: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
 
     StockTransfersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/StockTransfer" } }, next_cursor: { type: string } } }
 
@@ -3659,6 +4152,7 @@ components:
             required: [ingredient_id, actual_qty]
             properties:
               ingredient_id: { type: string, format: uuid }
+              kind: { type: string, enum: [ingredient, semi, batch] }
               actual_qty: { $ref: "#/components/schemas/Decimal" }
     InventoryCheck:
       type: object
@@ -3702,6 +4196,7 @@ components:
         amount: { $ref: "#/components/schemas/Decimal" }
         description: { type: string }
         category: { type: string, nullable: true, description: "Категория расхода; NULL для внесения/изъятия" }
+        account_id: { type: string, format: uuid, nullable: true, description: "Счёт операции; NULL → счёт смены (наличный ящик). ≠ счёту смены → безналичная операция, наличный ящик не трогает." }
     ShiftsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/CashShift" } }, next_cursor: { type: string } } }
 
     # ─── Orders ──
@@ -3741,6 +4236,21 @@ components:
         kitchen_started_at: { type: string, format: date-time }
         is_split: { type: boolean }
         split_count: { type: integer }
+        delivery_phone: { type: string, description: "Контакты доставки — заполняются на оплате заказа type='delivery'" }
+        delivery_address: { type: string }
+        payments:
+          type: array
+          description: >
+            Состав оплаты. С 3.16.111 заполняется и для одиночной оплаты (один
+            элемент), поэтому «чем и на какой счёт заплатили» доступно единообразно.
+          items: { $ref: "#/components/schemas/OrderPaymentPart" }
+    OrderPaymentPart:
+      type: object
+      properties:
+        method: { type: string, enum: [cash, card, transfer] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        account_name: { type: string, description: "Имя счёта на момент оплаты (денормализовано)" }
     PaymentSplit:
       type: object
       required: [method, amount, account_id]
@@ -3812,6 +4322,14 @@ components:
         service_percent: { $ref: "#/components/schemas/Decimal" }
         service_amount: { $ref: "#/components/schemas/Decimal" }
         created_at: { type: string, format: date-time }
+        payment_method: { type: string, description: "cash|card|transfer|split" }
+        is_split: { type: boolean }
+        payments:
+          description: Состав оплаты — заполнен и для одиночной оплаты (один элемент).
+          type: array
+          items: { $ref: "#/components/schemas/OrderPaymentPart" }
+        delivery_phone: { type: string }
+        delivery_address: { type: string }
         items:
           description: Заполняется только при ?include=items. Иначе отсутствует.
           type: array
@@ -3825,10 +4343,15 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         kind: { type: string, enum: [receipt, station] }
-        station: { type: string }
-        driver: { type: string, enum: [tcp, usb, virtual, mock] }
+        station: { type: string, description: "Legacy (до 053) — первый цех списка stations" }
+        stations:
+          type: array
+          items: { type: string }
+          description: "Цехи станционного принтера (053) — их позиции печатаются одним бегунком"
+        driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
         target: { type: string }
         cols: { type: integer, description: "32=58mm, 42-48=80mm" }
+        codepage: { type: integer, minimum: 0, maximum: 255, description: "Таблица символов ESC t n. 17=PC866 (дефолт). Часть принтеров держит кириллицу на другом номере" }
         is_default: { type: boolean }
         enabled: { type: boolean }
         print_logo: { type: boolean }
@@ -3841,10 +4364,15 @@ components:
       properties:
         name: { type: string }
         kind: { type: string, enum: [receipt, station] }
-        station: { type: string }
-        driver: { type: string, enum: [tcp, usb, virtual, mock] }
-        target: { type: string, description: "host[:port] — для tcp; :9100 добавляется автоматически если не указан" }
+        station: { type: string, description: "Legacy — эквивалент stations из одного цеха" }
+        stations:
+          type: array
+          items: { type: string }
+          description: "Цехи станционного принтера; на PATCH список заменяется целиком. Цех может принадлежать максимум одному принтеру (409 при конфликте)"
+        driver: { type: string, enum: [tcp, usb, system, virtual, mock] }
+        target: { type: string, description: "tcp — host[:port] (:9100 добавляется автоматически); system — имя очереди печати ОС из /printers/system-queues" }
         cols: { type: integer }
+        codepage: { type: integer, minimum: 0, maximum: 255 }
         is_default: { type: boolean }
         enabled: { type: boolean }
         print_logo: { type: boolean }
@@ -3853,6 +4381,13 @@ components:
         print_tip: { type: boolean }
         print_qr_feedback: { type: boolean }
     PrintersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Printer" } } } }
+    SystemPrintQueue:
+      type: object
+      properties:
+        name: { type: string, description: "Имя очереди в ОС — оно же target принтера с driver=system" }
+        is_default: { type: boolean, description: "Принтер по умолчанию в ОС" }
+        status: { type: string, description: "idle/printing/offline — если ОС отдаёт состояние (CUPS); на Windows пусто" }
+    SystemPrintQueuesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SystemPrintQueue" } } } }
     PrintJob:
       type: object
       properties:
@@ -3921,12 +4456,14 @@ components:
         station: { type: string }
         salary: { $ref: "#/components/schemas/Decimal" }
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
+        pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
+        daily_rate: { $ref: "#/components/schemas/Decimal" }
     UserInput:
       type: object
       properties:
         name: { type: string }
         username: { type: string }
-        role: { type: string, enum: [cashier, cook, waiter, manager, owner] }
+        role: { type: string, enum: [cashier, cook, waiter, manager, owner, storekeeper, accountant] }
         pin: { type: string }
         password: { type: string }
         phone: { type: string }
@@ -3934,6 +4471,8 @@ components:
         station: { type: string }
         salary: { $ref: "#/components/schemas/Decimal" }
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
+        pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
+        daily_rate: { $ref: "#/components/schemas/Decimal" }
     UsersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/User" } } } }
 
     Customer:
@@ -4014,6 +4553,7 @@ components:
         phone: { type: string }
         currency: { type: string }
         service_percent: { $ref: "#/components/schemas/Decimal" }
+        discount_approval_threshold: { $ref: "#/components/schemas/Decimal" }
         timezone: { type: string }
         enforce_stock_check: { type: boolean }
         tech_cards_enabled: { type: boolean }
@@ -4023,6 +4563,12 @@ components:
         pin_lock_timeout_min: { type: integer }
         supply_allow_negative: { type: boolean }
         on_screen_keyboard_enabled: { type: boolean }
+        tables_enabled: { type: boolean }
+        kitchen_on_pay: { type: boolean }
+        pos_v2_default: { type: boolean }
+        menu_sort_by_sales: { type: boolean }
+        delivery_enabled: { type: boolean, description: "Показывать «Доставка» третьим типом заказа в POS" }
+        delivery_contacts_required: { type: boolean, description: "Спрашивать телефон и адрес перед оплатой заказа-доставки" }
         license_expires_at: { type: string, format: date-time }
         is_blocked: { type: boolean }
     RestaurantInput:
@@ -4034,6 +4580,7 @@ components:
         phone: { type: string }
         currency: { type: string }
         service_percent: { $ref: "#/components/schemas/Decimal" }
+        discount_approval_threshold: { $ref: "#/components/schemas/Decimal", description: "Скидка выше этого % требует одобрения менеджера/владельца (default 10)" }
         timezone: { type: string }
         enforce_stock_check: { type: boolean }
         tech_cards_enabled: { type: boolean }
@@ -4043,6 +4590,12 @@ components:
         pin_lock_timeout_min: { type: integer }
         supply_allow_negative: { type: boolean }
         on_screen_keyboard_enabled: { type: boolean }
+        tables_enabled: { type: boolean }
+        kitchen_on_pay: { type: boolean }
+        pos_v2_default: { type: boolean }
+        menu_sort_by_sales: { type: boolean }
+        delivery_enabled: { type: boolean }
+        delivery_contacts_required: { type: boolean }
 
     # ─── Bootstrap ──
     BootstrapInput:
@@ -4252,6 +4805,7 @@ components:
         name: { type: string }
         output_unit: { type: string }
         yield_percent: { $ref: "#/components/schemas/Decimal" }
+        size_scale_value_id: { type: string, format: uuid, nullable: true, description: "Тег «это заготовка вот этого размера» (например «Тесто-30» → значение «30»)." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     SemiTypeInput:
@@ -4260,6 +4814,7 @@ components:
         name: { type: string }
         output_unit: { type: string }
         yield_percent: { $ref: "#/components/schemas/Decimal" }
+        size_scale_value_id: { type: string, format: uuid }
     SemiTypesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SemiFinishedType" } }, next_cursor: { type: string } } }
 
     SemiFinishedStock:
@@ -4284,6 +4839,12 @@ components:
         name: { type: string }
         type: { type: string, enum: [cash, bank, card, other] }
         balance: { $ref: "#/components/schemas/Decimal" }
+        is_enabled:
+          type: boolean
+          description: >
+            Счёт предлагается при оплате и в операциях. Отключённый счёт остаётся
+            со всей историей и остатком, но исчезает из выбора.
+        disabled_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     FinancialAccountInput:
@@ -4326,6 +4887,43 @@ components:
         counterparty: { type: string }
         shift_id: { type: string, format: uuid }
     FinancialOperationsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/FinancialOperation" } }, next_cursor: { type: string } } }
+
+    RecurringPayment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        activity: { type: string, enum: [operational, investment, financial] }
+        counterparty: { type: string }
+        day_of_month: { type: integer, minimum: 1, maximum: 31 }
+        next_due: { type: string, description: "YYYY-MM-DD — следующая дата платежа" }
+        last_paid_at: { type: string, format: date-time }
+        active: { type: boolean }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    RecurringPaymentInput:
+      type: object
+      properties:
+        name: { type: string }
+        category: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        activity: { type: string }
+        counterparty: { type: string }
+        day_of_month: { type: integer, minimum: 1, maximum: 31 }
+        active: { type: boolean }
+        note: { type: string }
+    RecurringPaymentPayInput:
+      type: object
+      description: "amount/account_id необязательны — по умолчанию из шаблона."
+      properties:
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+    RecurringPaymentsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/RecurringPayment" } }, next_cursor: { type: string } } }
 
     AccountTransferInput:
       type: object
@@ -4569,7 +5167,7 @@ components:
         to:       { type: string, format: date-time }
         insights: { type: array, items: { $ref: "#/components/schemas/Insight" } }
 
-    WaiterAppInfo:
+    AppDistInfo:
       type: object
       properties:
         available:     { type: boolean }
@@ -4671,6 +5269,55 @@ components:
         margin_percent: { $ref: "#/components/schemas/Decimal" }
         rows: { type: array, items: { $ref: "#/components/schemas/FoodCostRow" } }
 
+    SalesReportRow:
+      type: object
+      properties:
+        date: { type: string }
+        hour: { type: integer }
+        menu_item_id: { type: string, nullable: true }
+        name: { type: string }
+        category: { type: string }
+        is_purchased: { type: boolean }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+    SalesReportDay:
+      type: object
+      properties:
+        date: { type: string }
+        orders: { type: integer }
+        qty: { $ref: "#/components/schemas/Decimal" }
+        revenue: { $ref: "#/components/schemas/Decimal" }
+
+    ShiftBalanceFixLine:
+      type: object
+      properties:
+        account_id: { type: string }
+        account_name: { type: string }
+        balance_now: { $ref: "#/components/schemas/Decimal" }
+        correction: { $ref: "#/components/schemas/Decimal" }
+        balance_after: { $ref: "#/components/schemas/Decimal" }
+        ops_count: { type: integer }
+    ShiftBalanceFixResult:
+      type: object
+      properties:
+        already_applied: { type: boolean }
+        applied_at: { type: string, format: date-time, nullable: true }
+        cutoff: { type: string }
+        total_correction: { $ref: "#/components/schemas/Decimal" }
+        lines: { type: array, items: { $ref: "#/components/schemas/ShiftBalanceFixLine" } }
+    SalesReportResult:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string }, to: { type: string } } }
+        rows: { type: array, items: { $ref: "#/components/schemas/SalesReportRow" } }
+        by_date: { type: array, items: { $ref: "#/components/schemas/SalesReportDay" } }
+        totals:
+          type: object
+          properties:
+            revenue: { $ref: "#/components/schemas/Decimal" }
+            qty: { $ref: "#/components/schemas/Decimal" }
+            orders: { type: integer }
+
     FoodCostMonth:
       type: object
       properties:
@@ -4756,6 +5403,116 @@ components:
         employee_name: { type: string }
         period: { type: string }
         description: { type: string }
+        kind:
+          type: string
+          enum: [salary, advance]
+          description: >
+            salary — окончательный расчёт (категория «Зарплата»), advance — аванс
+            (категория «Аванс»). Пусто → salary. До разделения категорий оба вида
+            писались как «Зарплата» и отчёт не мог их разделить.
+        override:
+          type: boolean
+          description: >
+            Провести сумму выше расчётного остатка осознанно (бонус, доплата,
+            коррекция) вместо блокировки сервером. Требует override_reason.
+        override_reason:
+          type: string
+          description: "Обязательна при override=true и реальном превышении остатка."
+    AccountBalanceHistory:
+      type: object
+      properties:
+        from: { type: string }
+        to: { type: string }
+        accounts: { type: array, items: { $ref: "#/components/schemas/AccountPeriodSummary" } }
+        days: { type: array, items: { $ref: "#/components/schemas/AccountBalanceDay" } }
+    AccountPeriodSummary:
+      type: object
+      properties:
+        account_id: { type: string, format: uuid }
+        account_name: { type: string }
+        account_type: { type: string, enum: [cash, bank] }
+        current_balance: { $ref: "#/components/schemas/Decimal" }
+        opening_balance: { $ref: "#/components/schemas/Decimal" }
+        in: { $ref: "#/components/schemas/Decimal" }
+        out: { $ref: "#/components/schemas/Decimal" }
+        closing_balance: { $ref: "#/components/schemas/Decimal" }
+    AccountBalanceDay:
+      type: object
+      properties:
+        date: { type: string }
+        in: { $ref: "#/components/schemas/Decimal" }
+        out: { $ref: "#/components/schemas/Decimal" }
+        closing_balance: { $ref: "#/components/schemas/Decimal" }
+        per_account:
+          type: object
+          additionalProperties: { $ref: "#/components/schemas/Decimal" }
+          description: "account_id → остаток на конец дня"
+    SalaryAccrualRow:
+      type: object
+      properties:
+        user_id: { type: string, format: uuid }
+        user_name: { type: string }
+        position: { type: string }
+        role: { type: string }
+        pay_type: { type: string, enum: [monthly, daily] }
+        salary: { $ref: "#/components/schemas/Decimal" }
+        daily_rate: { $ref: "#/components/schemas/Decimal" }
+        days_worked: { type: integer, description: "Дней с отметкой в табеле за период" }
+        accrued: { $ref: "#/components/schemas/Decimal" }
+        advance: { $ref: "#/components/schemas/Decimal" }
+        deductions: { $ref: "#/components/schemas/Decimal" }
+    WorkedDaysResult:
+      type: object
+      properties:
+        shift_dates: { type: array, items: { type: string }, description: "Дни с приходом в табеле (снять нельзя)" }
+        manual_dates: { type: array, items: { type: string }, description: "Ручные отметки (toggleable)" }
+        count: { type: integer, description: "Уникальных отработанных дней всего" }
+    SalaryReport:
+      type: object
+      properties:
+        from: { type: string }
+        to: { type: string }
+        rows: { type: array, items: { $ref: "#/components/schemas/SalaryReportRow" } }
+        payouts: { type: array, items: { $ref: "#/components/schemas/SalaryPayoutRow" } }
+        totals: { $ref: "#/components/schemas/SalaryReportTotals" }
+    SalaryReportRow:
+      type: object
+      properties:
+        user_id: { type: string }
+        user_name: { type: string }
+        position: { type: string }
+        role: { type: string }
+        salary: { $ref: "#/components/schemas/Decimal" }
+        salary_paid: { $ref: "#/components/schemas/Decimal" }
+        advance_paid: { $ref: "#/components/schemas/Decimal" }
+        service_paid: { $ref: "#/components/schemas/Decimal" }
+        total: { $ref: "#/components/schemas/Decimal" }
+        payouts_count: { type: integer }
+        last_payout_at: { type: string }
+    SalaryPayoutRow:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        date: { type: string }
+        user_id: { type: string }
+        user_name: { type: string }
+        kind: { type: string, enum: [salary, advance, service] }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string }
+        account_name: { type: string }
+        description: { type: string }
+        is_override:
+          type: boolean
+          description: "Выплата выше расчётного остатка, проведённая осознанно (ЗП-4)."
+    SalaryReportTotals:
+      type: object
+      properties:
+        salary_paid: { $ref: "#/components/schemas/Decimal" }
+        advance_paid: { $ref: "#/components/schemas/Decimal" }
+        service_paid: { $ref: "#/components/schemas/Decimal" }
+        total: { $ref: "#/components/schemas/Decimal" }
+        employees: { type: integer }
+        payouts: { type: integer }
     ServiceChargePayInput:
       type: object
       required: [waiter_id, amount, account_id]
@@ -4766,6 +5523,31 @@ components:
         period_from: { type: string }
         period_to: { type: string }
         description: { type: string }
+        shift_id: { type: string, format: uuid }
+        override:
+          type: boolean
+          description: "См. SalaryPayInput.override — тот же принцип для обслуживания."
+        override_reason: { type: string }
+
+    SalaryDeduction:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        reason: { type: string }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+    SalaryDeductionInput:
+      type: object
+      required: [user_id, amount, reason]
+      properties:
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        reason:
+          type: string
+          description: "Обязательна — единственная цель записи в том, чтобы не терять «за что удержали»."
+    SalaryDeductionList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryDeduction" } } } }
 
     ServiceAccrual:
       type: object

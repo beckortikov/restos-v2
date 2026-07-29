@@ -81,7 +81,7 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 	}
 	qr := scoped.Table("orders").
 		Select(`EXTRACT(DOW FROM closed_at)::int AS weekday, COUNT(*) AS orders, COALESCE(SUM(total_with_service),0) AS revenue`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	qr = applyClosedPeriod(qr, f)
 	var revRows []revRow
 	if err := qr.Group("weekday").Scan(&revRows).Error; err != nil {
@@ -97,7 +97,7 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 	qc := scopedC.Table("order_items AS oi").
 		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL")
 	qc = whereClosedQ(qc, f, "o")
 	var cogsRows []cogsRow
@@ -160,7 +160,7 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 	}
 	qh := scopedH.Table("orders").
 		Select(`EXTRACT(DOW FROM closed_at)::int AS weekday, EXTRACT(HOUR FROM closed_at)::int AS hour, COUNT(*) AS orders, COALESCE(SUM(total_with_service),0) AS revenue`).
-		Where("status = ? AND closed_at IS NOT NULL", "closed")
+		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
 	qh = applyClosedPeriod(qh, f)
 	var hRows []hRow
 	if err := qh.Group("weekday, hour").Scan(&hRows).Error; err != nil {
@@ -175,7 +175,7 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 	qhc := scopedHC.Table("order_items AS oi").
 		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, EXTRACT(HOUR FROM o.closed_at)::int AS hour, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL")
 	qhc = whereClosedQ(qhc, f, "o")
 	var hcRows []hcRow
@@ -206,10 +206,10 @@ func (s *AnalyticsService) Weekday(ctx context.Context, f PeriodFilter) (*Weekda
 	}
 	qcat := scopedCat.Table("order_items AS oi").
 		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, COALESCE(NULLIF(mi.category,''),'—') AS category,
-		        COALESCE(SUM(oi.qty),0) AS qty, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END),0) AS revenue, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
+		        COALESCE(SUM(oi.qty),0) AS qty, COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)),0) AS revenue, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
-		Where("o.status = ? AND o.closed_at IS NOT NULL", "closed").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL", []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL")
 	qcat = whereClosedQ(qcat, f, "o")
 	var catRows []catRow

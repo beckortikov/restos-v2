@@ -7,6 +7,7 @@ import type {
   FinancialActivity,
 } from '../types'
 import { logAction } from './audit'
+import { randomId } from '../random-id'
 
 export async function fetchFinancialAccounts(): Promise<FinancialAccount[]> {
   const res: any = await unwrap(api.GET('/api/v1/finance/accounts'))
@@ -14,16 +15,43 @@ export async function fetchFinancialAccounts(): Promise<FinancialAccount[]> {
   return rows.map(mapFinancialAccount) as FinancialAccount[]
 }
 
+/**
+ * Счета, которые можно ВЫБРАТЬ при оплате или операции.
+ *
+ * Список из fetchFinancialAccounts намеренно возвращает и отключённые: их
+ * остаток продолжает учитываться в Балансе и на дашборде, а история операций
+ * должна показывать имя счёта. Поэтому фильтруем не при загрузке, а точечно —
+ * в каждом пикере. Агрегаты (Баланс, «Касса (все счета)», страница «Счета»,
+ * ДДС) этот хелпер НЕ используют — иначе деньги пропали бы из отчётов.
+ *
+ * @param kind 'cash' — только наличные, 'bank' — только безналичные.
+ */
+export function selectableAccounts(
+  accounts: FinancialAccount[],
+  kind?: 'cash' | 'bank',
+): FinancialAccount[] {
+  return accounts.filter((a) => {
+    if (!a.isEnabled) return false
+    if (kind === 'cash') return a.type === 'cash'
+    if (kind === 'bank') return a.type !== 'cash'
+    return true
+  })
+}
+
+/** Включить/отключить счёт. 409 — если счёт держит смену, платежи или он последний наличный. */
+export async function setFinancialAccountEnabled(id: string, enabled: boolean): Promise<FinancialAccount> {
+  const row: any = await unwrap(api.POST('/api/v1/finance/accounts/{id}/enabled', {
+    params: { path: { id } },
+    body: { enabled },
+  }))
+  return mapFinancialAccount(row)
+}
+
 export async function createFinancialAccount(data: { name: string; type: string }): Promise<FinancialAccount> {
   const row: any = await unwrap(api.POST('/api/v1/finance/accounts', {
     body: { name: data.name, type: data.type, balance: '0' } as any,
   }))
-  return {
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    balance: Number(row.balance ?? 0),
-  } as FinancialAccount
+  return mapFinancialAccount(row)
 }
 
 export async function updateFinancialAccount(id: string, patch: { name?: string; type?: string }): Promise<FinancialAccount> {
@@ -34,20 +62,18 @@ export async function updateFinancialAccount(id: string, patch: { name?: string;
     params: { path: { id } },
     body: body as any,
   }))
-  return {
-    id: row.id,
-    name: row.name,
-    type: row.type,
-    balance: Number(row.balance ?? 0),
-  } as FinancialAccount
+  return mapFinancialAccount(row)
 }
 
 export async function deleteFinancialAccount(id: string): Promise<void> {
   try {
     await unwrap(api.DELETE('/api/v1/finance/accounts/{id}', { params: { path: { id } } }))
   } catch (e) {
+    // Показываем причину сервера: 409 приходит и на «есть операции», и на
+    // «ненулевой баланс» — раньше обе подменялись одним текстом, и владелец
+    // видел неверную причину.
     if (e instanceof V4Error && e.status === 409) {
-      throw new Error('Счёт используется в операциях')
+      throw new Error(e.message || 'Счёт используется в операциях')
     }
     throw e
   }
@@ -166,10 +192,11 @@ function isoOrDate(v: Date | string | undefined): string | undefined {
   return String(v)
 }
 
-export async function fetchPnLReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<PnLReport> {
+export async function fetchPnLReport(opts: { from?: Date | string; to?: Date | string; operationalOnly?: boolean } = {}): Promise<PnLReport> {
   const query: Record<string, string> = {}
   const from = isoOrDate(opts.from); if (from) query.from = from
   const to = isoOrDate(opts.to); if (to) query.to = to
+  if (opts.operationalOnly) query.operational_only = 'true'
   const r: any = await unwrap(api.GET('/api/v1/finance/pnl', { params: { query: query as any } }))
   const revenue = r?.revenue ?? {}
   const cogs = r?.cogs ?? {}
@@ -252,18 +279,288 @@ export async function fetchMonthlyRevenue() {
 
 // ─── Salary / Service charge ──────────────────────────────────────────────
 
-export async function paySalaryFull(userId: string, amount: number, accountId: string, accountName: string, employeeName: string) {
+// kind='advance' → проводка ляжет категорией «Аванс», иначе «Зарплата».
+// Без этого отчёт не мог отделить авансы от расчёта: оба писались одной
+// категорией и различались лишь текстом «(аванс)» в имени контрагента.
+export async function paySalaryFull(
+  userId: string,
+  amount: number,
+  accountId: string,
+  accountName: string,
+  employeeName: string,
+  kind: 'salary' | 'advance' = 'salary',
+  period?: string, // YYYY-MM — включает серверный кап (без него кап отключён)
+  // override — выплатить сумму выше расчётного остатка осознанно (бонус,
+  // доплата, коррекция) вместо блокировки сервером; requires overrideReason.
+  opts?: { override?: boolean; overrideReason?: string },
+) {
   void accountName
+  const label = kind === 'advance' ? 'Аванс' : 'Зарплата'
   await unwrap(api.POST('/api/v1/finance/salary/pay', {
     body: {
       user_id: userId,
       amount: String(amount),
       account_id: accountId,
       employee_name: employeeName,
-      description: `Зарплата ${employeeName}`,
+      kind,
+      ...(period ? { period } : {}),
+      description: `${label} ${employeeName}`,
+      ...(opts?.override ? { override: true, override_reason: opts.overrideReason } : {}),
     } as any,
   }))
-  logAction('payroll.pay', 'payroll', userId, employeeName, { amount })
+  logAction('payroll.pay', 'payroll', userId, employeeName, { amount, kind, override: opts?.override ?? false })
+}
+
+/** Удержание с обязательной причиной (ЗП-4) — заменяет прежний счётчик без следа. */
+export async function addSalaryDeduction(userId: string, amount: number, reason: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/finance/salary/deductions', {
+    body: { user_id: userId, amount: String(amount), reason },
+    headers: { 'Idempotency-Key': randomId() },
+  }))
+  logAction('payroll.deduction', 'payroll', userId, undefined, { amount, reason })
+}
+
+export interface SalaryDeductionRow {
+  id: string
+  userId: string
+  amount: number
+  reason: string
+  createdBy?: string
+  createdAt: string
+}
+
+/** История удержаний сотрудника, новые сверху (ЗП-5, карточка сотрудника). */
+export async function fetchSalaryDeductions(userId: string): Promise<SalaryDeductionRow[]> {
+  const res: any = await unwrap(api.GET('/api/v1/finance/salary/deductions', {
+    params: { query: { user_id: userId } },
+  }))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+  return rows.map((r) => ({
+    id: r.id ?? '',
+    userId: r.user_id ?? '',
+    amount: Number(r.amount ?? 0),
+    reason: r.reason ?? '',
+    createdBy: r.created_by || undefined,
+    createdAt: r.created_at ?? '',
+  }))
+}
+
+// ─── Отработанные дни (059): табель + ручные отметки ────────────────────────
+
+export interface WorkedDaysResult {
+  shift_dates: string[]   // дни с приходом в табеле (снять нельзя)
+  manual_dates: string[]  // ручные отметки (toggleable)
+  count: number           // уникальных отработанных дней всего
+}
+
+export async function fetchWorkedDays(userId: string, from: string, to: string): Promise<WorkedDaysResult> {
+  const r: any = await unwrap(api.GET('/api/v1/finance/salary/worked-days', {
+    params: { query: { user_id: userId, from, to } },
+  }))
+  return {
+    shift_dates: r?.shift_dates ?? [],
+    manual_dates: r?.manual_dates ?? [],
+    count: Number(r?.count ?? 0),
+  }
+}
+
+// Заменяет РУЧНЫЕ отметки дней сотрудника в [from,to] на набор dates (идемпотентно).
+export async function setWorkedDays(userId: string, from: string, to: string, dates: string[]): Promise<WorkedDaysResult> {
+  const r: any = await unwrap(api.PUT('/api/v1/finance/salary/worked-days', {
+    body: { user_id: userId, from, to, dates },
+    headers: { 'Idempotency-Key': randomId() },
+  }))
+  return {
+    shift_dates: r?.shift_dates ?? [],
+    manual_dates: r?.manual_dates ?? [],
+    count: Number(r?.count ?? 0),
+  }
+}
+
+// ─── Остатки по счетам на дату ────────────────────────────────────────────
+
+export interface AccountPeriodSummary {
+  accountId: string
+  accountName: string
+  accountType: string
+  currentBalance: number
+  openingBalance: number
+  in: number
+  out: number
+  closingBalance: number
+}
+
+export interface AccountBalanceDay {
+  date: string
+  in: number
+  out: number
+  closingBalance: number
+  perAccount: Record<string, number>
+}
+
+export interface AccountBalanceHistory {
+  from: string
+  to: string
+  accounts: AccountPeriodSummary[]
+  days: AccountBalanceDay[]
+}
+
+// fetchAccountBalanceHistory — «сколько денег было на счетах в каждый день».
+// Считает сервер: financial_accounts.balance — остаток «сейчас», истории в
+// схеме нет, а список операций на клиенте обрезан лимитом выборки.
+export async function fetchAccountBalanceHistory(from: string, to: string): Promise<AccountBalanceHistory> {
+  const res: any = await unwrap(
+    api.GET('/api/v1/finance/accounts/balance-history', { params: { query: { from, to } } as any }),
+  )
+  const num = (v: any) => Number(v ?? 0)
+  return {
+    from: res?.from ?? from,
+    to: res?.to ?? to,
+    accounts: (res?.accounts ?? []).map((a: any) => ({
+      accountId: a.account_id ?? '',
+      accountName: a.account_name ?? '',
+      accountType: a.account_type ?? '',
+      currentBalance: num(a.current_balance),
+      openingBalance: num(a.opening_balance),
+      in: num(a.in),
+      out: num(a.out),
+      closingBalance: num(a.closing_balance),
+    })),
+    days: (res?.days ?? []).map((d: any) => ({
+      date: d.date ?? '',
+      in: num(d.in),
+      out: num(d.out),
+      closingBalance: num(d.closing_balance),
+      perAccount: Object.fromEntries(
+        Object.entries(d.per_account ?? {}).map(([k, v]) => [k, num(v)]),
+      ) as Record<string, number>,
+    })),
+  }
+}
+
+// ─── Начисления (оклад / дневная оплата) ──────────────────────────────────
+
+export interface SalaryAccrualRow {
+  userId: string
+  userName: string
+  position?: string
+  role?: string
+  payType: 'monthly' | 'daily'
+  salary: number
+  dailyRate: number
+  /** Дней с отметкой в табеле за период. Для оклада не используется. */
+  daysWorked: number
+  /** Оклад или ставка × дни — в зависимости от payType. */
+  accrued: number
+  advance: number
+  deductions: number
+}
+
+export async function fetchSalaryAccrual(from: string, to: string): Promise<SalaryAccrualRow[]> {
+  const res: any = await unwrap(
+    api.GET('/api/v1/finance/salary/accrual', { params: { query: { from, to } } as any }),
+  )
+  return (res?.data ?? []).map((r: any) => ({
+    userId: r.user_id ?? '',
+    userName: r.user_name ?? '',
+    position: r.position || undefined,
+    role: r.role || undefined,
+    payType: r.pay_type === 'daily' ? 'daily' : 'monthly',
+    salary: Number(r.salary ?? 0),
+    dailyRate: Number(r.daily_rate ?? 0),
+    daysWorked: Number(r.days_worked ?? 0),
+    accrued: Number(r.accrued ?? 0),
+    advance: Number(r.advance ?? 0),
+    deductions: Number(r.deductions ?? 0),
+  }))
+}
+
+// ─── Отчёт по зарплате ────────────────────────────────────────────────────
+
+export interface SalaryPayoutRow {
+  id: string
+  date: string
+  userId: string
+  userName: string
+  kind: 'salary' | 'advance' | 'service'
+  amount: number
+  accountId?: string
+  accountName?: string
+  description?: string
+  /** Выплата выше расчётного остатка, проведённая осознанно (ЗП-4). */
+  isOverride?: boolean
+}
+
+export interface SalaryReportRow {
+  userId: string
+  userName: string
+  position?: string
+  role?: string
+  salary: number
+  salaryPaid: number
+  advancePaid: number
+  servicePaid: number
+  total: number
+  payoutsCount: number
+  lastPayoutAt?: string
+}
+
+export interface SalaryReport {
+  from: string
+  to: string
+  rows: SalaryReportRow[]
+  payouts: SalaryPayoutRow[]
+  totals: {
+    salaryPaid: number
+    advancePaid: number
+    servicePaid: number
+    total: number
+    employees: number
+    payouts: number
+  }
+}
+
+export async function fetchSalaryReport(from: string, to: string): Promise<SalaryReport> {
+  const res: any = await unwrap(
+    api.GET('/api/v1/finance/salary/report', { params: { query: { from, to } } as any }),
+  )
+  return {
+    from: res?.from ?? from,
+    to: res?.to ?? to,
+    rows: (res?.rows ?? []).map((r: any) => ({
+      userId: r.user_id ?? '',
+      userName: r.user_name ?? '',
+      position: r.position || undefined,
+      role: r.role || undefined,
+      salary: Number(r.salary ?? 0),
+      salaryPaid: Number(r.salary_paid ?? 0),
+      advancePaid: Number(r.advance_paid ?? 0),
+      servicePaid: Number(r.service_paid ?? 0),
+      total: Number(r.total ?? 0),
+      payoutsCount: Number(r.payouts_count ?? 0),
+      lastPayoutAt: r.last_payout_at || undefined,
+    })),
+    payouts: (res?.payouts ?? []).map((p: any) => ({
+      id: p.id ?? '',
+      date: p.date ?? '',
+      userId: p.user_id ?? '',
+      userName: p.user_name ?? '',
+      kind: (p.kind ?? 'salary') as SalaryPayoutRow['kind'],
+      amount: Number(p.amount ?? 0),
+      accountId: p.account_id || undefined,
+      accountName: p.account_name || undefined,
+      description: p.description || undefined,
+      isOverride: Boolean(p.is_override),
+    })),
+    totals: {
+      salaryPaid: Number(res?.totals?.salary_paid ?? 0),
+      advancePaid: Number(res?.totals?.advance_paid ?? 0),
+      servicePaid: Number(res?.totals?.service_paid ?? 0),
+      total: Number(res?.totals?.total ?? 0),
+      employees: Number(res?.totals?.employees ?? 0),
+      payouts: Number(res?.totals?.payouts ?? 0),
+    },
+  }
 }
 
 export interface ServiceAccrualByWaiter {
@@ -325,8 +622,11 @@ export async function payServiceCharge(args: {
   periodFrom: string
   periodTo: string
   shiftId?: string
+  // override — см. paySalaryFull. Тот же принцип для обслуживания (ЗП-4).
+  override?: boolean
+  overrideReason?: string
 }) {
-  const { waiterId, waiterName, amount, accountId, accountName, periodFrom, periodTo, shiftId } = args
+  const { waiterId, waiterName, amount, accountId, accountName, periodFrom, periodTo, shiftId, override, overrideReason } = args
   void accountName
   const periodLabel = periodFrom.slice(0, 10) === periodTo.slice(0, 10)
     ? periodFrom.slice(0, 10)
@@ -342,9 +642,10 @@ export async function payServiceCharge(args: {
       description,
       // Привязка к смене — иначе выплата не попадёт в отчёт по смене.
       shift_id: shiftId,
+      ...(override ? { override: true, override_reason: overrideReason } : {}),
     } as any,
   }))
-  logAction('payroll.service_pay', 'payroll', waiterId, waiterName, { amount, periodFrom, periodTo, shiftId })
+  logAction('payroll.service_pay', 'payroll', waiterId, waiterName, { amount, periodFrom, periodTo, shiftId, override: override ?? false })
 }
 
 export async function transferBetweenAccounts(fromId: string, toId: string, amount: number, fromName: string, toName: string) {
@@ -483,6 +784,9 @@ function mapFinancialAccount(r: any): FinancialAccount {
     name: r.name,
     type: r.type,
     balance: Number(r.balance ?? 0),
+    // Бэк без миграции 063 поля не отдаёт — читаем как включённый, иначе
+    // после апдейта фронта раньше бэка исчезли бы ВСЕ счета из оплаты.
+    isEnabled: r.is_enabled !== false,
   } as FinancialAccount
 }
 
@@ -501,6 +805,7 @@ function mapFinancialOperation(r: any): FinancialOperation {
     isAuto: r.is_auto,
     sourceRef: r.source_ref ?? undefined,
     shiftId: r.shift_id ?? undefined,
+    createdAt: r.created_at ?? undefined,
   } as FinancialOperation
 }
 
@@ -511,6 +816,7 @@ function mapBudgetLine(r: any): BudgetLine {
     type: r.type,
     planAmount: Number(r.plan_amount ?? 0),
     factAmount: Number(r.fact_amount ?? 0),
+    period: String(r.period ?? ''),
   } as BudgetLine
 }
 
@@ -576,4 +882,56 @@ function mapEquityEntry(r: any): EquityEntry {
     amount: Number(r.amount ?? 0),
     note: r.note ?? undefined,
   }
+}
+
+// ─── Н13-ретро: разовая коррекция балансов под фикс кассовых расходов ────────
+
+export interface ShiftBalanceFixLine {
+  account_id: string
+  account_name: string
+  balance_now: number
+  correction: number
+  balance_after: number
+  ops_count: number
+}
+export interface ShiftBalanceFixResult {
+  already_applied: boolean
+  applied_at?: string | null
+  cutoff: string
+  total_correction: number
+  lines: ShiftBalanceFixLine[]
+}
+
+function mapShiftBalanceFix(r: any): ShiftBalanceFixResult {
+  return {
+    already_applied: !!r?.already_applied,
+    applied_at: r?.applied_at ?? null,
+    cutoff: String(r?.cutoff ?? ''),
+    total_correction: Number(r?.total_correction ?? 0),
+    lines: (r?.lines ?? []).map((x: any) => ({
+      account_id: String(x.account_id ?? ''),
+      account_name: String(x.account_name ?? ''),
+      balance_now: Number(x.balance_now ?? 0),
+      correction: Number(x.correction ?? 0),
+      balance_after: Number(x.balance_after ?? 0),
+      ops_count: Number(x.ops_count ?? 0),
+    })),
+  }
+}
+
+// Превью коррекции (без изменений). cutoff — дата установки фикса (YYYY-MM-DD).
+export async function fetchShiftBalanceFixPreview(cutoff?: string): Promise<ShiftBalanceFixResult> {
+  const query: any = cutoff ? { cutoff } : {}
+  const r: any = await unwrap(api.GET('/api/v1/admin/maintenance/shift-balance-fix', { params: { query } }))
+  return mapShiftBalanceFix(r)
+}
+
+// Применить коррекцию РОВНО ОДИН РАЗ (сервер ставит маркер, повтор → 409).
+export async function applyShiftBalanceFix(cutoff?: string): Promise<ShiftBalanceFixResult> {
+  const query: any = cutoff ? { cutoff } : {}
+  const r: any = await unwrap(api.POST('/api/v1/admin/maintenance/shift-balance-fix', {
+    params: { query },
+    headers: { 'Idempotency-Key': randomId() },
+  } as any))
+  return mapShiftBalanceFix(r)
 }

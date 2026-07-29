@@ -80,7 +80,7 @@ function KitchenCard({ order, tablesData, menuItems, onMove, activeStation }: { 
         <div>
           <p className="text-xs font-mono text-muted-foreground">#{order.id}</p>
           <p className="font-semibold text-foreground mt-0.5">
-            {table ? table.name : order.type === 'delivery' ? 'Доставка' : 'Самовывоз'}
+            {table ? table.name : order.type === 'delivery' ? 'Доставка' : 'С собой'}
           </p>
         </div>
         <div className={`flex items-center gap-1 text-xs ${isUrgent ? 'text-destructive font-semibold' : 'text-muted-foreground'}`}>

@@ -79,12 +79,18 @@ func setupE2E(t *testing.T) *e2eFixture {
 	pin := "1234"
 	role := "cashier"
 	// Фикстура-кассир по дефолту матрицы НЕ может отменять заказы целиком
-	// (orders.cancel). Большинство e2e — про бизнес-логику, а не про права,
-	// поэтому выдаём фикстуре явные права на отмену/возврат. Роль остаётся
-	// "cashier" — чтобы ролевые проверки (override stop-list и т.п.) не поплыли.
+	// (orders.cancel) и не имеет складских прав (inventory.manage —
+	// у кладовщика). Большинство e2e — про бизнес-логику, а не про права,
+	// поэтому выдаём фикстуре явные права. Роль остаётся "cashier" — чтобы
+	// ролевые проверки (override stop-list и т.п.) не поплыли.
+	//
+	// Это не подгонка под тесты: матрица официально поддерживает выдачу прав
+	// поверх роли (perms.Allow читает permissions.actions), и «кассир, который
+	// принимает товар» — обычная конфигурация маленького ресторана. Проверку
+	// самого гейта делает TestStockPerms_* на пользователе БЕЗ таких прав.
 	if err := gdb.Create(&models.User{
 		ID: uuid.NewString(), Name: &name, PIN: &pin, Role: &role, RestaurantID: &rid,
-		Permissions: datatypes.JSON([]byte(`{"actions":{"orders.cancel":true,"orders.void":true,"orders.refund":true,"orders.edit":true,"tables.edit":true}}`)),
+		Permissions: datatypes.JSON([]byte(`{"actions":{"orders.cancel":true,"orders.void":true,"orders.refund":true,"orders.edit":true,"tables.edit":true,"inventory.manage":true,"writeoffs.create":true,"suppliers.manage":true}}`)),
 	}).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -100,6 +106,7 @@ func setupE2E(t *testing.T) *e2eFixture {
 		DB:            gdb,
 		Build:         httpx.BuildInfo{Version: "test"},
 		WaiterAPKPath: filepath.Join(t.TempDir(), "waiter-app.apk"),
+		ZakupAPKPath:  filepath.Join(t.TempDir(), "zakup-app.apk"),
 	})
 	srv := httptest.NewServer(router)
 

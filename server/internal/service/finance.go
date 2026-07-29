@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,6 +22,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -28,10 +30,19 @@ import (
 // FinancialAccount CRUD + transfer
 // ═══════════════════════════════════════════════════════════════════════════
 
-type FinancialAccountsService struct{ r *repo.Repo }
+type FinancialAccountsService struct {
+	r   *repo.Repo
+	pub *EventPublisher
+}
 
 func NewFinancialAccountsService(r *repo.Repo) *FinancialAccountsService {
 	return &FinancialAccountsService{r: r}
+}
+
+// WithPublisher (как в других сервисах).
+func (s *FinancialAccountsService) WithPublisher(pub *EventPublisher) *FinancialAccountsService {
+	s.pub = pub
+	return s
 }
 
 type FinancialAccountInput struct {
@@ -75,17 +86,43 @@ func (s *FinancialAccountsService) Create(ctx context.Context, in FinancialAccou
 	now := time.Now().UTC()
 	a := &models.FinancialAccount{
 		ID: uuid.NewString(), Name: in.Name, Type: in.Type,
-		RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+		RestaurantID: &rid, IsEnabled: true, CreatedAt: now, UpdatedAt: now,
 	}
+	initial := decimal.Zero
 	if in.Balance != nil {
 		d, err := decimal.FromString(*in.Balance)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad balance", err)
 		}
-		a.Balance = d
+		if decimal.IsNegative(d) {
+			return nil, apperrors.Wrap("VALIDATION", "начальный баланс не может быть отрицательным", nil)
+		}
+		initial = d
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(a).Error; err != nil {
+	// #8: начальный остаток счёта — не «деньги из ниоткуда». Встречная запись —
+	// «Взнос собственника» (equity_entries), ровно как у начального остатка
+	// склада. Так актив (баланс счёта) уравновешен капиталом, Баланс сходится, и
+	// это НЕ финоперация — не засоряет ДДС/список операций/ОПиУ.
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		a.Balance = initial
+		if err := tx.Create(a).Error; err != nil {
+			return err
+		}
+		if decimal.IsPositive(initial) {
+			name := "Взнос собственника — начальный остаток счёта"
+			cat := "opening_account"
+			ridStr := rid
+			if err := tx.Create(&models.EquityEntry{
+				ID: uuid.NewString(), Name: &name, Category: &cat, Amount: initial,
+				RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return a, nil
@@ -110,12 +147,17 @@ func (s *FinancialAccountsService) Patch(ctx context.Context, id string, in Fina
 	if in.Type != nil {
 		updates["type"] = *in.Type
 	}
+	// #8: прямая перезапись баланса запрещена — это мимо всякого аудита сумм.
+	// Баланс меняется только проводкой (ручная операция / корректировка). Правку
+	// имени/типа при этом не блокируем.
 	if in.Balance != nil {
 		d, err := decimal.FromString(*in.Balance)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad balance", err)
 		}
-		updates["balance"] = d
+		if !d.Equal(existing.Balance) {
+			return nil, apperrors.Wrap("VALIDATION", "баланс счёта нельзя изменить напрямую — оформите финансовую операцию", nil)
+		}
 	}
 	scoped2, _ := s.r.ForTenant(ctx)
 	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
@@ -127,6 +169,162 @@ func (s *FinancialAccountsService) Patch(ctx context.Context, id string, in Fina
 		return nil, err
 	}
 	return &out, nil
+}
+
+// SetEnabled — включить/отключить счёт. Отключение заменяет удаление: строка
+// остаётся, вся история и остаток целы, но счёт перестаёт предлагаться при
+// оплате, и MustBeEnabled ниже не даёт провести на него деньги.
+//
+// Баланс НЕ проверяем осознанно: это не удаление, деньги никуда не деваются и
+// продолжают считаться в Балансе. Владельцу не нужно сначала обнулять счёт.
+//
+// Гварды — только там, где отключение реально ломает работу кассы.
+func (s *FinancialAccountsService) SetEnabled(ctx context.Context, id string, enabled bool) (*models.FinancialAccount, error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var existing models.FinancialAccount
+	if err := scoped.Where("id = ?", id).First(&existing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	if existing.IsEnabled == enabled {
+		return &existing, nil // идемпотентно
+	}
+
+	if !enabled {
+		if err := s.checkCanDisable(ctx, existing); err != nil {
+			return nil, err
+		}
+	}
+
+	now := time.Now().UTC()
+	updates := map[string]any{"is_enabled": enabled, "updated_at": now}
+	if enabled {
+		updates["disabled_at"] = nil
+	} else {
+		updates["disabled_at"] = now
+	}
+	scopedUpd, _ := s.r.ForTenant(ctx)
+	if err := scopedUpd.Model(&models.FinancialAccount{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	scopedOut, _ := s.r.ForTenant(ctx)
+	var out models.FinancialAccount
+	if err := scopedOut.Where("id = ?", id).First(&out).Error; err != nil {
+		return nil, err
+	}
+	// Публикуем ПОСЛЕ успешного обновления — открытые POS-терминалы
+	// перезапрашивают список счетов и перестают предлагать отключённый.
+	if s.pub != nil {
+		rid, err := tenant.MustRestaurantID(ctx)
+		if err == nil {
+			buf := NewBuffer()
+			buf.Add(EventFinanceAccountUpdated, map[string]any{
+				"id":         out.ID,
+				"is_enabled": out.IsEnabled,
+			})
+			s.pub.Flush(ctx, rid, buf)
+		}
+	}
+	return &out, nil
+}
+
+// checkCanDisable — три случая, когда отключение оставит кассу нерабочей.
+func (s *FinancialAccountsService) checkCanDisable(ctx context.Context, acc models.FinancialAccount) error {
+	// 1. Счёт открытой смены: смена уже пишет в него выручку, отключение
+	//    посреди смены оставит кассира без счёта до её закрытия.
+	scopedShift, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var openShifts int64
+	if err := scopedShift.Model(&models.CashShift{}).
+		Where("account_id = ? AND status = ?", acc.ID, "open").Count(&openShifts).Error; err != nil {
+		return err
+	}
+	if openShifts > 0 {
+		return apperrors.Wrap("CONFLICT", "счёт используется в открытой смене — закройте смену", nil)
+	}
+
+	// 2. Последний включённый наличный счёт: pos2 при открытии смены фильтрует
+	//    строго по type='cash' без фолбэка — без единого наличного счёта смена
+	//    просто не откроется.
+	if acc.Type != nil && *acc.Type == "cash" {
+		scopedCash, err := s.r.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		var otherCash int64
+		if err := scopedCash.Model(&models.FinancialAccount{}).
+			Where("id <> ? AND type = ? AND is_enabled = true", acc.ID, "cash").
+			Count(&otherCash).Error; err != nil {
+			return err
+		}
+		if otherCash == 0 {
+			return apperrors.Wrap("CONFLICT", "это единственный включённый наличный счёт — без него не открыть смену", nil)
+		}
+	}
+
+	// 3. Активные регулярные платежи: шаблон продолжил бы списывать с
+	//    отключённого счёта. Перечисляем их, чтобы владелец перепривязал.
+	scopedRec, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var pays []models.RecurringPayment
+	if err := scopedRec.Where("account_id = ? AND active = true", acc.ID).
+		Order("name ASC").Limit(5).Find(&pays).Error; err != nil {
+		return err
+	}
+	if len(pays) > 0 {
+		names := make([]string, 0, len(pays))
+		for _, p := range pays {
+			if p.Name != nil && *p.Name != "" {
+				names = append(names, *p.Name)
+			}
+		}
+		msg := "на счёт настроены регулярные платежи — перепривяжите их к другому счёту"
+		if len(names) > 0 {
+			msg += ": " + strings.Join(names, ", ")
+		}
+		return apperrors.Wrap("CONFLICT", msg, nil)
+	}
+	return nil
+}
+
+// MustBeEnabled — гвард для любой проводки денег. Вызывается из сервисов,
+// которые дебетуют/кредитуют счёт (операции, оплата заказа, приёмка, оплата
+// долга, ЗП, перевод). Страховка на случай пропущенного пикера на фронте или
+// старой сборки APK закупщика, которая ещё не знает про отключённые счета.
+//
+// Пустой id пропускаем — «счёт не указан» валидируется вызывающим кодом.
+func MustBeEnabled(ctx context.Context, r *repo.Repo, accountID string) error {
+	if accountID == "" {
+		return nil
+	}
+	scoped, err := r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var acc models.FinancialAccount
+	if err := scoped.Where("id = ?", accountID).First(&acc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return apperrors.Wrap("VALIDATION", "счёт не найден", nil)
+		}
+		return err
+	}
+	if !acc.IsEnabled {
+		name := ""
+		if acc.Name != nil {
+			name = " «" + *acc.Name + "»"
+		}
+		return apperrors.Wrap("CONFLICT", "счёт"+name+" отключён — выберите другой счёт", nil)
+	}
+	return nil
 }
 
 // Delete — 409 если есть FinancialOperation на этот аккаунт.
@@ -141,6 +339,11 @@ func (s *FinancialAccountsService) Delete(ctx context.Context, id string) error 
 			return apperrors.ErrNotFound
 		}
 		return err
+	}
+	// #8: счёт с ненулевым балансом удалять нельзя — иначе CashTotal в Балансе
+	// упадёт на сумму остатка без единой проводки.
+	if !existing.Balance.IsZero() {
+		return apperrors.Wrap("CONFLICT", "нельзя удалить счёт с ненулевым балансом: "+existing.Balance.String(), nil)
 	}
 	scopedCheck, _ := s.r.ForTenant(ctx)
 	var refs int64
@@ -181,6 +384,12 @@ func (s *FinancialAccountsService) Transfer(ctx context.Context, in AccountTrans
 	amount, err := decimal.FromString(*in.Amount)
 	if err != nil || !decimal.IsPositive(amount) {
 		return nil, apperrors.Wrap("VALIDATION", "amount must be positive decimal", err)
+	}
+	// Принимающий счёт должен быть включён — новые деньги на отключённый счёт
+	// не заводим. Счёт-источник проверять НЕ надо осознанно: перевод — это
+	// штатный способ забрать остаток с уже отключённого счёта.
+	if err := MustBeEnabled(ctx, s.r, *in.ToID); err != nil {
+		return nil, err
 	}
 
 	var result AccountTransferResult
@@ -295,10 +504,19 @@ func (s *FinancialAccountsService) Transfer(ctx context.Context, in AccountTrans
 // FinancialOperations — paged list + manual create
 // ═══════════════════════════════════════════════════════════════════════════
 
-type FinancialOperationsService struct{ r *repo.Repo }
+type FinancialOperationsService struct {
+	r   *repo.Repo
+	pub *EventPublisher
+}
 
 func NewFinancialOperationsService(r *repo.Repo) *FinancialOperationsService {
 	return &FinancialOperationsService{r: r}
+}
+
+// WithPublisher (как в других сервисах).
+func (s *FinancialOperationsService) WithPublisher(pub *EventPublisher) *FinancialOperationsService {
+	s.pub = pub
+	return s
 }
 
 type FinancialOperationsFilter struct {
@@ -382,8 +600,24 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 	if in.Category == nil || *in.Category == "" {
 		return nil, apperrors.Wrap("VALIDATION", "category is required", nil)
 	}
+	// #29: зарезервированные категории и financial-активность создаются ТОЛЬКО
+	// системой (приёмка, гашение долга, перевод, выручка, возврат). Ручная
+	// операция с такой меткой уводила деньги со счёта, но исключалась из opex
+	// ОПиУ — простой способ спрятать расход из прибыли. Запрещаем на входе.
+	switch *in.Category {
+	case "stock_purchase", "supplier_payment", "revenue", "refund", "Перевод":
+		return nil, apperrors.Wrap("VALIDATION", "категория «"+*in.Category+"» зарезервирована системой", nil)
+	}
+	if in.Activity != nil && *in.Activity == "financial" {
+		return nil, apperrors.Wrap("VALIDATION", "activity=financial зарезервирована (переводы между счетами)", nil)
+	}
 	if in.AccountID == nil || *in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	// Отключённый счёт не участвует в операциях — ни приход, ни расход.
+	// Забрать с него остаток можно переводом (см. Transfer ниже).
+	if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	date := now.Format("2006-01-02")
@@ -439,10 +673,41 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
-		return tx.Create(&op).Error
+		if err := tx.Create(&op).Error; err != nil {
+			return err
+		}
+		// #27: наличный расход, отбитый ручной операцией на кассовом счёте
+		// открытой смены, обязан уменьшить и expected_cash — иначе смена и счёт
+		// расходятся (фантомная недостача/излишек в Z). Зеркало создаётся только
+		// если счёт принадлежит открытой смене (внутри recordShiftCashOutIfActive).
+		if *in.Type == "out" {
+			shiftRef := ""
+			if in.ShiftID != nil {
+				shiftRef = *in.ShiftID
+			}
+			d := "Расход"
+			if in.Description != nil && *in.Description != "" {
+				d = *in.Description
+			}
+			if err := recordShiftCashOutIfActive(tx, rid, shiftRef, *in.AccountID, d, date, amount, now); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	// Публикуем ПОСЛЕ успешного коммита: подписчики (счета, ДДС, баланс)
+	// перезапрашивают данные и должны увидеть уже зафиксированную операцию.
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventFinanceOperation, map[string]any{
+			"id":         op.ID,
+			"type":       in.Type,
+			"account_id": in.AccountID,
+		})
+		s.pub.Flush(ctx, ridStr, buf)
 	}
 	return &op, nil
 }
@@ -561,6 +826,66 @@ type ByCategoryRow struct {
 	Amount   decimal.Decimal `json:"amount"`
 }
 
+// opexExcludedCategories — категории out-операций, которые НЕ являются
+// операционным расходом ОПиУ: закупка склада (станет COGS при продаже), гашение
+// долга поставщику и обязательства (движение по пассиву). Единый список для всех
+// отчётов — иначе они дают разную прибыль (#10/#12/#17).
+var opexExcludedCategories = []string{"stock_purchase", "supplier_payment", "liability_payment"}
+
+// OpexByDay — операционный расход по дням (тот же opex-фильтр, что в ОПиУ).
+// Нужен «Динамике» вместо валового ДДС-оттока (#12): раньше расходы графика
+// раздувались переводами/инкассациями/закупками.
+func (s *FinanceReportsService) OpexByDay(ctx context.Context, f PeriodFilter) (map[string]decimal.Decimal, error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	type dayRow struct {
+		Day   string          `gorm:"column:day"`
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	q := applyFOPeriod(applyOpexFilter(scoped.Table("financial_operations").
+		Select(foBizDay+" AS day, COALESCE(SUM(amount), 0) AS total")), f)
+	var rows []dayRow
+	if err := q.Group("day").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]decimal.Decimal, len(rows))
+	for _, r := range rows {
+		out[r.Day] = decimal.Normalize(r.Total)
+	}
+	return out, nil
+}
+
+// applyOpexFilter — операционный расход: type='out', не financial-активность
+// (переводы/инкассации/взносы), не зарезервированные категории. Применяется во
+// всех отчётах, где нужен opex, чтобы прибыль везде считалась одинаково.
+func applyOpexFilter(q *gorm.DB) *gorm.DB {
+	return q.Where("type = ?", "out").
+		Where("COALESCE(activity, '') <> ?", "financial").
+		Where("COALESCE(category, '') NOT IN ?", opexExcludedCategories)
+}
+
+// foBizDay — SQL деловой даты финоперации: date (введённая пользователем), а если
+// пусто — дата создания. По ней фильтруем и группируем финотчёты. Иначе операция,
+// заведённая задним числом (напр. «Аренда 01.07», внесена 05.07), попадала в
+// период/день ВВОДА, а не в свой: в ДДС график по created_at не сходился с
+// таблицей, которую клиент фильтрует по date.
+const foBizDay = "COALESCE(NULLIF(date, ''), to_char(created_at, 'YYYY-MM-DD'))"
+
+// applyFOPeriod фильтрует financial_operations по деловой дате (foBizDay) в
+// полуинтервале [From, To). To уже эксклюзивна — date-only +1 день в parsePeriod.
+// Сравнение текстовых 'YYYY-MM-DD' лексикографическое, что корректно для дат.
+func applyFOPeriod(q *gorm.DB, f PeriodFilter) *gorm.DB {
+	if f.From != nil {
+		q = q.Where(foBizDay+" >= ?", f.From.Format("2006-01-02"))
+	}
+	if f.To != nil {
+		q = q.Where(foBizDay+" < ?", f.To.Format("2006-01-02"))
+	}
+	return q
+}
+
 func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJSON, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
@@ -571,35 +896,114 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 	out.Period.To = f.To
 
 	scoped, _ := s.r.ForTenant(ctx)
-	// Revenue total + by payment_method.
+	// Revenue total + разбивка по методам оплаты.
+	// 'refunded' (полный возврат) включаем НАРАВНЕ с 'closed': валовая выручка и
+	// COGS считаются, а возврат вычитается отдельной строкой opex (category=
+	// 'refund'). Иначе полный возврат бил по прибыли дважды.
+	//
+	// ВАЖНО: 'split' — это РЕЖИМ оплаты (счёт разделён), а НЕ счёт. Реальные
+	// деньги ушли в наличные/карту через order_splits. Поэтому псевдо-метод
+	// «split» РАСКЛАДЫВАЕМ на фактические методы его сплитов пропорционально их
+	// долям — в отчёте не должно быть «счёта split» (замечание владельца).
 	type revRow struct {
 		Method string          `gorm:"column:method"`
 		Total  decimal.Decimal `gorm:"column:total"`
 	}
-	// 'refunded' (полный возврат) включаем НАРАВНЕ с 'closed': их валовая выручка
-	// и COGS должны считаться, а сам возврат вычитается отдельной строкой opex
-	// (category='refund'). Иначе полный возврат бил по прибыли дважды: выручка
-	// пропадала (статус 'refunded' выпадал) И возврат шёл в расход. Частичный
-	// возврат оставляет статус 'closed' и уже считался корректно — теперь оба
-	// пути согласованы.
-	q := scoped.Table("orders").
-		Select("COALESCE(payment_method, '') AS method, COALESCE(SUM(total_with_service), 0) AS total").
-		Where("status IN ? AND closed_at IS NOT NULL", []string{"closed", "refunded"})
-	if f.From != nil {
-		q = q.Where("closed_at >= ?", *f.From)
+	applyDates := func(q *gorm.DB) *gorm.DB {
+		if f.From != nil {
+			q = q.Where("closed_at >= ?", *f.From)
+		}
+		if f.To != nil {
+			q = q.Where("closed_at < ?", *f.To)
+		}
+		return q
 	}
-	if f.To != nil {
-		q = q.Where("closed_at < ?", *f.To)
+	methodTotals := map[string]decimal.Decimal{}
+	methodOrder := []string{}
+	addMethod := func(method string, amt decimal.Decimal) {
+		if _, ok := methodTotals[method]; !ok {
+			methodOrder = append(methodOrder, method)
+		}
+		methodTotals[method] = decimal.Add(methodTotals[method], amt)
 	}
+
+	// 1. Обычные заказы (не split) — по orders.payment_method.
 	var revRows []revRow
-	if err := q.Group("payment_method").Scan(&revRows).Error; err != nil {
+	if err := applyDates(scoped.Table("orders").
+		Select("COALESCE(payment_method, '') AS method, COALESCE(SUM(total_with_service), 0) AS total").
+		Where("status IN ? AND closed_at IS NOT NULL AND COALESCE(payment_method,'') <> 'split'", []string{"closed", "refunded"})).
+		Group("payment_method").Scan(&revRows).Error; err != nil {
 		return nil, err
 	}
-	out.Revenue.Total = decimal.Zero
-	out.Revenue.ByMethod = make([]ByMethodRow, 0, len(revRows))
 	for _, r := range revRows {
-		out.Revenue.Total = decimal.Add(out.Revenue.Total, r.Total)
-		out.Revenue.ByMethod = append(out.Revenue.ByMethod, ByMethodRow{Method: r.Method, Amount: decimal.Normalize(r.Total)})
+		addMethod(r.Method, r.Total)
+	}
+
+	// 2. Split-заказы — распределяем total_with_service по методам их сплитов.
+	scopedSplitOrd, _ := s.r.ForTenant(ctx)
+	type splitOrdRow struct {
+		ID      string          `gorm:"column:id"`
+		TotalWS decimal.Decimal `gorm:"column:total_with_service"`
+	}
+	var splitOrders []splitOrdRow
+	if err := applyDates(scopedSplitOrd.Table("orders").
+		Select("id, total_with_service").
+		Where("status IN ? AND closed_at IS NOT NULL AND COALESCE(payment_method,'') = 'split'", []string{"closed", "refunded"})).
+		Scan(&splitOrders).Error; err != nil {
+		return nil, err
+	}
+	if len(splitOrders) > 0 {
+		ids := make([]string, len(splitOrders))
+		for i, o := range splitOrders {
+			ids[i] = o.ID
+		}
+		scopedSplits, _ := s.r.ForTenant(ctx)
+		type splPart struct {
+			OrderID string          `gorm:"column:order_id"`
+			Method  string          `gorm:"column:method"`
+			Total   decimal.Decimal `gorm:"column:total"`
+		}
+		var parts []splPart
+		if err := scopedSplits.Table("order_splits").
+			Select("order_id, COALESCE(payment_method, '') AS method, COALESCE(total, 0) AS total").
+			Where("order_id IN ?", ids).Scan(&parts).Error; err != nil {
+			return nil, err
+		}
+		byOrder := map[string][]splPart{}
+		baseByOrder := map[string]decimal.Decimal{}
+		for _, pt := range parts {
+			byOrder[pt.OrderID] = append(byOrder[pt.OrderID], pt)
+			baseByOrder[pt.OrderID] = decimal.Add(baseByOrder[pt.OrderID], pt.Total)
+		}
+		for _, o := range splitOrders {
+			ps := byOrder[o.ID]
+			base := baseByOrder[o.ID]
+			if len(ps) == 0 || !decimal.IsPositive(base) {
+				// Нет сплитов/нулевая база — оставляем «split» (edge case).
+				addMethod("split", o.TotalWS)
+				continue
+			}
+			// Пропорция по долям сплитов; последнему — остаток (Σ === TotalWS,
+			// без дрейфа округления).
+			remaining := o.TotalWS
+			for i, pt := range ps {
+				var share decimal.Decimal
+				if i == len(ps)-1 {
+					share = remaining
+				} else {
+					share = decimal.Normalize(decimal.DivRound(decimal.Mul(o.TotalWS, pt.Total), base))
+					remaining = decimal.Sub(remaining, share)
+				}
+				addMethod(pt.Method, share)
+			}
+		}
+	}
+
+	out.Revenue.Total = decimal.Zero
+	out.Revenue.ByMethod = make([]ByMethodRow, 0, len(methodOrder))
+	for _, m := range methodOrder {
+		out.Revenue.Total = decimal.Add(out.Revenue.Total, methodTotals[m])
+		out.Revenue.ByMethod = append(out.Revenue.ByMethod, ByMethodRow{Method: m, Amount: decimal.Normalize(methodTotals[m])})
 	}
 	out.Revenue.Total = decimal.Normalize(out.Revenue.Total)
 
@@ -662,22 +1066,13 @@ func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJS
 		Category string          `gorm:"column:category"`
 		Total    decimal.Decimal `gorm:"column:total"`
 	}
-	q3 := scoped3.Table("financial_operations").
-		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total").
-		Where("type = ?", "out").
-		// Переводы между счетами (activity='financial', категория «Перевод») — это
-		// НЕ операционный расход: деньги не покидают бизнес, встречный in-leg их
-		// возвращает на другой счёт. Раньше они попадали в opex и занижали прибыль
-		// на каждую инкассацию в банк.
-		Where("COALESCE(activity, '') <> ?", "financial").
-		// stock_purchase — это склад (станет COGS при продаже), а supplier_payment —
-		// гашение долга поставщику (обязательство, не расход). Обе — не opex.
-		Where("COALESCE(category, '') NOT IN ?", []string{"stock_purchase", "supplier_payment"})
-	if f.From != nil {
-		q3 = q3.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q3 = q3.Where("created_at < ?", *f.To)
+	q3 := applyFOPeriod(applyOpexFilter(scoped3.Table("financial_operations").
+		Select("COALESCE(category, '') AS category, COALESCE(SUM(amount), 0) AS total")), f)
+	if f.OperationalOnly {
+		// «Только операционные»: капвложения (investment — оборудование) и
+		// финансовую активность в opex не считаем, чтобы разовая покупка не
+		// проваливала операционную прибыль. По умолчанию (флаг off) — как было.
+		q3 = q3.Where("COALESCE(activity, 'operational') = ?", "operational")
 	}
 	var opexRows []opexRow
 	if err := q3.Group("category").Scan(&opexRows).Error; err != nil {
@@ -749,14 +1144,8 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Type     string          `gorm:"column:type"`
 		Total    decimal.Decimal `gorm:"column:total"`
 	}
-	q := scoped.Table("financial_operations").
-		Select("COALESCE(activity, 'operational') AS activity, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total")
-	if f.From != nil {
-		q = q.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q = q.Where("created_at < ?", *f.To)
-	}
+	q := applyFOPeriod(scoped.Table("financial_operations").
+		Select("COALESCE(activity, 'operational') AS activity, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total"), f)
 	var rows []actRow
 	if err := q.Group("activity, type").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -783,14 +1172,8 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Type  string          `gorm:"column:type"`
 		Total decimal.Decimal `gorm:"column:total"`
 	}
-	q2 := scoped2.Table("financial_operations").
-		Select("to_char(created_at, 'YYYY-MM-DD') AS day, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total")
-	if f.From != nil {
-		q2 = q2.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q2 = q2.Where("created_at < ?", *f.To)
-	}
+	q2 := applyFOPeriod(scoped2.Table("financial_operations").
+		Select(foBizDay+" AS day, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total"), f)
 	var drows []dayRow
 	if err := q2.Group("day, type").Order("day ASC").Scan(&drows).Error; err != nil {
 		return nil, err
@@ -821,16 +1204,9 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Category string          `gorm:"column:category"`
 		Total    decimal.Decimal `gorm:"column:total"`
 	}
-	q3 := scoped3.Table("financial_operations").
+	q3 := applyFOPeriod(applyOpexFilter(scoped3.Table("financial_operations").
 		Select(`COALESCE(NULLIF(category, ''), 'Без категории') AS category,
-		        COALESCE(SUM(amount), 0) AS total`).
-		Where("COALESCE(type, '') = 'out'")
-	if f.From != nil {
-		q3 = q3.Where("created_at >= ?", *f.From)
-	}
-	if f.To != nil {
-		q3 = q3.Where("created_at < ?", *f.To)
-	}
+		        COALESCE(SUM(amount), 0) AS total`)), f)
 	var crows []catRow
 	_ = q3.Group("category").Scan(&crows).Error
 	out.OutByCategory = make([]CategoryAmount, 0, len(crows))
@@ -913,7 +1289,7 @@ func (s *FinanceReportsService) Balance(ctx context.Context) (*BalanceJSON, erro
 	}
 	scopedInv, _ := s.r.ForTenant(ctx)
 	if err := scopedInv.Model(&models.Ingredient{}).
-		Select("COALESCE(SUM(qty * price_per_unit), 0) AS total").
+		Select("COALESCE(SUM(GREATEST(qty, 0) * price_per_unit), 0) AS total").
 		Scan(&invRow).Error; err != nil {
 		return nil, err
 	}
@@ -923,7 +1299,7 @@ func (s *FinanceReportsService) Balance(ctx context.Context) (*BalanceJSON, erro
 	}
 	scopedSemi, _ := s.r.ForTenant(ctx)
 	if err := scopedSemi.Model(&models.SemiFinishedStock{}).
-		Select("COALESCE(SUM(qty * price_per_unit), 0) AS total").
+		Select("COALESCE(SUM(GREATEST(qty, 0) * price_per_unit), 0) AS total").
 		Scan(&semiRow).Error; err != nil {
 		return nil, err
 	}
@@ -1031,7 +1407,7 @@ func (s *FinanceReportsService) MonthlyRevenue(ctx context.Context, months int) 
 	var rows []row
 	if err := scoped.Table("orders").
 		Select("to_char(closed_at, 'YYYY-MM') AS month, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
-		Where("status = ? AND closed_at IS NOT NULL AND closed_at >= ?", "closed", startMonth).
+		Where("status IN ? AND closed_at IS NOT NULL AND closed_at >= ?", []string{"closed", "refunded"}, startMonth).
 		Group("month").
 		Order("month ASC").
 		Scan(&rows).Error; err != nil {
@@ -1050,9 +1426,9 @@ func (s *FinanceReportsService) MonthlyRevenue(ctx context.Context, months int) 
 	}
 	scopedE, _ := s.r.ForTenant(ctx)
 	var expRows []expRow
-	if err := scopedE.Table("financial_operations").
-		Select("to_char(COALESCE(date::timestamptz, created_at), 'YYYY-MM') AS month, COALESCE(SUM(amount), 0) AS total").
-		Where("type = ? AND activity = ? AND COALESCE(date::timestamptz, created_at) >= ?", "out", "operational", startMonth).
+	if err := applyOpexFilter(scopedE.Table("financial_operations").
+		Select("left("+foBizDay+", 7) AS month, COALESCE(SUM(amount), 0) AS total")).
+		Where(foBizDay+" >= ?", startMonth.Format("2006-01-02")).
 		Group("month").
 		Scan(&expRows).Error; err != nil {
 		return nil, err
@@ -1104,17 +1480,137 @@ type SalaryPayInput struct {
 	EmployeeName *string `json:"employee_name,omitempty"`
 	Period       *string `json:"period,omitempty"`
 	Description  *string `json:"description,omitempty"`
+	// Kind — «salary» (окончательный расчёт) или «advance» (аванс). До этого
+	// оба писались одной категорией «Зарплата» и различались только текстом
+	// «(аванс)» в имени контрагента, из-за чего отчёт не мог их разделить.
+	// Пусто → salary (совместимость со старыми клиентами).
+	Kind *string `json:"kind,omitempty"`
+	// Override — выплатить сумму выше расчётного остатка осознанно (бонус,
+	// доплата, ручная коррекция), а не быть заблокированным сервером. Требует
+	// непустой OverrideReason. Без Override превышение — 409, как раньше (ЗП-4).
+	Override *bool `json:"override,omitempty"`
+	// OverrideReason — обязательна при Override=true и реальном превышении
+	// кап-суммы. Уходит в описание проводки (см. mergeOverrideReason) — отчёт
+	// отличит осознанную "свободную" выплату от обычного расчёта по формуле.
+	OverrideReason *string `json:"override_reason,omitempty"`
+}
+
+// mergeOverrideReason — причина "свободной" выплаты в текст проводки.
+// Отдельного поля под причину в financial_operations нет (и не нужно — это
+// разовое пояснение, не структурный признак), is_override уже даёт признак
+// для фильтрации, а текст — для человека, читающего ленту операций.
+func mergeOverrideReason(base *string, reason string) string {
+	if base != nil && *base != "" {
+		return *base + " — свободная выплата: " + reason
+	}
+	return "Свободная выплата: " + reason
+}
+
+// Категории зарплатных проводок в financial_operations.
+const (
+	CategorySalary  = "Зарплата"
+	CategoryAdvance = "Аванс"
+)
+
+// salaryCategory — маппинг kind → категория проводки.
+func salaryCategory(kind *string) string {
+	if kind != nil && *kind == "advance" {
+		return CategoryAdvance
+	}
+	return CategorySalary
 }
 
 func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*models.FinancialOperation, error) {
+	// #7: сервер сам считает остаток к выплате и не даёт переплатить/выплатить
+	// дважды за период. Раньше amount брался от клиента без проверки: зарплату за
+	// период можно было выплатить сколько угодно раз, а аванс/удержания
+	// (User.Advance/Deductions) не вычитались вовсе.
+	//
+	// ЗП-4: превышение остатка теперь не глухая стена, а осознанный выбор —
+	// Override+OverrideReason проводит "свободную выплату" (бонус, доплата,
+	// коррекция), помечает is_override=true и кладёт причину в описание.
+	isOverride := false
+	overrideDesc := in.Description
+	if in.UserID != nil && *in.UserID != "" && in.Amount != nil && *in.Amount != "" && in.Period != nil && *in.Period != "" {
+		amount, perr := decimal.FromString(*in.Amount)
+		if perr != nil || !decimal.IsPositive(amount) {
+			return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
+		}
+		var u models.User
+		scoped, _ := s.r.ForTenant(ctx)
+		if err := scoped.Where("id = ?", *in.UserID).First(&u).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, apperrors.Wrap("VALIDATION", "user not found", nil)
+			}
+			return nil, err
+		}
+		// Уже выплачено за период = Σ зарплатных проводок этого сотрудника,
+		// датированных этим месяцем (date LIKE 'YYYY-MM%').
+		// Только категория «Зарплата»: авансы теперь пишутся отдельной
+		// категорией и вычитаются из остатка через u.Advance — считать их
+		// здесь второй раз означало бы вычесть аванс дважды.
+		var paid decimal.Decimal
+		scopedP, _ := s.r.ForTenant(ctx)
+		if err := scopedP.Table("financial_operations").
+			Select("COALESCE(SUM(amount), 0)").
+			Where("category = ? AND source_ref = ? AND date LIKE ?", CategorySalary, *in.UserID, *in.Period+"%").
+			Scan(&paid).Error; err != nil {
+			return nil, err
+		}
+		// Начислено за период. Для оклада — сумма из карточки, для дневной
+		// оплаты (054) — ставка × отработанные дни из табеля: капить дневника
+		// по u.Salary было бы неверно, у него оклад равен нулю.
+		accrued := u.Salary
+		basis := fmt.Sprintf("оклад %s", u.Salary)
+		if payTypeOf(u) == PayTypeDaily {
+			days, derr := s.daysWorkedInPeriod(ctx, *in.UserID, *in.Period)
+			if derr != nil {
+				return nil, derr
+			}
+			accrued = accruedFor(u, days)
+			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
+		}
+		// Кап действует только если начислено что-то положительное. Ноль
+		// (не сконфигурирован оклад/ставка или нет отметок) — выплата ручная,
+		// без ограничения: иначе включение дневной оплаты заблокировало бы
+		// выплаты до заполнения табеля.
+		if !accrued.IsPositive() {
+			return s.payout(ctx, payoutInput{
+				UserID: in.UserID, Amount: in.Amount, AccountID: in.AccountID,
+				Counterparty: in.EmployeeName, Category: salaryCategory(in.Kind),
+				Period: in.Period, Description: in.Description,
+			})
+		}
+		// Начислено − аванс − удержания − уже выплачено.
+		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, u.Advance), u.Deductions), paid)
+		if decimal.IsNegative(payable) {
+			payable = decimal.Zero
+		}
+		if decimal.Sub(amount, payable).GreaterThan(decimal.MustFromString("0.01")) {
+			if in.Override == nil || !*in.Override {
+				return nil, apperrors.Wrap("VALIDATION",
+					fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
+						amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+			}
+			reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
+			if reason == "" {
+				return nil, apperrors.Wrap("VALIDATION", "укажите причину свободной выплаты", nil)
+			}
+			isOverride = true
+			merged := mergeOverrideReason(in.Description, reason)
+			overrideDesc = &merged
+		}
+	}
+	sp := in
 	return s.payout(ctx, payoutInput{
-		UserID:       in.UserID,
-		Amount:       in.Amount,
-		AccountID:    in.AccountID,
-		Counterparty: in.EmployeeName,
-		Category:     "Зарплата",
-		Period:       in.Period,
-		Description:  in.Description,
+		UserID:       sp.UserID,
+		Amount:       sp.Amount,
+		AccountID:    sp.AccountID,
+		Counterparty: sp.EmployeeName,
+		Category:     salaryCategory(sp.Kind),
+		Period:       sp.Period,
+		Description:  overrideDesc,
+		IsOverride:   isOverride,
 	})
 }
 
@@ -1128,6 +1624,11 @@ type ServiceChargePayInput struct {
 	// ShiftID — без него выплата не привязывается к смене и не видна в
 	// отчёте по смене (service-payout/by-shift).
 	ShiftID *string `json:"shift_id,omitempty"`
+	// Override/OverrideReason — см. SalaryPayInput. Тот же принцип: превышение
+	// расчётного остатка не блокируется намертво, а требует осознанного флага
+	// и причины (ЗП-4).
+	Override       *bool   `json:"override,omitempty"`
+	OverrideReason *string `json:"override_reason,omitempty"`
 }
 
 func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePayInput) (*models.FinancialOperation, error) {
@@ -1150,14 +1651,42 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 		}
 	}
 	// Кап суммы: выплатить нельзя больше, чем НАЧИСЛЕНО официанту минус уже
-	// ВЫПЛАЧЕНО (по этой смене). Прежде единственным гейтом было «хватает денег
-	// на счёте» — можно было вывести сверх заработанного. Скоуп — по shift_id
-	// (source of truth начисления). Допуск 0.01 на округление.
-	if in.ShiftID != nil && *in.ShiftID != "" && in.WaiterID != nil && *in.WaiterID != "" && in.Amount != nil {
+	// ВЫПЛАЧЕНО. Прежде единственным гейтом было «хватает денег на счёте» —
+	// можно было вывести сверх заработанного. Допуск 0.01 на округление.
+	//
+	// ЗП-4: раньше кап срабатывал ТОЛЬКО по ShiftID — а страница «Зарплата»
+	// шлёт period_from/period_to без shift_id, и кап там был фантомным (UI
+	// показывал «остаток», сервер его не проверял вообще). Теперь при
+	// отсутствии смены считаем тот же остаток за произвольный период —
+	// ровно то, что показано в интерфейсе, наконец действительно проверяется.
+	isOverride := false
+	overrideDesc := in.Description
+	if in.WaiterID != nil && *in.WaiterID != "" && in.Amount != nil {
 		if payAmt, perr := decimal.FromString(*in.Amount); perr == nil {
-			accrual, aerr := s.AccrualByWaiter(ctx, nil, nil, *in.ShiftID)
-			payouts, err2 := s.PayoutByWaiter(ctx, nil, nil, *in.ShiftID)
-			if aerr == nil && err2 == nil {
+			var accrual []ServiceAccrualRow
+			var payouts []ServicePayoutRow
+			var aerr, perr2 error
+			haveCapData := false
+			switch {
+			case in.ShiftID != nil && *in.ShiftID != "":
+				accrual, aerr = s.AccrualByWaiter(ctx, nil, nil, *in.ShiftID)
+				payouts, perr2 = s.PayoutByWaiter(ctx, nil, nil, *in.ShiftID)
+				haveCapData = aerr == nil && perr2 == nil
+			case in.PeriodFrom != nil && *in.PeriodFrom != "" && in.PeriodTo != nil && *in.PeriodTo != "":
+				from, ferr := timeutil.ParseLooseRFC3339(*in.PeriodFrom)
+				to, terr := timeutil.ParseLooseRFC3339(*in.PeriodTo)
+				if ferr == nil && terr == nil {
+					// Date-only `to` (без времени) — включительно весь день,
+					// как в parsePeriod (xlsx.go) для остальных отчётов.
+					if !strings.Contains(*in.PeriodTo, "T") {
+						to = to.AddDate(0, 0, 1)
+					}
+					accrual, aerr = s.AccrualByWaiter(ctx, &from, &to, "")
+					payouts, perr2 = s.PayoutByWaiter(ctx, &from, &to, "")
+					haveCapData = aerr == nil && perr2 == nil
+				}
+			}
+			if haveCapData {
 				accrued := decimal.Zero
 				for _, r := range accrual {
 					if r.WaiterID == *in.WaiterID {
@@ -1174,9 +1703,18 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 				}
 				remaining := decimal.Sub(accrued, paid)
 				if decimal.Sub(payAmt, remaining).GreaterThan(decimal.MustFromString("0.01")) {
-					return nil, apperrors.Wrap("VALIDATION",
-						fmt.Sprintf("сумма выплаты %s превышает остаток к выплате %s (начислено %s − выплачено %s)",
-							payAmt.String(), remaining.String(), accrued.String(), paid.String()), nil)
+					if in.Override == nil || !*in.Override {
+						return nil, apperrors.Wrap("VALIDATION",
+							fmt.Sprintf("сумма выплаты %s превышает остаток к выплате %s (начислено %s − выплачено %s)",
+								payAmt.String(), remaining.String(), accrued.String(), paid.String()), nil)
+					}
+					reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
+					if reason == "" {
+						return nil, apperrors.Wrap("VALIDATION", "укажите причину свободной выплаты", nil)
+					}
+					isOverride = true
+					merged := mergeOverrideReason(in.Description, reason)
+					overrideDesc = &merged
 				}
 			}
 		}
@@ -1190,8 +1728,9 @@ func (s *SalaryService) PayServiceCharge(ctx context.Context, in ServiceChargePa
 		Counterparty: &cp,
 		Category:     "Сервис",
 		Period:       &period,
-		Description:  in.Description,
+		Description:  overrideDesc,
 		ShiftID:      in.ShiftID,
+		IsOverride:   isOverride,
 	})
 }
 
@@ -1204,6 +1743,9 @@ type payoutInput struct {
 	Period       *string
 	Description  *string
 	ShiftID      *string
+	// IsOverride — выплата выше расчётного остатка, проведённая осознанно
+	// (ЗП-4). false во всех путях, что не прошли через override-ветку.
+	IsOverride bool
 }
 
 func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.FinancialOperation, error) {
@@ -1223,6 +1765,10 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 	}
 	if in.AccountID == nil || *in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	// Общая точка обеих выплат — PaySalary и PayServiceCharge.
+	if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+		return nil, err
 	}
 	now := time.Now().UTC()
 	date := now.Format("2006-01-02")
@@ -1262,7 +1808,7 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 		// Наличная выплата (зарплата/обслуживание) со счёта открытой смены →
 		// зеркалим отток в кассовую смену (cash_out), иначе expected_cash в
 		// Z-отчёте покажет ложную недостачу. No-op для безнала/закрытой смены.
-		if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), amount, now); err != nil {
+		if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), date, amount, now); err != nil {
 			return err
 		}
 		op = models.FinancialOperation{
@@ -1279,6 +1825,7 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 			IsAuto:       &isAuto,
 			SourceRef:    &srcRef,
 			ShiftID:      in.ShiftID,
+			IsOverride:   in.IsOverride,
 			RestaurantID: &ridStr,
 			CreatedAt:    now,
 			UpdatedAt:    now,

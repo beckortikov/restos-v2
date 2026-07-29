@@ -1,6 +1,7 @@
 package service
 
 import (
+	"slices"
 	"strings"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/escpos"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
 // loadOrderPrintMeta — догружает имена стола, зоны и официанта/кассира для
@@ -92,7 +94,7 @@ func joinNonEmpty(sep string, parts ...string) string {
 	return strings.Join(out, sep)
 }
 
-// orderTypeLabel — "Зал" / "Доставка" / "Самовывоз".
+// orderTypeLabel — "Зал" / "Доставка" / "С собой".
 func orderTypeLabel(order *models.Order) string {
 	if order == nil || order.Type == nil {
 		return "Зал"
@@ -101,7 +103,7 @@ func orderTypeLabel(order *models.Order) string {
 	case "delivery":
 		return "Доставка"
 	case "takeaway":
-		return "Самовывоз"
+		return "С собой"
 	default:
 		return "Зал"
 	}
@@ -112,14 +114,16 @@ func orderTypeLabel(order *models.Order) string {
 // Реализуется printer.DBRouter. Сервис не знает про printer напрямую, чтобы не
 // циклить пакеты.
 //
-//   - ResolveByStation — id ВКЛЮЧЁННОГО принтера станции (ok=false, если нет).
-//   - StationHasPrinter — есть ли у станции принтер ВООБЩЕ (любой enabled).
-//     Нужно различать «станция настроена, но её принтер отключён» (→ бесбумажная,
-//     печатать НЕ надо, повар видит на KDS) и «у станции нет своего принтера»
-//     (→ как раньше, задание без printer_id уходит на общий станционный принтер).
+// StationRouting возвращает маршрутизацию цехов ресторана (053):
+//   - enabled: цех → id включённого принтера, обслуживающего его. Один принтер
+//     может обслуживать несколько цехов — их позиции печатаются ОДНИМ бегунком.
+//   - configured: есть ли у ресторана привязки цехов вообще (printer_stations,
+//     включая отключённые принтеры). configured и цеха нет в enabled →
+//     бесбумажный цех: бегунок не печатается, повар видит KDS. !configured →
+//     legacy: job без printer_id на каждый цех (воркер найдёт первый
+//     станционный принтер).
 type StationResolver interface {
-	ResolveByStation(restaurantID, station string) (string, bool)
-	StationHasPrinter(restaurantID, station string) bool
+	StationRouting(restaurantID string) (enabled map[string]string, configured bool)
 }
 
 // WithStationResolver — fluent setter (как WithPublisher).
@@ -128,10 +132,176 @@ func (s *OrdersService) WithStationResolver(r StationResolver) *OrdersService {
 	return s
 }
 
-// enqueueRunners группирует новые items по station и создаёт runner-print_jobs
-// по одному на station. printer_id заполняется через StationResolver — если
-// принтер не настроен, job создаётся без printer_id и попадёт в "failed"
-// при первом tick worker'а (это лучше, чем тихая потеря).
+// isFastFood — ресторан работает без столов (041, tables_enabled=false): гость
+// забирает заказ по номеру. Включает крупный номер заказа в чеке и ранере
+// (escpos: FontBig 6×) — гость читает своё число через зал, повар собирает
+// заказ по нему. В зале с официантами номер гостю не нужен.
+func isFastFood(rest models.Restaurant) bool {
+	return rest.TablesEnabled != nil && !*rest.TablesEnabled
+}
+
+// kitchenOnPay — «оплата вперёд»: кухонный бегунок печатается на ОПЛАТЕ
+// (orders_close.Close), а не при создании/дозаказе (orders_write).
+//
+// С 052 включается ДВУМЯ способами:
+//   - tables_enabled=false — фастфуд. Режим самодостаточен: нет столов →
+//     заказ без оплаты не создаётся вовсе, чек и бегунок печатаются вместе
+//     по факту оплаты. Отдельного тумблера в настройках больше нет, чтобы
+//     нельзя было выставить противоречивую комбинацию («фастфуд, но кухня
+//     печатает до оплаты»).
+//   - kitchen_on_pay=true — старый флаг из 041. Оставлен ради существующих
+//     конфигов: ресторан со столами мог включить предоплату отдельно.
+//
+// Ошибку чтения трактуем как false — безопаснее напечатать бегунок как обычно,
+// чем молча не отправить заказ на кухню.
+func (s *OrdersService) kitchenOnPay(tx *gorm.DB, restaurantID string) bool {
+	var on bool
+	if err := tx.Model(&models.Restaurant{}).
+		Select("COALESCE(kitchen_on_pay, false) OR NOT COALESCE(tables_enabled, true)").
+		Where("id = ?", restaurantID).
+		Scan(&on).Error; err != nil {
+		return false
+	}
+	return on
+}
+
+// deliveryContactsRequired — restaurants.delivery_contacts_required (052).
+// true (дефолт) → перед оплатой заказа-доставки касса обязана прислать телефон
+// и адрес. Ресторан, который развозит по своим каналам и контакты в кассе не
+// ведёт, выключает настройку.
+//
+// Ошибку чтения трактуем как false — не блокировать оплату на кассе из-за
+// сбоя чтения настройки. Пропущенный адрес чинится звонком, заблокированная
+// касса — нет.
+func (s *OrdersService) deliveryContactsRequired(tx *gorm.DB, restaurantID string) bool {
+	var on bool
+	if err := tx.Model(&models.Restaurant{}).
+		Select("COALESCE(delivery_contacts_required, true)").
+		Where("id = ?", restaurantID).
+		Scan(&on).Error; err != nil {
+		return false
+	}
+	return on
+}
+
+// discountApprovalThreshold — порог (%), ВЫШЕ которого скидка требует одобрения
+// менеджера/владельца (restaurants.discount_approval_threshold). Владелец задаёт
+// в настройках. При ошибке/NULL — 10 (прежнее захардкоженное поведение).
+func (s *OrdersService) discountApprovalThreshold(tx *gorm.DB, restaurantID string) decimal.Decimal {
+	var thr decimal.Decimal
+	if err := tx.Model(&models.Restaurant{}).
+		Select("COALESCE(discount_approval_threshold, 10)").
+		Where("id = ?", restaurantID).
+		Scan(&thr).Error; err != nil {
+		return decimal.FromInt(10)
+	}
+	return thr
+}
+
+// receiptPrinterFor — конфиг чекового принтера ресторана (кодовая страница,
+// ширина ленты, флаги содержимого). Второй результат — нашёлся ли принтер.
+//
+// Вынесен в общий хелпер, потому что путей печати чеков несколько: оплата,
+// пре-чек, перепечатка из истории, X/Z-отчёты. Раньше каждый собирал
+// ReceiptInput сам, и перепечатка кодовую страницу не проставляла вовсе —
+// чек при оплате печатался нормально, а тот же чек из закрытых заказов
+// выходил абракадаброй. Одна точка чтения — один шанс забыть, а не пять.
+func receiptPrinterFor(tx *gorm.DB, restaurantID string) (models.Printer, bool) {
+	var p models.Printer
+	ok := tx.Where("restaurant_id = ? AND kind = 'receipt' AND enabled = TRUE", restaurantID).
+		Order("is_default DESC, created_at ASC").First(&p).Error == nil
+	return p, ok
+}
+
+// applyPrinterToReceipt переносит настройки принтера в макет чека.
+func applyPrinterToReceipt(in *escpos.ReceiptInput, p models.Printer) {
+	in.Cols = p.Cols
+	in.Codepage = byte(p.Codepage)
+	in.SuppressLogo = !p.PrintLogo
+	in.SuppressDiscount = !p.PrintDiscount
+	in.SuppressService = !p.PrintService
+	in.ShowTip = p.PrintTip
+	in.ShowQRFeedback = p.PrintQRFeedback
+}
+
+// runnerTarget — одна цель печати бегунка: принтер (или legacy-цех) и его
+// позиции в порядке заказа. Stations — какие цехи попали в цель (для
+// заголовка: один цех — его имя, несколько — «КУХНЯ»).
+type runnerTarget struct {
+	printerID *string
+	stations  []string
+	items     []models.OrderItem
+}
+
+// routeRunnerItems раскладывает позиции по целям печати, сохраняя порядок
+// заказа (как пробивал кассир — внутри чека позиции НЕ перегруппировываются
+// по цехам, плоским списком).
+//
+//   - configured-режим (есть printer_stations): цель = принтер; цехи одного
+//     принтера сливаются в один бегунок. Цех без включённого принтера —
+//     бесбумажный: его позиции не печатаются (и не помечаются printed_at,
+//     как и раньше у станций с отключённым принтером).
+//   - legacy-режим (привязок нет вовсе): цель = цех, job без printer_id —
+//     поведение до 053, воркер резолвит первый станционный принтер.
+func (s *OrdersService) routeRunnerItems(restaurantID string, items []models.OrderItem, miByID map[string]models.MenuItem) []runnerTarget {
+	var routing map[string]string
+	configured := false
+	if s.stations != nil {
+		routing, configured = s.stations.StationRouting(restaurantID)
+	}
+	out := []runnerTarget{}
+	idx := map[string]int{}
+	for _, it := range items {
+		if it.MenuItemID == nil {
+			continue
+		}
+		mi, ok := miByID[*it.MenuItemID]
+		if !ok {
+			continue
+		}
+		station := "hot_kitchen"
+		if mi.Station != nil && *mi.Station != "" {
+			station = *mi.Station
+		}
+		key := "st:" + station
+		var printerID *string
+		if configured {
+			pid, ok := routing[station]
+			if !ok {
+				continue // бесбумажный цех
+			}
+			key = "pr:" + pid
+			p := pid
+			printerID = &p
+		}
+		i, ok := idx[key]
+		if !ok {
+			i = len(out)
+			idx[key] = i
+			out = append(out, runnerTarget{printerID: printerID})
+		}
+		t := &out[i]
+		if !slices.Contains(t.stations, station) {
+			t.stations = append(t.stations, station)
+		}
+		t.items = append(t.items, it)
+	}
+	return out
+}
+
+// runnerHeaderLabel — заголовок бегунка: имя цеха, если цель печатает один
+// цех; общий «КУХНЯ», когда принтер собирает несколько цехов в один чек.
+func runnerHeaderLabel(stations []string) string {
+	if len(stations) == 1 {
+		return stationLabel(stations[0])
+	}
+	return "КУХНЯ"
+}
+
+// enqueueRunners раскладывает новые items по целям печати (принтер или
+// legacy-цех, см. routeRunnerItems) и создаёт по одному runner-print_job на
+// цель. В legacy-режиме job без printer_id попадёт в "failed" при первом tick
+// worker'а, если принтеров нет вовсе (это лучше, чем тихая потеря).
 //
 // Вызывается из Create и AddItems после успешной записи items.
 //
@@ -159,30 +329,16 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		miByID[m.ID] = m
 	}
 
-	// Группируем items по station. Печатаем полную qty каждой строки —
-	// merge не сливается с уже-напечатанными рядами (см. loadMergeableItems
-	// фильтр `printed_at IS NULL`), поэтому здесь не нужно учитывать
-	// qty_printed. printedItemIDs — id строк, чтобы проставить
-	// printed_at/qty_printed после успешной постановки job'а.
-	byStation := make(map[string][]models.OrderItem)
-	printedItemIDs := make([]string, 0, len(items))
-	for _, it := range items {
-		if it.MenuItemID == nil {
-			continue
-		}
-		mi, ok := miByID[*it.MenuItemID]
-		if !ok {
-			continue
-		}
-		station := "hot_kitchen"
-		if mi.Station != nil && *mi.Station != "" {
-			station = *mi.Station
-		}
-		byStation[station] = append(byStation[station], it)
-	}
-	if len(byStation) == 0 {
+	// Печатаем полную qty каждой строки — merge не сливается с
+	// уже-напечатанными рядами (см. loadMergeableItems фильтр
+	// `printed_at IS NULL`), поэтому здесь не нужно учитывать qty_printed.
+	// printedItemIDs — id строк, чтобы проставить printed_at/qty_printed
+	// после успешной постановки job'а.
+	targets := s.routeRunnerItems(restaurantID, items, miByID)
+	if len(targets) == 0 {
 		return nil
 	}
+	printedItemIDs := make([]string, 0, len(items))
 
 	// Имя ресторана для шапки (опц.).
 	var rest models.Restaurant
@@ -202,30 +358,26 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 	}
 	runnerTableLabel := joinNonEmpty(", ", meta.TableLabel, zoneLabel, guestsLabel)
 
-	for station, sItems := range byStation {
-		// Резолвим принтер станции. Если станция настроена, но её принтер(ы)
-		// ОТКЛЮЧЕНЫ — она бесбумажная (повар видит позиции на KDS): бегунок не
-		// печатаем и строки НЕ помечаем напечатанными. Если у станции нет своего
-		// принтера — как раньше: job без printer_id уходит на общий станционный.
-		var printerID *string
-		if s.stations != nil {
-			if pid, ok := s.stations.ResolveByStation(restaurantID, station); ok {
-				printerID = &pid
-			} else if s.stations.StationHasPrinter(restaurantID, station) {
-				continue
-			}
-		}
+	codepages := printerCodepages(tx, restaurantID)
 
+	for _, t := range targets {
 		in := escpos.RunnerInput{
-			Station:     stationLabel(station),
+			Station:     runnerHeaderLabel(t.stations),
+			Codepage:    codepageOfTarget(codepages, t.printerID),
+			FastFood:    isFastFood(rest),
 			OrderNumber: order.OrderNumber,
 			TableLabel:  runnerTableLabel,
 			WaiterName:  meta.WaiterName,
-			CreatedAt:   now,
+			// Тип заказа в шапку фастфуд-бегунка (Зал/С собой/Доставка).
+			// В зале layout это поле игнорирует.
+			OrderType: typeLbl,
+			CreatedAt: now,
+			// Контакты доставки на кухонный бегунок больше не идут — они уходят
+			// на гостевой чек (см. buildCloseReceipt). Повару адрес не нужен.
 		}
 		// Группируем одинаковые весовые порции в одну строку «100г × 3».
 		// Unit берём из order_item (бэкенд всегда проставляет его из меню).
-		for _, g := range groupPrintItems(sItems) {
+		for _, g := range groupPrintItems(t.items) {
 			ri := escpos.RunnerItem{
 				Name:    g.Name,
 				Comment: g.Note,
@@ -245,7 +397,7 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		job := &models.PrintJob{
 			ID:           uuid.NewString(),
 			Type:         "runner",
-			PrinterID:    printerID,
+			PrinterID:    t.printerID,
 			Payload:      payload,
 			OrderID:      &order.ID,
 			Status:       "pending",
@@ -256,8 +408,9 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 		if err := tx.Session(&gorm.Session{SkipHooks: true}).Create(job).Error; err != nil {
 			return err
 		}
-		// Помечаем только строки реально напечатанных станций.
-		for _, it := range sItems {
+		// Помечаем только строки реально напечатанных целей (бесбумажные
+		// цехи выпали ещё в routeRunnerItems и остаются ненапечатанными).
+		for _, it := range t.items {
 			printedItemIDs = append(printedItemIDs, it.ID)
 		}
 	}
@@ -278,6 +431,30 @@ func (s *OrdersService) enqueueRunners(tx *gorm.DB, restaurantID string, order *
 	return nil
 }
 
+// printerCodepages — id принтера → его таблица символов (ESC t n).
+// Один запрос на весь ресторан: принтеров единицы, а бегунок может уходить
+// сразу на несколько, и N+1 здесь был бы бессмысленным.
+func printerCodepages(tx *gorm.DB, restaurantID string) map[string]byte {
+	out := map[string]byte{}
+	var rows []models.Printer
+	if err := tx.Where("restaurant_id = ?", restaurantID).Find(&rows).Error; err != nil {
+		return out
+	}
+	for _, p := range rows {
+		out[p.ID] = byte(p.Codepage)
+	}
+	return out
+}
+
+// codepageOfTarget — таблица символов цели печати. Пустой printerID (legacy-
+// режим без привязок цехов) → 0, и layout подставит дефолт.
+func codepageOfTarget(codepages map[string]byte, printerID *string) byte {
+	if printerID == nil {
+		return 0
+	}
+	return codepages[*printerID]
+}
+
 // enqueueCancelRunners печатает "ОТМЕНА" на station-принтерах для items,
 // которые были отменены. Группирует по station так же, как enqueueRunners.
 //
@@ -287,6 +464,26 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 	if len(items) == 0 {
 		return nil
 	}
+	// Отменяем только то, что кухня РЕАЛЬНО видела. printed_at проставляется
+	// в enqueueRunners после успешной постановки бегунка, поэтому пустой
+	// printed_at = позиция на кухню не уходила.
+	//
+	// Без этого фильтра в фастфуде (бегунок печатается на ОПЛАТЕ) отмена
+	// неоплаченного заказа выплёвывала повару «БЛЮДА УДАЛЕНЫ! НЕ ГОТОВИТЬ!»
+	// про блюдо, о котором он никогда не слышал: в лучшем случае мусор, в
+	// худшем — повар решает, что пропустил заказ, и идёт разбираться.
+	// Тот же эффект в зале, если позицию удалили до «Отправить на кухню».
+	printed := make([]models.OrderItem, 0, len(items))
+	for _, it := range items {
+		if it.PrintedAt != nil {
+			printed = append(printed, it)
+		}
+	}
+	if len(printed) == 0 {
+		return nil
+	}
+	items = printed
+
 	menuIDs := make([]string, 0, len(items))
 	for _, it := range items {
 		if it.MenuItemID != nil {
@@ -305,45 +502,34 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 		miByID[m.ID] = m
 	}
 
-	byStation := make(map[string][]models.OrderItem)
-	for _, it := range items {
-		if it.MenuItemID == nil {
-			continue
-		}
-		mi, ok := miByID[*it.MenuItemID]
-		if !ok {
-			continue
-		}
-		station := "hot_kitchen"
-		if mi.Station != nil && *mi.Station != "" {
-			station = *mi.Station
-		}
-		byStation[station] = append(byStation[station], it)
+	// Маршрутизация та же, что у обычных бегунков: бесбумажные цехи «ОТМЕНУ»
+	// тоже не печатают, цехи одного принтера — одним чеком.
+	targets := s.routeRunnerItems(restaurantID, items, miByID)
+	if len(targets) == 0 {
+		return nil
 	}
 
 	// Стол / зона / официант — повар должен сразу видеть, чей заказ отменяется.
 	meta := loadOrderPrintMeta(tx, order, false)
 	cancelTableLabel := joinNonEmpty(", ", meta.TableLabel, meta.ZoneName)
 
-	for station, sItems := range byStation {
-		// Отключённая станция бесбумажная — «ОТМЕНА» на неё тоже не печатаем.
-		var printerID *string
-		if s.stations != nil {
-			if pid, ok := s.stations.ResolveByStation(restaurantID, station); ok {
-				printerID = &pid
-			} else if s.stations.StationHasPrinter(restaurantID, station) {
-				continue
-			}
-		}
+	var rest models.Restaurant
+	_ = tx.Where("id = ?", restaurantID).First(&rest).Error
+
+	codepages := printerCodepages(tx, restaurantID)
+
+	for _, t := range targets {
 		in := escpos.CancelRunnerInput{
-			Station:     stationLabel(station),
+			Station:     runnerHeaderLabel(t.stations),
+			Codepage:    codepageOfTarget(codepages, t.printerID),
+			FastFood:    isFastFood(rest),
 			OrderNumber: order.OrderNumber,
 			TableLabel:  cancelTableLabel,
 			WaiterName:  meta.WaiterName,
 			CancelledAt: now,
 			Reason:      reason,
 		}
-		for _, it := range sItems {
+		for _, it := range t.items {
 			ri := escpos.RunnerItem{}
 			if it.Name != nil {
 				ri.Name = *it.Name
@@ -369,7 +555,7 @@ func (s *OrdersService) enqueueCancelRunners(tx *gorm.DB, restaurantID string, o
 		job := &models.PrintJob{
 			ID:           uuid.NewString(),
 			Type:         "cancel_runner",
-			PrinterID:    printerID,
+			PrinterID:    t.printerID,
 			Payload:      payload,
 			OrderID:      &order.ID,
 			Status:       "pending",
@@ -416,6 +602,8 @@ func stationLabel(s string) string {
 		return "Гриль"
 	case "dessert":
 		return "Десерты"
+	case "showcase":
+		return "Витрина"
 	default:
 		return s
 	}

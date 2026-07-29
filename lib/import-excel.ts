@@ -10,6 +10,15 @@ export interface ParsedFloorMap { zones: ParsedZone[]; tables: ParsedTable[]; er
 
 // ─── Menu (Dishes) ───────────────────────────────────────────────────────────
 
+// Вариация продукта из строк с заполненными колонками P/Q («Вариация» /
+// «Значение»). Несколько строк с одним названием блюда схлопываются в один
+// продукт-родитель + варианты (см. PUT /menu/items/{id}/attributes).
+export interface ParsedDishVariant {
+  label: string        // «25», «1 л», «большая»
+  price: number        // цена этой комбинации (колонка G строки варианта)
+  isAvailable: boolean
+}
+
 export interface ParsedDish {
   name: string
   category: string
@@ -23,6 +32,11 @@ export interface ParsedDish {
   unit: 'piece' | 'g' | 'kg'
   unitSize: number   // e.g. 100 for "price per 100g"
   saleStep: number   // granularity in grams (0 = any qty)
+  // Вариации (опционально): атрибут («Размер» у пицц 25/30/35, «Объём» у
+  // напитков 0.5/1/1.5 л) + значения. У продукта с вариациями price = 0
+  // (цены живут на вариантах).
+  attrName?: string
+  variants?: ParsedDishVariant[]
 }
 
 export interface ParsedDishList { dishes: ParsedDish[]; errors: string[] }
@@ -165,6 +179,11 @@ function readFile(file: File): Promise<XLSX.WorkBook> {
 //                             for piece/kg: 1
 //   O(14) Шаг (г)           — weight granularity (0 = any),
 //                             used for g/kg items sold by weight
+//   P(15) Вариация          — имя атрибута («Размер», «Объём»); строки с
+//                             одинаковым названием и заполненной вариацией
+//                             схлопываются в продукт + варианты
+//   Q(16) Значение          — значение вариации («25», «1 л»); цена в G —
+//                             своя у каждой строки-варианта
 
 // Map Russian/English unit aliases to canonical values
 function normalizeUnit(raw: string): 'piece' | 'g' | 'kg' {
@@ -180,8 +199,18 @@ export async function parseDishesExcel(file: File): Promise<ParsedDishList> {
   const wb = await readFile(file)
   const ws = wb.Sheets['Блюда'] || wb.Sheets[wb.SheetNames[0]]
   const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1 })
+  return parseDishRows(rows)
+}
+
+// Ядро парсинга листа «Блюда» — чистая функция без File/FileReader,
+// тестируется в node (см. lib/import-excel.test.ts).
+export function parseDishRows(rows: unknown[][]): ParsedDishList {
   const errors: string[] = []
   const dishes: ParsedDish[] = []
+  // Продукты с вариациями: ключ — название в lowercase, значение — уже
+  // созданный ParsedDish, в который доливаются варианты последующих строк.
+  const variantParents = new Map<string, ParsedDish>()
+  const flatNames = new Set<string>()
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i] as unknown[]
@@ -206,10 +235,59 @@ export async function parseDishesExcel(file: File): Promise<ParsedDishList> {
       : 1                               // piece/kg always unit_size=1
     const saleStep = Number(row[14]) || 0
 
+    // Variant columns (P/Q): both filled → this row is one variant of the
+    // product named in C; rows with the same name merge into one parent.
+    const attrName = String(row[15] || '').trim()
+    const attrValue = String(row[16] || '').trim()
+
+    if (attrName && attrValue) {
+      const key = name.toLocaleLowerCase('ru-RU')
+      let parent = variantParents.get(key)
+      if (!parent) {
+        if (!category) errors.push(`Строка ${i + 1}: блюдо "${name}" без категории`)
+        if (flatNames.has(key)) {
+          errors.push(`Строка ${i + 1}: "${name}" — выше есть обычная строка с этим названием; получится два блюда`)
+        }
+        parent = {
+          name, category, station, weight, cogs, price: 0, cookTimeMin, isAvailable,
+          unit: 'piece', unitSize: 1, saleStep: 0,
+          attrName, variants: [],
+        }
+        variantParents.set(key, parent)
+        dishes.push(parent)
+      } else if (parent.attrName !== attrName) {
+        errors.push(`Строка ${i + 1}: "${name}" — вариация "${attrName}" не совпадает с "${parent.attrName}" выше (используется первая)`)
+      }
+      if (parent.variants!.some(v => v.label.toLocaleLowerCase('ru-RU') === attrValue.toLocaleLowerCase('ru-RU'))) {
+        errors.push(`Строка ${i + 1}: "${name}" — значение "${attrValue}" повторяется`)
+        continue
+      }
+      if (price <= 0) errors.push(`Строка ${i + 1}: "${name} ${attrValue}" — не указана цена варианта`)
+      parent.variants!.push({ label: attrValue, price, isAvailable })
+      // Родитель доступен, если доступен хотя бы один вариант.
+      parent.isAvailable = parent.isAvailable || isAvailable
+      continue
+    }
+    if (attrName || attrValue) {
+      errors.push(`Строка ${i + 1}: "${name}" — заполните обе колонки «Вариация» и «Значение» (или ни одной)`)
+    }
+    if (variantParents.has(name.toLocaleLowerCase('ru-RU'))) {
+      errors.push(`Строка ${i + 1}: "${name}" — выше уже есть строки-вариации с этим названием; строка без вариации пропущена`)
+      continue
+    }
+
     if (!category) errors.push(`Строка ${i + 1}: блюдо "${name}" без категории`)
     if (price <= 0) errors.push(`Строка ${i + 1}: блюдо "${name}" без цены продажи`)
 
+    flatNames.add(name.toLocaleLowerCase('ru-RU'))
     dishes.push({ name, category, station, weight, cogs, price, cookTimeMin, isAvailable, unit, unitSize, saleStep })
+  }
+
+  // Лимиты бэка: до 10 значений на атрибут (см. maxValuesPerAttr).
+  for (const p of variantParents.values()) {
+    if (p.variants!.length > 10) {
+      errors.push(`"${p.name}": ${p.variants!.length} значений вариации — максимум 10`)
+    }
   }
 
   return { dishes, errors }

@@ -14,6 +14,7 @@ import {
   type FinancialAccount,
 } from '@/lib/types'
 import { fetchFinancialAccounts, fetchCustomCategories, createCustomCategory } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { DecimalInput } from '@/components/ui/decimal-input'
 
 const INCOME_CATEGORIES = [
@@ -80,7 +81,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
   useEffect(() => {
     if (open) {
       // Always re-fetch accounts when dialog opens (accounts may have been added)
-      fetchFinancialAccounts()
+      fetchFinancialAccounts().then(selectableAccounts)
         .then(accs => setAccounts(accs))
         .catch(() => {})
       // Custom categories — may fail on older desktop versions, non-blocking
@@ -207,6 +208,12 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
                   </option>
                 ))}
               </select>
+            )}
+            {/* Н9: кассовая закупка не приходует склад — для складского учёта нужна накладная. */}
+            {form.type === 'out' && (form.category === 'Закупка продуктов' || form.category === 'Закупка хозтоваров') && (
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Это расход из кассы — склад не пополнится. Чтобы товар встал на остаток, оформите приёмку (накладную).
+              </p>
             )}
           </div>
 

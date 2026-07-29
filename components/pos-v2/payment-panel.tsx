@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom'
 import { Banknote, CreditCard, SquareSplitHorizontal, Printer, ArrowLeft, Trash2, Plus, ReceiptText, Percent } from 'lucide-react'
 import { toast } from 'sonner'
 import { closeOrderWithPayment, printPreBill, fetchActiveShift } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { V4Error } from '@/lib/api'
 import { formatCurrency, calcLineCogs } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
@@ -18,7 +19,7 @@ import type { Order, FinancialAccount, OrderPayment, Restaurant, Table, Zone, Us
 // счёта-кошелька / Смешанная (нал+безнал по счетам) / скидка / обслуживание /
 // пре-чек. Бэк пересчитывает суммы; клиент шлёт метод, account_id, servicePercent,
 // discountType/Value. payable = (subtotal − скидка) + сервис (зал).
-export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, previewCtx }: {
+export function PaymentPanel({ order, servicePercent, accounts: allAccounts, userId, onPaid, previewCtx }: {
   order: Order
   servicePercent: number
   accounts: FinancialAccount[]
@@ -53,6 +54,9 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
   useEffect(() => { try { localStorage.setItem('pos-v2-print-receipt', printReceipt ? '1' : '0') } catch {} }, [printReceipt])
   const payingRef = useRef(false)
 
+  // Отключённые счета (миграция 063) к оплате не предлагаем — сервер такую
+  // проводку отклонит с 409.
+  const accounts = useMemo(() => selectableAccounts(allAccounts), [allAccounts])
   const cashAcc = useMemo(() => accounts.find(a => a.type === 'cash') ?? accounts[0], [accounts])
   const nonCash = useMemo(() => accounts.filter(a => a.type !== 'cash'), [accounts])
   const [cardAccId, setCardAccId] = useState('')
@@ -91,7 +95,7 @@ export function PaymentPanel({ order, servicePercent, accounts, userId, onPaid, 
   function handleErr(e: unknown) {
     const code = e instanceof V4Error ? (e.envelope() as { code?: string } | null)?.code : undefined
     if (code === 'DISCOUNT_REQUIRES_APPROVAL') {
-      toast.error('Скидка ≥10% требует одобрения менеджера', { description: 'Уменьшите скидку или проведите через менеджера.', duration: 6000 })
+      toast.error('Скидка требует одобрения менеджера', { description: 'Скидка выше порога ресторана — уменьшите её или проведите через менеджера.', duration: 6000 })
       return
     }
     toast.error(`Оплата не прошла: ${humanizeError(e)}`)

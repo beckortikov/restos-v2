@@ -15,7 +15,7 @@ export type TableStatus = 'free' | 'occupied' | 'reserved' | 'bill_requested'
 export type OrderStatus = 'new' | 'cooking' | 'ready' | 'served' | 'bill_requested' | 'done' | 'cancelled'
 export type OrderType = 'hall' | 'delivery' | 'takeaway'
 export type PaymentMethod = 'cash' | 'card' | 'transfer'
-export type StockMovementType = 'in' | 'out' | 'semi' | 'audit' | 'adj' | 'batch'
+export type StockMovementType = 'in' | 'out' | 'semi' | 'audit' | 'adj' | 'batch' | 'return'
 export type FinancialActivity = 'operational' | 'investment' | 'financial'
 export type FinancialOperationType = 'in' | 'out' | 'transfer'
 export type ReceiptPaymentType = 'paid' | 'credit' | 'partial'
@@ -35,6 +35,8 @@ export interface Restaurant {
   phone?: string
   currency: string
   servicePercent: number
+  // Скидка ВЫШЕ этого % требует одобрения менеджера/владельца (default 10).
+  discountApprovalThreshold?: number
   timezone: string
   enforceStockCheck: boolean
   techCardsEnabled?: boolean
@@ -45,6 +47,24 @@ export interface Restaurant {
   // Экранная клавиатура (iiko-style) на POS/смене/зале. Default false —
   // включается в настройках владельца для тач-терминалов без физ. клавиатуры.
   onScreenKeyboardEnabled?: boolean
+  // Режим обслуживания (041 + 052). tablesEnabled=false → фастфуд: заказ по
+  // номеру без столов, создать его без оплаты нельзя, чек и кухонный бегунок
+  // печатаются вместе по факту оплаты.
+  // kitchenOnPay — legacy-флаг из 041: то же «кухня на оплате», но для зала со
+  // столами. Отдельного тумблера в настройках больше нет (фастфуд включает
+  // поведение сам), поле оставлено ради существующих конфигов.
+  // posV2Default=true → новый POS по умолчанию на кассах ресторана.
+  tablesEnabled?: boolean
+  kitchenOnPay?: boolean
+  posV2Default?: boolean
+  // Сортировать меню в POS/pos2 по продаваемости (окно 30 дней). Default false
+  // → алфавит. Тумблер в настройках ресторана (060).
+  menuSortBySales?: boolean
+  // Доставка (052). deliveryEnabled=false → в POS только «Зал» и «С собой».
+  // deliveryContactsRequired=true → перед оплатой доставки касса спрашивает
+  // телефон и адрес.
+  deliveryEnabled?: boolean
+  deliveryContactsRequired?: boolean
   // Разрешает хозтоварам (is_food=false) уходить в реальный минус. Когда false —
   // createSupplyExpense блокирует выдачу если qty > остаток.
   supplyAllowNegative?: boolean
@@ -73,6 +93,10 @@ export interface User {
   roleDisplay: string
   restaurantId: string
   salary?: number
+  // Тип оплаты труда (054). 'monthly' — оклад (salary), 'daily' — ставка за
+  // отработанный день (dailyRate × дни с отметкой в табеле). Пусто = monthly.
+  payType?: 'monthly' | 'daily'
+  dailyRate?: number
   advance?: number
   deductions?: number
   password?: string
@@ -174,12 +198,35 @@ export interface MenuItem {
 export interface MenuAttributeValue {
   id: string
   label: string   // «1 л»
+  sizeScaleValueId?: string | null // если атрибут scale-linked — какое значение шкалы это зеркалит
 }
 
 export interface MenuAttribute {
   id: string
   name: string         // «Размер»
   values: MenuAttributeValue[]
+  // Если задан — values зеркалятся из этой шкалы размеров, а не вводятся
+  // вручную (см. components/menu/attributes-editor.tsx).
+  sizeScaleId?: string | null
+}
+
+// SizeScale — переиспользуемая шкала размеров («Пиццы 25/30/35»). Продукт
+// (через MenuAttribute.sizeScaleId) и заготовка (через
+// SemiFinishedType.sizeScaleValueId) ссылаются на неё вместо того, чтобы
+// заводить одинаковые значения размера с нуля на каждой карточке.
+export interface SizeScaleValue {
+  id: string
+  sizeScaleId: string
+  code: string        // «25»
+  title?: string       // «Маленькая» (опционально)
+  sortOrder: number
+  isDefault: boolean
+}
+
+export interface SizeScale {
+  id: string
+  name: string
+  values: SizeScaleValue[]
 }
 
 export interface SemiRecipeLine {
@@ -195,6 +242,9 @@ export interface SemiFinishedType {
   outputUnit: string
   yieldPercent: number // 70 = из 1кг сырья получается 0.7кг готового
   recipe: SemiRecipeLine[]
+  // Тег «это заготовка вот этого размера» (например «Тесто-30» → значение
+  // «30» шкалы пиццы) — подсказывает нужную заготовку в редакторе тех. карты.
+  sizeScaleValueId?: string | null
 }
 
 export interface SemiFinishedStock {
@@ -223,7 +273,10 @@ export interface BatchPortionCalc {
   maxPortions: number
   hasRecipe: boolean
   ingredients: {
-    ingredientId: string
+    // Строка ссылается ЛИБО на ингредиент, ЛИБО на полуфабрикат (тесто,
+    // соус...) — ровно как TechCardLine. Ровно одно из двух задано.
+    ingredientId?: string
+    semiTypeId?: string
     name: string
     unit: string
     recipeUnit: string
@@ -308,6 +361,10 @@ export interface Order {
   cashierId?: string
   paymentMethod?: PaymentMethod
   comment?: string
+  // Контакты доставки (052) — заполняются на оплате заказа type='delivery',
+  // печатаются на бегунке курьеру.
+  deliveryPhone?: string
+  deliveryAddress?: string
   items: OrderItem[]
   /** v2.1.2: число живых (не-cancelled) позиций. Заполняется backend slim-payload
    *  (items_count) или вычисляется из items. Используется UI чтобы скрыть
@@ -366,6 +423,16 @@ export interface Supplier {
 }
 
 export interface ReceiptLine {
+  // id строки нужен для возврата поставщику (receipt_line_id): возврат
+  // привязан к строке, а не к накладной — одна номенклатура может быть в
+  // накладной дважды по разным ценам. Отсутствует у ещё не сохранённых строк
+  // (форма создания накладной).
+  id?: string
+  // Сколько ещё можно вернуть по этой строке, в единицах накладной. Считает
+  // бэк (min(принято − неотменённые возвраты, остаток склада)) — клиенту это
+  // считать нельзя: он не знает про отменённые возвраты и путает единицы
+  // склада с единицами накладной. Есть только при ?include=lines.
+  availableToReturn?: number
   ingredientId: string
   name: string
   qty: number
@@ -383,6 +450,9 @@ export interface StockReceipt {
   paymentType: ReceiptPaymentType
   paidAmount: number
   debtAmount: number
+  // Сумма НЕотменённых возвратов поставщику по накладной. >0 → статус
+  // «Возвращено» (полный) / «Возврат части» (частичный) вместо статуса оплаты.
+  returnedTotal?: number
   dueDate?: string
   confirmedAt?: string
   confirmedBy?: string
@@ -434,6 +504,13 @@ export interface FinancialAccount {
   name: string
   type: 'cash' | 'bank'
   balance: number
+  /**
+   * Счёт участвует в оплате и операциях. Отключённый счёт остаётся со всей
+   * историей и остатком (остаток продолжает считаться в Балансе), но исчезает
+   * из выбора — см. selectableAccounts() в lib/queries/finance.ts.
+   * Старые ответы бэка без поля читаются как включённый.
+   */
+  isEnabled: boolean
 }
 
 export interface FinancialOperation {
@@ -450,6 +527,7 @@ export interface FinancialOperation {
   isAuto: boolean
   sourceRef?: string
   shiftId?: string
+  createdAt?: string // момент ввода — для внутридневной сортировки реестра ДДС
 }
 
 export interface BudgetLine {
@@ -458,6 +536,25 @@ export interface BudgetLine {
   type: 'in' | 'out'
   planAmount: number
   factAmount: number
+  // Месяц бюджета «YYYY-MM». В БД поле было всегда, но маппер его терял —
+  // из-за этого строки разных месяцев показывались вперемешку.
+  period: string
+}
+
+// RecurringPayment — шаблон повторяющегося платежа (модуль «Платежи»).
+export interface RecurringPayment {
+  id: string
+  name: string
+  category: string
+  amount: number
+  accountId?: string
+  activity: FinancialActivity
+  counterparty?: string
+  dayOfMonth: number
+  nextDue?: string        // YYYY-MM-DD
+  lastPaidAt?: string
+  active: boolean
+  note?: string
 }
 
 // ─── Balance: Assets, Liabilities, Equity ────────────────────────────────────
@@ -485,6 +582,64 @@ export const EQUITY_CATEGORY_LABELS: Record<EquityCategory, string> = {
   capital: 'Уставной капитал',
   retained_earnings: 'Нерасп. прибыль',
   owner_investment: 'Вложения владельца',
+}
+
+// Н22: авто-категории financial_operations, которые бэк создаёт техническими
+// кодами (приёмка, оплата долга, гашение обязательства, возврат). В ДДС/ОПиУ
+// они показывались сырыми кодами. Ручные категории уже по-русски — для них
+// finopCategoryLabel возвращает исходную строку.
+export const FINOP_CATEGORY_LABELS: Record<string, string> = {
+  stock_purchase: 'Закупка на склад (накладная)',
+  supplier_payment: 'Оплата долга поставщику',
+  liability_payment: 'Гашение обязательства',
+  refund: 'Возврат покупателю',
+  revenue: 'Выручка',
+  // «Сервис» в расходах — это ВЫПЛАТА собранного сервисного сбора официантам
+  // (сбор входит в выручку, выплата — расход; сквозной проход). Уточняем
+  // подпись, чтобы строка не читалась как выручка. Хранимое значение категории
+  // не меняем — по нему фильтруют Z-отчёт и экспорт.
+  'Сервис': 'Сервис (официантам)',
+
+  // Записи капитала (EquityEntry) — бэк пишет их латинскими кодами
+  // (finance.go, inventory.go, stock_opening.go, stock_extra.go). В Балансе и
+  // отчётах они показывались сырыми.
+  opening_account: 'Ввод остатка счёта',
+  opening_inventory: 'Ввод остатков склада',
+  inventory_overage: 'Излишек по инвентаризации',
+  inventory_shortage: 'Недостача по инвентаризации',
+  inventory_correction: 'Корректировка по инвентаризации',
+  stock_adjustment: 'Корректировка остатка склада',
+  stock_revaluation: 'Переоценка склада',
+
+  // Англоязычные коды статей из импорта / старых баз (v1, выгрузки). Пишутся
+  // не нашим бэком, но встречаются в данных — иначе в ДДС/ОПиУ висит латиница.
+  salary: 'Оплата труда',
+  advance: 'Аванс',
+  rent: 'Аренда',
+  utilities: 'Коммунальные платежи',
+  marketing: 'Маркетинг и реклама',
+  repair: 'Ремонт и обслуживание',
+  transport: 'Транспортные расходы',
+  taxes: 'Налоги и сборы',
+  bank_fee: 'Комиссия банка',
+  equipment: 'Покупка оборудования',
+  dividends: 'Дивиденды',
+  loan_repayment: 'Возврат займа',
+  loan_received: 'Займ полученный',
+  other_expense: 'Прочие затраты',
+  other_income: 'Прочие поступления',
+  owner_investment: 'Вклад учредителя',
+  investment: 'Инвестиции',
+  writeoff: 'Списание',
+  supply_expense: 'Расход хозтоваров',
+  transfer: 'Перевод',
+}
+
+// finopCategoryLabel — человекочитаемая подпись категории финоперации.
+// Для авто-кодов берёт из словаря, для ручных (уже русских) — как есть.
+export function finopCategoryLabel(category?: string | null): string {
+  if (!category) return ''
+  return FINOP_CATEGORY_LABELS[category] ?? category
 }
 
 export interface Asset {
@@ -665,12 +820,61 @@ export interface CashShiftOperation {
   /** Категория расхода. Заполнена только для расходов (cash_out с категорией);
    *  для внесения/изъятия пустая. См. cash_shift_operations.category. */
   category?: string
+  /** Счёт операции. Пусто → счёт смены (наличный ящик). ≠ счёту смены →
+   *  безналичная операция: наличный ящик (Ожидается в кассе) не трогает. */
+  accountId?: string
   createdBy?: string
   createdByName?: string
   createdAt: string
 }
 
 // ─── Writeoffs ───────────────────────────────────────────────────────────────
+
+// Возврат поставщику — не списание: списание наш убыток и бьёт по прибыли,
+// возврат это сторно закупки (товар уехал назад, деньги/долг вернулись).
+// Поэтому и причин меньше: «дегустация» вернуть поставщику нельзя.
+export type ReturnReason = 'spoilage' | 'breakage' | 'expired' | 'other'
+
+export const RETURN_REASON_LABELS: Record<ReturnReason, string> = {
+  spoilage: 'Порча',
+  breakage: 'Бой',
+  expired: 'Просрочка',
+  other: 'Другое',
+}
+
+// debt — уменьшить долг поставщику (накладная в долг);
+// money — деньги вернулись на счёт (накладная оплачена).
+export type RefundType = 'debt' | 'money'
+
+export interface StockReturnLine {
+  id: string
+  receiptLineId: string
+  ingredientId: string
+  name: string
+  qty: number
+  unit: string
+  pricePerUnit: number
+}
+
+export interface StockReturn {
+  id: string
+  receiptId: string
+  supplierId: string
+  supplierName: string
+  date: string
+  reason: ReturnReason
+  note?: string
+  totalAmount: number
+  refundType: RefundType
+  accountId?: string
+  createdBy?: string
+  // Сторно: товар вернулся на склад, деньги/долг откатились. Документ остаётся
+  // в истории, но перестаёт считаться возвращённым.
+  cancelledAt?: string
+  cancelledBy?: string
+  createdAt: string
+  lines: StockReturnLine[]
+}
 
 export type WriteoffReason = 'spoilage' | 'breakage' | 'tasting' | 'expired' | 'other'
 
@@ -745,6 +949,24 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   accountant: 'Бухгалтер',
   other: 'Прочий',
 }
+
+// Стандартные варианты «Должности» (User.position) — стартовый набор для
+// комбобокса на странице персонала. Не enum и не FK: position остаётся
+// свободным текстом, этот список — только подсказки. Комбобокс дополняет его
+// уже использованными в ресторане должностями (учится сам из employees).
+export const COMMON_STAFF_POSITIONS: string[] = [
+  // Кухня
+  'Шеф-повар', 'Су-шеф', 'Повар', 'Повар горячего цеха', 'Повар холодного цеха',
+  'Пекарь', 'Кондитер', 'Пиццмейкер', 'Кухонный работник', 'Мойщик посуды',
+  // Зал
+  'Официант', 'Старший официант', 'Хостес', 'Бармен', 'Бариста',
+  // Касса, склад, учёт
+  'Кассир', 'Кладовщик', 'Завскладом', 'Бухгалтер', 'Главный бухгалтер',
+  // Управление
+  'Управляющий', 'Администратор зала', 'Директор',
+  // Прочее
+  'Курьер', 'Уборщица', 'Охранник', 'Разнорабочий', 'Технический специалист',
+]
 
 export const STATUS_LABELS: Record<TableStatus, string> = {
   free: 'Свободен',
@@ -856,8 +1078,8 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'menu.edit': ['/warehouse/menu', '/warehouse/semi', '/network/menu'],
   'writeoffs.create': ['/warehouse/writeoffs'],
   'batch_cooking.manage': ['/operations/batch-cooking'],
-  'finance.view': ['/finance/cashflow', '/finance/pnl', '/finance/balance', '/network/summary'],
-  'finance.manage': ['/finance/cashflow', '/finance/accounts', '/finance/budget'],
+  'finance.view': ['/finance/overview', '/finance/cashflow', '/finance/pnl', '/finance/balance', '/finance/payments', '/network/summary'],
+  'finance.manage': ['/finance/overview', '/finance/cashflow', '/finance/accounts', '/finance/budget', '/finance/payments'],
   'payroll.manage': ['/finance/payroll'],
   'analytics.view': ['/analytics/abc-menu', '/analytics/abc-inventory', '/analytics/tables', '/analytics/waiters', '/analytics/peak-hours', '/analytics/food-cost', '/analytics/forecast'],
   'showcase.view': ['/operations/showcase'],

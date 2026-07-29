@@ -38,6 +38,10 @@ type ShiftOperationInput struct {
 	// Category — заполнена только для расходов (cash_out с категорией). Для
 	// внесения/изъятия пустая → хранится NULL, операция считается изъятием.
 	Category string `json:"category,omitempty"`
+	// AccountID — счёт операции. Пусто → счёт смены (наличный ящик). Для
+	// безналичного расхода — id банк-счёта: дебетуется он, наличный ящик
+	// (expected_cash) не трогается.
+	AccountID string `json:"account_id,omitempty"`
 }
 
 // WithPublisher — fluent setter (как в OrdersService).
@@ -59,6 +63,13 @@ func (s *ShiftsService) Open(ctx context.Context, in OpenShiftInput) (*models.Ca
 	}
 	if decimal.IsNegative(open) {
 		return nil, apperrors.Wrap("VALIDATION", "opening_balance must be >= 0", nil)
+	}
+	// Смену нельзя открыть на отключённый счёт — вся наличная выручка пошла бы
+	// на счёт, который владелец вывел из оборота.
+	if in.AccountID != nil {
+		if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+			return nil, err
+		}
 	}
 	actor, _ := audit.ActorFromContext(ctx)
 
@@ -164,27 +175,10 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 			}, nil)
 		}
 
-		// Сумма shift-операций (внос/изъятие) — для expected_cash.
-		var opSum decimal.Decimal
-		var ops []models.CashShiftOperation
-		if err := tx.Where("shift_id = ?", shiftID).Find(&ops).Error; err != nil {
+		expected, err := computeExpectedCash(tx, shiftID, &shift)
+		if err != nil {
 			return err
 		}
-		opSum = decimal.Zero
-		for _, op := range ops {
-			if op.Type == nil {
-				continue
-			}
-			switch *op.Type {
-			case "cash_in":
-				opSum = decimal.Add(opSum, op.Amount)
-			case "cash_out":
-				opSum = decimal.Sub(opSum, op.Amount)
-			}
-		}
-		expected := decimal.Normalize(
-			decimal.Add(decimal.Add(shift.OpeningBalance, shift.CashRevenue), opSum),
-		)
 
 		now := time.Now().UTC()
 		status := "closed"
@@ -305,6 +299,9 @@ func (s *ShiftsService) UpdateAccount(ctx context.Context, shiftID string, in Up
 	if in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
 	}
+	if err := MustBeEnabled(ctx, s.r, in.AccountID); err != nil {
+		return nil, err
+	}
 
 	var updated *models.CashShift
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -354,6 +351,50 @@ func (s *ShiftsService) UpdateAccount(ctx context.Context, shiftID string, in Up
 	return updated, nil
 }
 
+// opTouchesDrawer — трогает ли операция наличный ящик смены. Наличной считаем
+// операцию без своего счёта (legacy/наличные) или на самом счёте смены.
+// Операция на другом счёте (безналичный расход) ящик не трогает.
+func opTouchesDrawer(opAccountID, shiftAccountID *string) bool {
+	if opAccountID == nil || *opAccountID == "" {
+		return true
+	}
+	if shiftAccountID == nil || *shiftAccountID == "" {
+		return false
+	}
+	return *opAccountID == *shiftAccountID
+}
+
+// computeExpectedCash — expected_cash = opening_balance + cash_revenue +
+// Σcash_in − Σcash_out (только операции, касающиеся наличного ящика — см.
+// opTouchesDrawer). Общий расчёт для Close() и для пересчёта уже закрытой
+// смены после удаления фантомного __auto_mirror__ (см. DeleteExpense в
+// shifts_extras.go) — без него список операций и сохранённая цифра в Z-отчёте
+// расходятся.
+func computeExpectedCash(tx *gorm.DB, shiftID string, shift *models.CashShift) (decimal.Decimal, error) {
+	var ops []models.CashShiftOperation
+	if err := tx.Where("shift_id = ?", shiftID).Find(&ops).Error; err != nil {
+		return decimal.Zero, err
+	}
+	opSum := decimal.Zero
+	for _, op := range ops {
+		if op.Type == nil {
+			continue
+		}
+		if !opTouchesDrawer(op.AccountID, shift.AccountID) {
+			continue
+		}
+		switch *op.Type {
+		case "cash_in":
+			opSum = decimal.Add(opSum, op.Amount)
+		case "cash_out":
+			opSum = decimal.Sub(opSum, op.Amount)
+		}
+	}
+	return decimal.Normalize(
+		decimal.Add(decimal.Add(shift.OpeningBalance, shift.CashRevenue), opSum),
+	), nil
+}
+
 // AddOperation вносит cash_in / cash_out в смену.
 func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in ShiftOperationInput) (*models.CashShiftOperation, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
@@ -369,6 +410,14 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 	}
 	if !decimal.IsPositive(amt) {
 		return nil, apperrors.Wrap("VALIDATION", "amount must be > 0", nil)
+	}
+	// Безналичный расход из смены целится в конкретный банк-счёт — он должен
+	// быть включён. Пустой account_id = наличный ящик (счёт смены), он уже
+	// проверен при открытии смены.
+	if a := strings.TrimSpace(in.AccountID); a != "" {
+		if err := MustBeEnabled(ctx, s.r, a); err != nil {
+			return nil, err
+		}
 	}
 	actor, _ := audit.ActorFromContext(ctx)
 
@@ -397,6 +446,18 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 		if c := strings.TrimSpace(in.Category); c != "" {
 			category = &c
 		}
+		// Целевой счёт операции: явный account_id (безналичный расход с банк-счёта)
+		// либо счёт смены (наличный ящик). Храним на операции только если он
+		// отличается от счёта смены — тогда Close/ZReport понимают, что наличный
+		// ящик эта операция не трогает.
+		var opAccountID *string
+		if a := strings.TrimSpace(in.AccountID); a != "" {
+			opAccountID = &a
+		}
+		targetAccountID := shift.AccountID
+		if opAccountID != nil {
+			targetAccountID = opAccountID
+		}
 		newOp := &models.CashShiftOperation{
 			ID:          uuid.NewString(),
 			ShiftID:     &sid,
@@ -404,6 +465,7 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 			Amount:      amt,
 			Description: &desc,
 			Category:    category,
+			AccountID:   opAccountID,
 			CreatedBy:   &creator,
 			CreatedAt:   now,
 			UpdatedAt:   now,
@@ -418,14 +480,11 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 		// внесения/изъятия без категории). ОПиУ и ДДС читают ТОЛЬКО
 		// financial_operations, поэтому без этой записи расход был виден
 		// лишь в самой смене (Сводка/X-Z) и пропадал из P&L и cashflow.
-		// account_id — best-effort (для трассировки); баланс счёта НЕ трогаем:
-		// opening_balance смены никогда не постился на счёт, поэтому списание
-		// с баланса создало бы ложное «недостаточно средств» на свежих сменах.
 		if typ == "cash_out" && category != nil {
 			var accountName *string
-			if shift.AccountID != nil && *shift.AccountID != "" {
+			if targetAccountID != nil && *targetAccountID != "" {
 				var acc models.FinancialAccount
-				if err := tx.Where("id = ?", *shift.AccountID).First(&acc).Error; err == nil {
+				if err := tx.Where("id = ?", *targetAccountID).First(&acc).Error; err == nil {
 					accountName = acc.Name
 				}
 			}
@@ -439,7 +498,7 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 				Type:         &opType,
 				Amount:       amt,
 				Category:     category,
-				AccountID:    shift.AccountID,
+				AccountID:    targetAccountID,
 				AccountName:  accountName,
 				Activity:     &activity,
 				Date:         &date,
@@ -453,6 +512,25 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 			}
 			if err := tx.Create(fo).Error; err != nil {
 				return err
+			}
+			// Н13: дебетуем ЦЕЛЕВОЙ счёт на сумму расхода (наличный ящик смены или
+			// банк-счёт при безналичном расходе). Раньше баланс НЕ трогали — но
+			// выручка счёт кредитует полностью при закрытии заказа, а кассовые
+			// расходы его не уменьшали → «Денежные средства» в Балансе
+			// систематически завышались на сумму всех расходов за всю историю.
+			// Гард «недостаточно средств» НЕ применяем: opening_balance смены на
+			// счёт не постится, поэтому свежая смена может списать из физического
+			// флоата больше, чем на балансе счёта — относительное движение всё
+			// равно верное, а ложный отказ заблокировал бы реальную закупку.
+			if targetAccountID != nil && *targetAccountID != "" {
+				if err := tx.Model(&models.FinancialAccount{}).
+					Where("restaurant_id = ? AND id = ?", rid, *targetAccountID).
+					Updates(map[string]any{
+						"balance":    gorm.Expr("balance - ?", amt),
+						"updated_at": now,
+					}).Error; err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -470,8 +548,20 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 // обслуживание) наличными списывали баланс счёта, но не уменьшали expected_cash →
 // Z-отчёт показывал ложную недостачу. Вызывается ВНУТРИ транзакции операции.
 // No-op, если открытой смены на этом счёте нет (напр. безнал-счёт или смена закрыта).
-func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc string, amount decimal.Decimal, now time.Time) error {
+//
+// opDate — бизнес-дата самой финоперации (то, что пользователь выбрал в форме;
+// пусто = «не указана явно», всегда сегодня). Если операция ЗАДНИМ ЧИСЛОМ
+// (opDate ≠ сегодня) — зеркало НЕ создаём: это исторический учётный факт (забыли
+// внести расход за прошлую смену), а не движение в физическом ящике ТЕКУЩЕЙ
+// открытой смены. Мы не знаем, ушли ли деньги из кассы именно сегодня — если
+// зеркалить как обычно, ДДС-запись задним числом создаёт фантомную
+// недостачу/излишек в СЕГОДНЯШНЕМ Z-отчёте, а сама операция и так корректно
+// легла на свою дату в ДДС (foBizDay). Инцидент 23.07.2026.
+func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc, opDate string, amount decimal.Decimal, now time.Time) error {
 	if !decimal.IsPositive(amount) {
+		return nil
+	}
+	if opDate != "" && opDate != now.Format("2006-01-02") {
 		return nil
 	}
 	var shift models.CashShift
@@ -500,14 +590,23 @@ func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc strin
 	}
 	t := "cash_out"
 	d := desc
+	// #28: помечаем авто-зеркало — его нельзя удалять из смены как обычное
+	// изъятие (иначе expected_cash поднимется, а деньги со счёта уже ушли).
+	autoCat := autoMirrorCategory
 	op := &models.CashShiftOperation{
 		ID:          uuid.NewString(),
 		ShiftID:     &shift.ID,
 		Type:        &t,
 		Amount:      decimal.Normalize(amount),
 		Description: &d,
+		Category:    &autoCat,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
 	return tx.Create(op).Error
 }
+
+// autoMirrorCategory — метка авто-зеркал cash_out (зарплата/возврат/ручной
+// расход наличными). Такие операции создаёт система как отражение оттока со
+// счёта; удалять их вручную нельзя (см. DeleteOperation).
+const autoMirrorCategory = "__auto_mirror__"

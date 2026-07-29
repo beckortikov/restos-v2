@@ -58,12 +58,15 @@ const Shifts = () => L(() => import('@/app/(app)/operations/shifts/page'))
 const Showcase = () => L(() => import('@/app/(app)/operations/showcase/page'))
 
 // Warehouse
+const WarehouseHome = () => L(() => import('@/app/(app)/warehouse/page'))
+const WarehouseOperations = () => L(() => import('@/app/(app)/warehouse/operations/page'))
 const Inventory = () => L(() => import('@/app/(app)/warehouse/inventory/page'))
 const Menu = () => L(() => import('@/app/(app)/warehouse/menu/page'))
 const MenuNew = () => L(() => import('@/app/(app)/warehouse/menu/new/page'))
 const MenuEdit = () => L(() => import('@/app/(app)/warehouse/menu/[id]/page'))
 const Receipts = () => L(() => import('@/app/(app)/warehouse/receipts/page'))
 const ReceiptsNew = () => L(() => import('@/app/(app)/warehouse/receipts/new/page'))
+const Returns = () => L(() => import('@/app/(app)/warehouse/returns/page'))
 const Semi = () => L(() => import('@/app/(app)/warehouse/semi/page'))
 const Suppliers = () => L(() => import('@/app/(app)/warehouse/suppliers/page'))
 const SuppliersNew = () => L(() => import('@/app/(app)/warehouse/suppliers/new/page'))
@@ -83,12 +86,16 @@ const SyncSettings = () => L(() => import('@/app/(app)/settings/sync/page'))
 const OpeningBalance = () => L(() => import('@/app/(app)/warehouse/opening-balance/page'))
 
 // Finance
+const FinanceOverview = () => L(() => import('@/app/(app)/finance/overview/page'))
 const Cashflow = () => L(() => import('@/app/(app)/finance/cashflow/page'))
+const ExpensesByCategory = () => L(() => import('@/app/(app)/finance/expenses/page'))
 const PnL = () => L(() => import('@/app/(app)/finance/pnl/page'))
 const Balance = () => L(() => import('@/app/(app)/finance/balance/page'))
 const Budget = () => L(() => import('@/app/(app)/finance/budget/page'))
 const Accounts = () => L(() => import('@/app/(app)/finance/accounts/page'))
+const Payments = () => L(() => import('@/app/(app)/finance/payments/page'))
 const Payroll = () => L(() => import('@/app/(app)/finance/payroll/page'))
+const PayrollEmployee = () => L(() => import('@/app/(app)/finance/payroll/[id]/page'))
 const ServiceReport = () => L(() => import('@/app/(app)/finance/service-report/page'))
 
 // Analytics
@@ -160,12 +167,15 @@ export function AppRouter() {
         <Route path="/operations/showcase" element={<Showcase />} />
 
         {/* Warehouse */}
+        <Route path="/warehouse" element={<WarehouseHome />} />
+        <Route path="/warehouse/operations" element={<WarehouseOperations />} />
         <Route path="/warehouse/inventory" element={<Inventory />} />
         <Route path="/warehouse/menu" element={<Menu />} />
         <Route path="/warehouse/menu/new" element={<MenuNew />} />
         <Route path="/warehouse/menu/:id" element={<MenuEdit />} />
         <Route path="/warehouse/receipts" element={<Receipts />} />
         <Route path="/warehouse/receipts/new" element={<ReceiptsNew />} />
+        <Route path="/warehouse/returns" element={<Returns />} />
         <Route path="/warehouse/semi" element={<Semi />} />
         <Route path="/warehouse/suppliers" element={<Suppliers />} />
         <Route path="/warehouse/suppliers/new" element={<SuppliersNew />} />
@@ -183,12 +193,16 @@ export function AppRouter() {
         <Route path="/warehouse/opening-balance" element={<OpeningBalance />} />
 
         {/* Finance */}
+        <Route path="/finance/overview" element={<FinanceOverview />} />
         <Route path="/finance/cashflow" element={<Cashflow />} />
+        <Route path="/finance/expenses" element={<ExpensesByCategory />} />
         <Route path="/finance/pnl" element={<PnL />} />
         <Route path="/finance/balance" element={<Balance />} />
         <Route path="/finance/budget" element={<Budget />} />
         <Route path="/finance/accounts" element={<Accounts />} />
+        <Route path="/finance/payments" element={<Payments />} />
         <Route path="/finance/payroll" element={<Payroll />} />
+        <Route path="/finance/payroll/:id" element={<PayrollEmployee />} />
         <Route path="/finance/service-report" element={<ServiceReport />} />
 
         {/* Analytics */}

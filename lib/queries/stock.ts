@@ -3,6 +3,7 @@ import { fetchAllPages } from './_paginate'
 import { dMul, dSub, dSum } from '../decimal'
 import type {
   Ingredient, StockReceipt, StockMovement, StockWriteoff, WriteoffReason, ReceiptPaymentType, Warehouse,
+  StockReturn, ReturnReason, RefundType,
 } from '../types'
 import { logAction } from './audit'
 
@@ -139,28 +140,74 @@ export async function createReceipt(receipt: Omit<StockReceipt, 'id'>) {
   return data
 }
 
-export async function confirmReceipt(id: string, confirmedBy: string) {
-  // confirmed_by резолвится бэком из session token — не отправляем.
-  void confirmedBy
-  await unwrap(api.POST('/api/v1/stock/receipts/{id}/confirm', {
-    params: { path: { id } },
-    body: {} as any,
-  }))
-  logAction('receipt.confirm', 'receipt', id)
+export async function fetchStockReturns(opts?: { supplierId?: string; receiptId?: string }): Promise<StockReturn[]> {
+  const params: Record<string, string> = { include: 'lines' }
+  if (opts?.supplierId) params.supplier_id = opts.supplierId
+  if (opts?.receiptId) params.receipt_id = opts.receiptId
+  const rows = await fetchAllPages('/api/v1/stock/returns', params, 2000)
+  return rows.map(mapStockReturn)
 }
 
-export async function confirmReceiptFull(receiptId: string, confirmedBy: string, accountId?: string) {
-  const result = await unwrap(api.POST('/api/v1/stock/receipts/{id}/confirm', {
-    params: { path: { id: receiptId } },
+// createStockReturn — возврат поставщику. Шлём только receipt_line_id + qty:
+// цену/название/единицу бэк берёт из строки накладной (поставщик отдаёт ровно
+// ту сумму, что взял, а не текущую средневзвешенную с/с склада).
+export async function createStockReturn(input: {
+  receiptId: string
+  reason: ReturnReason
+  refundType: RefundType
+  accountId?: string
+  note?: string
+  lines: { receiptLineId: string; qty: number }[]
+  // idempotencyKey — стабильный ключ операции. Middleware (lib/api/v4-typed.ts)
+  // генерит свой на КАЖДЫЙ fetch, поэтому от двойного клика он не спасает: два
+  // клика = два ключа = два возврата. Форма передаёт один ключ на попытку
+  // проведения, и второй клик получает кэшированный ответ первого.
+  idempotencyKey?: string
+}) {
+  // Тело без каста: ReturnInput описан в openapi.yaml целиком, поэтому
+  // сгенерённые типы точны и оно типизируется само (бюджет — в _debt.test.ts).
+  const data = await unwrap(api.POST('/api/v1/stock/returns', {
+    ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
     body: {
-      confirmed_by: confirmedBy,
-      account_id: accountId,
-      payment_type: accountId ? 'paid' : 'credit',
-    } as any,
+      receipt_id: input.receiptId,
+      reason: input.reason,
+      refund_type: input.refundType,
+      account_id: input.refundType === 'money' ? input.accountId : undefined,
+      note: input.note || undefined,
+      lines: input.lines.map(l => ({ receipt_line_id: l.receiptLineId, qty: String(l.qty) })),
+    },
   }))
-  logAction('receipt.confirm', 'receipt', receiptId, 'Накладная подтверждена')
+  logAction('stock.return', 'return', data?.id, 'Возврат поставщику')
   await checkAndUpdateStopList()
-  return result
+  return data
+}
+
+// payReceipt — оплата долга по конкретной накладной. Бэк атомарно списывает
+// сумму со счёта, уменьшает долг накладной и поставщика, создаёт
+// financial_operation. Сумма клампится к остатку долга накладной.
+export async function payReceipt(input: {
+  receiptId: string
+  amount: number
+  accountId: string
+  // idempotencyKey — один ключ на попытку оплаты: второй клик получит
+  // кэшированный ответ первого, а не проведёт вторую оплату (см. createStockReturn).
+  idempotencyKey?: string
+}): Promise<StockReceipt> {
+  const data: any = await unwrap(api.POST('/api/v1/stock/receipts/{id}/pay', {
+    params: { path: { id: input.receiptId } },
+    ...(input.idempotencyKey ? { headers: { 'Idempotency-Key': input.idempotencyKey } } : {}),
+    body: { amount: String(input.amount), account_id: input.accountId } as any,
+  }))
+  logAction('receipt.pay', 'receipt', input.receiptId, 'Оплата накладной')
+  return mapStockReceipt(data) as StockReceipt
+}
+
+// cancelStockReturn — сторно возврата: товар назад на склад, деньги/долг
+// откатываются. Документ не удаляется, помечается отменённым.
+export async function cancelStockReturn(id: string) {
+  await unwrap(api.POST('/api/v1/stock/returns/{id}/cancel', { params: { path: { id } } }))
+  logAction('stock.return_cancel', 'return', id, 'Сторно возврата поставщику')
+  await checkAndUpdateStopList()
 }
 
 export async function fetchWriteoffs(): Promise<StockWriteoff[]> {
@@ -274,7 +321,7 @@ export async function fetchInventoryCheckLines(checkId: string): Promise<Invento
 }
 
 export async function applyInventoryCheck(
-  lines: { ingredientId: string; ingredientName: string; unit: string; systemQty: number; actualQty: number }[],
+  lines: { ingredientId: string; kind?: string; ingredientName: string; unit: string; systemQty: number; actualQty: number }[],
   conductedBy: string,
   conductedById: string,
   note: string,
@@ -285,6 +332,7 @@ export async function applyInventoryCheck(
       note,
       lines: lines.map(l => ({
         ingredient_id: l.ingredientId,
+        kind: l.kind ?? 'ingredient',
         actual_qty: String(l.actualQty),
       })),
     } as any,
@@ -357,6 +405,7 @@ const STOCK_MOVEMENT_TYPE_MAP: Record<string, StockMovement['type']> = {
   out: 'out',
   receipt: 'in',
   writeoff: 'out',
+  return_supplier: 'return',
   supply_expense: 'out',
   inventory_correction: 'audit',
   batch_out: 'batch',
@@ -382,6 +431,8 @@ function mapStockMovement(r: Record<string, unknown>): StockMovement {
 
 function mapStockReceiptLine(l: Record<string, unknown>) {
   return {
+    id: (l.id as string) ?? undefined,
+    availableToReturn: l.available_to_return != null ? Number(l.available_to_return) : undefined,
     ingredientId: (l.ingredient_id as string) ?? '',
     name: (l.name as string) ?? '',
     qty: Number(l.qty ?? 0),
@@ -402,11 +453,41 @@ function mapStockReceipt(r: Record<string, unknown>): StockReceipt {
     paymentType: (r.payment_type as ReceiptPaymentType) ?? 'paid',
     paidAmount: Number(r.paid_amount ?? 0),
     debtAmount: Number(r.debt_amount ?? 0),
+    returnedTotal: r.returned_total != null ? Number(r.returned_total) : undefined,
     dueDate: (r.due_date as string | null) ?? undefined,
     confirmedAt: (r.confirmed_at as string | null) ?? undefined,
     confirmedBy: (r.confirmed_by as string | null) ?? undefined,
     lines: linesRaw.map(mapStockReceiptLine),
   } as StockReceipt
+}
+
+function mapStockReturn(r: Record<string, unknown>): StockReturn {
+  const linesRaw: Record<string, unknown>[] = Array.isArray(r.lines) ? (r.lines as Record<string, unknown>[]) : []
+  return {
+    id: r.id as string,
+    receiptId: (r.receipt_id as string) ?? '',
+    supplierId: (r.supplier_id as string | null) ?? '',
+    supplierName: (r.supplier_name as string | null) ?? '',
+    date: (r.date as string) ?? '',
+    reason: (r.reason as ReturnReason) ?? 'other',
+    note: (r.note as string | null) ?? undefined,
+    totalAmount: Number(r.total_amount ?? 0),
+    refundType: (r.refund_type as RefundType) ?? 'debt',
+    accountId: (r.account_id as string | null) ?? undefined,
+    createdBy: (r.created_by as string | null) ?? undefined,
+    cancelledAt: (r.cancelled_at as string | null) ?? undefined,
+    cancelledBy: (r.cancelled_by as string | null) ?? undefined,
+    createdAt: (r.created_at as string) ?? '',
+    lines: linesRaw.map(l => ({
+      id: (l.id as string) ?? '',
+      receiptLineId: (l.receipt_line_id as string) ?? '',
+      ingredientId: (l.ingredient_id as string | null) ?? '',
+      name: (l.name as string | null) ?? '',
+      qty: Number(l.qty ?? 0),
+      unit: (l.unit as string | null) ?? '',
+      pricePerUnit: Number(l.price_per_unit ?? 0),
+    })),
+  }
 }
 
 function mapStockWriteoffLine(l: Record<string, unknown>) {

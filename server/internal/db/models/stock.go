@@ -208,9 +208,13 @@ type SemiFinishedType struct {
 	Name         *string         `json:"name"`
 	OutputUnit   *string         `gorm:"column:output_unit;default:'кг'" json:"output_unit"`
 	YieldPercent decimal.Decimal `gorm:"column:yield_percent;type:numeric(14,4);default:100" json:"yield_percent"`
-	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
+	// «Тесто-30» → значение «30» шкалы пиццы), используется UI тех. карты
+	// для подсказки правильного полуфабриката под размер варианта.
+	SizeScaleValueID *string   `gorm:"column:size_scale_value_id;type:uuid" json:"size_scale_value_id"`
+	RestaurantID     *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (SemiFinishedType) TableName() string { return "semi_finished_types" }
@@ -267,12 +271,17 @@ type SupplyExpense struct {
 	IngredientName *string         `gorm:"column:ingredient_name" json:"ingredient_name"`
 	Qty            decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"qty"`
 	Unit           *string         `json:"unit"`
-	Reason         *string         `json:"reason"`
-	IssuedTo       *string         `gorm:"column:issued_to" json:"issued_to"`
-	Note           *string         `json:"note"`
-	CreatedBy      *string         `gorm:"column:created_by" json:"created_by"`
-	RestaurantID   *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt      time.Time       `json:"created_at"`
+	// Cost — стоимость выдачи, зафиксированная НА МОМЕНТ (qty_склада × цена
+	// ингредиента тогда). ОПиУ читает это поле, а не JOIN на текущую цену (Н8):
+	// иначе история хозрасхода дорожает при подорожании и обнуляется при
+	// удалении ингредиента (LEFT JOIN → NULL).
+	Cost         decimal.Decimal `gorm:"column:cost;type:numeric(14,4);default:0" json:"cost"`
+	Reason       *string         `json:"reason"`
+	IssuedTo     *string         `gorm:"column:issued_to" json:"issued_to"`
+	Note         *string         `json:"note"`
+	CreatedBy    *string         `gorm:"column:created_by" json:"created_by"`
+	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time       `json:"created_at"`
 }
 
 func (SupplyExpense) TableName() string { return "supply_expenses" }
@@ -295,8 +304,11 @@ func (InventoryCheck) TableName() string { return "inventory_checks" }
 
 // InventoryCheckLine — позиция инвентаризации.
 type InventoryCheckLine struct {
-	ID             string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	CheckID        string          `gorm:"column:check_id;type:uuid;not null;index" json:"check_id"`
+	ID      string `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	CheckID string `gorm:"column:check_id;type:uuid;not null;index" json:"check_id"`
+	// Kind — тип позиции: ingredient | semi | batch (Н1). IngredientID несёт id
+	// соответствующей сущности (для semi — id полуфабриката, для batch — id блюда).
+	Kind           string          `gorm:"column:kind;not null;default:'ingredient'" json:"kind"`
 	IngredientID   string          `gorm:"column:ingredient_id;type:uuid;not null" json:"ingredient_id"`
 	IngredientName string          `gorm:"column:ingredient_name;not null" json:"ingredient_name"`
 	Unit           string          `gorm:"not null" json:"unit"`
@@ -307,3 +319,58 @@ type InventoryCheckLine struct {
 }
 
 func (InventoryCheckLine) TableName() string { return "inventory_check_lines" }
+
+// StockReturn — возврат товара поставщику (порча/бой/просрочка).
+//
+// Не путать с StockWriteoff: списание — наш убыток (бьёт по прибыли в ОПиУ),
+// возврат — сторно закупки (товар уехал назад, деньги/долг вернулись).
+// Всегда привязан к накладной: цена возврата берётся из её строк, а не из
+// средневзвешенной себестоимости склада. См. миграцию 042.
+type StockReturn struct {
+	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ReceiptID    string          `gorm:"column:receipt_id;type:uuid;not null;index" json:"receipt_id"`
+	SupplierID   *string         `gorm:"column:supplier_id" json:"supplier_id"`
+	SupplierName *string         `gorm:"column:supplier_name" json:"supplier_name"`
+	Date         *string         `json:"date"`
+	Reason       string          `gorm:"not null;default:'spoilage'" json:"reason"`
+	Note         *string         `json:"note"`
+	TotalAmount  decimal.Decimal `gorm:"column:total_amount;type:numeric(14,4);not null;default:0" json:"total_amount"`
+	// RefundType: debt — уменьшили долг поставщику; money — вернули деньги на счёт.
+	RefundType string  `gorm:"column:refund_type;not null;default:'debt'" json:"refund_type"`
+	AccountID  *string `gorm:"column:account_id" json:"account_id"`
+	CreatedBy  *string `gorm:"column:created_by" json:"created_by"`
+	// CancelledAt — сторно: товар вернулся на склад, деньги/долг откатились.
+	// Строка не удаляется (append-only), но перестаёт считаться в guard'е
+	// «нельзя вернуть больше, чем пришло».
+	CancelledAt  *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`
+	CancelledBy  *string    `gorm:"column:cancelled_by" json:"cancelled_by"`
+	RestaurantID *string    `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+func (StockReturn) TableName() string { return "stock_returns" }
+
+// StockReturnLine — строка возврата. Привязана к строке накладной
+// (ReceiptLineID): по ней берётся цена и считается guard «нельзя вернуть
+// больше, чем пришло».
+type StockReturnLine struct {
+	ID            string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	ReturnID      string          `gorm:"column:return_id;type:uuid;not null;index" json:"return_id"`
+	ReceiptLineID string          `gorm:"column:receipt_line_id;type:uuid;not null;index" json:"receipt_line_id"`
+	IngredientID  *string         `gorm:"column:ingredient_id" json:"ingredient_id"`
+	Name          *string         `json:"name"`
+	Qty           decimal.Decimal `gorm:"type:numeric(14,4);not null;default:0" json:"qty"`
+	Unit          *string         `json:"unit"`
+	PricePerUnit  decimal.Decimal `gorm:"column:price_per_unit;type:numeric(14,4);not null;default:0" json:"price_per_unit"`
+	// CostRolledBack — откатывал ли возврат средневзвешенную себестоимость по
+	// этой строке. Нужен сторно, чтобы зеркалить возврат, а не двигать цену в
+	// свою сторону: иначе цикл «возврат + сторно» завышает стоимость запасов
+	// (см. миграцию 045). Решение принимается по каждому ингредиенту отдельно,
+	// поэтому флаг на строке, а не на документе.
+	CostRolledBack bool      `gorm:"column:cost_rolled_back;not null;default:false" json:"cost_rolled_back"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (StockReturnLine) TableName() string { return "stock_return_lines" }

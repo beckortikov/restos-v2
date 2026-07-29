@@ -70,6 +70,7 @@ export default function SettingsPage() {
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
   const [servicePercent, setServicePercent] = useState(10)
+  const [discountApprovalThreshold, setDiscountApprovalThreshold] = useState(10)
   const [enforceStockCheck, setEnforceStockCheck] = useState(false)
   const [techCardsEnabled, setTechCardsEnabled] = useState(true)
   const [autoReadyMode, setAutoReadyMode] = useState(false)
@@ -78,6 +79,14 @@ export default function SettingsPage() {
   const [pinLockTimeoutMin, setPinLockTimeoutMin] = useState(5)
   const [supplyAllowNegative, setSupplyAllowNegative] = useState(true)
   const [onScreenKeyboardEnabled, setOnScreenKeyboardEnabled] = useState(false)
+  // Режим обслуживания (041 + 052): столы в зале (выкл = фастфуд) + доставка.
+  // Отдельного тумблера «кухня после оплаты» больше нет — фастфуд включает это
+  // поведение сам (см. lib/order-types.ts isPrepayMode и серверный kitchenOnPay).
+  const [tablesEnabled, setTablesEnabled] = useState(true)
+  const [deliveryEnabled, setDeliveryEnabled] = useState(false)
+  const [deliveryContactsRequired, setDeliveryContactsRequired] = useState(true)
+  const [posV2Default, setPosV2Default] = useState(false)
+  const [menuSortBySales, setMenuSortBySales] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -94,6 +103,7 @@ export default function SettingsPage() {
           setAddress(r.address || '')
           setPhone(r.phone || '')
           setServicePercent(r.servicePercent)
+          setDiscountApprovalThreshold(r.discountApprovalThreshold ?? 10)
           setEnforceStockCheck(r.enforceStockCheck ?? false)
           setTechCardsEnabled(r.techCardsEnabled ?? true)
           setAutoReadyMode(r.autoReadyMode ?? false)
@@ -102,6 +112,11 @@ export default function SettingsPage() {
           setPinLockTimeoutMin(r.pinLockTimeoutMin ?? 5)
           setSupplyAllowNegative(r.supplyAllowNegative ?? true)
           setOnScreenKeyboardEnabled(r.onScreenKeyboardEnabled ?? false)
+          setTablesEnabled(r.tablesEnabled ?? true)
+          setDeliveryEnabled(r.deliveryEnabled ?? false)
+          setDeliveryContactsRequired(r.deliveryContactsRequired ?? true)
+          setPosV2Default(r.posV2Default ?? false)
+          setMenuSortBySales(r.menuSortBySales ?? false)
         }
       })
       .catch(e => console.error('Failed to load restaurant:', e))
@@ -136,9 +151,9 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled })
+      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled }
+      const updated = { ...rest, name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -153,7 +168,7 @@ export default function SettingsPage() {
         tags: { component: 'settings.save' },
         extra: {
           restaurantId: rest.id,
-          payload: { name, address, phone, servicePercent, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled },
+          payload: { name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales },
         },
       })
     } finally {
@@ -167,6 +182,7 @@ export default function SettingsPage() {
     setAddress(rest.address || '')
     setPhone(rest.phone || '')
     setServicePercent(rest.servicePercent)
+    setDiscountApprovalThreshold(rest.discountApprovalThreshold ?? 10)
     setEnforceStockCheck(rest.enforceStockCheck ?? false)
     setTechCardsEnabled(rest.techCardsEnabled ?? true)
     setAutoReadyMode(rest.autoReadyMode ?? false)
@@ -175,6 +191,11 @@ export default function SettingsPage() {
     setPinLockTimeoutMin(rest.pinLockTimeoutMin ?? 5)
     setSupplyAllowNegative(rest.supplyAllowNegative ?? true)
     setOnScreenKeyboardEnabled(rest.onScreenKeyboardEnabled ?? false)
+    setTablesEnabled(rest.tablesEnabled ?? true)
+    setDeliveryEnabled(rest.deliveryEnabled ?? false)
+    setDeliveryContactsRequired(rest.deliveryContactsRequired ?? true)
+    setPosV2Default(rest.posV2Default ?? false)
+    setMenuSortBySales(rest.menuSortBySales ?? false)
   }
 
   return (
@@ -267,6 +288,16 @@ export default function SettingsPage() {
                 className={inputCls}
               />
             </Field>
+            <Field label="Скидка без одобрения (%)" hint="Скидку ВЫШЕ этого процента кассир не проведёт без одобрения менеджера/владельца. До этого значения включительно — свободно.">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={discountApprovalThreshold}
+                onChange={e => setDiscountApprovalThreshold(Number(e.target.value))}
+                className={inputCls}
+              />
+            </Field>
           </Card>
 
           {/* Склад и техкарты */}
@@ -354,6 +385,32 @@ export default function SettingsPage() {
             )}
           </Card>
 
+          {/* Режим обслуживания — как ресторан обслуживает гостей (зал/фастфуд). */}
+          <Card title="Режим обслуживания">
+            <ToggleRow
+              title="🍽️ Столы в зале"
+              hint="Включено — классический зал: заказ «в зал» привязывается к столу, группы, карта зала, оплата в конце. Выключите для фастфуда: заказ по номеру без стола, создать его без оплаты нельзя — чек гостю и бегунок на кухню печатаются вместе по факту оплаты."
+              checked={tablesEnabled}
+              onChange={() => setTablesEnabled(!tablesEnabled)}
+            />
+            <ToggleRow
+              title="🛵 Доставка"
+              hint="Добавляет «Доставка» третьим типом заказа рядом с «Зал» и «С собой». Флоу тот же, что у «С собой». Выключение не прячет уже созданные заказы-доставки — только убирает выбор типа для новых."
+              checked={deliveryEnabled}
+              onChange={() => setDeliveryEnabled(!deliveryEnabled)}
+            />
+            {deliveryEnabled && (
+              <div className="ml-4 pl-3 border-l-2 border-border">
+                <ToggleRow
+                  title="📞 Спрашивать телефон и адрес"
+                  hint="Перед оплатой заказа-доставки касса просит телефон и адрес клиента — они печатаются на бегунке курьеру. Выключите, если контакты ведутся вне кассы."
+                  checked={deliveryContactsRequired}
+                  onChange={() => setDeliveryContactsRequired(!deliveryContactsRequired)}
+                />
+              </div>
+            )}
+          </Card>
+
           {/* Интерфейс */}
           <Card title="Интерфейс">
             <ToggleRow
@@ -361,6 +418,18 @@ export default function SettingsPage() {
               hint="Виртуальная клавиатура (iiko-style) при вводе на POS, смене и карте зала. Нужна на тач-терминалах без физической клавиатуры."
               checked={onScreenKeyboardEnabled}
               onChange={() => setOnScreenKeyboardEnabled(!onScreenKeyboardEnabled)}
+            />
+            <ToggleRow
+              title="✨ Новый POS по умолчанию"
+              hint="Кассы открывают новый интерфейс (POS 2) без ручного включения на каждой. Касса может переопределить локально в своих настройках."
+              checked={posV2Default}
+              onChange={() => setPosV2Default(!posV2Default)}
+            />
+            <ToggleRow
+              title="🔥 Меню по продаваемости"
+              hint="Внутри каждой категории самые продаваемые блюда встают вверх (за последние 30 дней). Выключено — по алфавиту."
+              checked={menuSortBySales}
+              onChange={() => setMenuSortBySales(!menuSortBySales)}
             />
           </Card>
         </div>

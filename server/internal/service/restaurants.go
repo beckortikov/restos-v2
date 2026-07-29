@@ -24,22 +24,33 @@ type RestaurantsService struct{ r *repo.Repo }
 func NewRestaurantsService(r *repo.Repo) *RestaurantsService { return &RestaurantsService{r: r} }
 
 type RestaurantCreateInput struct {
-	Name               *string `json:"name,omitempty"`
-	Slug               *string `json:"slug,omitempty"`
-	LogoURL            *string `json:"logo_url,omitempty"`
-	Address            *string `json:"address,omitempty"`
-	Phone              *string `json:"phone,omitempty"`
-	Currency           *string `json:"currency,omitempty"`
-	ServicePercent     *string `json:"service_percent,omitempty"`
-	Timezone           *string `json:"timezone,omitempty"`
-	EnforceStockCheck  *bool   `json:"enforce_stock_check,omitempty"`
-	TechCardsEnabled   *bool   `json:"tech_cards_enabled,omitempty"`
-	AutoReadyMode      *bool   `json:"auto_ready_mode,omitempty"`
-	AutoReadyBufferMin *int    `json:"auto_ready_buffer_min,omitempty"`
-	PinLockEnabled     *bool   `json:"pin_lock_enabled,omitempty"`
-	PinLockTimeoutMin  *int    `json:"pin_lock_timeout_min,omitempty"`
-	SupplyAllowNeg     *bool   `json:"supply_allow_negative,omitempty"`
-	OnScreenKbdEnabled *bool   `json:"on_screen_keyboard_enabled,omitempty"`
+	Name           *string `json:"name,omitempty"`
+	Slug           *string `json:"slug,omitempty"`
+	LogoURL        *string `json:"logo_url,omitempty"`
+	Address        *string `json:"address,omitempty"`
+	Phone          *string `json:"phone,omitempty"`
+	Currency       *string `json:"currency,omitempty"`
+	ServicePercent *string `json:"service_percent,omitempty"`
+	// DiscountApprovalThreshold — скидка выше этого % требует одобрения
+	// менеджера/владельца. Строка (decimal), как service_percent.
+	DiscountApprovalThreshold *string `json:"discount_approval_threshold,omitempty"`
+	Timezone                  *string `json:"timezone,omitempty"`
+	EnforceStockCheck         *bool   `json:"enforce_stock_check,omitempty"`
+	TechCardsEnabled          *bool   `json:"tech_cards_enabled,omitempty"`
+	AutoReadyMode             *bool   `json:"auto_ready_mode,omitempty"`
+	AutoReadyBufferMin        *int    `json:"auto_ready_buffer_min,omitempty"`
+	PinLockEnabled            *bool   `json:"pin_lock_enabled,omitempty"`
+	PinLockTimeoutMin         *int    `json:"pin_lock_timeout_min,omitempty"`
+	SupplyAllowNeg            *bool   `json:"supply_allow_negative,omitempty"`
+	OnScreenKbdEnabled        *bool   `json:"on_screen_keyboard_enabled,omitempty"`
+	TablesEnabled             *bool   `json:"tables_enabled,omitempty"`
+	KitchenOnPay              *bool   `json:"kitchen_on_pay,omitempty"`
+	PosV2Default              *bool   `json:"pos_v2_default,omitempty"`
+	// Доставка (052).
+	DeliveryEnabled          *bool `json:"delivery_enabled,omitempty"`
+	DeliveryContactsRequired *bool `json:"delivery_contacts_required,omitempty"`
+	// Сортировать меню по продаваемости (060). Default false → алфавит.
+	MenuSortBySales *bool `json:"menu_sort_by_sales,omitempty"`
 }
 
 func (s *RestaurantsService) List(ctx context.Context) ([]models.Restaurant, error) {
@@ -90,6 +101,10 @@ func (s *RestaurantsService) Create(ctx context.Context, in RestaurantCreateInpu
 		PinLockEnabled:          in.PinLockEnabled,
 		PinLockTimeoutMin:       in.PinLockTimeoutMin,
 		OnScreenKeyboardEnabled: in.OnScreenKbdEnabled,
+		TablesEnabled:           in.TablesEnabled,
+		KitchenOnPay:            in.KitchenOnPay,
+		PosV2Default:            in.PosV2Default,
+		MenuSortBySales:         in.MenuSortBySales,
 		CreatedAt:               now,
 		UpdatedAt:               now,
 	}
@@ -104,6 +119,13 @@ func (s *RestaurantsService) Create(ctx context.Context, in RestaurantCreateInpu
 			return nil, apperrors.Wrap("VALIDATION", "bad service_percent", err)
 		}
 		r.ServicePercent = d
+	}
+	if in.DiscountApprovalThreshold != nil {
+		d, err := decimal.FromString(*in.DiscountApprovalThreshold)
+		if err != nil || decimal.IsNegative(d) {
+			return nil, apperrors.Wrap("VALIDATION", "bad discount_approval_threshold", err)
+		}
+		r.DiscountApprovalThreshold = d
 	}
 	if err := s.r.Raw().WithContext(ctx).Create(r).Error; err != nil {
 		return nil, err
@@ -148,6 +170,13 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 		}
 		updates["service_percent"] = d
 	}
+	if in.DiscountApprovalThreshold != nil {
+		d, err := decimal.FromString(*in.DiscountApprovalThreshold)
+		if err != nil || decimal.IsNegative(d) {
+			return nil, apperrors.Wrap("VALIDATION", "bad discount_approval_threshold", err)
+		}
+		updates["discount_approval_threshold"] = d
+	}
 	if in.EnforceStockCheck != nil {
 		updates["enforce_stock_check"] = *in.EnforceStockCheck
 	}
@@ -171,6 +200,24 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 	}
 	if in.OnScreenKbdEnabled != nil {
 		updates["on_screen_keyboard_enabled"] = *in.OnScreenKbdEnabled
+	}
+	if in.TablesEnabled != nil {
+		updates["tables_enabled"] = *in.TablesEnabled
+	}
+	if in.KitchenOnPay != nil {
+		updates["kitchen_on_pay"] = *in.KitchenOnPay
+	}
+	if in.PosV2Default != nil {
+		updates["pos_v2_default"] = *in.PosV2Default
+	}
+	if in.MenuSortBySales != nil {
+		updates["menu_sort_by_sales"] = *in.MenuSortBySales
+	}
+	if in.DeliveryEnabled != nil {
+		updates["delivery_enabled"] = *in.DeliveryEnabled
+	}
+	if in.DeliveryContactsRequired != nil {
+		updates["delivery_contacts_required"] = *in.DeliveryContactsRequired
 	}
 	if err := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
 		Where("id = ?", id).Updates(updates).Error; err != nil {

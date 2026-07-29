@@ -2,12 +2,47 @@ package service
 
 import (
 	"context"
+	"time"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/cursor"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
+
+// MenuPopularityRow — продано штук по позиции за окно (для сортировки меню).
+type MenuPopularityRow struct {
+	MenuItemID string          `json:"menu_item_id" gorm:"column:menu_item_id"`
+	Qty        decimal.Decimal `json:"qty" gorm:"column:qty"`
+}
+
+// Popularity — сколько продано по каждой позиции за последние days дней
+// (закрытые + возвращённые заказы, не-cancelled строки). Лёгкий агрегат для
+// сортировки меню в POS/pos2 по продаваемости (060).
+func (s *MenuService) Popularity(ctx context.Context, days int) ([]MenuPopularityRow, error) {
+	if days <= 0 {
+		days = 30
+	}
+	if days > 365 {
+		days = 365
+	}
+	scoped, err := s.r.ForTenantQualified(ctx, "o")
+	if err != nil {
+		return nil, err
+	}
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	var rows []MenuPopularityRow
+	if err := scoped.Table("orders AS o").
+		Select("oi.menu_item_id AS menu_item_id, COALESCE(SUM(oi.qty), 0) AS qty").
+		Joins("JOIN order_items oi ON oi.order_id = o.id").
+		Where("o.status IN ? AND o.closed_at IS NOT NULL AND o.closed_at >= ? AND oi.menu_item_id IS NOT NULL AND oi.cancelled_at IS NULL",
+			[]string{"closed", "refunded"}, since).
+		Group("oi.menu_item_id").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
 
 // MenuService — чтение меню (Phase 2 read-only).
 type MenuService struct {

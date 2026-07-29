@@ -34,8 +34,12 @@ import {
   type Zone,
 } from '@/lib/types'
 import { fetchTables, fetchUsers, fetchZones, fetchFinancialAccounts, fetchMenuItems } from '@/lib/queries'
+import { useDataSync } from '@/hooks/use-data-sync'
+import { selectableAccounts } from '@/lib/queries/finance'
+import type { FinancialAccount } from '@/lib/types'
 import { buildReceiptData } from '@/lib/receipt-data'
 import { useAuth } from '@/lib/auth-store'
+import { confirmDialog } from '@/lib/confirm'
 import { PrintReceipt, type ReceiptData } from '@/components/print-receipt'
 import { SplitBillDialog } from '@/components/dialogs/split-bill-dialog'
 import { fetchOrderSplits, paySplit, cancelSplits, fetchVoidsForOrder, fetchActiveShift } from '@/lib/queries'
@@ -58,13 +62,6 @@ import {
   Receipt,
   Loader2,
 } from 'lucide-react'
-
-interface FinancialAccount {
-  id: string
-  name: string
-  type: string
-  balance: number
-}
 
 export interface OrderActionData {
   paymentMethod?: PaymentMethod
@@ -121,7 +118,7 @@ const STATUS_STYLE: Record<OrderStatus, { bg: string; text: string }> = {
 const TYPE_LABELS: Record<string, string> = {
   hall: 'Зал',
   delivery: 'Доставка',
-  takeaway: 'Самовывоз',
+  takeaway: 'С собой',
 }
 
 type PaymentType = 'cash' | 'noncash'
@@ -167,6 +164,9 @@ export function OrderActionsBody({
   const [showClosePreview, setShowClosePreview] = useState(false)
   const [pendingCloseData, setPendingCloseData] = useState<any>(null)
   const receiptRef = useRef<HTMLDivElement>(null)
+  // Гвард поверх confirmDialog() (см. lib/confirm) — против второго тапа по
+  // «Открыть для редактирования», пока первый диалог подтверждения ещё висит.
+  const reopenBusyRef = useRef(false)
 
   // Split bill
   const [showSplitDialog, setShowSplitDialog] = useState(false)
@@ -194,14 +194,28 @@ export function OrderActionsBody({
   const [addPaymentAmount, setAddPaymentAmount] = useState('')
   const [reprinting, setReprinting] = useState(false)
 
+  // Отключённые счета (миграция 063) к оплате не предлагаем. Переиспользуется
+  // и на mount, и на SSE-рефреш (useDataSync ниже) — уже выбранный счёт
+  // трогаем только если он пропал из списка (его отключили), не на каждый рефреш.
+  const loadAccounts = useCallback(() => {
+    return fetchFinancialAccounts().then(all => {
+      const a = selectableAccounts(all)
+      setAccounts(a)
+      setSelectedAccountId(prev => {
+        if (prev && a.some(acc => acc.id === prev)) return prev
+        const cash = a.find(acc => acc.type === 'cash')
+        return cash ? cash.id : (a[0]?.id ?? '')
+      })
+    }).catch(() => {})
+  }, [])
+
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
+
   // Initial data load (one-shot). При смене order.id перезагружаем voids/splits ниже.
   useEffect(() => {
-    fetchFinancialAccounts().then(a => {
-      setAccounts(a)
-      const cash = a.find(acc => acc.type === 'cash')
-      if (cash) setSelectedAccountId(cash.id)
-      else if (a.length > 0) setSelectedAccountId(a[0].id)
-    }).catch(() => {})
+    loadAccounts()
     if (!dataLoaded) {
       fetchTables().then(t => setTables(t)).catch(() => {})
       fetchZones().then(z => setZones(z)).catch(() => {})
@@ -641,18 +655,30 @@ export function OrderActionsBody({
             выводит заказ из смены, потому чувствительнее обычной отмены). */}
         {order.status === 'done' && canDo('orders.edit') && !order.isSplit && (
           <button
-            onClick={() => {
-              const total = order.totalWithService ?? order.total
-              const ok = window.confirm(
-                `Открыть заказ #${order.orderNumber ?? order.id.slice(0, 8)} (${formatCurrency(total)}) для редактирования?\n\n` +
-                `• Будут удалены связанные финансовые операции (выручка и себестоимость).\n` +
-                `• Заказ выйдет из текущей/прошлой смены.\n` +
-                `• Стол вернётся в «Занят», статус — «Счёт».\n\n` +
-                `Сумму, скидку и обслуживание можно будет изменить и провести оплату заново.`
-              )
-              if (!ok) return
-              onAction('reopen')
-              onClose()
+            onClick={async () => {
+              // НЕ window.confirm: этот пункт вызывается ИЗНУТРИ уже открытого
+              // Sheet (Radix Dialog) — нативный confirm() рвёт фокус Electron
+              // после закрытия (electron/electron#19977 и класс дублей), и на
+              // вложенный Radix-диалог это накладывается ещё жёстче. См. lib/confirm
+              // — почему там именно Radix AlertDialog, а не самодельный оверлей.
+              if (reopenBusyRef.current) return
+              reopenBusyRef.current = true
+              try {
+                const total = order.totalWithService ?? order.total
+                const ok = await confirmDialog({
+                  title: `Открыть заказ #${order.orderNumber ?? order.id.slice(0, 8)} для редактирования?`,
+                  message: `Сумма ${formatCurrency(total)}.\n\n` +
+                    `• Будут удалены связанные финансовые операции (выручка и себестоимость).\n` +
+                    `• Заказ выйдет из текущей/прошлой смены.\n` +
+                    `• Стол вернётся в «Занят», статус — «Счёт».\n\n` +
+                    `Сумму, скидку и обслуживание можно будет изменить и провести оплату заново.`,
+                  confirmLabel: 'Открыть для редактирования',
+                  danger: true,
+                })
+                if (!ok) return
+                onAction('reopen')
+                onClose()
+              } finally { reopenBusyRef.current = false }
             }}
             className="w-full inline-flex items-center justify-center gap-2 rounded-xl border-2 border-amber-300 bg-amber-50 px-5 py-3.5 text-sm font-medium text-amber-700 hover:bg-amber-100 transition-colors"
           >

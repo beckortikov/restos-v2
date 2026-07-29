@@ -45,12 +45,34 @@ func Idempotency(svc *service.IdempotencyService) func(http.Handler) http.Handle
 			_ = r.Body.Close()
 
 			ctx := r.Context()
-			cached, err := svc.Lookup(ctx, key, r.Method, r.URL.Path, body)
+
+			// #26: РЕЗЕРВИРУЕМ ключ ДО выполнения (INSERT pending-строки). Так ключ
+			// занят раньше, чем деньги двинулись. Если процесс упадёт между
+			// коммитом операции и записью ответа — останется pending-строка, и
+			// повтор получит ErrInProgress (409), а не выполнит операцию второй раз.
+			// Раньше ключ писался ПОСЛЕ хендлера — краш в этом окне открывал дорогу
+			// двойному списанию.
+			var restID *string
+			if rid, ok := tenant.RestaurantID(ctx); ok {
+				restID = &rid
+			}
+			var userID *string
+			if a, ok := audit.ActorFromContext(ctx); ok && a.UserID != "" {
+				userID = &a.UserID
+			}
+			reserved, cached, err := svc.Reserve(ctx, key, r.Method, r.URL.Path, body, restID, userID)
 			if err != nil {
 				if errors.Is(err, service.ErrConflict) {
 					respond.JSON(w, http.StatusConflict, respond.ErrorEnvelope{
 						Code:    "IDEMPOTENCY_CONFLICT",
 						Message: "key reused for a different request",
+					})
+					return
+				}
+				if errors.Is(err, service.ErrInProgress) {
+					respond.JSON(w, http.StatusConflict, respond.ErrorEnvelope{
+						Code:    "IDEMPOTENCY_IN_PROGRESS",
+						Message: "операция уже выполняется — повторите запрос позже, не дублируйте",
 					})
 					return
 				}
@@ -64,30 +86,27 @@ func Idempotency(svc *service.IdempotencyService) func(http.Handler) http.Handle
 				_, _ = w.Write(cached.Body)
 				return
 			}
+			_ = reserved // всегда true здесь (иначе вернулись выше)
 
 			r.Body = io.NopCloser(bytes.NewReader(body))
 
 			// Полностью буферизованный writer. Ничего не уходит клиенту, пока
-			// мы не сохранили cache.
+			// не завершим idempotency-запись.
 			bw := newBufferedWriter()
 			next.ServeHTTP(bw, r)
 
-			// Сохраняем в idempotency cache только успешные 2xx.
 			if bw.status >= 200 && bw.status < 300 {
-				var restID *string
-				if rid, ok := tenant.RestaurantID(ctx); ok {
-					restID = &rid
-				}
-				var userID *string
-				if a, ok := audit.ActorFromContext(ctx); ok && a.UserID != "" {
-					userID = &a.UserID
-				}
-				if err := svc.Save(ctx, key, r.Method, r.URL.Path, body, bw.status, bw.body.Bytes(), restID, userID); err != nil {
-					log.Error().Err(err).Str("key", key).Msg("idempotency save failed")
-					// Save упал — нельзя гарантировать идемпотентность повтора.
-					// Возвращаем 500, чтобы клиент знал и сделал retry с новым ключом.
+				// Успех — фиксируем ответ в зарезервированной строке.
+				if err := svc.Complete(ctx, key, bw.status, bw.body.Bytes()); err != nil {
+					log.Error().Err(err).Str("key", key).Msg("idempotency complete failed")
 					respond.Error(w, err)
 					return
+				}
+			} else {
+				// Не-2xx (валидация/конфликт) — снимаем резерв, чтобы клиент мог
+				// исправить запрос и повторить с тем же ключом.
+				if err := svc.Release(ctx, key); err != nil {
+					log.Error().Err(err).Str("key", key).Msg("idempotency release failed")
 				}
 			}
 

@@ -29,6 +29,10 @@ func NewReportsService(r *repo.Repo) *ReportsService { return &ReportsService{r:
 type PeriodFilter struct {
 	From *time.Time
 	To   *time.Time
+	// OperationalOnly (ОПиУ): в opex учитывать только операционную активность,
+	// исключая инвестиционную (капвложения — оборудование) и финансовую. Иначе
+	// разовая закупка оборудования проваливает операционную прибыль месяца.
+	OperationalOnly bool
 }
 
 // ─── orders.xlsx ───────────────────────────────────────────────────────────

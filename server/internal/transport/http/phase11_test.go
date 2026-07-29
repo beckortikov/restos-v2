@@ -90,62 +90,6 @@ func TestPhase11_IngredientsCRUD(t *testing.T) {
 
 // ─── Stock receipts confirm ────────────────────────────────────────────────
 
-func TestPhase11_StockReceiptsConfirm(t *testing.T) {
-	f := setupE2E(t)
-	tok := f.login(t)
-	gdb, _, _, _ := seedForWrite(t, f)
-
-	var ing models.Ingredient
-	if err := gdb.Where("restaurant_id = ?", f.rid).First(&ing).Error; err != nil {
-		t.Fatal(err)
-	}
-
-	// Create receipt with payment_type=credit (на создании уже создаётся как credit).
-	supplierName := "Acme Supplies"
-	cr, cb := f.post(t, "/api/v1/stock/receipts", tok, uuid.NewString(),
-		map[string]any{
-			"payment_type":  "credit",
-			"supplier_name": supplierName,
-			"lines": []map[string]any{
-				{"ingredient_id": ing.ID, "name": "Rice", "qty": "10", "price_per_unit": "2"},
-			},
-		})
-	if cr.StatusCode != 201 {
-		t.Fatalf("create receipt %d: %s", cr.StatusCode, cb)
-	}
-	var receipt models.StockReceipt
-	_ = json.Unmarshal(cb, &receipt)
-	if !receipt.DebtAmount.Equal(decimal.MustFromString("20")) {
-		t.Errorf("debt_amount = %s, want 20", receipt.DebtAmount.String())
-	}
-
-	// Confirm с credit — создаст Liability.
-	confirmPath := fmt.Sprintf("/api/v1/stock/receipts/%s/confirm", receipt.ID)
-	conr, conb := f.post(t, confirmPath, tok, uuid.NewString(),
-		map[string]any{"payment_type": "credit"})
-	if conr.StatusCode != 200 {
-		t.Fatalf("confirm %d: %s", conr.StatusCode, conb)
-	}
-
-	// Verify liability.
-	var liabilities []models.Liability
-	if err := gdb.Where("restaurant_id = ?", f.rid).Find(&liabilities).Error; err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for _, l := range liabilities {
-		if l.Note != nil && *l.Note == "stock_receipt:"+receipt.ID {
-			found = true
-			if !l.TotalAmount.Equal(decimal.MustFromString("20")) {
-				t.Errorf("liability total = %s, want 20", l.TotalAmount.String())
-			}
-		}
-	}
-	if !found {
-		t.Errorf("liability for credit receipt not created (got %d)", len(liabilities))
-	}
-}
-
 // ─── Stock movements list ──────────────────────────────────────────────────
 
 func TestPhase11_StockMovementsList(t *testing.T) {

@@ -1,14 +1,15 @@
 'use client'
 
-import React, { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight } from 'lucide-react'
-import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts } from '@/lib/queries'
+import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2 } from 'lucide-react'
+import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, formatNum } from '@/lib/helpers'
+import { RETURN_REASON_LABELS } from '@/lib/types'
 import { dMul } from '@/lib/decimal'
 import { toast } from 'sonner'
-import type { Supplier, StockReceipt } from '@/lib/types'
+import type { Supplier, StockReceipt, StockReturn } from '@/lib/types'
 
 const PAY_BADGE: Record<string, { label: string; cls: string }> = {
   paid: { label: 'Оплачено', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' },
@@ -77,14 +78,37 @@ export default function EditSupplierPage() {
   const [form, setForm] = useState<SupplierForm>(emptyForm)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [editing, setEditing] = useState(false) // просмотр по умолчанию, edit — по кнопке
   const [catSearch, setCatSearch] = useState('')
   const [ingredientCategories, setIngredientCategories] = useState<string[]>([])
   const [receipts, setReceipts] = useState<StockReceipt[]>([])
   const [loadingReceipts, setLoadingReceipts] = useState(true)
   const [expandedReceipt, setExpandedReceipt] = useState<string | null>(null)
+  const [returns, setReturns] = useState<StockReturn[]>([])
 
   const totalPurchased = useMemo(() => receipts.reduce((s, r) => s + r.totalAmount, 0), [receipts])
   const totalDebt = useMemo(() => receipts.reduce((s, r) => s + r.debtAmount, 0), [receipts])
+  // Действующие возвраты этого поставщика. Без них непонятно, почему долг
+  // уменьшился или откуда приход денег — накладная просто «похудела».
+  const activeReturns = useMemo(() => returns.filter(r => !r.cancelledAt), [returns])
+  const totalReturned = useMemo(() => activeReturns.reduce((s, r) => s + r.totalAmount, 0), [activeReturns])
+  const returnsByReceipt = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const r of activeReturns) m.set(r.receiptId, (m.get(r.receiptId) ?? 0) + r.totalAmount)
+    return m
+  }, [activeReturns])
+  // Сами документы возвратов по накладной — чтобы в раскрытой накладной было
+  // видно, ЧТО и сколько вернули (а не только итоговую сумму). Отменённые тоже
+  // показываем — зачёркнутыми, чтобы ошибка и её исправление были видны.
+  const returnDocsByReceipt = useMemo(() => {
+    const m = new Map<string, StockReturn[]>()
+    for (const r of returns) {
+      const arr = m.get(r.receiptId) ?? []
+      arr.push(r)
+      m.set(r.receiptId, arr)
+    }
+    return m
+  }, [returns])
   const sortedReceipts = useMemo(
     () => [...receipts].sort((a, b) => (b.date || '').localeCompare(a.date || '')),
     [receipts],
@@ -93,9 +117,9 @@ export default function EditSupplierPage() {
   useEffect(() => {
     if (!id) return
     setLoadingReceipts(true)
-    fetchReceipts({ supplierId: id })
-      .then(setReceipts)
-      .catch(() => setReceipts([]))
+    Promise.all([fetchReceipts({ supplierId: id }), fetchStockReturns({ supplierId: id })])
+      .then(([rc, rt]) => { setReceipts(rc); setReturns(rt) })
+      .catch(() => { setReceipts([]); setReturns([]) })
       .finally(() => setLoadingReceipts(false))
   }, [id])
 
@@ -132,6 +156,18 @@ export default function EditSupplierPage() {
     }))
   }
 
+  const resetForm = () => {
+    if (!supplier) return
+    setForm({
+      name: supplier.name,
+      contactPerson: supplier.contactPerson,
+      phone: supplier.phone,
+      categories: supplier.categories,
+      paymentTermsDays: supplier.paymentTermsDays,
+      creditLimit: supplier.creditLimit,
+    })
+  }
+
   const handleSubmit = async () => {
     if (!supplier || !form.name.trim() || !form.contactPerson.trim() || !form.phone.trim() || form.categories.length === 0 || saving) return
     setSaving(true)
@@ -144,8 +180,18 @@ export default function EditSupplierPage() {
         payment_terms_days: form.paymentTermsDays,
         credit_limit: form.creditLimit,
       })
+      // Обновляем локально и возвращаемся в просмотр (не уходим со страницы).
+      setSupplier({
+        ...supplier,
+        name: form.name,
+        contactPerson: form.contactPerson,
+        phone: form.phone,
+        categories: form.categories,
+        paymentTermsDays: form.paymentTermsDays,
+        creditLimit: form.creditLimit,
+      })
+      setEditing(false)
       toast.success('Поставщик обновлён')
-      navigate('/warehouse/suppliers')
     } catch (e) {
       toast.error('Ошибка обновления поставщика')
     } finally {
@@ -189,21 +235,81 @@ export default function EditSupplierPage() {
             <span>Назад</span>
           </button>
           <h1 className="flex-1 text-base md:text-lg font-bold text-foreground truncate">
-            Редактирование: <span className="text-primary">{supplier?.name}</span>
+            {editing && <span className="text-muted-foreground font-medium">Редактирование: </span>}
+            <span className="text-primary">{supplier?.name}</span>
           </h1>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit || saving}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <CheckCircle className="size-4" />
-            {saving ? 'Сохранение...' : 'Сохранить изменения'}
-          </button>
+          {editing ? (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { setEditing(false); resetForm() }}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-foreground bg-card border border-border hover:bg-muted transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmit}
+                disabled={!canSubmit || saving}
+                className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+              >
+                <CheckCircle className="size-4" />
+                {saving ? 'Сохранение...' : 'Сохранить'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+            >
+              <Pencil className="size-4" />
+              Редактировать
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Body */}
+      {/* Body — просмотр (сводка read-only) ИЛИ редактирование (форма) */}
+      {!editing && (
+        <div className="flex-1 p-4 md:p-6 max-w-7xl mx-auto w-full">
+          <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
+              <div className="flex items-center gap-2 text-sm">
+                <User className="size-4 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground">Контакт:</span>
+                <span className="font-medium text-foreground">{supplier?.contactPerson || '—'}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Phone className="size-4 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground">Телефон:</span>
+                {supplier?.phone
+                  ? <a href={`tel:${supplier.phone}`} className="font-medium text-primary hover:underline">{supplier.phone}</a>
+                  : <span className="font-medium text-foreground">—</span>}
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <Landmark className="size-4 text-muted-foreground shrink-0" />
+                <span className="text-muted-foreground">Отсрочка:</span>
+                <span className="font-medium text-foreground">{supplier?.paymentTermsDays ? `${supplier.paymentTermsDays} дн.` : 'без отсрочки'}</span>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground">Наш долг:</span>
+                <span className={`font-bold ${(supplier?.currentDebt ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600'}`}>{formatCurrency(supplier?.currentDebt ?? 0)}</span>
+                {(supplier?.creditLimit ?? 0) > 0 && <span className="text-xs text-muted-foreground">из {formatCurrency(supplier!.creditLimit)}</span>}
+              </div>
+            </div>
+            {(supplier?.categories?.length ?? 0) > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-3 border-t border-border/60">
+                <Tag className="size-4 text-muted-foreground shrink-0" />
+                {supplier!.categories.map(c => (
+                  <span key={c} className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-md font-medium">{c}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {editing && (
       <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 p-4 md:p-6 max-w-7xl mx-auto w-full">
         {/* Left Column - Contact Info & Terms */}
         <div className="lg:col-span-6 space-y-6">
@@ -393,6 +499,7 @@ export default function EditSupplierPage() {
           </div>
         </div>
       </div>
+      )}
 
       {/* История закупок — накладные этого поставщика */}
       <div className="max-w-7xl mx-auto w-full px-4 md:px-6 pb-8">
@@ -406,6 +513,9 @@ export default function EditSupplierPage() {
               <div className="flex items-center gap-4 text-xs">
                 <span className="text-muted-foreground">Накладных: <span className="font-bold text-foreground tabular-nums">{receipts.length}</span></span>
                 <span className="text-muted-foreground">Закуплено: <span className="font-bold text-foreground tabular-nums">{formatCurrency(totalPurchased)}</span></span>
+                {totalReturned > 0.005 && (
+                  <span className="text-muted-foreground">Возвращено: <span className="font-bold text-orange-600 dark:text-orange-400 tabular-nums">{formatCurrency(totalReturned)}</span></span>
+                )}
                 {totalDebt > 0.005 && (
                   <span className="text-muted-foreground">Долг: <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">{formatCurrency(totalDebt)}</span></span>
                 )}
@@ -422,86 +532,110 @@ export default function EditSupplierPage() {
               У этого поставщика ещё нет накладных
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-[11px] uppercase tracking-wider text-muted-foreground border-b border-border/60">
-                    <th className="text-left font-semibold py-2 pr-3">Дата</th>
-                    <th className="text-left font-semibold py-2 pr-3">Оплата</th>
-                    <th className="text-right font-semibold py-2 pr-3">Сумма</th>
-                    <th className="text-right font-semibold py-2 pr-3">Оплачено</th>
-                    <th className="text-right font-semibold py-2">Долг</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedReceipts.map((r) => {
-                    const badge = PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid
-                    const itemsCount = r.lines?.length ?? 0
-                    const open = expandedReceipt === r.id
-                    return (
-                      <React.Fragment key={r.id}>
-                      <tr
-                        onClick={() => itemsCount > 0 && setExpandedReceipt(open ? null : r.id)}
-                        className={`border-b border-border/40 last:border-0 transition-colors ${itemsCount > 0 ? 'cursor-pointer hover:bg-muted/30' : ''} ${open ? 'bg-muted/40' : ''}`}
-                      >
-                        <td className="py-2.5 pr-3">
-                          <div className="flex items-center gap-1.5">
-                            {itemsCount > 0
-                              ? (open ? <ChevronDown className="size-3.5 text-muted-foreground shrink-0" /> : <ChevronRight className="size-3.5 text-muted-foreground shrink-0" />)
-                              : <span className="size-3.5 shrink-0" />}
-                            <div>
-                              <div className="font-medium text-foreground tabular-nums">{r.date || '—'}</div>
-                              {itemsCount > 0 && <div className="text-[11px] text-muted-foreground">{itemsCount} позиц.</div>}
-                            </div>
-                          </div>
-                        </td>
-                        <td className="py-2.5 pr-3">
-                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium ${badge.cls}`}>
-                            {badge.label}
+            <div className="space-y-2">
+              {sortedReceipts.map((r) => {
+                const badge = PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid
+                const itemsCount = r.lines?.length ?? 0
+                const open = expandedReceipt === r.id
+                const ret = returnsByReceipt.get(r.id) ?? 0
+                const origDebt = r.totalAmount - r.paidAmount
+                const debtReduced = r.debtAmount > 0.005 && origDebt > r.debtAmount + 0.005
+                return (
+                  <div key={r.id} className="rounded-lg border border-border overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => itemsCount > 0 && setExpandedReceipt(open ? null : r.id)}
+                      className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${itemsCount > 0 ? 'hover:bg-muted/40' : ''} ${open ? 'bg-muted/30' : ''}`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium text-foreground tabular-nums">{r.date || '—'}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badge.cls}`}>{badge.label}</span>
+                        </div>
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground mt-1">
+                          {itemsCount > 0 && <span>{itemsCount} позиц.</span>}
+                          {r.paidAmount > 0.005 && <span>оплачено {formatCurrency(r.paidAmount)}</span>}
+                          {ret > 0.005 && (
+                            <span className="text-orange-600 dark:text-orange-400 inline-flex items-center gap-0.5">
+                              <Undo2 className="size-2.5" />возврат {formatCurrency(ret)}
+                            </span>
+                          )}
+                          {r.debtAmount > 0.005 && (
+                            <span className="text-rose-600 dark:text-rose-400 font-medium inline-flex items-baseline gap-1">
+                              долг
+                              {debtReduced && <span className="line-through opacity-60">{formatCurrency(origDebt)}</span>}
+                              <span className="font-bold">{formatCurrency(r.debtAmount)}</span>
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {ret > 0.005 ? (
+                          <span className="flex items-baseline gap-1 whitespace-nowrap">
+                            <span className="text-xs text-muted-foreground line-through tabular-nums">{formatCurrency(r.totalAmount)}</span>
+                            <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount - ret)}</span>
                           </span>
-                        </td>
-                        <td className="py-2.5 pr-3 text-right font-semibold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</td>
-                        <td className="py-2.5 pr-3 text-right text-muted-foreground tabular-nums">{formatCurrency(r.paidAmount)}</td>
-                        <td className="py-2.5 text-right tabular-nums font-medium">
-                          {r.debtAmount > 0.005
-                            ? <span className="text-rose-600 dark:text-rose-400">{formatCurrency(r.debtAmount)}</span>
-                            : <span className="text-muted-foreground">0</span>}
-                        </td>
-                      </tr>
-                      {open && (
-                        <tr className="bg-muted/20">
-                          <td colSpan={5} className="px-3 pb-3 pt-1">
-                            <div className="rounded-lg border border-border/60 overflow-hidden">
-                              <table className="w-full text-xs">
-                                <thead>
-                                  <tr className="text-[10px] uppercase tracking-wider text-muted-foreground bg-muted/40">
-                                    <th className="text-left font-semibold px-3 py-1.5">Товар</th>
-                                    <th className="text-right font-semibold px-3 py-1.5">Кол-во</th>
-                                    <th className="text-right font-semibold px-3 py-1.5">Цена</th>
-                                    <th className="text-right font-semibold px-3 py-1.5">Сумма</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {(r.lines ?? []).map((l, i) => (
-                                    <tr key={i} className="border-t border-border/40">
-                                      <td className="px-3 py-1.5 text-foreground">{l.name}</td>
-                                      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{l.qty} {l.unit}</td>
-                                      <td className="px-3 py-1.5 text-right text-muted-foreground tabular-nums">{formatCurrency(l.pricePerUnit)}</td>
-                                      <td className="px-3 py-1.5 text-right font-medium text-foreground tabular-nums">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
+                        ) : (
+                          <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</span>
+                        )}
+                        {itemsCount > 0 && (open
+                          ? <ChevronDown className="size-4 text-muted-foreground" />
+                          : <ChevronRight className="size-4 text-muted-foreground" />)}
+                      </div>
+                    </button>
+                    {open && (
+                      <div className="border-t border-border bg-muted/20">
+                        <div className="divide-y divide-border/60">
+                          {(r.lines ?? []).map((l, i) => (
+                            <div key={i} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                              <span className="flex-1 text-foreground truncate">{l.name}</span>
+                              <span className="text-muted-foreground tabular-nums whitespace-nowrap">{l.qty} {l.unit} × {formatCurrency(l.pricePerUnit)}</span>
+                              <span className="font-medium text-foreground tabular-nums w-20 text-right">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</span>
                             </div>
-                            {r.note && <p className="text-[11px] text-muted-foreground mt-2">Примечание: {r.note}</p>}
-                          </td>
-                        </tr>
-                      )}
-                      </React.Fragment>
-                    )
-                  })}
-                </tbody>
-              </table>
+                          ))}
+                        </div>
+                        {r.note && <p className="text-[11px] text-muted-foreground px-3 py-2 border-t border-border/60">Примечание: {r.note}</p>}
+
+                        {/* Возвраты по этой накладной — какие позиции и на сколько
+                            вернули (в т.ч. частичный). Отменённые — зачёркнуты. */}
+                        {(returnDocsByReceipt.get(r.id) ?? []).length > 0 && (
+                          <div className="border-t border-border p-3 space-y-2">
+                            <p className="text-[11px] font-semibold text-orange-600 dark:text-orange-400 flex items-center gap-1.5">
+                              <Undo2 className="size-3" /> Возвраты по накладной
+                            </p>
+                            {(returnDocsByReceipt.get(r.id) ?? []).map((ret) => {
+                              const cancelled = !!ret.cancelledAt
+                              return (
+                                <div key={ret.id} className={`rounded-lg border border-border bg-card overflow-hidden ${cancelled ? 'opacity-55' : ''}`}>
+                                  <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-orange-50 dark:bg-orange-500/10 border-b border-border">
+                                    <span className="text-[11px] font-medium text-foreground">
+                                      {ret.date} · {RETURN_REASON_LABELS[ret.reason]}
+                                      {cancelled && <span className="ml-1.5 text-muted-foreground">(отменён)</span>}
+                                    </span>
+                                    <span className={`text-[11px] font-bold tabular-nums ${cancelled ? 'line-through text-muted-foreground' : 'text-orange-600 dark:text-orange-400'}`}>
+                                      −{formatCurrency(ret.totalAmount)}
+                                    </span>
+                                  </div>
+                                  <div className="divide-y divide-border/60">
+                                    {ret.lines.map((l) => (
+                                      <div key={l.id} className="flex items-center gap-3 px-3 py-1.5 text-xs">
+                                        <span className="flex-1 text-foreground truncate">{l.name}</span>
+                                        <span className="text-muted-foreground tabular-nums whitespace-nowrap">{formatNum(l.qty)} {l.unit}</span>
+                                        <span className="font-medium text-foreground tabular-nums w-20 text-right">{formatCurrency(dMul(l.qty, l.pricePerUnit))}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {ret.note && <p className="text-[11px] text-muted-foreground px-3 py-1.5 border-t border-border/60">Комментарий: {ret.note}</p>}
+                                </div>
+                              )
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

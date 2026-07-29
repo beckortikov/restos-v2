@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -260,12 +261,18 @@ func (s *LiabilitiesService) Patch(ctx context.Context, id string, in LiabilityI
 		}
 		updates["total_amount"] = d
 	}
+	// #9: paid_amount нельзя двигать через PATCH — это «погашение», которое
+	// обязано списать деньги со счёта. Иначе обязательство уменьшалось, а касса
+	// не трогалась → капитал (активы − пассивы) рос из воздуха. Оплата — только
+	// через POST /liabilities/{id}/pay.
 	if in.PaidAmount != nil {
 		d, err := decimal.FromString(*in.PaidAmount)
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad paid_amount", err)
 		}
-		updates["paid_amount"] = d
+		if !d.Equal(existing.PaidAmount) {
+			return nil, apperrors.Wrap("VALIDATION", "оплату обязательства проводите через /liabilities/{id}/pay (со списанием со счёта)", nil)
+		}
 	}
 	if in.MonthlyPayment != nil {
 		d, err := decimal.FromString(*in.MonthlyPayment)
@@ -297,6 +304,100 @@ func (s *LiabilitiesService) Patch(ctx context.Context, id string, in LiabilityI
 		return nil, err
 	}
 	return &out, nil
+}
+
+// LiabilityPayInput — body POST /api/v1/liabilities/{id}/pay.
+type LiabilityPayInput struct {
+	Amount    string `json:"amount"`
+	AccountID string `json:"account_id"`
+}
+
+// Pay — погашение обязательства: списывает деньги со счёта, создаёт проводку
+// (category=liability_payment — гашение пассива, НЕ opex ОПиУ), уменьшает долг.
+// Всё в одной транзакции, по образцу PayDebt. Порядок замков: счёт (единственный
+// внешний ресурс здесь).
+func (s *LiabilitiesService) Pay(ctx context.Context, id string, in LiabilityPayInput) (*models.Liability, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	amount, err := decimal.FromString(in.Amount)
+	if err != nil || !decimal.IsPositive(amount) {
+		return nil, apperrors.Wrap("VALIDATION", "amount must be > 0", err)
+	}
+	if in.AccountID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	if err := MustBeEnabled(ctx, s.r, in.AccountID); err != nil {
+		return nil, err
+	}
+	now := time.Now().UTC()
+	var out *models.Liability
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var lia models.Liability
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, id).First(&lia).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		remaining := decimal.Normalize(decimal.Sub(lia.TotalAmount, lia.PaidAmount))
+		if !decimal.IsPositive(remaining) {
+			return apperrors.Wrap("CONFLICT", "обязательство уже погашено", nil)
+		}
+		pay := amount
+		if pay.GreaterThan(remaining) {
+			pay = remaining // не переплачиваем
+		}
+		var acc models.FinancialAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, in.AccountID).First(&acc).Error; err != nil {
+			return apperrors.Wrap("VALIDATION", "account not found", err)
+		}
+		newBal := decimal.Normalize(decimal.Sub(acc.Balance, pay))
+		if decimal.IsNegative(newBal) {
+			return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)
+		}
+		if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		lia.PaidAmount = decimal.Normalize(decimal.Add(lia.PaidAmount, pay))
+		lia.RemainingAmount = decimal.Normalize(decimal.Sub(lia.TotalAmount, lia.PaidAmount))
+		if err := tx.Model(&lia).Updates(map[string]any{
+			"paid_amount": lia.PaidAmount, "remaining_amount": lia.RemainingAmount, "updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		opType, opCat, opAct := "out", "liability_payment", "operational"
+		opDate := now.Format("2006-01-02")
+		desc := "Погашение обязательства"
+		if lia.Name != nil && *lia.Name != "" {
+			desc = "Погашение: " + *lia.Name
+		}
+		isAuto := true
+		ridStr := rid
+		accID := in.AccountID
+		if err := tx.Create(&models.FinancialOperation{
+			ID: uuid.NewString(), Type: &opType, Amount: pay, Category: &opCat,
+			AccountID: &accID, AccountName: acc.Name, Activity: &opAct, Date: &opDate,
+			Description: &desc, Counterparty: lia.Creditor, IsAuto: &isAuto,
+			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+		}).Error; err != nil {
+			return err
+		}
+		// #27: наличное гашение с кассового счёта открытой смены зеркалим в смену.
+		if err := recordShiftCashOutIfActive(tx, rid, "", in.AccountID, desc, opDate, pay, now); err != nil {
+			return err
+		}
+		out = &lia
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *LiabilitiesService) Delete(ctx context.Context, id string) error {
@@ -1128,6 +1229,9 @@ type SemiTypeInput struct {
 	OutputUnit   *string            `json:"output_unit,omitempty"`
 	YieldPercent *string            `json:"yield_percent,omitempty"`
 	Recipe       *[]SemiRecipeInput `json:"recipe,omitempty"`
+	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
+	// «Тесто-30» → значение «30» шкалы пиццы); см. models.SemiFinishedType.
+	SizeScaleValueID *string `json:"size_scale_value_id,omitempty"`
 }
 
 // SemiRecipeInput — строка рецепта полуфабриката.
@@ -1231,7 +1335,8 @@ func (s *SemiFinishedService) CreateType(ctx context.Context, in SemiTypeInput) 
 	now := time.Now().UTC()
 	t := &models.SemiFinishedType{
 		ID: uuid.NewString(), Name: in.Name, OutputUnit: in.OutputUnit,
-		RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+		SizeScaleValueID: in.SizeScaleValueID,
+		RestaurantID:     &rid, CreatedAt: now, UpdatedAt: now,
 	}
 	if in.YieldPercent != nil {
 		d, err := decimal.FromString(*in.YieldPercent)
@@ -1308,6 +1413,13 @@ func (s *SemiFinishedService) PatchType(ctx context.Context, id string, in SemiT
 			return nil, apperrors.Wrap("VALIDATION", "bad yield_percent", err)
 		}
 		updates["yield_percent"] = d
+	}
+	if in.SizeScaleValueID != nil {
+		if *in.SizeScaleValueID == "" {
+			updates["size_scale_value_id"] = nil // явная очистка привязки
+		} else {
+			updates["size_scale_value_id"] = *in.SizeScaleValueID
+		}
 	}
 	now := time.Now().UTC()
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {

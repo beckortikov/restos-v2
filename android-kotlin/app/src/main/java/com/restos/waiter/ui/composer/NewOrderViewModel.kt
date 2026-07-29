@@ -186,10 +186,21 @@ class NewOrderViewModel @Inject constructor(
                     ServerEvent.Resync,
                     is ServerEvent.OrderCreated,
                     is ServerEvent.OrderUpdated -> _state.update { it.copy(batchAvail = fetchBatchAvail()) }
+                    // Повар поставил/снял стоп на кухне — перечитываем меню сразу,
+                    // чтобы стоп-блюдо исчезло из списка (filterMenu его прячет),
+                    // а не висело до перезахода на экран.
+                    is ServerEvent.StopListUpdated -> reloadMenu()
                     else -> Unit
                 }
             }
         }
+    }
+
+    /** Перечитать меню (после изменения стоп-листа). Категории пересобираем — блюдо могло уйти. */
+    private suspend fun reloadMenu() {
+        val items = runCatching { menuApi.listAllItems(isAvailable = null) }.getOrNull() ?: return
+        cache.setMenu(items)
+        _state.update { it.copy(items = items, categories = buildCategories(cache.categories.value, items)) }
     }
 
     private suspend fun loadInitial() {

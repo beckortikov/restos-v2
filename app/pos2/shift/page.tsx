@@ -13,6 +13,9 @@ import {
   fetchServiceAccrualByShift, fetchServicePayoutByShift, fetchUsers, payServiceCharge,
   deleteShiftExpense,
 } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
+import { useDataSync } from '@/hooks/use-data-sync'
+import { confirmDialog } from '@/lib/confirm'
 import { exportShiftToXlsx } from '@/lib/shift-export'
 import { formatCurrency } from '@/lib/helpers'
 import { PosModal } from '@/components/pos-v2/pos-modal'
@@ -23,6 +26,15 @@ import { V4Error } from '@/lib/api'
 import type { CashShift, CashShiftOperation, FinancialAccount, Order } from '@/lib/types'
 
 const EXPENSE_CATS = ['Закупка продуктов', 'Зарплата', 'Ремонт', 'Транспорт', 'Хозтовары', 'Прочие расходы']
+// Авто-зеркало возврата заказа (описание «Возврат заказа #…») — уже показано
+// отдельной строкой «Возвраты» (zr.refundsCount/refundsTotal с бэка), в
+// «Расходы из смены» его исключаем, как и старый экран «Смены» (см. AUTO_MIRROR_CAT
+// там же): иначе сырая категория "__auto_mirror__" лезет в список как обычный
+// удаляемый расход — а удалять этот системный зеркальный row нельзя, он держит
+// баланс смены синхронным с историей возврата заказа.
+const AUTO_MIRROR_CAT = '__auto_mirror__'
+const REFUND_DESC_PREFIX = 'Возврат заказа #'
+
 interface SvcRow { waiterId: string; waiterName: string; ordersCount: number; accrued: number; paid: number; toPay: number }
 type Action = 'cash_in' | 'cash_out' | 'expense' | 'close'
 const num = (s: string) => Math.max(0, parseFloat(s.replace(',', '.').replace(/\s/g, '')) || 0)
@@ -60,6 +72,13 @@ export default function PosV2Shift() {
   const busyRef = useRef(false)
 
   const cashAccounts = useMemo(() => accounts.filter(a => a.type === 'cash'), [accounts])
+  // Безналичные счета (банк/карта) — для безналичного расхода из смены.
+  const nonCashAccounts = useMemo(() => accounts.filter(a => a.type !== 'cash'), [accounts])
+  // Расход: нал (счёт смены) или безнал (выбранный банк-счёт). Безнал дебетует
+  // свой счёт, наличный ящик не трогает.
+  const [expenseCash, setExpenseCash] = useState(true)
+  const [expenseBankId, setExpenseBankId] = useState('')
+  useEffect(() => { if (!expenseBankId && nonCashAccounts.length) setExpenseBankId(nonCashAccounts[0].id) }, [nonCashAccounts, expenseBankId])
   // Счёт смены при открытии — обязателен (иначе расход/выплата обслуживания падают).
   const [openAccountId, setOpenAccountId] = useState('')
   // Гард закрытия: бэк называет блокирующие заказы в details.order_ids.
@@ -99,18 +118,32 @@ export default function PosV2Shift() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  useEffect(() => {
-    load()
-    fetchFinancialAccounts().then(setAccounts).catch(() => {})
-  }, [load])
+  const loadAccounts = useCallback(() => fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}), [])
+  useEffect(() => { load(); loadAccounts() }, [load, loadAccounts])
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
 
-  const cashIn = useMemo(() => dSum(ops.filter(o => o.type === 'cash_in').map(o => Number(o.amount))), [ops])
-  const withdraw = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !o.category).map(o => Number(o.amount))), [ops])
-  const expenses = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !!o.category).map(o => Number(o.amount))), [ops])
+  // Наличный ящик трогают только операции без своего счёта или на счёте смены.
+  // Безналичный расход (accountId = банк-счёт) в кассовую математику не идёт.
+  const touchesDrawer = useCallback((o: CashShiftOperation) => !o.accountId || o.accountId === shift?.accountId, [shift?.accountId])
+  const cashIn = useMemo(() => dSum(ops.filter(o => o.type === 'cash_in' && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
+  const withdraw = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !o.category && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
+  // Авто-зеркало возврата заказа исключаем из СПИСКА/бэйджа «Расходы из смены»
+  // (оно уже показано отдельной строкой «Возвраты» с бэка) — но НЕ из
+  // cashExpenses/expected ниже: реальные деньги из ящика ушли, кассовая
+  // математика должна их учитывать в любом случае.
+  const expenseOps = ops.filter(o => o.type === 'cash_out' && !!o.category
+    && !(o.category === AUTO_MIRROR_CAT && (o.description ?? '').startsWith(REFUND_DESC_PREFIX)))
+  // «Расходы» карточка — все расходы бизнеса (нал + безнал), без авто-зеркала
+  // возврата (см. expenseOps выше). Для наличного ящика ниже — cashExpenses,
+  // который зеркало намеренно НЕ исключает.
+  const expenses = useMemo(() => dSum(expenseOps.map(o => Number(o.amount))), [expenseOps])
+  const cashExpenses = useMemo(() => dSum(ops.filter(o => o.type === 'cash_out' && !!o.category && touchesDrawer(o)).map(o => Number(o.amount))), [ops, touchesDrawer])
   const openingBalance = shift?.openingBalance ?? 0
   const expected = useMemo(
-    () => dSub(dSub(dAdd(dAdd(openingBalance, rev.cashRevenue), cashIn), withdraw), expenses),
-    [openingBalance, rev.cashRevenue, cashIn, withdraw, expenses],
+    () => dSub(dSub(dAdd(dAdd(openingBalance, rev.cashRevenue), cashIn), withdraw), cashExpenses),
+    [openingBalance, rev.cashRevenue, cashIn, withdraw, cashExpenses],
   )
 
   const duration = useMemo(() => {
@@ -140,15 +173,25 @@ export default function PosV2Shift() {
   }
   async function deleteExpense(opId: string) {
     if (busyRef.current) return
-    if (typeof window !== 'undefined' && !window.confirm('Удалить этот расход? Баланс счёта смены откорректируется.')) return
-    busyRef.current = true; setBusy(true)
-    try { await deleteShiftExpense(opId); toast.success('Расход удалён'); await load() }
-    catch (e) { toast.error(humanizeError(e)) }
-    finally { busyRef.current = false; setBusy(false) }
+    // busyRef — сразу, до confirmDialog: диалог асинхронный (в отличие от
+    // синхронного window.confirm), и второй тап по той же корзине, пока
+    // первый диалог ещё висит, открывал бы второй диалог поверх первого.
+    busyRef.current = true
+    try {
+      if (!(await confirmDialog({
+        title: 'Удалить расход?',
+        message: 'Баланс счёта смены будет скорректирован. Действие нельзя отменить.',
+        confirmLabel: 'Удалить',
+        danger: true,
+      }))) return
+      setBusy(true)
+      try { await deleteShiftExpense(opId); toast.success('Расход удалён'); await load() }
+      catch (e) { toast.error(humanizeError(e)) }
+      finally { setBusy(false) }
+    } finally { busyRef.current = false }
   }
   const guests = zr?.guestsCount ?? 0
   const perGuest = guests > 0 ? curRevenue / guests : 0
-  const expenseOps = ops.filter(o => o.type === 'cash_out' && !!o.category)
 
   async function openHistory() {
     setHistOpen(true)
@@ -203,7 +246,7 @@ export default function PosV2Shift() {
     try {
       if (action === 'cash_in') await addShiftOperation(shift.id, 'cash_in', num(amt), desc)
       else if (action === 'cash_out') await addShiftOperation(shift.id, 'cash_out', num(amt), desc)
-      else if (action === 'expense') await createShiftExpense(shift.id, num(amt), cat, desc)
+      else if (action === 'expense') await createShiftExpense(shift.id, num(amt), cat, desc, expenseCash ? undefined : expenseBankId)
       else if (action === 'close') { await closeShift(shift.id, user?.id ?? '', amt ? num(amt) : expected); toast.success('Смена закрыта'); setAction(null); await load(); return }
       toast.success(action === 'cash_in' ? 'Внесение проведено' : action === 'cash_out' ? 'Изъятие проведено' : 'Расход проведён')
       setAction(null); setAmt(''); setDesc(''); await load()
@@ -223,11 +266,26 @@ export default function PosV2Shift() {
   }
 
   async function cancelStuck(orderId: string) {
-    if (!window.confirm('Отменить этот заказ? Он мешает закрыть смену.')) return
-    setCancellingId(orderId)
-    try { await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены'); setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId)); toast.success('Заказ отменён') }
-    catch (e) { toast.error(humanizeError(e)) }
-    finally { setCancellingId(null) }
+    // busyRef — сразу, до confirmDialog: раньше здесь не было синхронного
+    // гварда вообще (только cancellingId-state, который выставлялся уже
+    // ПОСЛЕ synchronous window.confirm — тогда это было безопасно). С async
+    // confirmDialog второй тап по той же строке, пока первый диалог ещё
+    // висит, открыл бы второй диалог поверх первого.
+    if (busyRef.current) return
+    busyRef.current = true
+    try {
+      if (!(await confirmDialog({
+        title: 'Отменить заказ?',
+        message: 'Он мешает закрыть смену.',
+        confirmLabel: 'Отменить заказ',
+        cancelLabel: 'Оставить',
+        danger: true,
+      }))) return
+      setCancellingId(orderId)
+      try { await cancelOrder(orderId, 'Зависший заказ — отменён при закрытии смены'); setStuckOrders(prev => (prev ?? []).filter(o => o.id !== orderId)); toast.success('Заказ отменён') }
+      catch (e) { toast.error(humanizeError(e)) }
+      finally { setCancellingId(null) }
+    } finally { busyRef.current = false }
   }
 
   async function attachAccount() {
@@ -239,7 +297,7 @@ export default function PosV2Shift() {
   }
 
   function openAction(a: Action) {
-    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0]); setStuckOrders(null)
+    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0]); setStuckOrders(null); setExpenseCash(true)
     setAmt(a === 'close' ? String(expected) : '')
   }
 
@@ -385,8 +443,10 @@ export default function PosV2Shift() {
                       ) })}
                       <div style={{ height: '1px', background: 'var(--pv-border)' }} />
                       <div className="flex items-center justify-between"><span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Выручка</span><span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(curRevenue)}</span></div>
-                      <div className="flex items-center justify-between"><span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Расход</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(zr.expensesTotal)}</span></div>
-                      <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.3vw,1.1rem)' }}>Итог</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.4vw,1.25rem)' }}>{formatCurrency(curRevenue - zr.expensesTotal)}</span></div>
+                      <div className="flex items-center justify-between"><span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Расход</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(zr.expensesTotalAll)}</span></div>
+                      {zr.withdrawals > 0 && <div className="flex items-center justify-between"><span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Изъятия</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(zr.withdrawals)}</span></div>}
+                      {zr.refundsCount > 0 && <div className="flex items-center justify-between"><span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Возвраты · {zr.refundsCount} чек{zr.refundsCount === 1 ? '' : zr.refundsCount < 5 ? 'а' : 'ов'}</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(zr.refundsTotal)}</span></div>}
+                      <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.3vw,1.1rem)' }}>Итог</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.4vw,1.25rem)' }}>{formatCurrency(curRevenue - zr.expensesTotalAll - zr.withdrawals - zr.refundsTotal)}</span></div>
                     </div>
                     {/* Категории + блюда */}
                     <div className="flex flex-wrap" style={{ gap: 'var(--pv-gap)' }}>
@@ -454,7 +514,7 @@ export default function PosV2Shift() {
                 <div className="rounded-2xl flex flex-col" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(1rem,1.6vw,1.4rem)', gap: '0.85rem' }}>
                   <div className="flex items-center gap-2"><Wallet style={{ width: '1.2rem', height: '1.2rem', color: 'var(--pv-brand)' }} /><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.4vw,1.25rem)' }}>Касса</span></div>
                   <div className="grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.6rem' }}>
-                    {([['Нач. остаток', openingBalance, 'var(--pv-text)', ''], ['Внесения', cashIn, 'var(--pv-free-text)', '+'], ['Изъятия', withdraw, '#e8890c', '−'], ['Расходы', expenses, 'var(--pv-occ-text)', '−']] as const).map(([l, v, color, sign]) => (
+                    {([['Нач. остаток', openingBalance, 'var(--pv-text)', ''], ['Внесения', cashIn, 'var(--pv-free-text)', '+'], ['Изъятия', withdraw, '#e8890c', '−'], ['Расходы', cashExpenses, 'var(--pv-occ-text)', '−']] as const).map(([l, v, color, sign]) => (
                       <div key={l} className="rounded-xl flex flex-col" style={{ background: 'var(--pv-bg)', padding: '0.65rem 0.75rem', gap: '0.2rem' }}>
                         <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{l}</span>
                         <span className="font-bold" style={{ color, fontSize: 'clamp(0.95rem,1.35vw,1.15rem)' }}>{sign}{formatCurrency(v)}</span>
@@ -484,7 +544,7 @@ export default function PosV2Shift() {
                   {expenseOps.length === 0 ? <span style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Расходов пока нет</span> : expenseOps.map(o => (
                     <div key={o.id} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: '0.55rem 0.7rem' }}>
                       <div className="rounded-lg flex items-center justify-center shrink-0" style={{ background: 'var(--pv-occ-soft)', width: '2rem', height: '2rem' }}><ReceiptText style={{ width: '1rem', height: '1rem', color: 'var(--pv-occ-text)' }} /></div>
-                      <div className="flex-1 min-w-0"><div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>{o.category}</div>{o.description && <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{o.description}</div>}</div>
+                      <div className="flex-1 min-w-0"><div className="font-semibold flex items-center gap-1.5" style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}><span className="truncate">{o.category}</span>{!touchesDrawer(o) && <span className="rounded-md shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.05rem 0.35rem', fontSize: 'calc(var(--pv-ctl) - 0.28rem)', fontWeight: 700 }}>безнал</span>}</div>{o.description && <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{o.description}</div>}</div>
                       <span className="font-bold shrink-0" style={{ color: 'var(--pv-occ-text)', fontSize: 'calc(var(--pv-ctl) - 0.02rem)' }}>−{formatCurrency(Number(o.amount))}</span>
                       <button onClick={() => deleteExpense(o.id)} disabled={busy} className="shrink-0 disabled:opacity-40" style={{ padding: '0.2rem' }} aria-label="Удалить расход"><Trash2 style={{ width: '1rem', height: '1rem', color: 'var(--pv-text-3)' }} /></button>
                     </div>
@@ -518,6 +578,25 @@ export default function PosV2Shift() {
                   </div>
                 </div>
               )}
+              {/* Способ расхода: наличные (счёт смены) или безналичные (банк-счёт).
+                  Безнал дебетует свой счёт, наличный ящик не трогает. Показываем
+                  только если вообще есть безналичный счёт. */}
+              {action === 'expense' && nonCashAccounts.length > 0 && (
+                <div>
+                  <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>Откуда</div>
+                  <div className="flex gap-2">
+                    {([[true, 'Наличные'], [false, 'Безналичные']] as const).map(([isCash, lbl]) => {
+                      const on = expenseCash === isCash
+                      return <button key={lbl} onClick={() => setExpenseCash(isCash)} className="flex-1 rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.5rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{lbl}</button>
+                    })}
+                  </div>
+                  {!expenseCash && (
+                    <select value={expenseBankId} onChange={e => setExpenseBankId(e.target.value)} className="mt-2 w-full rounded-xl border bg-transparent outline-none" style={{ borderColor: 'var(--pv-border)', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)', padding: '0.55rem 0.8rem' }}>
+                      {nonCashAccounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}
+                    </select>
+                  )}
+                </div>
+              )}
               <div>
                 <div className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', marginBottom: '0.45rem' }}>{action === 'close' ? 'Фактически в кассе' : 'Сумма'}</div>
                 <div className="flex items-center rounded-xl border" style={{ borderColor: 'var(--pv-brand)', borderWidth: '2px', padding: '0.7rem 1rem' }}>
@@ -540,7 +619,7 @@ export default function PosV2Shift() {
                   <div className="flex items-center gap-1.5 font-bold" style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><AlertTriangle style={{ width: '1rem', height: '1rem' }} />Смена не закрывается — есть незакрытые заказы</div>
                   <div style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)', opacity: 0.9 }}>Отмените их (или закройте с оплатой из заказа), затем нажмите «Закрыть смену» ещё раз.</div>
                   <div className="flex flex-col gap-1.5">
-                    {stuckOrders.map(o => { const label = o.type === 'takeaway' ? 'С собой' : 'Зал'; return (
+                    {stuckOrders.map(o => { const label = o.type === 'takeaway' ? 'С собой' : o.type === 'delivery' ? 'Доставка' : 'Зал'; return (
                       <div key={o.id} className="flex items-center justify-between rounded-lg" style={{ background: 'var(--pv-card)', padding: '0.5rem 0.7rem' }}>
                         <span style={{ color: 'var(--pv-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{label} №{o.orderNumber ?? '—'} <span style={{ color: 'var(--pv-text-3)' }}>{formatCurrency(o.total ?? 0)}</span></span>
                         <button disabled={cancellingId === o.id} onClick={() => cancelStuck(o.id)} className="flex items-center gap-1 rounded-md font-semibold disabled:opacity-50" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.35rem 0.6rem', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}><Ban style={{ width: '0.85rem', height: '0.85rem' }} />{cancellingId === o.id ? 'Отмена…' : 'Отменить'}</button>
@@ -632,7 +711,8 @@ export default function PosV2Shift() {
                     ) })}
                     <div style={{ height: '1px', background: 'var(--pv-border)' }} />
                     <div className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Расход</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(histZ.expensesTotal)}</span></div>
-                    <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Итог</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>{formatCurrency(rev - histZ.expensesTotal)}</span></div>
+                    {histZ.refundsCount > 0 && <div className="flex items-center justify-between"><span style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Возвраты · {histZ.refundsCount} чек{histZ.refundsCount === 1 ? '' : histZ.refundsCount < 5 ? 'а' : 'ов'}</span><span className="font-semibold" style={{ color: 'var(--pv-occ-text)', fontSize: 'var(--pv-ctl)' }}>−{formatCurrency(histZ.refundsTotal)}</span></div>}
+                    <div className="flex items-center justify-between"><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Итог</span><span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1rem,1.3vw,1.15rem)' }}>{formatCurrency(rev - histZ.expensesTotal - histZ.refundsTotal)}</span></div>
                   </div>
                   <div className="flex flex-wrap" style={{ gap: 'var(--pv-gap)' }}>
                     <div className="flex-1 rounded-2xl flex flex-col" style={{ minWidth: '12rem', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', padding: 'clamp(0.9rem,1.4vw,1.2rem)', gap: '0.5rem' }}>

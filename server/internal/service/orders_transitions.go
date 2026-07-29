@@ -8,6 +8,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -24,6 +25,12 @@ type OrderPatchInput struct {
 	GuestsCount *int    `json:"guests_count,omitempty"`
 	Comment     *string `json:"comment,omitempty"`
 	CustomerID  *string `json:"customer_id,omitempty"`
+	// Контакты доставки (052) — касса сохраняет их сюда перед тем, как открыть
+	// панель оплаты. Класть их в close было бы неудобно: closeOrderWithPayment
+	// на фронте уже принимает 18 позиционных аргументов, а контакты относятся
+	// к заказу, а не к платежу.
+	DeliveryPhone   *string `json:"delivery_phone,omitempty"`
+	DeliveryAddress *string `json:"delivery_address,omitempty"`
 }
 
 // PatchOrder — частичное обновление заказа. Допустимо только для status NOT IN
@@ -55,6 +62,12 @@ func (s *OrdersService) PatchOrder(ctx context.Context, id string, in OrderPatch
 		}
 		if in.CustomerID != nil {
 			updates["customer_id"] = *in.CustomerID
+		}
+		if in.DeliveryPhone != nil {
+			updates["delivery_phone"] = strings.TrimSpace(*in.DeliveryPhone)
+		}
+		if in.DeliveryAddress != nil {
+			updates["delivery_address"] = strings.TrimSpace(*in.DeliveryAddress)
 		}
 		if len(updates) == 1 {
 			out = order

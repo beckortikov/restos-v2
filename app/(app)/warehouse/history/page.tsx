@@ -1,14 +1,17 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { formatTime, formatNum } from '@/lib/helpers'
 import type { StockMovementType, StockMovement, Warehouse } from '@/lib/types'
 import { fetchStockMovements, fetchWarehouses } from '@/lib/queries'
-import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, Undo2, Search } from 'lucide-react'
+import { DateFilter, inRange, type DateFilterValue } from '@/components/warehouse/date-filter'
+import { useDataSync } from '@/hooks/use-data-sync'
 
 const TYPE_META: Record<StockMovementType, { label: string; color: string; bg: string; Icon: React.ElementType }> = {
   in:    { label: 'Приход',        color: 'text-emerald-600', bg: 'bg-emerald-100', Icon: ArrowDownToLine },
   out:   { label: 'Списание',      color: 'text-destructive', bg: 'bg-red-100',     Icon: ArrowUpFromLine },
+  return:{ label: 'Возврат',       color: 'text-orange-600',  bg: 'bg-orange-100',  Icon: Undo2 },
   batch: { label: 'Приготовление', color: 'text-purple-600',  bg: 'bg-purple-100',  Icon: CookingPot },
   semi:  { label: 'Производство',  color: 'text-blue-600',    bg: 'bg-blue-100',    Icon: FlaskConical },
   audit: { label: 'Инвентаризация',color: 'text-amber-600',   bg: 'bg-amber-100',   Icon: ClipboardCheck },
@@ -23,23 +26,65 @@ const WH_BADGE: Record<string, string> = {
 }
 const KIND_ORDER = ['products', 'purchased', 'supplies']
 
+// Описание движения в БД — это сырой source-ref «prefix:<uuid>» (writeoff:…,
+// receipt:…, order:…). Показывать UUID пользователю бессмысленно, а бейдж типа
+// схлопывает разные источники в один («Списание» = writeoff / хозрасход / заказ),
+// поэтому подпись из префикса реально уточняет, откуда движение.
+const REF_LABELS: Record<string, string> = {
+  receipt: 'Приход от поставщика',
+  writeoff: 'Списание (брак / порча)',
+  supply_expense: 'Расход хозтоваров',
+  return: 'Возврат поставщику',
+  order: 'Списание на заказ',
+  order_refund: 'Возврат по заказу',
+  batch: 'Приготовление блюда',
+  batch_out: 'Приготовление блюда',
+  batch_in: 'Готовое блюдо',
+  semi: 'Производство п/ф',
+  semi_out: 'Производство п/ф',
+  semi_in: 'Производство п/ф',
+  semi_consume: 'Расход на п/ф',
+  inventory: 'Инвентаризация',
+  inventory_correction: 'Инвентаризация',
+  adj: 'Корректировка',
+}
+
+function movementSubtitle(desc: string): string {
+  if (!desc) return ''
+  const i = desc.indexOf(':')
+  if (i <= 0) return desc
+  const label = REF_LABELS[desc.slice(0, i)]
+  const rest = desc.slice(i + 1)
+  // Заменяем только «сырой» ref (prefix:id без пробелов). Рукописные заметки
+  // (в них есть пробелы или нет известного префикса) показываем как есть.
+  return label && rest.length > 0 && !/\s/.test(rest) ? label : desc
+}
+
 export default function HistoryPage() {
   const [filter, setFilter] = useState<StockMovementType | 'all'>('all')
   const [whId, setWhId] = useState<string>('all')
   const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [movements, setMovements] = useState<StockMovement[]>([])
   const [loading, setLoading] = useState(true)
+  const [search, setSearch] = useState('')
+  const [dateRange, setDateRange] = useState<DateFilterValue>(null)
 
   useEffect(() => { fetchWarehouses().then(setWarehouses).catch(() => {}) }, [])
 
   // Фильтр по складу — серверный (у каждого склада свой отчёт движений): при
   // смене склада перезапрашиваем его последние движения (не режем клиентом).
+  const fetchMovements = useCallback(async () => {
+    const data = await fetchStockMovements({ warehouseId: whId === 'all' ? undefined : whId })
+    setMovements(data)
+  }, [whId])
+
   useEffect(() => {
     setLoading(true)
-    fetchStockMovements({ warehouseId: whId === 'all' ? undefined : whId })
-      .then((data) => { setMovements(data); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [whId])
+    fetchMovements().finally(() => setLoading(false))
+  }, [fetchMovements])
+
+  // Real-time: новое движение (продажа/приёмка/списание) втекает без спиннера.
+  useDataSync(['stock_movements'], fetchMovements)
 
   const warehouseById = useMemo(() => new Map(warehouses.map(w => [w.id, w])), [warehouses])
   const orderedWh = useMemo(
@@ -47,7 +92,18 @@ export default function HistoryPage() {
     [warehouses],
   )
 
-  const filtered = movements.filter((m) => filter === 'all' || m.type === filter)
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return movements.filter((m) => {
+      if (filter !== 'all' && m.type !== filter) return false
+      if (!inRange(m.timestamp, dateRange)) return false
+      if (q && !(
+        (m.ingredientName ?? '').toLowerCase().includes(q) ||
+        (m.description ?? '').toLowerCase().includes(q)
+      )) return false
+      return true
+    })
+  }, [movements, filter, dateRange, search])
 
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
@@ -55,6 +111,20 @@ export default function HistoryPage() {
         <h1 className="text-xl font-bold text-foreground">История движений</h1>
         <p className="text-muted-foreground text-sm mt-0.5">Все операции прихода, списания и производства — по складам</p>
       </div>
+
+      {/* Поиск по товару / описанию */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Поиск по товару или описанию…"
+          className="w-full pl-10 pr-3 py-2.5 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+        />
+      </div>
+
+      {/* Фильтр по датам */}
+      <DateFilter value={dateRange} onChange={setDateRange} />
 
       {/* Фильтр по складу (мультисклад): у каждого склада свой отчёт движений */}
       {orderedWh.length > 0 && (
@@ -132,7 +202,7 @@ export default function HistoryPage() {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{m.description}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5 truncate">{movementSubtitle(m.description)}</p>
                   </div>
                   <div className="text-right shrink-0">
                     <p className={`text-sm font-semibold ${m.qty > 0 ? 'text-emerald-600' : 'text-destructive'}`}>

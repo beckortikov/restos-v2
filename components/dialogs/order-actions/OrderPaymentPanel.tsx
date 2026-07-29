@@ -7,9 +7,12 @@
  * State владелец — родитель; компонент пробрасывает callbacks обратно.
  */
 
+import { useMemo } from 'react'
 import { dRound, dDiv, dMul } from '@/lib/decimal'
 import { formatCurrency } from '@/lib/helpers'
-import type { OrderPayment } from '@/lib/types'
+import { useAuth } from '@/lib/auth-store'
+import { selectableAccounts } from '@/lib/queries/finance'
+import type { OrderPayment, FinancialAccount } from '@/lib/types'
 import {
   Banknote,
   CreditCard,
@@ -22,13 +25,6 @@ import {
   AlertTriangle,
   ArrowRightLeft,
 } from 'lucide-react'
-
-interface FinancialAccount {
-  id: string
-  name: string
-  type: string
-  balance: number
-}
 
 type PaymentType = 'cash' | 'noncash'
 
@@ -105,7 +101,7 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
     setIncludeService,
     servicePercent,
     setServicePercent,
-    accounts,
+    accounts: allAccounts,
     paymentType,
     setPaymentType,
     selectedAccountId,
@@ -122,6 +118,16 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
     setAddPaymentAmount,
     onPreCheck,
   } = props
+
+  // Отключённый счёт (миграция 063) не предлагаем к оплате — сервер такую
+  // проводку всё равно отклонит с 409. Дальше по файлу `accounts` — уже
+  // отфильтрованный список, отдельных проверок в пикерах не нужно.
+  const accounts = useMemo(() => selectableAccounts(allAccounts), [allAccounts])
+
+  // Порог одобрения скидки — настройка ресторана (default 10). Скидку ВЫШЕ него
+  // бэк не проведёт без approved_by менеджера/владельца (orders_close.go).
+  const { restaurant } = useAuth()
+  const approvalThreshold = restaurant?.discountApprovalThreshold ?? 10
 
   return (
     <div className="space-y-3">
@@ -230,16 +236,16 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
               className="w-full py-2 px-3 rounded-lg border-2 border-border text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
             />
 
-            {discountType === 'percent' && discountValue > 10 && (
+            {discountType === 'percent' && discountValue > approvalThreshold && (
               <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
                 <AlertTriangle className="size-3.5 shrink-0" />
-                Требует одобрения менеджера
+                Скидка выше {approvalThreshold}% — требует одобрения менеджера
               </div>
             )}
-            {discountType === 'fixed' && subtotal > 0 && (discountValue / subtotal) * 100 > 10 && (
+            {discountType === 'fixed' && subtotal > 0 && (discountValue / subtotal) * 100 > approvalThreshold && (
               <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
                 <AlertTriangle className="size-3.5 shrink-0" />
-                Требует одобрения менеджера
+                Скидка выше {approvalThreshold}% — требует одобрения менеджера
               </div>
             )}
 

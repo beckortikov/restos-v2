@@ -1,0 +1,106 @@
+// salary_deductions — удержания из зарплаты с сохранённой причиной (ЗП-4,
+// миграция 064). Раньше удержание было чистым счётчиком на users.deductions:
+// причина показывалась тостом и терялась, ни одной записи не оставалось.
+//
+// НЕ FinancialOperation: удержание не двигает баланс счёта — деньги не
+// выданы, им неоткуда "выходить". Это только уменьшение будущей выплаты,
+// проверяемого в PaySalary (accrued − advance − deductions − paid).
+package service
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+
+	"github.com/restos/restos-v4/server/internal/audit"
+	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
+	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
+	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/repo"
+)
+
+type DeductionInput struct {
+	UserID *string `json:"user_id,omitempty"`
+	Amount *string `json:"amount,omitempty"`
+	Reason *string `json:"reason,omitempty"`
+}
+
+// AddDeduction — создаёт запись удержания и увеличивает users.deductions
+// в одной транзакции. Причина обязательна — без неё запись бессмысленна:
+// единственная цель этой сущности — не терять "за что удержали".
+func (s *SalaryService) AddDeduction(ctx context.Context, in DeductionInput) (*models.SalaryDeduction, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if in.UserID == nil || *in.UserID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "user_id is required", nil)
+	}
+	if in.Amount == nil || *in.Amount == "" {
+		return nil, apperrors.Wrap("VALIDATION", "amount is required", nil)
+	}
+	amount, perr := decimal.FromString(*in.Amount)
+	if perr != nil || !decimal.IsPositive(amount) {
+		return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
+	}
+	reason := strings.TrimSpace(derefOr(in.Reason, ""))
+	if reason == "" {
+		return nil, apperrors.Wrap("VALIDATION", "укажите причину удержания", nil)
+	}
+
+	actor, _ := audit.ActorFromContext(ctx)
+	createdBy := actor.UserID
+	now := time.Now().UTC()
+	ridStr := rid
+	dedID := *in.UserID
+	row := &models.SalaryDeduction{
+		ID:           uuid.NewString(),
+		RestaurantID: &ridStr,
+		UserID:       dedID,
+		Amount:       amount,
+		Reason:       reason,
+		CreatedBy:    &createdBy,
+		CreatedAt:    now,
+	}
+
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var u models.User
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, *in.UserID).First(&u).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("VALIDATION", "user not found", nil)
+			}
+			return err
+		}
+		if err := tx.Create(row).Error; err != nil {
+			return err
+		}
+		newDeductions := decimal.Normalize(decimal.Add(u.Deductions, amount))
+		return tx.Model(&u).Updates(map[string]any{"deductions": newDeductions, "updated_at": now}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
+// ListDeductions — история удержаний одного сотрудника, новые сверху.
+func (s *SalaryService) ListDeductions(ctx context.Context, userID string) ([]models.SalaryDeduction, error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var rows []models.SalaryDeduction
+	if err := scoped.Where("user_id = ?", userID).Order("created_at DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
+}

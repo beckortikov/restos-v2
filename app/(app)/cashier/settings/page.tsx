@@ -11,33 +11,8 @@ import {
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { usePosV2Flag } from '@/lib/pos-v2/flag'
+import { useDesktopUpdate, triggerDesktopUpdate, desktopUpdateLabel } from '@/hooks/use-desktop-update'
 import type { PermissionKey } from '@/lib/types'
-
-type DesktopUpdateState = {
-  status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'not-available' | 'error'
-  version: string | null
-  percent: number
-}
-
-function useDesktopUpdate() {
-  const isDesktop = typeof window !== 'undefined' && !!(window as any).restosDesktop?.isDesktop
-  const [state, setState] = useState<DesktopUpdateState>({ status: 'idle', version: null, percent: 0 })
-
-  useEffect(() => {
-    if (!isDesktop) return
-    const d = (window as any).restosDesktop
-    let cancelled = false
-    if (typeof d?.getUpdateStatus === 'function') {
-      d.getUpdateStatus().then((s: DesktopUpdateState) => { if (!cancelled) setState(s) }).catch(() => {})
-    }
-    if (typeof d?.onUpdateStatus === 'function') {
-      d.onUpdateStatus((s: DesktopUpdateState) => { if (!cancelled) setState(s) })
-    }
-    return () => { cancelled = true }
-  }, [isDesktop])
-
-  return { isDesktop, ...state }
-}
 
 type SectionId =
   | 'cash' | 'clients' | 'kitchen' | 'warehouse' | 'finance' | 'reports' | 'system'
@@ -78,27 +53,16 @@ export default function CashierSettingsPage() {
     window.location.hash = '#/show-qr'
   }
 
-  async function handleUpdate() {
+  function handleUpdate() {
     if (!update.isDesktop) return
-    const d = (window as any).restosDesktop
-    if (update.status === 'ready') {
-      try { d?.installUpdate?.() } catch {}
-      return
-    }
-    try { await d?.checkForUpdate?.() } catch {}
+    void triggerDesktopUpdate(update.status)
   }
 
   function handleLockSwitch() {
     window.dispatchEvent(new CustomEvent('cashier:lock-request'))
   }
 
-  const updateLabel =
-    update.status === 'ready' ? 'Перезапустить для установки' :
-    update.status === 'downloading' ? `Загрузка ${update.percent}%` :
-    update.status === 'available' ? 'Доступно обновление' :
-    update.status === 'checking' ? 'Проверка…' :
-    update.status === 'not-available' ? 'Установлена последняя версия' :
-    'Проверить обновления'
+  const updateLabel = desktopUpdateLabel(update)
 
   // Declarative card list. `gate()` returns whether this card is visible.
   const items: CardItem[] = [

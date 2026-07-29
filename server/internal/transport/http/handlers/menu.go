@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -76,6 +77,23 @@ func (h *MenuHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, makeList[models.MenuCategory](rows, ""))
+}
+
+// Popularity — GET /api/v1/menu/popularity?days=30. Продано штук по позициям
+// за окно (для сортировки меню по продаваемости).
+func (h *MenuHandler) Popularity(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			days = n
+		}
+	}
+	rows, err := h.svc.Popularity(r.Context(), days)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(rows, ""))
 }
 
 // CreateItem — POST /api/v1/menu/items.

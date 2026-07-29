@@ -2,7 +2,7 @@
 
 import { useState, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { createZone, createTable, fetchZones, fetchTables, createMenuItem, createIngredient, fetchMenuItems, fetchIngredients, createMenuCategory, fetchMenuCategoriesFull } from '@/lib/queries'
+import { createZone, createTable, fetchZones, fetchTables, createMenuItem, createIngredient, fetchMenuItems, fetchIngredients, createMenuCategory, fetchMenuCategoriesFull, syncMenuAttributes } from '@/lib/queries'
 import { api, unwrap, getBaseURL } from '@/lib/api'
 import { randomId } from '@/lib/random-id'
 import {
@@ -269,21 +269,36 @@ export default function ImportPage() {
       try { await createMenuCategory(name); existingLc.add(key) } catch {}
     }
 
+    let variantsCreated = 0
     for (const dish of parsedDishes.dishes) {
+      const hasVariants = !!dish.attrName && (dish.variants?.length ?? 0) > 0
       try {
-        await createMenuItem({
-          name: dish.name, category: dish.category, price: dish.price, cogs: dish.cogs,
+        // У продукта с вариациями цена живёт на вариантах, родитель — 0
+        // (та же семантика, что в форме создания блюда с атрибутами).
+        const item = await createMenuItem({
+          name: dish.name, category: dish.category, price: hasVariants ? 0 : dish.price, cogs: dish.cogs,
           emoji: '', isAvailable: dish.isAvailable, station: dish.station as import('@/lib/types').MenuStation,
           cookTimeMin: dish.cookTimeMin || null, techCard: [], stopListOverride: false,
           unit: dish.unit, unitSize: dish.unitSize, saleStep: dish.saleStep,
           isBatchCooking: false, preparedQty: 0,
         })
+        if (hasVariants) {
+          const id = (item as { id?: string } | undefined)?.id
+          if (!id) throw new Error('бэк не вернул id — вариации не созданы')
+          await syncMenuAttributes(
+            id,
+            [{ name: dish.attrName!, values: dish.variants!.map(v => ({ label: v.label })) }],
+            dish.variants!.map(v => ({ labels: [v.label], price: v.price })),
+          )
+          variantsCreated += dish.variants!.length
+        }
         created++
       } catch (err) { errors.push(`"${dish.name}": ${err instanceof Error ? err.message : 'ошибка'}`) }
     }
-    setImportResult({ created, label: `${created} блюд`, errors })
+    const label = variantsCreated > 0 ? `${created} блюд (${variantsCreated} вариантов)` : `${created} блюд`
+    setImportResult({ created, label, errors })
     setStep('done')
-    if (errors.length === 0) toast.success(`Импорт: ${created} блюд`)
+    if (errors.length === 0) toast.success(`Импорт: ${label}`)
     else toast.error(`Ошибки: ${errors.length}`)
   }
 
@@ -800,15 +815,32 @@ export default function ImportPage() {
                       <th className="px-2 py-1.5 text-right text-muted-foreground">Себест.</th>
                     </tr></thead>
                     <tbody>
-                      {parsedDishes.dishes.map((d, i) => (
-                        <tr key={i} className="border-b border-border/50">
-                          <td className="px-2 py-1.5 font-medium text-foreground">{d.name}</td>
-                          <td className="px-2 py-1.5 text-muted-foreground">{d.category}</td>
-                          <td className="px-2 py-1.5"><span className="bg-muted px-1.5 py-0.5 rounded text-[10px]">{d.station}</span></td>
-                          <td className="px-2 py-1.5 text-right">{d.price > 0 ? d.price : <span className="text-amber-600">—</span>}</td>
-                          <td className="px-2 py-1.5 text-right text-muted-foreground">{d.cogs.toFixed(1)}</td>
-                        </tr>
-                      ))}
+                      {parsedDishes.dishes.map((d, i) => {
+                        const vs = d.variants ?? []
+                        const vPrices = vs.map(v => v.price).filter(p => p > 0)
+                        return (
+                          <tr key={i} className="border-b border-border/50">
+                            <td className="px-2 py-1.5 font-medium text-foreground">
+                              {d.name}
+                              {vs.length > 0 && (
+                                <span className="ml-1.5 text-[10px] font-normal text-muted-foreground">
+                                  {d.attrName}: {vs.map(v => v.label).join(' / ')}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-1.5 text-muted-foreground">{d.category}</td>
+                            <td className="px-2 py-1.5"><span className="bg-muted px-1.5 py-0.5 rounded text-[10px]">{d.station}</span></td>
+                            <td className="px-2 py-1.5 text-right">
+                              {vs.length > 0
+                                ? (vPrices.length === vs.length
+                                    ? `${Math.min(...vPrices)}–${Math.max(...vPrices)}`
+                                    : <span className="text-amber-600">—</span>)
+                                : (d.price > 0 ? d.price : <span className="text-amber-600">—</span>)}
+                            </td>
+                            <td className="px-2 py-1.5 text-right text-muted-foreground">{d.cogs.toFixed(1)}</td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>

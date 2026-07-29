@@ -4,16 +4,18 @@ import { useEffect, useMemo, useRef, useState, useDeferredValue, useCallback } f
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
-  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2,
+  UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2, Bike,
   ChevronUp, ChevronDown,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
-import { useFavorites } from '@/lib/pos-favorites'
+import { toggleFavorite, useFavorites } from '@/lib/pos-favorites'
 import { useOrderData } from '@/components/order/use-order-data'
+import { sortMenuItems } from '@/lib/menu-sort'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder, fetchMenuPopularity } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, startOfToday, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -24,7 +26,9 @@ import { buildReceiptData } from '@/lib/receipt-data'
 import { PrintReceipt } from '@/components/print-receipt'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
-import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit } from '@/lib/types'
+import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit, OrderType } from '@/lib/types'
+import { ORDER_TYPE_LABELS, ORDER_TYPE_TITLES, availableOrderTypes, canCreateWithoutPayment, isTogo, needsDeliveryContacts } from '@/lib/order-types'
+import { describePayment } from '@/lib/payment-labels'
 import type { CartLine } from '@/components/order/types'
 
 const STATUS: Record<TableStatus, { soft: string; dot: string; text: string; label: string }> = {
@@ -42,6 +46,41 @@ function printerErr(e: unknown): string {
   return /printer|принтер/i.test(msg) ? 'Не настроен чековый принтер — Настройки → Принтеры' : `Не удалось: ${msg}`
 }
 
+// dishNameStyle — кегль и число строк под длину названия.
+//
+// Раньше кегль был фиксированным (14cqw) при жёстком обрезании в две строки:
+// «ЛАВАШ КУРИНИЙ С ОВОЩАМИ» и «Паста карбонара с курицей» упирались в предел
+// и уезжали в «…» — кассир не видел, что именно он нажимает, и отличить
+// два похожих блюда мог только по цене.
+//
+// Считаем по длине имени, а не по факту переполнения: измерять реальную
+// высоту пришлось бы в JS после отрисовки, это лишний layout-проход на
+// каждую карточку сетки. Длина символов — достаточно точный прокси, а
+// container query (cqw) продолжает подстраивать кегль под ширину карточки.
+function dishNameStyle(name: string): { fontSize: string; WebkitLineClamp: number; display: string; WebkitBoxOrient: 'vertical'; overflow: string } {
+  const n = name.length
+  const [fontSize, lines] =
+    n <= 14 ? ['clamp(0.62rem, 14cqw, 1.4rem)', 2] :
+    n <= 22 ? ['clamp(0.58rem, 11cqw, 1.1rem)', 3] :
+    n <= 32 ? ['clamp(0.54rem, 9cqw, 0.92rem)', 3] :
+              ['clamp(0.5rem, 7.5cqw, 0.8rem)', 4]
+  return {
+    fontSize,
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: lines,
+    overflow: 'hidden',
+  }
+}
+
+// Иконки типов заказа. Лейблы — в lib/order-types.ts (общий словарь), иконки
+// живут здесь: lib/ не должен зависеть от lucide.
+const ORDER_TYPE_ICONS: Record<OrderType, React.ElementType> = {
+  hall: UtensilsCrossed,
+  takeaway: ShoppingBag,
+  delivery: Bike,
+}
+
 // Phase 2 + критичный блок: заказ на реальных данных. Зал/такаут, гости, стоп-лист
 // override (менеджер), весовые позиции (вес × порции). Логику не переписываем.
 export default function PosV2Order() {
@@ -52,7 +91,32 @@ export default function PosV2Order() {
   const favorites = useFavorites(restaurantId ?? '')
   const favSet = useMemo(() => new Set(favorites), [favorites])
 
-  const [orderType, setOrderType] = useState<'hall' | 'takeaway'>('hall')
+  // Популярность блюд для сортировки по продаваемости (060). Грузим только
+  // когда тумблер включён; иначе меню сортируется по алфавиту.
+  const [popularity, setPopularity] = useState<Map<string, number>>(new Map())
+  useEffect(() => {
+    if (!restaurant?.menuSortBySales) { setPopularity(new Map()); return }
+    fetchMenuPopularity(30).then(setPopularity).catch(() => {})
+  }, [restaurant?.menuSortBySales])
+
+  const [orderType, setOrderType] = useState<OrderType>('hall')
+  // Фастфуд без столов (restaurants.tablesEnabled=false): «Зал» ведётся БЕЗ стола —
+  // заказ по номеру, ровно как «С собой» (тип остаётся 'hall' — для отчётов
+  // «здесь» vs «навынос»). numberMode = «работаем по номеру, стола нет».
+  // При tablesEnabled=true (дефолт) numberMode ≡ (заказ не в зал),
+  // т.е. классический зал со столами не меняется вообще.
+  const tablesEnabled = restaurant?.tablesEnabled ?? true
+  const numberMode = isTogo(orderType) || !tablesEnabled
+  // Типы заказа в переключателе: «Доставка» появляется третьей только если
+  // включена в настройках ресторана (052).
+  const orderTypes = useMemo(() => availableOrderTypes(restaurant), [restaurant])
+  // Фастфуд = оплата вперёд: кнопки «Создать без оплаты» нет вовсе, чек и
+  // кухонный бегунок печатаются вместе по факту оплаты. Зеркалит серверный
+  // kitchenOnPay() — если разойдётся, касса покажет кнопку, а кухня всё равно
+  // не получит бегунок до оплаты.
+  // Можно ли создать заказ без оплаты. В фастфуде нельзя, но доставка —
+  // исключение: заказ принимают по телефону, деньги привозит курьер.
+  const allowNoPay = canCreateWithoutPayment(restaurant, orderType)
   const [menuGrid] = useMenuGrid()
   // Высота области сетки блюд — чтобы в матричном режиме (N×M) подогнать высоту
   // рядов под экран (карточки квадратнее, а не «широкие и низкие»).
@@ -72,10 +136,13 @@ export default function PosV2Order() {
   useEffect(() => {
     const el = gridScrollRef.current
     if (!el) return
-    const ro = new ResizeObserver(() => { setGridAreaH(el.clientHeight); updateScrollBtns() })
-    ro.observe(el)
     setGridAreaH(el.clientHeight)
     updateScrollBtns()
+    // ResizeObserver есть во всех браузерах и Electron, но НЕ в jsdom (тесты):
+    // без guard'а экран заказа падал с ReferenceError и не монтировался.
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => { setGridAreaH(el.clientHeight); updateScrollBtns() })
+    ro.observe(el)
     return () => ro.disconnect()
   }, [updateScrollBtns])
   function scrollDishes(dir: 1 | -1) {
@@ -86,6 +153,34 @@ export default function PosV2Order() {
   const [search, setSearch] = useState('')
   const deferred = useDeferredValue(search)
   const [activeCat, setActiveCat] = useState<string | null>(null)
+  // Избранное: долгое нажатие по карточке блюда (тач) или правый клик (мышь).
+  // Раньше /pos2 умел только ЧИТАТЬ список — вкладка «Избранное» была, а
+  // положить в неё что-то можно было лишь из старого POS.
+  const longPress = useRef<{ timer?: number; fired: boolean; x: number; y: number }>({ fired: false, x: 0, y: 0 })
+  const toggleFav = useCallback((m: MenuItem) => {
+    if (!restaurantId) return
+    if (toggleFavorite(restaurantId, m.id)) toast.success(`«${m.name}» в избранном`)
+    else toast.message('Убрано из избранного', { description: m.name })
+  }, [restaurantId])
+  const pressStart = useCallback((e: React.PointerEvent, m: MenuItem) => {
+    // Правая кнопка мыши — не долгое нажатие, её обрабатывает onContextMenu.
+    if (e.pointerType === 'mouse' && e.button !== 0) return
+    longPress.current.fired = false
+    longPress.current.x = e.clientX
+    longPress.current.y = e.clientY
+    window.clearTimeout(longPress.current.timer)
+    longPress.current.timer = window.setTimeout(() => {
+      longPress.current.fired = true
+      toggleFav(m)
+    }, 450)
+  }, [toggleFav])
+  const pressCancel = useCallback(() => window.clearTimeout(longPress.current.timer), [])
+  // Палец поехал — это скролл сетки, а не удержание.
+  const pressMove = useCallback((e: React.PointerEvent) => {
+    if (Math.abs(e.clientX - longPress.current.x) > 12 || Math.abs(e.clientY - longPress.current.y) > 12) {
+      window.clearTimeout(longPress.current.timer)
+    }
+  }, [])
   const [cart, setCart] = useState<CartLine[]>([])
   const [selectedTableId, setSelectedTableId] = useState<string>('')
   const [tablesOpen, setTablesOpen] = useState(false)
@@ -128,6 +223,7 @@ export default function PosV2Order() {
   const [refundReason, setRefundReason] = useState('')
   const [refundAmt, setRefundAmt] = useState('')
   const [refundBusy, setRefundBusy] = useState(false)
+  const refundKeyRef = useRef('') // #3: стабильный Idempotency-Key на попытку возврата
 
   const selectedTable = useMemo(() => tables.find(t => t.id === selectedTableId), [tables, selectedTableId])
   const activeGroup = useMemo(() => tableOrders.find(o => o.id === activeGroupId) ?? null, [tableOrders, activeGroupId])
@@ -174,12 +270,14 @@ export default function PosV2Order() {
     } catch { /* ignore */ } finally { setTableLoading(false) }
   }, [tables])
 
-  // Загрузка открытых заказов «С собой» — тот же модельный слой (tableOrders),
-  // чтобы созданный «без оплаты» заказ оставался виден в сайдбаре до оплаты.
-  const loadTakeaway = useCallback(async (selectId?: string) => {
+  // Загрузка открытых заказов «по номеру» (без стола) — тот же модельный слой
+  // (tableOrders), чтобы созданный «без оплаты» заказ оставался виден в сайдбаре
+  // до оплаты. Тип параметризован: «С собой» всегда, а в фастфуде (tablesEnabled
+  // = false) так же работает и «Зал» — заказ без стола, идентификация по номеру.
+  const loadQueue = useCallback(async (type: OrderType, selectId?: string) => {
     setTableLoading(true)
     try {
-      const os = await fetchOrders({ type: 'takeaway', slim: false }).catch(() => [] as Order[])
+      const os = await fetchOrders({ type, slim: false }).catch(() => [] as Order[])
       const live = os.filter(o => o.status !== 'done' && o.status !== 'cancelled')
         .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
       setTableOrders(live)
@@ -230,14 +328,29 @@ export default function PosV2Order() {
   // сброс контекста не нужен (иначе он затрёт выбранный стол/группу).
   const skipTypeResetRef = useRef(false)
   useEffect(() => {
-    if (typeInitRef.current) { typeInitRef.current = false; return }
+    // Первый рендер: контекст сбрасывать нечего, но очередь загрузить НАДО.
+    // Раньше здесь был просто return, и на свежеоткрытом экране список заказов
+    // по номеру не подтягивался вовсе — вкладки появлялись только после
+    // переключения типа туда-обратно. Отсюда «то попадает, то стоит».
+    if (typeInitRef.current) {
+      typeInitRef.current = false
+      if (numberMode) loadQueue(orderType)
+      return
+    }
     if (skipTypeResetRef.current) { skipTypeResetRef.current = false; return }
-    setCart([]); setActiveGroupId(null)
-    if (orderType === 'takeaway') { setSelectedTableId(''); loadTakeaway() }
+    // Корзину при смене типа НЕ чистим: кассир набрал блюда и понял, что это
+    // «с собой», а не в зал — переключение типа не должно стирать набранное.
+    // Контекст заказа (группа/стол) сбрасываем — он привязан к прежнему типу.
+    setActiveGroupId(null)
+    if (numberMode) { setSelectedTableId(''); loadQueue(orderType) }
     else { setSelectedTableId(''); setTableOrders([]) }
-  }, [orderType, loadTakeaway])
+  }, [orderType, numberMode, loadQueue])
 
-  useEffect(() => { fetchFinancialAccounts().then(setAccounts).catch(() => {}) }, [])
+  const loadAccounts = useCallback(() => fetchFinancialAccounts().then(selectableAccounts).then(setAccounts).catch(() => {}), [])
+  useEffect(() => { loadAccounts() }, [loadAccounts])
+  // Счёт включили/отключили на другом терминале — пикер не должен предлагать
+  // уже отключённый до следующего F5.
+  useDataSync(['financial_accounts'], loadAccounts)
 
   // Разделённый заказ — грузим части (оплачиваются прямо в сайдбаре).
   useEffect(() => {
@@ -250,7 +363,7 @@ export default function PosV2Order() {
     const t = payTarget
     setPayTarget(null); setActiveGroupId(null)
     if (t?.tableId) await loadTableOrders(t.tableId)
-    else await loadTakeaway()
+    else await loadQueue(orderType)
   }
 
   async function reloadContext() {
@@ -261,7 +374,7 @@ export default function PosV2Order() {
     // на карте зала стол занят.
     const known = tableOrders.map(o => o.id)
     if (selectedTableId) await loadTableOrders(selectedTableId, activeGroupId ?? undefined, known)
-    else await loadTakeaway(activeGroupId ?? undefined)
+    else await loadQueue(orderType, activeGroupId ?? undefined)
   }
 
   // Отмена одной позиции. Бэк сам пересчитывает total и, если это была последняя
@@ -339,9 +452,12 @@ export default function PosV2Order() {
     const base = menuItems.filter(m => !m.parentId)
     const q = deferred.trim().toLowerCase()
     if (q) return base.filter(m => m.name.toLowerCase().includes(q))
-    if (currentCat === '__fav__') return base.filter(m => favSet.has(m.id))
-    return base.filter(m => m.category === currentCat)
-  }, [menuItems, currentCat, deferred, favSet])
+    const inCat = currentCat === '__fav__'
+      ? base.filter(m => favSet.has(m.id))
+      : base.filter(m => m.category === currentCat)
+    // Сортировка: алфавит по умолчанию, хиты вверху при menu_sort_by_sales (060).
+    return sortMenuItems(inCat, !!restaurant?.menuSortBySales, popularity)
+  }, [menuItems, currentCat, deferred, favSet, restaurant?.menuSortBySales, popularity])
   // Пересчёт стрелок прокрутки при смене категории/поиска/сетки (меняется высота контента).
   useEffect(() => { updateScrollBtns() }, [dishes, gridAreaH, menuGrid, updateScrollBtns])
 
@@ -447,35 +563,101 @@ export default function PosV2Order() {
   const [paying, setPaying] = useState(false)
   const payingRef = useRef(false)
 
-  // «С собой»: создать заказ без оплаты (остаётся открытым до оплаты).
-  async function createTakeawayNoPay() {
+  // ── Контакты доставки (052) ───────────────────────────────────
+  // Спрашиваем ПЕРЕД оплатой, а не при создании заказа: кассир сначала
+  // набирает корзину, контакты — последний шаг перед чеком. Сохраняем их
+  // patch'ем на заказ, бэкенд читает на close и печатает курьеру.
+  const [contactsFor, setContactsFor] = useState<Order | null>(null)
+  const [contactPhone, setContactPhone] = useState('')
+  const [contactAddress, setContactAddress] = useState('')
+  const [savingContacts, setSavingContacts] = useState(false)
+  // 'pay' — модалка ведёт в панель оплаты; 'queue' — заказ «без оплаты»,
+  // после сохранения контактов просто закрываемся, оставляя заказ в очереди.
+  const [contactsIntent, setContactsIntent] = useState<'pay' | 'queue'>('pay')
+  const contactsOnConfirmRef = useRef<((order: Order) => void) | null>(null)
+
+  // requireDeliveryContacts — единая точка входа перед любым завершением
+  // создания заказа доставки (оплата ИЛИ «без оплаты»), чтобы телефон/адрес
+  // нельзя было обойти ни одним из путей создания заказа.
+  const requireDeliveryContacts = useCallback((order: Order, intent: 'pay' | 'queue', onReady: (order: Order) => void) => {
+    if (needsDeliveryContacts(restaurant, order.type) && !order.deliveryAddress) {
+      setContactPhone(order.deliveryPhone ?? '')
+      setContactAddress(order.deliveryAddress ?? '')
+      setContactsIntent(intent)
+      contactsOnConfirmRef.current = onReady
+      setContactsFor(order)
+      return
+    }
+    onReady(order)
+  }, [restaurant])
+
+  // openPayment — единая точка входа в оплату. Для доставки с включённым
+  // запросом контактов сначала показывает модалку, иначе сразу панель оплаты.
+  // Все кнопки «К оплате» идут через неё, чтобы контакты нельзя было обойти
+  // ни из очереди, ни из карточки заказа.
+  const openPayment = useCallback((order: Order) => {
+    requireDeliveryContacts(order, 'pay', setPayTarget)
+  }, [requireDeliveryContacts])
+
+  async function confirmContacts() {
+    const order = contactsFor
+    if (!order || savingContacts) return
+    const phone = contactPhone.trim()
+    const address = contactAddress.trim()
+    if (!phone) { toast.error('Укажите телефон клиента'); return }
+    if (!address) { toast.error('Укажите адрес доставки'); return }
+    setSavingContacts(true)
+    try {
+      await patchOrder(order.id, { deliveryPhone: phone, deliveryAddress: address })
+      const updated = { ...order, deliveryPhone: phone, deliveryAddress: address }
+      // Иначе activeGroup (из tableOrders) остаётся без контактов, и повторный
+      // клик «К оплате» по тому же заказу снова спросит телефон/адрес.
+      setTableOrders(prev => prev.map(o => o.id === order.id ? { ...o, deliveryPhone: phone, deliveryAddress: address } : o))
+      setContactsFor(null)
+      contactsOnConfirmRef.current?.(updated)
+      contactsOnConfirmRef.current = null
+    } catch (e) {
+      toast.error(`Не удалось сохранить контакты: ${humanizeError(e)}`)
+    } finally {
+      setSavingContacts(false)
+    }
+  }
+
+  // Заказ «по номеру» (без стола) без оплаты — остаётся открытым до оплаты.
+  // Это «С собой», а в фастфуде (tablesEnabled=false) так же и «Зал».
+  async function createQueueOrderNoPay() {
     if (payingRef.current || cart.length === 0) return
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
-      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total: subtotal, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      const order = await createOrder({ type: orderType, items: cartToItems(cart), total: subtotal, shiftId: shift?.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
       toast.success(`Заказ создан · ${formatCurrency(subtotal)}`, { description: 'Без оплаты — оплатите позже' })
       setCart([])
-      await loadTakeaway(order.id) // остаётся в списке открытых «С собой»
+      await loadQueue(orderType, order.id) // остаётся в списке открытых до оплаты
+      // Контакты доставки нельзя обойти и в флоу «без оплаты» — тот же гейт,
+      // что и перед панелью оплаты, только без перехода в неё после сохранения.
+      const [fresh] = await fetchOrders({ ids: [order.id], slim: false }).catch(() => [order])
+      requireDeliveryContacts(fresh ?? order, 'queue', () => {})
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
     finally { payingRef.current = false; setPaying(false) }
   }
 
-  // «С собой»: создать заказ и открыть ОБЩУЮ панель оплаты (нал/безнал с выбором
-  // кошелька/смешанная/скидка/пре-чек) — как в зале. Единый платёжный флоу.
-  async function payNewTakeaway() {
+  // Заказ «по номеру» + сразу ОБЩАЯ панель оплаты (нал/безнал с выбором кошелька/
+  // смешанная/скидка/пре-чек). Единый платёжный флоу. Это и есть pay-first
+  // фастфуда: в связке с kitchen_on_pay кухня получит бегунок после оплаты.
+  async function payNewQueueOrder() {
     if (payingRef.current || cart.length === 0) return
     payingRef.current = true; setPaying(true)
     try {
       const shift = await fetchActiveShift()
       if (!shift) { toast.error('Откройте кассовую смену перед оплатой'); return }
-      const order = await createOrder({ type: 'takeaway', items: cartToItems(cart), total: subtotal, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
+      const order = await createOrder({ type: orderType, items: cartToItems(cart), total: subtotal, shiftId: shift.id, waiterId: user?.id ?? undefined, guestsCount: 1, overrideStopList: overrideStopList() })
       if (!order) throw new Error('Заказ не создан')
       setCart([])
       const [fresh] = await fetchOrders({ ids: [order.id], slim: false }).catch(() => [order])
-      await loadTakeaway(order.id)
-      setPayTarget(fresh ?? order)
+      await loadQueue(orderType, order.id)
+      openPayment(fresh ?? order)
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
     finally { payingRef.current = false; setPaying(false) }
   }
@@ -582,11 +764,17 @@ export default function PosV2Order() {
     if (o.status === 'cancelled') return
     // активный → грузим в сайдбар (без ухода с экрана)
     setOrdersOpen(false)
-    const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && o.tableId) ? 'hall' : 'takeaway'
+    // Тип восстанавливаем из самого заказа: доставку нельзя схлопывать в
+    // «с собой», иначе тап по заказу-доставке молча менял бы его тип в UI.
+    // Заказ 'hall' без стола при включённых столах — данные из очереди по
+    // номеру, показываем как «с собой» (поведение до 052).
+    const nextType: OrderType = (o.type === 'hall' && (o.tableId || !tablesEnabled))
+      ? 'hall'
+      : isTogo(o.type) ? o.type : 'takeaway'
     if (nextType !== orderType) skipTypeResetRef.current = true
     setOrderType(nextType)
     if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
-    else { loadTakeaway(o.id) }
+    else { loadQueue(nextType, o.id) }
   }
   async function doReprintReceipt() {
     if (!viewReceipt || reprinting) return
@@ -620,14 +808,20 @@ export default function PosV2Order() {
       await reopenOrder(o.id)
       toast.success('Заказ переоткрыт для редактирования')
       setViewReceipt(null); setOrdersOpen(false)
-      const nextType: 'hall' | 'takeaway' = (o.type === 'hall' && o.tableId) ? 'hall' : 'takeaway'
+      // Тип восстанавливаем из самого заказа: доставку нельзя схлопывать в
+    // «с собой», иначе тап по заказу-доставке молча менял бы его тип в UI.
+    // Заказ 'hall' без стола при включённых столах — данные из очереди по
+    // номеру, показываем как «с собой» (поведение до 052).
+    const nextType: OrderType = (o.type === 'hall' && (o.tableId || !tablesEnabled))
+      ? 'hall'
+      : isTogo(o.type) ? o.type : 'takeaway'
       if (nextType !== orderType) skipTypeResetRef.current = true
       setOrderType(nextType)
       if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
-      else { loadTakeaway(o.id) }
+      else { loadQueue(nextType, o.id) }
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
   }
-  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))) }
+  function openRefund(o: Order) { setRefundTarget(o); setRefundReason(''); setRefundAmt(String(remainingRefund(o))); refundKeyRef.current = randomId() }
   async function doRefund() {
     if (!refundTarget || refundBusy) return
     const rem = remainingRefund(refundTarget)
@@ -637,7 +831,7 @@ export default function PosV2Order() {
     if (!refundReason.trim()) { toast.error('Укажите причину возврата'); return }
     setRefundBusy(true)
     try {
-      await refundOrder(refundTarget.id, refundReason.trim(), amt)
+      await refundOrder(refundTarget.id, refundReason.trim(), amt, refundKeyRef.current)
       toast.success(`Возврат ${formatCurrency(amt)}`)
       setRefundTarget(null); setViewReceipt(null)
       await openOrders()
@@ -670,11 +864,12 @@ export default function PosV2Order() {
             <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
           </button>
           <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-            {([['hall', 'ЗАЛ', UtensilsCrossed], ['takeaway', 'С СОБОЙ', ShoppingBag]] as const).map(([val, label, Icon]) => {
+            {orderTypes.map(val => {
               const on = orderType === val
+              const Icon = ORDER_TYPE_ICONS[val]
               return (
                 <button key={val} onClick={() => setOrderType(val)} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: on ? 'var(--pv-brand)' : 'transparent', color: on ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                  <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{label}
+                  <Icon style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />{ORDER_TYPE_LABELS[val]}
                 </button>
               )
             })}
@@ -696,11 +891,12 @@ export default function PosV2Order() {
         {/* Категории переносятся на второй ряд (flex-wrap), а не скроллятся
             горизонтально — все категории видны сразу. Интервалы уменьшены. */}
         <div className="flex flex-wrap items-center shrink-0" style={{ gap: 'clamp(0.3rem,0.5vw,0.5rem)', padding: 'var(--pv-gap) var(--pv-gap) clamp(0.35rem,0.6vw,0.55rem) 0' }}>
-          {favorites.length > 0 && (
-            <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>
-              <Star style={{ width: '1rem', height: '1rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
-            </button>
-          )}
+          {/* Чип виден ВСЕГДА, даже когда список пуст: иначе про избранное просто
+              не узнать — жест удержания сам себя не покажет. Пустая вкладка
+              объясняет, как класть блюда. */}
+          <button onClick={() => { setSearch(''); setActiveCat('__fav__') }} title="Удержите блюдо, чтобы добавить или убрать из избранного" className="rounded-full font-semibold whitespace-nowrap shrink-0 border flex items-center gap-1.5" style={{ background: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-card)', color: currentCat === '__fav__' ? '#fff' : 'var(--pv-text-2)', borderColor: currentCat === '__fav__' ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>
+            <Star style={{ width: '1rem', height: '1rem', fill: currentCat === '__fav__' ? '#fff' : 'transparent' }} />Избранное
+          </button>
           {visibleCats.map(c => {
             const on = c === currentCat && !deferred.trim()
             return <button key={c} onClick={() => { setSearch(''); setActiveCat(c) }} className="rounded-full font-semibold whitespace-nowrap shrink-0 border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.5rem,0.75vw,0.7rem) clamp(0.75rem,1.15vw,1.15rem)', fontSize: 'var(--pv-ctl)' }}>{c}</button>
@@ -712,7 +908,15 @@ export default function PosV2Order() {
           {loading ? (
             <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Загрузка меню…</div>
           ) : dishes.length === 0 ? (
-            <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
+            currentCat === '__fav__' && !deferred.trim() ? (
+              <div className="h-full flex flex-col items-center justify-center text-center" style={{ color: 'var(--pv-text-3)', gap: '0.6rem', padding: '1rem' }}>
+                <Star style={{ width: '2.2rem', height: '2.2rem', color: 'var(--pv-border)' }} />
+                <span className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Избранное пусто</span>
+                <span style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Откройте категорию и удержите блюдо секунду — оно попадёт сюда</span>
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center" style={{ color: 'var(--pv-text-3)' }}>Ничего не найдено</div>
+            )
           ) : (
             <div style={menuGridStyle(menuGrid, gridAreaH)}>
               {dishes.map(m => {
@@ -731,11 +935,31 @@ export default function PosV2Order() {
                   // эмодзи-плейсхолдера и БЕЗ звёздочки-избранного на карточке.
                   // Цена — без ,00 (formatCurrencyCompact): «300 с.», не «300,00 с.».
                   <div key={m.id} className="relative">
-                    <button onClick={() => add(m)} disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.9rem,1.5vw,1.25rem) clamp(0.75rem,1.1vw,1rem)', gap: 'clamp(0.6rem,1vw,0.95rem)', minHeight: menuGrid === 'auto' ? 'clamp(7rem,11vw,9.5rem)' : 0, height: menuGrid === 'auto' ? undefined : '100%', opacity: stopped ? 0.6 : 1 }}>
-                      <span className="font-semibold leading-tight line-clamp-2" style={{ color: 'var(--pv-text)', fontSize: 'clamp(0.95rem,1.25vw,1.2rem)' }}>{m.name}</span>
-                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.4rem,0.7vw,0.6rem) clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(0.85rem,1.1vw,1.05rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
+                    <button
+                      onClick={() => {
+                        // Клик после сработавшего удержания — это «хвост» того же
+                        // жеста: блюдо уже ушло в избранное, в корзину не кладём.
+                        if (longPress.current.fired) { longPress.current.fired = false; return }
+                        add(m)
+                      }}
+                      onPointerDown={e => pressStart(e, m)}
+                      onPointerUp={pressCancel}
+                      onPointerLeave={pressCancel}
+                      onPointerCancel={pressCancel}
+                      onPointerMove={pressMove}
+                      onContextMenu={e => {
+                        e.preventDefault()
+                        pressCancel()
+                        if (!longPress.current.fired) { toggleFav(m); longPress.current.fired = true }
+                      }}
+                      disabled={stopped && !canOverrideStop} aria-label={`Добавить ${m.name}, ${formatCurrencyCompact(m.price)}`} className="w-full flex flex-col items-center justify-center text-center transition-transform active:scale-[0.97] disabled:opacity-45 disabled:pointer-events-none overflow-hidden" style={{ containerType: 'inline-size', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', borderRadius: 'var(--pv-radius)', boxShadow: '0 2px 8px rgba(0,0,0,0.06)', padding: 'clamp(0.45rem,0.9vw,1rem) clamp(0.4rem,0.7vw,0.85rem)', gap: 'clamp(0.3rem,0.6vw,0.8rem)', minHeight: menuGrid === 'auto' ? 'clamp(7rem,11vw,9.5rem)' : 0, height: menuGrid === 'auto' ? undefined : '100%', opacity: stopped ? 0.6 : 1, userSelect: 'none', WebkitUserSelect: 'none', WebkitTouchCallout: 'none' }}>
+                      <span className="font-semibold leading-tight" style={{ color: 'var(--pv-text)', ...dishNameStyle(m.name) }}>{m.name}</span>
+                      <span className="rounded-full font-bold whitespace-nowrap" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.35em 0.85em', fontSize: 'clamp(0.58rem, 11cqw, 1.1rem)' }}>{variants ? `от ${formatCurrencyCompact(minPrice)}` : formatCurrencyCompact(m.price)}{weight ? ` / ${m.unitSize}${m.unit === 'kg' ? 'кг' : 'г'}` : ''}</span>
                     </button>
                     {stopped && <span title={stopReasons.get(m.id) ?? 'В стоп-листе'} className="absolute rounded-full font-bold pointer-events-none" style={{ top: '0.5rem', right: '0.5rem', background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.5rem', fontSize: '0.65rem' }}>СТОП</span>}
+                    {/* Звёздочка только у избранного: иначе кассир не видит, что
+                        повторное удержание УБЕРЁТ блюдо из списка. */}
+                    {favSet.has(m.id) && <Star className="absolute pointer-events-none" style={{ top: '0.5rem', left: '0.5rem', width: '0.95rem', height: '0.95rem', color: 'var(--pv-brand)', fill: 'var(--pv-brand)' }} />}
                   </div>
                 )
               })}
@@ -761,7 +985,7 @@ export default function PosV2Order() {
       <aside className="shrink-0 flex flex-col border-l" style={{ width: 'clamp(20rem, 26vw, 30rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }}>
         {/* Header */}
         <div className="flex items-center justify-between gap-2 shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          {orderType === 'hall' ? (
+          {!numberMode ? (
             // Выбор стола прямо в сайдбаре заказа (тап открывает пикер столов),
             // слева от счётчика позиций. В зале стол выбирают здесь, а не в топбаре.
             <button onClick={() => setTablesOpen(true)} className="flex items-center gap-1.5 rounded-xl border min-w-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.95rem)' }} aria-label="Выберите стол">
@@ -775,13 +999,13 @@ export default function PosV2Order() {
         </div>
 
         {/* Вкладки: группы занятого стола / открытые «С собой» */}
-        {((orderType === 'hall' && selectedTable) || orderType === 'takeaway') && (tableOrders.length >= 1 || tableLoading) && (
+        {(numberMode || selectedTable) && (tableOrders.length >= 1 || tableLoading) && (
           <div className="flex items-center gap-2 flex-wrap shrink-0 border-b" style={{ padding: '0.6rem clamp(0.7rem,1vw,1rem)', borderColor: 'var(--pv-border)' }}>
             {tableOrders.map((o, i) => { const on = o.id === activeGroupId; return (
-              <button key={o.id} onClick={() => selectGroup(o.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{orderType === 'hall' ? `Группа ${i + 1}` : `#${o.orderNumber ?? i + 1} · ${formatCurrency(o.total)}`}</button>
+              <button key={o.id} onClick={() => selectGroup(o.id)} className="rounded-xl font-semibold border" style={{ background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text-2)', borderColor: on ? 'var(--pv-brand)' : 'var(--pv-border)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>{!numberMode ? `Группа ${i + 1}` : `#${o.orderNumber ?? i + 1} · ${formatCurrency(o.total)}`}</button>
             ) })}
             <button onClick={() => selectGroup(null)} className="rounded-xl font-semibold border border-dashed flex items-center gap-1" style={{ background: activeGroupId === null ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: 'var(--pv-brand)', color: 'var(--pv-brand)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
-              <Plus style={{ width: '0.95rem', height: '0.95rem' }} />{orderType === 'hall' ? 'Группа' : 'Новый'}
+              <Plus style={{ width: '0.95rem', height: '0.95rem' }} />{!numberMode ? 'Группа' : 'Новый'}
             </button>
           </div>
         )}
@@ -790,7 +1014,7 @@ export default function PosV2Order() {
         <div className="flex-1 min-h-0 overflow-y-auto" style={{ padding: 'clamp(0.7rem,1vw,1rem)' }}>
           {cart.length > 0 ? (
             <div className="flex flex-col" style={{ gap: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
-              {activeGroup && <div className="rounded-lg text-center font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Дозаказ в {orderType === 'hall' ? `Группу ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : `заказ #${activeGroup.orderNumber ?? ''}`}</div>}
+              {activeGroup && <div className="rounded-lg text-center font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.4rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>Дозаказ в {!numberMode ? `Группу ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : `заказ #${activeGroup.orderNumber ?? ''}`}</div>}
               {cart.map(l => {
                 const weight = l.unit !== 'piece'
                 const k = lineKey(l)
@@ -864,7 +1088,7 @@ export default function PosV2Order() {
 
         {/* Footer */}
         <div className="shrink-0 border-t" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          {orderType === 'hall' && (activeGroup || cart.length > 0 || !selectedTableId) && (
+          {!numberMode && (activeGroup || cart.length > 0 || !selectedTableId) && (
             <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.5rem,0.9vw,0.85rem)' }}>
               <span className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><Users style={{ width: '1.1rem', height: '1.1rem' }} />Гостей</span>
               <div className="flex items-center gap-2">
@@ -884,7 +1108,7 @@ export default function PosV2Order() {
             <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
             <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(footTotal)}</span>
           </div>
-          {orderType !== 'hall' ? (
+          {numberMode ? (
             activeGroup ? (
               cart.length > 0 ? (
                 <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
@@ -893,13 +1117,17 @@ export default function PosV2Order() {
               ) : (
                 <div className="flex items-center gap-2">
                   <button disabled={busy} onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center shrink-0 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)' }}><Printer style={{ width: '1.3em', height: '1.3em' }} /></button>
-                  <button onClick={() => setPayTarget(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}><CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате</button>
+                  <button onClick={() => openPayment(activeGroup)} className="flex-1 flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}><CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате</button>
                 </div>
               )
             ) : cart.length > 0 ? (
               <div className="flex flex-col" style={{ gap: '0.6rem' }}>
-                <button disabled={paying} onClick={createTakeawayNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
-                <button disabled={paying} onClick={payNewTakeaway} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                {/* Фастфуд = оплата вперёд: заказ без оплаты не создаётся вовсе.
+                    Чек гостю и бегунок на кухню печатаются вместе по оплате. */}
+                {allowNoPay && (
+                  <button disabled={paying} onClick={createQueueOrderNoPay} className="w-full flex items-center justify-center gap-2 rounded-2xl font-semibold border disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>Создать без оплаты</button>
+                )}
+                <button disabled={paying} onClick={payNewQueueOrder} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
                   <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате · {formatCurrency(subtotal)}
                 </button>
               </div>
@@ -932,7 +1160,7 @@ export default function PosV2Order() {
                 <button onClick={() => doPreBill(activeGroup.id)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><Printer style={{ width: '1.15em', height: '1.15em' }} />Пре-чек</button>
                 <button onClick={() => setExtrasOpen(true)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.15em', height: '1.15em' }} />Ещё</button>
               </div>
-              <button onClick={() => setPayTarget(activeGroup)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+              <button onClick={() => openPayment(activeGroup)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
                 <CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате
               </button>
             </div>
@@ -1019,10 +1247,56 @@ export default function PosV2Order() {
         </PosModal>
       )}
 
+      {/* ── Контакты доставки — спрашиваем ПЕРЕД панелью оплаты ──── */}
+      {contactsFor && (
+        <PosModal open onClose={() => setContactsFor(null)} width="clamp(20rem,44vw,32rem)"
+          title={`Доставка · заказ #${contactsFor.orderNumber ?? ''}`}>
+          <div className="flex flex-col" style={{ gap: 'clamp(0.7rem,1.1vw,1rem)' }}>
+            <div className="flex flex-col" style={{ gap: '0.35rem' }}>
+              <label htmlFor="pv-delivery-phone" className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Телефон клиента</label>
+              <input
+                id="pv-delivery-phone"
+                value={contactPhone}
+                onChange={e => setContactPhone(e.target.value)}
+                inputMode="tel"
+                autoFocus
+                placeholder="+992 ..."
+                className="rounded-xl border outline-none"
+                style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', color: 'var(--pv-text)', padding: 'clamp(0.7rem,1vw,0.95rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}
+              />
+            </div>
+            <div className="flex flex-col" style={{ gap: '0.35rem' }}>
+              <label htmlFor="pv-delivery-address" className="font-semibold" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Адрес доставки</label>
+              <textarea
+                id="pv-delivery-address"
+                value={contactAddress}
+                onChange={e => setContactAddress(e.target.value)}
+                rows={3}
+                placeholder="Улица, дом, квартира, подъезд"
+                className="rounded-xl border outline-none resize-none"
+                style={{ background: 'var(--pv-bg)', borderColor: 'var(--pv-border)', color: 'var(--pv-text)', padding: 'clamp(0.7rem,1vw,0.95rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}
+              />
+            </div>
+            <p style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
+              Напечатаются на бегунке курьеру вместе с составом заказа.
+            </p>
+            <button
+              disabled={savingContacts}
+              onClick={confirmContacts}
+              className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform"
+              style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}
+            >
+              {contactsIntent === 'pay' ? <CreditCard style={{ width: '1.3em', height: '1.3em' }} /> : <Check style={{ width: '1.3em', height: '1.3em' }} />}
+              {savingContacts ? 'Сохраняем…' : (contactsIntent === 'pay' ? 'Далее · к оплате' : 'Сохранить')}
+            </button>
+          </div>
+        </PosModal>
+      )}
+
       {/* ── Оплата зального заказа (инлайн, в одном окне) ──────── */}
       {payTarget && (
         <PosModal open onClose={() => setPayTarget(null)} width="clamp(22rem,64vw,52rem)"
-          title={`Оплата · ${payTarget.type === 'hall' ? `Стол ${selectedTable?.number ?? ''}` : `С собой #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
+          title={`Оплата · ${payTarget.type === 'hall' && !numberMode ? `Стол ${selectedTable?.number ?? ''}` : `${ORDER_TYPE_TITLES[payTarget.type] ?? ''} #${payTarget.orderNumber ?? ''}`} · ${formatCurrency(payTarget.total)}`}>
           <PaymentPanel order={payTarget} servicePercent={restaurant?.servicePercent ?? 0} accounts={accounts} userId={user?.id} onPaid={onPaidDone} previewCtx={{ restaurant, tables, zones, currentUser: user }} />
         </PosModal>
       )}
@@ -1112,12 +1386,17 @@ export default function PosV2Order() {
                     ) : (
                       <div className="flex flex-col" style={{ gap: '0.4rem' }}>
                         {rows.map(o => {
-                          const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : 'С собой'
+                          const loc = o.type === 'hall' ? `Стол ${o.tableId ? (tNum(o) || '—') : '—'}` : o.type === 'delivery' ? 'Доставка' : 'С собой'
                           const n = (o.items ?? []).filter(i => !i.cancelledAt).length
                           const isClosed = o.status === 'done' || o.status === 'cancelled'
                           const time = isClosed ? (o.closedAt ? ` · закрыт ${new Date(o.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : '') : ` · ${getTimeSince(o.createdAt)}`
-                          const badge = o.status === 'cancelled' ? 'Отменён' : o.status === 'done' ? 'Оплачен' : o.status === 'cooking' ? 'Готовится' : o.status === 'ready' ? 'Готов' : o.status === 'served' ? 'Подан' : o.status === 'bill_requested' ? 'Счёт' : 'Открыт'
-                          const bt = o.status === 'cancelled' ? { bg: 'var(--pv-bg)', c: 'var(--pv-text-3)' } : o.status === 'done' ? { bg: 'var(--pv-free-soft)', c: 'var(--pv-free-text)' } : o.status === 'bill_requested' ? { bg: 'var(--pv-bill-soft)', c: 'var(--pv-bill-text)' } : { bg: 'var(--pv-brand-soft)', c: 'var(--pv-brand)' }
+                          // Возврат: закрытый заказ (бэк 'refunded'/'closed' → 'done') с refundedTotal > 0.
+                          // Полный → «Возврат», частичный → «Возврат части». Иначе «Оплачен».
+                          const refundedAmt = o.status === 'done' ? (o.refundedTotal ?? 0) : 0
+                          const paidAmt = (o.totalWithService ?? o.total) || 0
+                          const refundedFull = refundedAmt > 0 && refundedAmt >= paidAmt - 0.01
+                          const badge = o.status === 'cancelled' ? 'Отменён' : refundedAmt > 0 ? (refundedFull ? 'Возврат' : 'Возврат части') : o.status === 'done' ? 'Оплачен' : o.status === 'cooking' ? 'Готовится' : o.status === 'ready' ? 'Готов' : o.status === 'served' ? 'Подан' : o.status === 'bill_requested' ? 'Счёт' : 'Открыт'
+                          const bt = o.status === 'cancelled' ? { bg: 'var(--pv-bg)', c: 'var(--pv-text-3)' } : refundedAmt > 0 ? { bg: 'var(--pv-occ-soft)', c: 'var(--pv-occ-text)' } : o.status === 'done' ? { bg: 'var(--pv-free-soft)', c: 'var(--pv-free-text)' } : o.status === 'bill_requested' ? { bg: 'var(--pv-bill-soft)', c: 'var(--pv-bill-text)' } : { bg: 'var(--pv-brand-soft)', c: 'var(--pv-brand)' }
                           return (
                             <button key={o.id} onClick={() => tapOrder(o)} className="w-full text-left rounded-xl border active:scale-[0.99] transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.95vw,0.85rem)' }}>
                               <div className="flex items-baseline justify-between gap-2" style={{ marginBottom: '0.25rem' }}>
@@ -1125,9 +1404,21 @@ export default function PosV2Order() {
                                 <span className="rounded-full font-semibold shrink-0" style={{ background: bt.bg, color: bt.c, padding: '0.1rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{badge}</span>
                               </div>
                               <div className="flex items-baseline justify-between gap-2">
-                                <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{loc} · {n} поз{time}</span>
+                                <span className="truncate" style={{ color: refundedAmt > 0 ? 'var(--pv-occ-text)' : 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{loc} · {n} поз{time}{refundedAmt > 0 ? ` · возврат ${formatCurrency(refundedAmt)}` : ''}</span>
                                 <span className="font-bold tabular-nums whitespace-nowrap" style={{ color: o.status === 'cancelled' ? 'var(--pv-text-3)' : 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(calcOrderDisplayTotal(o, restaurant?.servicePercent))}</span>
                               </div>
+                              {/* Чем расплатились — у оплаченных заказов. */}
+                              {o.status === 'done' && (() => {
+                                const pay = describePayment(o)
+                                if (!pay) return null
+                                return (
+                                  <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)', marginTop: '0.15rem' }}>
+                                    {pay.isMixed && pay.parts.length > 0
+                                      ? pay.parts.map(p => `${p.label}${p.account ? ` (${p.account})` : ''} ${formatCurrency(p.amount)}`).join(' + ')
+                                      : `${pay.label}${pay.account ? ` · ${pay.account}` : ''}`}
+                                  </div>
+                                )
+                              })()}
                             </button>
                           )
                         })}

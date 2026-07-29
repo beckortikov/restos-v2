@@ -40,7 +40,36 @@ func (b *Builder) DisableKanji() *Builder { return b.Raw(0x1C, '.') }
 
 // CodePageCP866 — ESC t 17. Выбор кодовой страницы 17 = CP866.
 // На большинстве принтеров (Epson, Xprinter) это валидно.
-func (b *Builder) CodePageCP866() *Builder { return b.Raw(0x1B, 't', 17) }
+func (b *Builder) CodePageCP866() *Builder { return b.CodePage(DefaultCodepage) }
+
+// DefaultCodepage — 17 = PC866 по таблице Epson. Работает на большинстве
+// принтеров, поэтому остаётся дефолтом.
+const DefaultCodepage byte = 17
+
+// CodePage — ESC t n. Номер таблицы символов.
+//
+// Единого стандарта нумерации НЕТ: у Epson PC866 (кириллица) на 17, а часть
+// китайских клонов держит её на другом индексе и незнакомый номер молча
+// игнорирует, оставаясь на своей дефолтной таблице. Симптом — латиница и
+// цифры печатаются верно, а вместо кириллицы лезут греческие буквы и символы
+// (это CP437). Поэтому номер вынесен в настройку принтера.
+func (b *Builder) CodePage(n byte) *Builder { return b.Raw(0x1B, 't', n) }
+
+// codepageOr — 0 трактуем как «не задано» → дефолт. Нулевая таблица (CP437)
+// осмысленного применения у нас не имеет, а ноль в структуре — обычный
+// признак незаполненного поля.
+func codepageOr(n byte) byte {
+	if n == 0 {
+		return DefaultCodepage
+	}
+	return n
+}
+
+// beginPayload — общий пролог любого чека: сброс, выход из Kanji-режима,
+// кодовая страница, международный набор. Порядок важен (см. DisableKanji).
+func beginPayload(codepage byte) *Builder {
+	return NewBuilder().Init().DisableKanji().CodePage(codepageOr(codepage)).CharsetRussia()
+}
 
 // CharsetRussia — ESC R 12. International character set = Russia.
 // Влияет на trim'ы букв в зоне 0x00..0x1F (нужно вместе с CodePage).
@@ -63,6 +92,13 @@ func (b *Builder) FontSize(n byte) *Builder { return b.Raw(0x1D, '!', n) }
 
 func (b *Builder) FontNormal() *Builder { return b.FontSize(0x00) }
 func (b *Builder) FontDouble() *Builder { return b.FontSize(0x11) }
+
+// FontBig — 6× по ширине И высоте (GS ! 0x55: биты 4..6 = 5 → 6× ширина,
+// биты 0..2 = 5 → 6× высота). Номер заказа в фастфуд-режиме: гость читает
+// своё число через зал, повар — из стопки чеков на полке.
+// Влезает 7 знаков на ленте 42 кол и 5 знаков на 32 кол — номера заказа
+// (1–3 цифры) хватает с запасом.
+func (b *Builder) FontBig() *Builder { return b.FontSize(0x55) }
 
 // FontTall — double height ONLY (single width). GS ! 0x01.
 // Используется для строк где важна высота, но ширина бумаги ограничена

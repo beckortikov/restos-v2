@@ -32,6 +32,19 @@ func (h *FinancialAccountsHandler) List(w http.ResponseWriter, r *http.Request) 
 	respond.JSON(w, http.StatusOK, makeList[models.FinancialAccount](rows, ""))
 }
 
+// BalanceHistory — GET /api/v1/finance/accounts/balance-history?from=&to=
+// Остаток по каждому счёту на конец каждого дня периода + движение за период.
+// Статический сегмент пути приоритетнее {id} в chi, конфликта нет.
+func (h *FinancialAccountsHandler) BalanceHistory(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.svc.BalanceHistory(r.Context(), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *FinancialAccountsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var in service.FinancialAccountInput
 	if !decodeBody(r, &in) {
@@ -53,6 +66,28 @@ func (h *FinancialAccountsHandler) Patch(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	out, err := h.svc.Patch(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// SetEnabled — POST /api/v1/finance/accounts/{id}/enabled  {"enabled": false}
+// Отключение счёта вместо удаления: см. FinancialAccountsService.SetEnabled.
+func (h *FinancialAccountsHandler) SetEnabled(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Enabled *bool `json:"enabled"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	if in.Enabled == nil {
+		respond.BadRequest(w, "enabled is required")
+		return
+	}
+	out, err := h.svc.SetEnabled(r.Context(), chi.URLParam(r, "id"), *in.Enabled)
 	if err != nil {
 		respond.Error(w, err)
 		return
@@ -197,6 +232,7 @@ func (h *FinanceReportsHandler) PnL(w http.ResponseWriter, r *http.Request) {
 		respond.BadRequest(w, err.Error())
 		return
 	}
+	f.OperationalOnly = queryString(r, "operational_only") == "true"
 	out, err := h.svc.PnL(r.Context(), f)
 	if err != nil {
 		respond.Error(w, err)
@@ -261,6 +297,95 @@ func (h *SalaryHandler) PaySalary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusCreated, out)
+}
+
+// AddDeduction — POST /api/v1/finance/salary/deductions
+// Удержание с сохранённой причиной (ЗП-4) — заменяет прежний счётчик
+// users.deductions без единой записи о том, за что удержали.
+func (h *SalaryHandler) AddDeduction(w http.ResponseWriter, r *http.Request) {
+	var in service.DeductionInput
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.AddDeduction(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, out)
+}
+
+// ListDeductions — GET /api/v1/finance/salary/deductions?user_id=
+func (h *SalaryHandler) ListDeductions(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		respond.BadRequest(w, "user_id is required")
+		return
+	}
+	rows, err := h.svc.ListDeductions(r.Context(), userID)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(rows, ""))
+}
+
+// SalaryReport — GET /api/v1/finance/salary/report?from=&to=
+// «Кому сколько выдали и когда» за период: сводка по сотрудникам + плоский
+// список выплат с датой, суммой и счётом.
+func (h *SalaryHandler) SalaryReport(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.svc.SalaryReport(r.Context(), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// SalaryAccrual — GET /api/v1/finance/salary/accrual?from=&to=
+// Начислено за период по каждому сотруднику: оклад или ставка × отработанные
+// дни из табеля.
+func (h *SalaryHandler) SalaryAccrual(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	rows, err := h.svc.SalaryAccrual(r.Context(), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(rows, ""))
+}
+
+// WorkedDays — GET /finance/salary/worked-days?user_id=&from=&to=.
+func (h *SalaryHandler) WorkedDays(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.svc.WorkedDays(r.Context(), q.Get("user_id"), q.Get("from"), q.Get("to"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// SetWorkedDays — PUT /finance/salary/worked-days: замена ручных отметок дней.
+func (h *SalaryHandler) SetWorkedDays(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		UserID string   `json:"user_id"`
+		From   string   `json:"from"`
+		To     string   `json:"to"`
+		Dates  []string `json:"dates"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.SetWorkedDays(r.Context(), in.UserID, in.From, in.To, in.Dates)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
 }
 
 func (h *SalaryHandler) PayServiceCharge(w http.ResponseWriter, r *http.Request) {

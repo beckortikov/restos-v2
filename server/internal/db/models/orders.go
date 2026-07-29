@@ -50,8 +50,13 @@ type Order struct {
 	RefundedTotal      decimal.Decimal  `gorm:"column:refunded_total;type:numeric(14,4);default:0" json:"refunded_total"`
 	RefundedAt         *time.Time       `gorm:"column:refunded_at" json:"refunded_at"`
 	RefundReason       *string          `gorm:"column:refund_reason" json:"refund_reason"`
-	CreatedAt          time.Time        `json:"created_at"`
-	UpdatedAt          time.Time        `json:"updated_at"`
+	// Контакты доставки (052) — заполняются на оплате заказа с type='delivery',
+	// печатаются на бегунке курьеру. Отдельно от customers: доставка часто
+	// разовая, карточку клиента ради одного адреса не заводим.
+	DeliveryPhone   *string   `gorm:"column:delivery_phone" json:"delivery_phone"`
+	DeliveryAddress *string   `gorm:"column:delivery_address" json:"delivery_address"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (Order) TableName() string { return "orders" }

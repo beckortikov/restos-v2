@@ -10,6 +10,8 @@ import {
   fetchInventoryChecks,
   fetchInventoryCheckLines,
   applyInventoryCheck,
+  fetchSemiStock,
+  fetchMenuItems,
   type InventoryCheck,
   type InventoryCheckLine,
 } from '@/lib/queries'
@@ -21,6 +23,7 @@ import { exportToExcel } from '@/lib/export-excel'
 
 interface InventoryLine {
   id: string
+  kind: 'ingredient' | 'semi' | 'batch'
   name: string
   unit: string
   category: string
@@ -58,21 +61,30 @@ export default function InventoryCheckPage() {
   const [period, setPeriod] = useState<PeriodKey>('all')
 
   useEffect(() => {
-    fetchIngredients()
-      .then(ings => {
-        setLines(ings.map(i => ({
-          id: i.id,
-          name: i.name,
-          unit: i.unit,
-          category: i.category,
-          pricePerUnit: i.pricePerUnit,
-          systemQty: i.qty,
-          actualQty: null,
-          diff: null,
-        })))
+    // Н1: инвентаризуем ингредиенты + полуфабрикаты + готовые заготовки.
+    Promise.all([fetchIngredients(), fetchSemiStock(), fetchMenuItems()])
+      .then(([ings, semis, menu]) => {
+        const ingLines: InventoryLine[] = ings.map(i => ({
+          id: i.id, kind: 'ingredient', name: i.name, unit: i.unit, category: i.category,
+          pricePerUnit: i.pricePerUnit, systemQty: i.qty, actualQty: null, diff: null,
+        }))
+        const semiLines: InventoryLine[] = semis.map(s => ({
+          id: s.id, kind: 'semi', name: s.name, unit: s.unit, category: 'Полуфабрикаты',
+          pricePerUnit: s.pricePerUnit, systemQty: s.qty, actualQty: null, diff: null,
+        }))
+        // Заготовки — блюда с накопленной batch-заготовкой (preparedQty > 0).
+        const batchLines: InventoryLine[] = menu
+          .filter(m => (m.preparedQty ?? 0) > 0)
+          .map(m => ({
+            id: m.id, kind: 'batch', name: m.name, unit: 'порц.', category: 'Заготовки',
+            pricePerUnit: m.cogs ?? 0, systemQty: m.preparedQty ?? 0, actualQty: null, diff: null,
+          }))
+        setLines([...ingLines, ...semiLines, ...batchLines])
         // Build price map for overview KPI
         const pm = new Map<string, number>()
         ings.forEach(i => pm.set(i.id, i.pricePerUnit))
+        semis.forEach(s => pm.set(s.id, s.pricePerUnit))
+        menu.forEach(m => pm.set(m.id, m.cogs ?? 0))
         setIngredientPriceMap(pm)
       })
       .catch(() => {})
@@ -110,6 +122,7 @@ export default function InventoryCheckPage() {
       await applyInventoryCheck(
         filledLines.map(l => ({
           ingredientId: l.id,
+          kind: l.kind,
           ingredientName: l.name,
           unit: l.unit,
           systemQty: l.systemQty,

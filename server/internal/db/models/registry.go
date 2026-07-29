@@ -14,6 +14,7 @@ func All() []any {
 		&MenuCategory{}, &CustomCategory{}, &MenuItem{},
 		&ModifierGroup{}, &Modifier{}, &TechCardLine{},
 		&MenuAttribute{}, &MenuAttributeValue{}, &MenuItemVariantValue{},
+		&SizeScale{}, &SizeScaleValue{},
 		// orders
 		&Order{}, &OrderItem{}, &OrderItemModifier{},
 		&OrderVoid{}, &OrderSplit{},
@@ -32,8 +33,8 @@ func All() []any {
 		&TimeEntry{}, &IdempotencyKey{}, &PrintJob{},
 		// auth
 		&Session{},
-		// printers (Phase 4.5)
-		&Printer{},
+		// printers (Phase 4.5; 053 — мультистанционная печать)
+		&Printer{}, &PrinterStation{},
 		// shadow drifts (Phase 8)
 		&ShadowDrift{},
 	}

@@ -38,6 +38,35 @@ type TimeEntry struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+// SalaryWorkedDay — ручная отметка отработанного дня для дневной оплаты (059).
+// Отдельно от табеля: начисление дневника = уникальные дни (табель ∪ отметки).
+type SalaryWorkedDay struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	UserID       *string   `gorm:"column:user_id;type:uuid" json:"user_id"`
+	WorkDate     string    `gorm:"column:work_date;type:date" json:"work_date"` // YYYY-MM-DD
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (SalaryWorkedDay) TableName() string { return "salary_worked_days" }
+
+// SalaryDeduction — удержание из зарплаты с сохранённой причиной (064).
+//
+// НЕ FinancialOperation: удержание не двигает баланс счёта — деньги не
+// выданы, им неоткуда "выходить". Это только уменьшение будущей выплаты
+// (users.deductions), а причина раньше терялась в тосте сразу после ввода.
+type SalaryDeduction struct {
+	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	UserID       string          `gorm:"column:user_id;type:uuid;index" json:"user_id"`
+	Amount       decimal.Decimal `gorm:"type:numeric(14,4)" json:"amount"`
+	Reason       string          `json:"reason"`
+	CreatedBy    *string         `gorm:"column:created_by" json:"created_by"`
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+func (SalaryDeduction) TableName() string { return "salary_deductions" }
+
 func (TimeEntry) TableName() string { return "time_entries" }
 
 // IdempotencyKey — кэш ответов для Idempotency-Key middleware.

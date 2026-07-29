@@ -168,6 +168,11 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 			}
 			return err
 		}
+		// Счёт уже под блокировкой — проверяем его флаг здесь, без лишнего
+		// запроса в горячем пути оплаты.
+		if !acc.IsEnabled {
+			return apperrors.Wrap("CONFLICT", "счёт отключён — выберите другой счёт", nil)
+		}
 
 		// 2b. Требуем открытую смену — как и /close. Продажа (в т.ч. через
 		// разделение счёта) без открытой смены не допускается.
@@ -287,7 +292,15 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 		order.Status = &closed
 		order.ClosedAt = &now
 		order.PaymentMethod = &pm
-		order.TotalWithService = decimal.Normalize(decimal.Add(order.Total, order.TipAmount))
+		// #4: TotalWithService = Σ split.Total (каждый уже с сервисом) + чаевые.
+		var splitSum decimal.Decimal
+		if err := tx.Model(&models.OrderSplit{}).
+			Where("restaurant_id = ? AND order_id = ?", rid, orderID).
+			Select("COALESCE(SUM(total), 0)").Scan(&splitSum).Error; err != nil {
+			return err
+		}
+		order.ServiceAmount = decimal.Normalize(decimal.Sub(splitSum, order.Total))
+		order.TotalWithService = decimal.Normalize(decimal.Add(splitSum, order.TipAmount))
 		order.UpdatedAt = now
 		if err := tx.Save(&order).Error; err != nil {
 			return err
@@ -619,15 +632,21 @@ func (s *OrdersService) CreateVoid(ctx context.Context, in CreateVoidInput) (*mo
 			v.ItemPrice = oi.Price // audit-запись — серверная цена, не клиентская
 		}
 
-		if err := tx.Create(v).Error; err != nil {
-			return err
-		}
-
-		// total уменьшаем ТОЛЬКО если позиция реально есть на открытом заказе —
-		// нельзя «списать» несуществующую позицию и произвольно занизить сумму.
+		// #30: нельзя списать больше, чем в позиции. Раньше CreateVoid не помечал
+		// позицию — та же строка матчилась снова, total резался многократно, а в
+		// журнале копились void-записи сверх физического количества. Гейтим по
+		// остатку позиции, уменьшаем её qty; на нуле — cancelled_at (строка больше
+		// не матчится и не списывается на кухню при закрытии).
 		mutable := order.Status == nil || (*order.Status != "closed" && *order.Status != "cancelled")
 		if mutable && matched {
-			lineTotal := decimal.Normalize(decimal.Mul(oi.Price, decimal.FromInt(int64(qty))))
+			voidQty := decimal.FromInt(int64(qty))
+			if voidQty.GreaterThan(oi.Qty) {
+				return apperrors.Wrap("CONFLICT", "нельзя списать больше, чем в позиции: остаток "+oi.Qty.String(), nil)
+			}
+			if err := tx.Create(v).Error; err != nil {
+				return err
+			}
+			lineTotal := decimal.Normalize(decimal.Mul(oi.Price, voidQty))
 			newTotal := decimal.Sub(order.Total, lineTotal)
 			if decimal.IsNegative(newTotal) {
 				newTotal = decimal.Zero
@@ -638,7 +657,21 @@ func (s *OrdersService) CreateVoid(ctx context.Context, in CreateVoidInput) (*mo
 			if err := tx.Save(&order).Error; err != nil {
 				return err
 			}
+			remaining := decimal.Normalize(decimal.Sub(oi.Qty, voidQty))
+			itemUpd := map[string]any{"qty": remaining, "updated_at": now}
+			if !remaining.IsPositive() {
+				itemUpd["cancelled_at"] = now
+			}
+			if err := tx.Model(&models.OrderItem{}).Where("id = ?", oi.ID).Updates(itemUpd).Error; err != nil {
+				return err
+			}
 			tableID = order.TableID
+		} else {
+			// Закрытый/отменённый заказ или позиция не найдена — только
+			// audit-запись void, сумму не трогаем.
+			if err := tx.Create(v).Error; err != nil {
+				return err
+			}
 		}
 		return nil
 	})

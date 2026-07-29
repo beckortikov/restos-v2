@@ -11,6 +11,7 @@ import {
   Trash2,
   Package,
   Box,
+  ShoppingCart,
   CheckCircle,
   X,
 } from 'lucide-react'
@@ -24,15 +25,17 @@ import {
   TableRow,
   TableCell,
 } from '@/components/ui/table'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dMul, dSub, dSum } from '@/lib/decimal'
 import {
   type ReceiptPaymentType,
   type Supplier,
   type Ingredient,
   type FinancialAccount,
+  type Warehouse,
 } from '@/lib/types'
-import { fetchSuppliers, fetchIngredients, createReceipt, createSupplier, createIngredient, fetchFinancialAccounts } from '@/lib/queries'
+import { fetchSuppliers, fetchIngredients, createReceipt, createSupplier, createIngredient, fetchFinancialAccounts, fetchWarehouses } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import {
   Dialog,
   DialogContent,
@@ -49,7 +52,7 @@ interface ReceiptLineForm {
   pricePerUnit: number
 }
 
-type CategoryFilter = 'all' | 'food' | 'nonfood'
+type CategoryFilter = 'all' | 'products' | 'purchased' | 'supplies'
 
 // ─── Supplier combobox (same UX as legacy dialog) ──────────────────────────
 // ─── Supplier combobox (same UX as legacy dialog) ──────────────────────────
@@ -179,6 +182,7 @@ export default function NewReceiptPage() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
+  const [warehouses, setWarehouses] = useState<Warehouse[]>([])
   const [loading, setLoading] = useState(true)
 
   const [supplierId, setSupplierId] = useState('')
@@ -190,6 +194,7 @@ export default function NewReceiptPage() {
   const [accountId, setAccountId] = useState('')
 
   const [filter, setFilter] = useState<CategoryFilter>('all')
+  const [catFilter, setCatFilter] = useState<string>('all') // категория товара — чипы под поиском
   const [search, setSearch] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -204,11 +209,12 @@ export default function NewReceiptPage() {
   const [creatingIngredient, setCreatingIngredient] = useState(false)
 
   useEffect(() => {
-    Promise.all([fetchSuppliers(), fetchIngredients(), fetchFinancialAccounts()])
-      .then(([s, i, accs]) => {
+    Promise.all([fetchSuppliers(), fetchIngredients(), fetchFinancialAccounts().then(selectableAccounts), fetchWarehouses()])
+      .then(([s, i, accs, whs]) => {
         setSuppliers(s)
         setIngredients(i)
         setAccounts(accs)
+        setWarehouses(whs)
         const defaultAcc = accs.find((a) => a.type === 'cash')?.id || accs[0]?.id || ''
         setAccountId(defaultAcc)
         setLoading(false)
@@ -227,18 +233,43 @@ export default function NewReceiptPage() {
         ? total
         : Math.max(0, dSub(total, paidAmount))
 
+  const warehouseById = useMemo(() => new Map(warehouses.map((w) => [w.id, w])), [warehouses])
+  // Склад товара: по warehouse_id (мультисклад). Не размеченные (legacy NULL) —
+  // фоллбэк по is_food, чтобы товар не пропал из списка.
+  const kindOf = (ing: Ingredient): 'products' | 'purchased' | 'supplies' => {
+    const k = ing.warehouseId ? warehouseById.get(ing.warehouseId)?.kind : undefined
+    if (k === 'products' || k === 'purchased' || k === 'supplies') return k
+    return ing.isFood === false ? 'supplies' : 'products'
+  }
+
   const filteredIngredients = useMemo(() => {
     const q = search.trim().toLowerCase()
     return ingredients.filter((ing) => {
-      if (filter === 'food' && ing.isFood === false) return false
-      if (filter === 'nonfood' && ing.isFood !== false) return false
+      if (filter !== 'all' && kindOf(ing) !== filter) return false
+      if (catFilter !== 'all' && (ing.category || '') !== catFilter) return false
       if (q && !ing.name.toLowerCase().includes(q)) return false
       return true
     })
-  }, [ingredients, filter, search])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredients, filter, catFilter, search, warehouseById])
 
-  const foodCount = ingredients.filter((i) => i.isFood !== false).length
-  const nonFoodCount = ingredients.filter((i) => i.isFood === false).length
+  const countByKind = useMemo(() => {
+    const c: Record<'products' | 'purchased' | 'supplies', number> = { products: 0, purchased: 0, supplies: 0 }
+    for (const i of ingredients) c[kindOf(i)]++
+    return c
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredients, warehouseById])
+
+  // Категории товаров текущего склада — для чипов-фильтров под поиском.
+  const categories = useMemo(() => {
+    const set = new Set<string>()
+    for (const ing of ingredients) {
+      if (filter !== 'all' && kindOf(ing) !== filter) continue
+      if (ing.category) set.add(ing.category)
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b, 'ru'))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ingredients, filter, warehouseById])
 
   function addOrIncrementIngredient(ing: Ingredient) {
     setLines((prev) => {
@@ -329,6 +360,15 @@ export default function NewReceiptPage() {
     lines.every((l) => l.name.trim().length > 0 && l.qty > 0 && l.pricePerUnit >= 0) &&
     ((paymentType !== 'paid' && paymentType !== 'partial') || !!accountId)
 
+  // Почему кнопка «Сохранить» недоступна — показываем прямо на ней (иначе
+  // серая кнопка молчит, и непонятно, чего не хватает).
+  const submitBlockReason =
+    !supplierId ? 'Выберите поставщика'
+    : lines.length === 0 ? 'Добавьте хотя бы одну позицию'
+    : !lines.every((l) => l.name.trim().length > 0 && l.qty > 0 && l.pricePerUnit >= 0) ? 'У позиций проверьте количество и цену'
+    : ((paymentType === 'paid' || paymentType === 'partial') && !accountId) ? 'Выберите счёт списания'
+    : ''
+
   async function handleSubmit() {
     if (!canSubmit || submitting) return
     setSubmitting(true)
@@ -380,15 +420,21 @@ export default function NewReceiptPage() {
           <h1 className="flex-1 text-base md:text-lg font-bold text-foreground truncate">
             Новая накладная
           </h1>
-          <button
-            type="button"
-            onClick={handleSubmit}
-            disabled={!canSubmit || submitting}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
-          >
-            <CheckCircle className="size-4" />
-            {submitting ? 'Сохранение...' : 'Сохранить'}
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              onClick={handleSubmit}
+              disabled={!canSubmit || submitting}
+              title={!canSubmit ? submitBlockReason : undefined}
+              className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              <CheckCircle className="size-4" />
+              {submitting ? 'Сохранение...' : 'Сохранить'}
+            </button>
+            {!canSubmit && submitBlockReason && (
+              <span className="text-xs text-muted-foreground">{submitBlockReason}</span>
+            )}
+          </div>
         </div>
       </div>
 
@@ -424,8 +470,9 @@ export default function NewReceiptPage() {
               {(
                 [
                   { v: 'all', label: 'Все', count: ingredients.length, icon: null },
-                  { v: 'food', label: 'Продукты', count: foodCount, icon: Package },
-                  { v: 'nonfood', label: 'Хозтовары', count: nonFoodCount, icon: Box },
+                  { v: 'products', label: 'Продукты', count: countByKind.products, icon: Package },
+                  { v: 'purchased', label: 'Покупные товары', count: countByKind.purchased, icon: ShoppingCart },
+                  { v: 'supplies', label: 'Хозтовары', count: countByKind.supplies, icon: Box },
                 ] as { v: CategoryFilter; label: string; count: number; icon: typeof Package | null }[]
               ).map((t) => {
                 const active = filter === t.v
@@ -434,7 +481,7 @@ export default function NewReceiptPage() {
                   <button
                     key={t.v}
                     type="button"
-                    onClick={() => setFilter(t.v)}
+                    onClick={() => { setFilter(t.v); setCatFilter('all') }}
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
                       active
                         ? 'bg-primary text-primary-foreground border-primary'
@@ -472,6 +519,40 @@ export default function NewReceiptPage() {
               />
             </div>
 
+            {/* Категории товара — чипы-фильтры под поиском (как склады). */}
+            {categories.length > 1 && (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCatFilter('all')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    catFilter === 'all'
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-card border-border text-foreground hover:bg-muted'
+                  }`}
+                >
+                  Все категории
+                </button>
+                {categories.map((cat) => {
+                  const active = catFilter === cat
+                  return (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => setCatFilter(active ? 'all' : cat)}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                        active
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-card border-border text-foreground hover:bg-muted'
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+
             {/* Ingredient grid */}
             {filteredIngredients.length === 0 ? (
               <div className="py-10 text-center space-y-3">
@@ -491,36 +572,43 @@ export default function NewReceiptPage() {
                 )}
               </div>
             ) : (
-              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
                 {filteredIngredients.map((ing) => {
-                  const inReceipt = lines.some((l) => l.ingredientId === ing.id)
+                  const line = lines.find((l) => l.ingredientId === ing.id)
+                  const inReceipt = !!line
                   return (
                     <button
                       key={ing.id}
                       type="button"
                       onClick={() => addOrIncrementIngredient(ing)}
-                      className={`group flex flex-col items-start gap-1.5 p-3 text-left rounded-xl border transition-all ${
+                      className={`group text-left p-3.5 rounded-xl border-2 transition-all relative overflow-hidden flex flex-col justify-between h-28 ${
                         inReceipt
-                          ? 'bg-primary/10 border-primary'
-                          : 'bg-card border-border hover:border-primary/60 hover:bg-muted/40'
+                          ? 'border-primary bg-primary/5 hover:bg-primary/10 shadow-sm'
+                          : 'border-border bg-card hover:border-primary/50 hover:bg-muted/30 hover:shadow-sm'
                       }`}
                     >
-                      <div className="flex items-center gap-1.5 w-full">
-                        {ing.isFood === false ? (
-                          <Box className="size-3.5 text-amber-600 shrink-0" />
-                        ) : (
-                          <Package className="size-3.5 text-emerald-600 shrink-0" />
-                        )}
-                        <span className="text-xs font-semibold text-foreground truncate flex-1">
+                      <div>
+                        <p className="font-semibold text-sm text-foreground leading-tight group-hover:text-primary transition-colors line-clamp-2">
                           {ing.name}
-                        </span>
+                        </p>
                       </div>
-                      <div className="text-[11px] text-muted-foreground">
-                        {formatCurrency(ing.pricePerUnit)} / {ing.unit}
+
+                      <div className="flex items-end justify-between mt-3">
+                        <div>
+                          <p className="text-xs text-muted-foreground">Остаток</p>
+                          <p className={`text-xs font-bold ${ing.qty <= 0 ? 'text-destructive' : 'text-foreground'}`}>
+                            {formatNum(ing.qty)} {ing.unit}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-xs text-muted-foreground">Цена</p>
+                          <p className="text-xs font-bold text-foreground">{formatCurrency(ing.pricePerUnit)}</p>
+                        </div>
                       </div>
+
                       {inReceipt && (
-                        <div className="text-[10px] font-medium text-primary">
-                          Добавлено
+                        <div className="absolute top-2 right-2 bg-primary text-primary-foreground text-[10px] font-bold px-1.5 py-0.5 rounded shadow-sm">
+                          {formatNum(line.qty)} {ing.unit}
                         </div>
                       )}
                     </button>

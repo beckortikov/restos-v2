@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -19,6 +20,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
+	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -139,6 +141,25 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 			}
 			if err := tx.Create(mv).Error; err != nil {
 				return err
+			}
+			// Н10: начальный остаток при создании ингредиента — тот же
+			// экономический смысл, что экран «Начальный остаток»: вырос актив
+			// «Склад», встречно растёт капитал (взнос собственника). Без этой
+			// проводки актив появлялся «из воздуха» и расчётный капитал в Балансе
+			// дрейфовал на стоимость остатка. Категория та же (opening_inventory),
+			// поэтому оба пути агрегируются в одну строку капитала.
+			stockValue := decimal.Normalize(decimal.Mul(initialQty, ing.PricePerUnit))
+			if decimal.IsPositive(stockValue) {
+				eqName := "Взнос собственника — начальный остаток склада"
+				eqCat := "opening_inventory"
+				eqNow := time.Now().UTC()
+				eq := &models.EquityEntry{
+					ID: uuid.NewString(), Name: &eqName, Category: &eqCat,
+					Amount: stockValue, RestaurantID: &rid, CreatedAt: eqNow, UpdatedAt: eqNow,
+				}
+				if err := tx.Create(eq).Error; err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -265,6 +286,24 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 				}
 			}
 		}
+		// Н11: переоценка СТАРОГО остатка при смене цены. Меняя цену 10->100 при
+		// 50 шт, актив «Склад» растёт на 50x90=4500 без встречной записи — расчётный
+		// капитал в Балансе дрейфовал. Проводим на existing.Qty x (новая - старая);
+		// вместе с qty-дельтой (на новой цене) это ровно полный дельта-стоимости.
+		if in.PricePerUnit != nil && !effPrice.Equal(existing.PricePerUnit) && decimal.IsPositive(existing.Qty) {
+			reval := decimal.Normalize(decimal.Mul(existing.Qty, decimal.Sub(effPrice, existing.PricePerUnit)))
+			if !reval.IsZero() {
+				rname := "Переоценка остатка склада"
+				rcat := "stock_revaluation"
+				req := &models.EquityEntry{
+					ID: uuid.NewString(), Name: &rname, Category: &rcat, Amount: reval,
+					RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+				}
+				if err := tx.Create(req).Error; err != nil {
+					return err
+				}
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -378,10 +417,28 @@ type ReceiptsFilter struct {
 	IncludeLines bool
 }
 
+// ReceiptLineWithAvailable — строка накладной + сколько по ней ещё можно
+// вернуть поставщику, В ЕДИНИЦАХ НАКЛАДНОЙ (в них же клиент вводит количество).
+//
+// Считает бэк, а не клиент. Диалог возврата считал это сам и ошибался дважды:
+// не вычитал отменённые возвраты (после сторно занижал доступное и блокировал
+// то, что бэк принимает) и сравнивал остаток склада в единицах СКЛАДА с
+// принятым в единицах НАКЛАДНОЙ (накладная в граммах при складе в кг → «20»
+// вместо 20000). Плюс ради этого он тянул на клиент весь справочник товаров.
+// Правило одно и живёт там же, где guard в CreateReturn.
+type ReceiptLineWithAvailable struct {
+	models.StockReceiptLine
+	Available decimal.Decimal `json:"available_to_return"`
+}
+
 // ReceiptWithLines — DTO для GET /stock/receipts?include=lines.
 type ReceiptWithLines struct {
 	*models.StockReceipt
-	Lines []models.StockReceiptLine `json:"lines"`
+	Lines []ReceiptLineWithAvailable `json:"lines"`
+	// ReturnedTotal — сумма НЕотменённых возвратов поставщику по этой накладной.
+	// UI по нему показывает статус «Возвращено» (полный) / «Возврат части»
+	// (частичный) вместо статуса оплаты.
+	ReturnedTotal decimal.Decimal `json:"returned_total"`
 }
 
 // WriteoffWithLines — аналог для writeoffs.
@@ -438,23 +495,142 @@ func (s *StockReadsService) ListReceiptsWithLines(ctx context.Context, f Receipt
 		Where("receipt_id IN ?", ids).Find(&lines).Error; err != nil {
 		return nil, "", err
 	}
-	byReceipt := make(map[string][]models.StockReceiptLine, len(rows))
+
+	// available_to_return по каждой строке — то же правило, что в guard'е
+	// CreateReturn: min(принято − уже возвращённое, фактический остаток).
+	avail, err := s.availableToReturn(ctx, lines)
+	if err != nil {
+		return nil, "", err
+	}
+
+	byReceipt := make(map[string][]ReceiptLineWithAvailable, len(rows))
 	for _, l := range lines {
 		if l.ReceiptID == nil {
 			continue
 		}
-		byReceipt[*l.ReceiptID] = append(byReceipt[*l.ReceiptID], l)
+		byReceipt[*l.ReceiptID] = append(byReceipt[*l.ReceiptID],
+			ReceiptLineWithAvailable{StockReceiptLine: l, Available: avail[l.ID]})
 	}
+
+	// Сумма НЕотменённых возвратов по каждой накладной — для статуса «Возвращено»/
+	// «Возврат части» в UI. receipt_id IN ids (отскоупленные) — тот же безопасный
+	// tenant-фильтр, что и для строк выше.
+	returnedByReceipt := make(map[string]decimal.Decimal, len(rows))
+	type retRow struct {
+		ReceiptID string          `gorm:"column:receipt_id"`
+		Sum       decimal.Decimal `gorm:"column:sum"`
+	}
+	var retRows []retRow
+	if err := s.r.Raw().WithContext(ctx).
+		Table("stock_returns").
+		Select("receipt_id, COALESCE(SUM(total_amount), 0) AS sum").
+		Where("receipt_id IN ? AND cancelled_at IS NULL", ids).
+		Group("receipt_id").
+		Find(&retRows).Error; err != nil {
+		return nil, "", err
+	}
+	for _, rr := range retRows {
+		returnedByReceipt[rr.ReceiptID] = decimal.Normalize(rr.Sum)
+	}
+
 	out := make([]ReceiptWithLines, len(rows))
 	for i := range rows {
 		r := rows[i]
 		ls := byReceipt[r.ID]
 		if ls == nil {
-			ls = []models.StockReceiptLine{}
+			ls = []ReceiptLineWithAvailable{}
 		}
-		out[i] = ReceiptWithLines{StockReceipt: &r, Lines: ls}
+		out[i] = ReceiptWithLines{StockReceipt: &r, Lines: ls, ReturnedTotal: returnedByReceipt[r.ID]}
 	}
 	return out, next, nil
+}
+
+// availableToReturn — сколько ещё можно вернуть по каждой строке накладной,
+// в единицах накладной. Зеркалит guard'ы CreateReturn:
+//   - «нельзя вернуть больше, чем пришло»: принято − Σ НЕотменённых возвратов;
+//   - «нельзя вернуть то, чего нет на складе»: фактический остаток товара,
+//     переведённый из единиц склада в единицы накладной.
+//
+// Два батч-запроса на всю страницу, без N+1.
+func (s *StockReadsService) availableToReturn(ctx context.Context, lines []models.StockReceiptLine) (map[string]decimal.Decimal, error) {
+	out := make(map[string]decimal.Decimal, len(lines))
+	if len(lines) == 0 {
+		return out, nil
+	}
+	lineIDs := make([]string, 0, len(lines))
+	ingIDs := make([]string, 0, len(lines))
+	seenIng := make(map[string]struct{})
+	for i := range lines {
+		lineIDs = append(lineIDs, lines[i].ID)
+		if id := deref(lines[i].IngredientID); id != "" {
+			if _, ok := seenIng[id]; !ok {
+				seenIng[id] = struct{}{}
+				ingIDs = append(ingIDs, id)
+			}
+		}
+	}
+
+	// Уже возвращённое (отменённые не считаем — товар по ним приехал назад).
+	returned := make(map[string]decimal.Decimal, len(lines))
+	var retRows []struct {
+		ReceiptLineID string          `gorm:"column:receipt_line_id"`
+		Qty           decimal.Decimal `gorm:"column:qty"`
+	}
+	if err := s.r.Raw().WithContext(ctx).Model(&models.StockReturnLine{}).
+		Joins("JOIN stock_returns sr ON sr.id = stock_return_lines.return_id").
+		Select("stock_return_lines.receipt_line_id AS receipt_line_id, COALESCE(SUM(stock_return_lines.qty), 0) AS qty").
+		Where("stock_return_lines.receipt_line_id IN ?", lineIDs).
+		Where("sr.cancelled_at IS NULL").
+		Group("stock_return_lines.receipt_line_id").Scan(&retRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range retRows {
+		returned[r.ReceiptLineID] = r.Qty
+	}
+
+	// Остатки товаров — через ForTenant (кросс-ресторанной утечки быть не должно).
+	ings := make(map[string]models.Ingredient, len(ingIDs))
+	if len(ingIDs) > 0 {
+		scoped, err := s.r.ForTenant(ctx)
+		if err != nil {
+			return nil, err
+		}
+		var rows []models.Ingredient
+		if err := scoped.Where("id IN ?", ingIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, i := range rows {
+			ings[i.ID] = i
+		}
+	}
+
+	for i := range lines {
+		l := lines[i]
+		unreturned := decimal.Sub(l.Qty, returned[l.ID])
+		if decimal.IsNegative(unreturned) {
+			unreturned = decimal.Zero
+		}
+		res := unreturned
+		ing, ok := ings[deref(l.IngredientID)]
+		if !ok {
+			// Товар удалён из справочника (удаление списывает остаток в убыток).
+			// Вернуть его поставщику нельзя — CreateReturn отбивает такую строку,
+			// и форма обязана показывать 0, а не всё принятое количество.
+			out[l.ID] = decimal.Zero
+			continue
+		}
+		// Остаток склада → в единицы накладной: иначе сравниваем килограммы
+		// с граммами (накладная в г при складе в кг занижала доступное в 1000 раз).
+		onHand := units.Convert(ing.Qty, deref(ing.Unit), deref(l.Unit))
+		if onHand.LessThan(res) {
+			res = onHand
+		}
+		if decimal.IsNegative(res) {
+			res = decimal.Zero
+		}
+		out[l.ID] = decimal.Normalize(res)
+	}
+	return out, nil
 }
 
 type WriteoffsFilter struct {
@@ -580,134 +756,6 @@ func (s *StockReadsService) ListCategories(ctx context.Context) ([]string, error
 		return nil, err
 	}
 	return rows, nil
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Receipt confirm
-// ═══════════════════════════════════════════════════════════════════════════
-
-type ConfirmReceiptInput struct {
-	AccountID   *string `json:"account_id,omitempty"`
-	PaymentType *string `json:"payment_type,omitempty"`
-}
-
-// ConfirmReceipt — POST /api/v1/stock/receipts/{id}/confirm.
-//
-// - Если payment_type == "credit" и есть supplier — создаёт Liability на сумму долга.
-// - Если account_id указан — создаёт FinancialOperation (type=expense, category=stock_receipt).
-// - Обновляет confirmed_at/by если ещё нет, и сохраняет payment_type.
-func (s *StockService) ConfirmReceipt(ctx context.Context, id string, in ConfirmReceiptInput) (*models.StockReceipt, error) {
-	rid, err := tenant.MustRestaurantID(ctx)
-	if err != nil {
-		return nil, err
-	}
-	actor, _ := audit.ActorFromContext(ctx)
-	now := time.Now().UTC()
-
-	var result *models.StockReceipt
-	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
-		tx := tr.Raw().WithContext(ctx)
-		var receipt models.StockReceipt
-		if err := tx.Where("restaurant_id = ? AND id = ?", rid, id).First(&receipt).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return apperrors.ErrNotFound
-			}
-			return err
-		}
-		updates := map[string]any{"updated_at": now}
-		if in.PaymentType != nil && *in.PaymentType != "" {
-			updates["payment_type"] = *in.PaymentType
-			if *in.PaymentType == "paid" {
-				updates["paid_amount"] = receipt.TotalAmount
-				updates["debt_amount"] = decimal.Zero
-			}
-		}
-		if receipt.ConfirmedAt == nil {
-			updates["confirmed_at"] = now
-			updates["confirmed_by"] = actor.UserID
-		}
-		if err := tx.Model(&receipt).Updates(updates).Error; err != nil {
-			return err
-		}
-		// Эффективный payment_type для side-effects.
-		effPT := ""
-		if in.PaymentType != nil {
-			effPT = *in.PaymentType
-		} else if receipt.PaymentType != nil {
-			effPT = *receipt.PaymentType
-		}
-
-		// Liability для credit.
-		if effPT == "credit" && decimal.IsPositive(receipt.TotalAmount) {
-			name := "Долг поставщику"
-			if receipt.SupplierName != nil && *receipt.SupplierName != "" {
-				name = "Долг: " + *receipt.SupplierName
-			}
-			category := "supplier_debt"
-			ridStr := rid
-			ref := "stock_receipt:" + receipt.ID
-			lia := &models.Liability{
-				ID:              uuid.NewString(),
-				Name:            &name,
-				Category:        &category,
-				TotalAmount:     receipt.TotalAmount,
-				PaidAmount:      decimal.Zero,
-				RemainingAmount: receipt.TotalAmount,
-				Creditor:        receipt.SupplierName,
-				DueDate:         receipt.DueDate,
-				Note:            &ref,
-				RestaurantID:    &ridStr,
-				CreatedAt:       now,
-				UpdatedAt:       now,
-			}
-			if err := tx.Create(lia).Error; err != nil {
-				return err
-			}
-		}
-
-		// FinancialOperation если account_id указан (оплачено наличкой/со счёта).
-		if in.AccountID != nil && *in.AccountID != "" && decimal.IsPositive(receipt.TotalAmount) {
-			opType := "expense"
-			category := "stock_receipt"
-			activity := "operational"
-			date := now.Format("2006-01-02")
-			desc := "stock_receipt:" + receipt.ID
-			ridStr := rid
-			accID := *in.AccountID
-			isAuto := true
-			op := &models.FinancialOperation{
-				ID:           uuid.NewString(),
-				Type:         &opType,
-				Amount:       receipt.TotalAmount,
-				Category:     &category,
-				AccountID:    &accID,
-				Activity:     &activity,
-				Date:         &date,
-				Description:  &desc,
-				Counterparty: receipt.SupplierName,
-				IsAuto:       &isAuto,
-				SourceRef:    &desc,
-				RestaurantID: &ridStr,
-				CreatedAt:    now,
-				UpdatedAt:    now,
-			}
-			if err := tx.Create(op).Error; err != nil {
-				return err
-			}
-		}
-
-		// Reload.
-		var refreshed models.StockReceipt
-		if err := tx.Where("id = ?", id).First(&refreshed).Error; err != nil {
-			return err
-		}
-		result = &refreshed
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -840,6 +888,9 @@ func (s *SupplyExpensesService) List(ctx context.Context, f SupplyExpensesFilter
 
 // Create — POST /api/v1/supply-expenses. Создаёт запись и StockMovement -qty.
 func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInput) (*models.SupplyExpense, error) {
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -875,12 +926,25 @@ func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInpu
 		unit = ing.Unit
 	}
 
+	// Н7: количество для движения — в единице склада (симметрично приёмке).
+	// Раньше движение писалось в единице строки: «500 г» при складе в кг
+	// денормализовало остаток как −500 кг.
+	stockUnit := deref(ing.Unit)
+	stockQty := units.Convert(qty, deref(unit), stockUnit)
+	mvUnit := unit
+	if stockUnit != "" {
+		mvUnit = &stockUnit
+	}
+	// Н8: стоимость фиксируем сейчас = складское_кол-во × текущая цена.
+	cost := decimal.Normalize(decimal.Mul(stockQty, ing.PricePerUnit))
+
 	exp := &models.SupplyExpense{
 		ID:             uuid.NewString(),
 		IngredientID:   in.IngredientID,
 		IngredientName: &ingName,
 		Qty:            qty,
 		Unit:           unit,
+		Cost:           cost,
 		Reason:         in.Reason,
 		IssuedTo:       in.IssuedTo,
 		Note:           in.Note,
@@ -891,6 +955,36 @@ func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInpu
 
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
+
+		// Флаг ресторана «📦 Хозтовары: разрешить минус». Выключен → выдать
+		// больше, чем на складе, нельзя. До v3.16.90 флаг НИГДЕ не читался: он
+		// писался в настройках и молча ничего не делал, то есть тумблер обещал
+		// владельцу контроль, которого не было. Default true — у тех, кто его не
+		// трогал, поведение не меняется; проверка включается только тем, кто
+		// осознанно выключил.
+		//
+		// Читаем остаток под замком в транзакции: без FOR UPDATE две параллельные
+		// выдачи прочитают один остаток и обе пройдут проверку.
+		var allowNeg bool
+		if err := tx.Model(&models.Restaurant{}).
+			Select("COALESCE(supply_allow_negative, true)").
+			Where("id = ?", rid).Scan(&allowNeg).Error; err != nil {
+			return err
+		}
+		if !allowNeg {
+			var locked models.Ingredient
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *in.IngredientID).
+				First(&locked).Error; err != nil {
+				return err
+			}
+			stockQty := units.Convert(qty, deref(unit), deref(locked.Unit))
+			if stockQty.GreaterThan(locked.Qty) {
+				return apperrors.Wrap("CONFLICT",
+					"на складе недостаточно: "+ingName+", остаток "+locked.Qty.String(), nil)
+			}
+		}
+
 		if err := tx.Create(exp).Error; err != nil {
 			return err
 		}
@@ -902,8 +996,8 @@ func (s *SupplyExpensesService) Create(ctx context.Context, in SupplyExpenseInpu
 			IngredientID:   in.IngredientID,
 			IngredientName: &ingName,
 			Description:    &desc,
-			Qty:            qty.Neg(),
-			Unit:           unit,
+			Qty:            stockQty.Neg(),
+			Unit:           mvUnit,
 			RestaurantID:   &rid,
 			CreatedAt:      now,
 		}

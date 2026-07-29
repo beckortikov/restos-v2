@@ -290,32 +290,54 @@ export async function updateMenuItem(id: string, data: Partial<{
 
   // Для покупного техкарту строит бэк — фронт её не трогает.
   if (data.techCard && !data.isPurchased) {
-    try {
-      const cur: any = await unwrap(api.GET('/api/v1/menu/tech-cards', { params: { query: { menu_item_id: id } } }))
-      const existing: Record<string, unknown>[] = cur?.data ?? []
-      for (const line of existing) {
-        const lid = line.id as string | undefined
-        if (lid) {
-          try { await unwrap(api.DELETE('/api/v1/menu/tech-cards/{id}', { params: { path: { id: lid } } })) } catch {}
-        }
-      }
-    } catch {}
-
-    const validTechLines = data.techCard.filter(l => l.ingredientId || l.semiId)
-    for (const l of validTechLines) {
-      await unwrap(api.POST('/api/v1/menu/tech-cards', {
-        body: {
-          menu_item_id: id,
-          ingredient_id: l.ingredientId || null,
-          semi_type_id: l.semiId || null,
-          name: l.name,
-          qty: String(l.qty),
-          unit: l.unit,
-        } as any,
-      }))
-    }
+    await replaceTechCardLines(id, data.techCard.filter(l => l.ingredientId || l.semiId))
   }
   logAction('menu.edit', 'menu_item', id, data.name)
+}
+
+// ─── Тех. карта варианта/продукта (menu_item_id — любой SKU) ──────────────
+
+export interface TechCardLineIO {
+  ingredientId?: string
+  semiId?: string
+  name: string
+  qty: number
+  unit: string
+}
+
+export async function fetchTechCardLines(menuItemId: string): Promise<TechCardLineIO[]> {
+  const res: any = await unwrap(api.GET('/api/v1/menu/tech-cards', { params: { query: { menu_item_id: menuItemId } } }))
+  const rows: Record<string, unknown>[] = res?.data ?? []
+  return rows.map(mapTechCardLine)
+}
+
+// replaceTechCardLines — полная замена (delete всех текущих строк + create
+// новых), как и на бэке при sync атрибутов. Используется и для продукта, и
+// для отдельного размерного варианта (menu_item_id = id варианта).
+export async function replaceTechCardLines(menuItemId: string, lines: TechCardLineIO[]): Promise<void> {
+  try {
+    const cur: any = await unwrap(api.GET('/api/v1/menu/tech-cards', { params: { query: { menu_item_id: menuItemId } } }))
+    const existing: Record<string, unknown>[] = cur?.data ?? []
+    for (const line of existing) {
+      const lid = line.id as string | undefined
+      if (lid) {
+        try { await unwrap(api.DELETE('/api/v1/menu/tech-cards/{id}', { params: { path: { id: lid } } })) } catch {}
+      }
+    }
+  } catch {}
+
+  for (const l of lines.filter(l => l.ingredientId || l.semiId)) {
+    await unwrap(api.POST('/api/v1/menu/tech-cards', {
+      body: {
+        menu_item_id: menuItemId,
+        ingredient_id: l.ingredientId || null,
+        semi_type_id: l.semiId || null,
+        name: l.name,
+        qty: String(l.qty),
+        unit: l.unit,
+      } as any,
+    }))
+  }
 }
 
 // ─── Атрибуты и варианты ────────────────────────────────────────────────────
@@ -332,9 +354,11 @@ function mapAttributesState(res: Record<string, unknown>): ProductAttributesStat
     attributes: attrs.map(a => ({
       id: a.id as string,
       name: (a.name as string) ?? '',
+      sizeScaleId: (a.size_scale_id as string | null) ?? undefined,
       values: (Array.isArray(a.values) ? (a.values as Record<string, unknown>[]) : []).map(v => ({
         id: v.id as string,
         label: (v.label as string) ?? '',
+        sizeScaleValueId: (v.size_scale_value_id as string | null) ?? undefined,
       })),
     })),
     variants: variants.map(v => ({
@@ -359,14 +383,17 @@ export async function fetchMenuAttributes(productId: string): Promise<ProductAtt
  */
 export async function syncMenuAttributes(
   productId: string,
-  attributes: { id?: string; name: string; values: { id?: string; label: string }[] }[],
+  attributes: { id?: string; name: string; sizeScaleId?: string; values: { id?: string; label: string }[] }[],
   combos: { labels: string[]; price: number; purchasePrice?: number }[],
 ): Promise<ProductAttributesState> {
   const body = {
     attributes: attributes.map(a => ({
       id: a.id || undefined,
       name: a.name,
-      values: a.values.map(v => ({
+      size_scale_id: a.sizeScaleId || undefined,
+      // Scale-linked (sizeScaleId задан): значения зеркалятся сервером из
+      // шкалы, values обязан быть пустым — см. валидацию на бэке.
+      values: a.sizeScaleId ? [] : a.values.map(v => ({
         id: v.id || undefined,
         label: v.label,
       })),
@@ -459,9 +486,11 @@ function mapMenuAttribute(a: Record<string, unknown>): MenuAttribute {
   return {
     id: a.id as string,
     name: (a.name as string) ?? '',
+    sizeScaleId: (a.size_scale_id as string | null) ?? undefined,
     values: values.map(v => ({
       id: v.id as string,
       label: (v.label as string) ?? '',
+      sizeScaleValueId: (v.size_scale_value_id as string | null) ?? undefined,
     })),
   }
 }
@@ -471,5 +500,24 @@ function mapMenuCategory(c: Record<string, unknown>): MenuCategory {
     id: c.id as string,
     name: c.name as string,
     sortOrder: (c.sort_order as number) ?? 0,
+  }
+}
+
+// ─── Популярность позиций (для сортировки меню по продаваемости, 060) ────────
+
+// fetchMenuPopularity — Map<menuItemId, продано штук> за последние days дней.
+// Пустая мапа при ошибке/нет данных — сортировка тихо падает на алфавит.
+export async function fetchMenuPopularity(days = 30): Promise<Map<string, number>> {
+  try {
+    const r: any = await unwrap(api.GET('/api/v1/menu/popularity', { params: { query: { days } } }))
+    const rows: any[] = r?.data ?? []
+    const map = new Map<string, number>()
+    for (const row of rows) {
+      const id = String(row?.menu_item_id ?? '')
+      if (id) map.set(id, Number(row?.qty ?? 0))
+    }
+    return map
+  } catch {
+    return new Map()
   }
 }

@@ -21,13 +21,26 @@ import { useLocation } from 'react-router-dom'
 // (их ставит react-focus-guards, пока жив хотя бы один модальный слой). Пока они
 // есть — не трогаем, чтобы не пробить блокировку фона у реально открытой модалки.
 
+// hasOpenRadixModal — есть ли в DOM РЕАЛЬНО открытый модальный слой Radix:
+// контент диалога/меню/списка с data-state="open" либо popper-обёртка/оверлей.
+// Пока он есть — блокировка фона легитимна. Проверяем именно data-state="open",
+// а НЕ [data-radix-focus-guard]: edge-guard'ы могут остаться в DOM после закрытия
+// диалога (та же гонка Radix, что оставляет body pointer-events:none) — и тогда
+// «осиротевшую» блокировку было не снять, инпуты оставались мёртвыми (форма
+// «Новая накладная»: поиск поставщика/дата, форма «Новое блюдо»).
+function hasOpenRadixModal(): boolean {
+  return !!document.querySelector(
+    '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"], ' +
+    '[role="menu"][data-state="open"], [role="listbox"][data-state="open"], ' +
+    '[data-radix-popper-content-wrapper]',
+  )
+}
+
 export function unstickBodyPointerEvents() {
   if (typeof document === 'undefined') return
   const body = document.body
   if (body.style.pointerEvents !== 'none') return
-  // Реально открытый модальный слой держит focus-guard'ы. Есть — блокировка
-  // легитимна, выходим. Нет — блокировка осиротела, снимаем.
-  if (document.querySelector('[data-radix-focus-guard]')) return
+  if (hasOpenRadixModal()) return // модалка реально открыта — блокировка нужна
   body.style.pointerEvents = ''
 }
 

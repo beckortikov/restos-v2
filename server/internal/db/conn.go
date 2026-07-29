@@ -90,10 +90,25 @@ func migrateUp(ctx context.Context, sqlDB *sql.DB) error {
 		return fmt.Errorf("goose dialect: %w", err)
 	}
 	goose.SetLogger(gooseZerolog{})
-	// WithAllowMissing: применяем миграции с «дырами» в нумерации без строгой
-	// ошибки. Нужно при слиянии параллельных веток: напр. multi-branch держит
-	// 026–032, а на кассе уже применены 033/034 (KDS/units) — без этой опции
-	// goose падает «found missing migrations before current version».
+	// WithAllowMissing — применять «пропущенные» (out-of-order) миграции вместо
+	// фатального отказа. Нужно для двух сценариев с одним и тем же симптомом:
+	//
+	// 1. Слияние параллельных веток: напр. multi-branch держит 026–032, а на
+	//    кассе уже применены 033/034 (KDS/units) — без этой опции goose падает
+	//    «found missing migrations before current version».
+	//
+	// 2. Реальный инцидент (22.07.2026, касса встала после апдейта): миграция
+	//    057_shift_op_account добавлена в коде ПОЗЖЕ (v3.16.132), чем
+	//    059_salary_worked_days (v3.16.130). На кассах, успевших применить 059
+	//    (goose_db_version=59), новый бинарь с файлом 057 в strict-режиме goose
+	//    падал: «found 1 missing migrations before current version 59: version
+	//    57». Падение на старте → log.Fatal → бесконечный рестарт-луп, касса down.
+	//
+	// AllowMissing заставляет goose ДОприменить пропущенную миграцию (её DDL
+	// идемпотентен — ADD COLUMN IF NOT EXISTS и т.п.), а не отвергать всё разом.
+	// Порядок номеров у таких миграций независим, применение вне очереди
+	// безопасно. Дальше держим номера строго по возрастанию, но защита
+	// остаётся на случай повторения любого из двух сценариев.
 	if err := goose.UpContext(ctx, sqlDB, "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("goose up: %w", err)
 	}

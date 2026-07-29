@@ -182,7 +182,14 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     address: r.address,
     phone: r.phone,
     currency: r.currency || 'TJS',
-    servicePercent: r.service_percent != null ? Number(r.service_percent) : 10,
+    // Дефолт 0, а НЕ 10: отсутствующий процент — это «неизвестно», и молча
+    // начислять гостю 10% по такому поводу нельзя. Ошибка в безопасную
+    // сторону — недосчитать обслуживание заметят, лишние 10% в чеке гостя
+    // заметят хуже и позже.
+    servicePercent: r.service_percent != null ? Number(r.service_percent) : 0,
+    // Порог одобрения скидки: дефолт 10 (прежнее захардкоженное поведение),
+    // если бэк не прислал.
+    discountApprovalThreshold: r.discount_approval_threshold != null ? Number(r.discount_approval_threshold) : 10,
     timezone: r.timezone || 'Asia/Dushanbe',
     enforceStockCheck: r.enforce_stock_check ?? false,
     techCardsEnabled: r.tech_cards_enabled ?? true,
@@ -191,6 +198,12 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     pinLockEnabled: r.pin_lock_enabled ?? false,
     pinLockTimeoutMin: r.pin_lock_timeout_min ?? 5,
     onScreenKeyboardEnabled: r.on_screen_keyboard_enabled ?? false,
+    tablesEnabled: r.tables_enabled ?? true,
+    kitchenOnPay: r.kitchen_on_pay ?? false,
+    posV2Default: r.pos_v2_default ?? false,
+    menuSortBySales: r.menu_sort_by_sales ?? false,
+    deliveryEnabled: r.delivery_enabled ?? false,
+    deliveryContactsRequired: r.delivery_contacts_required ?? true,
     supplyAllowNegative: r.supply_allow_negative ?? true,
     localServerIp: r.local_server_ip ?? undefined,
     licenseKey: r.license_key ?? undefined,
@@ -214,6 +227,8 @@ export function mapUserRow(r: Record<string, any>): User {
     roleDisplay: ROLE_DISPLAY_FULL[r.role as string] ?? r.role,
     restaurantId: r.restaurant_id || '',
     salary: r.salary != null ? Number(r.salary) || 0 : 0,
+    payType: r.pay_type === 'daily' ? 'daily' : 'monthly',
+    dailyRate: r.daily_rate != null ? Number(r.daily_rate) || 0 : 0,
     advance: r.advance != null ? Number(r.advance) || 0 : 0,
     deductions: r.deductions != null ? Number(r.deductions) || 0 : 0,
     position: r.position || undefined,
@@ -260,11 +275,21 @@ export function _mapV4OrderItem(i: Record<string, any>): OrderItem {
 
 export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[]): Order {
   const mappedItems = (items ?? []).map(_mapV4OrderItem)
-  let payments: import('../types').OrderPayment[] = []
-  if (Array.isArray(r.payments)) payments = r.payments
+  // payments приходит как jsonb-массив (или строка, если драйвер отдал текстом).
+  // Элементы — snake_case из БД, а тип OrderPayment — camelCase, поэтому
+  // нормализуем: раньше массив клался сырым, и p.accountName было undefined
+  // при заполненном account_name (счёт оплаты «терялся» по дороге).
+  let rawPayments: any[] = []
+  if (Array.isArray(r.payments)) rawPayments = r.payments
   else if (typeof r.payments === 'string' && r.payments.length > 0) {
-    try { const p = JSON.parse(r.payments); if (Array.isArray(p)) payments = p } catch {}
+    try { const p = JSON.parse(r.payments); if (Array.isArray(p)) rawPayments = p } catch {}
   }
+  const payments: import('../types').OrderPayment[] = rawPayments.map((p: any) => ({
+    method: p.method,
+    amount: Number(p.amount ?? 0),
+    accountId: p.accountId ?? p.account_id ?? '',
+    accountName: p.accountName ?? p.account_name ?? undefined,
+  }))
   return {
     id: r.id,
     orderNumber: r.order_number != null ? Number(r.order_number) : undefined,
@@ -275,6 +300,8 @@ export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[
     cashierId: r.cashier_id ?? undefined,
     paymentMethod: r.payment_method ?? undefined,
     comment: r.comment ?? undefined,
+    deliveryPhone: r.delivery_phone ?? undefined,
+    deliveryAddress: r.delivery_address ?? undefined,
     total: Number(r.total ?? 0),
     // subtotal — бэкендовый Σ price×effectivePortions (единый источник правды).
     subtotal: r.subtotal != null ? Number(r.subtotal) : undefined,

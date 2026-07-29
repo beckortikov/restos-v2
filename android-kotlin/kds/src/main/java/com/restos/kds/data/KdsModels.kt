@@ -44,6 +44,35 @@ data class SetStatusRequest(val status: String)
 @Serializable
 data class CallWaiterResponse(@SerialName("waiter_name") val waiterName: String = "")
 
+/**
+ * Блюдо меню — для экрана стоп-листа кухни. Слепок нужных полей из
+ * /api/v1/menu/items (остальные игнорируются: Json ignoreUnknownKeys).
+ */
+@Serializable
+data class MenuItemDto(
+    val id: String,
+    val name: String? = null,
+    val category: String? = null,
+    val emoji: String? = null,
+    val station: String? = null,
+    // Стоп «галочкой» в управлении меню — кухня его не трогает, только показывает.
+    @SerialName("is_available") val isAvailable: Boolean? = null,
+    // Ручной стоп (в т.ч. поставленный поваром с кухни) — им и управляем.
+    @SerialName("stop_list_override") val stopListOverride: Boolean? = null,
+) {
+    /** Блюдо недоступно для пробития (по любой ручной причине). */
+    val stopped: Boolean get() = stopListOverride == true || isAvailable == false
+}
+
+@Serializable
+data class MenuItemsResponse(
+    val data: List<MenuItemDto> = emptyList(),
+    @SerialName("next_cursor") val nextCursor: String = "",
+)
+
+@Serializable
+data class StopOverrideRequest(val override: Boolean)
+
 @Serializable
 data class StationsResponse(val data: List<String> = emptyList())
 

@@ -31,6 +31,7 @@ import {
 // в @/lib/queries возвращает stale до того, как фоновое обновление
 // допишет новые строки в Dexie (см. cache.ts cachedQuery, stale-while-revalidate).
 import { fetchVoidsForOrder } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
 import { fetchStopList } from '@/lib/queries'
 import { fetchBatchAvailability } from '@/lib/queries/batch_cooking'
 import { V4Error } from '@/lib/api'
@@ -46,12 +47,14 @@ import {
   Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet'
 import { useOrderData } from './use-order-data'
+import { sortMenuItems } from '@/lib/menu-sort'
+import { fetchMenuPopularity } from '@/lib/queries'
 import { useDataSync } from '@/hooks/use-data-sync'
 import type { CartLine, OrderComposerProps, TabInfo } from './types'
 
 const ORDER_TYPE_OPTIONS = [
   { value: 'hall' as const, label: 'Зал', icon: UtensilsCrossed },
-  { value: 'takeaway' as const, label: 'Самовывоз', icon: ShoppingBag },
+  { value: 'takeaway' as const, label: 'С собой', icon: ShoppingBag },
   { value: 'delivery' as const, label: 'Доставка', icon: Truck },
 ]
 
@@ -325,6 +328,14 @@ export function OrderComposer(props: OrderComposerProps) {
   // ровно то, что кассир добавил руками. Видна на любой категории.
   const frequentIds = useFrequent(restaurant?.id ?? '')
 
+  // Продаваемость блюд (060): грузим только при включённом тумблере, иначе
+  // меню сортируется по алфавиту.
+  const [popularity, setPopularity] = useState<Map<string, number>>(new Map())
+  useEffect(() => {
+    if (!restaurant?.menuSortBySales) { setPopularity(new Map()); return }
+    fetchMenuPopularity(30).then(setPopularity).catch(() => {})
+  }, [restaurant?.menuSortBySales])
+
   // Destination state (only used in 'new' mode) — declared before cart so its
   // initialCart can seed useState below.
   const newProps = !isAddMode
@@ -362,6 +373,9 @@ export function OrderComposer(props: OrderComposerProps) {
   const [weightValue, setWeightValue] = useState<number>(0)
   // Продукт с атрибутами, для которого открыт пикер вариантов.
   const [variantProduct, setVariantProduct] = useState<MenuItem | null>(null)
+  // Индекс строки корзины, чей размер/вариант сейчас меняется пикером —
+  // null значит «добавление новой позиции» (обычный addToCart-флоу).
+  const [editingLineIdx, setEditingLineIdx] = useState<number | null>(null)
 
   const [orderType, setOrderType] = useState<OrderType>(newProps?.initialOrderType ?? 'hall')
   const [selectedTableId, setSelectedTableId] = useState<string>(newProps?.initialTableId ?? '')
@@ -587,6 +601,10 @@ export function OrderComposer(props: OrderComposerProps) {
     return map
   }, [menuItems])
 
+  // id → MenuItem, включая варианты (parentId != null) — для резолва «строка
+  // корзины → продукт-родитель» при смене размера на лету (§4.4 спеки).
+  const menuItemsById = useMemo(() => new Map(menuItems.map(m => [m.id, m])), [menuItems])
+
   // Единый предикат «прятать из меню ПОС»: заготовка без готовых порций ИЛИ
   // (нет права create_stopped и блюдо в стопе/недоступно). Применяется во ВСЕХ
   // представлениях меню (сетка drill-down, поиск, избранное, частые), иначе
@@ -628,6 +646,8 @@ export function OrderComposer(props: OrderComposerProps) {
     // Сортировка по имени A-Z (locale-aware). При активном поиске —
     // сначала те, у кого имя НАЧИНАЕТСЯ с запроса, потом остальные;
     // внутри обеих групп — alpha. Без поиска — просто alpha.
+    // При поиске — релевантность (совпадение с начала имени), затем алфавит.
+    // Без поиска — алфавит по умолчанию, хиты вверху при menu_sort_by_sales (060).
     const sorted = q
       ? filtered.slice().sort((a, b) => {
           const ar = a.name.toLowerCase().startsWith(q) ? 0 : 1
@@ -635,9 +655,7 @@ export function OrderComposer(props: OrderComposerProps) {
           if (ar !== br) return ar - br
           return a.name.localeCompare(b.name, undefined, { numeric: true })
         })
-      : filtered.slice().sort((a, b) =>
-          a.name.localeCompare(b.name, undefined, { numeric: true }),
-        )
+      : sortMenuItems(filtered, !!restaurant?.menuSortBySales, popularity)
     // Already-added items pinned to the top, preserving cart order.
     if (cart.length === 0) return sorted
     const cartOrder = new Map(cart.map((l, i) => [l.menuItemId, i]))
@@ -645,7 +663,7 @@ export function OrderComposer(props: OrderComposerProps) {
       .sort((a, b) => (cartOrder.get(a.id)! - cartOrder.get(b.id)!))
     const rest = sorted.filter(i => !cartOrder.has(i.id))
     return [...inCart, ...rest]
-  }, [menuItems, category, deferredSearch, cart, isPosHidden])
+  }, [menuItems, category, deferredSearch, cart, isPosHidden, restaurant?.menuSortBySales, popularity])
 
   const total = dSum(cart.map(lineTotal))
   const totalItems = cart.length
@@ -730,6 +748,19 @@ export function OrderComposer(props: OrderComposerProps) {
     // without manually deleting the previous query.
     setSearch('')
   }, [canOrderStopped, stoppedIds, stopReasons, variantsByParent])
+
+  // Смена размера/варианта у УЖЕ добавленной строки корзины на лету — без
+  // удаления и повторного пробития (спека §4.4). Открывает тот же пикер, что
+  // и добавление новой позиции, но с preselect текущего варианта; onSelect
+  // ниже различает этот режим по editingLineIdx и обновляет строку in-place.
+  const swapLineVariant = useCallback((line: CartLine, idx: number) => {
+    const item = menuItemsById.get(line.menuItemId)
+    if (!item?.parentId) return
+    const product = menuItemsById.get(item.parentId)
+    if (!product) return
+    setEditingLineIdx(idx)
+    setVariantProduct(product)
+  }, [menuItemsById])
 
   const confirmWeight = useCallback((portionQty: number = 1) => {
     if (!weightItem || weightValue <= 0) return
@@ -896,7 +927,7 @@ export function OrderComposer(props: OrderComposerProps) {
           let accId: string | undefined = (shift as { accountId?: string } | null)?.accountId
           let accName: string | undefined = (shift as { accountName?: string } | null)?.accountName
           if (!accId) {
-            const accs = await fetchFinancialAccounts().catch(() => [])
+            const accs = await fetchFinancialAccounts().then(selectableAccounts).catch(() => [])
             const cash = accs.find(a => a.type === 'cash')
             accId = cash?.id
             accName = cash?.name
@@ -1287,13 +1318,22 @@ export function OrderComposer(props: OrderComposerProps) {
           </div>
         ) : cart.map((line, idx) => {
           const isWeight = line.unit !== 'piece'
+          const isVariantLine = !!menuItemsById.get(line.menuItemId)?.parentId
           return (
             <div key={`${line.menuItemId}-${idx}`} className="flex items-center gap-3 bg-card rounded-xl p-3 border border-border">
               <div className="flex-1 min-w-0">
-                <p className="text-base font-medium truncate">
-                  {line.emoji} {line.name}
-                  {isWeight && <span className="text-sm text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
-                </p>
+                {isVariantLine ? (
+                  <button type="button" onClick={() => swapLineVariant(line, idx)} className="text-left w-full active:opacity-70">
+                    <p className="text-base font-medium truncate underline decoration-dotted decoration-muted-foreground/50 underline-offset-4">
+                      {line.emoji} {line.name}
+                    </p>
+                  </button>
+                ) : (
+                  <p className="text-base font-medium truncate">
+                    {line.emoji} {line.name}
+                    {isWeight && <span className="text-sm text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
+                  </p>
+                )}
                 <p className="text-sm text-primary font-semibold">{formatCurrency(lineTotal(line))}</p>
               </div>
               <div className="flex items-center gap-1">
@@ -1346,9 +1386,14 @@ export function OrderComposer(props: OrderComposerProps) {
   // Order type selector (used in desktop right panel + mobile cart)
   function renderOrderTypeSelector(variant: 'mobile' | 'desktop') {
     if (lockDestination) return null
+    // Доставка (052) — только когда включена в настройках ресторана. Уже
+    // созданный заказ-доставку это не прячет: фильтруется лишь выбор типа.
+    const options = restaurant?.deliveryEnabled
+      ? ORDER_TYPE_OPTIONS
+      : ORDER_TYPE_OPTIONS.filter(o => o.value !== 'delivery')
     return (
       <div className={`flex gap-1 bg-muted/50 p-1 rounded-xl ${variant === 'desktop' ? '' : ''}`}>
-        {ORDER_TYPE_OPTIONS.map(opt => {
+        {options.map(opt => {
           const Icon = opt.icon
           return (
             <button key={opt.value}
@@ -1600,6 +1645,7 @@ export function OrderComposer(props: OrderComposerProps) {
   // там — редирект сюда с ?tableId=, и состав заказа открывается уже для стола.
   const renderTopBar = () => {
     const isHall = orderType === 'hall'
+    const deliveryEnabled = restaurant?.deliveryEnabled ?? false
     return (
       <div className="shrink-0 bg-card border-b border-border px-6 py-3 flex items-center gap-4">
         {/* Mode toggle */}
@@ -1631,11 +1677,26 @@ export function OrderComposer(props: OrderComposerProps) {
                 setSelectedTableId('')
               }}
               className={`px-6 py-2.5 rounded-xl text-base font-semibold transition-all ${
-                !isHall ? 'bg-primary text-primary-foreground shadow-md' : 'text-muted-foreground hover:text-foreground'
+                orderType === 'takeaway' ? 'bg-primary text-primary-foreground shadow-md' : 'text-muted-foreground hover:text-foreground'
               }`}
             >
               🥡 С СОБОЙ
             </button>
+            {/* Доставка (052) — третья кнопка, только если включена в настройках.
+                Флоу тот же, что у «С собой»: заказ без стола, без обслуживания. */}
+            {deliveryEnabled && (
+              <button
+                onClick={() => {
+                  setOrderType('delivery')
+                  setSelectedTableId('')
+                }}
+                className={`px-6 py-2.5 rounded-xl text-base font-semibold transition-all ${
+                  orderType === 'delivery' ? 'bg-primary text-primary-foreground shadow-md' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                🛵 ДОСТАВКА
+              </button>
+            )}
           </div>
         ) : null}
 
@@ -2088,14 +2149,23 @@ export function OrderComposer(props: OrderComposerProps) {
             <div className="space-y-2">
               {cart.map((line, idx) => {
                 const isWeight = line.unit !== 'piece'
+                const isVariantLine = !!menuItemsById.get(line.menuItemId)?.parentId
                 return (
                   <div key={`${line.menuItemId}-${idx}`} className="flex items-center gap-2 bg-background rounded-xl p-2.5 border border-border">
                     <span className="text-lg shrink-0">{line.emoji}</span>
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-foreground truncate">
-                        {line.name}
-                        {isWeight && <span className="text-[10px] text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
-                      </p>
+                      {isVariantLine ? (
+                        <button type="button" onClick={() => swapLineVariant(line, idx)} className="text-left w-full active:opacity-70">
+                          <p className="text-xs font-medium text-foreground truncate underline decoration-dotted decoration-muted-foreground/50 underline-offset-4">
+                            {line.name}
+                          </p>
+                        </button>
+                      ) : (
+                        <p className="text-xs font-medium text-foreground truncate">
+                          {line.name}
+                          {isWeight && <span className="text-[10px] text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground">{formatPriceLabel(line.price, line.unit, line.unitSize)}</p>
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0">
@@ -2229,8 +2299,20 @@ export function OrderComposer(props: OrderComposerProps) {
         product={variantProduct}
         variants={variantProduct ? (variantsByParent.get(variantProduct.id) ?? []) : []}
         stoppedIds={stoppedIds}
-        onClose={() => setVariantProduct(null)}
-        onSelect={(v) => { setVariantProduct(null); addToCart(v) }}
+        initialVariantId={editingLineIdx !== null ? cart[editingLineIdx]?.menuItemId : undefined}
+        onClose={() => { setVariantProduct(null); setEditingLineIdx(null) }}
+        onSelect={(v) => {
+          setVariantProduct(null)
+          if (editingLineIdx !== null) {
+            const idx = editingLineIdx
+            setEditingLineIdx(null)
+            setCart(prev => prev.map((l, i) => i === idx
+              ? { ...l, menuItemId: v.id, name: v.name, emoji: v.emoji, price: v.price, cogs: v.cogs }
+              : l))
+            return
+          }
+          addToCart(v)
+        }}
         nested
       />
 
