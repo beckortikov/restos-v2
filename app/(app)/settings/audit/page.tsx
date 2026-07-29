@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useMemo } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { useAuth } from '@/lib/auth-store'
 import { type AuditLogEntry, fetchAuditLog } from '@/lib/queries'
-import { History, Search, User, ShoppingBag, Package, DollarSign, ChefHat, Settings, Filter, Printer, X } from 'lucide-react'
+import { History, Search, User, ShoppingBag, Package, DollarSign, ChefHat, Settings, Filter, Printer, X, ArrowLeftRight } from 'lucide-react'
 
 const ACTION_LABELS: Record<string, string> = {
   'order.create': 'Создал заказ',
@@ -97,6 +97,7 @@ const ENTITY_ICONS: Record<string, React.ReactNode> = {
   equity: <DollarSign className="size-4" />,
   customer: <User className="size-4" />,
   print: <Printer className="size-4" />,
+  stock_transfer: <ArrowLeftRight className="size-4" />,
 }
 
 const ENTITY_COLORS: Record<string, string> = {
@@ -121,6 +122,7 @@ const ENTITY_COLORS: Record<string, string> = {
   equity: 'bg-purple-100 text-purple-600',
   customer: 'bg-blue-100 text-blue-600',
   print: 'bg-cyan-100 text-cyan-600',
+  stock_transfer: 'bg-teal-100 text-teal-600',
 }
 
 const PRINT_STATUS_BADGE: Record<string, string> = {
@@ -140,7 +142,7 @@ type FilterType = 'all' | 'operations' | 'warehouse' | 'finance' | 'settings' | 
 const FILTER_ENTITY_MAP: Record<FilterType, string[]> = {
   all: [],
   operations: ['order', 'table', 'zone', 'reservation', 'shift'],
-  warehouse: ['menu_item', 'ingredient', 'supplier', 'receipt', 'writeoff', 'semi'],
+  warehouse: ['menu_item', 'ingredient', 'supplier', 'receipt', 'writeoff', 'semi', 'stock_transfer'],
   finance: ['finance', 'payroll', 'budget', 'asset', 'liability', 'equity'],
   settings: ['user', 'settings', 'customer'],
   print: ['print'],

@@ -36,6 +36,8 @@ export interface Transfer {
   sentAt?: string | null
   receivedAt?: string | null
   createdAt?: string | null
+  createdBy?: string | null
+  receivedBy?: string | null
   lines: TransferLine[]
 }
 
@@ -62,6 +64,8 @@ function mapTransfer(r: any): Transfer {
     sentAt: r.sent_at,
     receivedAt: r.received_at,
     createdAt: r.created_at,
+    createdBy: r.created_by,
+    receivedBy: r.received_by,
     lines: Array.isArray(r.lines) ? r.lines.map(mapLine) : [],
   }
 }

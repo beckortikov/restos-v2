@@ -11,7 +11,8 @@ import { queryKeys } from '@/lib/query-client'
 import { humanizeError } from '@/lib/errors'
 
 import { Search, Plus, Trash2, X, Check, ArrowRightLeft, ShoppingCart, Pencil, PackageMinus, ChevronRight } from 'lucide-react'
-import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
+import { ManageIngredientDialog, CREATE_NEW_NOMENCLATURE } from '@/components/dialogs/manage-ingredient-dialog'
+import { createNomenclature, linkIngredientNomenclature } from '@/lib/queries/transfers'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 
@@ -73,8 +74,9 @@ export default function InventoryPage() {
     }
   }
 
-  async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; unitWeight?: number; unitWeightUnit?: string; isFood?: boolean }) {
+  async function handleIngredientSubmit(data: { name: string; category: string; unit: string; initialQty?: number; minQty: number; pricePerUnit: number; wastePercent?: number; unitWeight?: number; unitWeightUnit?: string; isFood?: boolean; nomenclatureId?: string; nomenclatureNewName?: string }) {
     try {
+      let ingredientId = editingIngredient?.id ?? ''
       if (editingIngredient) {
         await updateIngredient(editingIngredient.id, {
           name: data.name, category: data.category, min_qty: data.minQty, unit: data.unit,
@@ -90,13 +92,32 @@ export default function InventoryPage() {
         }
         toast.success(data.isFood ? 'Ингредиент обновлён' : 'Хозтовар обновлён')
       } else {
-        await createIngredient({
+        const created = await createIngredient({
           name: data.name, category: data.category, qty: data.initialQty ?? 0, min_qty: data.minQty, unit: data.unit,
           price_per_unit: data.pricePerUnit, waste_percent: data.wastePercent ?? 0,
           unit_weight: data.unitWeight ?? 0, unit_weight_unit: data.unitWeightUnit ?? '', is_food: data.isFood ?? true,
         })
+        ingredientId = created?.id ?? ''
         toast.success('Ингредиент добавлен')
       }
+
+      // Номенклатура сети — необязательно, ошибка здесь не должна откатывать
+      // уже сохранённый ингредиент, поэтому отдельный try/catch с тостом.
+      if (ingredientId && data.nomenclatureId) {
+        try {
+          let nomenclatureId = data.nomenclatureId
+          if (nomenclatureId === CREATE_NEW_NOMENCLATURE) {
+            const name = data.nomenclatureNewName?.trim()
+            if (!name) throw new Error('Введите название для новой записи номенклатуры')
+            const created = await createNomenclature({ name, unit: data.unit || undefined })
+            nomenclatureId = created.id
+          }
+          await linkIngredientNomenclature(ingredientId, nomenclatureId)
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : 'Не удалось привязать номенклатуру сети')
+        }
+      }
+
       reloadStock()
     } catch {
       toast.error('Ошибка при сохранении ингредиента')

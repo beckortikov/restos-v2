@@ -10,9 +10,15 @@ import {
 } from '@/components/ui/dialog'
 import { UNITS, type Ingredient, type StockMovement, type StockMovementType } from '@/lib/types'
 import { fetchIngredientCategories, fetchStockMovements } from '@/lib/queries'
+import { fetchNomenclature, type Nomenclature } from '@/lib/queries/transfers'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { formatTime, formatNum } from '@/lib/helpers'
-import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, History, Undo2 } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, History, Undo2, Network, ArrowLeftRight } from 'lucide-react'
+
+// Сентинел для «создать новую запись номенклатуры» в select ниже — отличим от
+// пустой строки (= не привязан) и от реального uuid существующей записи.
+// Экспортируется — вызывающая страница читает form.nomenclatureId после сабмита.
+export const CREATE_NEW_NOMENCLATURE = '__new__'
 
 // Стиль движений — как в «Истории движений» (warehouse/history), чтобы карточка
 // товара читалась одинаково с общей историей.
@@ -24,6 +30,7 @@ const MOVE_META: Record<StockMovementType, { label: string; color: string; bg: s
   semi:  { label: 'Производство',   color: 'text-blue-600',    bg: 'bg-blue-100 dark:bg-blue-950/40',       Icon: FlaskConical },
   audit: { label: 'Инвентаризация', color: 'text-amber-600',   bg: 'bg-amber-100 dark:bg-amber-950/40',     Icon: ClipboardCheck },
   adj:   { label: 'Корректировка',  color: 'text-muted-foreground', bg: 'bg-muted',                         Icon: SlidersHorizontal },
+  transfer: { label: 'Перемещение', color: 'text-cyan-600',    bg: 'bg-cyan-100 dark:bg-cyan-950/40',       Icon: ArrowLeftRight },
 }
 
 interface IngredientForm {
@@ -37,6 +44,10 @@ interface IngredientForm {
   unitWeight: number
   unitWeightUnit: string
   isFood: boolean
+  // Номенклатура сети (ADR-003): '' = без изменений, uuid существующей записи
+  // = привязать к ней, CREATE_NEW_NOMENCLATURE = создать новую (nomenclatureNewName).
+  nomenclatureId: string
+  nomenclatureNewName: string
 }
 
 // Штучные единицы (нет универсального метрического коэффициента к г/мл).
@@ -68,13 +79,29 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
     unitWeight: 0,
     unitWeightUnit: 'г',
     isFood: true,
+    nomenclatureId: '',
+    nomenclatureNewName: '',
   })
 
   const [categories, setCategories] = useState<string[]>([])
   const [dataLoaded, setDataLoaded] = useState(false)
   const [movements, setMovements] = useState<StockMovement[]>([])
   const [loadingMovements, setLoadingMovements] = useState(false)
+  const [nomenclature, setNomenclature] = useState<Nomenclature[]>([])
+  const [networkAvailable, setNetworkAvailable] = useState(false)
   const isEditing = !!ingredient
+
+  // Ресторан в сети? Определяем реактивно по ответу /nomenclature — отдельного
+  // синхронного флага на фронте нет (см. isNotInNetwork). Не критичный путь:
+  // любая другая ошибка тоже просто скрывает секцию, не блокирует диалог.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    fetchNomenclature()
+      .then((list) => { if (!cancelled) { setNomenclature(list); setNetworkAvailable(true) } })
+      .catch(() => { if (!cancelled) { setNetworkAvailable(false); setNomenclature([]) } })
+    return () => { cancelled = true }
+  }, [open])
 
   // Движения товара (приход → расход/продажа) — грузим при открытии карточки
   // существующего товара. Для нового (create) движений ещё нет.
@@ -142,9 +169,11 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
           unitWeight: ingredient.unitWeight ?? 0,
           unitWeightUnit: ingredient.unitWeightUnit || 'г',
           isFood: ingredient.isFood ?? true,
+          nomenclatureId: ingredient.nomenclatureId ?? '',
+          nomenclatureNewName: '',
         })
       } else {
-        setForm({ name: '', category: '', unit: '', initialQty: 0, minQty: 0, pricePerUnit: 0, wastePercent: 0, unitWeight: 0, unitWeightUnit: 'г', isFood: defaultIsFood })
+        setForm({ name: '', category: '', unit: '', initialQty: 0, minQty: 0, pricePerUnit: 0, wastePercent: 0, unitWeight: 0, unitWeightUnit: 'г', isFood: defaultIsFood, nomenclatureId: '', nomenclatureNewName: '' })
       }
     }
   }, [open, ingredient])
@@ -215,6 +244,42 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
               </select>
             </div>
           </div>
+
+          {networkAvailable && (
+            <div className="space-y-1.5 px-3 py-2.5 rounded-lg border border-border bg-muted/30">
+              <label className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <Network className="size-3.5 text-muted-foreground" /> Номенклатура сети
+              </label>
+              <select
+                value={form.nomenclatureId}
+                onChange={(e) => setForm((p) => ({ ...p, nomenclatureId: e.target.value }))}
+                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              >
+                <option value="">— не привязан —</option>
+                {nomenclature.map((n) => (
+                  <option key={n.id} value={n.id}>{n.name}{n.unit ? ` · ${n.unit}` : ''}</option>
+                ))}
+                <option value={CREATE_NEW_NOMENCLATURE}>+ Создать новую запись…</option>
+              </select>
+              {form.nomenclatureId === CREATE_NEW_NOMENCLATURE && (
+                <div className="space-y-1">
+                  <input
+                    type="text"
+                    value={form.nomenclatureNewName}
+                    onChange={(e) => setForm((p) => ({ ...p, nomenclatureNewName: e.target.value }))}
+                    placeholder={form.name || 'Название для каталога сети'}
+                    className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Единица — {form.unit || 'выберите единицу выше'}, как у этого ингредиента.
+                  </p>
+                </div>
+              )}
+              <p className="text-[10px] text-muted-foreground">
+                Позволяет перемещать этот товар между филиалами сети. Необязательно.
+              </p>
+            </div>
+          )}
 
           {/* Food / Supply toggle */}
           <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/30">

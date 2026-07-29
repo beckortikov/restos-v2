@@ -23,6 +23,7 @@ type StockTransfer struct {
 	SentAt           *time.Time `gorm:"column:sent_at" json:"sent_at"`
 	ReceivedAt       *time.Time `gorm:"column:received_at" json:"received_at"`
 	CreatedBy        *string    `gorm:"column:created_by" json:"created_by"`
+	ReceivedBy       *string    `gorm:"column:received_by" json:"received_by"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
 

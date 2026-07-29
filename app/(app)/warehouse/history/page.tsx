@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo, useCallback } from 'react'
 import { formatTime, formatNum } from '@/lib/helpers'
 import type { StockMovementType, StockMovement, Warehouse } from '@/lib/types'
 import { fetchStockMovements, fetchWarehouses } from '@/lib/queries'
-import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, Undo2, Search } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, FlaskConical, ClipboardCheck, SlidersHorizontal, CookingPot, Undo2, Search, ArrowLeftRight } from 'lucide-react'
 import { DateFilter, inRange, type DateFilterValue } from '@/components/warehouse/date-filter'
 import { useDataSync } from '@/hooks/use-data-sync'
 
@@ -16,6 +16,7 @@ const TYPE_META: Record<StockMovementType, { label: string; color: string; bg: s
   semi:  { label: 'Производство',  color: 'text-blue-600',    bg: 'bg-blue-100',    Icon: FlaskConical },
   audit: { label: 'Инвентаризация',color: 'text-amber-600',   bg: 'bg-amber-100',   Icon: ClipboardCheck },
   adj:   { label: 'Корректировка', color: 'text-muted-foreground', bg: 'bg-muted', Icon: SlidersHorizontal },
+  transfer: { label: 'Перемещение', color: 'text-cyan-600',   bg: 'bg-cyan-100',    Icon: ArrowLeftRight },
 }
 
 // Цвет бейджа склада (в тон инвентарю).
@@ -47,6 +48,7 @@ const REF_LABELS: Record<string, string> = {
   inventory: 'Инвентаризация',
   inventory_correction: 'Инвентаризация',
   adj: 'Корректировка',
+  transfer: 'Перемещение между филиалами',
 }
 
 function movementSubtitle(desc: string): string {
@@ -148,7 +150,7 @@ export default function HistoryPage() {
 
       {/* Фильтр по типу движения */}
       <div className="flex flex-wrap gap-2">
-        {(['all', 'in', 'out', 'semi', 'audit', 'adj'] as const).map((t) => {
+        {(['all', 'in', 'out', 'transfer', 'semi', 'audit', 'adj'] as const).map((t) => {
           const meta = t !== 'all' ? TYPE_META[t] : null
           const active = filter === t
           return (

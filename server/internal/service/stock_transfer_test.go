@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -86,7 +87,8 @@ func TestStockTransfer_Flow(t *testing.T) {
 
 	svc := service.NewTransferService(repo.New(gdb))
 	ctxCentral := tenant.WithRestaurant(context.Background(), centralID)
-	ctxOutlet := tenant.WithRestaurant(context.Background(), outletID)
+	outletUserID := uuid.NewString()
+	ctxOutlet := audit.WithActor(tenant.WithRestaurant(context.Background(), outletID), audit.Actor{UserID: outletUserID})
 
 	// ─── Отправка: центральный склад → филиал, 30 кг ─────────────────────
 	tr, err := svc.CreateTransfer(ctxCentral, service.CreateTransferInput{
@@ -138,6 +140,9 @@ func TestStockTransfer_Flow(t *testing.T) {
 	}
 	if got.Status != "received" {
 		t.Errorf("status = %s, want received", got.Status)
+	}
+	if got.ReceivedBy == nil || *got.ReceivedBy != outletUserID {
+		t.Errorf("received_by = %v, want %s", got.ReceivedBy, outletUserID)
 	}
 
 	// У получателя появился ингредиент по nomenclature_id с qty 30.

@@ -412,6 +412,8 @@ const STOCK_MOVEMENT_TYPE_MAP: Record<string, StockMovement['type']> = {
   semi_out: 'semi',
   semi_in: 'semi',
   batch_in: 'batch',
+  transfer_out: 'transfer',
+  transfer_in: 'transfer',
 }
 
 function mapStockMovement(r: Record<string, unknown>): StockMovement {

@@ -307,16 +307,22 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 			}
 		}
 
-		if err := tx.Model(&models.StockTransfer{}).
-			Where("id = ?", transferID).
-			Updates(map[string]any{"status": "received", "received_at": now, "updated_at": now}).Error; err != nil {
+		// load-then-save структуры (а не Model().Updates(map[string]any{...})):
+		// апдейт через голую map лишает generic audit-хук возможности прочитать
+		// entity_id (extractFromValue умеет только struct/slice), и заодно тут
+		// же фиксируем received_by — раньше приём не писал нигде, кто принял.
+		t.Status = "received"
+		t.ReceivedAt = &now
+		t.UpdatedAt = now
+		if actor, ok := audit.ActorFromContext(ctx); ok && actor.UserID != "" {
+			t.ReceivedBy = &actor.UserID
+		}
+		if err := tx.Save(&t).Error; err != nil {
 			return err
 		}
 
 		// sync-дельта: приём (смена статуса) — чтобы центральный узел знал,
 		// что перемещение завершено.
-		t.Status = "received"
-		t.ReceivedAt = &now
 		t.Lines = lines
 		if err := synclog.Record(tx, synclog.Entry{
 			Entity: "stock_transfers", RowID: transferID, Op: "update",
