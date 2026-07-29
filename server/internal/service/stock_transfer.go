@@ -349,6 +349,34 @@ func (s *TransferService) List(ctx context.Context) ([]models.StockTransfer, err
 		Find(&out).Error; err != nil {
 		return nil, err
 	}
+	// Строки — одним батч-запросом на все перемещения списка, а не в Get()
+	// (там на одно перемещение). Без этого List() отдавал Lines=nil, и на
+	// экране «Перемещения» колонка «Позиций» всегда показывала 0 независимо
+	// от реального состава.
+	if len(out) == 0 {
+		return out, nil
+	}
+	ids := make([]string, len(out))
+	for i, t := range out {
+		ids[i] = t.ID
+	}
+	var lines []models.StockTransferLine
+	if err := s.r.Raw().WithContext(ctx).
+		Where("transfer_id IN ?", ids).
+		Order("created_at ASC").
+		Find(&lines).Error; err != nil {
+		return nil, err
+	}
+	byTransfer := make(map[string][]models.StockTransferLine, len(out))
+	for _, l := range lines {
+		if l.TransferID == nil {
+			continue
+		}
+		byTransfer[*l.TransferID] = append(byTransfer[*l.TransferID], l)
+	}
+	for i := range out {
+		out[i].Lines = byTransfer[out[i].ID]
+	}
 	return out, nil
 }
 

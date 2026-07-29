@@ -179,3 +179,81 @@ func TestStockTransfer_Flow(t *testing.T) {
 		}
 	}
 }
+
+// TestStockTransfer_ListIncludesLines — List() обязан отдавать Lines для
+// каждого перемещения, а не только Get() для одного. Раньше List() делал
+// голый Find(&out) без загрузки строк, и экран «Перемещения» показывал
+// «Позиций: 0» для абсолютно любого перемещения независимо от состава —
+// баг нашли вживую (создали перемещение из 1 позиции, список показал 0,
+// хотя stock_transfer_lines в БД содержала строку корректно).
+func TestStockTransfer_ListIncludesLines(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{
+		"sync_log", "stock_transfer_lines", "stock_transfers", "stock_movements",
+		"ingredients", "nomenclature", "restaurants", "company_accounts",
+	} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	accountID := uuid.NewString()
+	if err := gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	centralID, outletID := uuid.NewString(), uuid.NewString()
+	cw, ot := "central_warehouse", "outlet"
+	if err := gdb.Create(&models.Restaurant{ID: centralID, Name: "Склад", AccountID: &accountID, Kind: &cw}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&models.Restaurant{ID: outletID, Name: "Филиал-1", AccountID: &accountID, Kind: &ot}).Error; err != nil {
+		t.Fatal(err)
+	}
+	nomID := uuid.NewString()
+	potato, kg := "Картофель", "kg"
+	if err := gdb.Create(&models.Nomenclature{ID: nomID, AccountID: &accountID, Name: potato, Unit: &kg}).Error; err != nil {
+		t.Fatal(err)
+	}
+	srcIngID := uuid.NewString()
+	if err := gdb.Create(&models.Ingredient{
+		ID: srcIngID, Name: &potato, Unit: &kg, Qty: decimal.MustFromString("10"),
+		PricePerUnit: decimal.MustFromString("15"), RestaurantID: &centralID, NomenclatureID: &nomID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	svc := service.NewTransferService(repo.New(gdb))
+	ctxCentral := tenant.WithRestaurant(context.Background(), centralID)
+	if _, err := svc.CreateTransfer(ctxCentral, service.CreateTransferInput{
+		ToRestaurantID: outletID,
+		Lines:          []service.TransferLineInput{{IngredientID: srcIngID, Qty: "3"}},
+	}); err != nil {
+		t.Fatalf("CreateTransfer: %v", err)
+	}
+
+	// List() — свежий вызов, а не переиспользование объекта из CreateTransfer.
+	list, err := svc.List(ctxCentral)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("list length = %d, want 1", len(list))
+	}
+	if len(list[0].Lines) != 1 {
+		t.Fatalf("list[0].Lines = %d, want 1 (List() must load lines like Get())", len(list[0].Lines))
+	}
+	if !list[0].Lines[0].Qty.Equal(decimal.MustFromString("3")) {
+		t.Errorf("list[0].Lines[0].Qty = %s, want 3", list[0].Lines[0].Qty.String())
+	}
+}
