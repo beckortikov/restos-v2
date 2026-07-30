@@ -10,7 +10,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { type FinancialAccount, type FinancialOperation, finopCategoryLabel } from '@/lib/types'
 import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
 import { selectableAccounts, setFinancialAccountEnabled } from '@/lib/queries/finance'
-import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil } from 'lucide-react'
+import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil, ChevronDown } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -47,6 +47,9 @@ export default function AccountsPage() {
   // перенос остатка). По умолчанию прячем их — показываем лишь дни с приходом/
   // расходом. Тумблер возвращает полный ряд.
   const [hideQuietDays, setHideQuietDays] = useState(true)
+  // «Остаток по дням» по умолчанию свёрнут — большинству нужны только карточки
+  // счетов; таблицу по дням разворачивают по клику.
+  const [showBalanceByDay, setShowBalanceByDay] = useState(false)
 
   // Edit-account dialog state. Открывается по клику на pencil-иконку
   // в карточке счёта. Позволяет поменять name и/или type (cash ↔ bank).
@@ -68,13 +71,27 @@ export default function AccountsPage() {
     setOperations(ops)
   }, [])
 
+  // Обновление истории остатков по дням — карточки показывают closingBalance из
+  // неё (не acc.balance), поэтому после расхода/прихода/перевода её тоже надо
+  // перезапросить, иначе цифра на карточке врёт до смены периода/F5.
+  const reloadBalanceHistory = useCallback(async () => {
+    if (period === 'all') { setBalanceHistory(null); return }
+    const { from, to } = getDateRange(period, customFrom, customTo)
+    if (!from || !to) { setBalanceHistory(null); return }
+    const ymd = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    try { setBalanceHistory(await fetchAccountBalanceHistory(ymd(from), ymd(to))) }
+    catch { /* оставляем прежнее значение — карточка не мигнёт */ }
+  }, [period, customFrom, customTo])
+
   useEffect(() => {
     reloadAccounts().finally(() => setLoading(false))
   }, [reloadAccounts])
 
   // Live-баланс: приёмка, оплата долга, закрытие смены и операции с другого
   // терминала меняют остатки — без этого цифры на карточках врали до F5.
-  useDataSync(['financial_operations', 'financial_accounts', 'cash_shifts'], reloadAccounts)
+  const reloadAll = useCallback(async () => { await Promise.all([reloadAccounts(), reloadBalanceHistory()]) }, [reloadAccounts, reloadBalanceHistory])
+  useDataSync(['financial_operations', 'financial_accounts', 'cash_shifts'], reloadAll)
 
   // Перезапрашиваем при смене периода. Для «всё время» истории по дням не
   // строим — ряд был бы неограниченным, а карточки показывают текущий остаток.
@@ -170,10 +187,11 @@ export default function AccountsPage() {
         description: data.description,
         isAuto: false,
       })
-      // Refresh data from DB
+      // Refresh data from DB (+ история по дням — карточки берут остаток из неё).
       const [accs, ops] = await Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
       setAccounts(accs)
       setOperations(ops)
+      await reloadBalanceHistory()
       toast.success('Операция создана')
     } catch (e) {
       toast.error(humanizeError(e, 'Ошибка создания операции'))
@@ -189,6 +207,7 @@ export default function AccountsPage() {
       const [updatedAccounts, updatedOps] = await Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
       setAccounts(updatedAccounts)
       setOperations(updatedOps)
+      await reloadBalanceHistory()
       toast.success(`Перевод ${transferAmount.toLocaleString()} выполнен`)
     } catch {
       toast.error('Ошибка при переводе')
@@ -337,7 +356,13 @@ export default function AccountsPage() {
           financial_accounts.balance хранит только состояние «сейчас». */}
       {period !== 'all' && (
         <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setShowBalanceByDay(v => !v)}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setShowBalanceByDay(v => !v) } }}
+            className={`flex items-center justify-between gap-3 px-4 py-3 cursor-pointer select-none hover:bg-muted/20 transition-colors ${showBalanceByDay ? 'border-b border-border' : ''}`}
+          >
             <h2 className="text-sm font-semibold text-foreground">
               Остаток по дням
               {selectedAccount !== 'all' && (
@@ -348,19 +373,20 @@ export default function AccountsPage() {
             </h2>
             <div className="flex items-center gap-3">
               {historyLoading && <span className="text-xs text-muted-foreground">Загружаем…</span>}
-              {quietDaysCount > 0 && (
+              {showBalanceByDay && quietDaysCount > 0 && (
                 <button
                   type="button"
-                  onClick={() => setHideQuietDays(v => !v)}
+                  onClick={e => { e.stopPropagation(); setHideQuietDays(v => !v) }}
                   className="text-xs font-medium text-muted-foreground hover:text-foreground transition-colors whitespace-nowrap"
                   title="Дни без прихода и расхода — только перенос остатка"
                 >
                   {hideQuietDays ? `Показать пустые дни (${quietDaysCount})` : 'Скрыть пустые дни'}
                 </button>
               )}
+              <ChevronDown className={`size-4 text-muted-foreground transition-transform ${showBalanceByDay ? 'rotate-180' : ''}`} />
             </div>
           </div>
-          {!balanceHistory || balanceHistory.days.length === 0 ? (
+          {!showBalanceByDay ? null : !balanceHistory || balanceHistory.days.length === 0 ? (
             <p className="p-6 text-center text-sm text-muted-foreground">
               {historyLoading ? '' : 'Нет данных за период'}
             </p>

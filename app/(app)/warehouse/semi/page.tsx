@@ -4,8 +4,9 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { type SemiFinishedType, type SemiFinishedStock, type Ingredient } from '@/lib/types'
-import { fetchSemiTypes, fetchSemiStock, fetchIngredients, produceSemiFab, createSemiType, deleteSemiType } from '@/lib/queries'
-import { Plus, FlaskConical, ChevronDown, ChevronRight, X, Trash2, Search } from 'lucide-react'
+import { fetchSemiTypes, fetchSemiStock, fetchIngredients, produceSemiFab, createSemiType, deleteSemiType, updateSemiType, createWriteoff } from '@/lib/queries'
+import type { WriteoffReason } from '@/lib/types'
+import { Plus, FlaskConical, ChevronDown, ChevronRight, X, Trash2, Search, Pencil, PackageMinus } from 'lucide-react'
 import { toast } from 'sonner'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -118,13 +119,20 @@ export default function SemiPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
 
-  // Create form
+  // Create / edit form (одна форма: editingId=null → создание, иначе правка).
   const [showCreate, setShowCreate] = useState(false)
+  const [editingId, setEditingId] = useState<string | null>(null)
   const [newName, setNewName] = useState('')
   const [newUnit, setNewUnit] = useState('кг')
   const [newYield, setNewYield] = useState(100)
   const [newRecipe, setNewRecipe] = useState<{ ingredientId: string; name: string; qtyPerUnit: number; unit: string }[]>([])
   const [saving, setSaving] = useState(false)
+
+  // Списание произведённого запаса
+  const [writeoffStock, setWriteoffStock] = useState<SemiFinishedStock | null>(null)
+  const [writeoffQty, setWriteoffQty] = useState(0)
+  const [writeoffReason, setWriteoffReason] = useState<WriteoffReason>('spoilage')
+  const [writeoffSaving, setWriteoffSaving] = useState(false)
 
   const reload = () => {
     Promise.all([fetchSemiTypes(), fetchSemiStock(), fetchIngredients()])
@@ -146,25 +154,68 @@ export default function SemiPage() {
     return dMul(inStockUnit, ing.pricePerUnit)
   }
 
-  const handleCreate = async () => {
+  const resetForm = () => {
+    setEditingId(null)
+    setNewName('')
+    setNewUnit('кг')
+    setNewYield(100)
+    setNewRecipe([])
+  }
+  const closeForm = () => { setShowCreate(false); resetForm() }
+  const openCreate = () => { resetForm(); setShowCreate(true) }
+  const startEdit = (type: SemiFinishedType) => {
+    setEditingId(type.id)
+    setNewName(type.name)
+    setNewUnit(type.outputUnit)
+    setNewYield(type.yieldPercent)
+    setNewRecipe(type.recipe.map(r => ({ ingredientId: r.ingredientId, name: r.name, qtyPerUnit: r.qtyPerUnit, unit: r.unit })))
+    setProducing(null)
+    setShowCreate(true)
+  }
+
+  const handleSave = async () => {
     if (!newName.trim()) { toast.error('Введите название'); return }
     if (newRecipe.length === 0) { toast.error('Добавьте хотя бы один ингредиент'); return }
     if (newRecipe.some(l => !l.ingredientId || l.qtyPerUnit <= 0)) { toast.error('Заполните все строки рецепта'); return }
     setSaving(true)
     try {
-      await createSemiType(newName.trim(), newUnit, newRecipe, newYield)
-      toast.success('Полуфабрикат создан')
-      setShowCreate(false)
-      setNewName('')
-      setNewUnit('кг')
-      setNewYield(100)
-      setNewRecipe([])
+      if (editingId) {
+        await updateSemiType(editingId, { name: newName.trim(), outputUnit: newUnit, yieldPercent: newYield, recipe: newRecipe })
+        toast.success('Полуфабрикат обновлён')
+      } else {
+        await createSemiType(newName.trim(), newUnit, newRecipe, newYield)
+        toast.success('Полуфабрикат создан')
+      }
+      closeForm()
       reload()
     } catch (e) {
       console.error(e)
-      toast.error('Ошибка создания')
+      toast.error('Ошибка сохранения')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const handleWriteoff = async () => {
+    if (!writeoffStock) return
+    if (writeoffQty <= 0) { toast.error('Введите количество'); return }
+    if (writeoffQty > writeoffStock.qty) { toast.error(`Нельзя списать больше остатка (${formatNum(writeoffStock.qty)} ${writeoffStock.unit})`); return }
+    setWriteoffSaving(true)
+    try {
+      await createWriteoff({
+        reason: writeoffReason,
+        // Полуфабрикат: строка списания kind='semi', id = id строки запаса.
+        lines: [{ ingredientId: writeoffStock.id, name: writeoffStock.name, qty: writeoffQty, unit: writeoffStock.unit, pricePerUnit: writeoffStock.pricePerUnit, kind: 'semi' }],
+      })
+      toast.success(`Списано ${formatNum(writeoffQty)} ${writeoffStock.unit} — ${writeoffStock.name}`)
+      setWriteoffStock(null)
+      const [newStock] = await Promise.all([fetchSemiStock()])
+      setSemiStock(newStock)
+    } catch (e) {
+      console.error(e)
+      toast.error('Ошибка списания')
+    } finally {
+      setWriteoffSaving(false)
     }
   }
 
@@ -254,6 +305,14 @@ export default function SemiPage() {
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Пр-во: {new Date(s.lastProducedAt).toLocaleDateString('ru')} {new Date(s.lastProducedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}
                 </p>
+                {canDo('writeoffs.create') && s.qty > 0 && (
+                  <button
+                    onClick={() => { setWriteoffStock(s); setWriteoffQty(0); setWriteoffReason('spoilage') }}
+                    className="mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border border-border text-destructive hover:bg-destructive/10 transition-colors"
+                  >
+                    <PackageMinus className="size-3.5" />Списать
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -266,7 +325,7 @@ export default function SemiPage() {
           <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Типы полуфабрикатов</h2>
           {canDo('menu.edit') && (
             <button
-              onClick={() => setShowCreate(true)}
+              onClick={openCreate}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
             >
               <Plus className="size-3.5" />Новый тип
@@ -291,8 +350,8 @@ export default function SemiPage() {
         {showCreate && (
           <div className="bg-card rounded-xl border border-border p-5 mb-4 space-y-4">
             <div className="flex items-center justify-between">
-              <h3 className="font-semibold text-foreground text-sm">Новый полуфабрикат</h3>
-              <button onClick={() => setShowCreate(false)} className="text-muted-foreground hover:text-foreground"><X className="size-4" /></button>
+              <h3 className="font-semibold text-foreground text-sm">{editingId ? 'Редактировать полуфабрикат' : 'Новый полуфабрикат'}</h3>
+              <button onClick={closeForm} className="text-muted-foreground hover:text-foreground"><X className="size-4" /></button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -403,17 +462,17 @@ export default function SemiPage() {
 
             <div className="flex gap-2">
               <button
-                onClick={() => setShowCreate(false)}
+                onClick={closeForm}
                 className="px-5 py-2.5 bg-muted text-foreground rounded-xl text-sm font-medium hover:bg-muted/80 transition-colors"
               >
                 Отмена
               </button>
               <button
-                onClick={handleCreate}
+                onClick={handleSave}
                 disabled={saving}
                 className="flex-1 sm:flex-none px-5 py-2.5 bg-primary text-primary-foreground rounded-xl text-sm font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
               >
-                {saving ? 'Сохранение...' : 'Создать полуфабрикат'}
+                {saving ? 'Сохранение...' : editingId ? 'Сохранить изменения' : 'Создать полуфабрикат'}
               </button>
             </div>
           </div>
@@ -461,6 +520,13 @@ export default function SemiPage() {
                           className="px-3 py-1.5 bg-primary text-primary-foreground rounded-lg text-xs font-medium hover:bg-primary/90 transition-colors"
                         >
                           Произвести
+                        </button>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); startEdit(type) }}
+                          className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
+                          aria-label="Редактировать"
+                        >
+                          <Pencil className="size-3.5" />
                         </button>
                         <button
                           onClick={(e) => { e.stopPropagation(); handleDelete(type.id, type.name) }}
@@ -560,6 +626,60 @@ export default function SemiPage() {
           })}
         </div>
       </div>
+
+      {/* Списание произведённого запаса */}
+      {writeoffStock && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={() => !writeoffSaving && setWriteoffStock(null)}>
+          <div className="bg-card rounded-2xl border border-border w-full max-w-sm p-5 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold text-foreground">Списать полуфабрикат</h3>
+              <button onClick={() => setWriteoffStock(null)} className="text-muted-foreground hover:text-foreground"><X className="size-4" /></button>
+            </div>
+            <div className="flex items-center gap-2 text-sm">
+              <FlaskConical className="size-4 text-primary" />
+              <span className="font-medium text-foreground">{writeoffStock.name}</span>
+              <span className="text-muted-foreground">· остаток {formatNum(writeoffStock.qty)} {writeoffStock.unit}</span>
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground block mb-1">Количество ({writeoffStock.unit})</label>
+              <DecimalInput
+                min={0}
+                value={writeoffQty}
+                onChange={setWriteoffQty}
+                placeholder="0"
+                className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-muted-foreground block mb-1.5">Причина</label>
+              <div className="grid grid-cols-2 gap-2">
+                {([['spoilage', 'Порча'], ['breakage', 'Бой'], ['expired', 'Просрочка'], ['other', 'Другое']] as [WriteoffReason, string][]).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setWriteoffReason(key)}
+                    className={`px-3 py-2 rounded-lg text-sm font-medium border transition-colors ${writeoffReason === key ? 'border-primary bg-primary/10 text-foreground' : 'border-border text-muted-foreground hover:bg-muted'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {writeoffStock.pricePerUnit > 0 && writeoffQty > 0 && (
+              <p className="text-xs text-muted-foreground">Убыток: <span className="font-semibold text-destructive">{formatCurrency(writeoffStock.pricePerUnit * writeoffQty)}</span></p>
+            )}
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setWriteoffStock(null)} className="flex-1 px-4 py-2.5 bg-muted text-foreground rounded-xl text-sm font-medium hover:bg-muted/80 transition-colors">Отмена</button>
+              <button
+                onClick={handleWriteoff}
+                disabled={writeoffSaving || writeoffQty <= 0}
+                className="flex-1 px-4 py-2.5 bg-destructive text-white rounded-xl text-sm font-medium hover:bg-destructive/90 transition-colors disabled:opacity-50"
+              >
+                {writeoffSaving ? 'Списание…' : 'Списать'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
