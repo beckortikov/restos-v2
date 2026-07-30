@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/audit"
@@ -37,17 +38,42 @@ import (
 // только если ТЕКУЩИЙ ресторан — central_warehouse.
 
 // branchDataAvailable — пути, чьи данные ПОЛНОСТЬЮ реплицируются с филиала на
-// central (ADR-003 Фаза 2 — financial_operations; Фаза 5.1 — orders/order_items),
-// поэтому просмотр через X-Branch-Id для них даёт корректные, а не тихо-нулевые
-// цифры. Список сознательно консервативен: аналитика (ABC-меню, продажи и т.п.)
-// тоже читает orders/order_items, но местами джойнит ингредиенты/столы/официантов
+// central (ADR-003 Фаза 2 — financial_operations; Фаза 5.1 — orders/order_items;
+// «Central видит всё» Ф1 — cash_shifts/cash_shift_operations/users), поэтому
+// просмотр через X-Branch-Id для них даёт корректные, а не тихо-нулевые цифры.
+// Список сознательно консервативен: аналитика (ABC-меню, продажи и т.п.) тоже
+// читает orders/order_items, но местами джойнит ингредиенты/столы/официантов
 // (не реплицированы) — не добавляем её сюда, пока это не проверено построчно по
 // каждому хендлеру. Пусто здесь = баннер «недоступно» вместо риска показать
 // правдоподобную, но неполную цифру.
+//
+// Ключи — CHI ROUTE PATTERN (chi.RouteContext(ctx).RoutePattern()), НЕ
+// r.URL.Path: путь с параметром типа /shifts/{id} в реальном запросе всегда
+// содержит подставленный UUID, а не литерал "{id}" — сверка по r.URL.Path
+// никогда бы не совпала (баг, найден при добавлении первых параметризованных
+// путей в Ф1). RoutePattern() уже разрешён на этот момент (проверено —
+// middleware выполняется ПОСЛЕ того, как chi нашёл маршрут) и включает полный
+// префикс /api/v1.
 var branchDataAvailable = map[string]bool{
 	"/api/v1/network/summary":         true,
 	"/api/v1/finance/cashflow":        true,
 	"/api/v1/finance/monthly-revenue": true,
+	// Ф1 (смены + сотрудники) — cash_shifts/cash_shift_operations реплицируются
+	// на каждое сохранение (см. recordShiftSync), ZReport построчно проверен:
+	// зависит только от cash_shifts/cash_shift_operations (свои) + orders/
+	// order_items/financial_operations (уже реплицированы Фаза 2/5.1) + users
+	// (Ф1, имена официантов/кассира) — menu_items/financial_accounts JOIN'ятся
+	// с graceful COALESCE-фолбэком (деградируют до Ф2/Ф5, не ломаются).
+	"/api/v1/shifts":                 true,
+	"/api/v1/shifts/active":          true,
+	"/api/v1/shifts/{id}":            true,
+	"/api/v1/shifts/{id}/zreport":    true,
+	"/api/v1/shifts/{id}/revenue":    true,
+	"/api/v1/shifts/{id}/operations": true,
+	// users — сам по себе не джойнит ничего нереплицированного (имена
+	// официантов/кассиров для смен, фильтр «по сотруднику»).
+	"/api/v1/users":      true,
+	"/api/v1/users/{id}": true,
 }
 
 func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
@@ -106,7 +132,8 @@ func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
 			// Сигнал фронту: просмотр филиала активен, но эти данные сюда ещё не
 			// доезжают — фронт покажет баннер вместо того, чтобы тихо отрисовать
 			// нули как «у филиала так и есть». См. lib/api/v4-typed.ts.
-			if overridden && !branchDataAvailable[r.URL.Path] {
+			pattern := chi.RouteContext(ctx).RoutePattern()
+			if overridden && !branchDataAvailable[pattern] {
 				w.Header().Set("X-Branch-Data-Scope", "unavailable")
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))

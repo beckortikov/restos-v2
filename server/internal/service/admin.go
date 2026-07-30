@@ -168,8 +168,16 @@ func (s *UsersService) Create(ctx context.Context, in UserInput) (*models.User, 
 	if in.Permissions != nil && len(*in.Permissions) > 0 {
 		u.Permissions = datatypes.JSON(*in.Permissions)
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(u).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped.Create(u).Error; err != nil {
+			return err
+		}
+		return recordUserSync(scoped, u, "insert")
+	}); err != nil {
 		return nil, err
 	}
 	return u, nil
@@ -268,8 +276,26 @@ func (s *UsersService) Patch(ctx context.Context, id string, in UserInput) (*mod
 	if in.Permissions != nil && len(*in.Permissions) > 0 {
 		updates["permissions"] = datatypes.JSON(*in.Permissions)
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped2, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		// Свежая строка (updates — только изменённые поля) для payload синка —
+		// PIN/Password вычищаются json:"-" внутри recordUserSync.
+		scoped3, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		var fresh models.User
+		if err := scoped3.Where("id = ?", id).First(&fresh).Error; err != nil {
+			return err
+		}
+		return recordUserSync(scoped3, &fresh, "update")
+	}); err != nil {
 		return nil, err
 	}
 	return s.Get(ctx, id)

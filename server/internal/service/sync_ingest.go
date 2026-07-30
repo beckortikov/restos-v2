@@ -87,6 +87,21 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "cash_shifts":
+			if err := s.applyShift(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "cash_shift_operations":
+			if err := s.applyShiftOp(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "users":
+			if err := s.applyUser(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
@@ -208,6 +223,72 @@ func (s *SyncService) applyOrder(ctx context.Context, e SyncEntry, updateAll boo
 			}
 		}
 		return nil
+	})
+}
+
+// applyShift — upsert кассовой смены из payload (ADR-003 «Central видит всё»,
+// Ф1). В отличие от заказов, синкается на КАЖДОЕ сохранение (см.
+// recordShiftSync) — central должен видеть агрегаты ещё открытой смены.
+func (s *SyncService) applyShift(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var sh models.CashShift
+	if err := json.Unmarshal(e.Payload, &sh); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid cash_shifts payload", err)
+	}
+	if sh.ID == "" {
+		return apperrors.Wrap("VALIDATION", "cash_shifts payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&sh).Error
+	})
+}
+
+// applyShiftOp — upsert/delete операции смены. INSERT приходит через
+// generic-хук (trackedInsert), DELETE — явно из recordShiftOpDeleteSync
+// (DeleteExpense/DeleteOperation на филиале); такой payload пуст, удаляем
+// строго по RowID.
+func (s *SyncService) applyShiftOp(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "cash_shift_operations delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.CashShiftOperation{}).Error
+		})
+	}
+	var op models.CashShiftOperation
+	if err := json.Unmarshal(e.Payload, &op); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid cash_shift_operations payload", err)
+	}
+	if op.ID == "" {
+		return apperrors.Wrap("VALIDATION", "cash_shift_operations payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&op).Error
+	})
+}
+
+// applyUser — upsert сотрудника из payload. PIN/Password несут json:"-" на
+// models.User — payload их не содержит вовсе, поэтому реплицированная строка
+// на central всегда с pin/password = NULL. LoginByPIN фильтрует
+// "pin IS NOT NULL" (см. auth.go) — реплицированный сотрудник филиала физически
+// не может залогиниться на central.
+func (s *SyncService) applyUser(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var u models.User
+	if err := json.Unmarshal(e.Payload, &u); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid users payload", err)
+	}
+	if u.ID == "" {
+		return apperrors.Wrap("VALIDATION", "users payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&u).Error
 	})
 }
 

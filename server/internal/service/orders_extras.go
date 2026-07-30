@@ -259,6 +259,9 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 		if err := tx.Save(&shift).Error; err != nil {
 			return err
 		}
+		if err := recordShiftSync(tx, &shift, "update"); err != nil {
+			return err
+		}
 
 		// 5. Check if all splits paid → close order.
 		if sp.OrderID == nil {
@@ -305,6 +308,13 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
+		// Заказ закрыт (терминальный переход) — реплицируем на central, как и в
+		// /close (см. recordOrderSync). Этот путь (split-оплата) раньше такую
+		// запись не делал — заказы, закрытые через разделение счёта, не попадали
+		// в central вовсе.
+		if err := recordOrderSync(tx, &order, "update"); err != nil {
+			return err
+		}
 
 		// Счётчик заказов смены +1 (на полное закрытие заказа, не на каждый split)
 		// и пересчёт среднего чека — как в /close.
@@ -317,6 +327,9 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 		shift.AvgCheck = decimal.Normalize(decimal.DivRound(shTotal, decimal.FromInt(int64(oc))))
 		shift.UpdatedAt = now
 		if err := tx.Save(&shift).Error; err != nil {
+			return err
+		}
+		if err := recordShiftSync(tx, &shift, "update"); err != nil {
 			return err
 		}
 
@@ -1340,6 +1353,9 @@ func (s *OrdersService) reverseCloseFinancials(tx *gorm.DB, rid string, order *m
 			}
 			shift.UpdatedAt = now
 			if err := tx.Save(&shift).Error; err != nil {
+				return err
+			}
+			if err := recordShiftSync(tx, &shift, "update"); err != nil {
 				return err
 			}
 		case errors.Is(err, gorm.ErrRecordNotFound):

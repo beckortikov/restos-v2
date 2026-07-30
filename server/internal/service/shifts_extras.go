@@ -214,14 +214,21 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 		if res.RowsAffected == 0 {
 			return apperrors.ErrNotFound
 		}
+		if err := recordShiftOpDeleteSync(tx, opID, rid); err != nil {
+			return err
+		}
 
 		if !isOpen {
 			expected, err := computeExpectedCash(tx, shiftID, &shift)
 			if err != nil {
 				return err
 			}
-			if err := tx.Model(&models.CashShift{}).Where("id = ?", shiftID).
-				Updates(map[string]any{"expected_cash": expected, "updated_at": time.Now().UTC()}).Error; err != nil {
+			shift.ExpectedCash = &expected
+			shift.UpdatedAt = time.Now().UTC()
+			if err := tx.Save(&shift).Error; err != nil {
+				return err
+			}
+			if err := recordShiftSync(tx, &shift, "update"); err != nil {
 				return err
 			}
 		}
@@ -325,13 +332,20 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		if res.RowsAffected == 0 {
 			return apperrors.ErrNotFound
 		}
+		if err := recordShiftOpDeleteSync(tx, opID, rid); err != nil {
+			return err
+		}
 		if !isOpen {
 			expected, err := computeExpectedCash(tx, *op.ShiftID, &shift)
 			if err != nil {
 				return err
 			}
-			if err := tx.Model(&models.CashShift{}).Where("id = ?", *op.ShiftID).
-				Updates(map[string]any{"expected_cash": expected, "updated_at": time.Now().UTC()}).Error; err != nil {
+			shift.ExpectedCash = &expected
+			shift.UpdatedAt = time.Now().UTC()
+			if err := tx.Save(&shift).Error; err != nil {
+				return err
+			}
+			if err := recordShiftSync(tx, &shift, "update"); err != nil {
 				return err
 			}
 		}

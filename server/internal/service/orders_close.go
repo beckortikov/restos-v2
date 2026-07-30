@@ -634,6 +634,9 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 			if err := tx.Save(&shift).Error; err != nil {
 				return err
 			}
+			if err := recordShiftSync(tx, &shift, "update"); err != nil {
+				return err
+			}
 		} // end if !alreadyPosted — выручка/кредит/склад/агрегаты постятся ОДИН раз
 
 		// 8. Enqueue receipt print job (fire-and-forget: worker отправит после commit).

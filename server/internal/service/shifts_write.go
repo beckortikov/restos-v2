@@ -105,6 +105,9 @@ func (s *ShiftsService) Open(ctx context.Context, in OpenShiftInput) (*models.Ca
 		if err := tx.Create(newShift).Error; err != nil {
 			return err
 		}
+		if err := recordShiftSync(tx, newShift, "insert"); err != nil {
+			return err
+		}
 		shift = newShift
 		return nil
 	})
@@ -190,6 +193,9 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 		shift.ClosedBy = &closedBy
 		shift.UpdatedAt = now
 		if err := tx.Save(&shift).Error; err != nil {
+			return err
+		}
+		if err := recordShiftSync(tx, &shift, "update"); err != nil {
 			return err
 		}
 		closed = &shift
@@ -335,6 +341,9 @@ func (s *ShiftsService) UpdateAccount(ctx context.Context, shiftID string, in Up
 		shift.AccountID = &in.AccountID
 		shift.UpdatedAt = now
 		if err := tx.Save(&shift).Error; err != nil {
+			return err
+		}
+		if err := recordShiftSync(tx, &shift, "update"); err != nil {
 			return err
 		}
 		updated = &shift

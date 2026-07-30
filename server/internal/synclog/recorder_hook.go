@@ -17,8 +17,14 @@ import (
 // «только нужное»). Финопы — для сводки владельцу (выручка/расходы по сети).
 // Они append-only и создаются структурами, поэтому AfterCreate-хук надёжен
 // (в отличие от Updates(map)). Перемещения пишутся явно в сервисе.
+//
+// cash_shift_operations (Ф1, ADR-003 «Central видит всё») — тоже append-only
+// (создаются только через tx.Create в AddOperation/recordShiftCashOutIfActive),
+// поэтому годятся под тот же generic-хук. Удаление операции (DeleteExpense/
+// DeleteOperation) хук не ловит — там explicit recordShiftOpDeleteSync.
 var trackedInsert = map[string]bool{
-	"financial_operations": true,
+	"financial_operations":  true,
+	"cash_shift_operations": true,
 }
 
 // RegisterRecorder цепляет AfterCreate-хук, пишущий дельты tracked-таблиц в

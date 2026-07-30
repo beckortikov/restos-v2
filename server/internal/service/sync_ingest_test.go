@@ -230,3 +230,200 @@ func TestSyncIngest_Orders(t *testing.T) {
 		t.Errorf("after repeat: orders=%d items=%d, want 1/1", orderCount, itemCount)
 	}
 }
+
+// TestSyncIngest_Shift — приём кассовой смены на central (ADR-003 «Central
+// видит всё», Ф1): upsert, идемпотентный повтор с обновлёнными агрегатами
+// (central должен видеть свежую выручку ЕЩЁ открытой смены — см. recordShiftSync).
+func TestSyncIngest_Shift(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"cash_shifts"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	shiftID := uuid.NewString()
+	openStatus := "open"
+	shift := models.CashShift{
+		ID: shiftID, RestaurantID: &branchID, Status: &openStatus,
+		OpeningBalance: decimal.MustFromString("500"),
+		CashRevenue:    decimal.MustFromString("1200"),
+		CardRevenue:    decimal.MustFromString("800"),
+	}
+	body, _ := json.Marshal(shift)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "cash_shifts", RowID: shiftID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.CashShift
+	if err := gdb.First(&got, "id = ?", shiftID).Error; err != nil {
+		t.Fatalf("shift not upserted: %v", err)
+	}
+	if !got.CashRevenue.Equal(decimal.MustFromString("1200")) {
+		t.Errorf("cash_revenue = %s, want 1200", got.CashRevenue.String())
+	}
+
+	// ─── Смена ещё открыта, но агрегаты подросли (следующий order close) ──
+	shift.CashRevenue = decimal.MustFromString("1550")
+	closedStatus := "closed"
+	shift.Status = &closedStatus
+	body2, _ := json.Marshal(shift)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "cash_shifts", RowID: shiftID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", shiftID)
+	if !got.CashRevenue.Equal(decimal.MustFromString("1550")) {
+		t.Errorf("cash_revenue after upsert = %s, want 1550", got.CashRevenue.String())
+	}
+	if got.Status == nil || *got.Status != "closed" {
+		t.Errorf("status after upsert = %v, want closed", got.Status)
+	}
+	var shiftCount int64
+	gdb.Model(&models.CashShift{}).Where("id = ?", shiftID).Count(&shiftCount)
+	if shiftCount != 1 {
+		t.Errorf("shifts = %d, want 1 (не задвоилось)", shiftCount)
+	}
+}
+
+// TestSyncIngest_ShiftOp — приём операции смены: upsert на insert (генерируется
+// generic-хуком trackedInsert на филиале), явный delete (DeleteExpense/
+// DeleteOperation шлют Op:"delete" без payload — см. recordShiftOpDeleteSync).
+func TestSyncIngest_ShiftOp(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"cash_shift_operations", "cash_shifts"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	shiftID := uuid.NewString()
+	opID := uuid.NewString()
+	typ := "cash_out"
+	op := models.CashShiftOperation{
+		ID: opID, ShiftID: &shiftID, Type: &typ, Amount: decimal.MustFromString("100"),
+	}
+	body, _ := json.Marshal(op)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "cash_shift_operations", RowID: opID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var count int64
+	gdb.Model(&models.CashShiftOperation{}).Where("id = ?", opID).Count(&count)
+	if count != 1 {
+		t.Fatalf("operation not upserted: count = %d", count)
+	}
+
+	// ─── Удаление (DeleteExpense/DeleteOperation на филиале) — payload пуст ─
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "cash_shift_operations", RowID: opID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	gdb.Model(&models.CashShiftOperation{}).Where("id = ?", opID).Count(&count)
+	if count != 0 {
+		t.Errorf("operation still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_User — приём сотрудника на central: upsert, и защитная
+// проверка, что PIN/Password физически отсутствуют в payload (json:"-" на
+// models.User — см. recordUserSync) → на central эти колонки NULL, реплицированный
+// сотрудник филиала не может залогиниться на central (LoginByPIN фильтрует
+// "pin IS NOT NULL", см. auth.go).
+func TestSyncIngest_User(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"users"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	userID := uuid.NewString()
+	name := "Официант Азиз"
+	role := "waiter"
+	// PIN/Password намеренно НЕ в payload'е — так их и не увидит
+	// recordUserSync (json:"-" на models.User), симулируем реальный payload.
+	rawPayload := []byte(`{"id":"` + userID + `","name":"` + name + `","role":"` + role + `","restaurant_id":"` + branchID + `"}`)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "users", RowID: userID, Op: "insert", Payload: rawPayload},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.User
+	if err := gdb.First(&got, "id = ?", userID).Error; err != nil {
+		t.Fatalf("user not upserted: %v", err)
+	}
+	if got.Name == nil || *got.Name != name {
+		t.Errorf("name = %v, want %s", got.Name, name)
+	}
+	if got.PIN != nil {
+		t.Errorf("PIN = %v, want nil (реплицированный сотрудник не должен логиниться на central)", *got.PIN)
+	}
+}
