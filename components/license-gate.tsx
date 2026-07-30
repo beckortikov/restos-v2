@@ -20,15 +20,42 @@ const TG_LINK = 'https://t.me/restos_support' // TODO: реальный кана
 //
 // v2.0.29+: бэкенд блокирует writes при `license_expires_at IS NULL`.
 // Read'ы свободны → этот gate работает на их основе.
+//
+// Транзиентную сетевую осечку (не «лицензия невалидна», а «не достучались
+// до бэка») НЕ считаем блокировкой: ретраим несколько раз, и если бэк так и
+// не ответил — открываем UI как есть (fail-open), а не намертво виснем на
+// экране активации. Backend всё равно независимо блокирует write-эндпоинты,
+// если лицензия реально истекла (см. коммент выше) — фронтовый гейт лишь
+// UX-подсказка, не единственная точка защиты, поэтому fail-open здесь
+// безопасен. Нашли вживую: полноэкранный reload (напр. переключатель
+// филиала) поднимает всплеск параллельных запросов, один из них может
+// транзиентно оборваться — раньше это НАВСЕГДА запирало кассу до
+// следующей полной перезагрузки страницы (а если та же осечка повторялась
+// на реюсе — запирало снова).
+const STATUS_RETRY_ATTEMPTS = 3
+const STATUS_RETRY_BASE_MS = 400
+
 export function LicenseGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
   const [loading, setLoading] = useState(true)
+  const [unreachable, setUnreachable] = useState(false)
 
   useEffect(() => {
     let mounted = true
-    fetchLicenseStatus()
-      .then(s => { if (mounted) { setStatus(s); setLoading(false) } })
-      .catch(() => { if (mounted) setLoading(false) })
+    async function load() {
+      for (let attempt = 1; attempt <= STATUS_RETRY_ATTEMPTS; attempt++) {
+        try {
+          const s = await fetchLicenseStatus()
+          if (mounted) { setStatus(s); setLoading(false) }
+          return
+        } catch {
+          if (attempt === STATUS_RETRY_ATTEMPTS) break
+          await new Promise(r => setTimeout(r, STATUS_RETRY_BASE_MS * attempt))
+        }
+      }
+      if (mounted) { setUnreachable(true); setLoading(false) }
+    }
+    load()
     return () => { mounted = false }
   }, [])
 
@@ -42,11 +69,13 @@ export function LicenseGate({ children }: { children: React.ReactNode }) {
     )
   }
 
-  const blocked = !status
+  const blocked = !unreachable && (
+    !status
     || status.state === 'none'
     || status.state === 'locked'
     || status.state === 'softLocked'
     || status.isBlocked
+  )
 
   if (!blocked) {
     return <>{children}</>

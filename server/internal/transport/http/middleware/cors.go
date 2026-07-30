@@ -53,8 +53,20 @@ func CORS(allowedOrigins []string) func(http.Handler) http.Handler {
 				// ресторана в POS не обновляются вовсе. В Electron и при заходе
 				// по LAN на порт бэка это same-origin и CORS не применяется —
 				// поэтому промах был виден только на vite-dev (:5173).
-				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Requested-With, X-Skip-Auth-Expire")
-				w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id")
+				//
+				// X-Branch-Id (ADR-003 Фаза 4, «смотреть как филиал») — та же
+				// ловушка, найдена вживую на двух параллельных vite-dev (5173+5174):
+				// заголовок отправлялся, preflight проходил (204), а САМ запрос
+				// браузер молча ронял (net::ERR_FAILED) — сам эндпоинт получал 0
+				// байт, фронт видел это как обрыв сети и (до фикса LicenseGate)
+				// намертво вис на экране активации.
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key, X-Requested-With, X-Skip-Auth-Expire, X-Branch-Id")
+				// X-Branch-Data-Scope — ответный заголовок для branchDataScopeMiddleware
+				// (баннер «данные филиала недоступны», см. branch_override.go). Без
+				// Expose-Headers JS в браузере не может прочитать кастомный
+				// response-заголовок кросс-origin — баннер тихо никогда не сработает
+				// в dev, только в same-origin проде.
+				w.Header().Set("Access-Control-Expose-Headers", "X-Request-Id, X-Branch-Data-Scope")
 				w.Header().Set("Access-Control-Max-Age", "600")
 			}
 
