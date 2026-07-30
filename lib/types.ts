@@ -76,6 +76,12 @@ export interface Restaurant {
   lastSeenAt?: string
   appVersion?: string
   createdAt: string
+  // Тип точки в сети (ADR-003/004): 'central_warehouse' | 'outlet' | null
+  // (одиночный ресторан вне сети). Используется ТОЛЬКО для решения «можно ли
+  // отсюда смотреть отчёты за филиалы» (BranchSelector) — у филиала в его
+  // отдельной БД для соседей только заглушки, переключение туда ломает
+  // отчёты/лицензию (см. components/branch-selector.tsx).
+  kind?: 'outlet' | 'central_warehouse' | null
 }
 
 // ─── Interfaces ───────────────────────────────────────────────────────────────

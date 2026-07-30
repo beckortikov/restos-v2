@@ -213,6 +213,7 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     lastSeenAt: r.last_seen_at ?? undefined,
     appVersion: r.app_version ?? undefined,
     createdAt: r.created_at,
+    kind: r.kind ?? null,
   }
 }
 

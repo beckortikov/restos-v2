@@ -111,4 +111,57 @@ func TestBranchOverride(t *testing.T) {
 	if !has(asOther, "Plov") || has(asOther, otherDish) {
 		t.Errorf("cross-network override should be ignored: %v", asOther)
 	}
+
+	// ─── Гвард: owner ФИЛИАЛА не может переключиться на central ──────────
+	// У филиала своя отдельная БД (ADR-003) — в общей тестовой БД у него
+	// нет реальных данных central, только доступ к тем же строкам, что и в
+	// проде выглядели бы заглушками. Override обязан работать ТОЛЬКО с
+	// central_warehouse (нашли вживую: филиал случайно выбрал central и
+	// получил ложный экран активации лицензии через /license/status).
+	branchOwnerName, branchOwnerPin, branchOwnerRole := "Управляющий филиала", "7777", "owner"
+	gdb.Create(&models.User{ID: uuid.NewString(), Name: &branchOwnerName, PIN: &branchOwnerPin, Role: &branchOwnerRole, RestaurantID: &outletID})
+	branchOwnerTok := loginRid(t, f.srv.URL, outletID, "7777")
+
+	asBranchOwner := menuNames(t, f.srv.URL, branchOwnerTok, f.rid)
+	if !has(asBranchOwner, outletDish) || has(asBranchOwner, "Plov") {
+		t.Errorf("branch->central override should be ignored (not central_warehouse): %v", asBranchOwner)
+	}
+
+	// ─── Лицензия НИКОГДА не подменяется через X-Branch-Id ────────────────
+	// central лицензирован (валиден 365 дней), у outlet license_expires_at
+	// нарочно оставлен NULL (как заглушка в реальной cross-node строке).
+	// Even valid central-owner override на outlet не должен утянуть его
+	// пустой лицензионный статус на central-сессию — /license/* исключён
+	// безусловно (см. BranchOverride).
+	future := "now() + interval '365 days'"
+	gdb.Exec("UPDATE restaurants SET license_expires_at = "+future+" WHERE id = ?", f.rid)
+	withoutOverride := licenseState(t, f.srv.URL, ownerTok, "")
+	withOverride := licenseState(t, f.srv.URL, ownerTok, outletID)
+	if withoutOverride != "active" {
+		t.Fatalf("central license state = %q, want active (test setup)", withoutOverride)
+	}
+	if withOverride != withoutOverride {
+		t.Errorf("license/status changed under X-Branch-Id override: without=%q, with=%q (must always reflect the LOGGED-IN restaurant)", withoutOverride, withOverride)
+	}
+}
+
+// licenseState — GET /license/status с опциональным X-Branch-Id, вернуть state.
+func licenseState(t *testing.T, srvURL, tok, branchID string) string {
+	t.Helper()
+	req, _ := http.NewRequest("GET", srvURL+"/api/v1/license/status", nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	if branchID != "" {
+		req.Header.Set("X-Branch-Id", branchID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	var out struct {
+		State string `json:"state"`
+	}
+	_ = json.Unmarshal(b, &out)
+	return out.State
 }
