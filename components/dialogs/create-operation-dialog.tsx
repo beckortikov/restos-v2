@@ -72,7 +72,6 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
     description: '',
     date: today,
   })
-  const [customCategory, setCustomCategory] = useState(false)
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [dbCategories, setDbCategories] = useState<{ name: string; type: string }[]>([])
   const [dataLoaded, setDataLoaded] = useState(false)
@@ -96,7 +95,6 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
         type: 'out', amount: 0, category: '', accountId: '',
         activity: 'operational', description: '', date: today,
       })
-      setCustomCategory(false)
       setSaving(false)
     }
   }, [open])
@@ -109,13 +107,16 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
 
   async function handleSubmit() {
     setSaving(true)
-    // Save custom category to DB if entered manually
-    if (customCategory && form.category.trim()) {
+    // Введённую вручную категорию (нет ни в базовом списке, ни в кастомных)
+    // сохраняем — попадёт в подсказки datalist в след. раз.
+    const typed = form.category.trim()
+    if (typed) {
       const base = form.type === 'in' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
-      if (!base.includes(form.category.trim())) {
+      const known = base.includes(typed) || dbCategories.some(c => c.type === form.type && c.name === typed)
+      if (!known) {
         try {
-          await createCustomCategory(form.category.trim(), form.type as 'in' | 'out')
-          setDbCategories(prev => [...prev, { name: form.category.trim(), type: form.type }])
+          await createCustomCategory(typed, form.type as 'in' | 'out')
+          setDbCategories(prev => [...prev, { name: typed, type: form.type }])
         } catch {}
       }
     }
@@ -172,43 +173,22 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
             />
           </div>
 
-          {/* Category */}
+          {/* Category — свободный ввод + подсказки из списка (можно ввести свою). */}
           <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-foreground">Категория</label>
-              <button
-                type="button"
-                onClick={() => {
-                  setCustomCategory(!customCategory)
-                  setForm((p) => ({ ...p, category: '' }))
-                }}
-                className="text-xs text-primary hover:text-primary/80 transition-colors"
-              >
-                {customCategory ? 'Из списка' : 'Своя'}
-              </button>
-            </div>
-            {customCategory ? (
-              <input
-                type="text"
-                value={form.category}
-                onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-                placeholder="Введите категорию"
-                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
-            ) : (
-              <select
-                value={form.category}
-                onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-              >
-                <option value="">Выберите категорию</option>
-                {categories.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            )}
+            <label className="text-sm font-medium text-foreground">Категория</label>
+            <input
+              type="text"
+              list="op-category-list"
+              value={form.category}
+              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
+              placeholder="Введите или выберите категорию"
+              className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+            <datalist id="op-category-list">
+              {categories.map((c) => (
+                <option key={c} value={c} />
+              ))}
+            </datalist>
             {/* Н9: кассовая закупка не приходует склад — для складского учёта нужна накладная. */}
             {form.type === 'out' && (form.category === 'Закупка продуктов' || form.category === 'Закупка хозтоваров') && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
