@@ -34,14 +34,23 @@ export async function createSemiType(name: string, outputUnit: string, recipe: {
   return data
 }
 
-// updateSemiType — частичный patch (например привязка/отвязка заготовки к
-// значению шкалы размеров). sizeScaleValueId: '' — явная отвязка (SET NULL).
-export async function updateSemiType(id: string, patch: { name?: string; outputUnit?: string; yieldPercent?: number; sizeScaleValueId?: string }) {
-  const body: { name?: string; output_unit?: string; yield_percent?: string; size_scale_value_id?: string } = {}
+// updateSemiType — частичный patch (название/ед./выход/привязка к шкале + полный
+// перезалив рецепта). sizeScaleValueId: '' — явная отвязка (SET NULL). Бэк
+// (PatchType) при переданном recipe удаляет старые строки и создаёт новые.
+export async function updateSemiType(id: string, patch: { name?: string; outputUnit?: string; yieldPercent?: number; sizeScaleValueId?: string; recipe?: { ingredientId: string; name: string; qtyPerUnit: number; unit: string }[] }) {
+  const body: { name?: string; output_unit?: string; yield_percent?: string; size_scale_value_id?: string; recipe?: any[] } = {}
   if (patch.name !== undefined) body.name = patch.name
   if (patch.outputUnit !== undefined) body.output_unit = patch.outputUnit
   if (patch.yieldPercent !== undefined) body.yield_percent = String(patch.yieldPercent)
   if (patch.sizeScaleValueId !== undefined) body.size_scale_value_id = patch.sizeScaleValueId
+  if (patch.recipe !== undefined) {
+    body.recipe = patch.recipe.map(l => ({
+      ingredient_id: l.ingredientId,
+      name: l.name,
+      qty_per_unit: String(l.qtyPerUnit),
+      unit: l.unit,
+    }))
+  }
   const data: any = await unwrap(api.PATCH('/api/v1/semi/types/{id}', { params: { path: { id } }, body }))
   logAction('semi.edit', 'semi', id)
   return data
