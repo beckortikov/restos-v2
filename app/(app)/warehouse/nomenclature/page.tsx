@@ -8,10 +8,17 @@ import {
   type Nomenclature,
 } from '@/lib/queries/transfers'
 import { UNITS, type Ingredient } from '@/lib/types'
-import { Boxes, Plus, Link2, Search, AlertTriangle } from 'lucide-react'
+import { GitMerge, Plus, Link2, Search, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
 
+// Сопоставление товаров — вспомогательный инструмент (Настройки → Филиалы).
+// Сетевой идентификатор (nomenclature) ингредиент получает САМ, при первом
+// перемещении между филиалами (см. CreateTransfer/Receive) — вручную сюда
+// заходить не обязательно. Экран нужен для разбора расхождений: например,
+// один филиал завёл «Мясо», другой — «Мясо говяжье», автосопоставление по
+// точному имени их не связало, и в каталоге оказались две записи вместо
+// одной. Здесь это можно поправить руками.
 export default function NomenclaturePage() {
   const [items, setItems] = useState<Nomenclature[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
@@ -54,7 +61,7 @@ export default function NomenclaturePage() {
     setCreating(true)
     try {
       await createNomenclature({ name: name.trim(), unit: unit || undefined, category: category || undefined })
-      toast.success('Продукт добавлен в каталог сети')
+      toast.success('Запись добавлена в каталог сети')
       setName(''); setUnit(''); setCategory('')
       await reload()
     } catch (e: any) {
@@ -67,10 +74,10 @@ export default function NomenclaturePage() {
   const onLink = async (ingredientId: string, nomenclatureId: string) => {
     try {
       await linkIngredientNomenclature(ingredientId, nomenclatureId)
-      toast.success('Ингредиент привязан')
+      toast.success('Ингредиент сопоставлен')
       await reload()
     } catch (e: any) {
-      toast.error(e?.message ?? 'Не удалось привязать')
+      toast.error(e?.message ?? 'Не удалось сопоставить')
     }
   }
 
@@ -92,10 +99,10 @@ export default function NomenclaturePage() {
     return (
       <div className="p-4 md:p-6 space-y-5 max-w-3xl">
         <div className="flex items-center gap-2">
-          <Boxes className="size-5 text-primary" />
-          <h1 className="text-xl font-bold text-foreground">Номенклатура сети</h1>
+          <GitMerge className="size-5 text-primary" />
+          <h1 className="text-xl font-bold text-foreground">Сопоставление товаров</h1>
         </div>
-        <NotInNetwork what="номенклатуру сети" />
+        <NotInNetwork what="сопоставление товаров" />
       </div>
     )
   }
@@ -103,50 +110,60 @@ export default function NomenclaturePage() {
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-3xl">
       <div className="flex items-center gap-2">
-        <Boxes className="size-5 text-primary" />
-        <h1 className="text-xl font-bold text-foreground">Номенклатура сети</h1>
+        <GitMerge className="size-5 text-primary" />
+        <h1 className="text-xl font-bold text-foreground">Сопоставление товаров</h1>
       </div>
       <p className="text-sm text-muted-foreground">
-        Общий каталог продуктов сети. Привяжите к нему ингредиенты филиалов — тогда их можно перемещать между точками.
+        Ингредиент получает сетевой идентификатор автоматически — при первом перемещении между
+        филиалами. Загляните сюда, если автосопоставление не сработало (например, один филиал завёл
+        «Мясо», другой — «Мясо говяжье», и это разъехалось на две записи каталога) — здесь это можно
+        поправить вручную.
       </p>
 
-      {/* Создать продукт */}
-      <div className="space-y-2 rounded-xl border border-border p-3">
-        <div className="flex items-end gap-2">
-          <div className="flex-1 space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">Название</label>
-            <input value={name} onChange={e => setName(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" placeholder="напр. Мясо говяжье" />
+      {/* Завести запись каталога заранее — редкий случай, обычно не нужен */}
+      <details className="rounded-xl border border-border p-3">
+        <summary className="cursor-pointer text-sm font-medium text-foreground">
+          Завести запись каталога заранее (необязательно)
+        </summary>
+        <div className="mt-3 space-y-2">
+          <div className="flex items-end gap-2">
+            <div className="flex-1 space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Название</label>
+              <input value={name} onChange={e => setName(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm" placeholder="напр. Мясо говяжье" />
+            </div>
+            <div className="w-40 space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Категория</label>
+              <select value={category} onChange={e => setCategory(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                <option value="">Без категории</option>
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div className="w-28 space-y-1">
+              <label className="text-xs font-medium text-muted-foreground">Ед.</label>
+              <select value={unit} onChange={e => setUnit(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
+                <option value="">Выберите ед.</option>
+                {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+            <button onClick={onCreate} disabled={!name.trim() || creating} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
+              <Plus className="size-4" /> Добавить
+            </button>
           </div>
-          <div className="w-40 space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">Категория</label>
-            <select value={category} onChange={e => setCategory(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-              <option value="">Без категории</option>
-              {categories.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-          <div className="w-28 space-y-1">
-            <label className="text-xs font-medium text-muted-foreground">Ед.</label>
-            <select value={unit} onChange={e => setUnit(e.target.value)} className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm">
-              <option value="">Выберите ед.</option>
-              {UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
-          </div>
-          <button onClick={onCreate} disabled={!name.trim() || creating} className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50">
-            <Plus className="size-4" /> Добавить
-          </button>
+          {isDuplicateName && (
+            <p className="flex items-center gap-1.5 text-xs text-amber-600">
+              <AlertTriangle className="size-3.5 shrink-0" /> В каталоге уже есть запись с похожим названием — проверьте, не дубль ли это.
+            </p>
+          )}
         </div>
-        {isDuplicateName && (
-          <p className="flex items-center gap-1.5 text-xs text-amber-600">
-            <AlertTriangle className="size-3.5 shrink-0" /> В каталоге уже есть запись с похожим названием — проверьте, не дубль ли это.
-          </p>
-        )}
-      </div>
+      </details>
 
       {/* Каталог */}
       <div>
-        <h2 className="mb-2 text-sm font-semibold text-foreground">Каталог ({items.length})</h2>
+        <h2 className="mb-2 text-sm font-semibold text-foreground">Каталог сети ({items.length})</h2>
         {items.length === 0 ? (
-          <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">Каталог пуст</div>
+          <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+            Каталог пуст — заполнится сам после первого перемещения между филиалами.
+          </div>
         ) : (
           <div className="flex flex-wrap gap-2">
             {items.map(n => (
@@ -156,15 +173,15 @@ export default function NomenclaturePage() {
         )}
       </div>
 
-      {/* Привязка ингредиентов */}
+      {/* Сопоставление ингредиентов */}
       <div>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
           <h2 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
-            <Link2 className="size-4" /> Привязка ингредиентов
+            <Link2 className="size-4" /> Сопоставление ингредиентов
           </h2>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <input type="checkbox" checked={onlyUnlinked} onChange={e => setOnlyUnlinked(e.target.checked)} className="rounded border-border" />
-            Только непривязанные
+            Только несопоставленные
           </label>
         </div>
         <div className="relative mb-2">
@@ -181,13 +198,13 @@ export default function NomenclaturePage() {
             <thead className="bg-muted/50 text-muted-foreground">
               <tr>
                 <th className="px-3 py-2 text-left font-medium">Ингредиент</th>
-                <th className="px-3 py-2 text-left font-medium">Номенклатура сети</th>
+                <th className="px-3 py-2 text-left font-medium">Запись каталога сети</th>
               </tr>
             </thead>
             <tbody>
               {filteredIngredients.length === 0 && (
                 <tr><td colSpan={2} className="px-3 py-6 text-center text-muted-foreground">
-                  {onlyUnlinked ? 'Все ингредиенты уже привязаны' : 'Ничего не найдено'}
+                  {onlyUnlinked ? 'Все ингредиенты уже сопоставлены' : 'Ничего не найдено'}
                 </td></tr>
               )}
               {filteredIngredients.map(ing => (
@@ -199,7 +216,7 @@ export default function NomenclaturePage() {
                       onChange={e => e.target.value && onLink(ing.id, e.target.value)}
                       className="rounded-lg border border-border bg-background px-2 py-1.5 text-sm"
                     >
-                      <option value="">— не привязан —</option>
+                      <option value="">— не сопоставлен —</option>
                       {items.map(n => (
                         <option key={n.id} value={n.id}>{n.name}</option>
                       ))}

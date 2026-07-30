@@ -185,6 +185,212 @@ func TestStockTransfer_Flow(t *testing.T) {
 	}
 }
 
+// TestStockTransfer_AutoCreatesNomenclature — CreateTransfer больше не требует
+// заранее привязанной nomenclature_id (упрощение UX, ADR-004): ингредиент без
+// неё должен автоматически завести запись в сетевом каталоге (из своего же
+// имени/единицы) и привязаться к ней, а не откатывать перемещение ошибкой.
+// Повторное перемещение того же (уже привязанного) ингредиента не должно
+// создавать вторую запись каталога.
+func TestStockTransfer_AutoCreatesNomenclature(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{
+		"sync_log", "stock_transfer_lines", "stock_transfers", "stock_movements",
+		"ingredients", "nomenclature", "restaurants", "company_accounts",
+	} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	accountID := uuid.NewString()
+	if err := gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	centralID, outletID := uuid.NewString(), uuid.NewString()
+	cw, ot := "central_warehouse", "outlet"
+	if err := gdb.Create(&models.Restaurant{ID: centralID, Name: "Склад", AccountID: &accountID, Kind: &cw}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&models.Restaurant{ID: outletID, Name: "Филиал-1", AccountID: &accountID, Kind: &ot}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Ингредиент источника БЕЗ nomenclature_id — раньше CreateTransfer падал
+	// на нём VALIDATION-ошибкой.
+	srcIngID := uuid.NewString()
+	onion, kg := "Лук репчатый", "kg"
+	if err := gdb.Create(&models.Ingredient{
+		ID: srcIngID, Name: &onion, Unit: &kg, Qty: decimal.MustFromString("50"),
+		PricePerUnit: decimal.MustFromString("8"), RestaurantID: &centralID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	svc := service.NewTransferService(repo.New(gdb))
+	ctxCentral := tenant.WithRestaurant(context.Background(), centralID)
+
+	tr, err := svc.CreateTransfer(ctxCentral, service.CreateTransferInput{
+		ToRestaurantID: outletID,
+		Lines:          []service.TransferLineInput{{IngredientID: srcIngID, Qty: "5"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTransfer should auto-create nomenclature, not fail: %v", err)
+	}
+	if len(tr.Lines) != 1 || tr.Lines[0].NomenclatureID == nil {
+		t.Fatalf("transfer line has no nomenclature_id: %+v", tr.Lines)
+	}
+
+	// Ингредиент источника теперь привязан.
+	var src models.Ingredient
+	if err := gdb.First(&src, "id = ?", srcIngID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if src.NomenclatureID == nil {
+		t.Fatal("source ingredient nomenclature_id was not linked")
+	}
+
+	// Ровно одна запись каталога, с именем/единицей ингредиента.
+	var noms []models.Nomenclature
+	if err := gdb.Where("account_id = ?", accountID).Find(&noms).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(noms) != 1 {
+		t.Fatalf("nomenclature rows = %d, want 1", len(noms))
+	}
+	if noms[0].Name != onion {
+		t.Errorf("nomenclature name = %q, want %q", noms[0].Name, onion)
+	}
+	if noms[0].Unit == nil || *noms[0].Unit != kg {
+		t.Errorf("nomenclature unit = %v, want %q", noms[0].Unit, kg)
+	}
+	if *src.NomenclatureID != noms[0].ID {
+		t.Errorf("ingredient nomenclature_id = %s, want %s", *src.NomenclatureID, noms[0].ID)
+	}
+
+	// ─── Второе перемещение того же ингредиента — без нового дубля каталога ──
+	if _, err := svc.CreateTransfer(ctxCentral, service.CreateTransferInput{
+		ToRestaurantID: outletID,
+		Lines:          []service.TransferLineInput{{IngredientID: srcIngID, Qty: "2"}},
+	}); err != nil {
+		t.Fatalf("second CreateTransfer: %v", err)
+	}
+	var nomCount int64
+	gdb.Model(&models.Nomenclature{}).Where("account_id = ?", accountID).Count(&nomCount)
+	if nomCount != 1 {
+		t.Errorf("nomenclature rows after second transfer = %d, want 1 (no duplicate)", nomCount)
+	}
+}
+
+// TestStockTransfer_ReceiveMatchesExistingUnlinkedIngredient — получатель уже
+// сам завёл у себя ингредиент с тем же именем/единицей (до какого-либо
+// перемещения, nomenclature_id = NULL). Receive() обязан связать его с
+// сетевой номенклатурой и зачислить приход НА НЕГО, а не создавать второй
+// (дублирующий) ингредиент рядом.
+func TestStockTransfer_ReceiveMatchesExistingUnlinkedIngredient(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{
+		"sync_log", "stock_transfer_lines", "stock_transfers", "stock_movements",
+		"ingredients", "nomenclature", "restaurants", "company_accounts",
+	} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	accountID := uuid.NewString()
+	if err := gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	centralID, outletID := uuid.NewString(), uuid.NewString()
+	cw, ot := "central_warehouse", "outlet"
+	if err := gdb.Create(&models.Restaurant{ID: centralID, Name: "Склад", AccountID: &accountID, Kind: &cw}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&models.Restaurant{ID: outletID, Name: "Филиал-1", AccountID: &accountID, Kind: &ot}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	nomID := uuid.NewString()
+	sugar, kg := "Сахар", "kg"
+	if err := gdb.Create(&models.Nomenclature{ID: nomID, AccountID: &accountID, Name: sugar, Unit: &kg}).Error; err != nil {
+		t.Fatal(err)
+	}
+	srcIngID := uuid.NewString()
+	if err := gdb.Create(&models.Ingredient{
+		ID: srcIngID, Name: &sugar, Unit: &kg, Qty: decimal.MustFromString("100"),
+		PricePerUnit: decimal.MustFromString("10"), RestaurantID: &centralID, NomenclatureID: &nomID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Получатель уже независимо завёл «Сахар» (kg) у себя, качество 5, ещё
+	// НЕ привязанный ни к какой номенклатуре.
+	preExistingID := uuid.NewString()
+	if err := gdb.Create(&models.Ingredient{
+		ID: preExistingID, Name: &sugar, Unit: &kg, Qty: decimal.MustFromString("5"),
+		PricePerUnit: decimal.MustFromString("9"), RestaurantID: &outletID,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	svc := service.NewTransferService(repo.New(gdb))
+	ctxCentral := tenant.WithRestaurant(context.Background(), centralID)
+	ctxOutlet := tenant.WithRestaurant(context.Background(), outletID)
+
+	tr, err := svc.CreateTransfer(ctxCentral, service.CreateTransferInput{
+		ToRestaurantID: outletID,
+		Lines:          []service.TransferLineInput{{IngredientID: srcIngID, Qty: "10"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateTransfer: %v", err)
+	}
+	if _, err := svc.Receive(ctxOutlet, tr.ID); err != nil {
+		t.Fatalf("Receive: %v", err)
+	}
+
+	// Ровно один ингредиент «Сахар» у получателя — никакого дубля.
+	var count int64
+	gdb.Model(&models.Ingredient{}).Where("restaurant_id = ? AND name = ?", outletID, sugar).Count(&count)
+	if count != 1 {
+		t.Fatalf("outlet ingredients named %q = %d, want 1 (no duplicate)", sugar, count)
+	}
+
+	// Приход зачислен НА существующий ингредиент: qty 5 + 10 = 15, и он
+	// теперь привязан к сетевой номенклатуре.
+	var dest models.Ingredient
+	if err := gdb.First(&dest, "id = ?", preExistingID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !dest.Qty.Equal(decimal.MustFromString("15")) {
+		t.Errorf("dest qty = %s, want 15 (5 existing + 10 transfer_in)", dest.Qty.String())
+	}
+	if dest.NomenclatureID == nil || *dest.NomenclatureID != nomID {
+		t.Errorf("dest nomenclature_id = %v, want %s (linked, not left NULL)", dest.NomenclatureID, nomID)
+	}
+}
+
 // TestStockTransfer_ListIncludesLines — List() обязан отдавать Lines для
 // каждого перемещения, а не только Get() для одного. Раньше List() делал
 // голый Find(&out) без загрузки строк, и экран «Перемещения» показывал

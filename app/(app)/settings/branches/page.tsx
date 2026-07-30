@@ -1,8 +1,9 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { fetchNetworkSummary, createNetwork, setBranchKind, type BranchSummary } from '@/lib/queries/transfers'
-import { Network, Store, Warehouse, Plus } from 'lucide-react'
+import { Network, Store, Warehouse, Plus, GitMerge, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 
 export default function BranchesSettingsPage() {
@@ -119,6 +120,20 @@ export default function BranchesSettingsPage() {
               </tbody>
             </table>
           </div>
+
+          <Link
+            to="/warehouse/nomenclature"
+            className="flex items-center justify-between rounded-xl border border-border p-3 text-sm hover:bg-muted/50 transition-colors"
+          >
+            <span className="flex items-center gap-2">
+              <GitMerge className="size-4 text-muted-foreground" />
+              <span>
+                <span className="font-medium text-foreground">Сопоставление товаров</span>
+                <span className="block text-xs text-muted-foreground">Разобрать расхождения, если автосопоставление ингредиентов между филиалами не сработало</span>
+              </span>
+            </span>
+            <ChevronRight className="size-4 text-muted-foreground shrink-0" />
+          </Link>
         </>
       )}
     </div>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Plus, Trash2, Timer, Search, X, ArrowLeft, CheckCircle, Archive } from 'lucide-react'
+import { Plus, Trash2, Timer, Search, X, ArrowLeft, CheckCircle, Archive, Network } from 'lucide-react'
 import { DishImageUpload } from '@/components/dish-image'
 import {
   UNITS,
@@ -15,6 +15,8 @@ import {
   type MenuAttribute,
 } from '@/lib/types'
 import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient } from '@/lib/queries'
+import { createNetworkMenuItem, updateNetworkMenuItem } from '@/lib/queries/transfers'
+import { useNetworkStatus } from '@/hooks/use-network-status'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
@@ -187,6 +189,11 @@ export default function EditMenuItemPage() {
   // отдельный fetch проще, чем поднимать состояние наверх через колбэк).
   const [variantAttributes, setVariantAttributes] = useState<MenuAttribute[]>([])
   const [productVariants, setProductVariants] = useState<MenuItem[]>([])
+  // «Блюдо сети»: уже привязанные (masterId) — держим мастер в синхроне на
+  // каждое сохранение, без тумблера (см. handleSubmit). Ещё не привязанные —
+  // тумблер, скрыт для вариативных товаров (NetworkMenuItem без атрибутов).
+  const { inNetwork } = useNetworkStatus()
+  const [isNetworkDish, setIsNetworkDish] = useState(false)
   const [form, setForm] = useState<MenuItemForm>({
     name: '',
     category: '',
@@ -343,6 +350,30 @@ export default function EditMenuItemPage() {
       // создаёт/обновляет складской ингредиент (0 остаток) + 1:1 техкарту +
       // станцию showcase. Фронт лишь передаёт поля формы.
       await updateMenuItem(menuItem.id, form)
+      // Сеть: уже привязанное блюдо держим в синхроне (только наследуемые
+      // поля — цену мастера трогать нельзя, её задаёт каждый филиал у себя,
+      // см. applyNetworkMenu). Ещё не привязанное — создаём мастер по тумблеру.
+      if (menuItem.masterId) {
+        try {
+          await updateNetworkMenuItem(menuItem.masterId, {
+            name: form.name, category: form.category, station: form.station,
+            unit: form.unit, emoji: form.emoji,
+          })
+        } catch {
+          toast.error('Блюдо обновлено локально, но не синхронизировалось с мастером сети')
+        }
+      } else if (isNetworkDish && !hasAttributes && !menuItem.parentId) {
+        try {
+          const master = await createNetworkMenuItem({
+            name: form.name, category: form.category, basePrice: form.price,
+            station: form.station, unit: form.unit, emoji: form.emoji,
+          })
+          await updateMenuItem(menuItem.id, { masterId: master.id })
+          setMenuItem(prev => prev ? { ...prev, masterId: master.id } : prev)
+        } catch {
+          toast.error('Блюдо обновлено, но не удалось сделать его сетевым — привяжите вручную позже')
+        }
+      }
       toast.success('Блюдо обновлено')
       navigate('/warehouse/menu')
     } catch {
@@ -379,6 +410,7 @@ export default function EditMenuItemPage() {
   // Реальные строки техкарты (с ингредиентом/п-ф). ПУСТЫЕ строки-плейсхолдеры
   // (по умолчанию форма держит одну) игнорируем — иначе «Сохранить» залипало
   // серым даже при заполненной техкарте: `.every()` падал на пустой строке.
+  const alreadyLinked = !!menuItem?.masterId
   const realTechLines = form.techCard.filter((l) => l.ingredientId || l.semiId)
   const realTechLinesValid = realTechLines.every((l) => l.qty > 0)
   // Весовое сырьё (на развес) продаётся по весу и НЕ требует техкарты-рецепта.
@@ -643,6 +675,35 @@ export default function EditMenuItemPage() {
                   <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.unit === 'g' ? 'translate-x-5' : ''}`} />
                 </button>
               </div>
+
+              {inNetwork && (
+                alreadyLinked ? (
+                  <div className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-primary/20 bg-primary/5">
+                    <Network className="size-3.5 text-primary shrink-0" />
+                    <div>
+                      <p className="text-xs font-semibold text-primary">Блюдо сети — привязано</p>
+                      <p className="text-[10px] text-muted-foreground">Название/категория/станция/ед. синхронизируются с мастером при сохранении</p>
+                    </div>
+                  </div>
+                ) : !hasAttributes && !menuItem?.parentId ? (
+                  <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
+                    <div className="flex items-start gap-2">
+                      <Network className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                      <div>
+                        <p className="text-xs font-semibold text-foreground">Блюдо сети</p>
+                        <p className="text-[10px] text-muted-foreground">Появится в меню всех филиалов сети</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsNetworkDish(v => !v)}
+                      className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${isNetworkDish ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                    >
+                      <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${isNetworkDish ? 'translate-x-5' : ''}`} />
+                    </button>
+                  </div>
+                ) : null
+              )}
             </div>
 
             {/* Actions for delete/archive */}

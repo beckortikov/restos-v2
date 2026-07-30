@@ -43,6 +43,11 @@ type MenuItemInput struct {
 	PurchasePrice  *string `json:"purchase_price,omitempty"`
 	PurchaseUnit   *string `json:"purchase_unit,omitempty"`
 	PurchaseMinQty *string `json:"purchase_min_qty,omitempty"`
+	// MasterID — привязка к мастер-блюду сети (ADR-004). Пусто ("") снимает
+	// привязку (местное блюдо перестаёт быть источником сетевого мастера).
+	// Проставляется ТОЛЬКО фронтом центрального узла сразу после того, как он
+	// сам создал/обновил NetworkMenuItem — см. app/(app)/warehouse/menu/*.
+	MasterID *string `json:"master_id,omitempty"`
 }
 
 // parsePurchase валидирует поля покупного товара.
@@ -286,6 +291,13 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 	}
 	if in.LowStockThreshold != nil {
 		updates["low_stock_threshold"] = *in.LowStockThreshold
+	}
+	if in.MasterID != nil {
+		if *in.MasterID == "" {
+			updates["master_id"] = nil
+		} else {
+			updates["master_id"] = *in.MasterID
+		}
 	}
 	updates["updated_at"] = time.Now().UTC()
 

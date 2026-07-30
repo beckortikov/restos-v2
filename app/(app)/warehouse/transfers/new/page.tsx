@@ -31,8 +31,6 @@ export default function NewTransferPage() {
 
   // Получатели — все филиалы сети, кроме текущего.
   const receivers = useMemo(() => branches.filter(b => b.id !== restaurantId), [branches, restaurantId])
-  // Перемещать можно только ингредиенты, привязанные к сетевой номенклатуре.
-  const transferable = useMemo(() => ingredients.filter(i => i.nomenclatureId), [ingredients])
 
   const setRow = (i: number, patch: Partial<Row>) =>
     setRows(rs => rs.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
@@ -73,9 +71,9 @@ export default function NewTransferPage() {
           Нет филиалов-получателей. Ресторан должен быть в сети.
         </div>
       )}
-      {transferable.length === 0 && (
+      {ingredients.length === 0 && (
         <div className="rounded-lg bg-amber-500/10 px-3 py-2 text-sm text-amber-700">
-          Нет ингредиентов, привязанных к сетевой номенклатуре. Привяжите их в разделе «Номенклатура сети».
+          На складе пока нет ингредиентов для перемещения.
         </div>
       )}
 
@@ -103,7 +101,7 @@ export default function NewTransferPage() {
               className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm"
             >
               <option value="">— ингредиент —</option>
-              {transferable.map(ing => (
+              {ingredients.map(ing => (
                 <option key={ing.id} value={ing.id}>{ing.name} ({ing.unit})</option>
               ))}
             </select>

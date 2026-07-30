@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Trash2, Timer, Search, X, ArrowLeft, CheckCircle } from 'lucide-react'
+import { Plus, Trash2, Timer, Search, X, ArrowLeft, CheckCircle, Network } from 'lucide-react'
 import { DishImageUpload } from '@/components/dish-image'
 import {
   UNITS,
@@ -12,7 +12,9 @@ import {
   type SemiFinishedType,
   type MenuStation,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes, replaceTechCardLines } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes, replaceTechCardLines, updateMenuItem } from '@/lib/queries'
+import { createNetworkMenuItem } from '@/lib/queries/transfers'
+import { useNetworkStatus } from '@/hooks/use-network-status'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
@@ -170,6 +172,12 @@ export default function NewMenuItemPage() {
   // создать и продавать без списания (бэк: stockcheck ModeTechCardOnly).
   const enforceStockCheck = restaurant?.enforceStockCheck ?? false
   const requireTechCard = techCardsEnabled && enforceStockCheck
+
+  // «Блюдо сети» — сеть определяется реактивно (useNetworkStatus). Тумблер
+  // скрыт для вариативных товаров (атрибуты/размеры): NetworkMenuItem — плоская
+  // сущность без вариантов (ADR-004, applyNetworkMenu не знает про атрибуты).
+  const { inNetwork } = useNetworkStatus()
+  const [isNetworkDish, setIsNetworkDish] = useState(false)
 
   const [form, setForm] = useState<MenuItemForm>({
     name: '',
@@ -355,6 +363,23 @@ export default function NewMenuItemPage() {
         toast.success(`Товар добавлен · вариантов: ${state.variants.length}`)
       } else {
         toast.success(form.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
+      }
+      // Привязка к сети — отдельным шагом, не откатывает уже созданное блюдо
+      // при сбое (тот же паттерн, что и линковка номенклатуры у ингредиента).
+      if (isNetworkDish && !hasAttrs && created?.id) {
+        try {
+          const master = await createNetworkMenuItem({
+            name: form.name,
+            category: form.category,
+            basePrice: form.price,
+            station: form.station,
+            unit: form.unit,
+            emoji: form.emoji,
+          })
+          await updateMenuItem(created.id, { masterId: master.id })
+        } catch {
+          toast.error('Блюдо создано, но не удалось сделать его сетевым — привяжите вручную позже')
+        }
       }
       navigate('/warehouse/menu')
     } catch {
@@ -646,6 +671,25 @@ export default function NewMenuItemPage() {
                   <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.unit === 'g' ? 'translate-x-5' : ''}`} />
                 </button>
               </div>
+
+              {inNetwork && !hasAttrs && (
+                <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
+                  <div className="flex items-start gap-2">
+                    <Network className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-xs font-semibold text-foreground">Блюдо сети</p>
+                      <p className="text-[10px] text-muted-foreground">Появится в меню всех филиалов сети</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setIsNetworkDish(v => !v)}
+                    className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${isNetworkDish ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                  >
+                    <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${isNetworkDish ? 'translate-x-5' : ''}`} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

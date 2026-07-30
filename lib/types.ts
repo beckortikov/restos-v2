@@ -1075,7 +1075,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'inventory.view': ['/warehouse/inventory'],
   'inventory.manage': ['/warehouse/inventory', '/warehouse/receipts', '/warehouse/inventory-check', '/warehouse/history', '/warehouse/supply-expenses', '/warehouse/transfers', '/warehouse/nomenclature'],
   'menu.view': ['/warehouse/menu', '/operations/pos'],
-  'menu.edit': ['/warehouse/menu', '/warehouse/semi', '/network/menu'],
+  'menu.edit': ['/warehouse/menu', '/warehouse/semi'],
   'writeoffs.create': ['/warehouse/writeoffs'],
   'batch_cooking.manage': ['/operations/batch-cooking'],
   'finance.view': ['/finance/overview', '/finance/cashflow', '/finance/pnl', '/finance/balance', '/finance/payments', '/network/summary'],

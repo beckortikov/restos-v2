@@ -11,7 +11,6 @@ import {
   Truck,
   ScrollText,
   FlaskConical,
-  BookOpen,
   Users,
   ClipboardCheck,
   History,
@@ -57,7 +56,6 @@ import {
   Network,
   RefreshCw,
   ListChecks,
-  Tags,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -263,8 +261,6 @@ const NAV: NavItem[] = [
       { label: 'Поставщики', href: '/warehouse/suppliers', icon: Truck },
       { label: 'Операции', href: '/warehouse/operations', icon: ListChecks },
       { label: 'Перемещения', href: '/warehouse/transfers', icon: ArrowLeftRight },
-      { label: 'Номенклатура сети', href: '/warehouse/nomenclature', icon: Tags },
-      { label: 'Меню сети', href: '/network/menu', icon: BookOpen },
     ],
   },
   {

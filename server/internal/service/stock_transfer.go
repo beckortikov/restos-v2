@@ -105,9 +105,10 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 		return nil, apperrors.Wrap("VALIDATION", "to_restaurant belongs to a different network", nil)
 	}
 
-	// Парсим строки + загружаем ингредиенты источника. Каждый обязан быть
-	// привязан к сетевой номенклатуре (nomenclature_id), иначе получатель не
-	// сможет сопоставить.
+	// Парсим строки + загружаем ингредиенты источника. Ингредиент без сетевой
+	// номенклатуры (nomenclature_id) — не ошибка: заводим её автоматически
+	// внутри транзакции ниже, из его же имени/единицы, вместо требования
+	// сделать это вручную заранее (см. упрощение номенклатуры сети, ADR-004).
 	parsed := make([]parsedTransferLine, 0, len(in.Lines))
 	for _, l := range in.Lines {
 		qty, err := decimal.FromString(l.Qty)
@@ -128,10 +129,6 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 				return nil, apperrors.Wrap("VALIDATION", "ingredient "+l.IngredientID+" not found at source", nil)
 			}
 			return nil, err
-		}
-		if ing.NomenclatureID == nil || *ing.NomenclatureID == "" {
-			return nil, apperrors.Wrap("VALIDATION",
-				"ingredient "+l.IngredientID+" is not linked to network nomenclature", nil)
 		}
 		if cost.IsZero() {
 			cost = ing.PricePerUnit
@@ -171,6 +168,30 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 
 		desc := "transfer:" + transferID
 		for _, pl := range parsed {
+			// Автосоздание сетевой номенклатуры при первой отправке этого
+			// ингредиента: имя/единица берутся с самого ингредиента, второй
+			// раз их вводить не нужно. Линкуем ингредиент источника сразу —
+			// повторные перемещения того же товара уже не создадут дубль.
+			if pl.ing.NomenclatureID == nil || *pl.ing.NomenclatureID == "" {
+				nom := &models.Nomenclature{
+					ID:        uuid.NewString(),
+					AccountID: &accountID,
+					Name:      *pl.ing.Name,
+					Unit:      pl.ing.Unit,
+					Category:  pl.ing.Category,
+					CreatedAt: now,
+					UpdatedAt: now,
+				}
+				if err := tx.Create(nom).Error; err != nil {
+					return err
+				}
+				if err := tx.Model(&models.Ingredient{}).Where("id = ?", pl.ing.ID).
+					Update("nomenclature_id", nom.ID).Error; err != nil {
+					return err
+				}
+				pl.ing.NomenclatureID = &nom.ID
+			}
+
 			lineID := uuid.NewString()
 			line := &models.StockTransferLine{
 				ID:             lineID,
@@ -266,24 +287,41 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 		desc := "transfer:" + transferID
 
 		for _, l := range lines {
-			// Ингредиент получателя по (me, nomenclature_id); нет — создаём.
+			// Ингредиент получателя по (me, nomenclature_id); нет — сперва
+			// пробуем найти уже существующий у получателя НЕпривязанный
+			// ингредиент с тем же именем+единицей (завёл его сам, до первого
+			// перемещения) и связать его, а не плодить дубль на складе;
+			// не нашли — заводим с нуля.
 			var dest models.Ingredient
 			derr := tx.Where("restaurant_id = ? AND nomenclature_id = ?", me, l.NomenclatureID).
 				First(&dest).Error
 			if errors.Is(derr, gorm.ErrRecordNotFound) {
-				dest = models.Ingredient{
-					ID:             uuid.NewString(),
-					Name:           l.IngredientName,
-					Unit:           l.Unit,
-					Qty:            decimal.Zero,
-					PricePerUnit:   l.CostPerUnit,
-					RestaurantID:   &me,
-					NomenclatureID: l.NomenclatureID,
-					CreatedAt:      now,
-					UpdatedAt:      now,
-				}
-				if err := tx.Create(&dest).Error; err != nil {
-					return err
+				matchErr := tx.Where("restaurant_id = ? AND nomenclature_id IS NULL AND name = ? AND unit = ?",
+					me, l.IngredientName, l.Unit).First(&dest).Error
+				switch {
+				case matchErr == nil:
+					if err := tx.Model(&models.Ingredient{}).Where("id = ?", dest.ID).
+						Update("nomenclature_id", l.NomenclatureID).Error; err != nil {
+						return err
+					}
+					dest.NomenclatureID = l.NomenclatureID
+				case errors.Is(matchErr, gorm.ErrRecordNotFound):
+					dest = models.Ingredient{
+						ID:             uuid.NewString(),
+						Name:           l.IngredientName,
+						Unit:           l.Unit,
+						Qty:            decimal.Zero,
+						PricePerUnit:   l.CostPerUnit,
+						RestaurantID:   &me,
+						NomenclatureID: l.NomenclatureID,
+						CreatedAt:      now,
+						UpdatedAt:      now,
+					}
+					if err := tx.Create(&dest).Error; err != nil {
+						return err
+					}
+				default:
+					return matchErr
 				}
 			} else if derr != nil {
 				return derr

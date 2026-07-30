@@ -263,9 +263,12 @@ export async function updateMenuItem(id: string, data: Partial<{
   unit: 'piece' | 'g' | 'kg'; unitSize: number; saleStep: number;
   techCard: { name: string; qty: number; unit: string; ingredientId?: string; semiId?: string }[];
   isPurchased: boolean; purchasePrice: number; purchaseUnit: string; purchaseMinQty: number;
+  // masterId — привязка к мастер-блюду сети (ADR-004). '' снимает привязку.
+  masterId: string;
 }>) {
   const updates: Record<string, unknown> = {}
   if (data.name !== undefined) updates.name = data.name
+  if (data.masterId !== undefined) updates.master_id = data.masterId
   if (data.category !== undefined) updates.category = data.category
   if (data.price !== undefined) updates.price = String(data.price)
   if (data.emoji !== undefined) updates.emoji = data.emoji
