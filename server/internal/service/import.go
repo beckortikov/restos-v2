@@ -81,6 +81,7 @@ func (s *ImportService) ImportMenuItems(ctx context.Context, r io.Reader) (*Impo
 	res := &ImportResult{}
 	now := time.Now().UTC()
 
+	var affectedIDs []string
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 
@@ -158,6 +159,7 @@ func (s *ImportService) ImportMenuItems(ctx context.Context, r io.Reader) (*Impo
 					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
 					continue
 				}
+				affectedIDs = append(affectedIDs, existing.ID)
 				res.Updated++
 			} else {
 				// Create.
@@ -201,10 +203,11 @@ func (s *ImportService) ImportMenuItems(ctx context.Context, r io.Reader) (*Impo
 					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
 					continue
 				}
+				affectedIDs = append(affectedIDs, mi.ID)
 				res.Created++
 			}
 		}
-		return nil
+		return recordMenuItemsSync(tx, affectedIDs)
 	})
 	if err != nil {
 		return nil, err

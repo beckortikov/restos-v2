@@ -728,7 +728,17 @@ func (s *MenuService) syncVariants(tx *gorm.DB, rid string, product *models.Menu
 			return err
 		}
 	}
-	return nil
+
+	// Финальный снапшот: родитель + ВСЕ его варианты в текущем (пост-sync)
+	// состоянии — один проход вместо инструментирования каждого Updates()
+	// внутри циклов выше (создание/воскрешение/переименование/архивация).
+	var allVariantIDs []string
+	if err := tx.Model(&models.MenuItem{}).
+		Where("restaurant_id = ? AND parent_id = ?", rid, product.ID).
+		Pluck("id", &allVariantIDs).Error; err != nil {
+		return err
+	}
+	return recordMenuItemsSync(tx, append(allVariantIDs, product.ID))
 }
 
 // parentBackingUnit — единица backing-ингредиента продукта (для наследования

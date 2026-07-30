@@ -193,7 +193,10 @@ func (s *MenuService) CreateItem(ctx context.Context, in MenuItemInput) (*models
 				ID: uuid.NewString(), MenuItemID: &mi.ID, IngredientID: &ing.ID,
 				Name: mi.Name, Qty: decimal.MustFromString("1"), Unit: &unit, RestaurantID: &rid,
 			}
-			return tx.Create(line).Error
+			if err := tx.Create(line).Error; err != nil {
+				return err
+			}
+			return recordMenuItemsSync(tx, []string{mi.ID})
 		})
 		if txErr != nil {
 			return nil, txErr
@@ -201,11 +204,16 @@ func (s *MenuService) CreateItem(ctx context.Context, in MenuItemInput) (*models
 		return mi, nil
 	}
 
-	scoped, err := s.r.ForTenant(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if err := scoped.Create(mi).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped.Create(mi).Error; err != nil {
+			return err
+		}
+		return recordMenuItemsSync(scoped, []string{mi.ID})
+	}); err != nil {
 		return nil, err
 	}
 	return mi, nil
@@ -329,6 +337,14 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 	if err := scoped3.Where("id = ?", id).First(&updated).Error; err != nil {
 		return nil, err
 	}
+	// recomputeVariants выше (если звалась) уже синкнула варианты — здесь только
+	// сам товар. НЕ оборачиваем всю функцию в транзакцию: recomputeVariants
+	// сама открывает СВОЮ транзакцию и должна увидеть уже ЗАКОММИЧЕННОЕ новое
+	// имя (иначе варианты переименовались бы по старому имени) — эта функция
+	// изначально многошаговая, не атомарная как единое целое.
+	if err := recordMenuItemsSync(scoped3, []string{id}); err != nil {
+		return nil, err
+	}
 	return &updated, nil
 }
 
@@ -377,7 +393,16 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 				return err
 			}
 			mi.IsPurchased = true
-			return s.ensureVariantsPurchasedBacking(tx, rid, mi, unit, price, time.Now().UTC())
+			if err := s.ensureVariantsPurchasedBacking(tx, rid, mi, unit, price, time.Now().UTC()); err != nil {
+				return err
+			}
+			var variantIDs []string
+			if err := tx.Model(&models.MenuItem{}).
+				Where("restaurant_id = ? AND parent_id = ?", rid, mi.ID).
+				Pluck("id", &variantIDs).Error; err != nil {
+				return err
+			}
+			return recordMenuItemsSync(tx, append(variantIDs, mi.ID))
 		}
 
 		var lines []models.TechCardLine
@@ -426,7 +451,10 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 			ID: uuid.NewString(), MenuItemID: &mi.ID, IngredientID: &ingID,
 			Name: &nm, Qty: decimal.MustFromString("1"), Unit: &unit, RestaurantID: &rid,
 		}
-		return tx.Create(line).Error
+		if err := tx.Create(line).Error; err != nil {
+			return err
+		}
+		return recordMenuItemsSync(tx, []string{mi.ID})
 	})
 	if txErr != nil {
 		return nil, txErr
@@ -443,23 +471,45 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 // у order_items стоит FK с RESTRICT (см. PRD 06).
 // Продукт с атрибутами архивируется вместе со своими вариантами.
 func (s *MenuService) SoftDeleteItem(ctx context.Context, id string) error {
-	scoped, err := s.r.ForTenant(ctx)
-	if err != nil {
-		return err
-	}
-	res := scoped.Model(&models.MenuItem{}).
-		Where("id = ? OR parent_id = ?", id, id).
-		Updates(map[string]any{
-			"is_deleted": true,
-			"updated_at": time.Now().UTC(),
-		})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		// Каждый вызов — СВЕЖИЙ scope (см. repo.ForTenant): GORM в chain-режиме
+		// переиспользует Statement, повторное использование ОДНОГО scoped для
+		// Pluck+Updates склеивает условия и роняет запрос
+		// ("table name menu_items specified more than once").
+		scopedPluck, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		// ids ДО Update — is_deleted/updated_at меняются, id/parent_id нет,
+		// поэтому список затронутых строк тот же что до и после.
+		var ids []string
+		if err := scopedPluck.Model(&models.MenuItem{}).
+			Where("id = ? OR parent_id = ?", id, id).
+			Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		scopedUpdate, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		res := scopedUpdate.Model(&models.MenuItem{}).
+			Where("id = ? OR parent_id = ?", id, id).
+			Updates(map[string]any{
+				"is_deleted": true,
+				"updated_at": time.Now().UTC(),
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		scopedSync, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		return recordMenuItemsSync(scopedSync, ids)
+	})
 }
 
 // ─── Categories ─────────────────────────────────────────────────────────────

@@ -74,6 +74,29 @@ var branchDataAvailable = map[string]bool{
 	// официантов/кассиров для смен, фильтр «по сотруднику»).
 	"/api/v1/users":      true,
 	"/api/v1/users/{id}": true,
+
+	// Ф2 (меню + столы/зоны) — menu_items снапшот на каждое сохранение
+	// (см. recordMenuItemsSync), tables/zones structural CRUD (см.
+	// recordTableSync/recordZoneSync). Построчно проверены (Explore, 2026-07-30)
+	// все analytics/*-хендлеры и reports/*.xlsx — ниже добавлены ТОЛЬКО те, что
+	// читают исключительно orders/order_items/financial_operations/cash_shifts/
+	// cash_shift_operations/users/menu_items/tables/zones (все уже реплицированы).
+	// НЕ добавлены (зависят от НЕреплицированного, дают тихо-неверную цифру,
+	// не просто баннер): /finance/pnl и /reports/pl.xlsx (stock_writeoffs,
+	// /reports/pl.xlsx ещё и supply_expenses), /reports/stock-movements.xlsx
+	// (stock_movements), /reports/audit.xlsx (audit_log — вне плана репликации
+	// вовсе), /analytics/weekday (time_entries — Ф5б «Персонал», ФОТ прямо
+	// входит в NetProfit), /analytics/food-cost*, /ingredient-stock-value,
+	// /forecast, /abc-inventory, /insights (склад — Ф3).
+	"/api/v1/analytics/abc-menu":       true,
+	"/api/v1/analytics/peak-hours":     true,
+	"/api/v1/analytics/waiters":        true,
+	"/api/v1/analytics/tables":         true,
+	"/api/v1/analytics/sales-report":   true,
+	"/api/v1/analytics/trends":         true,
+	"/api/v1/analytics/trends.xlsx":    true,
+	"/api/v1/reports/orders.xlsx":      true,
+	"/api/v1/reports/shifts/{id}.xlsx": true,
 }
 
 func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {

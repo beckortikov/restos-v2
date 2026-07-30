@@ -57,8 +57,16 @@ func (s *ZonesWriteService) Create(ctx context.Context, in ZoneInput) (*models.Z
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(z).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped.Create(z).Error; err != nil {
+			return err
+		}
+		return recordZoneSync(scoped, z, "insert")
+	}); err != nil {
 		return nil, err
 	}
 	return z, nil
@@ -89,13 +97,27 @@ func (s *ZonesWriteService) Patch(ctx context.Context, id string, in ZoneInput) 
 	if in.SortOrder != nil {
 		updates["sort_order"] = *in.SortOrder
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
-		return nil, err
-	}
-	scoped3, _ := s.r.ForTenant(ctx)
 	var out models.Zone
-	if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped2, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		// Свежий scope: GORM в chain-режиме не гарантирует чистое состояние
+		// после Model().Updates() для следующего запроса на том же scoped
+		// (см. комментарий к repo.ForTenant и найденный баг в SoftDeleteItem).
+		scoped3, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {
+			return err
+		}
+		return recordZoneSync(scoped3, &out, "update")
+	}); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -103,6 +125,10 @@ func (s *ZonesWriteService) Patch(ctx context.Context, id string, in ZoneInput) 
 
 func (s *ZonesWriteService) Delete(ctx context.Context, id string) error {
 	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
 		return err
 	}
 	scoped, err := s.r.ForTenant(ctx)
@@ -117,15 +143,20 @@ func (s *ZonesWriteService) Delete(ctx context.Context, id string) error {
 	if cnt > 0 {
 		return apperrors.Wrap("CONFLICT", "zone is referenced by tables", nil)
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	res := scoped2.Where("id = ?", id).Delete(&models.Zone{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped2, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		res := scoped2.Where("id = ?", id).Delete(&models.Zone{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		return recordZoneDeleteSync(scoped2, id, rid)
+	})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -179,8 +210,16 @@ func (s *TablesWriteService) Create(ctx context.Context, in TableInput) (*models
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(t).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped.Create(t).Error; err != nil {
+			return err
+		}
+		return recordTableSync(scoped, t, "insert")
+	}); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -217,13 +256,25 @@ func (s *TablesWriteService) Patch(ctx context.Context, id string, in TableInput
 	if in.Status != nil {
 		updates["status"] = *in.Status
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
-		return nil, err
-	}
-	scoped3, _ := s.r.ForTenant(ctx)
 	var out models.Table
-	if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped2, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		// Свежий scope — см. комментарий в ZonesWriteService.Patch.
+		scoped3, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {
+			return err
+		}
+		return recordTableSync(scoped3, &out, "update")
+	}); err != nil {
 		return nil, err
 	}
 	return &out, nil
@@ -231,6 +282,10 @@ func (s *TablesWriteService) Patch(ctx context.Context, id string, in TableInput
 
 func (s *TablesWriteService) Delete(ctx context.Context, id string) error {
 	if err := requirePermFor(ctx, s.r, "tables.edit"); err != nil {
+		return err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
 		return err
 	}
 	scoped, err := s.r.ForTenant(ctx)
@@ -247,15 +302,20 @@ func (s *TablesWriteService) Delete(ctx context.Context, id string) error {
 	if existing.CurrentOrderID != nil && *existing.CurrentOrderID != "" {
 		return apperrors.Wrap("CONFLICT", "table has an active order", nil)
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	res := scoped2.Where("id = ?", id).Delete(&models.Table{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped2, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		res := scoped2.Where("id = ?", id).Delete(&models.Table{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		return recordTableDeleteSync(scoped2, id, rid)
+	})
 }
 
 // SetStatus — PATCH /tables/{id}/status. Атомарное изменение статуса + связанных полей.

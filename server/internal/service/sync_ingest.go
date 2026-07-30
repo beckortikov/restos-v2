@@ -102,6 +102,21 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "menu_items":
+			if err := s.applyMenuItem(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "tables":
+			if err := s.applyTable(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "zones":
+			if err := s.applyZone(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
@@ -141,17 +156,39 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 				Name: &m.Name, Category: m.Category, Price: m.BasePrice,
 				Station: m.Station, Unit: m.Unit, Emoji: m.Emoji, IsAvailable: &avail,
 			}
-			return tx.Create(item).Error
+			if err := tx.Create(item).Error; err != nil {
+				return err
+			}
+			// Унаследованный от мастера товар — тоже часть меню ЭТОГО филиала:
+			// пишем в sync_log филиала, чтобы обычный Pusher отправил его
+			// central обратно (иначе central никогда не увидит товары сети в
+			// branch-view меню конкретного филиала — только на филиале локально).
+			return recordMenuItemsSync(tx, []string{item.ID})
 		}
 		if err != nil {
 			return err
 		}
-		// Обновляем ТОЛЬКО наследуемые поля — цену/доступность/оформление филиала
-		// не трогаем.
-		return tx.Model(&models.MenuItem{}).Where("id = ?", existing.ID).
-			Updates(map[string]any{
-				"name": m.Name, "category": m.Category, "station": m.Station, "unit": m.Unit,
-			}).Error
+		// Есть ли РЕАЛЬНОЕ изменение наследуемых полей? applyNetworkMenu вызывается
+		// на КАЖДЫЙ down-pull (раз в --sync-interval-sec, т.е. постоянно, а не
+		// только когда мастер реально поменялся) — без этой проверки
+		// recordMenuItemsSync писал бы дельту каждый цикл ДАЖЕ без изменений,
+		// а поскольку сама запись в sync_log тоже реплицируется на central —
+		// получался бы бесконечный поток "изменений" туда-обратно (найдено
+		// вживую на двухузловом стенде: одна и та же строка синкалась каждые
+		// 5 секунд без остановки).
+		if (existing.Name == nil || *existing.Name != m.Name) ||
+			!strPtrEqual(existing.Category, m.Category) ||
+			!strPtrEqual(existing.Station, m.Station) ||
+			!strPtrEqual(existing.Unit, m.Unit) {
+			if err := tx.Model(&models.MenuItem{}).Where("id = ?", existing.ID).
+				Updates(map[string]any{
+					"name": m.Name, "category": m.Category, "station": m.Station, "unit": m.Unit,
+				}).Error; err != nil {
+				return err
+			}
+			return recordMenuItemsSync(tx, []string{existing.ID})
+		}
+		return nil
 	})
 }
 
@@ -289,6 +326,75 @@ func (s *SyncService) applyUser(ctx context.Context, e SyncEntry, updateAll bool
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		return tx.Clauses(conflict).Create(&u).Error
+	})
+}
+
+// applyMenuItem — upsert блюда меню (снапшот, Ф2). Delete отдельно не
+// нужен — удаление на филиале всегда soft (is_deleted=true уже в payload,
+// см. recordMenuItemsSync/SoftDeleteItem), обычный upsert его переносит.
+func (s *SyncService) applyMenuItem(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var mi models.MenuItem
+	if err := json.Unmarshal(e.Payload, &mi); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid menu_items payload", err)
+	}
+	if mi.ID == "" {
+		return apperrors.Wrap("VALIDATION", "menu_items payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&mi).Error
+	})
+}
+
+// applyTable — upsert/delete стола (Ф2). Delete — НАСТОЯЩИЙ (в отличие от
+// menu_items): TablesWriteService.Delete делает hard DELETE, не soft.
+func (s *SyncService) applyTable(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "tables delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.Table{}).Error
+		})
+	}
+	var t models.Table
+	if err := json.Unmarshal(e.Payload, &t); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid tables payload", err)
+	}
+	if t.ID == "" {
+		return apperrors.Wrap("VALIDATION", "tables payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&t).Error
+	})
+}
+
+// applyZone — upsert/delete зоны (Ф2). Delete — настоящий, как у tables.
+func (s *SyncService) applyZone(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "zones delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.Zone{}).Error
+		})
+	}
+	var z models.Zone
+	if err := json.Unmarshal(e.Payload, &z); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid zones payload", err)
+	}
+	if z.ID == "" {
+		return apperrors.Wrap("VALIDATION", "zones payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&z).Error
 	})
 }
 

@@ -427,3 +427,196 @@ func TestSyncIngest_User(t *testing.T) {
 		t.Errorf("PIN = %v, want nil (реплицированный сотрудник не должен логиниться на central)", *got.PIN)
 	}
 }
+
+// TestSyncIngest_MenuItem — приём блюда меню на central (Ф2): upsert,
+// идемпотентный повтор с изменившимися полями (цена/is_deleted).
+func TestSyncIngest_MenuItem(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"menu_items"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	itemID := uuid.NewString()
+	name := "Плов"
+	category := "Основные блюда"
+	mi := models.MenuItem{
+		ID: itemID, Name: &name, Category: &category, RestaurantID: &branchID,
+		Price: decimal.MustFromString("45"),
+	}
+	body, _ := json.Marshal(mi)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "menu_items", RowID: itemID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.MenuItem
+	if err := gdb.First(&got, "id = ?", itemID).Error; err != nil {
+		t.Fatalf("menu item not upserted: %v", err)
+	}
+	if !got.Price.Equal(decimal.MustFromString("45")) {
+		t.Errorf("price = %s, want 45", got.Price.String())
+	}
+
+	// ─── Повтор: цена изменилась + архивация (is_deleted=true) — soft-delete
+	// приезжает обычным upsert'ом, отдельная delete-ветка не нужна. ─────────
+	mi.Price = decimal.MustFromString("50")
+	mi.IsDeleted = true
+	body2, _ := json.Marshal(mi)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "menu_items", RowID: itemID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", itemID)
+	if !got.Price.Equal(decimal.MustFromString("50")) {
+		t.Errorf("price after upsert = %s, want 50", got.Price.String())
+	}
+	if !got.IsDeleted {
+		t.Errorf("is_deleted after upsert = false, want true")
+	}
+	var count int64
+	gdb.Model(&models.MenuItem{}).Where("id = ?", itemID).Count(&count)
+	if count != 1 {
+		t.Errorf("menu_items = %d, want 1 (не задвоилось)", count)
+	}
+}
+
+// TestSyncIngest_Table — приём стола на central (Ф2): upsert + hard delete
+// (в отличие от menu_items — здесь настоящий DELETE).
+func TestSyncIngest_Table(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"tables"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	tableID := uuid.NewString()
+	num := 7
+	tbl := models.Table{ID: tableID, Number: &num, RestaurantID: &branchID}
+	body, _ := json.Marshal(tbl)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "tables", RowID: tableID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var count int64
+	gdb.Model(&models.Table{}).Where("id = ?", tableID).Count(&count)
+	if count != 1 {
+		t.Fatalf("table not upserted: count = %d", count)
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "tables", RowID: tableID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	gdb.Model(&models.Table{}).Where("id = ?", tableID).Count(&count)
+	if count != 0 {
+		t.Errorf("table still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_Zone — приём зоны на central (Ф2): upsert + hard delete.
+func TestSyncIngest_Zone(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"zones"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	zoneID := uuid.NewString()
+	z := models.Zone{ID: zoneID, Name: "Летняя веранда", RestaurantID: &branchID}
+	body, _ := json.Marshal(z)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "zones", RowID: zoneID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var count int64
+	gdb.Model(&models.Zone{}).Where("id = ?", zoneID).Count(&count)
+	if count != 1 {
+		t.Fatalf("zone not upserted: count = %d", count)
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "zones", RowID: zoneID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	gdb.Model(&models.Zone{}).Where("id = ?", zoneID).Count(&count)
+	if count != 0 {
+		t.Errorf("zone still present after delete: count = %d", count)
+	}
+}
