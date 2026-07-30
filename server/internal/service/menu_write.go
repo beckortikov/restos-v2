@@ -196,6 +196,9 @@ func (s *MenuService) CreateItem(ctx context.Context, in MenuItemInput) (*models
 			if err := tx.Create(line).Error; err != nil {
 				return err
 			}
+			if err := recordIngredientSync(tx, []string{ing.ID}); err != nil {
+				return err
+			}
 			return recordMenuItemsSync(tx, []string{mi.ID})
 		})
 		if txErr != nil {
@@ -452,6 +455,9 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 			Name: &nm, Qty: decimal.MustFromString("1"), Unit: &unit, RestaurantID: &rid,
 		}
 		if err := tx.Create(line).Error; err != nil {
+			return err
+		}
+		if err := recordIngredientSync(tx, []string{ingID}); err != nil {
 			return err
 		}
 		return recordMenuItemsSync(tx, []string{mi.ID})

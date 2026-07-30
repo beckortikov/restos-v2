@@ -22,9 +22,18 @@ import (
 // (создаются только через tx.Create в AddOperation/recordShiftCashOutIfActive),
 // поэтому годятся под тот же generic-хук. Удаление операции (DeleteExpense/
 // DeleteOperation) хук не ловит — там explicit recordShiftOpDeleteSync.
+//
+// stock_movements (Ф3) — append-only событие (все 19 точек создания в service
+// делают struct-based tx.Create, ни одна не использует Updates(map)) — тот же
+// generic-хук покрывает продажу/списание/приёмку/инвентаризацию/перемещение/
+// хозрасход/производство разом, без 19 явных вызовов. Денормализованный
+// ingredients синкается ОТДЕЛЬНО, снапшотом, внутри самого денорм-хука
+// (audit/stock_hook.go, после applyStockMovement с SkipHooks central его не
+// повторяет — см. комментарий там).
 var trackedInsert = map[string]bool{
 	"financial_operations":  true,
 	"cash_shift_operations": true,
+	"stock_movements":       true,
 }
 
 // RegisterRecorder цепляет AfterCreate-хук, пишущий дельты tracked-таблиц в

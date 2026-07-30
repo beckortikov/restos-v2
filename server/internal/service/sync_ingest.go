@@ -117,6 +117,16 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "ingredients":
+			if err := s.applyIngredient(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "stock_movements":
+			if err := s.applyStockMovement(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
@@ -395,6 +405,55 @@ func (s *SyncService) applyZone(ctx context.Context, e SyncEntry, updateAll bool
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		return tx.Clauses(conflict).Create(&z).Error
+	})
+}
+
+// applyIngredient — upsert снапшота ингредиента (Ф3). Delete — настоящий
+// (IngredientsWriteService.Delete/removeParentPhantomBacking), как у tables/
+// zones. SkipHooks здесь избыточен для самой модели Ingredient (она не в
+// trackedInsert), но консистентен с остальными apply*-функциями.
+func (s *SyncService) applyIngredient(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "ingredients delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.Ingredient{}).Error
+		})
+	}
+	var ing models.Ingredient
+	if err := json.Unmarshal(e.Payload, &ing); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid ingredients payload", err)
+	}
+	if ing.ID == "" {
+		return apperrors.Wrap("VALIDATION", "ingredients payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&ing).Error
+	})
+}
+
+// applyStockMovement — upsert append-only события движения (Ф3). SkipHooks
+// КРИТИЧЕН здесь: stockAfterCreate (audit/stock_hook.go) проверяет
+// tx.Statement.SkipHooks первой строкой и отказывается от повторной
+// денормализации ingredients.qty — central получает уже денормализованный
+// снапшот отдельно (applyIngredient), «проигрывание» движения задвоило бы
+// delta. Delete не нужен — движения не удаляются (append-only источник истины).
+func (s *SyncService) applyStockMovement(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var mv models.StockMovement
+	if err := json.Unmarshal(e.Payload, &mv); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid stock_movements payload", err)
+	}
+	if mv.ID == "" {
+		return apperrors.Wrap("VALIDATION", "stock_movements payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&mv).Error
 	})
 }
 

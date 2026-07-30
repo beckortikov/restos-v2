@@ -247,6 +247,7 @@ func (s *ImportService) ImportIngredients(ctx context.Context, r io.Reader) (*Im
 	res := &ImportResult{}
 	now := time.Now().UTC()
 
+	var affectedIngredientIDs []string
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
 		for i, row := range rows[1:] {
@@ -294,6 +295,7 @@ func (s *ImportService) ImportIngredients(ctx context.Context, r io.Reader) (*Im
 					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
 					continue
 				}
+				affectedIngredientIDs = append(affectedIngredientIDs, existing.ID)
 				res.Updated++
 			} else {
 				ing := &models.Ingredient{
@@ -322,10 +324,11 @@ func (s *ImportService) ImportIngredients(ctx context.Context, r io.Reader) (*Im
 					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
 					continue
 				}
+				affectedIngredientIDs = append(affectedIngredientIDs, ing.ID)
 				res.Created++
 			}
 		}
-		return nil
+		return recordIngredientSync(tx, affectedIngredientIDs)
 	})
 	if err != nil {
 		return nil, err

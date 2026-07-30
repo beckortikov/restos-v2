@@ -620,3 +620,144 @@ func TestSyncIngest_Zone(t *testing.T) {
 		t.Errorf("zone still present after delete: count = %d", count)
 	}
 }
+
+// TestSyncIngest_Ingredient — приём ингредиента на central (Ф3): upsert +
+// hard delete.
+func TestSyncIngest_Ingredient(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"ingredients"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	ingID := uuid.NewString()
+	name := "Мука"
+	ing := models.Ingredient{ID: ingID, Name: &name, RestaurantID: &branchID, Qty: decimal.MustFromString("20")}
+	body, _ := json.Marshal(ing)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "ingredients", RowID: ingID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.Ingredient
+	if err := gdb.First(&got, "id = ?", ingID).Error; err != nil {
+		t.Fatalf("ingredient not upserted: %v", err)
+	}
+	if !got.Qty.Equal(decimal.MustFromString("20")) {
+		t.Errorf("qty = %s, want 20", got.Qty.String())
+	}
+
+	// Повтор с изменённым qty (снапшот после следующего движения) — upsert.
+	ing.Qty = decimal.MustFromString("35")
+	body2, _ := json.Marshal(ing)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "ingredients", RowID: ingID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", ingID)
+	if !got.Qty.Equal(decimal.MustFromString("35")) {
+		t.Errorf("qty after upsert = %s, want 35", got.Qty.String())
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "ingredients", RowID: ingID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	var count int64
+	gdb.Model(&models.Ingredient{}).Where("id = ?", ingID).Count(&count)
+	if count != 0 {
+		t.Errorf("ingredient still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_StockMovement — приём движения склада на central (Ф3):
+// upsert, append-only (нет delete-ветки — движения не удаляются).
+func TestSyncIngest_StockMovement(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"stock_movements"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	ingID := uuid.NewString()
+	mvID := uuid.NewString()
+	mvType := "receipt"
+	mv := models.StockMovement{
+		ID: mvID, Type: &mvType, IngredientID: &ingID, Qty: decimal.MustFromString("8"), RestaurantID: &branchID,
+	}
+	body, _ := json.Marshal(mv)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "stock_movements", RowID: mvID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.StockMovement
+	if err := gdb.First(&got, "id = ?", mvID).Error; err != nil {
+		t.Fatalf("movement not upserted: %v", err)
+	}
+	if !got.Qty.Equal(decimal.MustFromString("8")) {
+		t.Errorf("qty = %s, want 8", got.Qty.String())
+	}
+	// Повторный приём (идемпотентность Pusher'а) — не задваивает строку, и
+	// НЕ должен повторно денормализовать central-копию ingredient (проверено
+	// отдельно в TestStockMovementSkipHooksNoDoubleCount — applyStockMovement
+	// использует ту же Session(SkipHooks:true), что и остальные apply*).
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "stock_movements", RowID: mvID, Op: "insert", Payload: body},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	var count int64
+	gdb.Model(&models.StockMovement{}).Where("id = ?", mvID).Count(&count)
+	if count != 1 {
+		t.Errorf("stock_movements = %d, want 1 (не задвоилось)", count)
+	}
+}

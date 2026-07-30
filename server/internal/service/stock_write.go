@@ -310,6 +310,9 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 					Update("price_per_unit", newPrice).Error; err != nil {
 					return err
 				}
+				if err := recordIngredientSync(tx, []string{pl.in.IngredientID}); err != nil {
+					return err
+				}
 				// In-memory обновление для следующих строк того же ингредиента.
 				ing.Qty = denom
 				ing.PricePerUnit = newPrice

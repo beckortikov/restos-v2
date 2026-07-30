@@ -9,6 +9,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
+	"github.com/restos/restos-v4/server/internal/synclog"
 )
 
 // RegisterStockDenorm цепляет AfterCreate-хук на StockMovement, который
@@ -28,6 +29,15 @@ func RegisterStockDenorm(db *gorm.DB) error {
 
 func stockAfterCreate(tx *gorm.DB) {
 	if tx.Error != nil {
+		return
+	}
+	// SkipHooks: реплицированное с филиала stock_movement (см. applyStockMovement,
+	// service/sync_ingest.go) на central НЕ должно повторно денормализовать qty —
+	// central получает уже денормализованный ingredients отдельным снапшотом
+	// (см. recordIngredientsSync ниже), «проигрывание» движения задвоило бы delta.
+	// ADR-003 «Central видит всё», Ф3 — обязательный пререквизит перед репликацией
+	// stock_movements (см. план).
+	if tx.Statement.SkipHooks {
 		return
 	}
 	// Только для stock_movements.
@@ -95,6 +105,7 @@ func stockAfterCreate(tx *gorm.DB) {
 		}
 	}
 
+	touched := make([]string, 0, len(deltas))
 	for ingID, delta := range deltas {
 		if delta.IsZero() {
 			continue
@@ -129,6 +140,33 @@ func stockAfterCreate(tx *gorm.DB) {
 			})
 		if res.Error != nil {
 			log.Error().Err(res.Error).Str("ingredient_id", ingID).Msg("stock denorm update failed")
+			continue
+		}
+		touched = append(touched, ingID)
+	}
+
+	// ADR-003 «Central видит всё», Ф3: снапшот денормализованного qty — одна
+	// точка покрывает ВСЕ вызывающие места (продажа/списание/приёмка/
+	// инвентаризация/перемещение/хозрасход/производство), а не 19 отдельных
+	// явных вызовов на каждой точке создания stock_movement. Enabled() — та
+	// же оптимизация, что и в synclog/recorder_hook.go afterCreate: на central
+	// (нет pusher'а) синк выключен, не тратим Find на реплицированный batch.
+	if len(touched) > 0 && synclog.Enabled() {
+		var rows []models.Ingredient
+		if err := session.Where("id IN ?", touched).Find(&rows).Error; err != nil {
+			log.Error().Err(err).Msg("stock denorm: ingredient snapshot read failed")
+			return
+		}
+		for i := range rows {
+			if err := synclog.Record(session, synclog.Entry{
+				Entity:       "ingredients",
+				RowID:        rows[i].ID,
+				Op:           "update",
+				RestaurantID: rows[i].RestaurantID,
+				Payload:      rows[i],
+			}); err != nil {
+				log.Error().Err(err).Str("ingredient_id", rows[i].ID).Msg("stock denorm: sync record failed")
+			}
 		}
 	}
 }

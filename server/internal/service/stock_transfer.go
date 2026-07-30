@@ -189,6 +189,9 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 					Update("nomenclature_id", nom.ID).Error; err != nil {
 					return err
 				}
+				if err := recordIngredientSync(tx, []string{pl.ing.ID}); err != nil {
+					return err
+				}
 				pl.ing.NomenclatureID = &nom.ID
 			}
 
@@ -322,6 +325,11 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 					}
 				default:
 					return matchErr
+				}
+				// Обе ветки (реюз с линковкой / новый ингредиент) меняют dest —
+				// синкаем один раз после switch.
+				if err := recordIngredientSync(tx, []string{dest.ID}); err != nil {
+					return err
 				}
 			} else if derr != nil {
 				return derr

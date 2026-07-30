@@ -83,11 +83,9 @@ var branchDataAvailable = map[string]bool{
 	// cash_shift_operations/users/menu_items/tables/zones (все уже реплицированы).
 	// НЕ добавлены (зависят от НЕреплицированного, дают тихо-неверную цифру,
 	// не просто баннер): /finance/pnl и /reports/pl.xlsx (stock_writeoffs,
-	// /reports/pl.xlsx ещё и supply_expenses), /reports/stock-movements.xlsx
-	// (stock_movements), /reports/audit.xlsx (audit_log — вне плана репликации
-	// вовсе), /analytics/weekday (time_entries — Ф5б «Персонал», ФОТ прямо
-	// входит в NetProfit), /analytics/food-cost*, /ingredient-stock-value,
-	// /forecast, /abc-inventory, /insights (склад — Ф3).
+	// /reports/pl.xlsx ещё и supply_expenses), /reports/audit.xlsx (audit_log —
+	// вне плана репликации вовсе), /analytics/weekday (time_entries — Ф5б
+	// «Персонал», ФОТ прямо входит в NetProfit).
 	"/api/v1/analytics/abc-menu":       true,
 	"/api/v1/analytics/peak-hours":     true,
 	"/api/v1/analytics/waiters":        true,
@@ -97,6 +95,34 @@ var branchDataAvailable = map[string]bool{
 	"/api/v1/analytics/trends.xlsx":    true,
 	"/api/v1/reports/orders.xlsx":      true,
 	"/api/v1/reports/shifts/{id}.xlsx": true,
+
+	// Ф3 (склад: остатки + движения) — ingredients снапшот (денормализованный
+	// qty, синкается и явными точками, и внутри самого хука денормализации,
+	// см. sync_stock.go/audit/stock_hook.go), stock_movements append-only
+	// (generic trackedInsert). Построчно проверены (Explore, 2026-07-30):
+	// /analytics/food-cost*, /forecast — ошибочно считались «складскими» по
+	// названию в комментарии Ф2 выше; реально читают только orders/order_items
+	// (cogs заморожен на филиале в момент продажи, см. orders_write.go) и
+	// financial_operations (forecast, fixed costs) — были безопасны уже с Ф1,
+	// просто не проверены построчно тогда. /reports/stock-movements.xlsx —
+	// читает только stock_movements, был в «не добавлено» списке Ф2 как раз
+	// потому что stock_movements ещё не реплицировался — теперь можно.
+	//
+	// НЕ добавлен /analytics/insights: агрегатор из 7 паков, один из которых
+	// (cogsDriftInsights) JOIN'ит stock_receipts/stock_receipt_lines (Ф4,
+	// складские документы — ещё не реплицированы) — тихо теряет ОДНУ карточку
+	// «подорожание сырья» из ленты (INNER JOIN на 0 строк → nil, не ошибка),
+	// неотличимо от «проблемы реально нет». Остальные 6 паков сами по себе
+	// безопасны, но выборочно допускать часть ответа агрегатора нельзя.
+	"/api/v1/stock/ingredients":                true,
+	"/api/v1/stock/ingredient-categories":      true,
+	"/api/v1/stock/movements":                  true,
+	"/api/v1/analytics/ingredient-stock-value": true,
+	"/api/v1/analytics/abc-inventory":          true,
+	"/api/v1/analytics/food-cost":              true,
+	"/api/v1/analytics/food-cost/monthly":      true,
+	"/api/v1/analytics/forecast":               true,
+	"/api/v1/reports/stock-movements.xlsx":     true,
 }
 
 func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {

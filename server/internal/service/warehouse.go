@@ -133,6 +133,12 @@ func (s *WarehouseService) Transfer(ctx context.Context, in WarehouseTransferInp
 			Updates(map[string]any{"warehouse_id": in.ToWarehouseID, "updated_at": now}).Error; err != nil {
 			return err
 		}
+		// type=transfer — хук денормализации его явно игнорирует (остаток тот же,
+		// меняется только склад), поэтому синкаем ingredient явно: единственный
+		// путь донести смену warehouse_id до central.
+		if err := recordIngredientSync(tx, []string{in.IngredientID}); err != nil {
+			return err
+		}
 		tp := "transfer"
 		desc := "warehouse_transfer"
 		mv := &models.StockMovement{

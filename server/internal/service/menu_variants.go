@@ -811,6 +811,9 @@ func (s *MenuService) ensureVariantsPurchasedBacking(tx *gorm.DB, rid string, pr
 					Update("warehouse_id", *wid).Error; err != nil {
 					return err
 				}
+				if err := recordIngredientSync(tx, []string{*lines[0].IngredientID}); err != nil {
+					return err
+				}
 			}
 		} else {
 			// Нет своего склада (обычная вариация до конвертации) — создаём
@@ -821,6 +824,9 @@ func (s *MenuService) ensureVariantsPurchasedBacking(tx *gorm.DB, rid string, pr
 				WarehouseID: wid, RestaurantID: &rid,
 			}
 			if err := tx.Create(ing).Error; err != nil {
+				return err
+			}
+			if err := recordIngredientSync(tx, []string{ing.ID}); err != nil {
 				return err
 			}
 			if err := tx.Where("menu_item_id = ?", v.ID).Delete(&models.TechCardLine{}).Error; err != nil {
@@ -886,7 +892,10 @@ func removeParentPhantomBacking(tx *gorm.DB, rid, productID string) error {
 	if err := tx.Where("menu_item_id = ?", productID).Delete(&models.TechCardLine{}).Error; err != nil {
 		return err
 	}
-	return tx.Where("id = ?", ingID).Delete(&models.Ingredient{}).Error
+	if err := tx.Where("id = ?", ingID).Delete(&models.Ingredient{}).Error; err != nil {
+		return err
+	}
+	return recordIngredientDeleteSync(tx, ingID, rid)
 }
 
 // syncVariantIngredientPrice обновляет закупку backing-ингредиента варианта
@@ -900,9 +909,13 @@ func syncVariantIngredientPrice(tx *gorm.DB, rid, variantID string, purchase dec
 	if len(lines) != 1 || lines[0].IngredientID == nil {
 		return nil
 	}
-	return tx.Model(&models.Ingredient{}).
-		Where("id = ?", *lines[0].IngredientID).
-		Update("price_per_unit", purchase).Error
+	ingID := *lines[0].IngredientID
+	if err := tx.Model(&models.Ingredient{}).
+		Where("id = ?", ingID).
+		Update("price_per_unit", purchase).Error; err != nil {
+		return err
+	}
+	return recordIngredientSync(tx, []string{ingID})
 }
 
 func insertVariantLinks(tx *gorm.DB, rid, variantID string, valueIDs []string, now time.Time) error {
@@ -993,6 +1006,9 @@ func (s *MenuService) createVariant(tx *gorm.DB, rid string, product *models.Men
 			WarehouseID: wid, RestaurantID: &rid,
 		}
 		if err := tx.Create(ing).Error; err != nil {
+			return "", err
+		}
+		if err := recordIngredientSync(tx, []string{ing.ID}); err != nil {
 			return "", err
 		}
 		line := &models.TechCardLine{

@@ -145,20 +145,28 @@ func (s *NetworkService) LinkIngredient(ctx context.Context, ingredientID, nomen
 		return apperrors.Wrap("VALIDATION", "nomenclature belongs to a different network", nil)
 	}
 	// Обновляем только свой ингредиент (ForTenant — tenant-safe).
-	scoped, err := s.r.ForTenant(ctx)
-	if err != nil {
-		return err
-	}
-	res := scoped.Model(&models.Ingredient{}).
-		Where("id = ?", ingredientID).
-		Update("nomenclature_id", nomenclatureID)
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		res := scoped.Model(&models.Ingredient{}).
+			Where("id = ?", ingredientID).
+			Update("nomenclature_id", nomenclatureID)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		// Свежий scope: явный .Model() выше не гарантирует чистое состояние для
+		// следующего запроса на том же scoped (см. [[gorm-scoped-double-model-call-bug]]).
+		scoped2, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		return recordIngredientSync(scoped2, []string{ingredientID})
+	})
 }
 
 // CreateNetwork заводит сеть (company_account) и делает ТЕКУЩИЙ ресторан её

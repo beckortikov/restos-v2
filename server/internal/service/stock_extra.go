@@ -124,6 +124,9 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 		if err := tx.Create(ing).Error; err != nil {
 			return err
 		}
+		if err := recordIngredientSync(tx, []string{ing.ID}); err != nil {
+			return err
+		}
 		if hasInitial {
 			mvType := "receipt"
 			desc := "ingredient_initial:" + ing.ID
@@ -262,6 +265,11 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 			Updates(updates).Error; err != nil {
 			return err
 		}
+		// qty (если меняется ниже, через StockMovement) синкнётся отдельно,
+		// автоматически, через stockAfterCreate — здесь синкаем НЕ-qty поля.
+		if err := recordIngredientSync(tx, []string{id}); err != nil {
+			return err
+		}
 		if qtyDelta != nil && !qtyDelta.IsZero() {
 			mvType := "adjustment"
 			desc := "Корректировка остатка (ручная правка)"
@@ -397,7 +405,7 @@ func (s *IngredientsWriteService) Delete(ctx context.Context, id string) error {
 		if res.RowsAffected == 0 {
 			return apperrors.ErrNotFound
 		}
-		return nil
+		return recordIngredientDeleteSync(tx, id, rid)
 	})
 }
 

@@ -85,6 +85,12 @@ func (s *StockService) OpeningBalance(ctx context.Context, in OpeningBalanceInpu
 						Update("price_per_unit", p).Error; err != nil {
 						return err
 					}
+					// qty синкнётся отдельно, автоматически, через stockAfterCreate
+					// (audit/stock_hook.go) когда ниже создастся StockMovement —
+					// здесь синкаем ТОЛЬКО цену, если она реально изменилась.
+					if err := recordIngredientSync(tx, []string{l.IngredientID}); err != nil {
+						return err
+					}
 				}
 			}
 			// Начальный остаток — это УСТАНОВКА остатка в target, а не добавление

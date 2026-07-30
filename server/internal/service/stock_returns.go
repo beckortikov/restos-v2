@@ -411,6 +411,9 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 						Update("price_per_unit", newPrice).Error; err != nil {
 						return err
 					}
+					if err := recordIngredientSync(tx, []string{ingID}); err != nil {
+						return err
+					}
 					ing.PricePerUnit = newPrice
 					// Запоминаем на строке: сторно обязано сделать ровно обратное,
 					// иначе цикл «возврат + сторно» завышает стоимость запасов
@@ -716,6 +719,9 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 				if err := tx.Model(&models.Ingredient{}).
 					Where("restaurant_id = ? AND id = ?", rid, ingID).
 					Update("price_per_unit", newPrice).Error; err != nil {
+					return err
+				}
+				if err := recordIngredientSync(tx, []string{ingID}); err != nil {
 					return err
 				}
 				ing.PricePerUnit = newPrice
