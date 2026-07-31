@@ -171,11 +171,43 @@ var branchDataAvailable = map[string]bool{
 	// текстовую деталь. Остальные 5 паков сами по себе безопасны, но выборочно
 	// допускать часть ответа агрегатора нельзя (тот же принцип, что у Ф3).
 	//
-	// НЕ добавлен /finance/balance: помимо suppliers.current_debt (теперь
-	// реплицирован) читает financial_accounts/semi_finished_stock/assets/
-	// liabilities/equity_entries — ни одна не реплицирована, а
-	// GrandTotalAssets/GrandTotalLiabilities/ComputedEquity считаются из ВСЕХ
-	// сразу (finance.go) — частичная деградация невозможна.
+	// НЕ добавлен /finance/balance на момент Ф4: помимо suppliers.current_debt
+	// (теперь реплицирован) читал financial_accounts/semi_finished_stock/
+	// assets/liabilities/equity_entries — ни одна тогда не была реплицирована.
+	// financial_accounts реплицирован Ф5 (см. ниже) — эта причина снята, но
+	// остаются 4 самостоятельных блокера (semi_finished_stock/assets/
+	// liabilities/equity_entries, всё ещё вне плана репликации) — вердикт не
+	// меняется, см. актуальное обоснование в конце Ф5 ниже.
+
+	// Ф5 (деньги: счета + платежи) — financial_accounts: первая и единственная
+	// сущность плана на generic AfterCreate+AfterUpdate хук (trackedSave,
+	// synclog/recorder_hook.go) — точек мутации баланса ~20 по всему
+	// кодовому базу, явные recordXSync на каждой были бы избыточны. Хук
+	// перечитывает строку из БД по id ПОСЛЕ апдейта (не полагается на
+	// значение из Updates(map)/gorm.Expr, что было бы ненадёжно — 6 из 20
+	// точек пишут баланс именно через gorm.Expr). recurring_payments —
+	// explicit (4 точки: Create/Patch/Delete/Pay), как в Ф1-Ф4. Закрыт
+	// delete-пробел financial_operations (DeleteExpense/DeleteOperation
+	// реально удаляют связанную финоперацию — generic trackedInsert-хук
+	// ловит только insert). Построчно проверены (Explore, 2026-07-31):
+	"/api/v1/finance/accounts":                            true,
+	"/api/v1/finance/accounts/balance-history":            true,
+	"/api/v1/finance/recurring-payments":                  true,
+	"/api/v1/finance/service-accrual/by-waiter":           true,
+	"/api/v1/finance/service-accrual/by-shift/{shift_id}": true,
+	"/api/v1/finance/service-payout/by-waiter":            true,
+	"/api/v1/finance/service-payout/by-shift/{shift_id}":  true,
+	// service-accrual/service-payout читают только orders (o.service_amount,
+	// замороженный при закрытии заказа)/financial_operations/users — уже
+	// реплицированы (Ф1/Ф2/5.1). Разблокирует часть баннера на «Смены»
+	// (Ф1-эра комментарий выше: «также читает finance/accounts +
+	// finance/service-accrual|payout» — обе причины теперь сняты; остаётся
+	// только Ф5б «Персонал»/time_entries, если она вообще нужна этой странице).
+	//
+	// НЕ добавлен /finance/balance (см. выше, актуальные 4 блокера):
+	// semi_finished_stock, assets, liabilities, equity_entries — ни одна не
+	// реплицирована, а GrandTotalAssets/GrandTotalLiabilities/ComputedEquity
+	// считаются из ВСЕХ сразу (finance.go) — частичная деградация невозможна.
 }
 
 func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {

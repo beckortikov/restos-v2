@@ -209,7 +209,10 @@ func (s *FinancialAccountsService) SetEnabled(ctx context.Context, id string, en
 		updates["disabled_at"] = now
 	}
 	scopedUpd, _ := s.r.ForTenant(ctx)
-	if err := scopedUpd.Model(&models.FinancialAccount{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+	// Model(&existing), не голый литерал: ADR-003 Ф5 — generic trackedSave-хук
+	// (synclog/recorder_hook.go) достаёт RowID через reflection на Statement.Model,
+	// это работает только когда ID реально заполнен в переданной структуре.
+	if err := scopedUpd.Model(&existing).Updates(updates).Error; err != nil {
 		return nil, err
 	}
 	scopedOut, _ := s.r.ForTenant(ctx)
@@ -329,6 +332,10 @@ func MustBeEnabled(ctx context.Context, r *repo.Repo, accountID string) error {
 
 // Delete — 409 если есть FinancialOperation на этот аккаунт.
 func (s *FinancialAccountsService) Delete(ctx context.Context, id string) error {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return err
@@ -354,15 +361,19 @@ func (s *FinancialAccountsService) Delete(ctx context.Context, id string) error 
 	if refs > 0 {
 		return apperrors.Wrap("CONFLICT", "account has financial operations", nil)
 	}
-	scopedDel, _ := s.r.ForTenant(ctx)
-	res := scopedDel.Where("id = ?", id).Delete(&models.FinancialAccount{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	// Delete — hard, generic trackedSave-хук его не ловит (только Create/Update),
+	// поэтому explicit sync, как у всех прочих delete-путей в этом плане (Ф2-Ф4).
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		res := tx.Where("restaurant_id = ? AND id = ?", rid, id).Delete(&models.FinancialAccount{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		return recordFinancialAccountDeleteSync(tx, id, rid)
+	})
 }
 
 // Transfer — атомарный перевод между двумя счетами. Создаёт две FinancialOperation,

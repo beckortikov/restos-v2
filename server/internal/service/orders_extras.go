@@ -1272,8 +1272,10 @@ func (s *OrdersService) reverseCloseFinancials(tx *gorm.DB, rid string, order *m
 		if op.AccountID == nil || *op.AccountID == "" {
 			continue
 		}
-		if err := tx.Model(&models.FinancialAccount{}).
-			Where("restaurant_id = ? AND id = ?", rid, *op.AccountID).
+		// Model(&FinancialAccount{ID: ...}), не голый литерал: ADR-003 Ф5 —
+		// generic trackedSave-хук достаёт RowID через reflection.
+		if err := tx.Model(&models.FinancialAccount{ID: *op.AccountID}).
+			Where("restaurant_id = ?", rid).
 			Updates(map[string]any{
 				"balance":    gorm.Expr("balance - ?", op.Amount),
 				"updated_at": now,

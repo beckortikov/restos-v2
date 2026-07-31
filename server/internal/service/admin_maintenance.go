@@ -140,8 +140,11 @@ func (s *MaintenanceService) ApplyShiftBalanceFix(ctx context.Context, cutoff ti
 			if !decimal.IsPositive(l.Correction) {
 				continue
 			}
-			if err := tx.Model(&models.FinancialAccount{}).
-				Where("restaurant_id = ? AND id = ?", rid, l.AccountID).
+			// Model(&FinancialAccount{ID: ...}), не голый литерал: ADR-003 Ф5 —
+			// generic trackedSave-хук достаёт RowID через reflection, нужен ID
+			// прямо в структуре, не только в Where.
+			if err := tx.Model(&models.FinancialAccount{ID: l.AccountID}).
+				Where("restaurant_id = ?", rid).
 				Updates(map[string]any{
 					"balance":    gorm.Expr("balance - ?", l.Correction),
 					"updated_at": now,

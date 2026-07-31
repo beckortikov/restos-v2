@@ -197,9 +197,22 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 		// категорией — см. AddOperation), иначе удалённый расход остался бы
 		// висеть в ОПиУ/ДДС. У auto_mirror такой финоперации нет (собственный
 		// source_ref не совпадает) — Delete по WHERE ничего не находит, no-op.
+		// ADR-003 Ф5: закрываем пробел delete-синка — читаем id ДО удаления
+		// (после Delete строку было бы уже не найти), затем явный delete-sync.
+		var foIDs []string
+		if err := tx.Model(&models.FinancialOperation{}).
+			Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
+			Pluck("id", &foIDs).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
 			return err
+		}
+		for _, foID := range foIDs {
+			if err := recordFinancialOpDeleteSync(tx, foID, rid); err != nil {
+				return err
+			}
 		}
 		// Н13: вернуть деньги на счёт, если операция его дебетовала (cash_out с
 		// реальной категорией). Авто-зеркала счёт не дебетовали — их исключаем.
@@ -258,8 +271,10 @@ func reverseShiftAccountDebit(tx *gorm.DB, rid string, shift *models.CashShift, 
 	if target == nil || *target == "" {
 		return nil
 	}
-	return tx.Model(&models.FinancialAccount{}).
-		Where("restaurant_id = ? AND id = ?", rid, *target).
+	// Model(&FinancialAccount{ID: ...}), не голый литерал: ADR-003 Ф5 —
+	// generic trackedSave-хук достаёт RowID через reflection.
+	return tx.Model(&models.FinancialAccount{ID: *target}).
+		Where("restaurant_id = ?", rid).
 		Updates(map[string]any{
 			"balance":    gorm.Expr("balance + ?", op.Amount),
 			"updated_at": time.Now().UTC(),
@@ -315,9 +330,21 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		}
 		// Реверс связанной financial_operation (см. DeleteExpense). У auto_mirror
 		// такой финоперации нет (собственный source_ref не совпадает) — no-op.
+		// ADR-003 Ф5: закрываем пробел delete-синка — читаем id ДО удаления.
+		var foIDs []string
+		if err := tx.Model(&models.FinancialOperation{}).
+			Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
+			Pluck("id", &foIDs).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("restaurant_id = ? AND source_ref = ?", rid, "shift_expense:"+opID).
 			Delete(&models.FinancialOperation{}).Error; err != nil {
 			return err
+		}
+		for _, foID := range foIDs {
+			if err := recordFinancialOpDeleteSync(tx, foID, rid); err != nil {
+				return err
+			}
 		}
 		// Н13: вернуть деньги на счёт, если операция его дебетовала. Авто-зеркала
 		// счёт не дебетовали (баланс уже списан исходной операцией в другом

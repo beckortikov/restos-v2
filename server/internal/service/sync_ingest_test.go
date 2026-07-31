@@ -1235,3 +1235,230 @@ func TestSyncIngest_SupplyExpense(t *testing.T) {
 		t.Errorf("supply_expenses = %d, want 1 (не задвоилось)", count)
 	}
 }
+
+// TestSyncIngest_FinancialAccount — приём снапшота счёта на central (Ф5):
+// upsert (приходит с каждым Create/Update филиала через generic trackedSave-
+// хук — central всегда видит текущий баланс) + hard delete.
+func TestSyncIngest_FinancialAccount(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"financial_accounts"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	accID := uuid.NewString()
+	name := "Касса"
+	acc := models.FinancialAccount{ID: accID, Name: &name, RestaurantID: &branchID, Balance: decimal.MustFromString("1000"), IsEnabled: true}
+	body, _ := json.Marshal(acc)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_accounts", RowID: accID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.FinancialAccount
+	if err := gdb.First(&got, "id = ?", accID).Error; err != nil {
+		t.Fatalf("account not upserted: %v", err)
+	}
+	if !got.Balance.Equal(decimal.MustFromString("1000")) {
+		t.Errorf("balance = %s, want 1000", got.Balance.String())
+	}
+
+	// Повтор с изменённым балансом (после следующей операции на филиале) — upsert.
+	acc.Balance = decimal.MustFromString("850")
+	body2, _ := json.Marshal(acc)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_accounts", RowID: accID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", accID)
+	if !got.Balance.Equal(decimal.MustFromString("850")) {
+		t.Errorf("balance after upsert = %s, want 850", got.Balance.String())
+	}
+
+	// IsEnabled: true→false через upsert — регресс-проверка отдельного бага
+	// (Ф5): IsEnabled — bool с gorm:"default:true", GORM's Create()/ON CONFLICT
+	// подменяет zero-значение (false) значением из default-тега при наивном
+	// struct-based upsert. applyFinancialAccount форсирует правильное значение
+	// отдельным Update — без него этот блок ловил бы is_enabled=true (сломано).
+	acc.IsEnabled = false
+	body3, _ := json.Marshal(acc)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_accounts", RowID: accID, Op: "update", Payload: body3},
+	}}); err != nil {
+		t.Fatalf("Ingest (disable): %v", err)
+	}
+	gdb.First(&got, "id = ?", accID)
+	if got.IsEnabled {
+		t.Errorf("is_enabled after upsert = true, want false (см. комментарий: gorm default-substitution gotcha)")
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_accounts", RowID: accID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	var count int64
+	gdb.Model(&models.FinancialAccount{}).Where("id = ?", accID).Count(&count)
+	if count != 0 {
+		t.Errorf("account still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_RecurringPayment — приём регулярного платежа на central (Ф5):
+// upsert + hard delete.
+func TestSyncIngest_RecurringPayment(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"recurring_payments"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	rpID := uuid.NewString()
+	name := "Аренда"
+	rp := models.RecurringPayment{ID: rpID, Name: &name, RestaurantID: &branchID, Amount: decimal.MustFromString("5000"), DayOfMonth: 5, Active: true}
+	body, _ := json.Marshal(rp)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "recurring_payments", RowID: rpID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.RecurringPayment
+	if err := gdb.First(&got, "id = ?", rpID).Error; err != nil {
+		t.Fatalf("recurring_payment not upserted: %v", err)
+	}
+	if !got.Active {
+		t.Errorf("active = false, want true")
+	}
+
+	// Повтор после Pay (next_due/last_paid_at изменились) — upsert.
+	rp.Active = false
+	body2, _ := json.Marshal(rp)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "recurring_payments", RowID: rpID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", rpID)
+	if got.Active {
+		t.Errorf("active after upsert = true, want false")
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "recurring_payments", RowID: rpID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	var count int64
+	gdb.Model(&models.RecurringPayment{}).Where("id = ?", rpID).Count(&count)
+	if count != 0 {
+		t.Errorf("recurring_payment still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_FinancialOpDelete — закрывает пробел (Ф5): удаление
+// financial_operations на филиале (DeleteExpense/DeleteOperation) теперь
+// реплицируется, а не только insert.
+func TestSyncIngest_FinancialOpDelete(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"financial_operations"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	opID := uuid.NewString()
+	typ, cat := "out", "shift_expense"
+	fo := models.FinancialOperation{ID: opID, Type: &typ, Category: &cat, Amount: decimal.MustFromString("100"), RestaurantID: &branchID}
+	body, _ := json.Marshal(fo)
+
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_operations", RowID: opID, Op: "insert", Payload: body},
+	}}); err != nil {
+		t.Fatalf("Ingest (insert): %v", err)
+	}
+	var count int64
+	gdb.Model(&models.FinancialOperation{}).Where("id = ?", opID).Count(&count)
+	if count != 1 {
+		t.Fatalf("count after insert = %d, want 1", count)
+	}
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_operations", RowID: opID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res.Applied)
+	}
+	gdb.Model(&models.FinancialOperation{}).Where("id = ?", opID).Count(&count)
+	if count != 0 {
+		t.Errorf("financial_operation still present after delete: count = %d", count)
+	}
+}

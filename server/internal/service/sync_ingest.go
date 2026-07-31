@@ -157,6 +157,16 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "financial_accounts":
+			if err := s.applyFinancialAccount(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "recurring_payments":
+			if err := s.applyRecurringPayment(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
@@ -686,7 +696,18 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*Ingest
 // applyFinancialOp — upsert денежной операции из payload (для сводки владельцу).
 // Только запись строки; балансы счетов на центральном узле НЕ трогаем (они —
 // производные операций филиала, сводку считаем из financial_operations).
+// Delete (Ф5) — закрывает пробел: DeleteExpense/DeleteOperation на филиале
+// реально удаляют связанную финоперацию при отмене кассового расхода.
 func (s *SyncService) applyFinancialOp(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "financial_operations delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.FinancialOperation{}).Error
+		})
+	}
 	var op models.FinancialOperation
 	if err := json.Unmarshal(e.Payload, &op); err != nil {
 		return apperrors.Wrap("VALIDATION", "invalid financial_operations payload", err)
@@ -698,5 +719,81 @@ func (s *SyncService) applyFinancialOp(ctx context.Context, e SyncEntry, updateA
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		return tx.Clauses(conflict).Create(&op).Error
+	})
+}
+
+// applyFinancialAccount — upsert/delete снапшота счёта (Ф5). Приходит на
+// каждый Create/Update (generic trackedSave-хук, synclog/recorder_hook.go) —
+// частота ≈ каждая денежная операция в системе, central всегда видит
+// актуальный баланс филиала. Delete — настоящий (hard, FinancialAccountsService.
+// Delete), как у suppliers/ingredients/tables.
+func (s *SyncService) applyFinancialAccount(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "financial_accounts delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.FinancialAccount{}).Error
+		})
+	}
+	var acc models.FinancialAccount
+	if err := json.Unmarshal(e.Payload, &acc); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid financial_accounts payload", err)
+	}
+	if acc.ID == "" {
+		return apperrors.Wrap("VALIDATION", "financial_accounts payload missing id", nil)
+	}
+	// IsEnabled — bool (не указатель) с gorm:"default:true": GORM's
+	// ConvertToCreateValues (callbacks/create.go) БЕЗУСЛОВНО подменяет
+	// zero-значение поля (false) значением из default-тега (true) при
+	// Create()/ON CONFLICT DO UPDATE — это внутренняя логика построения
+	// VALUES, Select("*")/Omit её не отключают (проверено чтением исходников
+	// GORM). Хуже: подмена пишет исправленное значение ОБРАТНО в саму
+	// переданную структуру (field.Set(...)) — поэтому значение нужно
+	// захватить ДО Create(), иначе acc.IsEnabled к моменту форс-апдейта уже
+	// испорчено самим Create(). Map-based Update этой подмене не подвержен
+	// (другой путь в GORM — ConvertToAssignments, не ConvertToCreateValues).
+	wantEnabled := acc.IsEnabled
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&acc).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.FinancialAccount{ID: acc.ID}).Update("is_enabled", wantEnabled).Error
+	})
+}
+
+// applyRecurringPayment — upsert/delete снапшота регулярного платежа (Ф5).
+// Delete — настоящий (hard, RecurringPaymentsService.Delete).
+func (s *SyncService) applyRecurringPayment(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "recurring_payments delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.RecurringPayment{}).Error
+		})
+	}
+	var rp models.RecurringPayment
+	if err := json.Unmarshal(e.Payload, &rp); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid recurring_payments payload", err)
+	}
+	if rp.ID == "" {
+		return apperrors.Wrap("VALIDATION", "recurring_payments payload missing id", nil)
+	}
+	// Active — та же ловушка, что у FinancialAccount.IsEnabled (bool +
+	// gorm:"default:true", см. подробный комментарий в applyFinancialAccount) —
+	// захватываем ДО Create(), которая испортит rp.Active обратной записью.
+	wantActive := rp.Active
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&rp).Error; err != nil {
+			return err
+		}
+		return tx.Model(&models.RecurringPayment{ID: rp.ID}).Update("active", wantActive).Error
 	})
 }

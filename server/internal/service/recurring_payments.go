@@ -103,8 +103,13 @@ func (s *RecurringPaymentsService) Create(ctx context.Context, in RecurringPayme
 	nd := nextDueDate(now, dom)
 	rp.NextDue = &nd
 
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(rp).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Create(rp).Error; err != nil {
+			return err
+		}
+		return recordRecurringPaymentSync(tx, []string{rp.ID})
+	}); err != nil {
 		return nil, err
 	}
 	return rp, nil
@@ -164,8 +169,13 @@ func (s *RecurringPaymentsService) Patch(ctx context.Context, id string, in Recu
 		nd := nextDueDate(now, *in.DayOfMonth)
 		updates["next_due"] = nd
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		return recordRecurringPaymentSync(tx, []string{existing.ID})
+	}); err != nil {
 		return nil, err
 	}
 	scoped3, _ := s.r.ForTenant(ctx)
@@ -180,18 +190,21 @@ func (s *RecurringPaymentsService) Delete(ctx context.Context, id string) error 
 	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
 		return err
 	}
-	scoped, err := s.r.ForTenant(ctx)
+	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return err
 	}
-	res := scoped.Where("id = ?", id).Delete(&models.RecurringPayment{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		res := tx.Where("restaurant_id = ? AND id = ?", rid, id).Delete(&models.RecurringPayment{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		return recordRecurringPaymentDeleteSync(tx, id, rid)
+	})
 }
 
 // Pay — провести платёж по шаблону. Атомарно: списывает сумму со счёта, создаёт
@@ -298,6 +311,9 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 			"last_paid_at": now,
 			"updated_at":   now,
 		}).Error; err != nil {
+			return err
+		}
+		if err := recordRecurringPaymentSync(tx, []string{rp.ID}); err != nil {
 			return err
 		}
 		rp.NextDue = &nd

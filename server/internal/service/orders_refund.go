@@ -210,8 +210,10 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 			return err
 		}
 		// Debit account balance (мы снимаем деньги — balance уменьшается).
-		if err := tx.Model(&models.FinancialAccount{}).
-			Where("restaurant_id = ? AND id = ?", rid, accountID).
+		// Model(&FinancialAccount{ID: ...}), не голый литерал: ADR-003 Ф5 —
+		// generic trackedSave-хук достаёт RowID через reflection.
+		if err := tx.Model(&models.FinancialAccount{ID: accountID}).
+			Where("restaurant_id = ?", rid).
 			Updates(map[string]any{
 				"balance":    gorm.Expr("balance - ?", amount),
 				"updated_at": now,

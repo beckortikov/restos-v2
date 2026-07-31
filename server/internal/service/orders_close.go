@@ -492,8 +492,10 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		// Идемпотентность по source_ref уже обеспечена check'ом stock-deduct'а
 		// выше (один финoperation на order — нет double-credit'а на ретрае).
 		creditAccount := func(accountID string, amount decimal.Decimal) error {
-			return tx.Model(&models.FinancialAccount{}).
-				Where("restaurant_id = ? AND id = ?", rid, accountID).
+			// Model(&FinancialAccount{ID: ...}), не голый литерал: ADR-003 Ф5 —
+			// generic trackedSave-хук достаёт RowID через reflection.
+			return tx.Model(&models.FinancialAccount{ID: accountID}).
+				Where("restaurant_id = ?", rid).
 				Updates(map[string]any{
 					"balance":    gorm.Expr("balance + ?", amount),
 					"updated_at": now,

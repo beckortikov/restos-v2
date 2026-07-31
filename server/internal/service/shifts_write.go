@@ -532,8 +532,10 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 			// флоата больше, чем на балансе счёта — относительное движение всё
 			// равно верное, а ложный отказ заблокировал бы реальную закупку.
 			if targetAccountID != nil && *targetAccountID != "" {
-				if err := tx.Model(&models.FinancialAccount{}).
-					Where("restaurant_id = ? AND id = ?", rid, *targetAccountID).
+				// Model(&FinancialAccount{ID: ...}), не голый литерал: ADR-003
+				// Ф5 — generic trackedSave-хук достаёт RowID через reflection.
+				if err := tx.Model(&models.FinancialAccount{ID: *targetAccountID}).
+					Where("restaurant_id = ?", rid).
 					Updates(map[string]any{
 						"balance":    gorm.Expr("balance - ?", amt),
 						"updated_at": now,
