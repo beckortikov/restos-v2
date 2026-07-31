@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
@@ -36,6 +37,24 @@ func (h *SyncHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 // адресованные филиалу (down-sync): входящие sent-перемещения.
 func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.PullFor(r.Context(), r.URL.Query().Get("restaurant_id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// Backfill — POST /api/v1/sync/backfill. Ручная кнопка «Отправить всю
+// историю на central» (Настройки → Синхронизация, owner-only — проверка
+// внутри SyncService.Backfill). Вызывается на ФИЛИАЛЕ (не central): rid —
+// текущий tenant запроса, тот же ресторан, чья история уходит.
+func (h *SyncHandler) Backfill(w http.ResponseWriter, r *http.Request) {
+	rid, err := tenant.MustRestaurantID(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	out, err := h.svc.Backfill(r.Context(), rid)
 	if err != nil {
 		respond.Error(w, err)
 		return

@@ -13,6 +13,12 @@ type SyncSettings struct {
 	RestaurantID *string    `gorm:"column:restaurant_id;type:uuid" json:"restaurant_id"`
 	IntervalSec  int        `gorm:"column:interval_sec;default:30" json:"interval_sec"`
 	UpdatedAt    *time.Time `gorm:"column:updated_at" json:"updated_at"`
+	// BackfilledAt — маркер «история этого филиала отправлена на central»
+	// (Ф6). NULL = ещё не выполнялся; main.go на старте сравнивает с Enabled,
+	// чтобы отличить первое включение sync от обычного рестарта уже
+	// синхронизирующейся кассы. Не трогается Update() (PUT /settings/sync
+	// меняет только сетевые параметры) — выставляется ТОЛЬКО из Backfill().
+	BackfilledAt *time.Time `gorm:"column:backfilled_at" json:"backfilled_at,omitempty"`
 }
 
 func (SyncSettings) TableName() string { return "sync_settings" }

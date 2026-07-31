@@ -2301,6 +2301,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sync/backfill": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Отправить всю существующую историю филиала на central (ADR-003 Ф6, «Central видит всё»). Owner-only. Enqueue'ит текущее состояние каждой реплицируемой таблицы в sync_log — обычный пушер доставит батчи на следующих циклах. Вызывать один раз после первого включения sync (для истории ДО этого момента) — central иначе увидел бы данные только с момента появления пушера. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            entities?: {
+                                [key: string]: number;
+                            };
+                        };
+                    };
+                };
+                /** @description Только владелец. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/writeoffs": {
         parameters: {
             query?: never;
@@ -12394,6 +12444,8 @@ export interface components {
             /** Format: uuid */
             restaurant_id?: string;
             interval_sec?: number;
+            /** Format: date-time */
+            backfilled_at?: string | null;
         };
         BranchesList: {
             data?: components["schemas"]["Branch"][];

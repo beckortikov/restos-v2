@@ -781,6 +781,31 @@ paths:
                   applied: { type: integer }
                   skipped: { type: integer }
 
+  /api/v1/sync/backfill:
+    post:
+      tags: [stock]
+      summary: >-
+        Отправить всю существующую историю филиала на central (ADR-003 Ф6,
+        «Central видит всё»). Owner-only. Enqueue'ит текущее состояние
+        каждой реплицируемой таблицы в sync_log — обычный пушер доставит
+        батчи на следующих циклах. Вызывать один раз после первого включения
+        sync (для истории ДО этого момента) — central иначе увидел бы данные
+        только с момента появления пушера.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  entities:
+                    type: object
+                    additionalProperties: { type: integer }
+        "403":
+          description: Только владелец.
+
   /api/v1/stock/writeoffs:
     get:
       tags: [stock]
@@ -4007,6 +4032,7 @@ components:
         token: { type: string }
         restaurant_id: { type: string, format: uuid }
         interval_sec: { type: integer }
+        backfilled_at: { type: string, format: date-time, nullable: true }
 
     BranchesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Branch" } }, next_cursor: { type: string } } }
     Branch:
