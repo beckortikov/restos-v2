@@ -4,8 +4,7 @@ import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { fetchBranches, type Branch } from '@/lib/queries/transfers'
 import { Network } from 'lucide-react'
-
-const KEY = 'restos-branch-view'
+import { BRANCH_VIEW_KEY as KEY } from '@/hooks/use-branch-view'
 
 // BranchSelector — переключатель «смотреть как филиал» для владельца сети
 // (ADR-003 Фаза 4). Ставит X-Branch-Id (через localStorage → api middleware),

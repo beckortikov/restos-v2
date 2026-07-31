@@ -37,15 +37,33 @@ import (
 // уронит кассу в экран активации (нашли вживую). Поэтому override включается,
 // только если ТЕКУЩИЙ ресторан — central_warehouse.
 
-// branchDataAvailable — пути, чьи данные ПОЛНОСТЬЮ реплицируются с филиала на
-// central (ADR-003 Фаза 2 — financial_operations; Фаза 5.1 — orders/order_items;
-// «Central видит всё» Ф1 — cash_shifts/cash_shift_operations/users), поэтому
-// просмотр через X-Branch-Id для них даёт корректные, а не тихо-нулевые цифры.
-// Список сознательно консервативен: аналитика (ABC-меню, продажи и т.п.) тоже
-// читает orders/order_items, но местами джойнит ингредиенты/столы/официантов
-// (не реплицированы) — не добавляем её сюда, пока это не проверено построчно по
-// каждому хендлеру. Пусто здесь = баннер «недоступно» вместо риска показать
-// правдоподобную, но неполную цифру.
+// ─── Ф7: инверсия allowlist → blocklist ────────────────────────────────────
+// До Ф7 (v3.16.226-231) здесь жил `branchDataAvailable` — allowlist
+// (default-deny): путь показывал данные филиала БЕЗ баннера, только если его
+// построчно проверили и явно вписали. По мере фаз Ф1-Ф6 репликация выросла с
+// 3 сущностей (orders/order_items/financial_operations) до 19 — allowlist
+// разросся, но 79 из 124 GET-роутов оставались НЕ проверены вовсе и потому
+// показывали баннер «недоступно» даже там, где данные на самом деле были
+// полными и корректными (напр. /network/branches, /finance/operations,
+// /menu/popularity — см. ниже). План (docs, ADR-003) требовал на финальной
+// фазе инвертировать: доступно ВСЁ, кроме явного списка live-путей.
+//
+// branchDataBlocked — обратная семантика: путь здесь = баннер «недоступно»
+// показывается. ВСЁ, чего нет в карте, теперь по умолчанию считается
+// доступным. Это смещает риск: раньше забытый allow = лишний баннер (не
+// опасно), теперь забытый block = тихо неверная/неполная цифра ВМЕСТО
+// честного баннера. Каждая новая GET-ручка, читающая live-состояние кассы
+// (карта зала, кухня, принтеры, любая нереплицированная таблица) ОБЯЗАНА
+// сразу попасть сюда — самой частой ошибкой ревью теперь будет забыть это
+// сделать, а не забыть добавить в allowlist.
+//
+// Полная построчная разведка всех 79 путей — Explore-агенты, 2026-07-31
+// (4 параллельных агента по доменам: меню/склад-справочники/CRM,
+// аналитика/отчёты, заказы/смены/операционные, сетевые/служебные). Единственный
+// источник истины о том, что реплицируется — `sync_backfill.go`/`sync_ingest.go`
+// (19 entity в обе стороны) + generic-хуки `synclog/recorder_hook.go`
+// (trackedInsert/trackedSave) — ни триггеров, ни других путей записи в
+// sync_log в БД нет.
 //
 // Ключи — CHI ROUTE PATTERN (chi.RouteContext(ctx).RoutePattern()), НЕ
 // r.URL.Path: путь с параметром типа /shifts/{id} в реальном запросе всегда
@@ -53,161 +71,220 @@ import (
 // никогда бы не совпала (баг, найден при добавлении первых параметризованных
 // путей в Ф1). RoutePattern() уже разрешён на этот момент (проверено —
 // middleware выполняется ПОСЛЕ того, как chi нашёл маршрут) и включает полный
-// префикс /api/v1.
-var branchDataAvailable = map[string]bool{
-	"/api/v1/network/summary":         true,
-	"/api/v1/finance/cashflow":        true,
-	"/api/v1/finance/monthly-revenue": true,
-	// Ф1 (смены + сотрудники) — cash_shifts/cash_shift_operations реплицируются
-	// на каждое сохранение (см. recordShiftSync), ZReport построчно проверен:
-	// зависит только от cash_shifts/cash_shift_operations (свои) + orders/
-	// order_items/financial_operations (уже реплицированы Фаза 2/5.1) + users
-	// (Ф1, имена официантов/кассира) — menu_items/financial_accounts JOIN'ятся
-	// с graceful COALESCE-фолбэком (деградируют до Ф2/Ф5, не ломаются).
-	"/api/v1/shifts":                 true,
-	"/api/v1/shifts/active":          true,
-	"/api/v1/shifts/{id}":            true,
-	"/api/v1/shifts/{id}/zreport":    true,
-	"/api/v1/shifts/{id}/revenue":    true,
-	"/api/v1/shifts/{id}/operations": true,
-	// users — сам по себе не джойнит ничего нереплицированного (имена
-	// официантов/кассиров для смен, фильтр «по сотруднику»).
-	"/api/v1/users":      true,
-	"/api/v1/users/{id}": true,
+// префикс /api/v1. Матчинг — по ВСЕМУ паттерну, без учёта query-параметров:
+// выборочно запретить только один `?include=`/`?status=` для одного и того же
+// пути middleware не умеет (тот же принцип, что раньше сформулирован для
+// /finance/pnl vs /reports/pl.xlsx) — если хоть один режим пути читает
+// нереплицированное или живое состояние, блокируется путь целиком.
+var branchDataBlocked = map[string]bool{
+	// ─── Заказы и живая операционка кассы ──────────────────────────────────
+	// recordOrderSync вызывается ТОЛЬКО из терминальных точек (Close/Cancel/
+	// VoidItem/Refund/PaySplit-autoclose, см. sync_orders.go) — нетерминальные
+	// (new/cooking/ready/served) на central физически не существуют.
+	"/api/v1/orders":             true, // ?status=new/open — central даст правдоподобно ПУСТОЙ список активных вместо баннера
+	"/api/v1/orders/{id}":        true, // для нетерминального id — тихий 404 вместо честного «не реплицируется»; для терминального был бы корректен, но паттерн общий
+	"/api/v1/order-items/{id}":   true, // тот же JOIN на orders — тот же 404-паттерн
+	"/api/v1/orders/{id}/splits": true, // order_splits вне плана репликации (сознательно, см. план — «живая операционка»)
+	"/api/v1/orders/{id}/voids":  true, // order_voids вне плана репликации
+	"/api/v1/voids":              true, // order_voids вне плана репликации
+	"/api/v1/kds/items":          true, // фильтр status NOT IN ('done','served','cancelled') — ровно нетерминальные
+	"/api/v1/kds/stations":       true, // технически безопасен (только menu_items), блокируем для консистентности — список станций бессмыслен без самой доски KDS
+	// /tables — НЕ найден в исходной разведке 4 агентов (те проверяли только
+	// /analytics/tables), обнаружен отдельно при финальной сверке: TablesService.
+	// ListTables отдаёт models.Table целиком, включая status/current_order_id/
+	// opened_at/waiter_id — из Ф2 эти поля НЕ реплицируются (только structural
+	// CRUD, SetStatus/AssignWaiter/OpenForOrder — живая операционка кассы).
+	// ?status=occupied дал бы тот же класс риска, что /orders?status=new. Zones
+	// (models.Zone) такого живого поля не несёт вовсе — безопасен по умолчанию.
+	"/api/v1/tables": true,
 
-	// Ф2 (меню + столы/зоны) — menu_items снапшот на каждое сохранение
-	// (см. recordMenuItemsSync), tables/zones structural CRUD (см.
-	// recordTableSync/recordZoneSync). Построчно проверены (Explore, 2026-07-30)
-	// все analytics/*-хендлеры и reports/*.xlsx — ниже добавлены ТОЛЬКО те, что
-	// читают исключительно orders/order_items/financial_operations/cash_shifts/
-	// cash_shift_operations/users/menu_items/tables/zones (все уже реплицированы).
-	// НЕ добавлены на момент Ф2 (зависят от НЕреплицированного, дают
-	// тихо-неверную цифру, не просто баннер): /finance/pnl и /reports/pl.xlsx
-	// (stock_writeoffs, /reports/pl.xlsx ещё и supply_expenses — обе таблицы
-	// реплицированы Ф4: /reports/pl.xlsx переехал в разрешённые ниже,
-	// /finance/pnl остался запрещён по ДРУГОЙ причине — см. Ф4), /reports/audit.xlsx
-	// (audit_log — вне плана репликации вовсе), /analytics/weekday
-	// (time_entries — Ф5б «Персонал», ФОТ прямо входит в NetProfit).
-	"/api/v1/analytics/abc-menu":       true,
-	"/api/v1/analytics/peak-hours":     true,
-	"/api/v1/analytics/waiters":        true,
-	"/api/v1/analytics/tables":         true,
-	"/api/v1/analytics/sales-report":   true,
-	"/api/v1/analytics/trends":         true,
-	"/api/v1/analytics/trends.xlsx":    true,
-	"/api/v1/reports/orders.xlsx":      true,
-	"/api/v1/reports/shifts/{id}.xlsx": true,
+	// ─── Печать/принтеры — железо КОНКРЕТНОЙ кассы, вне плана репликации ───
+	"/api/v1/printers":                     true,
+	"/api/v1/printers/{id}":                true,
+	"/api/v1/printers/system-queues":       true, // вообще не tenant-scoped (комментарий в коде: «список снимается с машины, где крутится Go-бэк») — под override показал бы очереди central, а не филиала
+	"/api/v1/print/jobs":                   true,
+	"/api/v1/print/jobs/active-by-station": true,
 
-	// Ф3 (склад: остатки + движения) — ingredients снапшот (денормализованный
-	// qty, синкается и явными точками, и внутри самого хука денормализации,
-	// см. sync_stock.go/audit/stock_hook.go), stock_movements append-only
-	// (generic trackedInsert). Построчно проверены (Explore, 2026-07-30):
-	// /analytics/food-cost*, /forecast — ошибочно считались «складскими» по
-	// названию в комментарии Ф2 выше; реально читают только orders/order_items
-	// (cogs заморожен на филиале в момент продажи, см. orders_write.go) и
-	// financial_operations (forecast, fixed costs) — были безопасны уже с Ф1,
-	// просто не проверены построчно тогда. /reports/stock-movements.xlsx —
-	// читает только stock_movements, был в «не добавлено» списке Ф2 как раз
-	// потому что stock_movements ещё не реплицировался — теперь можно.
-	//
-	// НЕ добавлен /analytics/insights на момент Ф3: агрегатор из 7 паков, один
-	// из которых (cogsDriftInsights) JOIN'ит stock_receipts/stock_receipt_lines
-	// (Ф4, складские документы — тогда ещё не реплицированы). Эта причина Ф4
-	// СНЯТА (см. ниже), но нашлись ДВЕ ДРУГИЕ, независимые — путь остаётся
-	// запрещён.
-	"/api/v1/stock/ingredients":                true,
-	"/api/v1/stock/ingredient-categories":      true,
-	"/api/v1/stock/movements":                  true,
-	"/api/v1/analytics/ingredient-stock-value": true,
-	"/api/v1/analytics/abc-inventory":          true,
-	"/api/v1/analytics/food-cost":              true,
-	"/api/v1/analytics/food-cost/monthly":      true,
-	"/api/v1/analytics/forecast":               true,
-	"/api/v1/reports/stock-movements.xlsx":     true,
+	// ─── Стоп-лист — живое состояние кухни прямо сейчас ────────────────────
+	// Ручные стопы (menu_items) были бы корректны, но авто-стоп по нехватке
+	// сырья джойнит tech_card_lines (не реплицируется) — список тихо теряет
+	// часть строк, не просто пуст целиком (тот же корень, что у
+	// /analytics/insights ниже).
+	"/api/v1/stop-list": true,
 
-	// Ф4 (складские документы: приёмки/списания/инвентаризации/возвраты/
-	// поставщики/снабжение) — снапшот-по-id для 4 документов с дочерними
-	// строками (stock_receipts/stock_writeoffs/inventory_checks/stock_returns,
-	// см. recordReceiptSync/recordWriteoffSync/recordInventorySync/
-	// recordReturnSync в sync_docs.go), плоский снапшот+delete для suppliers,
-	// generic trackedInsert для supply_expenses (append-only, единственная
-	// точка создания никогда не мутирует строку). Построчно проверены
-	// (Explore, 2026-07-31), ни один JOIN на нереплицированное:
-	"/api/v1/stock/receipts":             true,
-	"/api/v1/stock/writeoffs":            true,
-	"/api/v1/stock/returns":              true,
-	"/api/v1/stock/inventory":            true,
-	"/api/v1/stock/inventory/{id}":       true,
-	"/api/v1/stock/inventory/{id}/lines": true,
-	"/api/v1/suppliers":                  true,
-	"/api/v1/supply-expenses":            true,
-	// /reports/pl.xlsx — computePnL (reports_pl.go) читает РОВНО 4 таблицы:
-	// orders/order_items (Ф2/5.1), stock_writeoffs/supply_expenses (Ф4) —
-	// подтверждено построчным чтением функции, не только Explore. Отличается
-	// от /finance/pnl (см. ниже) — это ДРУГАЯ, более простая реализация без
-	// разбивки revenue.by_method.
-	"/api/v1/reports/pl.xlsx": true,
+	// ─── Диагностика shadow-режима — метрики ЭТОЙ инсталляции ──────────────
+	"/api/v1/admin/shadow/stats":  true,
+	"/api/v1/admin/shadow/drifts": true,
 
-	// НЕ добавлен /finance/pnl (в отличие от /reports/pl.xlsx выше!): читает
-	// те же 4 реплицированные таблицы для headline-цифр (revenue/cogs/
-	// writeoffs/opex/profit — они были бы верны), НО ещё и order_splits для
-	// revenue.by_method (finance.go) — эта таблица НЕ реплицируется. На
-	// central для заказов с payment_method='split' order_splits пуст →
-	// код уходит в свой же fallback (изначально рассчитанный на редкий
-	// edge-case гонки на филиале, не на систематическое отсутствие данных) и
-	// сваливает ВСЮ split-выручку в один бакет "split" вместо разбивки по
-	// факту (наличные/карта) — тихо неверная часть ответа, не просто баннер.
-	// Итоговые суммы (net_profit и т.п.) при этом верны — деградирует только
-	// одно вложенное поле, но выборочно возвращать часть ответа нельзя (тот
-	// же принцип, что и у /analytics/insights).
-	//
-	// НЕ добавлен /analytics/insights: причина Ф3 (cogsDriftInsights →
-	// stock_receipts) снята репликацией Ф4, но построчная проверка ВСЕХ 7
-	// паков агрегатора нашла две другие, ранее не всплывавшие: leakInsights
-	// JOIN'ит order_voids (не реплицируется вовсе, вне плана), lostSalesInsights
-	// делегирует в StopListService.List, который для авто-стопа по нехватке
-	// сырья читает tech_card_lines (тоже не реплицируется) — на central даст
-	// пустой список авто-стопов вместо заниженного/пустого impact в ₽, не
-	// текстовую деталь. Остальные 5 паков сами по себе безопасны, но выборочно
-	// допускать часть ответа агрегатора нельзя (тот же принцип, что у Ф3).
-	//
-	// НЕ добавлен /finance/balance на момент Ф4: помимо suppliers.current_debt
-	// (теперь реплицирован) читал financial_accounts/semi_finished_stock/
-	// assets/liabilities/equity_entries — ни одна тогда не была реплицирована.
-	// financial_accounts реплицирован Ф5 (см. ниже) — эта причина снята, но
-	// остаются 4 самостоятельных блокера (semi_finished_stock/assets/
-	// liabilities/equity_entries, всё ещё вне плана репликации) — вердикт не
-	// меняется, см. актуальное обоснование в конце Ф5 ниже.
+	// already_applied читается из restaurants.shift_balance_corrected_at —
+	// таблица restaurants нигде не участвует в sync_log ни в одном направлении
+	// (нет ни одного record*Sync/hook/backfill-кейса) — центральный узел может
+	// показать «ещё не поправлено» для филиала, где коррекцию давно применили
+	// локально. Сами денежные суммы (Lines/TotalCorrection) при этом были бы
+	// верны (financial_operations/financial_accounts реплицированы) — но
+	// выборочно доверять части ответа нельзя.
+	"/api/v1/admin/maintenance/shift-balance-fix": true,
 
-	// Ф5 (деньги: счета + платежи) — financial_accounts: первая и единственная
-	// сущность плана на generic AfterCreate+AfterUpdate хук (trackedSave,
-	// synclog/recorder_hook.go) — точек мутации баланса ~20 по всему
-	// кодовому базу, явные recordXSync на каждой были бы избыточны. Хук
-	// перечитывает строку из БД по id ПОСЛЕ апдейта (не полагается на
-	// значение из Updates(map)/gorm.Expr, что было бы ненадёжно — 6 из 20
-	// точек пишут баланс именно через gorm.Expr). recurring_payments —
-	// explicit (4 точки: Create/Patch/Delete/Pay), как в Ф1-Ф4. Закрыт
-	// delete-пробел financial_operations (DeleteExpense/DeleteOperation
-	// реально удаляют связанную финоперацию — generic trackedInsert-хук
-	// ловит только insert). Построчно проверены (Explore, 2026-07-31):
-	"/api/v1/finance/accounts":                            true,
-	"/api/v1/finance/accounts/balance-history":            true,
-	"/api/v1/finance/recurring-payments":                  true,
-	"/api/v1/finance/service-accrual/by-waiter":           true,
-	"/api/v1/finance/service-accrual/by-shift/{shift_id}": true,
-	"/api/v1/finance/service-payout/by-waiter":            true,
-	"/api/v1/finance/service-payout/by-shift/{shift_id}":  true,
-	// service-accrual/service-payout читают только orders (o.service_amount,
-	// замороженный при закрытии заказа)/financial_operations/users — уже
-	// реплицированы (Ф1/Ф2/5.1). Разблокирует часть баннера на «Смены»
-	// (Ф1-эра комментарий выше: «также читает finance/accounts +
-	// finance/service-accrual|payout» — обе причины теперь сняты; остаётся
-	// только Ф5б «Персонал»/time_entries, если она вообще нужна этой странице).
-	//
-	// НЕ добавлен /finance/balance (см. выше, актуальные 4 блокера):
-	// semi_finished_stock, assets, liabilities, equity_entries — ни одна не
-	// реплицирована, а GrandTotalAssets/GrandTotalLiabilities/ComputedEquity
-	// считаются из ВСЕХ сразу (finance.go) — частичная деградация невозможна.
+	// ─── Бэкапы — файлы ЭТОЙ машины ─────────────────────────────────────────
+	// BackupService.List/Path не принимают context.Context вообще — чистая
+	// работа с локальной ФС. Под override покажет бэкапы central, выдавая их
+	// за бэкапы филиала — не пустой ответ, а откровенно ЧУЖИЕ данные.
+	"/api/v1/backup/list":            true,
+	"/api/v1/backup/download/{name}": true,
+
+	// ─── Табель — Ф5б «Персонал», отложена по согласованию с владельцем ────
+	"/api/v1/time-entries":        true,
+	"/api/v1/time-entries/active": true,
+	// today-stats — то же (time_entries) + orders БЕЗ статус-фильтра для
+	// orders_count/revenue (комментарий в коде прямо говорит «открытые/закрытые»).
+	"/api/v1/waiters/{id}/today-stats": true,
+
+	// ─── Аудит-лог — вне плана репликации вовсе ─────────────────────────────
+	"/api/v1/audit-log": true,
+
+	// ─── Зарплата — то, что реально опирается на нереплицированные таблицы ─
+	// (в отличие от /finance/salary/report — только financial_operations+users,
+	// оба реплицированы, оставлен доступным по умолчанию, см. блок ниже).
+	"/api/v1/finance/salary/accrual":     true, // daysWorked ← time_entries UNION salary_worked_days
+	"/api/v1/finance/salary/worked-days": true, // целиком time_entries + salary_worked_days
+	"/api/v1/finance/salary/deductions":  true, // salary_deductions не реплицируется
+
+	// ─── Свободные справочники ДДС/бюджет — свои таблицы, вне плана ────────
+	"/api/v1/finance/custom-categories": true,
+	"/api/v1/budget":                    true,
+
+	// ─── Баланс: активы/обязательства/капитал — те же 3 из 4 блокеров
+	// /finance/balance (см. «унаследовано из Ф2-Ф4» ниже), но как отдельные
+	// CRUD-страницы, а не только вложенные суммы в одном отчёте. Ни assets,
+	// ни liabilities, ни equity_entries нигде не участвуют в sync_log.
+	"/api/v1/assets":      true,
+	"/api/v1/liabilities": true,
+	"/api/v1/equity":      true,
+
+	// ─── Настройки ресторана — правки на филиале никогда не долетают ──────
+	// PATCH /api/v1/restaurant пишет в ту же таблицу restaurants, которая не
+	// участвует в sync_log ни в одну сторону — central хранит только то, чем
+	// ресторан был провижининг, без единого последующего апдейта.
+	"/api/v1/restaurant": true,
+	// override для /restaurants/{id}/stats формально no-op (Stats() берёт id
+	// из URL, не из tenant ctx), но orders_count/last_order_at считаются БЕЗ
+	// статус-фильтра — заниженное число и потенциально устаревшая дата.
+	"/api/v1/restaurants/{id}/stats": true,
+
+	// ─── Меню — справочники за пределами самой строки menu_items ───────────
+	// Базовый /menu/items без query безопасен (только menu_items), но
+	// include=tech_cards/ingredient_prices/attributes на ТОМ ЖЕ паттерне
+	// джойнят tech_card_lines/semi_finished_stock/menu_attributes*/
+	// menu_item_variant_values — ни одна не реплицирована, а middleware не
+	// различает query-параметры → блокируем путь целиком.
+	"/api/v1/menu/items":                   true,
+	"/api/v1/menu/items/{id}/attributes":   true,
+	"/api/v1/menu/categories":              true, // отдельная от menu_items таблица, нигде не реплицируется
+	"/api/v1/menu/modifier-groups":         true,
+	"/api/v1/menu/modifiers":               true,
+	"/api/v1/menu/tech-cards":              true, // tech_card_lines
+	"/api/v1/semi/types":                   true,
+	"/api/v1/semi/types/{id}":              true,
+	"/api/v1/semi/stock":                   true, // semi_finished_stock — тот же блокер, что и у /finance/balance
+	"/api/v1/size-scales":                  true,
+	"/api/v1/menu/items/{id}/max-portions": true, // tech_card_lines + semi_finished_types/stock, плюс живой остаток «прямо сейчас»
+	// Резерв считается по orders/order_items WHERE status NOT IN ('closed','cancelled')
+	// — ровно нетерминальные, которых на central нет: available = prepared − 0,
+	// т.е. ТИХО ЗАВЫШЕННАЯ, а не просто пустая цифра.
+	"/api/v1/menu/batch/availability":    true,
+	"/api/v1/menu/items/{id}/batch/logs": true, // batch_cooking_logs
+	"/api/v1/menu/batch/logs":            true, // batch_cooking_logs
+
+	// ─── CRM/бронирования — свои таблицы, вне плана ────────────────────────
+	"/api/v1/customers":                         true,
+	"/api/v1/reservations":                      true,
+	"/api/v1/reservations/for-table/{table_id}": true, // + окно «ближайшие 12 часов» — по сути живой снимок
+
+	// ─── Конфиг/состояние МАШИНЫ, не филиала ───────────────────────────────
+	// Технически override для всех трёх ничего не читает из tenant ctx (Get()
+	// не вызывает tenant.RestaurantID вовсе, Info() даже не принимает ctx) —
+	// эти данные всегда центрального узла. Блокируем не из соображений
+	// безопасности, а чтобы не путать «чья это машина»: иначе выглядит так,
+	// будто показан конфиг синхронизации/APK именно филиала X.
+	"/api/v1/settings/sync": true,
+	"/api/v1/waiter-app":    true,
+	"/api/v1/zakup-app":     true,
+
+	// ─── Унаследовано без изменений из Ф2-Ф4 (allowlist-эпоха) ─────────────
+	// Причины не пересматривались в Ф7 — форвард-порт старых «НЕ добавлен»
+	// записей в новую модель, иначе они молча стали бы default-allowed.
+	"/api/v1/finance/pnl":        true, // order_splits (не реплицируется) → revenue.by_method тихо сваливает всю split-выручку в один бакет; headline-суммы верны, но выборочно доверять части ответа нельзя
+	"/api/v1/analytics/insights": true, // leakInsights джойнит order_voids (вне плана); lostSalesInsights → StopListService (tech_card_lines)
+	"/api/v1/finance/balance":    true, // semi_finished_stock/assets/liabilities/equity_entries — ни одна не реплицирована, считаются из ВСЕХ разом
+	"/api/v1/reports/audit.xlsx": true, // audit_log вне плана репликации вовсе
+	"/api/v1/analytics/weekday":  true, // time_entries — Ф5б «Персонал», ФОТ входит в NetProfit
+}
+
+// ─── Построчно проверено и подтверждено безопасным (документация, НЕ карта) ─
+// Ниже — пути, для которых override реально доезжает до central БЕЗ баннера,
+// с кратким «почему». Раньше (allowlist-эпоха, Ф1-Ф6) это были явные записи
+// `branchDataAvailable[path] = true`; при инверсии в blocklist они просто
+// стали default-allowed — списки оставлены как факт «кто-то реально
+// построчно проверил каждый JOIN», а не «никто не запретил». Если нужна
+// точная историческая причина по каждому — `git log -p` этого файла до
+// v3.16.232 (Ф7) хранит построчные обоснования из Ф1-Ф5.
+//
+// Ф1 (смены/сотрудники): /network/summary, /finance/cashflow,
+//   /finance/monthly-revenue, /shifts[/active], /shifts/{id}[/zreport|/revenue|/operations],
+//   /users[/{id}]
+// Ф2 (меню/столы): /analytics/abc-menu|peak-hours|waiters|tables|sales-report|trends[.xlsx],
+//   /reports/orders.xlsx, /reports/shifts/{id}.xlsx
+// Ф3 (склад: остатки): /stock/ingredients[/ingredient-categories|/movements],
+//   /analytics/ingredient-stock-value|abc-inventory|food-cost[/monthly]|forecast,
+//   /reports/stock-movements.xlsx
+// Ф4 (складские документы): /stock/receipts|writeoffs|returns|inventory[/{id}[/lines]],
+//   /suppliers, /supply-expenses, /reports/pl.xlsx
+// Ф5 (деньги): /finance/accounts[/balance-history], /finance/recurring-payments,
+//   /finance/service-{accrual,payout}/by-{waiter,shift/{shift_id}}
+//
+// Ф7 (доразведано вместе с инверсией — были безопасны и раньше, просто
+//   никогда не проверялись построчно; баг был обратный — ложный баннер, не
+//   утечка данных):
+//   /network/branches, /network/menu, /nomenclature — account-scoped
+//     (accountForCtx), override физически не меняет ответ: activates ТОЛЬКО
+//     когда curAcc==tgtAcc, а значит account_id инвариантен к подмене.
+//   /finance/operations — только своя таблица, курсорная пагинация, без JOIN.
+//   /finance/salary/report — financial_operations (category IN Зарплата/
+//     Аванс/Сервис) LEFT JOIN users, обе реплицированы; НЕ читает time_entries
+//     (в отличие от /finance/salary/accrual|worked-days|deductions — блок выше).
+//   /restaurants, /restaurants/{id} — RestaurantsService.List/Get используют
+//     Raw() без tenant.RestaurantID(ctx) вовсе (комментарий в коде: «Owner/
+//     superadmin only, фильтрации по tenant нет») — override на них не влияет
+//     физически, добавлять некуда и незачем.
+//   /menu/popularity — orders/order_items с фильтром status IN
+//     ('closed','refunded') — ровно терминальные, как и весь остальной orders-код.
+//   /zones — models.Zone структурно реплицируется (Ф2), в отличие от /tables
+//     не несёт НИ ОДНОГО live-поля (нет status/current_order_id/waiter_id).
+//   /stock/transfers[/{id}] — читает только stock_transfers+stock_transfer_lines,
+//     реплицируются с ADR-003 Фаза 2/5.1 (пред-плановый фундамент, раньше
+//     orders/financial_operations), без JOIN на нереплицированное.
+//
+// Структурно вне досягаемости самого механизма BranchOverride (эффекта от
+// добавления/неотсутствия в любую карту нет вовсе — Auth и/или BranchOverride
+// не подключены на их роут-группе, см. router.go): /sync/pull, /events (SSE),
+// /bootstrap/status, /bootstrap/backups, /public/machine-info, /license/*
+// (последний исключён явно и раньше, см. код ниже).
+
+// noTenantSubstitution — пути, для которых override НЕ подменяет tenant в
+// контексте вовсе (как и /license/*, см. ниже), а не просто помечается
+// баннером «недоступно». Единственный найденный (Explore, 2026-07-31) случай
+// GET-хендлера с побочной ЗАПИСЬЮ: WarehouseService.List безусловно вызывает
+// ensureWarehouses(rid) — idempotent-по-имени, но НЕ idempotent-по-UUID
+// Create() трёх складов при первом обращении для данного rid. Обычная
+// подмена tenant означала бы, что central при первом просмотре «как филиал X»
+// молча заводит СЕБЕ 3 фантомные строки warehouses с restaurant_id=филиал и
+// случайными UUID, никак не связанными с реальными складами филиала (своя
+// Postgres, свои UUID) — источник будущего рассинхрона, а не просто неполные
+// данные. Баннер «недоступно» при этом всё равно показываем (см. ниже) —
+// в отличие от /license/*, здесь это не служебный путь, а раздел, который
+// владелец реально пытается посмотреть «за филиал».
+var noTenantSubstitution = map[string]bool{
+	"/api/v1/warehouses": true,
 }
 
 func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
@@ -223,7 +300,8 @@ func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
 			// вьюхой на филиал (см. большой комментарий выше файла): иначе
 			// заглушка чужого ресторана без license_expires_at в локальной БД
 			// филиала ошибочно уводит кассу на экран активации. Проверяем ДО
-			// разбора actor/kind — этот путь исключён безусловно.
+			// разбора actor/kind — этот путь исключён безусловно, без баннера
+			// (это служебный статус текущей машины, не раздел «данные филиала»).
 			if strings.HasPrefix(r.URL.Path, "/api/v1/license/") {
 				next.ServeHTTP(w, r)
 				return
@@ -242,7 +320,7 @@ func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
 				Kind      *string
 			}
 			var rows []row
-			overridden := false
+			wantOverride := false
 			if err := db.WithContext(ctx).Model(&models.Restaurant{}).
 				Select("id, account_id, kind").
 				Where("id IN ?", []string{cur, target}).
@@ -259,16 +337,27 @@ func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {
 				}
 				isCentral := curKind != nil && *curKind == "central_warehouse"
 				if isCentral && curAcc != nil && *curAcc != "" && tgtAcc != nil && *curAcc == *tgtAcc {
-					ctx = tenant.WithRestaurant(ctx, target)
-					overridden = true
+					wantOverride = true
 				}
 			}
-			// Сигнал фронту: просмотр филиала активен, но эти данные сюда ещё не
-			// доезжают — фронт покажет баннер вместо того, чтобы тихо отрисовать
-			// нули как «у филиала так и есть». См. lib/api/v4-typed.ts.
-			pattern := chi.RouteContext(ctx).RoutePattern()
-			if overridden && !branchDataAvailable[pattern] {
-				w.Header().Set("X-Branch-Data-Scope", "unavailable")
+			if wantOverride {
+				pattern := chi.RouteContext(ctx).RoutePattern()
+				if noTenantSubstitution[pattern] {
+					// Не подменяем ctx вовсе (см. комментарий у карты выше) —
+					// хендлер физически пишет в БД под rid; баннер всё равно
+					// честно показываем, чтобы не выдавать данные central за
+					// данные филиала.
+					w.Header().Set("X-Branch-Data-Scope", "unavailable")
+				} else {
+					ctx = tenant.WithRestaurant(ctx, target)
+					// Сигнал фронту: просмотр филиала активен, но эти данные
+					// сюда ещё не доезжают — фронт покажет баннер вместо того,
+					// чтобы тихо отрисовать нули как «у филиала так и есть».
+					// См. lib/api/v4-typed.ts.
+					if branchDataBlocked[pattern] {
+						w.Header().Set("X-Branch-Data-Scope", "unavailable")
+					}
+				}
 			}
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

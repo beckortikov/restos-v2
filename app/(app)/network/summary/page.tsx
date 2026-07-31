@@ -1,10 +1,13 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { fetchNetworkSummary, type NetworkSummary } from '@/lib/queries/transfers'
 import { formatCurrency } from '@/lib/helpers'
-import { Network, Store, Warehouse, TrendingUp } from 'lucide-react'
+import { Network, Store, Warehouse, TrendingUp, ArrowRight } from 'lucide-react'
 import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
+import { useAuth } from '@/lib/auth-store'
+import { BRANCH_VIEW_KEY } from '@/hooks/use-branch-view'
 
 type Period = 'today' | 'week' | 'month' | 'all'
 
@@ -26,11 +29,32 @@ function periodRange(p: Period): { from?: string } {
 }
 
 export default function NetworkSummaryPage() {
+  const navigate = useNavigate()
+  const { restaurantId, restaurant, canAccessRoles } = useAuth()
+  // Drill-down («смотреть как этот филиал») требует того же гейта, что и сам
+  // BranchSelector (components/branch-selector.tsx) — переключение реально
+  // работает только с central_warehouse, филиалу оно ломает лицензионный
+  // экран (см. branch-view-central-only). Некликабельно вне central — не
+  // обещаем действие, которое ничего не сделает.
+  const canDrillDown = canAccessRoles(['owner']) && restaurant?.kind === 'central_warehouse'
   const [period, setPeriod] = useState<Period>('month')
   const [summary, setSummary] = useState<NetworkSummary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notInNetwork, setNotInNetwork] = useState(false)
+
+  const drillInto = (branchId: string) => {
+    if (!canDrillDown) return
+    if (branchId === restaurantId) localStorage.removeItem(BRANCH_VIEW_KEY)
+    else localStorage.setItem(BRANCH_VIEW_KEY, branchId)
+    // navigate() синхронно обновляет location (Hash- и BrowserRouter — оба
+    // через History API) ДО возврата из вызова, поэтому reload сразу следом
+    // подхватывает уже новый путь. Полный reload, а не точечная инвалидация
+    // — тем же способом, что и сам BranchSelector.onChange, чтобы его
+    // дропдаун в шапке тоже перечитал localStorage и показал верный филиал.
+    navigate('/dashboard')
+    window.location.reload()
+  }
 
   useEffect(() => {
     setLoading(true)
@@ -98,31 +122,46 @@ export default function NetworkSummaryPage() {
                   <th className="px-3 py-2 text-left font-medium">Филиал</th>
                   <th className="px-3 py-2 text-right font-medium">Выручка</th>
                   <th className="px-3 py-2 text-right font-medium">Доля</th>
+                  {canDrillDown && <th className="w-8 px-3 py-2" aria-hidden />}
                 </tr>
               </thead>
               <tbody>
                 {branches.map(b => (
-                  <tr key={b.id} className="border-t border-border">
+                  <tr
+                    key={b.id}
+                    onClick={canDrillDown ? () => drillInto(b.id) : undefined}
+                    className={`border-t border-border ${canDrillDown ? 'cursor-pointer hover:bg-muted/40 transition-colors' : ''}`}
+                    title={canDrillDown ? `Открыть отчёты филиала «${b.name}»` : undefined}
+                  >
                     <td className="px-3 py-2">
                       <span className="inline-flex items-center gap-1.5">
                         {b.kind === 'central_warehouse'
                           ? <Warehouse className="size-4 text-amber-600" />
                           : <Store className="size-4 text-muted-foreground" />}
                         {b.name}
+                        {b.id === restaurantId && <span className="text-muted-foreground">(мой)</span>}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-right font-medium">{formatCurrency(b.revenue)}</td>
                     <td className="px-3 py-2 text-right text-muted-foreground">
                       {total > 0 ? Math.round((b.revenue / total) * 100) : 0}%
                     </td>
+                    {canDrillDown && (
+                      <td className="px-3 py-2 text-muted-foreground">
+                        <ArrowRight className="size-3.5" />
+                      </td>
+                    )}
                   </tr>
                 ))}
                 {branches.length === 0 && (
-                  <tr><td colSpan={3} className="px-3 py-6 text-center text-muted-foreground">Нет данных по сети</td></tr>
+                  <tr><td colSpan={canDrillDown ? 4 : 3} className="px-3 py-6 text-center text-muted-foreground">Нет данных по сети</td></tr>
                 )}
               </tbody>
             </table>
           </div>
+          {canDrillDown && branches.length > 0 && (
+            <p className="text-xs text-muted-foreground">Клик по филиалу — открыть его дашборд и отчёты.</p>
+          )}
         </>
       )}
     </div>

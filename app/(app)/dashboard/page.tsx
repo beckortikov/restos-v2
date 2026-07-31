@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import {
   ORDER_STATUS_LABELS,
   type Order,
@@ -190,6 +191,12 @@ function OrderPipeline({ orders }: { orders: Order[] }) {
 // ─── Dashboard Page ───────────────────────────────────────────────────────────
 export default function DashboardPage() {
   const { user } = useAuth()
+  // ADR-003 Ф7: карта зала и конвейер заказов читают ЖИВОЙ статус
+  // стола/заказа, который сеть намеренно не реплицирует (только
+  // терминальные переходы, см. sync_orders.go/sync_layout.go) — в
+  // branch-view эти виджеты показали бы правдоподобный, но неверный «0
+  // активных»/«все свободны» вместо честного отсутствия данных.
+  const isBranchView = useBranchView()
   const [orders, setOrders] = useState<Order[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
@@ -266,13 +273,22 @@ export default function DashboardPage() {
 
   // Alerts
   const lowStock = useMemo(() => ingredients.filter(i => i.qty < i.minQty), [ingredients])
-  const longCooking = useMemo(() => orders.filter(o => {
-    if (o.status !== 'cooking') return false
-    const mins = (Date.now() - new Date(o.createdAt).getTime()) / 60000
-    return mins > 30
-  }), [orders])
+  // longCooking/billRequested — тот же живой статус, что и карта зала/конвейер
+  // ниже: в branch-view пустой массив означает «не реплицируется», а не
+  // «проблемы нет», поэтому в этом режиме сознательно не считаем вовсе.
+  const longCooking = useMemo(() => {
+    if (isBranchView) return []
+    return orders.filter(o => {
+      if (o.status !== 'cooking') return false
+      const mins = (Date.now() - new Date(o.createdAt).getTime()) / 60000
+      return mins > 30
+    })
+  }, [orders, isBranchView])
   const overdueSuppliers = useMemo(() => suppliers.filter(s => s.currentDebt > 0), [suppliers])
-  const billRequested = useMemo(() => tables.filter(t => t.status === 'bill_requested'), [tables])
+  const billRequested = useMemo(
+    () => (isBranchView ? [] : tables.filter(t => t.status === 'bill_requested')),
+    [tables, isBranchView],
+  )
   // Регулярные платежи «к оплате»: активные, срок ≤ 7 дней (включая просроченные).
   const duePayments = useMemo(() => {
     const now = new Date()
@@ -525,66 +541,70 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-4">
         {/* LEFT: Operations overview */}
         <div className="xl:col-span-2 space-y-4">
-          {/* Table map + Order pipeline */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Mini table map */}
-            <div className="bg-card rounded-xl border border-border p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <MapPin className="size-4 text-muted-foreground" />
-                  Карта зала
-                </h2>
-                <Link to="/operations/table-map" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
-                  Открыть <ArrowRight className="size-3" />
-                </Link>
+          {/* Table map + Order pipeline — живой статус стола/заказа, сеть его
+              не реплицирует (см. isBranchView выше), поэтому в branch-view
+              виджет целиком скрыт, а не показывает правдоподобный ноль. */}
+          {!isBranchView && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Mini table map */}
+              <div className="bg-card rounded-xl border border-border p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <MapPin className="size-4 text-muted-foreground" />
+                    Карта зала
+                  </h2>
+                  <Link to="/operations/table-map" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+                    Открыть <ArrowRight className="size-3" />
+                  </Link>
+                </div>
+                <MiniTableMap tables={tables} zones={zones} />
               </div>
-              <MiniTableMap tables={tables} zones={zones} />
-            </div>
 
-            {/* Order pipeline */}
-            <div className="bg-card rounded-xl border border-border p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                  <ChefHat className="size-4 text-muted-foreground" />
-                  Конвейер заказов
-                </h2>
-                <Link to="/operations/kitchen" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
-                  Кухня <ArrowRight className="size-3" />
-                </Link>
-              </div>
-              <OrderPipeline orders={orders} />
+              {/* Order pipeline */}
+              <div className="bg-card rounded-xl border border-border p-4">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+                    <ChefHat className="size-4 text-muted-foreground" />
+                    Конвейер заказов
+                  </h2>
+                  <Link to="/operations/kitchen" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+                    Кухня <ArrowRight className="size-3" />
+                  </Link>
+                </div>
+                <OrderPipeline orders={orders} />
 
-              {/* Latest active orders */}
-              <div className="mt-4 space-y-1.5">
-                {activeOrders.slice(0, 4).map(o => {
-                  const table = o.tableId ? tables.find(t => t.id === o.tableId) : null
-                  return (
-                    <div key={o.id} className="flex items-center justify-between py-1.5 text-xs">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
-                          o.status === 'new' ? 'bg-blue-100 text-blue-700' :
-                          o.status === 'cooking' ? 'bg-amber-100 text-amber-700' :
-                          'bg-emerald-100 text-emerald-700'
-                        }`}>
-                          {ORDER_STATUS_LABELS[o.status]}
-                        </span>
-                        <span className="text-foreground font-medium truncate">
-                          {table?.name || (o.type === 'delivery' ? 'Доставка' : 'С собой')}
-                        </span>
-                        <span className="text-muted-foreground">{o.items.length} поз.</span>
+                {/* Latest active orders */}
+                <div className="mt-4 space-y-1.5">
+                  {activeOrders.slice(0, 4).map(o => {
+                    const table = o.tableId ? tables.find(t => t.id === o.tableId) : null
+                    return (
+                      <div key={o.id} className="flex items-center justify-between py-1.5 text-xs">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                            o.status === 'new' ? 'bg-blue-100 text-blue-700' :
+                            o.status === 'cooking' ? 'bg-amber-100 text-amber-700' :
+                            'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {ORDER_STATUS_LABELS[o.status]}
+                          </span>
+                          <span className="text-foreground font-medium truncate">
+                            {table?.name || (o.type === 'delivery' ? 'Доставка' : 'С собой')}
+                          </span>
+                          <span className="text-muted-foreground">{o.items.length} поз.</span>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="font-medium text-foreground">{formatCurrency(o.total)}</span>
+                          <span className="text-muted-foreground flex items-center gap-0.5">
+                            <Clock className="size-3" />{getTimeSince(o.createdAt)}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className="font-medium text-foreground">{formatCurrency(o.total)}</span>
-                        <span className="text-muted-foreground flex items-center gap-0.5">
-                          <Clock className="size-3" />{getTimeSince(o.createdAt)}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           {/* Revenue chart */}
           <div className="bg-card rounded-xl border border-border p-4 md:p-5">

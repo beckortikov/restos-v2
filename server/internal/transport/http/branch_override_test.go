@@ -165,3 +165,102 @@ func licenseState(t *testing.T, srvURL, tok, branchID string) string {
 	_ = json.Unmarshal(b, &out)
 	return out.State
 }
+
+// branchScopeHeader — GET по произвольному пути с опциональным X-Branch-Id,
+// вернуть значение X-Branch-Data-Scope (пусто, если баннер не выставлен).
+func branchScopeHeader(t *testing.T, srvURL, tok, branchID, path string) string {
+	t.Helper()
+	req, _ := http.NewRequest("GET", srvURL+path, nil)
+	req.Header.Set("Authorization", "Bearer "+tok)
+	if branchID != "" {
+		req.Header.Set("X-Branch-Id", branchID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+	return resp.Header.Get("X-Branch-Data-Scope")
+}
+
+// TestBranchOverride_BlocklistBanner — Ф7: инверсия allowlist→blocklist.
+// /orders читает нетерминальные заказы (не реплицируются) — баннер обязателен.
+// /finance/operations — только своя таблица, без JOIN — доступен по умолчанию,
+// баннера НЕ должно быть, хотя раньше (allowlist-эпоха) он был бы, т.к. путь
+// никогда явно не добавляли (см. Ф7-разведку в branch_override.go).
+func TestBranchOverride_BlocklistBanner(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	accountID := uuid.NewString()
+	gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"})
+	cw := "central_warehouse"
+	gdb.Model(&models.Restaurant{}).Where("id = ?", f.rid).Updates(map[string]any{"account_id": accountID, "kind": cw})
+	ownerName, ownerPin, ownerRole := "Владелец", "9999", "owner"
+	gdb.Create(&models.User{ID: uuid.NewString(), Name: &ownerName, PIN: &ownerPin, Role: &ownerRole, RestaurantID: &f.rid})
+
+	outletID := uuid.NewString()
+	ot := "outlet"
+	gdb.Create(&models.Restaurant{ID: outletID, Name: "Филиал", AccountID: &accountID, Kind: &ot})
+
+	ownerTok := loginRid(t, f.srv.URL, f.rid, "9999")
+
+	if got := branchScopeHeader(t, f.srv.URL, ownerTok, outletID, "/api/v1/orders?status=new"); got != "unavailable" {
+		t.Errorf("/orders under override: X-Branch-Data-Scope = %q, want unavailable (нетерминальные заказы не реплицируются)", got)
+	}
+	if got := branchScopeHeader(t, f.srv.URL, ownerTok, outletID, "/api/v1/finance/operations"); got != "" {
+		t.Errorf("/finance/operations under override: X-Branch-Data-Scope = %q, want пусто (default-allow, только своя таблица без JOIN)", got)
+	}
+	// Без override (свой ресторан) баннера быть не должно нигде.
+	if got := branchScopeHeader(t, f.srv.URL, ownerTok, "", "/api/v1/orders"); got != "" {
+		t.Errorf("/orders без override: X-Branch-Data-Scope = %q, want пусто", got)
+	}
+}
+
+// TestBranchOverride_WarehousesNoPhantomRow — Ф7: /warehouses исключён из
+// подмены tenant вовсе (noTenantSubstitution), а не просто помечен баннером —
+// WarehouseService.List безусловно вызывает ensureWarehouses(rid), и под
+// обычной подменой central создал бы себе фантомные строки склада с
+// restaurant_id=outletID и случайными UUID, не связанными с реальными
+// складами филиала (своя Postgres). Проверяем: баннер показан, НО ни одной
+// строки warehouses с restaurant_id=outletID в БД central не появилось.
+func TestBranchOverride_WarehousesNoPhantomRow(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	accountID := uuid.NewString()
+	gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"})
+	cw := "central_warehouse"
+	gdb.Model(&models.Restaurant{}).Where("id = ?", f.rid).Updates(map[string]any{"account_id": accountID, "kind": cw})
+	ownerName, ownerPin, ownerRole := "Владелец", "9999", "owner"
+	gdb.Create(&models.User{ID: uuid.NewString(), Name: &ownerName, PIN: &ownerPin, Role: &ownerRole, RestaurantID: &f.rid})
+
+	outletID := uuid.NewString()
+	ot := "outlet"
+	gdb.Create(&models.Restaurant{ID: outletID, Name: "Филиал", AccountID: &accountID, Kind: &ot})
+
+	ownerTok := loginRid(t, f.srv.URL, f.rid, "9999")
+
+	if got := branchScopeHeader(t, f.srv.URL, ownerTok, outletID, "/api/v1/warehouses"); got != "unavailable" {
+		t.Errorf("/warehouses under override: X-Branch-Data-Scope = %q, want unavailable", got)
+	}
+
+	var phantomCount int64
+	if err := gdb.Model(&models.Warehouse{}).Where("restaurant_id = ?", outletID).Count(&phantomCount).Error; err != nil {
+		t.Fatalf("count warehouses: %v", err)
+	}
+	if phantomCount != 0 {
+		t.Errorf("warehouses с restaurant_id=%s (филиал) = %d, want 0 — override не должен был подменить tenant для /warehouses", outletID, phantomCount)
+	}
+}
