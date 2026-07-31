@@ -30,10 +30,17 @@ import (
 // ingredients синкается ОТДЕЛЬНО, снапшотом, внутри самого денорм-хука
 // (audit/stock_hook.go, после applyStockMovement с SkipHooks central его не
 // повторяет — см. комментарий там).
+//
+// supply_expenses (Ф4) — единственная точка мутации (SupplyExpensesService.Create,
+// stock_extra.go) создаёт строку через struct-based tx.Create и НИКОГДА её не
+// обновляет/не удаляет (разведка: grep по всему service/ на Model(&SupplyExpense
+// либо Delete(&SupplyExpense — ноль совпадений) — идеальный кандидат под
+// generic-хук, явный recordXSync не нужен вовсе.
 var trackedInsert = map[string]bool{
 	"financial_operations":  true,
 	"cash_shift_operations": true,
 	"stock_movements":       true,
+	"supply_expenses":       true,
 }
 
 // RegisterRecorder цепляет AfterCreate-хук, пишущий дельты tracked-таблиц в

@@ -203,6 +203,9 @@ func (s *InventoryService) Create(ctx context.Context, in InventoryCheckInput) (
 				return err
 			}
 		}
+		if err := recordInventorySync(tx, []string{check.ID}); err != nil {
+			return err
+		}
 		created = check
 		return nil
 	})
@@ -379,6 +382,9 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 					return err
 				}
 			}
+			if err := recordWriteoffSync(tx, []string{woID}); err != nil {
+				return err
+			}
 		}
 		if decimal.IsPositive(overageValue) {
 			name := "Излишек по инвентаризации"
@@ -393,6 +399,9 @@ func (s *InventoryService) Apply(ctx context.Context, checkID string) (*models.I
 		check.Status = "applied"
 		check.AppliedAt = &now
 		if err := tx.Save(&check).Error; err != nil {
+			return err
+		}
+		if err := recordInventorySync(tx, []string{check.ID}); err != nil {
 			return err
 		}
 		applied = &check

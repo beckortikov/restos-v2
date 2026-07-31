@@ -761,3 +761,477 @@ func TestSyncIngest_StockMovement(t *testing.T) {
 		t.Errorf("stock_movements = %d, want 1 (не задвоилось)", count)
 	}
 }
+
+// receiptSyncTestPayload — форма payload'а "stock_receipts", как её строит
+// recordReceiptSync (sync_docs.go): models.StockReceipt + срез Lines.
+type receiptSyncTestPayload struct {
+	models.StockReceipt
+	Lines []models.StockReceiptLine `json:"lines"`
+}
+
+// TestSyncIngest_StockReceipt — приём накладной приёмки на central (Ф4):
+// upsert шапки + строк, идемпотентный повтор (напр. после PayReceipt меняется
+// debt_amount, строки те же).
+func TestSyncIngest_StockReceipt(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"stock_receipt_lines", "stock_receipts"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	receiptID := uuid.NewString()
+	lineID := uuid.NewString()
+	flour := "Мука"
+	payload := receiptSyncTestPayload{
+		StockReceipt: models.StockReceipt{
+			ID: receiptID, RestaurantID: &branchID,
+			TotalAmount: decimal.MustFromString("1000"), DebtAmount: decimal.MustFromString("1000"),
+		},
+		Lines: []models.StockReceiptLine{{
+			ID: lineID, ReceiptID: &receiptID, Name: &flour,
+			Qty: decimal.MustFromString("10"), PricePerUnit: decimal.MustFromString("100"),
+		}},
+	}
+	body, _ := json.Marshal(payload)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "stock_receipts", RowID: receiptID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.StockReceipt
+	if err := gdb.First(&got, "id = ?", receiptID).Error; err != nil {
+		t.Fatalf("receipt not upserted: %v", err)
+	}
+	if !got.DebtAmount.Equal(decimal.MustFromString("1000")) {
+		t.Errorf("debt_amount = %s, want 1000", got.DebtAmount.String())
+	}
+	var lines []models.StockReceiptLine
+	gdb.Where("receipt_id = ?", receiptID).Find(&lines)
+	if len(lines) != 1 {
+		t.Fatalf("lines = %d, want 1", len(lines))
+	}
+
+	// Повтор после PayReceipt (debt_amount уменьшился, строки не изменились).
+	payload.DebtAmount = decimal.Zero
+	body2, _ := json.Marshal(payload)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "stock_receipts", RowID: receiptID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", receiptID)
+	if !got.DebtAmount.IsZero() {
+		t.Errorf("debt_amount after upsert = %s, want 0", got.DebtAmount.String())
+	}
+	var receiptCount, lineCount int64
+	gdb.Model(&models.StockReceipt{}).Where("id = ?", receiptID).Count(&receiptCount)
+	gdb.Model(&models.StockReceiptLine{}).Where("receipt_id = ?", receiptID).Count(&lineCount)
+	if receiptCount != 1 || lineCount != 1 {
+		t.Errorf("after repeat: receipts=%d lines=%d, want 1/1", receiptCount, lineCount)
+	}
+}
+
+// writeoffSyncTestPayload — форма payload'а "stock_writeoffs" (sync_docs.go).
+type writeoffSyncTestPayload struct {
+	models.StockWriteoff
+	Lines []models.StockWriteoffLine `json:"lines"`
+}
+
+// TestSyncIngest_StockWriteoff — приём списания на central (Ф4): upsert
+// шапки (с уже пересчитанным total_cost) + строк.
+func TestSyncIngest_StockWriteoff(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"stock_writeoff_lines", "stock_writeoffs"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	writeoffID := uuid.NewString()
+	lineID := uuid.NewString()
+	sugar := "Сахар"
+	payload := writeoffSyncTestPayload{
+		StockWriteoff: models.StockWriteoff{
+			ID: writeoffID, RestaurantID: &branchID, TotalCost: decimal.MustFromString("250"),
+		},
+		Lines: []models.StockWriteoffLine{{
+			ID: lineID, WriteoffID: &writeoffID, Name: &sugar,
+			Qty: decimal.MustFromString("5"), Cost: decimal.MustFromString("250"),
+		}},
+	}
+	body, _ := json.Marshal(payload)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "stock_writeoffs", RowID: writeoffID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.StockWriteoff
+	if err := gdb.First(&got, "id = ?", writeoffID).Error; err != nil {
+		t.Fatalf("writeoff not upserted: %v", err)
+	}
+	if !got.TotalCost.Equal(decimal.MustFromString("250")) {
+		t.Errorf("total_cost = %s, want 250", got.TotalCost.String())
+	}
+	var lineCount int64
+	gdb.Model(&models.StockWriteoffLine{}).Where("writeoff_id = ?", writeoffID).Count(&lineCount)
+	if lineCount != 1 {
+		t.Errorf("lines = %d, want 1", lineCount)
+	}
+}
+
+// inventorySyncTestPayload — форма payload'а "inventory_checks" (sync_docs.go).
+type inventorySyncTestPayload struct {
+	models.InventoryCheck
+	Lines []models.InventoryCheckLine `json:"lines"`
+}
+
+// TestSyncIngest_InventoryCheck — приём инвентаризации на central (Ф4):
+// upsert, приходит дважды за жизненный цикл (draft, потом applied) —
+// повторный upsert меняет только status/applied_at.
+func TestSyncIngest_InventoryCheck(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"inventory_check_lines", "inventory_checks"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	checkID := uuid.NewString()
+	lineID := uuid.NewString()
+	ingID := uuid.NewString()
+	payload := inventorySyncTestPayload{
+		InventoryCheck: models.InventoryCheck{
+			ID: checkID, RestaurantID: branchID, ConductedBy: "Кладовщик", Status: "draft",
+		},
+		Lines: []models.InventoryCheckLine{{
+			ID: lineID, CheckID: checkID, Kind: "ingredient", IngredientID: ingID,
+			IngredientName: "Мука", Unit: "кг", RestaurantID: branchID,
+			SystemQty: decimal.MustFromString("10"), ActualQty: decimal.MustFromString("9"),
+			Diff: decimal.MustFromString("-1"),
+		}},
+	}
+	body, _ := json.Marshal(payload)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "inventory_checks", RowID: checkID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.InventoryCheck
+	if err := gdb.First(&got, "id = ?", checkID).Error; err != nil {
+		t.Fatalf("check not upserted: %v", err)
+	}
+	if got.Status != "draft" {
+		t.Errorf("status = %s, want draft", got.Status)
+	}
+	var lineCount int64
+	gdb.Model(&models.InventoryCheckLine{}).Where("check_id = ?", checkID).Count(&lineCount)
+	if lineCount != 1 {
+		t.Errorf("lines = %d, want 1", lineCount)
+	}
+
+	// Повтор после Apply — status меняется на applied.
+	payload.Status = "applied"
+	body2, _ := json.Marshal(payload)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "inventory_checks", RowID: checkID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", checkID)
+	if got.Status != "applied" {
+		t.Errorf("status after upsert = %s, want applied", got.Status)
+	}
+	var lineCount2 int64
+	gdb.Model(&models.InventoryCheckLine{}).Where("check_id = ?", checkID).Count(&lineCount2)
+	if lineCount2 != 1 {
+		t.Errorf("lines after repeat = %d, want 1 (не задвоились)", lineCount2)
+	}
+}
+
+// returnSyncTestPayload — форма payload'а "stock_returns" (sync_docs.go).
+type returnSyncTestPayload struct {
+	models.StockReturn
+	Lines []models.StockReturnLine `json:"lines"`
+}
+
+// TestSyncIngest_StockReturn — приём возврата поставщику на central (Ф4):
+// upsert, приходит дважды (CreateReturn, потом CancelReturn) — повторный
+// upsert проставляет cancelled_at/cancelled_by.
+func TestSyncIngest_StockReturn(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"stock_return_lines", "stock_returns"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	receiptID := uuid.NewString()
+	returnID := uuid.NewString()
+	lineID := uuid.NewString()
+	receiptLineID := uuid.NewString()
+	payload := returnSyncTestPayload{
+		StockReturn: models.StockReturn{
+			ID: returnID, ReceiptID: receiptID, RestaurantID: &branchID,
+			Reason: "spoilage", RefundType: "debt", TotalAmount: decimal.MustFromString("50"),
+		},
+		Lines: []models.StockReturnLine{{
+			ID: lineID, ReturnID: returnID, ReceiptLineID: receiptLineID,
+			Qty: decimal.MustFromString("1"), PricePerUnit: decimal.MustFromString("50"),
+		}},
+	}
+	body, _ := json.Marshal(payload)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "stock_returns", RowID: returnID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.StockReturn
+	if err := gdb.First(&got, "id = ?", returnID).Error; err != nil {
+		t.Fatalf("return not upserted: %v", err)
+	}
+	if got.CancelledAt != nil {
+		t.Errorf("cancelled_at = %v, want nil (ещё активен)", got.CancelledAt)
+	}
+
+	// Повтор после CancelReturn.
+	now := got.CreatedAt
+	payload.CancelledAt = &now
+	cancelledBy := "Кладовщик"
+	payload.CancelledBy = &cancelledBy
+	body2, _ := json.Marshal(payload)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "stock_returns", RowID: returnID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", returnID)
+	if got.CancelledAt == nil {
+		t.Errorf("cancelled_at after upsert = nil, want set")
+	}
+	var lineCount int64
+	gdb.Model(&models.StockReturnLine{}).Where("return_id = ?", returnID).Count(&lineCount)
+	if lineCount != 1 {
+		t.Errorf("lines after repeat = %d, want 1 (не задвоились)", lineCount)
+	}
+}
+
+// TestSyncIngest_Supplier — приём поставщика на central (Ф4): upsert +
+// hard delete (SuppliersService.Delete).
+func TestSyncIngest_Supplier(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"suppliers"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	supID := uuid.NewString()
+	name := "ООО Молоко"
+	sup := models.Supplier{ID: supID, Name: &name, RestaurantID: &branchID, CurrentDebt: decimal.MustFromString("500")}
+	body, _ := json.Marshal(sup)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "suppliers", RowID: supID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.Supplier
+	if err := gdb.First(&got, "id = ?", supID).Error; err != nil {
+		t.Fatalf("supplier not upserted: %v", err)
+	}
+	if !got.CurrentDebt.Equal(decimal.MustFromString("500")) {
+		t.Errorf("current_debt = %s, want 500", got.CurrentDebt.String())
+	}
+
+	// Повтор с изменённым долгом (после PayDebt) — upsert.
+	sup.CurrentDebt = decimal.MustFromString("200")
+	body2, _ := json.Marshal(sup)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "suppliers", RowID: supID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", supID)
+	if !got.CurrentDebt.Equal(decimal.MustFromString("200")) {
+		t.Errorf("current_debt after upsert = %s, want 200", got.CurrentDebt.String())
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "suppliers", RowID: supID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	var count int64
+	gdb.Model(&models.Supplier{}).Where("id = ?", supID).Count(&count)
+	if count != 0 {
+		t.Errorf("supplier still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_SupplyExpense — приём расхода снабжения на central (Ф4):
+// append-only, приходит через generic trackedInsert (не explicit recordXSync),
+// но применяется тем же apply()-путём — upsert идемпотентен на повторе.
+func TestSyncIngest_SupplyExpense(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"supply_expenses"} {
+		if err := gdb.Exec("DELETE FROM " + tbl).Error; err != nil {
+			t.Fatalf("clean %s: %v", tbl, err)
+		}
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	seID := uuid.NewString()
+	name := "Перчатки"
+	se := models.SupplyExpense{
+		ID: seID, IngredientName: &name, RestaurantID: &branchID,
+		Qty: decimal.MustFromString("2"), Cost: decimal.MustFromString("60"),
+	}
+	body, _ := json.Marshal(se)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "supply_expenses", RowID: seID, Op: "insert", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.SupplyExpense
+	if err := gdb.First(&got, "id = ?", seID).Error; err != nil {
+		t.Fatalf("supply_expense not upserted: %v", err)
+	}
+	if !got.Cost.Equal(decimal.MustFromString("60")) {
+		t.Errorf("cost = %s, want 60", got.Cost.String())
+	}
+
+	// Повторный приём (идемпотентность Pusher'а) — не задваивает строку.
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "supply_expenses", RowID: seID, Op: "insert", Payload: body},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	var count int64
+	gdb.Model(&models.SupplyExpense{}).Where("id = ?", seID).Count(&count)
+	if count != 1 {
+		t.Errorf("supply_expenses = %d, want 1 (не задвоилось)", count)
+	}
+}

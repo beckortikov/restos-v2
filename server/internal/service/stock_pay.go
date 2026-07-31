@@ -145,6 +145,9 @@ func (s *StockService) PayReceipt(ctx context.Context, id string, in ReceiptPayI
 			}).Error; err != nil {
 				return err
 			}
+			if err := recordSupplierSync(tx, []string{sup.ID}); err != nil {
+				return err
+			}
 		}
 
 		opType := "out"
@@ -165,6 +168,9 @@ func (s *StockService) PayReceipt(ctx context.Context, id string, in ReceiptPayI
 			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(fo).Error; err != nil {
+			return err
+		}
+		if err := recordReceiptSync(tx, []string{receipt.ID}); err != nil {
 			return err
 		}
 		out = &receipt

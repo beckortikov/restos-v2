@@ -478,6 +478,12 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			}).Error; err != nil {
 				return err
 			}
+			if err := recordReceiptSync(tx, []string{receipt.ID}); err != nil {
+				return err
+			}
+			if err := recordSupplierSync(tx, []string{sup.ID}); err != nil {
+				return err
+			}
 		case "money":
 			// Есть непогашенный долг → деньги нельзя: за товар ещё не заплачено,
 			// поставщик его не вернёт. Сначала гасим долг (ветка debt).
@@ -537,6 +543,10 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 			}).Error; err != nil {
 				return err
 			}
+		}
+
+		if err := recordReturnSync(tx, []string{returnID}); err != nil {
+			return err
 		}
 
 		created = ret
@@ -743,11 +753,17 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 			}).Error; err != nil {
 				return err
 			}
+			if err := recordReceiptSync(tx, []string{receipt.ID}); err != nil {
+				return err
+			}
 			if sup != nil {
 				if err := tx.Model(sup).Updates(map[string]any{
 					"current_debt": decimal.Normalize(decimal.Add(sup.CurrentDebt, ret.TotalAmount)),
 					"updated_at":   now,
 				}).Error; err != nil {
+					return err
+				}
+				if err := recordSupplierSync(tx, []string{sup.ID}); err != nil {
 					return err
 				}
 			}
@@ -807,6 +823,9 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 		}
 		ret.CancelledAt = &now
 		ret.CancelledBy = &cancelledBy
+		if err := recordReturnSync(tx, []string{ret.ID}); err != nil {
+			return err
+		}
 		out = &ret
 		return nil
 	})

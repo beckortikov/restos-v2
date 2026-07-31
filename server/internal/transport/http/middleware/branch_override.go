@@ -81,11 +81,13 @@ var branchDataAvailable = map[string]bool{
 	// все analytics/*-хендлеры и reports/*.xlsx — ниже добавлены ТОЛЬКО те, что
 	// читают исключительно orders/order_items/financial_operations/cash_shifts/
 	// cash_shift_operations/users/menu_items/tables/zones (все уже реплицированы).
-	// НЕ добавлены (зависят от НЕреплицированного, дают тихо-неверную цифру,
-	// не просто баннер): /finance/pnl и /reports/pl.xlsx (stock_writeoffs,
-	// /reports/pl.xlsx ещё и supply_expenses), /reports/audit.xlsx (audit_log —
-	// вне плана репликации вовсе), /analytics/weekday (time_entries — Ф5б
-	// «Персонал», ФОТ прямо входит в NetProfit).
+	// НЕ добавлены на момент Ф2 (зависят от НЕреплицированного, дают
+	// тихо-неверную цифру, не просто баннер): /finance/pnl и /reports/pl.xlsx
+	// (stock_writeoffs, /reports/pl.xlsx ещё и supply_expenses — обе таблицы
+	// реплицированы Ф4: /reports/pl.xlsx переехал в разрешённые ниже,
+	// /finance/pnl остался запрещён по ДРУГОЙ причине — см. Ф4), /reports/audit.xlsx
+	// (audit_log — вне плана репликации вовсе), /analytics/weekday
+	// (time_entries — Ф5б «Персонал», ФОТ прямо входит в NetProfit).
 	"/api/v1/analytics/abc-menu":       true,
 	"/api/v1/analytics/peak-hours":     true,
 	"/api/v1/analytics/waiters":        true,
@@ -108,12 +110,11 @@ var branchDataAvailable = map[string]bool{
 	// читает только stock_movements, был в «не добавлено» списке Ф2 как раз
 	// потому что stock_movements ещё не реплицировался — теперь можно.
 	//
-	// НЕ добавлен /analytics/insights: агрегатор из 7 паков, один из которых
-	// (cogsDriftInsights) JOIN'ит stock_receipts/stock_receipt_lines (Ф4,
-	// складские документы — ещё не реплицированы) — тихо теряет ОДНУ карточку
-	// «подорожание сырья» из ленты (INNER JOIN на 0 строк → nil, не ошибка),
-	// неотличимо от «проблемы реально нет». Остальные 6 паков сами по себе
-	// безопасны, но выборочно допускать часть ответа агрегатора нельзя.
+	// НЕ добавлен /analytics/insights на момент Ф3: агрегатор из 7 паков, один
+	// из которых (cogsDriftInsights) JOIN'ит stock_receipts/stock_receipt_lines
+	// (Ф4, складские документы — тогда ещё не реплицированы). Эта причина Ф4
+	// СНЯТА (см. ниже), но нашлись ДВЕ ДРУГИЕ, независимые — путь остаётся
+	// запрещён.
 	"/api/v1/stock/ingredients":                true,
 	"/api/v1/stock/ingredient-categories":      true,
 	"/api/v1/stock/movements":                  true,
@@ -123,6 +124,58 @@ var branchDataAvailable = map[string]bool{
 	"/api/v1/analytics/food-cost/monthly":      true,
 	"/api/v1/analytics/forecast":               true,
 	"/api/v1/reports/stock-movements.xlsx":     true,
+
+	// Ф4 (складские документы: приёмки/списания/инвентаризации/возвраты/
+	// поставщики/снабжение) — снапшот-по-id для 4 документов с дочерними
+	// строками (stock_receipts/stock_writeoffs/inventory_checks/stock_returns,
+	// см. recordReceiptSync/recordWriteoffSync/recordInventorySync/
+	// recordReturnSync в sync_docs.go), плоский снапшот+delete для suppliers,
+	// generic trackedInsert для supply_expenses (append-only, единственная
+	// точка создания никогда не мутирует строку). Построчно проверены
+	// (Explore, 2026-07-31), ни один JOIN на нереплицированное:
+	"/api/v1/stock/receipts":             true,
+	"/api/v1/stock/writeoffs":            true,
+	"/api/v1/stock/returns":              true,
+	"/api/v1/stock/inventory":            true,
+	"/api/v1/stock/inventory/{id}":       true,
+	"/api/v1/stock/inventory/{id}/lines": true,
+	"/api/v1/suppliers":                  true,
+	"/api/v1/supply-expenses":            true,
+	// /reports/pl.xlsx — computePnL (reports_pl.go) читает РОВНО 4 таблицы:
+	// orders/order_items (Ф2/5.1), stock_writeoffs/supply_expenses (Ф4) —
+	// подтверждено построчным чтением функции, не только Explore. Отличается
+	// от /finance/pnl (см. ниже) — это ДРУГАЯ, более простая реализация без
+	// разбивки revenue.by_method.
+	"/api/v1/reports/pl.xlsx": true,
+
+	// НЕ добавлен /finance/pnl (в отличие от /reports/pl.xlsx выше!): читает
+	// те же 4 реплицированные таблицы для headline-цифр (revenue/cogs/
+	// writeoffs/opex/profit — они были бы верны), НО ещё и order_splits для
+	// revenue.by_method (finance.go) — эта таблица НЕ реплицируется. На
+	// central для заказов с payment_method='split' order_splits пуст →
+	// код уходит в свой же fallback (изначально рассчитанный на редкий
+	// edge-case гонки на филиале, не на систематическое отсутствие данных) и
+	// сваливает ВСЮ split-выручку в один бакет "split" вместо разбивки по
+	// факту (наличные/карта) — тихо неверная часть ответа, не просто баннер.
+	// Итоговые суммы (net_profit и т.п.) при этом верны — деградирует только
+	// одно вложенное поле, но выборочно возвращать часть ответа нельзя (тот
+	// же принцип, что и у /analytics/insights).
+	//
+	// НЕ добавлен /analytics/insights: причина Ф3 (cogsDriftInsights →
+	// stock_receipts) снята репликацией Ф4, но построчная проверка ВСЕХ 7
+	// паков агрегатора нашла две другие, ранее не всплывавшие: leakInsights
+	// JOIN'ит order_voids (не реплицируется вовсе, вне плана), lostSalesInsights
+	// делегирует в StopListService.List, который для авто-стопа по нехватке
+	// сырья читает tech_card_lines (тоже не реплицируется) — на central даст
+	// пустой список авто-стопов вместо заниженного/пустого impact в ₽, не
+	// текстовую деталь. Остальные 5 паков сами по себе безопасны, но выборочно
+	// допускать часть ответа агрегатора нельзя (тот же принцип, что у Ф3).
+	//
+	// НЕ добавлен /finance/balance: помимо suppliers.current_debt (теперь
+	// реплицирован) читает financial_accounts/semi_finished_stock/assets/
+	// liabilities/equity_entries — ни одна не реплицирована, а
+	// GrandTotalAssets/GrandTotalLiabilities/ComputedEquity считаются из ВСЕХ
+	// сразу (finance.go) — частичная деградация невозможна.
 }
 
 func BranchOverride(db *gorm.DB) func(http.Handler) http.Handler {

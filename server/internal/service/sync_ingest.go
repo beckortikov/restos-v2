@@ -127,6 +127,36 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "stock_receipts":
+			if err := s.applyStockReceipt(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "stock_writeoffs":
+			if err := s.applyStockWriteoff(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "inventory_checks":
+			if err := s.applyInventoryCheck(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "stock_returns":
+			if err := s.applyStockReturn(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "suppliers":
+			if err := s.applySupplier(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "supply_expenses":
+			if err := s.applySupplyExpense(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
@@ -454,6 +484,153 @@ func (s *SyncService) applyStockMovement(ctx context.Context, e SyncEntry, updat
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		return tx.Clauses(conflict).Create(&mv).Error
+	})
+}
+
+// applyStockReceipt — upsert накладной приёмки + её строк (Ф4). Строки
+// insert-only (см. разведку sync_docs.go) — upsert безопасен и на повторе.
+func (s *SyncService) applyStockReceipt(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var p receiptSyncPayload
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid stock_receipts payload", err)
+	}
+	if p.ID == "" {
+		return apperrors.Wrap("VALIDATION", "stock_receipts payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&p.StockReceipt).Error; err != nil {
+			return err
+		}
+		for i := range p.Lines {
+			if err := tx.Clauses(conflict).Create(&p.Lines[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// applyStockWriteoff — upsert списания + его строк (Ф4).
+func (s *SyncService) applyStockWriteoff(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var p writeoffSyncPayload
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid stock_writeoffs payload", err)
+	}
+	if p.ID == "" {
+		return apperrors.Wrap("VALIDATION", "stock_writeoffs payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&p.StockWriteoff).Error; err != nil {
+			return err
+		}
+		for i := range p.Lines {
+			if err := tx.Clauses(conflict).Create(&p.Lines[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// applyInventoryCheck — upsert инвентаризации + её строк (Ф4). Приходит
+// дважды за жизненный цикл документа (Create=draft, Apply=applied) — upsert
+// второй раз просто перезаписывает шапку тем же id, строки не меняются.
+func (s *SyncService) applyInventoryCheck(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var p inventorySyncPayload
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid inventory_checks payload", err)
+	}
+	if p.ID == "" {
+		return apperrors.Wrap("VALIDATION", "inventory_checks payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&p.InventoryCheck).Error; err != nil {
+			return err
+		}
+		for i := range p.Lines {
+			if err := tx.Clauses(conflict).Create(&p.Lines[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// applyStockReturn — upsert возврата поставщику + его строк (Ф4). Приходит
+// дважды (CreateReturn, CancelReturn) — второй раз только шапка меняется
+// (cancelled_at/cancelled_by), строки те же (перечитаны заново, содержимое
+// идентично).
+func (s *SyncService) applyStockReturn(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var p returnSyncPayload
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid stock_returns payload", err)
+	}
+	if p.ID == "" {
+		return apperrors.Wrap("VALIDATION", "stock_returns payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&p.StockReturn).Error; err != nil {
+			return err
+		}
+		for i := range p.Lines {
+			if err := tx.Clauses(conflict).Create(&p.Lines[i]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// applySupplier — upsert/delete снапшота поставщика (Ф4). Delete — настоящий
+// (SuppliersService.Delete делает hard DELETE), как у tables/zones/ingredients.
+func (s *SyncService) applySupplier(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "suppliers delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.Supplier{}).Error
+		})
+	}
+	var sup models.Supplier
+	if err := json.Unmarshal(e.Payload, &sup); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid suppliers payload", err)
+	}
+	if sup.ID == "" {
+		return apperrors.Wrap("VALIDATION", "suppliers payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&sup).Error
+	})
+}
+
+// applySupplyExpense — upsert append-only расхода снабжения (Ф4). Приходит
+// через generic trackedInsert (recorder_hook.go), не explicit recordXSync —
+// единственная точка создания (SupplyExpensesService.Create) никогда не
+// обновляет/не удаляет строку. Delete не нужен.
+func (s *SyncService) applySupplyExpense(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var se models.SupplyExpense
+	if err := json.Unmarshal(e.Payload, &se); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid supply_expenses payload", err)
+	}
+	if se.ID == "" {
+		return apperrors.Wrap("VALIDATION", "supply_expenses payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&se).Error
 	})
 }
 

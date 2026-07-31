@@ -434,6 +434,13 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 			if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
 				return err
 			}
+			if err := recordSupplierSync(tx, []string{sup.ID}); err != nil {
+				return err
+			}
+		}
+
+		if err := recordReceiptSync(tx, []string{receiptID}); err != nil {
+			return err
 		}
 
 		created = receipt
@@ -640,6 +647,9 @@ func (s *StockService) CreateWriteoff(ctx context.Context, in WriteoffInput) (*m
 				return err
 			}
 			w.TotalCost = decimal.Normalize(actualTotal)
+		}
+		if err := recordWriteoffSync(tx, []string{writeoffID}); err != nil {
+			return err
 		}
 		created = w
 		return nil

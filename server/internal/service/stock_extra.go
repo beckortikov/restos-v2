@@ -397,6 +397,9 @@ func (s *IngredientsWriteService) Delete(ctx context.Context, id string) error {
 			if err := tx.Create(mv).Error; err != nil {
 				return err
 			}
+			if err := recordWriteoffSync(tx, []string{writeoffID}); err != nil {
+				return err
+			}
 		}
 		res := tx.Where("id = ? AND restaurant_id = ?", id, rid).Delete(&models.Ingredient{})
 		if res.Error != nil {

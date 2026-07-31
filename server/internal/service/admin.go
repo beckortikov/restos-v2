@@ -643,8 +643,14 @@ func (s *SuppliersService) Create(ctx context.Context, in SupplierInput) (*model
 		}
 		sup.CreditLimit = d
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(sup).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Create(sup).Error; err != nil {
+			return err
+		}
+		return recordSupplierSync(tx, []string{sup.ID})
+	})
+	if err != nil {
 		return nil, err
 	}
 	return sup, nil
@@ -686,8 +692,14 @@ func (s *SuppliersService) Patch(ctx context.Context, id string, in SupplierInpu
 		}
 		updates["credit_limit"] = d
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		return recordSupplierSync(tx, []string{existing.ID})
+	})
+	if err != nil {
 		return nil, err
 	}
 	scoped3, _ := s.r.ForTenant(ctx)
@@ -699,18 +711,21 @@ func (s *SuppliersService) Patch(ctx context.Context, id string, in SupplierInpu
 }
 
 func (s *SuppliersService) Delete(ctx context.Context, id string) error {
-	scoped, err := s.r.ForTenant(ctx)
+	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return err
 	}
-	res := scoped.Where("id = ?", id).Delete(&models.Supplier{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		res := tx.Where("restaurant_id = ? AND id = ?", rid, id).Delete(&models.Supplier{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		return recordSupplierDeleteSync(tx, id, rid)
+	})
 }
 
 // SupplierPayDebtInput — тело POST /suppliers/{id}/pay-debt.
@@ -745,18 +760,34 @@ func (s *SuppliersService) RecomputeDebts(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	res := s.r.Raw().WithContext(ctx).Exec(`
-		UPDATE suppliers s SET
-		  current_debt = GREATEST(0,
-		    COALESCE((SELECT SUM(sr.debt_amount) FROM stock_receipts sr
-		              WHERE sr.supplier_id::text = s.id::text), 0)
-		  ),
-		  updated_at = now()
-		WHERE s.restaurant_id = ?`, rid)
-	if res.Error != nil {
-		return 0, res.Error
+	var affected int64
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		res := tx.Exec(`
+			UPDATE suppliers s SET
+			  current_debt = GREATEST(0,
+			    COALESCE((SELECT SUM(sr.debt_amount) FROM stock_receipts sr
+			              WHERE sr.supplier_id::text = s.id::text), 0)
+			  ),
+			  updated_at = now()
+			WHERE s.restaurant_id = ?`, rid)
+		if res.Error != nil {
+			return res.Error
+		}
+		affected = res.RowsAffected
+		// batch UPDATE не даёт списка задетых id напрямую — пересинкаем ВСЕХ
+		// поставщиков ресторана (обычно десятки, не тысячи; recompute — редкая
+		// ручная кнопка «само-ремонт», не горячий путь).
+		var ids []string
+		if err := tx.Model(&models.Supplier{}).Where("restaurant_id = ?", rid).Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		return recordSupplierSync(tx, ids)
+	})
+	if err != nil {
+		return 0, err
 	}
-	return res.RowsAffected, nil
+	return affected, nil
 }
 
 // allocateDebtPayment раскладывает оплату долга по накладным поставщика FIFO
@@ -778,6 +809,7 @@ func allocateDebtPayment(tx *gorm.DB, rid, supplierID string, amount decimal.Dec
 		return err
 	}
 	left := amount
+	touched := make([]string, 0, len(receipts))
 	for i := range receipts {
 		if !decimal.IsPositive(left) {
 			break
@@ -792,9 +824,10 @@ func allocateDebtPayment(tx *gorm.DB, rid, supplierID string, amount decimal.Dec
 		}).Error; err != nil {
 			return err
 		}
+		touched = append(touched, receipts[i].ID)
 		left = decimal.Sub(left, cut)
 	}
-	return nil
+	return recordReceiptSync(tx, touched)
 }
 
 // PayDebt — гашение долга поставщику. Атомарно: списывает сумму со счёта,
@@ -865,6 +898,9 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 		}
 		sup.CurrentDebt = decimal.Normalize(decimal.Sub(sup.CurrentDebt, pay))
 		if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		if err := recordSupplierSync(tx, []string{sup.ID}); err != nil {
 			return err
 		}
 		opType := "out"
