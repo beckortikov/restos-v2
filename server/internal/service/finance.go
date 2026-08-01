@@ -1544,16 +1544,21 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			}
 			return nil, err
 		}
-		// Уже выплачено за период = Σ зарплатных проводок этого сотрудника,
-		// датированных этим месяцем (date LIKE 'YYYY-MM%').
+		// Уже выплачено за период = Σ зарплатных проводок этого сотрудника ЗА
+		// ЭТОТ ПЕРИОД — матчим по тегу периода в description ("Зарплата:2026-07",
+		// см. payout()), НЕ по фактической дате проводки: зарплату за июль часто
+		// платят в начале августа, и "date LIKE период%" эту прошлую выплату
+		// никогда не найдёт — кап молча переставал работать (ЗП-баг, нашли по
+		// TestSalary_WorkedDays_AccrualCapAndFreePayout).
 		// Только категория «Зарплата»: авансы теперь пишутся отдельной
 		// категорией и вычитаются из остатка через u.Advance — считать их
 		// здесь второй раз означало бы вычесть аванс дважды.
 		var paid decimal.Decimal
 		scopedP, _ := s.r.ForTenant(ctx)
+		periodTag := "%" + CategorySalary + ":" + *in.Period + "%"
 		if err := scopedP.Table("financial_operations").
 			Select("COALESCE(SUM(amount), 0)").
-			Where("category = ? AND source_ref = ? AND date LIKE ?", CategorySalary, *in.UserID, *in.Period+"%").
+			Where("category = ? AND source_ref = ? AND description LIKE ?", CategorySalary, *in.UserID, periodTag).
 			Scan(&paid).Error; err != nil {
 			return nil, err
 		}
@@ -1783,10 +1788,25 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 	srcRef := *in.UserID
 	ridStr := rid
 
+	// Тег периода в описании ("Зарплата:2026-07") — не просто человекочитаемая
+	// подпись: PaySalary матчит по нему уже выплаченное за период (ниже,
+	// "paid"-запрос), потому что financial_operations.date — это дата САМОЙ
+	// проводки (когда деньги реально ушли), а не период, за который платят.
+	// Зарплату за июль часто платят в начале августа — "date LIKE период%"
+	// в этом случае никогда не совпадает, и кап молча не видит предыдущую
+	// выплату. Тег ставим ВСЕГДА, даже если вызывающий передал свой
+	// description — иначе для платежа с произвольным текстом период
+	// потерялся бы и кап снова ослеп именно на этой проводке.
 	desc := in.Description
-	if (desc == nil || *desc == "") && in.Period != nil && *in.Period != "" {
-		p := fmt.Sprintf("%s:%s", category, *in.Period)
-		desc = &p
+	if in.Period != nil && *in.Period != "" {
+		tag := fmt.Sprintf("%s:%s", category, *in.Period)
+		switch {
+		case desc == nil || *desc == "":
+			desc = &tag
+		case !strings.Contains(*desc, tag):
+			merged := *desc + " " + tag
+			desc = &merged
+		}
 	}
 
 	var op models.FinancialOperation
