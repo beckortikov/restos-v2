@@ -1,5 +1,8 @@
 package com.restos.kiosk.ui.menu
 
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,7 +43,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -189,14 +197,35 @@ private fun MenuItemCard(
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
+            val dishBitmap = rememberDishImageBitmap(item.imageUrl)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(1.05f)
-                    .background(KioskColors.SurfaceMuted, RoundedCornerShape(KioskRadius.tile)),
+                    .background(KioskColors.SurfaceMuted, RoundedCornerShape(KioskRadius.tile))
+                    .clip(RoundedCornerShape(KioskRadius.tile)),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(item.emoji.ifBlank { "🍽" }, fontSize = 52.sp)
+                if (dishBitmap != null) {
+                    Image(
+                        bitmap = dishBitmap,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    // Без фото — название блюда вместо эмодзи (как на вебе,
+                    // components/dish-image.tsx: эмодзи там deprecated).
+                    Text(
+                        item.name,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = KioskColors.TextSecondary,
+                        textAlign = TextAlign.Center,
+                        maxLines = 3,
+                        modifier = Modifier.padding(10.dp),
+                    )
+                }
             }
 
             Spacer(Modifier.height(12.dp))
@@ -321,6 +350,25 @@ private fun CartBar(
                 }
             }
         }
+    }
+}
+
+/**
+ * Фото блюда хранится как base64 data-URI прямо в menu_items.image_url
+ * (см. lib/queries/menu.ts::uploadDishImage — лимит 500КБ, без файлового
+ * сервера/CDN). Декодируем один раз на item.id и переиспользуем битмап,
+ * пока LazyVerticalGrid не пересоздаст composable за пределами viewport.
+ */
+@Composable
+private fun rememberDishImageBitmap(dataUri: String?): ImageBitmap? {
+    return remember(dataUri) {
+        if (dataUri.isNullOrBlank() || !dataUri.startsWith("data:")) return@remember null
+        val comma = dataUri.indexOf(',')
+        if (comma < 0) return@remember null
+        runCatching {
+            val bytes = Base64.decode(dataUri.substring(comma + 1), Base64.DEFAULT)
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+        }.getOrNull()
     }
 }
 

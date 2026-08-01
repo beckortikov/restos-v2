@@ -10,10 +10,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -33,8 +32,14 @@ import com.restos.kiosk.ui.theme.KioskRadius
 import kotlinx.coroutines.delay
 
 /**
- * Заказ создан — терминал показывает номер и через паузу САМ возвращается на
- * стартовый экран для следующего гостя (никто не должен нажимать «выход»).
+ * Заказ создан, НО не оплачен — киоск не принимает оплату. Гость идёт платить
+ * на кассу, называет номер заказа. Печать чека (касса, по закрытию/оплате
+ * заказа) и печать бегунка на кухню (при создании — либо, если у ресторана
+ * "фастфуд"/kitchen_on_pay, тоже по оплате) уже автоматика общего пайплайна
+ * заказов — kiosk ничего печатать сам не должен и не может.
+ *
+ * Через паузу терминал САМ возвращается на стартовый экран для следующего
+ * гостя (никто не должен нажимать «выход»).
  */
 @Composable
 fun OrderConfirmedScreen(
@@ -58,15 +63,15 @@ fun OrderConfirmedScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    Icons.Filled.CheckCircle,
+                    Icons.AutoMirrored.Outlined.ReceiptLong,
                     contentDescription = null,
-                    tint = KioskColors.Success,
-                    modifier = Modifier.size(96.dp),
+                    tint = KioskColors.Primary,
+                    modifier = Modifier.size(72.dp),
                 )
             }
 
             Spacer(Modifier.height(24.dp))
-            Text("Заказ принят", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
+            Text("Оплатите заказ на кассе", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
 
             if (orderNumber != null) {
@@ -86,7 +91,7 @@ fun OrderConfirmedScreen(
             }
 
             Text(
-                "Назовите номер на стойке выдачи, когда заказ будет готов — мы позовём вас по нему.",
+                "Назовите кассиру номер заказа и оплатите его — чек напечатается на кассе.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = KioskColors.TextSecondary,
                 textAlign = TextAlign.Center,
