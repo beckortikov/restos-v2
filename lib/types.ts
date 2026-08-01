@@ -9,6 +9,7 @@ export type UserRole =
   | 'cook'
   | 'storekeeper'
   | 'accountant'
+  | 'kiosk'
   | 'other'
 
 export type TableStatus = 'free' | 'occupied' | 'reserved' | 'bill_requested'
@@ -945,6 +946,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   cook: 'Повар',
   storekeeper: 'Кладовщик',
   accountant: 'Бухгалтер',
+  kiosk: 'Терминал самозаказа',
   other: 'Прочий',
 }
 
@@ -1140,6 +1142,12 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
       'finance.view': true, 'finance.manage': true,
       'menu.view_cost': true, 'analytics.view': true,
       'audit.view': true,
+    },
+  },
+  kiosk: {
+    nav: [],
+    actions: {
+      'orders.create': true, 'menu.view': true, 'showcase.view': true,
     },
   },
   other: {

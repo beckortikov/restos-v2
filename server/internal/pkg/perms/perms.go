@@ -36,6 +36,12 @@ var roleDefaults = map[string]map[string]bool{
 		"finance.view": true, "finance.manage": true, "menu.view_cost": true,
 		"analytics.view": true, "audit.view": true,
 	},
+	// kiosk — терминал самозаказа (планшет/тотем в зале). Только создание
+	// заказов и просмотр меню, ничего чувствительного (не может закрывать
+	// счета, отменять, работать со сменой) — устройство стоит без присмотра.
+	"kiosk": {
+		"orders.create": true, "menu.view": true, "showcase.view": true,
+	},
 }
 
 // AllPermissions — полный список ключей действий (зеркало ALL_PERMISSIONS,

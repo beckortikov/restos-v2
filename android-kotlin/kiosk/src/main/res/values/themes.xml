@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Светлая тема-контейнер окна; UI рисует Compose (KioskTheme). Фон
+         страницы #F7F7FB — нейтральный с лёгким индиго-подтоном. -->
+    <style name="Theme.RestosKiosk" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F7F7FB</item>
+        <item name="android:statusBarColor">#F7F7FB</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

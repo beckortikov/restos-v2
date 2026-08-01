@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Стакан/чашка на индиго-фоне — иконка терминала самозаказа. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group android:scaleX="1.6" android:scaleY="1.6" android:pivotX="54" android:pivotY="54">
+        <!-- Корпус стакана -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M44,40 h20 a2,2 0 0 1 1.98,2.24 l-2.2,19.4 a3,3 0 0 1 -2.98,2.66 h-13.6 a3,3 0 0 1 -2.98,-2.66 l-2.2,-19.4 a2,2 0 0 1 1.98,-2.24 Z" />
+        <!-- Крышка -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M42.5,40 h23 a1.5,1.5 0 0 1 0,3 h-23 a1.5,1.5 0 0 1 0,-3 Z" />
+        <!-- Трубочка -->
+        <path
+            android:strokeColor="#FFFFFF"
+            android:strokeWidth="2.2"
+            android:strokeLineCap="round"
+            android:fillColor="#00000000"
+            android:pathData="M58,40 L61,32" />
+    </group>
+</vector>
