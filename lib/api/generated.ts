@@ -8655,6 +8655,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/kitchen-stage-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Время блюда по станциям (очередь/готовка/ожидание выдачи) vs тех-карта */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["KitchenStageReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/tables": {
         parameters: {
             query?: never;
@@ -12789,6 +12828,28 @@ export interface components {
             total_orders?: number;
             total_revenue?: components["schemas"]["Decimal"];
             cells?: components["schemas"]["PeakHoursCell"][];
+        };
+        KitchenStageRow: {
+            menu_item_id?: string;
+            dish_name?: string;
+            category?: string;
+            station?: string;
+            item_count?: number;
+            avg_queue_min?: components["schemas"]["Decimal"];
+            avg_cook_min?: components["schemas"]["Decimal"];
+            avg_hold_min?: components["schemas"]["Decimal"];
+            avg_total_min?: components["schemas"]["Decimal"];
+            tech_cook_time_min?: number | null;
+            delta_min?: components["schemas"]["Decimal"];
+        };
+        KitchenStageReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            rows?: components["schemas"]["KitchenStageRow"][];
         };
         WeekdayRow: {
             /** @description 0=вс … 6=сб (Postgres DOW) */

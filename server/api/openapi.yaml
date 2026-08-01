@@ -2509,6 +2509,12 @@ paths:
       summary: Статистика по официантам за период
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaitersReport" } } } } }
+  /api/v1/analytics/kitchen-stage-report:
+    get:
+      tags: [analytics]
+      summary: Время блюда по станциям (очередь/готовка/ожидание выдачи) vs тех-карта
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/KitchenStageReport" } } } } }
   /api/v1/analytics/tables:
     get:
       tags: [analytics]
@@ -4792,6 +4798,26 @@ components:
         total_orders:  { type: integer }
         total_revenue: { $ref: "#/components/schemas/Decimal" }
         cells: { type: array, items: { $ref: "#/components/schemas/PeakHoursCell" } }
+
+    KitchenStageRow:
+      type: object
+      properties:
+        menu_item_id:       { type: string }
+        dish_name:          { type: string }
+        category:           { type: string }
+        station:            { type: string }
+        item_count:         { type: integer }
+        avg_queue_min:      { $ref: "#/components/schemas/Decimal" }
+        avg_cook_min:       { $ref: "#/components/schemas/Decimal" }
+        avg_hold_min:       { $ref: "#/components/schemas/Decimal" }
+        avg_total_min:      { $ref: "#/components/schemas/Decimal" }
+        tech_cook_time_min: { type: integer, nullable: true }
+        delta_min:          { $ref: "#/components/schemas/Decimal" }
+    KitchenStageReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        rows:   { type: array, items: { $ref: "#/components/schemas/KitchenStageRow" } }
 
     WeekdayRow:
       type: object

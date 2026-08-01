@@ -4,8 +4,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
@@ -275,10 +277,13 @@ func (s *KDSService) SetItemStatus(ctx context.Context, itemID, status string) (
 			models.OrderItem
 			WaiterID    *string `gorm:"column:waiter_id"`
 			OrderNumber int     `gorm:"column:order_number"`
+			Station     string  `gorm:"column:station"`
 		}
 		err := tx.Table("order_items AS oi").
-			Select("oi.*, o.waiter_id AS waiter_id, o.order_number AS order_number").
+			Select(`oi.*, o.waiter_id AS waiter_id, o.order_number AS order_number,
+				COALESCE(mi.station, 'hot_kitchen') AS station`).
 			Joins("JOIN orders o ON o.id = oi.order_id").
+			Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id").
 			Where("oi.id = ? AND o.restaurant_id = ?", itemID, rid).
 			First(&row).Error
 		if err != nil {
@@ -296,6 +301,30 @@ func (s *KDSService) SetItemStatus(ctx context.Context, itemID, status string) (
 			Where("id = ?", itemID).
 			Updates(map[string]any{"station_status": status, "station_status_at": now}).Error; err != nil {
 			return err
+		}
+		// Событие в лог стадий — только на РЕАЛЬНЫЙ переход (пропускаем повторный
+		// тап той же кнопки: SetItemStatus идемпотентен, но не должен засорять
+		// отчёт по времени нулевыми стадиями).
+		if row.StationStatus == nil || *row.StationStatus != status {
+			var changedBy *string
+			if actor, ok := audit.ActorFromContext(ctx); ok && actor.UserID != "" {
+				changedBy = &actor.UserID
+			}
+			ev := &models.OrderItemStageEvent{
+				ID:           uuid.NewString(),
+				OrderItemID:  itemID,
+				RestaurantID: rid,
+				MenuItemID:   row.MenuItemID,
+				DishName:     row.Name,
+				Station:      row.Station,
+				FromStatus:   row.StationStatus,
+				ToStatus:     status,
+				ChangedBy:    changedBy,
+				CreatedAt:    now,
+			}
+			if err := tx.Create(ev).Error; err != nil {
+				return err
+			}
 		}
 		name := ""
 		if row.Name != nil {

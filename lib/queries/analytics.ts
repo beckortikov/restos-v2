@@ -63,6 +63,32 @@ export interface WaitersReport {
   rows: WaiterRow[]
 }
 
+// ─── Время блюда по станциям (очередь/готовка/ожидание выдачи) ─────────────
+
+export interface KitchenStageRow {
+  menu_item_id: string
+  dish_name: string
+  category: string
+  station: string
+  item_count: number
+  avg_queue_min: DecStr
+  avg_cook_min: DecStr
+  avg_hold_min: DecStr
+  avg_total_min: DecStr
+  tech_cook_time_min?: number | null
+  delta_min?: DecStr | null
+}
+
+export interface KitchenStageReport {
+  period: AnalyticsPeriod
+  rows: KitchenStageRow[]
+}
+
+export async function fetchKitchenStageReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<KitchenStageReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/analytics/kitchen-stage-report', { params: { query: query as any } }))) as KitchenStageReport
+}
+
 export type TableLiveStatus = 'free' | 'occupied' | 'reserved' | 'bill_requested'
 
 export interface TableAnalyticsRow {

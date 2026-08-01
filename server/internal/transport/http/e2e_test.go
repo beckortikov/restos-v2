@@ -50,7 +50,7 @@ func setupE2E(t *testing.T) *e2eFixture {
 	// Очистка релевантных таблиц.
 	for _, tbl := range []string{
 		"audit_log", "print_jobs", "printers",
-		"order_item_modifiers", "order_voids", "order_items", "orders",
+		"order_item_modifiers", "order_voids", "order_item_stage_events", "order_items", "orders",
 		"stock_movements", "tech_card_lines", "ingredients",
 		"cash_shift_operations", "cash_shifts",
 		"sessions", "menu_items", "users", "restaurants",

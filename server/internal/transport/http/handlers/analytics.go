@@ -61,6 +61,22 @@ func (h *AnalyticsHandler) PeakHours(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// KitchenStages — GET /api/v1/analytics/kitchen-stage-report. Время блюда по
+// станциям/стадиям (очередь/готовка/ожидание выдачи) + сравнение с тех-картой.
+func (h *AnalyticsHandler) KitchenStages(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.KitchenStages(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *AnalyticsHandler) Waiters(w http.ResponseWriter, r *http.Request) {
 	f, err := parsePeriod(r)
 	if err != nil {

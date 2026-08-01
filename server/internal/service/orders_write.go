@@ -232,7 +232,7 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 		// items + modifiers + accumulate total
 		total := decimal.Zero
 		for _, it := range in.Items {
-			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx)
+			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx, rid)
 			if err != nil {
 				return err
 			}
@@ -434,7 +434,7 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 				runnerItems = append(runnerItems, *existing)
 				continue
 			}
-			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx)
+			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx, rid)
 			if err != nil {
 				return err
 			}
@@ -720,6 +720,7 @@ func buildOrderItem(
 	orderID *string,
 	now time.Time,
 	tx *gorm.DB,
+	rid string,
 ) (*models.OrderItem, decimal.Decimal, error) {
 	qty, err := decimal.FromString(it.Qty)
 	if err != nil {
@@ -777,6 +778,27 @@ func buildOrderItem(
 		}
 	}
 	if err := tx.Create(oi).Error; err != nil {
+		return nil, decimal.Zero, err
+	}
+	// Стартовое событие лога стадий (→pending): без него длительность
+	// «очереди» для отчёта по станциям отсчитывалась бы не от создания
+	// позиции, а от первого ручного перехода на кухне.
+	station := "hot_kitchen"
+	if mi.Station != nil && *mi.Station != "" {
+		station = *mi.Station
+	}
+	ev := &models.OrderItemStageEvent{
+		ID:           uuid.NewString(),
+		OrderItemID:  itemID,
+		RestaurantID: rid,
+		MenuItemID:   oi.MenuItemID,
+		DishName:     oi.Name,
+		Station:      station,
+		FromStatus:   nil,
+		ToStatus:     "pending",
+		CreatedAt:    now,
+	}
+	if err := tx.Create(ev).Error; err != nil {
 		return nil, decimal.Zero, err
 	}
 	eff := effectivePortions(oi.Unit, qty, oi.UnitSize)
