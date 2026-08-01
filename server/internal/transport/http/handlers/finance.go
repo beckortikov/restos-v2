@@ -388,6 +388,27 @@ func (h *SalaryHandler) SetWorkedDays(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// ToggleDayMultiplier — PUT /finance/salary/day-multiplier: переключить день
+// сотрудника ×1 ↔ ×2 («две смены в один день», 066).
+func (h *SalaryHandler) ToggleDayMultiplier(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		UserID string `json:"user_id"`
+		Date   string `json:"date"`
+		From   string `json:"from"`
+		To     string `json:"to"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.ToggleDayMultiplier(r.Context(), in.UserID, in.Date, in.From, in.To)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *SalaryHandler) PayServiceCharge(w http.ResponseWriter, r *http.Request) {
 	var in service.ServiceChargePayInput
 	if !decodeBody(r, &in) {

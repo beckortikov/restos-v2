@@ -9498,6 +9498,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/day-multiplier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Переключить день сотрудника ×1 ↔ ×2 («две смены в один день», 066)
+         * @description Тоггл: если на дату уже стоит множитель — снимает его (обратно ×1), иначе ставит ×2. Возвращает свежий WorkedDaysResult за [from, to].
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_id?: string;
+                        /** @description YYYY-MM-DD */
+                        date?: string;
+                        from?: string;
+                        to?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkedDaysResult"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/report": {
         parameters: {
             query?: never;
@@ -13208,6 +13257,8 @@ export interface components {
             daily_rate?: components["schemas"]["Decimal"];
             /** @description Дней с отметкой в табеле за период */
             days_worked?: number;
+            /** @description Оплачиваемых единиц (дни ×2 считаются дважды, 066) */
+            paid_units?: number;
             accrued?: components["schemas"]["Decimal"];
             advance?: components["schemas"]["Decimal"];
             deductions?: components["schemas"]["Decimal"];
@@ -13219,6 +13270,12 @@ export interface components {
             manual_dates?: string[];
             /** @description Уникальных отработанных дней всего */
             count?: number;
+            /** @description Оплачиваемых единиц с учётом множителей ×2 (066) */
+            paid_units?: number;
+            /** @description date → множитель; дни без override отсутствуют (подразумевается ×1) */
+            multipliers?: {
+                [key: string]: number;
+            };
         };
         SalaryReport: {
             from?: string;

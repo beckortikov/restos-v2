@@ -1563,12 +1563,16 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 		accrued := u.Salary
 		basis := fmt.Sprintf("оклад %s", u.Salary)
 		if payTypeOf(u) == PayTypeDaily {
-			days, derr := s.daysWorkedInPeriod(ctx, *in.UserID, *in.Period)
+			days, units, derr := s.daysWorkedInPeriod(ctx, *in.UserID, *in.Period)
 			if derr != nil {
 				return nil, derr
 			}
-			accrued = accruedFor(u, days)
-			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
+			accrued = accruedFor(u, units)
+			if units != days {
+				basis = fmt.Sprintf("ставка %s × %d опл.ед. (%d дн., есть дни ×2) = %s", u.DailyRate, units, days, accrued)
+			} else {
+				basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
+			}
 		}
 		// Кап действует только если начислено что-то положительное. Ноль
 		// (не сконфигурирован оклад/ставка или нет отметок) — выплата ручная,

@@ -739,7 +739,10 @@ export default function PayrollPage() {
                                 необъяснимым числом и её нельзя проверить. */}
                             {isDaily && (
                               <span className="text-[10px] text-muted-foreground">
-                                {formatCurrency(acc?.dailyRate ?? emp.dailyRate ?? 0)} × {acc?.daysWorked ?? 0} дн.
+                                {formatCurrency(acc?.dailyRate ?? emp.dailyRate ?? 0)} × {acc?.paidUnits ?? acc?.daysWorked ?? 0} дн.
+                                {acc && acc.paidUnits !== acc.daysWorked && (
+                                  <span className="text-amber-600"> (есть дни ×2)</span>
+                                )}
                               </span>
                             )}
                           </button>

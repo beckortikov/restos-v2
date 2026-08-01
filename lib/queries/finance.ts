@@ -351,17 +351,27 @@ export interface WorkedDaysResult {
   shift_dates: string[]   // дни с приходом в табеле (снять нельзя)
   manual_dates: string[]  // ручные отметки (toggleable)
   count: number           // уникальных отработанных дней всего
+  /** Оплачиваемых единиц с учётом дней ×2 (066) — count при отсутствии множителей. */
+  paidUnits: number
+  /** date → множитель; дни без override отсутствуют (подразумевается ×1). */
+  multipliers: Record<string, number>
+}
+
+function mapWorkedDays(r: any): WorkedDaysResult {
+  return {
+    shift_dates: r?.shift_dates ?? [],
+    manual_dates: r?.manual_dates ?? [],
+    count: Number(r?.count ?? 0),
+    paidUnits: Number(r?.paid_units ?? r?.count ?? 0),
+    multipliers: r?.multipliers ?? {},
+  }
 }
 
 export async function fetchWorkedDays(userId: string, from: string, to: string): Promise<WorkedDaysResult> {
   const r: any = await unwrap(api.GET('/api/v1/finance/salary/worked-days', {
     params: { query: { user_id: userId, from, to } },
   }))
-  return {
-    shift_dates: r?.shift_dates ?? [],
-    manual_dates: r?.manual_dates ?? [],
-    count: Number(r?.count ?? 0),
-  }
+  return mapWorkedDays(r)
 }
 
 // Заменяет РУЧНЫЕ отметки дней сотрудника в [from,to] на набор dates (идемпотентно).
@@ -370,11 +380,16 @@ export async function setWorkedDays(userId: string, from: string, to: string, da
     body: { user_id: userId, from, to, dates },
     headers: { 'Idempotency-Key': randomId() },
   }))
-  return {
-    shift_dates: r?.shift_dates ?? [],
-    manual_dates: r?.manual_dates ?? [],
-    count: Number(r?.count ?? 0),
-  }
+  return mapWorkedDays(r)
+}
+
+// Переключает день сотрудника ×1 ↔ ×2 («две смены в один день», 066).
+export async function toggleDayMultiplier(userId: string, date: string, from: string, to: string): Promise<WorkedDaysResult> {
+  const r: any = await unwrap(api.PUT('/api/v1/finance/salary/day-multiplier', {
+    body: { user_id: userId, date, from, to },
+    headers: { 'Idempotency-Key': randomId() },
+  }))
+  return mapWorkedDays(r)
 }
 
 // ─── Остатки по счетам на дату ────────────────────────────────────────────
@@ -450,7 +465,9 @@ export interface SalaryAccrualRow {
   dailyRate: number
   /** Дней с отметкой в табеле за период. Для оклада не используется. */
   daysWorked: number
-  /** Оклад или ставка × дни — в зависимости от payType. */
+  /** Оплачиваемых единиц (дни ×2, 066) — по нему считается accrued, не по daysWorked. */
+  paidUnits: number
+  /** Оклад или ставка × paidUnits — в зависимости от payType. */
   accrued: number
   advance: number
   deductions: number
@@ -469,6 +486,7 @@ export async function fetchSalaryAccrual(from: string, to: string): Promise<Sala
     salary: Number(r.salary ?? 0),
     dailyRate: Number(r.daily_rate ?? 0),
     daysWorked: Number(r.days_worked ?? 0),
+    paidUnits: Number(r.paid_units ?? r.days_worked ?? 0),
     accrued: Number(r.accrued ?? 0),
     advance: Number(r.advance ?? 0),
     deductions: Number(r.deductions ?? 0),

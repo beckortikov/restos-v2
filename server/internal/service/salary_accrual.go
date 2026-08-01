@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -24,10 +26,13 @@ const (
 //
 // Для оклада (monthly) начисление не зависит от периода — это фиксированная
 // сумма из карточки. Для дневной оплаты (daily) считается ставка × число
-// отработанных дней, где день берётся из табеля: считается день, в котором
-// есть хотя бы одна отметка прихода. Именно поэтому DaysWorked отдаётся
-// наружу — без него сумма выглядит как необъяснимое число, и менеджер не
-// может проверить расчёт.
+// «оплачиваемых единиц» (PaidUnits), где день берётся из табеля: считается
+// день, в котором есть хотя бы одна отметка прихода. DaysWorked — сколько
+// РАЗНЫХ календарных дней отработано; PaidUnits — то же самое, но день с
+// ручным множителем ×2 (066, «две смены в один день») считается дважды.
+// В обычном случае (без множителей) PaidUnits == DaysWorked. Оба поля
+// отдаются наружу — без них сумма выглядит как необъяснимое число, и
+// менеджер не может проверить расчёт.
 type SalaryAccrualRow struct {
 	UserID     string          `json:"user_id"`
 	UserName   string          `json:"user_name"`
@@ -37,6 +42,7 @@ type SalaryAccrualRow struct {
 	Salary     decimal.Decimal `json:"salary"`
 	DailyRate  decimal.Decimal `json:"daily_rate"`
 	DaysWorked int             `json:"days_worked"`
+	PaidUnits  int             `json:"paid_units"`
 	Accrued    decimal.Decimal `json:"accrued"`
 	Advance    decimal.Decimal `json:"advance"`
 	Deductions decimal.Decimal `json:"deductions"`
@@ -62,7 +68,7 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 		return []SalaryAccrualRow{}, nil
 	}
 
-	days, err := s.daysWorked(ctx, rid, from, to)
+	days, units, err := s.daysWorked(ctx, rid, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -75,6 +81,7 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 			Salary:     decimal.Normalize(u.Salary),
 			DailyRate:  decimal.Normalize(u.DailyRate),
 			DaysWorked: days[u.ID],
+			PaidUnits:  units[u.ID],
 			Advance:    decimal.Normalize(u.Advance),
 			Deductions: decimal.Normalize(u.Deductions),
 		}
@@ -87,7 +94,7 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 		if u.Role != nil {
 			row.Role = *u.Role
 		}
-		row.Accrued = accruedFor(u, row.DaysWorked)
+		row.Accrued = accruedFor(u, row.PaidUnits)
 		out = append(out, row)
 	}
 	return out, nil
@@ -102,21 +109,51 @@ func payTypeOf(u models.User) string {
 	return PayTypeMonthly
 }
 
-// accruedFor — начислено за период.
-func accruedFor(u models.User, daysWorked int) decimal.Decimal {
+// accruedFor — начислено за период. paidUnits — не «дни», а оплачиваемые
+// единицы: обычный день = 1, день с множителем ×2 (066) = 2. См. daysWorked.
+func accruedFor(u models.User, paidUnits int) decimal.Decimal {
 	if payTypeOf(u) == PayTypeDaily {
-		return decimal.Normalize(decimal.Mul(u.DailyRate, decimal.FromInt(int64(daysWorked))))
+		return decimal.Normalize(decimal.Mul(u.DailyRate, decimal.FromInt(int64(paidUnits))))
 	}
 	return decimal.Normalize(u.Salary)
 }
 
-// daysWorkedInPeriod — отработанные дни ОДНОГО сотрудника за месяц period
-// («YYYY-MM»). Используется капом на выплату: там период приходит месяцем, а
-// не парой дат.
-func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period string) (int, error) {
+// dayMultipliers — ручные множители (066) одного сотрудника за период, в
+// виде map[work_date]multiplier. Строк нет для дней без override (там
+// множитель подразумевается = 1) — таблица хранит только исключения.
+func (s *SalaryService) dayMultipliers(ctx context.Context, restaurantID, userID, from, to string) (map[string]int, error) {
+	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
+	q := raw.Table("salary_day_multipliers").
+		Select("work_date::text AS d, multiplier").
+		Where("restaurant_id = ? AND user_id::text = ?", restaurantID, userID)
+	if from != "" {
+		q = q.Where("work_date >= ?::date", from)
+	}
+	if to != "" {
+		q = q.Where("work_date <= ?::date", to)
+	}
+	var rows []struct {
+		D          string `gorm:"column:d"`
+		Multiplier int    `gorm:"column:multiplier"`
+	}
+	if err := q.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]int, len(rows))
+	for _, r := range rows {
+		out[r.D] = r.Multiplier
+	}
+	return out, nil
+}
+
+// daysWorkedInPeriod — отработанные дни и оплачиваемые единицы ОДНОГО
+// сотрудника за месяц period («YYYY-MM»). Используется капом на выплату: там
+// период приходит месяцем, а не парой дат. paidUnits учитывает множители
+// (066): день с ×2 добавляет 2 единицы вместо 1.
+func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period string) (daysWorked, paidUnits int, err error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	// «2026-07» → [2026-07-01, 2026-07-31]. Верхнюю границу не вычисляем
 	// вручную: сравнение идёт по префиксу месяца.
@@ -131,7 +168,7 @@ func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period s
 		Where("restaurant_id = ? AND user_id::text = ? AND clock_in IS NOT NULL", rid, userID).
 		Where("to_char(clock_in, 'YYYY-MM') = ?", period).
 		Scan(&te).Error; err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	for _, x := range te {
 		dates[x.D] = struct{}{}
@@ -145,20 +182,38 @@ func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period s
 		Where("restaurant_id = ? AND user_id::text = ?", rid, userID).
 		Where("to_char(work_date, 'YYYY-MM') = ?", period).
 		Scan(&md).Error; err != nil {
-		return 0, err
+		return 0, 0, err
 	}
 	for _, x := range md {
 		dates[x.D] = struct{}{}
 	}
-	return len(dates), nil
+	monthFrom, monthTo := period+"-01", period+"-31"
+	mult, err := s.dayMultipliers(ctx, rid, userID, monthFrom, monthTo)
+	if err != nil {
+		return 0, 0, err
+	}
+	units := 0
+	for d := range dates {
+		if m, ok := mult[d]; ok {
+			units += m
+		} else {
+			units++
+		}
+	}
+	return len(dates), units, nil
 }
 
-// daysWorked — сколько РАЗНЫХ дней сотрудник отмечен в табеле за период.
+// daysWorked — сколько РАЗНЫХ дней сотрудник отмечен в табеле за период
+// (daysWorked), и сколько из этого ОПЛАЧИВАЕМЫХ единиц (paidUnits) с учётом
+// ручных множителей (066, «две смены в один день»).
 //
-// Считаем по дате прихода (clock_in), а не по числу записей: две отметки в
-// один день — это один рабочий день, иначе сотрудник, отметившийся после
-// перерыва, получил бы двойную оплату. Дата приводится к дате без времени.
-func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to string) (map[string]int, error) {
+// Дни считаем по дате прихода (clock_in), а не по числу записей: две отметки
+// в один день — это один рабочий день, иначе сотрудник, отметившийся после
+// перерыва, получил бы двойную оплату. Явный множитель ×2 на конкретный день
+// (проставляется вручную через календарь) — единственный способ учесть
+// реальную вторую смену, не полагаясь на ненадёжную эвристику по интервалу
+// между отметками. Без override paidUnits[u] == daysWorked[u].
+func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to string) (daysWorked, paidUnits map[string]int, err error) {
 	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
 	// (user, date) из табеля и из ручных отметок → union в Go, чтобы один и тот
 	// же день из двух источников не задваивался.
@@ -177,7 +232,7 @@ func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to s
 	}
 	var r1 []ud
 	if err := q1.Scan(&r1).Error; err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	q2 := raw.Table("salary_worked_days").
 		Select("user_id::text AS user_id, work_date::text AS d").
@@ -190,7 +245,7 @@ func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to s
 	}
 	var r2 []ud
 	if err := q2.Scan(&r2).Error; err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sets := map[string]map[string]struct{}{}
 	addRows := func(rows []ud) {
@@ -203,21 +258,63 @@ func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to s
 	}
 	addRows(r1)
 	addRows(r2)
-	out := make(map[string]int, len(sets))
-	for u, d := range sets {
-		out[u] = len(d)
+
+	// Множители (066) за период, по ВСЕМ сотрудникам сразу — один запрос.
+	q3 := raw.Table("salary_day_multipliers").
+		Select("user_id::text AS user_id, work_date::text AS d, multiplier").
+		Where("restaurant_id = ?", restaurantID)
+	if from != "" {
+		q3 = q3.Where("work_date >= ?::date", from)
 	}
-	return out, nil
+	if to != "" {
+		q3 = q3.Where("work_date <= ?::date", to)
+	}
+	var r3 []struct {
+		UserID     string `gorm:"column:user_id"`
+		D          string `gorm:"column:d"`
+		Multiplier int    `gorm:"column:multiplier"`
+	}
+	if err := q3.Scan(&r3).Error; err != nil {
+		return nil, nil, err
+	}
+	mult := map[string]map[string]int{}
+	for _, x := range r3 {
+		if mult[x.UserID] == nil {
+			mult[x.UserID] = map[string]int{}
+		}
+		mult[x.UserID][x.D] = x.Multiplier
+	}
+
+	daysWorked = make(map[string]int, len(sets))
+	paidUnits = make(map[string]int, len(sets))
+	for u, d := range sets {
+		daysWorked[u] = len(d)
+		units := 0
+		for date := range d {
+			if m, ok := mult[u][date]; ok {
+				units += m
+			} else {
+				units++
+			}
+		}
+		paidUnits[u] = units
+	}
+	return daysWorked, paidUnits, nil
 }
 
 // ─── Ручная отметка отработанных дней (059) ─────────────────────────────────
 
 // WorkedDaysResult — дни для календаря отметки: из табеля (снять нельзя, это
-// реальный приход) и ручные (059, toggleable). Count — уникальных дней всего.
+// реальный приход) и ручные (059, toggleable). Count — уникальных дней всего;
+// PaidUnits — то же самое, но дни с множителем (066) считаются кратно.
+// Multipliers — только исключения (день без override в карте отсутствует,
+// подразумевается ×1).
 type WorkedDaysResult struct {
-	ShiftDates  []string `json:"shift_dates"`
-	ManualDates []string `json:"manual_dates"`
-	Count       int      `json:"count"`
+	ShiftDates  []string       `json:"shift_dates"`
+	ManualDates []string       `json:"manual_dates"`
+	Count       int            `json:"count"`
+	PaidUnits   int            `json:"paid_units"`
+	Multipliers map[string]int `json:"multipliers"`
 }
 
 // WorkedDays — отработанные дни сотрудника за [from, to] (YYYY-MM-DD включ.).
@@ -230,7 +327,7 @@ func (s *SalaryService) WorkedDays(ctx context.Context, userID, from, to string)
 		return nil, apperrors.Wrap("VALIDATION", "user_id is required", nil)
 	}
 	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
-	out := &WorkedDaysResult{ShiftDates: []string{}, ManualDates: []string{}}
+	out := &WorkedDaysResult{ShiftDates: []string{}, ManualDates: []string{}, Multipliers: map[string]int{}}
 	union := map[string]struct{}{}
 
 	var te []struct {
@@ -273,7 +370,64 @@ func (s *SalaryService) WorkedDays(ctx context.Context, userID, from, to string)
 		union[x.D] = struct{}{}
 	}
 	out.Count = len(union)
+
+	mult, err := s.dayMultipliers(ctx, rid, userID, from, to)
+	if err != nil {
+		return nil, err
+	}
+	units := 0
+	for d := range union {
+		if m, ok := mult[d]; ok {
+			out.Multipliers[d] = m
+			units += m
+		} else {
+			units++
+		}
+	}
+	out.PaidUnits = units
 	return out, nil
+}
+
+// ToggleDayMultiplier — переключает день сотрудника между ×1 (обычный,
+// строки в таблице нет) и ×2 («две смены в один день», 066). Возвращает
+// свежий WorkedDays(from, to), чтобы клиент одним ответом обновил и бейджи, и
+// итоговую сумму — тыком по дню в календаре, без отдельного перезапроса.
+func (s *SalaryService) ToggleDayMultiplier(ctx context.Context, userID, date, from, to string) (*WorkedDaysResult, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if userID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "user_id is required", nil)
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return nil, apperrors.Wrap("VALIDATION", "bad date: "+date, nil)
+	}
+
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var existing models.SalaryDayMultiplier
+		err := tx.Where("restaurant_id = ? AND user_id::text = ? AND work_date = ?::date", rid, userID, date).
+			Take(&existing).Error
+		if err == nil {
+			return tx.Delete(&existing).Error
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		uid, ridStr := userID, rid
+		return tx.Create(&models.SalaryDayMultiplier{
+			ID: uuid.NewString(), RestaurantID: &ridStr, UserID: &uid, WorkDate: date,
+			Multiplier: 2, CreatedAt: time.Now().UTC(),
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.WorkedDays(ctx, userID, from, to)
 }
 
 // SetWorkedDays — заменяет РУЧНЫЕ отметки сотрудника в [from, to] на набор dates.

@@ -673,6 +673,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/finance/custom-categories/{id}", customCatsH.Delete)
 			g.Post("/finance/salary/pay", salaryH.PaySalary)
 			g.Put("/finance/salary/worked-days", salaryH.SetWorkedDays)
+			g.Put("/finance/salary/day-multiplier", salaryH.ToggleDayMultiplier)
 			g.Post("/finance/service-charge/pay", salaryH.PayServiceCharge)
 			g.Post("/finance/salary/deductions", salaryH.AddDeduction)
 

@@ -50,6 +50,20 @@ type SalaryWorkedDay struct {
 
 func (SalaryWorkedDay) TableName() string { return "salary_worked_days" }
 
+// SalaryDayMultiplier — множитель дневной оплаты за конкретный день (066):
+// «две смены в один день» — строка существует, только когда множитель != 1
+// (по умолчанию день = ×1, строки нет — как и SalaryWorkedDay, чистый override).
+type SalaryDayMultiplier struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	UserID       *string   `gorm:"column:user_id;type:uuid" json:"user_id"`
+	WorkDate     string    `gorm:"column:work_date;type:date" json:"work_date"` // YYYY-MM-DD
+	Multiplier   int       `gorm:"column:multiplier;default:2" json:"multiplier"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (SalaryDayMultiplier) TableName() string { return "salary_day_multipliers" }
+
 // SalaryDeduction — удержание из зарплаты с сохранённой причиной (064).
 //
 // НЕ FinancialOperation: удержание не двигает баланс счёта — деньги не
