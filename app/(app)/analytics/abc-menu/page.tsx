@@ -215,6 +215,31 @@ export default function AbcMenuPage() {
         </div>
       </div>
 
+      {/* KPI-сводка — сразу под шапкой: владелец смотрит эти цифры первыми
+          (раньше блок висел в самом низу под таблицей). */}
+      {summaryKPIs && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-muted/30 rounded-lg p-4">
+            <p className="text-xs text-muted-foreground mb-1">Средний Food Cost</p>
+            <p className="text-2xl font-bold text-foreground">{(summaryKPIs.avgFoodCost || 0).toFixed(1)}%</p>
+          </div>
+          <div className="bg-muted/30 rounded-lg p-4">
+            <p className="text-xs text-muted-foreground mb-1">Доля A-класса в выручке</p>
+            <p className="text-2xl font-bold text-emerald-600">{(summaryKPIs.aRevenueShare || 0).toFixed(1)}%</p>
+          </div>
+          <div className="bg-muted/30 rounded-lg p-4">
+            <p className="text-xs text-muted-foreground mb-1">Блюд по классам</p>
+            <p className="text-2xl font-bold text-foreground">
+              <span className="text-emerald-600">{summaryKPIs.aCount}A</span>
+              {' / '}
+              <span className="text-primary">{summaryKPIs.bCount}B</span>
+              {' / '}
+              <span className="text-red-600">{summaryKPIs.cCount}C</span>
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ABC group summary — доля класса в выручке + топ-блюда (без стены имён) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {(['A', 'B', 'C'] as ABCClass[]).map((cls) => {
@@ -346,33 +371,6 @@ export default function AbcMenuPage() {
         </table>
         </div>
       </div>
-
-      {/* Summary KPIs */}
-      {summaryKPIs && (
-        <div className="bg-card rounded-xl border border-border p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4">Сводные показатели</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-muted/30 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-1">Средний Food Cost %</p>
-              <p className="text-2xl font-bold text-foreground">{(summaryKPIs.avgFoodCost || 0).toFixed(1)}%</p>
-            </div>
-            <div className="bg-muted/30 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-1">Количество блюд</p>
-              <p className="text-2xl font-bold text-foreground">
-                <span className="text-emerald-600">{summaryKPIs.aCount}A</span>
-                {' / '}
-                <span className="text-primary">{summaryKPIs.bCount}B</span>
-                {' / '}
-                <span className="text-red-600">{summaryKPIs.cCount}C</span>
-              </p>
-            </div>
-            <div className="bg-muted/30 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-1">Доля A-класса в выручке</p>
-              <p className="text-2xl font-bold text-emerald-600">{(summaryKPIs.aRevenueShare || 0).toFixed(1)}%</p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Recommendations */}
       {recommendations.length > 0 && (
