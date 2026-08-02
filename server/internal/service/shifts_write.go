@@ -28,6 +28,11 @@ type OpenShiftInput struct {
 // CloseShiftInput — body POST /api/v1/shifts/{id}/close.
 type CloseShiftInput struct {
 	ClosingBalance string `json:"closing_balance"`
+	// ConfirmOpenOrders — явное «закрыть всё равно», когда в ресторане есть
+	// незакрытые заказы (068). Без него, даже при наличии права
+	// shifts.close_with_open_orders, первый запрос всё равно вернёт CONFLICT
+	// со списком столов — чтобы это было осознанное действие, а не случайный клик.
+	ConfirmOpenOrders bool `json:"confirm_open_orders,omitempty"`
 }
 
 // ShiftOperationInput — body POST /api/v1/shifts/{id}/operations.
@@ -148,9 +153,13 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
 
-		// Guard: нельзя закрыть смену, пока есть незакрытые заказы (открытые
-		// столы или «с собой»). Иначе выручка/остатки этих заказов не попадут
-		// в смену. Сообщаем кассиру, что именно закрыть.
+		// Guard: незакрытые заказы (открытые столы или «с собой») блокируют
+		// закрытие смены — ПОКА у кассира нет права shifts.close_with_open_orders
+		// (068) и он не подтвердил явно (ConfirmOpenOrders). Без права — жёсткий
+		// блок, как раньше: иначе рядовой сотрудник мог бы уйти, бросив столы, без
+		// ведома старшего. С правом первый запрос БЕЗ подтверждения тоже блокирует
+		// (CanForce=true в details) — чтобы закрытие с висящими столами было
+		// осознанным действием, а не случайным кликом.
 		var openOrders []models.Order
 		if err := tx.
 			Where("restaurant_id = ? AND status NOT IN ?", rid, []string{"closed", "cancelled"}).
@@ -159,20 +168,24 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 			return err
 		}
 		if len(openOrders) > 0 {
-			// order_ids/order_numbers — machine-readable, чтобы фронт мог сразу
-			// предложить открыть/отменить именно эти заказы (независимо от того,
-			// к какой смене/дате они привязаны — «Активные заказы» скоупятся на
-			// текущую смену и не находят заказы-«хвосты» из прошлых смен).
-			ids := make([]string, len(openOrders))
-			numbers := make([]int, len(openOrders))
-			for i, o := range openOrders {
-				ids[i] = o.ID
-				numbers[i] = o.OrderNumber
+			canForce := hasPermFor(ctx, s.r, "shifts.close_with_open_orders")
+			if !canForce || !in.ConfirmOpenOrders {
+				// order_ids/order_numbers — machine-readable, чтобы фронт мог сразу
+				// предложить открыть/отменить именно эти заказы (независимо от того,
+				// к какой смене/дате они привязаны — «Активные заказы» скоупятся на
+				// текущую смену и не находят заказы-«хвосты» из прошлых смен).
+				ids := make([]string, len(openOrders))
+				numbers := make([]int, len(openOrders))
+				for i, o := range openOrders {
+					ids[i] = o.ID
+					numbers[i] = o.OrderNumber
+				}
+				return apperrors.WrapDetails("CONFLICT", openOrdersMessage(tx, rid, openOrders), map[string]any{
+					"order_ids":     ids,
+					"order_numbers": numbers,
+					"can_force":     canForce,
+				}, nil)
 			}
-			return apperrors.WrapDetails("CONFLICT", openOrdersMessage(tx, rid, openOrders), map[string]any{
-				"order_ids":     ids,
-				"order_numbers": numbers,
-			}, nil)
 		}
 
 		expected, err := computeExpectedCash(tx, shiftID, &shift)
@@ -188,6 +201,7 @@ func (s *ShiftsService) Close(ctx context.Context, shiftID string, in CloseShift
 		shift.ExpectedCash = &expected
 		shift.ClosedAt = &now
 		shift.ClosedBy = &closedBy
+		shift.ClosedOpenOrdersCount = len(openOrders)
 		shift.UpdatedAt = now
 		if err := tx.Save(&shift).Error; err != nil {
 			return err

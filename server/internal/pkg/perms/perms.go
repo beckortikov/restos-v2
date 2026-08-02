@@ -24,6 +24,9 @@ var roleDefaults = map[string]map[string]bool{
 		"orders.service_charge": true,
 		"tables.reserve":        true, "shifts.manage": true, "pos.access": true,
 		"showcase.view": true, "customers.manage": true, "printers.manage": true,
+		// Пересменка с открытыми столами (068): у двух смен в один день иначе
+		// не получится передать кассу друг другу, пока висит хоть один стол.
+		"shifts.close_with_open_orders": true,
 	},
 	"cook": {
 		"kitchen.cooking": true, "menu.view": true, "batch_cooking.manage": true,
@@ -50,7 +53,7 @@ var AllPermissions = []string{
 	"orders.create", "orders.close", "orders.cancel", "orders.void",
 	"orders.refund", "orders.edit", "orders.reprint", "orders.view_others", "orders.create_stopped",
 	"orders.service_charge",
-	"kitchen.cooking", "tables.edit", "tables.reserve", "shifts.manage", "shifts.history", "pos.access", "showcase.view",
+	"kitchen.cooking", "tables.edit", "tables.reserve", "shifts.manage", "shifts.history", "shifts.close_with_open_orders", "pos.access", "showcase.view",
 	"inventory.view", "inventory.manage", "suppliers.manage",
 	"menu.view", "menu.edit", "menu.view_cost", "writeoffs.create", "batch_cooking.manage",
 	"finance.view", "finance.manage", "payroll.manage", "analytics.view",

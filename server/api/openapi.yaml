@@ -755,7 +755,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [closing_balance], properties: { closing_balance: { type: string } } }
+            schema: { type: object, required: [closing_balance], properties: { closing_balance: { type: string }, confirm_open_orders: { type: boolean, description: "Закрыть, несмотря на открытые столы — требует права shifts.close_with_open_orders" } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CashShift" } } } } }
 
   /api/v1/shifts/{id}/operations:
@@ -3906,6 +3906,7 @@ components:
         avg_check: { $ref: "#/components/schemas/Decimal" }
         opened_at: { type: string, format: date-time }
         closed_at: { type: string, format: date-time }
+        closed_open_orders_count: { type: integer, description: "Сколько заказов было ещё открыто в момент закрытия этой смены. 0 — обычное закрытие." }
     CashShiftOperation:
       type: object
       properties:

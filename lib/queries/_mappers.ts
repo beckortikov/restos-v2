@@ -465,6 +465,7 @@ export function _mapV4Shift(r: Record<string, any>): CashShift {
     ordersCount: Number(r.orders_count ?? 0),
     avgCheck: Number(r.avg_check ?? 0),
     status: (r.status as CashShiftStatus) ?? 'open',
+    closedOpenOrdersCount: Number(r.closed_open_orders_count ?? 0),
   }
 }
 

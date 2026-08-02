@@ -815,6 +815,9 @@ export interface CashShift {
   ordersCount: number
   avgCheck: number
   status: CashShiftStatus
+  // closedOpenOrdersCount (068) — сколько заказов было ещё открыто в момент
+  // закрытия ЭТОЙ смены. 0/undefined — обычное закрытие.
+  closedOpenOrdersCount?: number
 }
 
 export interface CashShiftOperation {
@@ -1006,7 +1009,7 @@ export const ALL_PERMISSIONS = [
   'orders.service_charge',
   'kitchen.cooking',
   'tables.edit', 'tables.reserve',
-  'shifts.manage', 'shifts.history', 'pos.access',
+  'shifts.manage', 'shifts.history', 'shifts.close_with_open_orders', 'pos.access',
   'showcase.view',
   'inventory.view', 'inventory.manage',
   'suppliers.manage',
@@ -1040,6 +1043,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'tables.reserve': 'Бронирование столов',
   'shifts.manage': 'Управление сменами',
   'shifts.history': 'История смен (все дни)',
+  'shifts.close_with_open_orders': 'Закрывать смену с открытыми столами',
   'pos.access': 'Доступ к POS-терминалу',
   'inventory.view': 'Просмотр остатков',
   'inventory.manage': 'Управление складом / накладные',
@@ -1062,7 +1066,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 export const PERMISSION_GROUPS: { label: string; keys: PermissionKey[] }[] = [
-  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.edit', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'pos.access', 'showcase.view'] },
+  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.edit', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'shifts.close_with_open_orders', 'pos.access', 'showcase.view'] },
   { label: 'Склад', keys: ['inventory.view', 'inventory.manage', 'suppliers.manage', 'menu.view', 'menu.edit', 'menu.view_cost', 'writeoffs.create'] },
   { label: 'Финансы', keys: ['finance.view', 'finance.manage', 'payroll.manage'] },
   { label: 'Аналитика и клиенты', keys: ['analytics.view', 'customers.manage'] },
@@ -1126,6 +1130,9 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
       'showcase.view': true,
       'customers.manage': true,
       'printers.manage': true,
+      // Пересменка с открытыми столами (068) — иначе две смены в один день
+      // не смогут передать кассу друг другу, пока висит хоть один стол.
+      'shifts.close_with_open_orders': true,
     },
   },
   cook: {

@@ -68,7 +68,12 @@ type CashShift struct {
 	ClosedAt       *time.Time       `gorm:"column:closed_at" json:"closed_at"`
 	RestaurantID   *string          `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	AccountID      *string          `gorm:"column:account_id" json:"account_id"`
-	UpdatedAt      time.Time        `json:"updated_at"`
+	// ClosedOpenOrdersCount — сколько заказов были ещё открыты в момент
+	// закрытия ЭТОЙ смены (068). 0 — обычное закрытие. >0 — закрыли осознанно
+	// (право shifts.close_with_open_orders + подтверждение с фронта), для
+	// пометки в истории смен — см. миграцию 068 за подробностями.
+	ClosedOpenOrdersCount int       `gorm:"column:closed_open_orders_count;default:0" json:"closed_open_orders_count"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
 
 func (CashShift) TableName() string { return "cash_shifts" }

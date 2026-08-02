@@ -2159,6 +2159,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         closing_balance: string;
+                        /** @description Закрыть, несмотря на открытые столы — требует права shifts.close_with_open_orders */
+                        confirm_open_orders?: boolean;
                     };
                 };
             };
@@ -11896,6 +11898,8 @@ export interface components {
             opened_at?: string;
             /** Format: date-time */
             closed_at?: string;
+            /** @description Сколько заказов было ещё открыто в момент закрытия этой смены. 0 — обычное закрытие. */
+            closed_open_orders_count?: number;
         };
         CashShiftOperation: {
             /** Format: uuid */
