@@ -702,7 +702,7 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 			if in.Description != nil && *in.Description != "" {
 				d = *in.Description
 			}
-			if err := recordShiftCashOutIfActive(tx, rid, shiftRef, *in.AccountID, d, date, amount, now); err != nil {
+			if err := recordShiftCashOutIfActive(tx, rid, shiftRef, *in.AccountID, d, date, op.ID, amount, now); err != nil {
 				return err
 			}
 		}
@@ -887,16 +887,34 @@ func applyOpexFilter(q *gorm.DB) *gorm.DB {
 const foBizDay = "COALESCE(NULLIF(date, ''), to_char(created_at, 'YYYY-MM-DD'))"
 
 // applyFOPeriod фильтрует financial_operations по деловой дате (foBizDay) в
-// полуинтервале [From, To). To уже эксклюзивна — date-only +1 день в parsePeriod.
-// Сравнение текстовых 'YYYY-MM-DD' лексикографическое, что корректно для дат.
+// полуинтервале [From, To). Сравнение текстовых 'YYYY-MM-DD' лексикографическое,
+// что корректно для дат.
+//
+// To усечён до даты — эксклюзивность корректна, ТОЛЬКО когда To уже полночь
+// (date-only «to» получает +1 день в parsePeriod специально для этого: делает
+// диапазон включительным по последний день, оставаясь эксклюзивным как timestamp).
+// Если To — момент СРЕДИ дня (обычный случай: «с текущего момента», отчёт за
+// сегодня без явного date-only фильтра — ровно как шлёт TestFinancialFlow_Full),
+// усечение до даты и строгое "<" вычёркивали ВЕСЬ сегодняшний день целиком: дата
+// операции, заведённой прямо сейчас, равна today, а today < today — ложь. ОПиУ и
+// ДДС за «сегодня» показывали 0 по расходам, хотя они только что созданы.
 func applyFOPeriod(q *gorm.DB, f PeriodFilter) *gorm.DB {
 	if f.From != nil {
 		q = q.Where(foBizDay+" >= ?", f.From.Format("2006-01-02"))
 	}
 	if f.To != nil {
-		q = q.Where(foBizDay+" < ?", f.To.Format("2006-01-02"))
+		toDate := f.To.Format("2006-01-02")
+		if isMidnight(*f.To) {
+			q = q.Where(foBizDay+" < ?", toDate)
+		} else {
+			q = q.Where(foBizDay+" <= ?", toDate)
+		}
 	}
 	return q
+}
+
+func isMidnight(t time.Time) bool {
+	return t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 && t.Nanosecond() == 0
 }
 
 func (s *FinanceReportsService) PnL(ctx context.Context, f PeriodFilter) (*PnLJSON, error) {
@@ -1845,11 +1863,14 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 		// Наличная выплата (зарплата/обслуживание) со счёта открытой смены →
 		// зеркалим отток в кассовую смену (cash_out), иначе expected_cash в
 		// Z-отчёте покажет ложную недостачу. No-op для безнала/закрытой смены.
-		if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), date, amount, now); err != nil {
+		// foID — генерируем ЗАРАНЕЕ (а не в поле ниже), чтобы зеркало несло
+		// source_ref на саму эту выплату (069, регресс БАГ #28).
+		foID := uuid.NewString()
+		if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), date, foID, amount, now); err != nil {
 			return err
 		}
 		op = models.FinancialOperation{
-			ID:           uuid.NewString(),
+			ID:           foID,
 			Type:         &outType,
 			Amount:       amount,
 			Category:     &category,

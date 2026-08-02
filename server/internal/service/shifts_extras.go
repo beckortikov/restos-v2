@@ -189,7 +189,11 @@ func (s *ShiftsService) DeleteExpense(ctx context.Context, shiftID, opID string)
 			return err
 		}
 		isAutoMirror := op.Category != nil && *op.Category == autoMirrorCategory
-		if !isOpen && !isAutoMirror {
+		if isAutoMirror {
+			if err := requireMirrorSourceGone(tx, &op); err != nil {
+				return err
+			}
+		} else if !isOpen {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
 
@@ -259,6 +263,30 @@ func reverseShiftAccountDebit(tx *gorm.DB, rid string, shift *models.CashShift, 
 		}).Error
 }
 
+// requireMirrorSourceGone — регресс БАГ #28 (069): удаление __auto_mirror__
+// безопасно ТОЛЬКО когда оно фантомное — не привязано к SourceRef (legacy
+// зеркала, либо созданные без него) ИЛИ его исходная financial_operations
+// уже не существует (реверснута/удалена в другом месте). Если source_ref
+// указывает на ДЕЙСТВУЮЩУЮ операцию — зеркало отражает реальный, ещё
+// актуальный отток денег со счёта ЭТОЙ смены; удаление одного только зеркала
+// (без реверса баланса — см. reverseShiftAccountDebit) оставило бы
+// expected_cash не видящим уже потраченные деньги. Отменять нужно исходную
+// операцию (выплату/расход/возврат), а не зеркало.
+func requireMirrorSourceGone(tx *gorm.DB, op *models.CashShiftOperation) error {
+	if op.SourceRef == nil || *op.SourceRef == "" {
+		return nil
+	}
+	var cnt int64
+	if err := tx.Model(&models.FinancialOperation{}).Where("id = ?", *op.SourceRef).Count(&cnt).Error; err != nil {
+		return err
+	}
+	if cnt > 0 {
+		return apperrors.Wrap("CONFLICT",
+			"зеркало отражает ещё действующую операцию — отмените/сторнируйте исходную выплату или расход, а не удаляйте зеркало напрямую", nil)
+	}
+	return nil
+}
+
 // DeleteOperation — DELETE /api/v1/cash-shift-operations/{id}.
 // Резолвит shift_id из самой операции, применяет tenant-проверку через
 // смену-родителя. Это ЕДИНСТВЕННЫЙ путь, которым реально пользуется фронт
@@ -303,7 +331,11 @@ func (s *ShiftsService) DeleteOperation(ctx context.Context, opID string) error 
 		}
 		isOpen := shift.Status != nil && *shift.Status == "open"
 		isAutoMirror := op.Category != nil && *op.Category == autoMirrorCategory
-		if !isOpen && !isAutoMirror {
+		if isAutoMirror {
+			if err := requireMirrorSourceGone(tx, &op); err != nil {
+				return err
+			}
+		} else if !isOpen {
 			return apperrors.Wrap("CONFLICT", "shift is not open", nil)
 		}
 		// Реверс связанной financial_operation (см. DeleteExpense). У auto_mirror

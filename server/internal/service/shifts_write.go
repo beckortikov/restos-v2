@@ -571,7 +571,12 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 // зеркалить как обычно, ДДС-запись задним числом создаёт фантомную
 // недостачу/излишек в СЕГОДНЯШНЕМ Z-отчёте, а сама операция и так корректно
 // легла на свою дату в ДДС (foBizDay). Инцидент 23.07.2026.
-func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc, opDate string, amount decimal.Decimal, now time.Time) error {
+//
+// sourceRef — id financial_operations, отток которой отражает это зеркало
+// (069, регресс БАГ #28). Пусто — допустимо (напр. вызовы без своей FO), но
+// тогда зеркало навсегда останется «фантомным» для DeleteOperation/DeleteExpense
+// — удаляемым без проверки, что исходная операция ещё действует.
+func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc, opDate, sourceRef string, amount decimal.Decimal, now time.Time) error {
 	if !decimal.IsPositive(amount) {
 		return nil
 	}
@@ -616,6 +621,9 @@ func recordShiftCashOutIfActive(tx *gorm.DB, rid, shiftID, accountID, desc, opDa
 		Category:    &autoCat,
 		CreatedAt:   now,
 		UpdatedAt:   now,
+	}
+	if sourceRef != "" {
+		op.SourceRef = &sourceRef
 	}
 	return tx.Create(op).Error
 }

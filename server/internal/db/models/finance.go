@@ -92,7 +92,13 @@ type CashShiftOperation struct {
 	// ящик, legacy). Не-NULL и ≠ счёту смены → безналичный расход: дебетует свой
 	// счёт, но наличный ящик (expected_cash) не трогает — зеркалит приход, где
 	// нал идёт на кассу, а карта на банк-счёт.
-	AccountID *string   `gorm:"column:account_id;type:uuid" json:"account_id"`
+	AccountID *string `gorm:"column:account_id;type:uuid" json:"account_id"`
+	// SourceRef — id financial_operations, отток которой отражает это
+	// авто-зеркало (069). NULL — legacy/фантомное зеркало (поведение
+	// удаления не меняется). Заполнен и запись ещё существует — зеркало
+	// реальное и действующее, DeleteOperation/DeleteExpense блокируют прямое
+	// удаление (см. миграцию 069 за подробностями про БАГ #28).
+	SourceRef *string   `gorm:"column:source_ref" json:"source_ref"`
 	CreatedBy *string   `gorm:"column:created_by" json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

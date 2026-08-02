@@ -100,6 +100,25 @@ func TestPayout_NoShift_NotInShiftReport(t *testing.T) {
 	}
 	wID := mkUser(t, gdb, f.rid, "Bob", "waiter", "")
 	tok := f.login(t)
+
+	// Начисление обслуживания для Боба — без него кап выплаты (нельзя вывести
+	// больше начисленного) корректно отклонит 30 при 0 начисленных: это не
+	// баг, это #7 (сервер сам считает остаток к выплате). Тест проверяет
+	// другое — что выплата БЕЗ shift_id не попадает в отчёт КОНКРЕТНОЙ смены,
+	// поэтому начисление есть, а shift_id у заказа сознательно не ставим.
+	closedStatus := "closed"
+	closedAt := time.Now().UTC()
+	if err := gdb.Create(&models.Order{
+		ID: uuid.NewString(), RestaurantID: &f.rid,
+		WaiterID: &wID, Status: &closedStatus, ClosedAt: &closedAt,
+		Total:            decimal.MustFromString("500"),
+		ServiceAmount:    decimal.MustFromString("50"),
+		TotalWithService: decimal.MustFromString("550"),
+		CreatedAt:        closedAt, UpdatedAt: closedAt,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	r, b := f.post(t, "/api/v1/finance/service-charge/pay", tok, uuid.NewString(), map[string]any{
 		"waiter_id": wID, "amount": "30", "account_id": accountID,
 		"period_from": "2026-01-01T00:00:00Z", "period_to": "2026-12-31T00:00:00Z",

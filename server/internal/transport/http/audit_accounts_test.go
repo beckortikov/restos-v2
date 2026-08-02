@@ -249,8 +249,13 @@ func TestAudit_ManualCashOut_AffectsShiftFalse_NotMirroredIntoShift(t *testing.T
 	}
 }
 
-// БАГ #28: авто-зеркало cash_out (наличная выплата) можно удалить как обычную
-// операцию смены → expected_cash растёт, хотя деньги реально ушли со счёта.
+// БАГ #28 (регресс, 069): авто-зеркало cash_out (наличная выплата) раньше
+// можно было удалить как обычную операцию смены → expected_cash поднимался,
+// хотя деньги реально ушли со счёта. Зеркало реальной, ещё действующей
+// выплаты теперь несёт source_ref на её financial_operations — удаление
+// такого зеркала блокируется (нужно отменять исходную выплату, не зеркало).
+// Фантомные зеркала (без source_ref, или чья исходная операция уже удалена)
+// по-прежнему удаляются как раньше — см. delete_phantom_mirror*_test.go.
 func TestAudit_DeleteAutoMirror_KeepsShiftConsistent(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
@@ -269,7 +274,8 @@ func TestAudit_DeleteAutoMirror_KeepsShiftConsistent(t *testing.T) {
 	if err := gdb.Create(&models.User{ID: uid, Name: &uname, RestaurantID: &f.rid}).Error; err != nil {
 		t.Fatal(err)
 	}
-	// Наличная выплата 200 с кассового счёта → account 300 + зеркало cash_out 200.
+	// Наличная выплата 200 с кассового счёта → account 300 + зеркало cash_out 200
+	// с source_ref на саму эту выплату.
 	if r, b := f.post(t, "/api/v1/finance/salary/pay", tok, uuid.NewString(), map[string]any{
 		"user_id": uid, "amount": "200", "account_id": accountID, "employee_name": uname, "period": "2026-07",
 	}); r.StatusCode != http.StatusCreated && r.StatusCode != http.StatusOK {
@@ -277,25 +283,44 @@ func TestAudit_DeleteAutoMirror_KeepsShiftConsistent(t *testing.T) {
 	}
 	var mirror models.CashShiftOperation
 	if err := gdb.Where("shift_id = ? AND type = ?", shiftID, "cash_out").First(&mirror).Error; err != nil {
-		t.Skipf("зеркало cash_out не создано (смена не сматчилась по account_id): %v", err)
+		t.Fatalf("зеркало cash_out не создано: %v", err)
+	}
+	if mirror.SourceRef == nil || *mirror.SourceRef == "" {
+		t.Fatalf("зеркало без source_ref — санити-чек сетапа сломан")
 	}
 
-	// Удаляем зеркало как обычную операцию смены.
-	if r, b := f.del(t, "/api/v1/cash-shift-operations/"+mirror.ID, tok, uuid.NewString()); r.StatusCode != http.StatusOK && r.StatusCode != http.StatusNoContent {
-		t.Skipf("delete cash-shift-operation: %d %s", r.StatusCode, b)
+	// Удалить зеркало напрямую — заблокировано: выплата ещё действует.
+	r, b := f.del(t, "/api/v1/cash-shift-operations/"+mirror.ID, tok, uuid.NewString())
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("delete живого зеркала: %d %s, want 409 — выплата ещё существует", r.StatusCode, b)
+	}
+	var stillExists int64
+	gdb.Model(&models.CashShiftOperation{}).Where("id = ?", mirror.ID).Count(&stillExists)
+	if stillExists == 0 {
+		t.Fatalf("зеркало удалено, несмотря на 409 — запись должна остаться на месте")
 	}
 
 	// Закрываем смену — expected_cash обязан остаться согласован со счётом (300).
 	if r, b := f.post(t, "/api/v1/shifts/"+shiftID+"/close", tok, uuid.NewString(), map[string]any{
 		"closing_balance": "300",
 	}); r.StatusCode != http.StatusOK {
-		t.Skipf("close shift: %d %s", r.StatusCode, b)
+		t.Fatalf("close shift: %d %s", r.StatusCode, b)
 	}
 	var shift models.CashShift
 	gdb.First(&shift, "id = ?", shiftID)
 	acc := accBalance(t, gdb, accountID)
-	if shift.ExpectedCash != nil && !shift.ExpectedCash.Equal(acc) {
-		t.Errorf("expected_cash = %s, баланс счёта = %s — удаление авто-зеркала подняло ожидаемую кассу, деньги уже ушли",
-			*shift.ExpectedCash, acc)
+	if shift.ExpectedCash == nil || !shift.ExpectedCash.Equal(acc) {
+		t.Errorf("expected_cash = %v, баланс счёта = %s — должны совпасть", shift.ExpectedCash, acc)
+	}
+
+	// Исходная выплата удалена (сторнирована) отдельно от зеркала — ТЕПЕРЬ
+	// зеркало фантомное (source_ref есть, но записи по нему больше нет) и
+	// удаление разрешено — штатный путь очистки после отмены операции.
+	if err := gdb.Where("id = ?", *mirror.SourceRef).Delete(&models.FinancialOperation{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	r2, b2 := f.del(t, "/api/v1/cash-shift-operations/"+mirror.ID, tok, uuid.NewString())
+	if r2.StatusCode != http.StatusOK && r2.StatusCode != http.StatusNoContent {
+		t.Errorf("delete зеркала после удаления исходной операции: %d %s, want 200/204", r2.StatusCode, b2)
 	}
 }

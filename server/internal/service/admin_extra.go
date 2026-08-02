@@ -379,8 +379,9 @@ func (s *LiabilitiesService) Pay(ctx context.Context, id string, in LiabilityPay
 		isAuto := true
 		ridStr := rid
 		accID := in.AccountID
+		foID := uuid.NewString()
 		if err := tx.Create(&models.FinancialOperation{
-			ID: uuid.NewString(), Type: &opType, Amount: pay, Category: &opCat,
+			ID: foID, Type: &opType, Amount: pay, Category: &opCat,
 			AccountID: &accID, AccountName: acc.Name, Activity: &opAct, Date: &opDate,
 			Description: &desc, Counterparty: lia.Creditor, IsAuto: &isAuto,
 			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
@@ -388,7 +389,7 @@ func (s *LiabilitiesService) Pay(ctx context.Context, id string, in LiabilityPay
 			return err
 		}
 		// #27: наличное гашение с кассового счёта открытой смены зеркалим в смену.
-		if err := recordShiftCashOutIfActive(tx, rid, "", in.AccountID, desc, opDate, pay, now); err != nil {
+		if err := recordShiftCashOutIfActive(tx, rid, "", in.AccountID, desc, opDate, foID, pay, now); err != nil {
 			return err
 		}
 		out = &lia
