@@ -215,11 +215,14 @@ export default function AbcMenuPage() {
         </div>
       </div>
 
-      {/* ABC group summary */}
+      {/* ABC group summary — доля класса в выручке + топ-блюда (без стены имён) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {(['A', 'B', 'C'] as ABCClass[]).map((cls) => {
-          const group = byClass(cls)
+          const group = byClass(cls) // items уже отсортированы по выручке desc
           const groupRevenue = group.reduce((s, i) => s + i.revenue, 0)
+          const groupShare = totalRevenueAll > 0 ? (groupRevenue / totalRevenueAll) * 100 : 0
+          const top = group.slice(0, 3)
+          const rest = group.length - top.length
           return (
             <div key={cls} className="bg-card rounded-xl border border-border p-5">
               <div className="flex items-center gap-2 mb-3">
@@ -229,10 +232,21 @@ export default function AbcMenuPage() {
                   <p className="text-xs text-muted-foreground">{ABC_DESC[cls]}</p>
                 </div>
               </div>
-              <p className="text-xl font-bold text-foreground">{formatCurrency(groupRevenue)}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {group.map((i) => i.name).join(', ')}
-              </p>
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="text-xl font-bold text-foreground">{formatCurrency(groupRevenue)}</p>
+                <p className="text-xs font-medium text-muted-foreground tabular-nums">{groupShare.toFixed(0)}% выручки</p>
+              </div>
+              <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${Math.min(groupShare, 100)}%`, backgroundColor: ABC_COLORS[cls] }} />
+              </div>
+              {top.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {top.map((i) => (
+                    <span key={i.id} className="max-w-[10rem] truncate rounded-md bg-muted px-2 py-0.5 text-xs text-foreground">{i.name}</span>
+                  ))}
+                  {rest > 0 && <span className="px-1 py-0.5 text-xs text-muted-foreground">+{rest} ещё</span>}
+                </div>
+              )}
             </div>
           )
         })}
