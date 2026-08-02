@@ -79,34 +79,36 @@ export function WorkedDaysDialog({
     return units
   }, [shiftSet, manualSet, multipliers])
 
-  // Тап по бейджу «×2» — переключает множитель немедленно (не ждёт «Сохранить
-  // дни»): день уже отработан, множитель — не черновой набор дат, а
-  // самостоятельный факт «в этот день было две смены».
-  async function toggleDouble(e: React.MouseEvent, iso: string) {
-    e.stopPropagation()
+  // Единый тап по дню (весь квадрат — не крошечный угловой бейдж, который
+  // физически промахивался на тач-экране в плотной сетке 7×6). Состояния:
+  //   выключен            → тап → включён (×1)               — локально, до «Сохранить дни»
+  //   включён, ×1         → тап → ×2                          — сразу на сервер
+  //   включён, ×2         → тап → ×1                          — сразу на сервер
+  // Дни из табеля всегда «включены» (то же самое, начиная со 2-й строки —
+  // тап на них сразу переключает множитель, включать/выключать нечего).
+  async function handleDayTap(iso: string) {
+    const on = shiftSet.has(iso) || manualSet.has(iso)
+    if (!on) {
+      setManualSet((prev) => {
+        const next = new Set(prev)
+        next.add(iso)
+        return next
+      })
+      return
+    }
+    // Множитель — не черновой набор дат, а самостоятельный факт «в этот день
+    // было две смены»: пишется сразу, не ждёт «Сохранить дни».
     if (togglingDate) return
     setTogglingDate(iso)
     try {
       const res = await toggleDayMultiplier(employeeId, iso, monthStart, monthEnd)
       setMultipliers(res.multipliers)
-      // Множитель пишется сразу (не ждёт «Сохранить дни») — список сотрудников
-      // за спиной диалога должен подхватить новую сумму, не дожидаясь закрытия.
       onSaved?.(res.count)
     } catch (err) {
       toast.error(humanizeError(err, 'Не удалось изменить множитель'))
     } finally {
       setTogglingDate(null)
     }
-  }
-
-  function toggle(iso: string) {
-    if (shiftSet.has(iso)) return // табель не трогаем
-    setManualSet((prev) => {
-      const next = new Set(prev)
-      if (next.has(iso)) next.delete(iso)
-      else next.add(iso)
-      return next
-    })
   }
 
   function markFirstN() {
@@ -198,39 +200,27 @@ export function WorkedDaysDialog({
                   const on = isShift || isManual
                   const isDouble = (multipliers[iso] ?? 1) > 1
                   return (
-                    <div key={iso} className="relative">
-                      <button
-                        onClick={() => toggle(iso)}
-                        disabled={isShift}
-                        title={isShift ? 'Из табеля — снять нельзя' : undefined}
-                        className={[
-                          'w-full aspect-square rounded-md text-sm flex items-center justify-center transition-colors tabular-nums',
-                          isShift ? 'bg-primary/30 text-foreground font-semibold cursor-not-allowed ring-1 ring-primary/40' : '',
-                          !isShift && isManual ? 'bg-primary text-primary-foreground font-semibold' : '',
-                          !on ? 'bg-muted/50 text-foreground hover:bg-muted' : '',
-                        ].join(' ')}
-                      >
-                        {format(d, 'd')}
-                      </button>
-                      {/* Бейдж «две смены» — тап переключает множитель ×1 ↔ ×2 (066),
-                          не трогая сам факт «день отработан». Виден только на
-                          отмеченных днях: на пустом дне множитель бессмыслен. */}
-                      {on && (
-                        <button
-                          onClick={(e) => toggleDouble(e, iso)}
-                          disabled={togglingDate === iso}
-                          title={isDouble ? 'Две смены — тап, чтобы снять' : 'Отметить как две смены за день'}
-                          className={[
-                            'absolute -top-1.5 -right-1.5 h-4 min-w-4 px-0.5 rounded-full text-[9px] font-bold flex items-center justify-center transition-colors',
-                            isDouble
-                              ? 'bg-amber-500 text-white'
-                              : 'bg-background border border-border text-muted-foreground/60',
-                          ].join(' ')}
-                        >
+                    <button
+                      key={iso}
+                      onClick={() => handleDayTap(iso)}
+                      disabled={togglingDate === iso}
+                      title={!on ? undefined : isDouble ? 'Тап — вернуть одну смену' : 'Тап — отметить две смены за день'}
+                      className={[
+                        'relative w-full aspect-square rounded-md text-sm flex items-center justify-center transition-colors tabular-nums',
+                        isShift ? 'bg-primary/30 text-foreground font-semibold ring-1 ring-primary/40' : '',
+                        !isShift && isManual ? 'bg-primary text-primary-foreground font-semibold' : '',
+                        !on ? 'bg-muted/50 text-foreground hover:bg-muted' : '',
+                      ].join(' ')}
+                    >
+                      {format(d, 'd')}
+                      {/* Пометка «две смены» — чисто визуальная, не отдельная кликабельная
+                          зона: переключает её тап по всему дню (handleDayTap). */}
+                      {isDouble && (
+                        <span className="pointer-events-none absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-amber-500 text-white text-[8px] font-bold flex items-center justify-center leading-none">
                           ×2
-                        </button>
+                        </span>
                       )}
-                    </div>
+                    </button>
                   )
                 })}
               </div>
@@ -275,7 +265,7 @@ export function WorkedDaysDialog({
                 </p>
               )}
               <p className="text-[11px] text-muted-foreground">
-                Тап по <span className="inline-flex items-center justify-center size-3.5 rounded-full bg-amber-500 text-white text-[8px] font-bold align-middle">×2</span> на отмеченном дне — если сотрудник в этот день отработал две смены.
+                Тап по отмеченному дню — переключить <span className="inline-flex items-center justify-center size-3.5 rounded-full bg-amber-500 text-white text-[8px] font-bold align-middle">×2</span>, если сотрудник в этот день отработал две смены. Ещё тап — обратно на одну.
               </p>
             </>
           )}
