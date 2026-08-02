@@ -82,6 +82,9 @@ export default function AbcMenuPage() {
   const [period, setPeriod] = useState<PeriodKey>('month')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  // Фильтр таблицы по ABC-классу (сводка/график/KPI показывают всё, фильтруется
+  // только таблица). 'all' — без фильтра.
+  const [filterClass, setFilterClass] = useState<ABCClass | 'all'>('all')
 
   useEffect(() => {
     setLoading(true)
@@ -158,6 +161,8 @@ export default function AbcMenuPage() {
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
   const byClass = (cls: ABCClass) => items.filter((i) => i.abc === cls)
+  // Строки таблицы с учётом фильтра-чипа (сводка и график остаются по всем).
+  const visibleItems = filterClass === 'all' ? items : byClass(filterClass)
 
   const scatterData = items.map((item) => ({
     x: item.qty,
@@ -328,6 +333,21 @@ export default function AbcMenuPage() {
 
       {/* Full table */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
+        {/* Чипы-фильтры по классу — фильтруют только таблицу ниже */}
+        <div className="flex flex-wrap items-center gap-1.5 p-3 border-b border-border">
+          {(['all', 'A', 'B', 'C'] as const).map((key) => {
+            const count = key === 'all' ? items.length : byClass(key).length
+            return (
+              <button
+                key={key}
+                onClick={() => setFilterClass(key)}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${filterClass === key ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'}`}
+              >
+                {key === 'all' ? 'Все' : key} <span className="tabular-nums opacity-70">{count}</span>
+              </button>
+            )
+          })}
+        </div>
         <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[700px]">
           <thead>
@@ -338,7 +358,7 @@ export default function AbcMenuPage() {
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {visibleItems.map((item) => (
               <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
                 <td className="px-4 py-3">
                   <span className={`size-6 rounded font-bold text-xs flex items-center justify-center ${ABC_BG[item.abc]}`}>{item.abc}</span>
@@ -364,8 +384,10 @@ export default function AbcMenuPage() {
                 </td>
               </tr>
             ))}
-            {items.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+            {visibleItems.length === 0 && (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                {items.length === 0 ? 'Нет данных за выбранный период' : `Нет блюд класса ${filterClass}`}
+              </td></tr>
             )}
           </tbody>
         </table>
