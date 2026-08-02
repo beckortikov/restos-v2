@@ -127,3 +127,51 @@ func TestSalary_DayMultiplier_DoubleShift(t *testing.T) {
 		t.Fatalf("после снятия множителя: days=%d units=%d, want 2/2", days, units)
 	}
 }
+
+// TestSalary_DayMultiplier_ToggleBeforeSave_StillReturnsInResponse — тап
+// «включить день» в календаре отмечает дату только ЛОКАЛЬНО (на клиенте) —
+// в salary_worked_days она попадает лишь по кнопке «Сохранить дни»
+// (SetWorkedDays). Если тут же тапнуть «×2» (двойной тап по дню), запрос
+// day-multiplier уходит на дату, которой ЕЩЁ НЕТ в salary_worked_days.
+// ToggleDayMultiplier создаёт множитель корректно, но WorkedDays() раньше
+// фильтровал ответное поле multipliers по union (дни ИЗ БД) — только что
+// созданный множитель для несохранённой даты тут же пропадал из ответа, и
+// бейдж ×2 в календаре не появлялся. Регрессия: ответ обязан включать
+// множитель для ЛЮБОЙ даты периода, независимо от того, сохранена она как
+// «отработанный день» или нет.
+func TestSalary_DayMultiplier_ToggleBeforeSave_StillReturnsInResponse(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb := openTestDB(t)
+
+	gdb.Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"payroll.manage":true}}`)))
+
+	daily, cook := "daily", "cook"
+	dName := "Несохранённый"
+	dUser := uuid.NewString()
+	gdb.Create(&models.User{
+		ID: dUser, Name: &dName, Role: &cook, PayType: &daily,
+		DailyRate: decimal.MustFromString("60"), RestaurantID: &f.rid,
+	})
+
+	from, to := "2026-07-01", "2026-07-31"
+
+	// Ставим ×2 на дату, которую НИКТО не отмечал через /worked-days —
+	// ровно то, что происходит при двойном тапе по свежедобавленному дню.
+	r, b := f.put(t, "/api/v1/finance/salary/day-multiplier", tok, uuid.NewString(), map[string]any{
+		"user_id": dUser, "date": "2026-07-05", "from": from, "to": to,
+	})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("toggle multiplier: %d %s", r.StatusCode, b)
+	}
+	var toggled struct {
+		Multipliers map[string]int `json:"multipliers"`
+	}
+	if err := json.Unmarshal(b, &toggled); err != nil {
+		t.Fatalf("unmarshal: %v — %s", err, b)
+	}
+	if toggled.Multipliers["2026-07-05"] != 2 {
+		t.Fatalf("multipliers[2026-07-05] = %v, want 2 — ×2 на несохранённый день должен быть виден в ответе, %s", toggled.Multipliers, b)
+	}
+}

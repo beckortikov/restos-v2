@@ -375,10 +375,18 @@ func (s *SalaryService) WorkedDays(ctx context.Context, userID, from, to string)
 	if err != nil {
 		return nil, err
 	}
+	// Multipliers — ВСЕ найденные в периоде, не только для дат из union. Тап
+	// «включить день» отмечает дату только локально на клиенте — она попадает
+	// в salary_worked_days лишь по кнопке «Сохранить дни» (SetWorkedDays).
+	// Если тут же тапнуть «×2», ToggleDayMultiplier создаёт строку корректно,
+	// но union (посчитанный из БД) её ещё не видит — старый фильтр «только для
+	// дат из union» прятал только что созданный множитель из ответа, и бейдж
+	// ×2 не появлялся, пока день не сохранён. PaidUnits — реальный предпросмотр
+	// начисления, его по union считаем как раньше (не завышаем на несохранённые дни).
+	out.Multipliers = mult
 	units := 0
 	for d := range union {
 		if m, ok := mult[d]; ok {
-			out.Multipliers[d] = m
 			units += m
 		} else {
 			units++

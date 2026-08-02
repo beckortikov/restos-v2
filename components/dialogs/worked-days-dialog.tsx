@@ -214,8 +214,11 @@ export function WorkedDaysDialog({
                     >
                       {format(d, 'd')}
                       {/* Пометка «две смены» — чисто визуальная, не отдельная кликабельная
-                          зона: переключает её тап по всему дню (handleDayTap). */}
-                      {isDouble && (
+                          зона: переключает её тап по всему дню (handleDayTap). Гейт по on —
+                          множитель на ещё не сохранённую (несохранённую save()) дату может
+                          существовать на сервере, но показывать ×2 на невключённом дне
+                          вводило бы в заблуждение. */}
+                      {on && isDouble && (
                         <span className="pointer-events-none absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-amber-500 text-white text-[8px] font-bold flex items-center justify-center leading-none">
                           ×2
                         </span>
