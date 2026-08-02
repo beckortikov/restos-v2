@@ -75,6 +75,18 @@ const ME_DESC: Record<Exclude<EngineeringClass, ''>, string> = {
 // поэтому 2.5 порц. — валидно. Целые показываем без хвоста.
 const fmtQty = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1))
 
+// Колонки таблицы. sortKey задан → заголовок кликабелен (сортировка).
+type SortKey = 'name' | 'qty' | 'revenue' | 'share' | 'margin'
+const COLUMNS: { header: string; sortKey?: SortKey }[] = [
+  { header: 'Класс' },
+  { header: 'Блюдо', sortKey: 'name' },
+  { header: 'Продано', sortKey: 'qty' },
+  { header: 'Выручка', sortKey: 'revenue' },
+  { header: 'Доля', sortKey: 'share' },
+  { header: 'Маржа', sortKey: 'margin' },
+  { header: 'Класс ME' },
+]
+
 export default function AbcMenuPage() {
   const { canDo } = useAuth()
   const [report, setReport] = useState<ABCMenuReport | null>(null)
@@ -85,6 +97,8 @@ export default function AbcMenuPage() {
   // Фильтр таблицы по ABC-классу (сводка/график/KPI показывают всё, фильтруется
   // только таблица). 'all' — без фильтра.
   const [filterClass, setFilterClass] = useState<ABCClass | 'all'>('all')
+  // Сортировка таблицы. Дефолт — выручка по убыванию (как отдаёт бэк).
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'revenue', dir: 'desc' })
 
   useEffect(() => {
     setLoading(true)
@@ -163,6 +177,15 @@ export default function AbcMenuPage() {
   const byClass = (cls: ABCClass) => items.filter((i) => i.abc === cls)
   // Строки таблицы с учётом фильтра-чипа (сводка и график остаются по всем).
   const visibleItems = filterClass === 'all' ? items : byClass(filterClass)
+  // + сортировка по выбранной колонке (только представление таблицы; класс
+  // блюда от сортировки не меняется — он свойство блюда, не строки).
+  const sortedItems = [...visibleItems].sort((a, b) => {
+    const { key, dir } = sort
+    const cmp = key === 'name' ? a.name.localeCompare(b.name, 'ru') : (a[key] as number) - (b[key] as number)
+    return dir === 'asc' ? cmp : -cmp
+  })
+  const toggleSort = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
 
   const scatterData = items.map((item) => ({
     x: item.qty,
@@ -352,13 +375,22 @@ export default function AbcMenuPage() {
         <table className="w-full text-sm min-w-[700px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              {['Класс', 'Блюдо', 'Продано', 'Выручка', 'Доля', 'Маржа', 'Класс ME'].map((h) => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+              {COLUMNS.map((col) => (
+                <th key={col.header} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  {col.sortKey ? (
+                    <button onClick={() => toggleSort(col.sortKey!)} className="inline-flex items-center gap-1 uppercase hover:text-foreground transition-colors">
+                      {col.header}
+                      {sort.key === col.sortKey && <span aria-hidden="true">{sort.dir === 'asc' ? '↑' : '↓'}</span>}
+                    </button>
+                  ) : (
+                    col.header
+                  )}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {visibleItems.map((item) => (
+            {sortedItems.map((item) => (
               <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
                 <td className="px-4 py-3">
                   <span className={`size-6 rounded font-bold text-xs flex items-center justify-center ${ABC_BG[item.abc]}`}>{item.abc}</span>
