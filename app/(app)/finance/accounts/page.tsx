@@ -173,7 +173,7 @@ export default function AccountsPage() {
     }
   }
 
-  async function handleCreateOperation(data: { type: 'in' | 'out' | 'transfer'; amount: number; category: string; accountId: string; activity: 'operational' | 'investment' | 'financial'; description: string; date: string }) {
+  async function handleCreateOperation(data: { type: 'in' | 'out' | 'transfer'; amount: number; category: string; accountId: string; activity: 'operational' | 'investment' | 'financial'; description: string; date: string; affectsShift?: boolean }) {
     try {
       const account = accounts.find((a) => a.id === data.accountId)
       await createFinancialOperation({
@@ -186,6 +186,7 @@ export default function AccountsPage() {
         date: data.date,
         description: data.description,
         isAuto: false,
+        affectsShift: data.affectsShift,
       })
       // Refresh data from DB (+ история по дням — карточки берут остаток из неё).
       const [accs, ops] = await Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])

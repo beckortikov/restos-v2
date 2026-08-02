@@ -4591,6 +4591,7 @@ components:
         description: { type: string }
         counterparty: { type: string }
         shift_id: { type: string, format: uuid }
+        affects_shift: { type: boolean, description: "false — не зеркалить расход в текущую открытую смену, даже если счёт совпадает (по умолчанию/omitted — зеркалить, как раньше)" }
     FinancialOperationsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/FinancialOperation" } }, next_cursor: { type: string } } }
 
     RecurringPayment:

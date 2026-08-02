@@ -53,6 +53,9 @@ interface OperationForm {
   activity: FinancialActivity
   description: string
   date: string
+  // affectsShift — только для расхода: зеркалить ли в текущую открытую
+  // смену (уменьшить «Ожидается касса»), если счёт совпадает с её кассой.
+  affectsShift: boolean
 }
 
 interface CreateOperationDialogProps {
@@ -71,6 +74,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
     activity: 'operational',
     description: '',
     date: today,
+    affectsShift: true,
   })
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [dbCategories, setDbCategories] = useState<{ name: string; type: string }[]>([])
@@ -94,6 +98,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
       setForm({
         type: 'out', amount: 0, category: '', accountId: '',
         activity: 'operational', description: '', date: today,
+        affectsShift: true,
       })
       setSaving(false)
     }
@@ -213,6 +218,28 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
               ))}
             </select>
           </div>
+
+          {/* Списать со смены — только для расхода: явный выбор, должна ли эта
+              проводка ещё и уменьшить «Ожидается касса» текущей открытой смены
+              (если счёт совпадает с её кассой), или это чисто бухгалтерская
+              запись на счёте, которая не была движением денег в сегодняшнем
+              ящике. */}
+          {form.type === 'out' && (
+            <label className="flex items-start gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={form.affectsShift}
+                onChange={(e) => setForm((p) => ({ ...p, affectsShift: e.target.checked }))}
+                className="mt-0.5 size-4 rounded border-border accent-primary"
+              />
+              <span>
+                <span className="block text-sm font-medium text-foreground">Списать из текущей смены</span>
+                <span className="block text-xs text-muted-foreground mt-0.5">
+                  Уменьшит «Ожидается касса» открытой смены, если счёт — её касса. Выключите, если деньги физически не выходили из ящика сегодня.
+                </span>
+              </span>
+            </label>
+          )}
 
           {/* Activity */}
           <div className="space-y-1.5">

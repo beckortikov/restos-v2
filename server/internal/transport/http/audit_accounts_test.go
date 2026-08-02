@@ -195,6 +195,60 @@ func TestAudit_ManualCashOut_ReflectedInShift(t *testing.T) {
 	}
 }
 
+// affects_shift=false — расход реально списывается со счёта (деньги правда
+// ушли), но НЕ зеркалится в открытую смену: пользователь явно сказал, что это
+// не было движением наличных в сегодняшнем ящике (бухгалтерская проводка).
+func TestAudit_ManualCashOut_AffectsShiftFalse_NotMirroredIntoShift(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, shiftID, accountID := seedForWrite(t, f)
+
+	if err := gdb.Model(&models.CashShift{}).Where("id = ?", shiftID).
+		Updates(map[string]any{"account_id": accountID, "opening_balance": decimal.MustFromString("500")}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Model(&models.FinancialAccount{}).Where("id = ?", accountID).
+		Update("balance", decimal.MustFromString("500")).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	if r, b := f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), map[string]any{
+		"type": "out", "amount": "200", "account_id": accountID, "category": "прочие расходы",
+		"activity": "operational", "affects_shift": false,
+	}); r.StatusCode != http.StatusCreated && r.StatusCode != http.StatusOK {
+		t.Fatalf("manual out: %d %s", r.StatusCode, b)
+	}
+
+	// Счёт реально дебетован — деньги ушли независимо от affects_shift.
+	if acc := accBalance(t, gdb, accountID); !acc.Equal(decimal.MustFromString("300")) {
+		t.Errorf("account balance = %s, want 300 — affects_shift не должен влиять на сам факт списания со счёта", acc)
+	}
+
+	// Но зеркала в смену НЕ должно быть.
+	var cnt int64
+	if err := gdb.Model(&models.CashShiftOperation{}).
+		Where("shift_id = ? AND type = ?", shiftID, "cash_out").Count(&cnt).Error; err != nil {
+		t.Fatal(err)
+	}
+	if cnt != 0 {
+		t.Errorf("cash_shift_operations cash_out count = %d, want 0 — affects_shift=false не должен зеркалить расход в смену", cnt)
+	}
+
+	// Закрываем смену: раз зеркала нет, expected_cash остаётся 500 (как будто
+	// этого расхода смена не видела вовсе) — ровно то поведение, которое просили.
+	r, b := f.post(t, "/api/v1/shifts/"+shiftID+"/close", tok, uuid.NewString(), map[string]any{
+		"closing_balance": "500",
+	})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("close shift: %d %s", r.StatusCode, b)
+	}
+	var shift models.CashShift
+	gdb.First(&shift, "id = ?", shiftID)
+	if shift.ExpectedCash == nil || !shift.ExpectedCash.Equal(decimal.MustFromString("500")) {
+		t.Errorf("expected_cash = %v, want 500 — расход с affects_shift=false не должен был войти в расчёт", shift.ExpectedCash)
+	}
+}
+
 // БАГ #28: авто-зеркало cash_out (наличная выплата) можно удалить как обычную
 // операцию смены → expected_cash растёт, хотя деньги реально ушли со счёта.
 func TestAudit_DeleteAutoMirror_KeepsShiftConsistent(t *testing.T) {

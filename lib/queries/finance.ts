@@ -107,6 +107,7 @@ export async function createFinancialOperation(op: Omit<FinancialOperation, 'id'
       description: op.description,
       counterparty: op.counterparty || null,
       shift_id: op.shiftId || null,
+      affects_shift: op.affectsShift,
     } as any,
   }))
   logAction('finance.create', 'finance', row?.id, op.category, { amount: op.amount })

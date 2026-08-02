@@ -527,6 +527,10 @@ export interface FinancialOperation {
   sourceRef?: string
   shiftId?: string
   createdAt?: string // момент ввода — для внутридневной сортировки реестра ДДС
+  // affectsShift — расход: false = не зеркалить в текущую открытую смену
+  // (бухгалтерская проводка на счёте, которая не была физическим движением
+  // денег в сегодняшнем ящике). undefined/true — зеркалить, как раньше.
+  affectsShift?: boolean
 }
 
 export interface BudgetLine {

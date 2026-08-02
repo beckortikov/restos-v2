@@ -578,6 +578,14 @@ type FinancialOperationInput struct {
 	Description  *string `json:"description,omitempty"`
 	Counterparty *string `json:"counterparty,omitempty"`
 	ShiftID      *string `json:"shift_id,omitempty"`
+	// AffectsShift — явный выбор «Касса» (счёт, ничего больше) vs «Смена»
+	// (тот же счёт + уменьшить «Ожидается касса» текущей открытой смены).
+	// nil/true — как раньше: recordShiftCashOutIfActive решает сам по
+	// совпадению счёта (обратная совместимость со старыми клиентами и
+	// существующими тестами). Явный false — расход НЕ зеркалится в смену,
+	// даже если счёт совпадает: бухгалтерская проводка, которая не была
+	// физическим движением наличных в ящике сегодня.
+	AffectsShift *bool `json:"affects_shift,omitempty"`
 }
 
 // Create — ручная финансовая операция (Manager). Обновляет баланс счёта в той же tx.
@@ -680,7 +688,12 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 		// открытой смены, обязан уменьшить и expected_cash — иначе смена и счёт
 		// расходятся (фантомная недостача/излишек в Z). Зеркало создаётся только
 		// если счёт принадлежит открытой смене (внутри recordShiftCashOutIfActive).
-		if *in.Type == "out" {
+		//
+		// AffectsShift=false — явный отказ от зеркала: пользователь говорит, что
+		// эта проводка не была физическим движением денег в сегодняшнем ящике
+		// (бухгалтерская операция на счёте «Касса», а не расход из смены).
+		// nil/true — поведение как раньше (совместимость со старыми клиентами).
+		if *in.Type == "out" && (in.AffectsShift == nil || *in.AffectsShift) {
 			shiftRef := ""
 			if in.ShiftID != nil {
 				shiftRef = *in.ShiftID
