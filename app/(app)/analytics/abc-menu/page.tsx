@@ -5,7 +5,7 @@ import { formatCurrency } from '@/lib/helpers'
 import type { ABCClass } from '@/lib/types'
 import { fetchABCMenu, type ABCMenuReport, type EngineeringClass } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
-import { Download } from 'lucide-react'
+import { Download, Search } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { InsightsRecommendations } from '@/components/insights-recommendations'
@@ -99,6 +99,7 @@ export default function AbcMenuPage() {
   const [filterClass, setFilterClass] = useState<ABCClass | 'all'>('all')
   // Сортировка таблицы. Дефолт — выручка по убыванию (как отдаёт бэк).
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'revenue', dir: 'desc' })
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     setLoading(true)
@@ -175,8 +176,12 @@ export default function AbcMenuPage() {
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
   const byClass = (cls: ABCClass) => items.filter((i) => i.abc === cls)
-  // Строки таблицы с учётом фильтра-чипа (сводка и график остаются по всем).
-  const visibleItems = filterClass === 'all' ? items : byClass(filterClass)
+  // Строки таблицы: фильтр-чип по классу + поиск по названию (сводка и график
+  // остаются по всем блюдам).
+  const q = search.trim().toLowerCase()
+  const visibleItems = items.filter(
+    (i) => (filterClass === 'all' || i.abc === filterClass) && (q === '' || i.name.toLowerCase().includes(q)),
+  )
   // + сортировка по выбранной колонке (только представление таблицы; класс
   // блюда от сортировки не меняется — он свойство блюда, не строки).
   const sortedItems = [...visibleItems].sort((a, b) => {
@@ -370,6 +375,17 @@ export default function AbcMenuPage() {
               </button>
             )
           })}
+          <div className="relative ml-auto">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" aria-hidden="true" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Поиск блюда"
+              aria-label="Поиск блюда"
+              className="w-40 pl-8 pr-3 py-1 text-xs bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </div>
         </div>
         <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[700px]">
@@ -418,7 +434,11 @@ export default function AbcMenuPage() {
             ))}
             {visibleItems.length === 0 && (
               <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
-                {items.length === 0 ? 'Нет данных за выбранный период' : `Нет блюд класса ${filterClass}`}
+                {items.length === 0
+                  ? 'Нет данных за выбранный период'
+                  : q !== ''
+                    ? `Ничего не найдено по запросу «${search.trim()}»`
+                    : `Нет блюд класса ${filterClass}`}
               </td></tr>
             )}
           </tbody>
