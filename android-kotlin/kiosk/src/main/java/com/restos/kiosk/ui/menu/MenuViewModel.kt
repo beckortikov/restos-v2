@@ -14,12 +14,14 @@ import com.restos.kiosk.data.orders.CreateOrderApi
 import com.restos.kiosk.data.orders.CreateOrderRequest
 import com.restos.kiosk.data.orders.NewOrderItem
 import com.restos.kiosk.data.orders.OrderDto
+import com.restos.kiosk.data.shifts.ShiftsApi
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import retrofit2.HttpException
 import java.math.BigDecimal
 import java.util.UUID
 import javax.inject.Inject
@@ -57,7 +59,9 @@ data class MenuUiState(
     val categories: List<CategoryDto> = emptyList(),
     val items: List<MenuItemDto> = emptyList(),
     val selectedCategoryId: String? = null,
+    val search: String = "",
     val cart: List<CartLine> = emptyList(),
+    val showPreview: Boolean = false,
     val busy: Boolean = false,
     val error: String? = null,
     val createdOrder: OrderDto? = null,
@@ -68,6 +72,7 @@ class MenuViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val menuApi: MenuApi,
     private val createOrderApi: CreateOrderApi,
+    private val shiftsApi: ShiftsApi,
     private val eventBus: EventBus,
 ) : ViewModel() {
 
@@ -128,6 +133,10 @@ class MenuViewModel @Inject constructor(
         _state.update { it.copy(selectedCategoryId = id) }
     }
 
+    fun setSearch(q: String) {
+        _state.update { it.copy(search = q) }
+    }
+
     fun addToCart(item: MenuItemDto) {
         _state.update { s ->
             val existing = s.cart.find { it.menuItemId == item.id }
@@ -156,11 +165,25 @@ class MenuViewModel @Inject constructor(
         }
     }
 
+    fun remove(menuItemId: String) {
+        _state.update { s -> s.copy(cart = s.cart.filterNot { it.menuItemId == menuItemId }) }
+    }
+
     fun qtyInCart(menuItemId: String): Int = _state.value.cart.firstOrNull { it.menuItemId == menuItemId }?.qty ?: 0
 
     fun cartCount(): Int = _state.value.cart.sumOf { it.qty }
 
     fun cartTotal(): BigDecimal = _state.value.cart.fold(BigDecimal.ZERO) { acc, line -> acc + line.lineTotal() }
+
+    /** Открыть/закрыть превью заказа (список позиций перед отправкой). */
+    fun openPreview() {
+        if (_state.value.cart.isEmpty()) return
+        _state.update { it.copy(showPreview = true) }
+    }
+
+    fun dismissPreview() {
+        _state.update { it.copy(showPreview = false) }
+    }
 
     fun submit() {
         val s = _state.value
@@ -169,15 +192,36 @@ class MenuViewModel @Inject constructor(
         viewModelScope.launch {
             val idemKey = pendingIdemKey ?: UUID.randomUUID().toString().also { pendingIdemKey = it }
             try {
+                // shift_id ОБЯЗАТЕЛЕН на создании — бэк не проставляет его сам
+                // (нет server-side fallback на активную смену открытия). Без
+                // него заказ создаётся, но невидим для кассы: не найти в
+                // списке "Заказы" (строгий скоуп по shift_id), нельзя ни
+                // открыть, ни отменить, ни закрыть.
+                val shift = try {
+                    shiftsApi.active()
+                } catch (e: HttpException) {
+                    if (e.code() == 404) {
+                        _state.update {
+                            it.copy(
+                                busy = false,
+                                showPreview = false,
+                                error = "Касса ещё не открыла смену. Обратитесь к сотруднику.",
+                            )
+                        }
+                        return@launch
+                    }
+                    throw e
+                }
                 val resp = createOrderApi.create(
                     idemKey = idemKey,
                     body = CreateOrderRequest(
                         orderType = orderType,
+                        shiftId = shift.id,
                         items = s.cart.map { NewOrderItem(menuItemId = it.menuItemId, qty = it.qty) },
                     ),
                 )
                 pendingIdemKey = null
-                _state.update { it.copy(busy = false, cart = emptyList(), createdOrder = resp) }
+                _state.update { it.copy(busy = false, showPreview = false, cart = emptyList(), createdOrder = resp) }
             } catch (e: Throwable) {
                 _state.update { it.copy(busy = false, error = errorMessage(e, "Не удалось создать заказ")) }
             }

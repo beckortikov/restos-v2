@@ -27,10 +27,10 @@ object Routes {
     const val LOGIN = "login"
     const val WELCOME = "welcome"
     const val MENU = "menu/{orderType}"
-    const val CONFIRM = "confirm?orderNumber={orderNumber}"
+    const val CONFIRM = "confirm?orderId={orderId}&orderNumber={orderNumber}"
 
     fun menu(orderType: String) = "menu/$orderType"
-    fun confirm(orderNumber: Int?) = "confirm?orderNumber=${orderNumber ?: ""}"
+    fun confirm(orderId: String, orderNumber: Int?) = "confirm?orderId=$orderId&orderNumber=${orderNumber ?: ""}"
 }
 
 @Composable
@@ -94,8 +94,8 @@ fun KioskNavGraph(
             arguments = listOf(navArgument("orderType") { type = NavType.StringType }),
         ) {
             MenuScreen(
-                onOrderCreated = { orderNumber ->
-                    navController.navigate(Routes.confirm(orderNumber)) {
+                onOrderCreated = { orderId, orderNumber ->
+                    navController.navigate(Routes.confirm(orderId, orderNumber)) {
                         popUpTo(Routes.WELCOME) { inclusive = false }
                     }
                 },
@@ -105,12 +105,11 @@ fun KioskNavGraph(
         composable(
             route = Routes.CONFIRM,
             arguments = listOf(
+                navArgument("orderId") { type = NavType.StringType; defaultValue = "" },
                 navArgument("orderNumber") { type = NavType.StringType; defaultValue = "" },
             ),
-        ) { entry ->
-            val orderNumber = entry.arguments?.getString("orderNumber")?.toIntOrNull()
+        ) {
             OrderConfirmedScreen(
-                orderNumber = orderNumber,
                 onDone = {
                     navController.navigate(Routes.WELCOME) {
                         popUpTo(Routes.WELCOME) { inclusive = true }

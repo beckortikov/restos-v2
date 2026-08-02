@@ -13,23 +13,25 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.restos.kiosk.ui.theme.KioskColors
 import com.restos.kiosk.ui.theme.KioskRadius
-import kotlinx.coroutines.delay
 
 /**
  * Заказ создан, НО не оплачен — киоск не принимает оплату. Гость идёт платить
@@ -38,17 +40,20 @@ import kotlinx.coroutines.delay
  * "фастфуд"/kitchen_on_pay, тоже по оплате) уже автоматика общего пайплайна
  * заказов — kiosk ничего печатать сам не должен и не может.
  *
- * Через паузу терминал САМ возвращается на стартовый экран для следующего
- * гостя (никто не должен нажимать «выход»).
+ * Экран держится, ПОКА кассир реально не закроет/оплатит заказ (поллинг
+ * статуса в ConfirmViewModel) — не по таймеру, иначе гость может уйти
+ * раньше, чем каждый его чек и кухонный бегунок точно готовы. «Готово» —
+ * ручной оверрайд на случай сетевого сбоя поллинга, не основной путь.
  */
 @Composable
 fun OrderConfirmedScreen(
-    orderNumber: Int?,
     onDone: () -> Unit,
+    viewModel: ConfirmViewModel = hiltViewModel(),
 ) {
-    LaunchedEffect(Unit) {
-        delay(8_000)
-        onDone()
+    val state by viewModel.state.collectAsStateWithLifecycle()
+
+    LaunchedEffect(state.closed) {
+        if (state.closed) onDone()
     }
 
     Surface(modifier = Modifier.fillMaxSize(), color = KioskColors.Bg) {
@@ -74,13 +79,13 @@ fun OrderConfirmedScreen(
             Text("Оплатите заказ на кассе", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
             Spacer(Modifier.height(12.dp))
 
-            if (orderNumber != null) {
+            if (state.orderNumber != null) {
                 Surface(
                     shape = RoundedCornerShape(KioskRadius.tile),
                     color = KioskColors.PrimarySoft,
                 ) {
                     Text(
-                        "№ $orderNumber",
+                        "№ ${state.orderNumber}",
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp),
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold,
@@ -98,18 +103,23 @@ fun OrderConfirmedScreen(
                 modifier = Modifier.widthIn(max = 420.dp),
             )
 
+            Spacer(Modifier.height(28.dp))
+            CircularProgressIndicator(color = KioskColors.Primary, modifier = Modifier.size(28.dp), strokeWidth = 3.dp)
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Ждём оплату на кассе…",
+                style = MaterialTheme.typography.bodySmall,
+                color = KioskColors.TextTertiary,
+            )
+
             Spacer(Modifier.weight(1f))
 
-            Button(
+            OutlinedButton(
                 onClick = onDone,
-                modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp).height(56.dp),
+                modifier = Modifier.fillMaxWidth().widthIn(max = 420.dp).height(52.dp),
                 shape = RoundedCornerShape(KioskRadius.button),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = KioskColors.Primary,
-                    contentColor = KioskColors.OnPrimary,
-                ),
             ) {
-                Text("Готово", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Text("Готово", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = KioskColors.TextSecondary)
             }
 
             Spacer(Modifier.height(32.dp))
