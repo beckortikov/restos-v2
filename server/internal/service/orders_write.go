@@ -592,7 +592,14 @@ func preMergeInputs(items []CreateOrderItem) ([]CreateOrderItem, error) {
 // кассирский UX оказался запутаннее, чем кухонный профит).
 func loadMergeableItems(tx *gorm.DB, orderID string) ([]*models.OrderItem, map[string][]models.OrderItemModifier, error) {
 	var rows []models.OrderItem
-	if err := tx.Where("order_id = ? AND cancelled_at IS NULL AND served_at IS NULL AND printed_at IS NULL", orderID).
+	// Не сливаем в позицию, которую повар уже начал/приготовил/подал на КУХОННОМ
+	// ДИСПЛЕЕ (station_status != 'pending'). KDS-статус — отдельная плоскость:
+	// SetItemStatus меняет только station_status, не served_at/printed_at, поэтому
+	// без этого гварда дозаказ вливался в «готовую» строку и на кухне появлялся
+	// сразу готовым, а не новым. Аналог гварда printed_at (после печати — отдельно).
+	if err := tx.Where(
+		"order_id = ? AND cancelled_at IS NULL AND served_at IS NULL AND printed_at IS NULL "+
+			"AND (station_status IS NULL OR station_status = 'pending')", orderID).
 		Find(&rows).Error; err != nil {
 		return nil, nil, err
 	}

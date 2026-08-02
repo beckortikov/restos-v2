@@ -310,6 +310,79 @@ func TestKDS_StopList_EmitsSSE(t *testing.T) {
 	}
 }
 
+// TestKDS_AddAfterAdvanced_NewPendingRow — дозаказ того же блюда, которое повар
+// уже двинул на кухне (ready/served), НЕ сливается в готовую строку, а создаёт
+// новую позицию со station_status=pending (на доске — «Новые», а не «готовое»).
+func TestKDS_AddAfterAdvanced_NewPendingRow(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	name := "Лагман"
+	miID := uuid.NewString()
+	if err := gdb.Create(&models.MenuItem{
+		ID: miID, Name: &name, Price: decimal.MustFromString("30"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Заказ с одним лагманом.
+	code, body := postJSON(t, f.srv.URL+"/api/v1/orders", tok,
+		map[string]any{"items": []map[string]any{{"menu_item_id": miID, "qty": "1"}}})
+	if code != http.StatusCreated {
+		t.Fatalf("create order: %d %s", code, body)
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(body, &created)
+	if created.ID == "" {
+		t.Fatalf("no order id in payload: %s", body)
+	}
+
+	// Первая позиция — из БД (не зависим от формата create-ответа).
+	var first models.OrderItem
+	if err := gdb.Where("order_id = ?", created.ID).First(&first).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Повар на кухне двинул блюдо в «готово».
+	if c, b := postJSON(t, f.srv.URL+fmt.Sprintf("/api/v1/kds/items/%s/status", first.ID), tok,
+		map[string]string{"status": "ready"}); c != 200 {
+		t.Fatalf("set ready: %d %s", c, b)
+	}
+
+	// Дозаказ того же лагмана.
+	if c, b := postJSON(t, f.srv.URL+fmt.Sprintf("/api/v1/orders/%s/items", created.ID), tok,
+		map[string]any{"items": []map[string]any{{"menu_item_id": miID, "qty": "1"}}}); c != 200 && c != http.StatusCreated {
+		t.Fatalf("add items: %d %s", c, b)
+	}
+
+	// В БД: две отдельные строки. Первая ready, вторая — новая pending.
+	var rows []models.OrderItem
+	if err := gdb.Where("order_id = ? AND cancelled_at IS NULL", created.ID).
+		Order("created_at").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("ожидали 2 отдельные позиции (дозаказ не слить в готовую), получили %d", len(rows))
+	}
+	pending := 0
+	for _, r := range rows {
+		if r.StationStatus != nil && *r.StationStatus == "pending" {
+			pending++
+		}
+	}
+	if pending != 1 {
+		t.Fatalf("ожидали ровно 1 pending-позицию (новый дозаказ), получили %d из %d", pending, len(rows))
+	}
+}
+
 // postJSON — POST с Bearer + Idempotency-Key (write-эндпоинты его требуют).
 func postJSON(t *testing.T, url, token string, body any) (int, []byte) {
 	t.Helper()
