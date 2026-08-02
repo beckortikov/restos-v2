@@ -245,6 +245,19 @@ func (h *SuppliersHandler) RecomputeDebts(w http.ResponseWriter, r *http.Request
 	}
 	respond.JSON(w, http.StatusOK, map[string]any{"updated": n})
 }
+func (h *SuppliersHandler) CreateOpeningDebt(w http.ResponseWriter, r *http.Request) {
+	var in service.SupplierOpeningDebtInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	rec, err := h.svc.CreateOpeningDebt(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, rec)
+}
 
 // ─── Reservations ──────────────────────────────────────────────────────────
 

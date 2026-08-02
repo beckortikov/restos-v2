@@ -457,6 +457,7 @@ function mapStockReceipt(r: Record<string, unknown>): StockReceipt {
     confirmedAt: (r.confirmed_at as string | null) ?? undefined,
     confirmedBy: (r.confirmed_by as string | null) ?? undefined,
     lines: linesRaw.map(mapStockReceiptLine),
+    isOpeningDebt: Boolean(r.is_opening_debt),
   } as StockReceipt
 }
 

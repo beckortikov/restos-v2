@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2 } from 'lucide-react'
-import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns } from '@/lib/queries'
+import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2, Banknote } from 'lucide-react'
+import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns, createSupplierOpeningDebt } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { RETURN_REASON_LABELS } from '@/lib/types'
 import { dMul } from '@/lib/decimal'
@@ -85,6 +86,14 @@ export default function EditSupplierPage() {
   const [loadingReceipts, setLoadingReceipts] = useState(true)
   const [expandedReceipt, setExpandedReceipt] = useState<string | null>(null)
   const [returns, setReturns] = useState<StockReturn[]>([])
+
+  // Долг поставщику без накладной (067) — перенос задолженности с момента до
+  // перехода на систему.
+  const [showOpeningDebt, setShowOpeningDebt] = useState(false)
+  const [debtAmount, setDebtAmount] = useState(0)
+  const [debtNote, setDebtNote] = useState('')
+  const [debtDate, setDebtDate] = useState('')
+  const [savingDebt, setSavingDebt] = useState(false)
 
   const totalPurchased = useMemo(() => receipts.reduce((s, r) => s + r.totalAmount, 0), [receipts])
   const totalDebt = useMemo(() => receipts.reduce((s, r) => s + r.debtAmount, 0), [receipts])
@@ -211,6 +220,25 @@ export default function EditSupplierPage() {
     }
   }
 
+  async function handleCreateOpeningDebt() {
+    if (!supplier || debtAmount <= 0 || savingDebt) return
+    setSavingDebt(true)
+    try {
+      await createSupplierOpeningDebt(supplier.id, debtAmount, debtNote.trim() || undefined, debtDate || undefined)
+      setSupplier((prev) => (prev ? { ...prev, currentDebt: prev.currentDebt + debtAmount } : prev))
+      fetchReceipts({ supplierId: supplier.id }).then(setReceipts).catch(() => {})
+      toast.success(`Долг ${formatCurrency(debtAmount)} внесён`)
+      setShowOpeningDebt(false)
+      setDebtAmount(0)
+      setDebtNote('')
+      setDebtDate('')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Не удалось внести долг')
+    } finally {
+      setSavingDebt(false)
+    }
+  }
+
   const canSubmit = form.name.trim() && form.contactPerson.trim() && form.phone.trim() && form.categories.length > 0
 
   if (loading) {
@@ -296,6 +324,14 @@ export default function EditSupplierPage() {
                 <span className="text-muted-foreground">Наш долг:</span>
                 <span className={`font-bold ${(supplier?.currentDebt ?? 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600'}`}>{formatCurrency(supplier?.currentDebt ?? 0)}</span>
                 {(supplier?.creditLimit ?? 0) > 0 && <span className="text-xs text-muted-foreground">из {formatCurrency(supplier!.creditLimit)}</span>}
+                <button
+                  type="button"
+                  onClick={() => setShowOpeningDebt(true)}
+                  className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  title="Долг, который был у поставщика до перехода на эту кассу — без накладной"
+                >
+                  <Plus className="size-3" />указать долг
+                </button>
               </div>
             </div>
             {(supplier?.categories?.length ?? 0) > 0 && (
@@ -534,8 +570,11 @@ export default function EditSupplierPage() {
           ) : (
             <div className="space-y-2">
               {sortedReceipts.map((r) => {
-                const badge = PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid
+                const badge = r.isOpeningDebt
+                  ? { label: 'Начальный долг', cls: 'bg-violet-100 text-violet-700 dark:bg-violet-950/40 dark:text-violet-400' }
+                  : (PAY_BADGE[r.paymentType] ?? PAY_BADGE.paid)
                 const itemsCount = r.lines?.length ?? 0
+                const expandable = itemsCount > 0 || r.isOpeningDebt
                 const open = expandedReceipt === r.id
                 const ret = returnsByReceipt.get(r.id) ?? 0
                 const origDebt = r.totalAmount - r.paidAmount
@@ -544,8 +583,8 @@ export default function EditSupplierPage() {
                   <div key={r.id} className="rounded-lg border border-border overflow-hidden">
                     <button
                       type="button"
-                      onClick={() => itemsCount > 0 && setExpandedReceipt(open ? null : r.id)}
-                      className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${itemsCount > 0 ? 'hover:bg-muted/40' : ''} ${open ? 'bg-muted/30' : ''}`}
+                      onClick={() => expandable && setExpandedReceipt(open ? null : r.id)}
+                      className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${expandable ? 'hover:bg-muted/40' : ''} ${open ? 'bg-muted/30' : ''}`}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -553,7 +592,9 @@ export default function EditSupplierPage() {
                           <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${badge.cls}`}>{badge.label}</span>
                         </div>
                         <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground mt-1">
-                          {itemsCount > 0 && <span>{itemsCount} позиц.</span>}
+                          {r.isOpeningDebt ? (
+                            <span>внесён вручную, без накладной</span>
+                          ) : itemsCount > 0 && <span>{itemsCount} позиц.</span>}
                           {r.paidAmount > 0.005 && <span>оплачено {formatCurrency(r.paidAmount)}</span>}
                           {ret > 0.005 && (
                             <span className="text-orange-600 dark:text-orange-400 inline-flex items-center gap-0.5">
@@ -578,7 +619,7 @@ export default function EditSupplierPage() {
                         ) : (
                           <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(r.totalAmount)}</span>
                         )}
-                        {itemsCount > 0 && (open
+                        {expandable && (open
                           ? <ChevronDown className="size-4 text-muted-foreground" />
                           : <ChevronRight className="size-4 text-muted-foreground" />)}
                       </div>
@@ -640,6 +681,80 @@ export default function EditSupplierPage() {
           )}
         </div>
       </div>
+
+      {/* Долг без накладной — перенос задолженности с момента до перехода на систему. */}
+      <Dialog
+        open={showOpeningDebt}
+        onOpenChange={(v) => {
+          setShowOpeningDebt(v)
+          if (!v) { setDebtAmount(0); setDebtNote(''); setDebtDate('') }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Долг поставщику без накладной</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Если у {supplier?.name || 'поставщика'} уже был долг ещё до перехода на эту кассу —
+              впишите сумму здесь. Остатки склада это не тронет: долг сразу встанет в общую
+              задолженность и гасится обычной оплатой, как по накладной.
+            </p>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">Сумма долга</label>
+              <DecimalInput
+                value={debtAmount}
+                onChange={setDebtAmount}
+                min={0}
+                placeholder="0"
+                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">
+                Дата возникновения <span className="text-muted-foreground font-normal">(необязательно)</span>
+              </label>
+              <input
+                type="date"
+                value={debtDate}
+                onChange={(e) => setDebtDate(e.target.value)}
+                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium text-foreground">
+                Комментарий <span className="text-muted-foreground font-normal">(необязательно)</span>
+              </label>
+              <input
+                type="text"
+                value={debtNote}
+                onChange={(e) => setDebtNote(e.target.value)}
+                placeholder="Например: долг по старой системе учёта"
+                className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setShowOpeningDebt(false)}
+              disabled={savingDebt}
+              className="px-4 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors disabled:opacity-50"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={handleCreateOpeningDebt}
+              disabled={debtAmount <= 0 || savingDebt}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <Banknote className="size-4" />
+              {savingDebt ? 'Сохраняю…' : 'Внести долг'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

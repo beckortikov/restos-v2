@@ -149,9 +149,15 @@ type StockReceipt struct {
 	DueDate      *string         `gorm:"column:due_date" json:"due_date"`
 	ConfirmedAt  *time.Time      `gorm:"column:confirmed_at" json:"confirmed_at"`
 	ConfirmedBy  *string         `gorm:"column:confirmed_by" json:"confirmed_by"`
-	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// IsOpeningDebt — долг поставщику, внесённый вручную (067), без накладной
+	// и без строк товара: для переноса задолженности с момента до перехода на
+	// эту систему. Отличает такую запись от настоящей приёмки в UI/отчётах;
+	// на allocateDebtPayment/RecomputeDebts не влияет — оба уже работают по
+	// debt_amount вне зависимости от происхождения строки.
+	IsOpeningDebt bool      `gorm:"column:is_opening_debt;default:false" json:"is_opening_debt"`
+	RestaurantID  *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (StockReceipt) TableName() string { return "stock_receipts" }

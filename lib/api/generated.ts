@@ -5533,6 +5533,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/suppliers/{id}/opening-debt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Долг поставщику без накладной (перенос задолженности до перехода на систему)
+         * @description Создаёт запись долга без товарных строк (stock_receipts, is_opening_debt=true)
+         *     и увеличивает `suppliers.current_debt`. Не влияет на остатки склада.
+         *     Гасится тем же `/pay-debt`, учитывается «Пересчитать долги».
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SupplierOpeningDebtInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReceipt"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reservations": {
         parameters: {
             query?: never;
@@ -11702,6 +11752,8 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+            /** @description Долг внесён вручную (без накладной) — перенос задолженности до перехода на систему. */
+            is_opening_debt?: boolean;
             /** @description Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части». */
             returned_total?: components["schemas"]["Decimal"];
             /** @description Только при ?include=lines. */
@@ -12221,6 +12273,12 @@ export interface components {
             /** Format: uuid */
             account_id: string;
         };
+        SupplierOpeningDebtInput: {
+            amount: components["schemas"]["Decimal"];
+            note?: string;
+            /** @description YYYY-MM-DD, когда фактически возник долг. Пусто = сегодня. */
+            date?: string;
+        };
         SuppliersList: {
             data?: components["schemas"]["Supplier"][];
         };
@@ -12658,6 +12716,8 @@ export interface components {
             counterparty?: string;
             /** Format: uuid */
             shift_id?: string;
+            /** @description false — не зеркалить расход в текущую открытую смену, даже если счёт совпадает (по умолчанию/omitted — зеркалить, как раньше) */
+            affects_shift?: boolean;
         };
         FinancialOperationsList: {
             data?: components["schemas"]["FinancialOperation"][];

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -868,6 +869,90 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 		return nil, err
 	}
 	return out, nil
+}
+
+// SupplierOpeningDebtInput — body POST /suppliers/{id}/opening-debt.
+type SupplierOpeningDebtInput struct {
+	Amount string  `json:"amount"`
+	Note   *string `json:"note,omitempty"`
+	// Date — когда фактически возник долг (для истории/сортировки), YYYY-MM-DD.
+	// Пусто → сегодня.
+	Date *string `json:"date,omitempty"`
+}
+
+// CreateOpeningDebt — долг поставщику без накладной (067): перенос задолженности
+// с момента до перехода на эту систему. Пишем НЕ напрямую в
+// suppliers.current_debt (Patch это поле игнорирует намеренно, см. коммент там,
+// а «Пересчитать долги» стёр бы такую правку при следующем нажатии), а как
+// stock_receipts-строку без товарных позиций, помеченную is_opening_debt —
+// PayDebt/allocateDebtPayment и RecomputeDebts уже умеют работать с любым
+// debt_amount на накладной, откуда бы он ни взялся.
+func (s *SuppliersService) CreateOpeningDebt(ctx context.Context, id string, in SupplierOpeningDebtInput) (*models.StockReceipt, error) {
+	// То же право, что и на гашение долга (see PayDebt) — обе стороны одной
+	// операции («сколько мы должны») должны быть доступны одним и тем же людям.
+	if !hasPermFor(ctx, s.r, "suppliers.manage") && !hasPermFor(ctx, s.r, "finance.manage") {
+		return nil, apperrors.Wrap("FORBIDDEN", "недостаточно прав для внесения долга поставщику", nil)
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	amount, err := decimal.FromString(in.Amount)
+	if err != nil || !decimal.IsPositive(amount) {
+		return nil, apperrors.Wrap("VALIDATION", "amount must be > 0", err)
+	}
+	now := time.Now().UTC()
+	date := now.Format("2006-01-02")
+	if in.Date != nil && *in.Date != "" {
+		date = *in.Date
+	}
+	note := "Начальный долг — внесён вручную, без накладной"
+	if in.Note != nil && strings.TrimSpace(*in.Note) != "" {
+		note = strings.TrimSpace(*in.Note)
+	}
+	paymentType := "credit"
+	amt := decimal.Normalize(amount)
+
+	var receipt *models.StockReceipt
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var sup models.Supplier
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, id).First(&sup).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		r := &models.StockReceipt{
+			ID:            uuid.NewString(),
+			SupplierID:    &id,
+			SupplierName:  sup.Name,
+			Date:          &date,
+			Note:          &note,
+			TotalAmount:   amt,
+			PaymentType:   &paymentType,
+			PaidAmount:    decimal.Zero,
+			DebtAmount:    amt,
+			IsOpeningDebt: true,
+			RestaurantID:  &rid,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		if err := tx.Create(r).Error; err != nil {
+			return err
+		}
+		sup.CurrentDebt = decimal.Normalize(decimal.Add(sup.CurrentDebt, amt))
+		if err := tx.Model(&sup).Updates(map[string]any{"current_debt": sup.CurrentDebt, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		receipt = r
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return receipt, nil
 }
 
 // ─── Reservations ──────────────────────────────────────────────────────────

@@ -170,6 +170,70 @@ func TestPayDebt_AllocatesFIFO(t *testing.T) {
 	}
 }
 
+// TestSupplierOpeningDebt_NoLinesSurvivesRecomputeAndPaysDown — долг, внесённый
+// вручную (067, без накладной, для переноса задолженности до перехода на
+// систему), обязан: (1) не задевать склад (нет строк товара), (2) пережить
+// «Пересчитать долги» (formula Σ stock_receipts.debt_amount уже включает его —
+// не отдельная колонка, которую эта кнопка молча стёрла бы), (3) гаситься тем
+// же /pay-debt, что и обычная накладная (FIFO-аллокатор работает по
+// debt_amount, ему всё равно, откуда взялась строка).
+func TestSupplierOpeningDebt_NoLinesSurvivesRecomputeAndPaysDown(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID)
+
+	supName := "Ромашка-начальный-долг"
+	sup := &models.Supplier{
+		ID: uuid.NewString(), Name: &supName,
+		CurrentDebt: decimal.Zero, RestaurantID: &f.rid,
+	}
+	if err := gdb.Create(sup).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r, b := f.post(t, "/api/v1/suppliers/"+sup.ID+"/opening-debt", tok, uuid.NewString(),
+		map[string]any{"amount": "500", "note": "Долг до перехода на новую кассу"})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("opening-debt: %d %s", r.StatusCode, b)
+	}
+	var receipt models.StockReceipt
+	if err := json.Unmarshal(b, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if !receipt.IsOpeningDebt {
+		t.Errorf("is_opening_debt = false, want true")
+	}
+	if !receipt.DebtAmount.Equal(decimal.MustFromString("500")) {
+		t.Errorf("receipt.debt_amount = %s, want 500", receipt.DebtAmount)
+	}
+	if got := supplierDebt(t, gdb, sup.ID); !got.Equal(decimal.MustFromString("500")) {
+		t.Errorf("supplier.current_debt = %s, want 500", got)
+	}
+
+	// Пересчёт не должен стереть долг без накладной — он такая же строка
+	// stock_receipts, как обычная приёмка в кредит.
+	if r, b := f.post(t, "/api/v1/suppliers/recompute-debts", tok, uuid.NewString(),
+		map[string]any{}); r.StatusCode != http.StatusOK {
+		t.Fatalf("recompute-debts: %d %s", r.StatusCode, b)
+	}
+	if got := supplierDebt(t, gdb, sup.ID); !got.Equal(decimal.MustFromString("500")) {
+		t.Errorf("current_debt после RecomputeDebts = %s, want 500 (пересчёт стёр ручной долг)", got)
+	}
+
+	// Гасим обычным /pay-debt — FIFO-аллокатор обязан найти эту накладную.
+	if r, b := f.post(t, "/api/v1/suppliers/"+sup.ID+"/pay-debt", tok, uuid.NewString(),
+		map[string]any{"amount": "500", "account_id": accountID}); r.StatusCode != http.StatusOK {
+		t.Fatalf("pay-debt: %d %s", r.StatusCode, b)
+	}
+	if got := receiptDebt(t, gdb, receipt.ID); !got.Equal(decimal.Zero) {
+		t.Errorf("receipt.debt_amount после гашения = %s, want 0", got)
+	}
+	if got := supplierDebt(t, gdb, sup.ID); !got.Equal(decimal.Zero) {
+		t.Errorf("supplier.current_debt после гашения = %s, want 0", got)
+	}
+}
+
 // TestSupplyExpense_AllowNegativeFlag — флаг «📦 Хозтовары: разрешить минус»
 // наконец работает. До v3.16.90 он писался в настройках и НИГДЕ не читался:
 // тумблер обещал владельцу контроль, которого не было.

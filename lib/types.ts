@@ -461,6 +461,9 @@ export interface StockReceipt {
   accountId?: string
   paid?: boolean
   lines: ReceiptLine[]
+  // isOpeningDebt (067) — долг внесён вручную, без накладной: перенос
+  // задолженности с момента до перехода на систему. lines всегда пуст.
+  isOpeningDebt?: boolean
 }
 
 export interface SupplyExpense {

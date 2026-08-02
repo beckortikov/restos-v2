@@ -1879,6 +1879,18 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierPayDebtInput" } } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Supplier" } } } } }
 
+  /api/v1/suppliers/{id}/opening-debt:
+    post:
+      tags: [admin]
+      summary: Долг поставщику без накладной (перенос задолженности до перехода на систему)
+      description: |
+        Создаёт запись долга без товарных строк (stock_receipts, is_opening_debt=true)
+        и увеличивает `suppliers.current_debt`. Не влияет на остатки склада.
+        Гасится тем же `/pay-debt`, учитывается «Пересчитать долги».
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierOpeningDebtInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
+
   /api/v1/reservations:
     get:
       tags: [admin]
@@ -3720,6 +3732,7 @@ components:
         total_amount: { $ref: "#/components/schemas/Decimal" }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         debt_amount: { $ref: "#/components/schemas/Decimal" }
+        is_opening_debt: { type: boolean, description: "Долг внесён вручную (без накладной) — перенос задолженности до перехода на систему." }
         returned_total:
           $ref: "#/components/schemas/Decimal"
           description: "Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части»."
@@ -4221,6 +4234,13 @@ components:
       properties:
         amount: { $ref: "#/components/schemas/Decimal" }
         account_id: { type: string, format: uuid }
+    SupplierOpeningDebtInput:
+      type: object
+      required: [amount]
+      properties:
+        amount: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+        date: { type: string, description: "YYYY-MM-DD, когда фактически возник долг. Пусто = сегодня." }
     SuppliersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Supplier" } } } }
 
     Reservation:
