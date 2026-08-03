@@ -5,7 +5,7 @@ import { formatCurrency } from '@/lib/helpers'
 import type { ABCClass } from '@/lib/types'
 import { fetchABCMenu, type ABCMenuReport, type EngineeringClass } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
-import { Download, Search } from 'lucide-react'
+import { Download, Search, X } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { InsightsRecommendations } from '@/components/insights-recommendations'
@@ -100,6 +100,8 @@ export default function AbcMenuPage() {
   // Сортировка таблицы. Дефолт — выручка по убыванию (как отдаёт бэк).
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'revenue', dir: 'desc' })
   const [search, setSearch] = useState('')
+  // Фильтр таблицы по квадранту Menu Engineering (композится с классом+поиском).
+  const [meFilter, setMeFilter] = useState<Exclude<EngineeringClass, ''> | 'all'>('all')
 
   useEffect(() => {
     setLoading(true)
@@ -180,7 +182,10 @@ export default function AbcMenuPage() {
   // остаются по всем блюдам).
   const q = search.trim().toLowerCase()
   const visibleItems = items.filter(
-    (i) => (filterClass === 'all' || i.abc === filterClass) && (q === '' || i.name.toLowerCase().includes(q)),
+    (i) =>
+      (filterClass === 'all' || i.abc === filterClass) &&
+      (meFilter === 'all' || i.me === meFilter) &&
+      (q === '' || i.name.toLowerCase().includes(q)),
   )
   // + сортировка по выбранной колонке (только представление таблицы; класс
   // блюда от сортировки не меняется — он свойство блюда, не строки).
@@ -314,12 +319,19 @@ export default function AbcMenuPage() {
       {items.some(i => i.me !== '') && (
         <div className="bg-card rounded-xl border border-border p-5">
           <h2 className="text-sm font-semibold text-foreground mb-1">Menu Engineering (Boston Matrix)</h2>
-          <p className="text-xs text-muted-foreground mb-4">Классификация по медианам объёма продаж и маржи</p>
+          <p className="text-xs text-muted-foreground mb-4">Классификация по медианам объёма продаж и маржи · нажмите квадрант, чтобы отфильтровать таблицу</p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {(['star', 'workhorse', 'puzzle', 'dog'] as const).map(cls => {
               const list = items.filter(i => i.me === cls)
+              const active = meFilter === cls
               return (
-                <div key={cls} className={`rounded-lg p-4 border ${ME_BADGE[cls]} border-current/20`}>
+                <button
+                  key={cls}
+                  type="button"
+                  onClick={() => setMeFilter(active ? 'all' : cls)}
+                  aria-pressed={active}
+                  className={`text-left rounded-lg p-4 border ${ME_BADGE[cls]} ${active ? 'border-current ring-2 ring-current/40' : 'border-current/20 hover:border-current/40'} transition-colors`}
+                >
                   <div className="flex items-center gap-2 mb-2">
                     <span className="text-2xl">{ME_EMOJI[cls]}</span>
                     <div>
@@ -328,8 +340,8 @@ export default function AbcMenuPage() {
                     </div>
                   </div>
                   <p className="text-2xl font-bold">{list.length}</p>
-                  <p className="text-[10px] opacity-80 mt-0.5">блюд</p>
-                </div>
+                  <p className="text-[10px] opacity-80 mt-0.5">{active ? 'фильтр включён' : 'блюд'}</p>
+                </button>
               )
             })}
           </div>
@@ -375,6 +387,17 @@ export default function AbcMenuPage() {
               </button>
             )
           })}
+          {meFilter !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setMeFilter('all')}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${ME_BADGE[meFilter]}`}
+              aria-label={`Убрать фильтр: ${ME_LABEL[meFilter]}`}
+            >
+              <span aria-hidden="true">{ME_EMOJI[meFilter]}</span>{ME_LABEL[meFilter]}
+              <X className="size-3" aria-hidden="true" />
+            </button>
+          )}
           <div className="relative ml-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" aria-hidden="true" />
             <input
@@ -438,7 +461,7 @@ export default function AbcMenuPage() {
                   ? 'Нет данных за выбранный период'
                   : q !== ''
                     ? `Ничего не найдено по запросу «${search.trim()}»`
-                    : `Нет блюд класса ${filterClass}`}
+                    : 'Нет блюд по выбранным фильтрам'}
               </td></tr>
             )}
           </tbody>
