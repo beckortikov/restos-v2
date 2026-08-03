@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/cursor"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -1551,6 +1552,59 @@ func salaryCategory(kind *string) string {
 	return CategorySalary
 }
 
+// salaryCapForPeriod — начислено/выплачено за период для честного кап-чека
+// (#7): вынесено из PaySalary, чтобы GiveAdvance (070) применял ТОТ ЖЕ кап,
+// что и раньше применялся к kind=advance внутри PaySalary — иначе выдача
+// аванса новым эндпоинтом стала бы неограниченной там, где раньше требовала
+// осознанного Override.
+func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period string) (u models.User, accrued decimal.Decimal, basis string, paid decimal.Decimal, err error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return u, accrued, basis, paid, err
+	}
+	if err = scoped.Where("id = ?", userID).First(&u).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return u, accrued, basis, paid, apperrors.Wrap("VALIDATION", "user not found", nil)
+		}
+		return u, accrued, basis, paid, err
+	}
+	// Уже выплачено за период = Σ зарплатных проводок этого сотрудника ЗА
+	// ЭТОТ ПЕРИОД — матчим по тегу периода в description ("Зарплата:2026-07",
+	// см. payoutTx()), НЕ по фактической дате проводки: зарплату за июль часто
+	// платят в начале августа, и "date LIKE период%" эту прошлую выплату
+	// никогда не найдёт — кап молча переставал работать (ЗП-баг, нашли по
+	// TestSalary_WorkedDays_AccrualCapAndFreePayout).
+	// Только категория «Зарплата»: авансы теперь пишутся отдельной
+	// категорией и вычитаются из остатка через u.Advance — считать их
+	// здесь второй раз означало бы вычесть аванс дважды.
+	scopedP, _ := s.r.ForTenant(ctx)
+	periodTag := "%" + CategorySalary + ":" + period + "%"
+	if err = scopedP.Table("financial_operations").
+		Select("COALESCE(SUM(amount), 0)").
+		Where("category = ? AND source_ref = ? AND description LIKE ?", CategorySalary, userID, periodTag).
+		Scan(&paid).Error; err != nil {
+		return u, accrued, basis, paid, err
+	}
+	// Начислено за период. Для оклада — сумма из карточки, для дневной
+	// оплаты (054) — ставка × отработанные дни из табеля: капить дневника
+	// по u.Salary было бы неверно, у него оклад равен нулю.
+	accrued = u.Salary
+	basis = fmt.Sprintf("оклад %s", u.Salary)
+	if payTypeOf(u) == PayTypeDaily {
+		days, units, derr := s.daysWorkedInPeriod(ctx, userID, period)
+		if derr != nil {
+			return u, accrued, basis, paid, derr
+		}
+		accrued = accruedFor(u, units)
+		if units != days {
+			basis = fmt.Sprintf("ставка %s × %d опл.ед. (%d дн., есть дни ×2) = %s", u.DailyRate, units, days, accrued)
+		} else {
+			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
+		}
+	}
+	return u, accrued, basis, paid, nil
+}
+
 func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*models.FinancialOperation, error) {
 	// #7: сервер сам считает остаток к выплате и не даёт переплатить/выплатить
 	// дважды за период. Раньше amount брался от клиента без проверки: зарплату за
@@ -1567,48 +1621,9 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 		if perr != nil || !decimal.IsPositive(amount) {
 			return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
 		}
-		var u models.User
-		scoped, _ := s.r.ForTenant(ctx)
-		if err := scoped.Where("id = ?", *in.UserID).First(&u).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return nil, apperrors.Wrap("VALIDATION", "user not found", nil)
-			}
+		u, accrued, basis, paid, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
+		if err != nil {
 			return nil, err
-		}
-		// Уже выплачено за период = Σ зарплатных проводок этого сотрудника ЗА
-		// ЭТОТ ПЕРИОД — матчим по тегу периода в description ("Зарплата:2026-07",
-		// см. payout()), НЕ по фактической дате проводки: зарплату за июль часто
-		// платят в начале августа, и "date LIKE период%" эту прошлую выплату
-		// никогда не найдёт — кап молча переставал работать (ЗП-баг, нашли по
-		// TestSalary_WorkedDays_AccrualCapAndFreePayout).
-		// Только категория «Зарплата»: авансы теперь пишутся отдельной
-		// категорией и вычитаются из остатка через u.Advance — считать их
-		// здесь второй раз означало бы вычесть аванс дважды.
-		var paid decimal.Decimal
-		scopedP, _ := s.r.ForTenant(ctx)
-		periodTag := "%" + CategorySalary + ":" + *in.Period + "%"
-		if err := scopedP.Table("financial_operations").
-			Select("COALESCE(SUM(amount), 0)").
-			Where("category = ? AND source_ref = ? AND description LIKE ?", CategorySalary, *in.UserID, periodTag).
-			Scan(&paid).Error; err != nil {
-			return nil, err
-		}
-		// Начислено за период. Для оклада — сумма из карточки, для дневной
-		// оплаты (054) — ставка × отработанные дни из табеля: капить дневника
-		// по u.Salary было бы неверно, у него оклад равен нулю.
-		accrued := u.Salary
-		basis := fmt.Sprintf("оклад %s", u.Salary)
-		if payTypeOf(u) == PayTypeDaily {
-			days, units, derr := s.daysWorkedInPeriod(ctx, *in.UserID, *in.Period)
-			if derr != nil {
-				return nil, derr
-			}
-			accrued = accruedFor(u, units)
-			if units != days {
-				basis = fmt.Sprintf("ставка %s × %d опл.ед. (%d дн., есть дни ×2) = %s", u.DailyRate, units, days, accrued)
-			} else {
-				basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
-			}
 		}
 		// Кап действует только если начислено что-то положительное. Ноль
 		// (не сконфигурирован оклад/ставка или нет отметок) — выплата ручная,
@@ -1793,6 +1808,35 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 	if err != nil {
 		return nil, err
 	}
+	if in.AccountID == nil || *in.AccountID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	// Общая точка обеих выплат — PaySalary и PayServiceCharge.
+	if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+		return nil, err
+	}
+	var op *models.FinancialOperation
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		created, err := payoutTx(ctx, tr, rid, in)
+		if err != nil {
+			return err
+		}
+		op = created
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return op, nil
+}
+
+// payoutTx — тело выплаты (списание счёта + FinancialOperation + зеркало в
+// кассовую смену), выполняемое ВНУТРИ уже открытой транзакции tr. Вынесено из
+// payout(), чтобы GiveAdvance мог провести выплату аванса и создать
+// сопутствующую SalaryAdvance-запись + инкремент users.advance в ОДНОЙ
+// транзакции (070) — раньше это были два независимых запроса подряд, и
+// падение второго теряло синхронизацию счётчика с реально списанными деньгами.
+func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*models.FinancialOperation, error) {
 	if in.UserID == nil || *in.UserID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "user_id/waiter_id is required", nil)
 	}
@@ -1805,10 +1849,6 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 	}
 	if in.AccountID == nil || *in.AccountID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
-	}
-	// Общая точка обеих выплат — PaySalary и PayServiceCharge.
-	if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
-		return nil, err
 	}
 	now := time.Now().UTC()
 	date := now.Format("2006-01-02")
@@ -1840,60 +1880,293 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 		}
 	}
 
-	var op models.FinancialOperation
+	tx := tr.Raw().WithContext(ctx)
+	var acc models.FinancialAccount
+	// FOR UPDATE: блокируем счёт на время read-modify-write баланса,
+	// иначе параллельные операции теряют друг друга (порча денег).
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.Wrap("VALIDATION", "account not found", nil)
+		}
+		return nil, err
+	}
+	if decimal.IsNegative(decimal.Sub(acc.Balance, amount)) {
+		return nil, apperrors.Wrap("CONFLICT", "insufficient funds", nil)
+	}
+	newBal := decimal.Normalize(decimal.Sub(acc.Balance, amount))
+	if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+		return nil, err
+	}
+	// Наличная выплата (зарплата/обслуживание) со счёта открытой смены →
+	// зеркалим отток в кассовую смену (cash_out), иначе expected_cash в
+	// Z-отчёте покажет ложную недостачу. No-op для безнала/закрытой смены.
+	// foID — генерируем ЗАРАНЕЕ (а не в поле ниже), чтобы зеркало несло
+	// source_ref на саму эту выплату (069, регресс БАГ #28).
+	foID := uuid.NewString()
+	if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), date, foID, amount, now); err != nil {
+		return nil, err
+	}
+	op := models.FinancialOperation{
+		ID:           foID,
+		Type:         &outType,
+		Amount:       amount,
+		Category:     &category,
+		AccountID:    in.AccountID,
+		AccountName:  acc.Name,
+		Activity:     &activity,
+		Date:         &date,
+		Description:  desc,
+		Counterparty: in.Counterparty,
+		IsAuto:       &isAuto,
+		SourceRef:    &srcRef,
+		ShiftID:      in.ShiftID,
+		IsOverride:   in.IsOverride,
+		RestaurantID: &ridStr,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if err := tx.Create(&op).Error; err != nil {
+		return nil, err
+	}
+	return &op, nil
+}
+
+// AdvanceInput — выдача аванса (070). См. SalaryService.GiveAdvance.
+type AdvanceInput struct {
+	UserID    *string `json:"user_id,omitempty"`
+	Amount    *string `json:"amount,omitempty"`
+	AccountID *string `json:"account_id,omitempty"`
+	Period    *string `json:"period,omitempty"`
+	Note      *string `json:"note,omitempty"`
+	// Override/OverrideReason — тот же кап и тот же принцип, что и в
+	// PaySalary (ЗП-4): раньше аванс шёл через PaySalary(kind=advance) и
+	// капался ТОЙ ЖЕ формулой (начислено − аванс − удержания − выплачено).
+	// GiveAdvance обязан применять этот кап, иначе выдача аванса стала бы
+	// неограниченной именно там, где раньше требовала осознанного Override.
+	Override       *bool   `json:"override,omitempty"`
+	OverrideReason *string `json:"override_reason,omitempty"`
+}
+
+// GiveAdvance — выдача аванса ОДНОЙ транзакцией: списание счёта +
+// FinancialOperation (категория «Аванс») + строка salary_advances +
+// инкремент users.advance. До 070 это были два независимых запроса подряд
+// (payout + отдельный PATCH users.advance) — если второй не проходил, деньги
+// уходили без обновления счётчика, а без id у "аванса" нечего было
+// редактировать/отменять.
+func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*models.SalaryAdvance, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if in.UserID == nil || *in.UserID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "user_id is required", nil)
+	}
+	if in.Period == nil || *in.Period == "" {
+		return nil, apperrors.Wrap("VALIDATION", "period is required", nil)
+	}
+	if in.AccountID == nil || *in.AccountID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
+	}
+	if err := MustBeEnabled(ctx, s.r, *in.AccountID); err != nil {
+		return nil, err
+	}
+	amount, perr := decimal.FromString(derefOr(in.Amount, ""))
+	if perr != nil || !decimal.IsPositive(amount) {
+		return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
+	}
+
+	u, accrued, basis, paid, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
+	if err != nil {
+		return nil, err
+	}
+	isOverride := false
+	note := in.Note
+	// Тот же принцип, что и в PaySalary: кап действует только если начислено
+	// что-то положительное — иначе включение дневной оплаты заблокировало бы
+	// авансы до заполнения табеля.
+	if accrued.IsPositive() {
+		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, u.Advance), u.Deductions), paid)
+		if decimal.IsNegative(payable) {
+			payable = decimal.Zero
+		}
+		if decimal.Sub(amount, payable).GreaterThan(decimal.MustFromString("0.01")) {
+			if in.Override == nil || !*in.Override {
+				return nil, apperrors.Wrap("VALIDATION",
+					fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
+						amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+			}
+			reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
+			if reason == "" {
+				return nil, apperrors.Wrap("VALIDATION", "укажите причину свободной выплаты", nil)
+			}
+			isOverride = true
+			merged := mergeOverrideReason(in.Note, reason)
+			note = &merged
+		}
+	}
+
+	actor, _ := audit.ActorFromContext(ctx)
+	createdBy := actor.UserID
+
+	var advRow models.SalaryAdvance
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		op, err := payoutTx(ctx, tr, rid, payoutInput{
+			UserID:       in.UserID,
+			Amount:       in.Amount,
+			AccountID:    in.AccountID,
+			Counterparty: u.Name,
+			Category:     CategoryAdvance,
+			Period:       in.Period,
+			Description:  note,
+			IsOverride:   isOverride,
+		})
+		if err != nil {
+			return err
+		}
+		tx := tr.Raw().WithContext(ctx)
+		now := time.Now().UTC()
+		ridStr := rid
+		advRow = models.SalaryAdvance{
+			ID:           uuid.NewString(),
+			RestaurantID: &ridStr,
+			UserID:       *in.UserID,
+			Amount:       amount,
+			Period:       *in.Period,
+			AccountID:    *in.AccountID,
+			Note:         in.Note,
+			SourceOpID:   &op.ID,
+			CreatedBy:    &createdBy,
+			CreatedAt:    now,
+		}
+		if err := tx.Create(&advRow).Error; err != nil {
+			return err
+		}
+		newAdvance := decimal.Normalize(decimal.Add(u.Advance, amount))
+		return tx.Model(&models.User{}).Where("restaurant_id = ? AND id = ?", rid, u.ID).
+			Updates(map[string]any{"advance": newAdvance, "updated_at": now}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &advRow, nil
+}
+
+// CancelAdvance — отмена ранее выданного аванса: реверс денег обратно на
+// счёт, с которого выдавали (AccountID на строке), декремент users.advance,
+// пометка cancelled_at/by. Реверс — отдельная FinancialOperation (тип "in",
+// та же категория «Аванс»), а не удаление проводки: следуем тому же
+// принципу, что и reverseCloseFinancials — история не переписывается, а
+// дополняется компенсирующей записью.
+func (s *SalaryService) CancelAdvance(ctx context.Context, id string) (*models.SalaryAdvance, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, apperrors.Wrap("VALIDATION", "id is required", nil)
+	}
+	actor, _ := audit.ActorFromContext(ctx)
+	cancelledBy := actor.UserID
+
+	var row models.SalaryAdvance
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, id).First(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("NOT_FOUND", "advance not found", nil)
+			}
+			return err
+		}
+		if row.CancelledAt != nil {
+			return apperrors.Wrap("VALIDATION", "аванс уже отменён", nil)
+		}
+		var u models.User
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, row.UserID).First(&u).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("VALIDATION", "user not found", nil)
+			}
+			return err
+		}
 		var acc models.FinancialAccount
-		// FOR UPDATE: блокируем счёт на время read-modify-write баланса,
-		// иначе параллельные операции теряют друг друга (порча денег).
+		// FOR UPDATE — тот же принцип, что и в payoutTx: блокируем счёт на
+		// время read-modify-write баланса.
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
-			Where("restaurant_id = ? AND id = ?", rid, *in.AccountID).First(&acc).Error; err != nil {
+			Where("restaurant_id = ? AND id = ?", rid, row.AccountID).First(&acc).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return apperrors.Wrap("VALIDATION", "account not found", nil)
 			}
 			return err
 		}
-		if decimal.IsNegative(decimal.Sub(acc.Balance, amount)) {
-			return apperrors.Wrap("CONFLICT", "insufficient funds", nil)
-		}
-		newBal := decimal.Normalize(decimal.Sub(acc.Balance, amount))
+		now := time.Now().UTC()
+		date := now.Format("2006-01-02")
+		newBal := decimal.Normalize(decimal.Add(acc.Balance, row.Amount))
 		if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
 			return err
 		}
-		// Наличная выплата (зарплата/обслуживание) со счёта открытой смены →
-		// зеркалим отток в кассовую смену (cash_out), иначе expected_cash в
-		// Z-отчёте покажет ложную недостачу. No-op для безнала/закрытой смены.
-		// foID — генерируем ЗАРАНЕЕ (а не в поле ниже), чтобы зеркало несло
-		// source_ref на саму эту выплату (069, регресс БАГ #28).
-		foID := uuid.NewString()
-		if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), date, foID, amount, now); err != nil {
-			return err
-		}
-		op = models.FinancialOperation{
-			ID:           foID,
-			Type:         &outType,
-			Amount:       amount,
+		inType := "in"
+		activity := "operational"
+		category := CategoryAdvance
+		isAuto := false
+		desc := fmt.Sprintf("Отмена аванса (%s)", row.Period)
+		srcRef := row.UserID
+		ridStr := rid
+		accountID := row.AccountID
+		reverseOp := models.FinancialOperation{
+			ID:           uuid.NewString(),
+			Type:         &inType,
+			Amount:       row.Amount,
 			Category:     &category,
-			AccountID:    in.AccountID,
+			AccountID:    &accountID,
 			AccountName:  acc.Name,
 			Activity:     &activity,
 			Date:         &date,
-			Description:  desc,
-			Counterparty: in.Counterparty,
+			Description:  &desc,
+			Counterparty: u.Name,
 			IsAuto:       &isAuto,
 			SourceRef:    &srcRef,
-			ShiftID:      in.ShiftID,
-			IsOverride:   in.IsOverride,
 			RestaurantID: &ridStr,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
-		return tx.Create(&op).Error
+		if err := tx.Create(&reverseOp).Error; err != nil {
+			return err
+		}
+		newAdvance := decimal.Normalize(decimal.Sub(u.Advance, row.Amount))
+		if decimal.IsNegative(newAdvance) {
+			newAdvance = decimal.Zero
+		}
+		if err := tx.Model(&u).Updates(map[string]any{"advance": newAdvance, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		row.CancelledAt = &now
+		row.CancelledBy = &cancelledBy
+		return tx.Model(&models.SalaryAdvance{}).Where("id = ?", row.ID).
+			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy}).Error
 	})
 	if err != nil {
 		return nil, err
 	}
-	return &op, nil
+	return &row, nil
+}
+
+// ListAdvances — история авансов одного сотрудника, новые сверху.
+func (s *SalaryService) ListAdvances(ctx context.Context, userID string) ([]models.SalaryAdvance, error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var rows []models.SalaryAdvance
+	if err := scoped.Where("user_id = ?", userID).Order("created_at DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // ServiceAccrualRow / ServicePayoutRow — для сводок по официанту.

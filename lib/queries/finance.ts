@@ -313,12 +313,18 @@ export async function paySalaryFull(
 }
 
 /** Удержание с обязательной причиной (ЗП-4) — заменяет прежний счётчик без следа. */
-export async function addSalaryDeduction(userId: string, amount: number, reason: string): Promise<void> {
+export async function addSalaryDeduction(userId: string, amount: number, reason: string, period?: string): Promise<void> {
   await unwrap(api.POST('/api/v1/finance/salary/deductions', {
-    body: { user_id: userId, amount: String(amount), reason },
+    body: { user_id: userId, amount: String(amount), reason, ...(period ? { period } : {}) } as any,
     headers: { 'Idempotency-Key': randomId() },
   }))
-  logAction('payroll.deduction', 'payroll', userId, undefined, { amount, reason })
+  logAction('payroll.deduction', 'payroll', userId, undefined, { amount, reason, period })
+}
+
+/** Отмена удержания (070) — декремент users.deductions, деньги не двигались. */
+export async function cancelSalaryDeduction(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/finance/salary/deductions/{id}', { params: { path: { id } } }))
+  logAction('payroll.deduction_cancel', 'payroll', id)
 }
 
 export interface SalaryDeductionRow {
@@ -326,8 +332,11 @@ export interface SalaryDeductionRow {
   userId: string
   amount: number
   reason: string
+  period?: string
   createdBy?: string
   createdAt: string
+  cancelledAt?: string
+  cancelledBy?: string
 }
 
 /** История удержаний сотрудника, новые сверху (ЗП-5, карточка сотрудника). */
@@ -341,9 +350,83 @@ export async function fetchSalaryDeductions(userId: string): Promise<SalaryDeduc
     userId: r.user_id ?? '',
     amount: Number(r.amount ?? 0),
     reason: r.reason ?? '',
+    period: r.period || undefined,
     createdBy: r.created_by || undefined,
     createdAt: r.created_at ?? '',
+    cancelledAt: r.cancelled_at || undefined,
+    cancelledBy: r.cancelled_by || undefined,
   }))
+}
+
+/**
+ * Выдача аванса ОДНОЙ атомарной транзакцией (070) — счёт, FinancialOperation
+ * и users.advance обновляются на бэке за один запрос. Заменяет прежний
+ * двухшаговый нетранзакционный поток paySalaryFull(kind='advance') +
+ * отдельный updateUser({advance}): падение второго шага теряло
+ * синхронизацию — деньги списаны, счётчик остался старым.
+ */
+export async function giveSalaryAdvance(
+  userId: string, amount: number, accountId: string, period: string, note?: string,
+  // override — тот же кап и тот же принцип, что и в paySalaryFull (ЗП-4):
+  // сервер отклоняет аванс сверх начисленного, если не передан override.
+  opts?: { override?: boolean; overrideReason?: string },
+): Promise<SalaryAdvanceRow> {
+  const row: any = await unwrap(api.POST('/api/v1/finance/salary/advance', {
+    body: {
+      user_id: userId, amount: String(amount), account_id: accountId, period, ...(note ? { note } : {}),
+      ...(opts?.override ? { override: true, override_reason: opts.overrideReason } : {}),
+    } as any,
+    headers: { 'Idempotency-Key': randomId() },
+  }))
+  logAction('payroll.advance', 'payroll', userId, undefined, { amount, period, override: opts?.override ?? false })
+  return mapSalaryAdvance(row)
+}
+
+/** Отмена аванса (070) — деньги возвращаются на счёт, users.advance декрементируется. */
+export async function cancelSalaryAdvance(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/finance/salary/advances/{id}', { params: { path: { id } } }))
+  logAction('payroll.advance_cancel', 'payroll', id)
+}
+
+export interface SalaryAdvanceRow {
+  id: string
+  userId: string
+  amount: number
+  period: string
+  accountId: string
+  note?: string
+  /** id проводки financial_operations самой выдачи — нужен, чтобы не
+   * задвоить эту же сумму, если она также показана в SalaryReport.payouts. */
+  sourceOpId?: string
+  createdBy?: string
+  createdAt: string
+  cancelledAt?: string
+  cancelledBy?: string
+}
+
+function mapSalaryAdvance(r: any): SalaryAdvanceRow {
+  return {
+    id: r.id ?? '',
+    userId: r.user_id ?? '',
+    amount: Number(r.amount ?? 0),
+    period: r.period ?? '',
+    accountId: r.account_id ?? '',
+    note: r.note || undefined,
+    sourceOpId: r.source_op_id || undefined,
+    createdBy: r.created_by || undefined,
+    createdAt: r.created_at ?? '',
+    cancelledAt: r.cancelled_at || undefined,
+    cancelledBy: r.cancelled_by || undefined,
+  }
+}
+
+/** История авансов сотрудника, новые сверху (070, карточка сотрудника). */
+export async function fetchSalaryAdvances(userId: string): Promise<SalaryAdvanceRow[]> {
+  const res: any = await unwrap(api.GET('/api/v1/finance/salary/advances', {
+    params: { query: { user_id: userId } },
+  }))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+  return rows.map(mapSalaryAdvance)
 }
 
 // ─── Отработанные дни (059): табель + ручные отметки ────────────────────────

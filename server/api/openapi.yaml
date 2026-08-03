@@ -2751,6 +2751,46 @@ paths:
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeductionInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeduction" } } } } }
+  /api/v1/finance/salary/deductions/{id}:
+    delete:
+      tags: [finance, payroll]
+      summary: Отмена удержания (070)
+      description: >
+        Помечает cancelled_at/by и уменьшает users.deductions. Без движения
+        денег по счёту — удержание и не двигало баланс.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeduction" } } } } }
+  /api/v1/finance/salary/advance:
+    post:
+      tags: [finance, payroll]
+      summary: Выдача аванса — одна атомарная транзакция (070)
+      description: >
+        Списание счёта + FinancialOperation (категория «Аванс») + запись
+        salary_advances + инкремент users.advance в ОДНОЙ транзакции.
+        Заменяет прежний двухшаговый нетранзакционный поток
+        (PaySalary(kind=advance) + отдельный PATCH users.advance).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvanceInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvance" } } } } }
+  /api/v1/finance/salary/advances:
+    get:
+      tags: [finance, payroll]
+      summary: История авансов сотрудника
+      parameters:
+        - { in: query, name: user_id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvanceList" } } } } }
+  /api/v1/finance/salary/advances/{id}:
+    delete:
+      tags: [finance, payroll]
+      summary: Отмена аванса (070)
+      description: >
+        Реверс денег обратно на счёт, с которого выдавали (компенсирующая
+        FinancialOperation, тип "in"), декремент users.advance, пометка
+        cancelled_at/by.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvance" } } } } }
   /api/v1/finance/service-charge/pay:
     post:
       tags: [finance, payroll]
@@ -5286,8 +5326,11 @@ components:
         user_id: { type: string, format: uuid }
         amount: { $ref: "#/components/schemas/Decimal" }
         reason: { type: string }
+        period: { type: string, nullable: true, description: "YYYY-MM. Пусто у записей до 070." }
         created_by: { type: string }
         created_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        cancelled_by: { type: string, nullable: true }
     SalaryDeductionInput:
       type: object
       required: [user_id, amount, reason]
@@ -5297,7 +5340,36 @@ components:
         reason:
           type: string
           description: "Обязательна — единственная цель записи в том, чтобы не терять «за что удержали»."
+        period: { type: string, description: "YYYY-MM" }
     SalaryDeductionList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryDeduction" } } } }
+    SalaryAdvance:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        period: { type: string, description: "YYYY-MM" }
+        account_id: { type: string, format: uuid }
+        note: { type: string, nullable: true }
+        source_op_id: { type: string, format: uuid, nullable: true }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        cancelled_by: { type: string, nullable: true }
+    SalaryAdvanceInput:
+      type: object
+      required: [user_id, amount, account_id, period]
+      properties:
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        period: { type: string, description: "YYYY-MM" }
+        note: { type: string }
+        override:
+          type: boolean
+          description: "См. SalaryPayInput.override — тот же кап-чек и тот же принцип для аванса."
+        override_reason: { type: string }
+    SalaryAdvanceList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryAdvance" } } } }
 
     ServiceAccrual:
       type: object

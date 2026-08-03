@@ -9711,6 +9711,172 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/deductions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отмена удержания (070)
+         * @description Помечает cancelled_at/by и уменьшает users.deductions. Без движения денег по счёту — удержание и не двигало баланс.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryDeduction"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Выдача аванса — одна атомарная транзакция (070)
+         * @description Списание счёта + FinancialOperation (категория «Аванс») + запись salary_advances + инкремент users.advance в ОДНОЙ транзакции. Заменяет прежний двухшаговый нетранзакционный поток (PaySalary(kind=advance) + отдельный PATCH users.advance).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SalaryAdvanceInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryAdvance"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/advances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История авансов сотрудника */
+        get: {
+            parameters: {
+                query: {
+                    user_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryAdvanceList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/advances/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отмена аванса (070)
+         * @description Реверс денег обратно на счёт, с которого выдавали (компенсирующая FinancialOperation, тип "in"), декремент users.advance, пометка cancelled_at/by.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryAdvance"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/service-charge/pay": {
         parameters: {
             query?: never;
@@ -13406,9 +13572,14 @@ export interface components {
             user_id?: string;
             amount?: components["schemas"]["Decimal"];
             reason?: string;
+            /** @description YYYY-MM. Пусто у записей до 070. */
+            period?: string | null;
             created_by?: string;
             /** Format: date-time */
             created_at?: string;
+            /** Format: date-time */
+            cancelled_at?: string | null;
+            cancelled_by?: string | null;
         };
         SalaryDeductionInput: {
             /** Format: uuid */
@@ -13416,9 +13587,47 @@ export interface components {
             amount: components["schemas"]["Decimal"];
             /** @description Обязательна — единственная цель записи в том, чтобы не терять «за что удержали». */
             reason: string;
+            /** @description YYYY-MM */
+            period?: string;
         };
         SalaryDeductionList: {
             data?: components["schemas"]["SalaryDeduction"][];
+        };
+        SalaryAdvance: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            amount?: components["schemas"]["Decimal"];
+            /** @description YYYY-MM */
+            period?: string;
+            /** Format: uuid */
+            account_id?: string;
+            note?: string | null;
+            /** Format: uuid */
+            source_op_id?: string | null;
+            created_by?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            cancelled_at?: string | null;
+            cancelled_by?: string | null;
+        };
+        SalaryAdvanceInput: {
+            /** Format: uuid */
+            user_id: string;
+            amount: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id: string;
+            /** @description YYYY-MM */
+            period: string;
+            note?: string;
+            /** @description См. SalaryPayInput.override — тот же кап-чек и тот же принцип для аванса. */
+            override?: boolean;
+            override_reason?: string;
+        };
+        SalaryAdvanceList: {
+            data?: components["schemas"]["SalaryAdvance"][];
         };
         ServiceAccrual: {
             /** Format: uuid */

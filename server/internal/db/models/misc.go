@@ -69,17 +69,58 @@ func (SalaryDayMultiplier) TableName() string { return "salary_day_multipliers" 
 // НЕ FinancialOperation: удержание не двигает баланс счёта — деньги не
 // выданы, им неоткуда "выходить". Это только уменьшение будущей выплаты
 // (users.deductions), а причина раньше терялась в тосте сразу после ввода.
+//
+// Period/CancelledAt/CancelledBy — 070: привязка к месяцу и отмена (раньше
+// удержание нельзя было ни к месяцу привязать, ни снять — DELETE для него не
+// существовал вовсе).
 type SalaryDeduction struct {
 	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	UserID       string          `gorm:"column:user_id;type:uuid;index" json:"user_id"`
 	Amount       decimal.Decimal `gorm:"type:numeric(14,4)" json:"amount"`
 	Reason       string          `json:"reason"`
-	CreatedBy    *string         `gorm:"column:created_by" json:"created_by"`
-	CreatedAt    time.Time       `json:"created_at"`
+	// Period — YYYY-MM, к какому месяцу относится удержание. Пусто у записей
+	// до 070 (миграция не бэкфиллит — они и раньше не были period-aware).
+	Period      *string    `json:"period"`
+	CreatedBy   *string    `gorm:"column:created_by" json:"created_by"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CancelledAt *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`
+	CancelledBy *string    `gorm:"column:cancelled_by" json:"cancelled_by"`
 }
 
 func (SalaryDeduction) TableName() string { return "salary_deductions" }
+
+// SalaryAdvance — выдача аванса с сохранённой историей (070).
+//
+// ДО этой миграции "аванс" был сырым счётчиком users.advance, который менялся
+// ДВУМЯ независимыми запросами подряд (выплата + отдельный PATCH нового
+// значения) — если второй не проходил, деньги уходили, а счётчик не
+// обновлялся, и поправить было нечего: без id нет что редактировать/отменять.
+// Теперь выдача — ОДНА транзакция (создание этой строки + financial_operation
+// + инкремент users.advance, см. SalaryService.GiveAdvance), и у записи есть
+// id — можно отменить (CancelAdvance: реверс денег на AccountID + декремент
+// счётчика), не трогая формулу капа выплаты (она по-прежнему читает
+// users.advance — тот всегда синхронен с активными записями).
+type SalaryAdvance struct {
+	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	UserID       string          `gorm:"column:user_id;type:uuid;index" json:"user_id"`
+	Amount       decimal.Decimal `gorm:"type:numeric(14,4)" json:"amount"`
+	Period       string          `json:"period"`
+	// AccountID — счёт, с которого выдан аванс. Нужен для отмены: куда
+	// вернуть деньги.
+	AccountID string  `gorm:"column:account_id;type:uuid" json:"account_id"`
+	Note      *string `json:"note"`
+	// SourceOpID — id financial_operations самой выплаты (для трассировки
+	// «эта проводка — вот эта строка истории»).
+	SourceOpID  *string    `gorm:"column:source_op_id;type:uuid" json:"source_op_id"`
+	CreatedBy   *string    `gorm:"column:created_by" json:"created_by"`
+	CreatedAt   time.Time  `json:"created_at"`
+	CancelledAt *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`
+	CancelledBy *string    `gorm:"column:cancelled_by" json:"cancelled_by"`
+}
+
+func (SalaryAdvance) TableName() string { return "salary_advances" }
 
 func (TimeEntry) TableName() string { return "time_entries" }
 
