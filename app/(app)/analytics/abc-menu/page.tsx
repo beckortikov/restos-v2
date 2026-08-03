@@ -102,6 +102,7 @@ export default function AbcMenuPage() {
   const [search, setSearch] = useState('')
   // Фильтр таблицы по квадранту Menu Engineering (композится с классом+поиском).
   const [meFilter, setMeFilter] = useState<Exclude<EngineeringClass, ''> | 'all'>('all')
+  const [showAllRecs, setShowAllRecs] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -469,12 +470,14 @@ export default function AbcMenuPage() {
         </div>
       </div>
 
-      {/* Recommendations */}
+      {/* Recommendations — топ-5, остальное под «Показать все» */}
       {recommendations.length > 0 && (
         <div className="bg-card rounded-xl border border-border p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4">Рекомендации</h2>
+          <h2 className="text-sm font-semibold text-foreground mb-4">
+            Рекомендации <span className="font-normal text-muted-foreground">({recommendations.length})</span>
+          </h2>
           <div className="space-y-3">
-            {recommendations.map((rec, idx) => (
+            {(showAllRecs ? recommendations : recommendations.slice(0, 5)).map((rec, idx) => (
               <div
                 key={idx}
                 className={`rounded-lg p-4 text-sm font-medium ${
@@ -489,6 +492,15 @@ export default function AbcMenuPage() {
               </div>
             ))}
           </div>
+          {recommendations.length > 5 && (
+            <button
+              type="button"
+              onClick={() => setShowAllRecs((v) => !v)}
+              className="mt-3 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+            >
+              {showAllRecs ? 'Свернуть' : `Показать все (${recommendations.length})`}
+            </button>
+          )}
         </div>
       )}
 
