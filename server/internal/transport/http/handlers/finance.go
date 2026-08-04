@@ -331,6 +331,59 @@ func (h *SalaryHandler) ListDeductions(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, makeList(rows, ""))
 }
 
+// CancelDeduction — DELETE /api/v1/finance/salary/deductions/{id}
+func (h *SalaryHandler) CancelDeduction(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.CancelDeduction(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// GiveAdvance — POST /api/v1/finance/salary/advance
+// Выдача аванса одной атомарной транзакцией (070) — заменяет прежний
+// двухшаговый нетранзакционный поток (PaySalary(kind=advance) + отдельный
+// PATCH users.advance), где падение второго запроса теряло синхронизацию.
+func (h *SalaryHandler) GiveAdvance(w http.ResponseWriter, r *http.Request) {
+	var in service.AdvanceInput
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.GiveAdvance(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, out)
+}
+
+// ListAdvances — GET /api/v1/finance/salary/advances?user_id=
+func (h *SalaryHandler) ListAdvances(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		respond.BadRequest(w, "user_id is required")
+		return
+	}
+	rows, err := h.svc.ListAdvances(r.Context(), userID)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(rows, ""))
+}
+
+// CancelAdvance — DELETE /api/v1/finance/salary/advances/{id}
+func (h *SalaryHandler) CancelAdvance(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.CancelAdvance(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // SalaryReport — GET /api/v1/finance/salary/report?from=&to=
 // «Кому сколько выдали и когда» за период: сводка по сотрудникам + плоский
 // список выплат с датой, суммой и счётом.
@@ -381,6 +434,27 @@ func (h *SalaryHandler) SetWorkedDays(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.SetWorkedDays(r.Context(), in.UserID, in.From, in.To, in.Dates)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// ToggleDayMultiplier — PUT /finance/salary/day-multiplier: переключить день
+// сотрудника ×1 ↔ ×2 («две смены в один день», 066).
+func (h *SalaryHandler) ToggleDayMultiplier(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		UserID string `json:"user_id"`
+		Date   string `json:"date"`
+		From   string `json:"from"`
+		To     string `json:"to"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	out, err := h.svc.ToggleDayMultiplier(r.Context(), in.UserID, in.Date, in.From, in.To)
 	if err != nil {
 		respond.Error(w, err)
 		return

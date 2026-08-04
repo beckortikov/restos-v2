@@ -56,6 +56,7 @@ import {
   Network,
   RefreshCw,
   ListChecks,
+  Timer,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
@@ -301,6 +302,7 @@ const NAV: NavItem[] = [
       { label: 'Аналитика столов', href: '/analytics/tables', icon: MapPin },
       { label: 'Аналитика официантов', href: '/analytics/waiters', icon: Users },
       { label: 'Пиковые часы', href: '/analytics/peak-hours', icon: Clock },
+      { label: 'Время блюда по станциям', href: '/analytics/kitchen-stages', icon: Timer },
       { label: 'Себестоимость', href: '/analytics/food-cost', icon: TrendingDown },
       { label: 'Прогноз', href: '/analytics/forecast', icon: Target },
     ],

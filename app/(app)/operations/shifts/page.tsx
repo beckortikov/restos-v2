@@ -305,6 +305,10 @@ export default function ShiftsPage() {
   // подгружаем их отдельно и даём отменить прямо здесь.
   const [stuckOrders, setStuckOrders] = useState<Order[] | null>(null)
   const [cancellingStuckId, setCancellingStuckId] = useState<string | null>(null)
+  // 068: можно ли закрыть смену «всё равно» — право shifts.close_with_open_orders,
+  // приходит с бэка в details.can_force (бэк — источник правды по правам).
+  const [canForceClose, setCanForceClose] = useState(false)
+  const [forcingClose, setForcingClose] = useState(false)
   // Синхронный гвард поверх confirmDialog(): в отличие от window.confirm()
   // (блокировал JS-поток сам), async-диалог не мешает второму тапу открыть
   // второй диалог поверх первого, пока первый ещё висит.
@@ -614,6 +618,7 @@ export default function ShiftsPage() {
       if (!ok) return
     }
     setStuckOrders(null)
+    setCanForceClose(false)
     try {
       await closeShift(activeShift.id, user.id, closeBalance)
       toast.success('Смена закрыта')
@@ -641,13 +646,49 @@ export default function ShiftsPage() {
       // Бэк называет конкретные блокирующие заказы в details.order_ids —
       // подгружаем их напрямую по id (без scope по текущей смене/дате), иначе
       // заказ-«хвост» из прошлой смены невозможно найти нигде в интерфейсе.
-      const orderIds = e instanceof V4Error ? (e.envelope()?.details?.order_ids as unknown) : undefined
+      // details.can_force (068) — доступна ли кнопка «закрыть всё равно» этому
+      // пользователю (право shifts.close_with_open_orders).
+      const details = e instanceof V4Error ? e.envelope()?.details : undefined
+      const orderIds = details?.order_ids as unknown
       if (Array.isArray(orderIds) && orderIds.length > 0) {
         try {
           const found = await fetchOrders({ ids: orderIds as string[], slim: true })
           setStuckOrders(found)
         } catch { /* покажем только текст ошибки — не критично */ }
       }
+      setCanForceClose(Boolean(details?.can_force))
+    }
+  }
+
+  // 068 — «Закрыть всё равно»: подтверждаем закрытие с висящими столами явно
+  // (confirm_open_orders), не тихим повтором того же запроса.
+  const handleForceClose = async () => {
+    if (!activeShift || !user || confirmBusyRef.current) return
+    confirmBusyRef.current = true
+    let ok: boolean
+    try {
+      ok = await confirmDialog({
+        title: 'Закрыть смену с открытыми столами?',
+        message: `Незакрытых заказов: ${stuckOrders?.length ?? 0}. Они прикрепятся к следующей открытой смене, когда будут оплачены.`,
+        confirmLabel: 'Закрыть всё равно',
+        cancelLabel: 'Отмена',
+        danger: true,
+      })
+    } finally { confirmBusyRef.current = false }
+    if (!ok) return
+    setForcingClose(true)
+    try {
+      await closeShift(activeShift.id, user.id, closeBalance, true)
+      toast.success('Смена закрыта')
+      setStuckOrders(null)
+      setCanForceClose(false)
+      setShowClose(false)
+      setCloseBalance(0)
+      await reload()
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка закрытия смены'))
+    } finally {
+      setForcingClose(false)
     }
   }
 
@@ -1495,6 +1536,7 @@ export default function ShiftsPage() {
                 Эти заказы могли остаться от прошлой смены и поэтому не видны в
                 «Активные заказы». Отмените их (или закройте с оплатой из
                 карточки заказа), затем повторите закрытие смены.
+                {canForceClose && ' Либо закройте всё равно — столы прикрепятся к следующей смене.'}
               </p>
               <div className="space-y-1.5">
                 {stuckOrders.map(o => {
@@ -1517,10 +1559,18 @@ export default function ShiftsPage() {
                   )
                 })}
               </div>
-              <button onClick={handleClose}
-                className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
-                Повторить закрытие смены
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={handleClose}
+                  className="px-4 py-2 bg-amber-600 text-white rounded-lg text-sm font-medium hover:bg-amber-700">
+                  Повторить закрытие смены
+                </button>
+                {canForceClose && (
+                  <button onClick={handleForceClose} disabled={forcingClose}
+                    className="px-4 py-2 bg-destructive text-destructive-foreground rounded-lg text-sm font-medium hover:bg-destructive/90 disabled:opacity-50">
+                    {forcingClose ? 'Закрываем…' : 'Закрыть всё равно'}
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -1633,6 +1683,11 @@ export default function ShiftsPage() {
                           {shift.closedAt ? new Date(shift.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }) : '?'}
                         </span>
                         <span className="text-xs text-muted-foreground">({formatDuration(shift.openedAt, shift.closedAt)})</span>
+                        {!!shift.closedOpenOrdersCount && (
+                          <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950/40 dark:text-amber-400" title="Закрыта с незакрытыми заказами">
+                            закрыта с {shift.closedOpenOrdersCount} столами
+                          </span>
+                        )}
                       </div>
                       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 text-xs text-muted-foreground">
                         <span>{shift.ordersCount} заказ{shift.ordersCount === 1 ? '' : shift.ordersCount < 5 ? 'а' : 'ов'}</span>

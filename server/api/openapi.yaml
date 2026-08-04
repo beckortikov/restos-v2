@@ -986,7 +986,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [closing_balance], properties: { closing_balance: { type: string } } }
+            schema: { type: object, required: [closing_balance], properties: { closing_balance: { type: string }, confirm_open_orders: { type: boolean, description: "Закрыть, несмотря на открытые столы — требует права shifts.close_with_open_orders" } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CashShift" } } } } }
 
   /api/v1/shifts/{id}/operations:
@@ -2110,6 +2110,18 @@ paths:
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierPayDebtInput" } } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/Supplier" } } } } }
 
+  /api/v1/suppliers/{id}/opening-debt:
+    post:
+      tags: [admin]
+      summary: Долг поставщику без накладной (перенос задолженности до перехода на систему)
+      description: |
+        Создаёт запись долга без товарных строк (stock_receipts, is_opening_debt=true)
+        и увеличивает `suppliers.current_debt`. Не влияет на остатки склада.
+        Гасится тем же `/pay-debt`, учитывается «Пересчитать долги».
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SupplierOpeningDebtInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
+
   /api/v1/reservations:
     get:
       tags: [admin]
@@ -2740,6 +2752,12 @@ paths:
       summary: Статистика по официантам за период
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaitersReport" } } } } }
+  /api/v1/analytics/kitchen-stage-report:
+    get:
+      tags: [analytics]
+      summary: Время блюда по станциям (очередь/готовка/ожидание выдачи) vs тех-карта
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/KitchenStageReport" } } } } }
   /api/v1/analytics/tables:
     get:
       tags: [analytics]
@@ -2918,6 +2936,24 @@ paths:
                 to: { type: string }
                 dates: { type: array, items: { type: string } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WorkedDaysResult" } } } } }
+  /api/v1/finance/salary/day-multiplier:
+    put:
+      tags: [finance, payroll]
+      summary: Переключить день сотрудника ×1 ↔ ×2 («две смены в один день», 066)
+      description: >
+        Тоггл: если на дату уже стоит множитель — снимает его (обратно ×1),
+        иначе ставит ×2. Возвращает свежий WorkedDaysResult за [from, to].
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: string }
+                date: { type: string, description: "YYYY-MM-DD" }
+                from: { type: string }
+                to: { type: string }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WorkedDaysResult" } } } } }
   /api/v1/finance/salary/report:
     get:
       tags: [finance, payroll]
@@ -2946,6 +2982,46 @@ paths:
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeductionInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeduction" } } } } }
+  /api/v1/finance/salary/deductions/{id}:
+    delete:
+      tags: [finance, payroll]
+      summary: Отмена удержания (070)
+      description: >
+        Помечает cancelled_at/by и уменьшает users.deductions. Без движения
+        денег по счёту — удержание и не двигало баланс.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryDeduction" } } } } }
+  /api/v1/finance/salary/advance:
+    post:
+      tags: [finance, payroll]
+      summary: Выдача аванса — одна атомарная транзакция (070)
+      description: >
+        Списание счёта + FinancialOperation (категория «Аванс») + запись
+        salary_advances + инкремент users.advance в ОДНОЙ транзакции.
+        Заменяет прежний двухшаговый нетранзакционный поток
+        (PaySalary(kind=advance) + отдельный PATCH users.advance).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvanceInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvance" } } } } }
+  /api/v1/finance/salary/advances:
+    get:
+      tags: [finance, payroll]
+      summary: История авансов сотрудника
+      parameters:
+        - { in: query, name: user_id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvanceList" } } } } }
+  /api/v1/finance/salary/advances/{id}:
+    delete:
+      tags: [finance, payroll]
+      summary: Отмена аванса (070)
+      description: >
+        Реверс денег обратно на счёт, с которого выдавали (компенсирующая
+        FinancialOperation, тип "in"), декремент users.advance, пометка
+        cancelled_at/by.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvance" } } } } }
   /api/v1/finance/service-charge/pay:
     post:
       tags: [finance, payroll]
@@ -3927,6 +4003,7 @@ components:
         total_amount: { $ref: "#/components/schemas/Decimal" }
         paid_amount: { $ref: "#/components/schemas/Decimal" }
         debt_amount: { $ref: "#/components/schemas/Decimal" }
+        is_opening_debt: { type: boolean, description: "Долг внесён вручную (без накладной) — перенос задолженности до перехода на систему." }
         returned_total:
           $ref: "#/components/schemas/Decimal"
           description: "Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части»."
@@ -4214,6 +4291,7 @@ components:
         avg_check: { $ref: "#/components/schemas/Decimal" }
         opened_at: { type: string, format: date-time }
         closed_at: { type: string, format: date-time }
+        closed_open_orders_count: { type: integer, description: "Сколько заказов было ещё открыто в момент закрытия этой смены. 0 — обычное закрытие." }
     CashShiftOperation:
       type: object
       properties:
@@ -4542,6 +4620,13 @@ components:
       properties:
         amount: { $ref: "#/components/schemas/Decimal" }
         account_id: { type: string, format: uuid }
+    SupplierOpeningDebtInput:
+      type: object
+      required: [amount]
+      properties:
+        amount: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+        date: { type: string, description: "YYYY-MM-DD, когда фактически возник долг. Пусто = сегодня." }
     SuppliersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Supplier" } } } }
 
     Reservation:
@@ -4912,6 +4997,7 @@ components:
         description: { type: string }
         counterparty: { type: string }
         shift_id: { type: string, format: uuid }
+        affects_shift: { type: boolean, description: "false — не зеркалить расход в текущую открытую смену, даже если счёт совпадает (по умолчанию/omitted — зеркалить, как раньше)" }
     FinancialOperationsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/FinancialOperation" } }, next_cursor: { type: string } } }
 
     RecurringPayment:
@@ -5137,6 +5223,26 @@ components:
         total_orders:  { type: integer }
         total_revenue: { $ref: "#/components/schemas/Decimal" }
         cells: { type: array, items: { $ref: "#/components/schemas/PeakHoursCell" } }
+
+    KitchenStageRow:
+      type: object
+      properties:
+        menu_item_id:       { type: string }
+        dish_name:          { type: string }
+        category:           { type: string }
+        station:            { type: string }
+        item_count:         { type: integer }
+        avg_queue_min:      { $ref: "#/components/schemas/Decimal" }
+        avg_cook_min:       { $ref: "#/components/schemas/Decimal" }
+        avg_hold_min:       { $ref: "#/components/schemas/Decimal" }
+        avg_total_min:      { $ref: "#/components/schemas/Decimal" }
+        tech_cook_time_min: { type: integer, nullable: true }
+        delta_min:          { $ref: "#/components/schemas/Decimal" }
+    KitchenStageReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        rows:   { type: array, items: { $ref: "#/components/schemas/KitchenStageRow" } }
 
     WeekdayRow:
       type: object
@@ -5484,6 +5590,7 @@ components:
         salary: { $ref: "#/components/schemas/Decimal" }
         daily_rate: { $ref: "#/components/schemas/Decimal" }
         days_worked: { type: integer, description: "Дней с отметкой в табеле за период" }
+        paid_units: { type: integer, description: "Оплачиваемых единиц (дни ×2 считаются дважды, 066)" }
         accrued: { $ref: "#/components/schemas/Decimal" }
         advance: { $ref: "#/components/schemas/Decimal" }
         deductions: { $ref: "#/components/schemas/Decimal" }
@@ -5493,6 +5600,8 @@ components:
         shift_dates: { type: array, items: { type: string }, description: "Дни с приходом в табеле (снять нельзя)" }
         manual_dates: { type: array, items: { type: string }, description: "Ручные отметки (toggleable)" }
         count: { type: integer, description: "Уникальных отработанных дней всего" }
+        paid_units: { type: integer, description: "Оплачиваемых единиц с учётом множителей ×2 (066)" }
+        multipliers: { type: object, additionalProperties: { type: integer }, description: "date → множитель; дни без override отсутствуют (подразумевается ×1)" }
     SalaryReport:
       type: object
       properties:
@@ -5562,8 +5671,11 @@ components:
         user_id: { type: string, format: uuid }
         amount: { $ref: "#/components/schemas/Decimal" }
         reason: { type: string }
+        period: { type: string, nullable: true, description: "YYYY-MM. Пусто у записей до 070." }
         created_by: { type: string }
         created_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        cancelled_by: { type: string, nullable: true }
     SalaryDeductionInput:
       type: object
       required: [user_id, amount, reason]
@@ -5573,7 +5685,36 @@ components:
         reason:
           type: string
           description: "Обязательна — единственная цель записи в том, чтобы не терять «за что удержали»."
+        period: { type: string, description: "YYYY-MM" }
     SalaryDeductionList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryDeduction" } } } }
+    SalaryAdvance:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        period: { type: string, description: "YYYY-MM" }
+        account_id: { type: string, format: uuid }
+        note: { type: string, nullable: true }
+        source_op_id: { type: string, format: uuid, nullable: true }
+        created_by: { type: string }
+        created_at: { type: string, format: date-time }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        cancelled_by: { type: string, nullable: true }
+    SalaryAdvanceInput:
+      type: object
+      required: [user_id, amount, account_id, period]
+      properties:
+        user_id: { type: string, format: uuid }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        account_id: { type: string, format: uuid }
+        period: { type: string, description: "YYYY-MM" }
+        note: { type: string }
+        override:
+          type: boolean
+          description: "См. SalaryPayInput.override — тот же кап-чек и тот же принцип для аванса."
+        override_reason: { type: string }
+    SalaryAdvanceList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SalaryAdvance" } } } }
 
     ServiceAccrual:
       type: object

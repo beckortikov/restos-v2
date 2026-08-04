@@ -6,9 +6,10 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Pencil, TrendingUp, History } from 'lucide-react'
+import { ArrowLeft, Pencil, TrendingUp, History, X as XIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatCurrency } from '@/lib/helpers'
+import { humanizeError } from '@/lib/errors'
 import { ROLE_LABELS, type User, type FinancialAccount } from '@/lib/types'
 import {
   fetchUsers, fetchFinancialAccounts, fetchFinancialOperations,
@@ -16,7 +17,11 @@ import {
   fetchSalaryReport, type SalaryPayoutRow,
   fetchServiceAccrualByWaiter, fetchServicePayoutByWaiter, type ServiceAccrualByWaiter,
 } from '@/lib/queries'
-import { selectableAccounts, fetchSalaryDeductions, type SalaryDeductionRow } from '@/lib/queries/finance'
+import {
+  selectableAccounts,
+  fetchSalaryDeductions, cancelSalaryDeduction, type SalaryDeductionRow,
+  fetchSalaryAdvances, cancelSalaryAdvance, type SalaryAdvanceRow,
+} from '@/lib/queries/finance'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 
 const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
@@ -61,7 +66,9 @@ export default function EmployeeDetailPage() {
   // История — окно TREND_MONTHS для тренда, а ленту показываем целиком.
   const [payouts, setPayouts] = useState<SalaryPayoutRow[]>([])
   const [deductions, setDeductions] = useState<SalaryDeductionRow[]>([])
+  const [advances, setAdvances] = useState<SalaryAdvanceRow[]>([])
   const [historyLoading, setHistoryLoading] = useState(true)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
 
   const reload = useCallback(async () => {
     if (!id) return
@@ -71,13 +78,14 @@ export default function EmployeeDetailPage() {
     const trendStart = new Date(now.getFullYear(), now.getMonth() - (TREND_MONTHS - 1), 1)
     const trendFrom = `${trendStart.getFullYear()}-${pad(trendStart.getMonth() + 1)}-01`
 
-    const [users, accs, accrualRows, ops, report, dedRows] = await Promise.all([
+    const [users, accs, accrualRows, ops, report, dedRows, advRows] = await Promise.all([
       fetchUsers(),
       fetchFinancialAccounts().then(selectableAccounts),
       fetchSalaryAccrual(monthStart, today).catch(() => []),
       fetchFinancialOperations(),
       fetchSalaryReport(trendFrom, today).catch(() => null),
       fetchSalaryDeductions(id).catch(() => []),
+      fetchSalaryAdvances(id).catch(() => []),
     ])
 
     const emp = users.find(u => u.id === id)
@@ -116,8 +124,45 @@ export default function EmployeeDetailPage() {
 
     if (report) setPayouts(report.payouts.filter(p => p.userId === id))
     setDeductions(dedRows)
+    setAdvances(advRows)
     setHistoryLoading(false)
   }, [id, navigate])
+
+  const handleCancelAdvance = useCallback(async (advId: string) => {
+    const ok = window.confirm('Отменить аванс? Деньги вернутся на счёт, с которого выдавали.')
+    // Electron/Windows: нативный confirm() иногда не возвращает клавиатурный
+    // фокус окну после закрытия — следующий инпут (например «Ставка» в
+    // диалоге «Оклад») выглядит недоступным: курсора нет, ввод не проходит.
+    window.focus()
+    if (!ok) return
+    setCancellingId(advId)
+    try {
+      await cancelSalaryAdvance(advId)
+      toast.success('Аванс отменён')
+      await reload()
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось отменить аванс'))
+    } finally {
+      setCancellingId(null)
+    }
+  }, [reload])
+
+  const handleCancelDeduction = useCallback(async (dedId: string) => {
+    const ok = window.confirm('Отменить удержание?')
+    // См. handleCancelAdvance — тот же фикс возврата фокуса окну.
+    window.focus()
+    if (!ok) return
+    setCancellingId(dedId)
+    try {
+      await cancelSalaryDeduction(dedId)
+      toast.success('Удержание отменено')
+      await reload()
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось отменить удержание'))
+    } finally {
+      setCancellingId(null)
+    }
+  }, [reload])
 
   useEffect(() => {
     setLoading(true)
@@ -146,18 +191,28 @@ export default function EmployeeDetailPage() {
 
   const trendMax = Math.max(1, ...trendRows.map(r => r.salary + r.advance + r.service))
 
-  // ─── Лента: выплаты + удержания одним списком, новые сверху ────────────────
+  // ─── Лента: выплаты + авансы + удержания одним списком, новые сверху ───────
+  // 070: авансы и удержания теперь ОТМЕНЯЕМЫЕ записи — попадают в общую ленту
+  // наравне с выплатами (все операции сотрудника отражаются здесь, включая
+  // отменённые — они не пропадают, а помечаются зачёркнутым «Отменено»).
   type TimelineItem =
     | { type: 'payout'; date: string; data: SalaryPayoutRow }
     | { type: 'deduction'; date: string; data: SalaryDeductionRow }
+    | { type: 'advance'; date: string; data: SalaryAdvanceRow }
 
   const timeline = useMemo<TimelineItem[]>(() => {
+    // GiveAdvance (070) создаёт и salary_advances-строку, И ту же самую
+    // FinancialOperation, что раньше одна представляла аванс в SalaryReport —
+    // без фильтра сумма показалась бы дважды. Старые (до 070) авансы такой
+    // строки не имеют — остаются видны как обычный payout, без отмены.
+    const advanceOpIds = new Set(advances.map(a => a.sourceOpId).filter(Boolean))
     const items: TimelineItem[] = [
-      ...payouts.map(p => ({ type: 'payout' as const, date: p.date, data: p })),
+      ...payouts.filter(p => !(p.kind === 'advance' && advanceOpIds.has(p.id))).map(p => ({ type: 'payout' as const, date: p.date, data: p })),
       ...deductions.map(d => ({ type: 'deduction' as const, date: d.createdAt.slice(0, 10), data: d })),
+      ...advances.map(a => ({ type: 'advance' as const, date: a.createdAt.slice(0, 10), data: a })),
     ]
     return items.sort((a, b) => b.date.localeCompare(a.date))
-  }, [payouts, deductions])
+  }, [payouts, deductions, advances])
 
   if (loading || !employee) {
     return (
@@ -274,8 +329,10 @@ export default function EmployeeDetailPage() {
             <div className="py-10 text-center text-sm text-muted-foreground">Пока нет выплат за последние {TREND_MONTHS} мес.</div>
           ) : (
             <div className="divide-y divide-border/60">
-              {timeline.map((item, i) => (
-                <div key={item.type === 'payout' ? item.data.id : item.data.id ?? i} className="flex items-start gap-3 py-2.5">
+              {timeline.map((item, i) => {
+                const cancelled = item.type !== 'payout' && !!item.data.cancelledAt
+                return (
+                <div key={`${item.type}-${item.type === 'payout' ? item.data.id : item.data.id ?? i}`} className={`flex items-start gap-3 py-2.5 ${cancelled ? 'opacity-50' : ''}`}>
                   <span className="text-xs text-muted-foreground tabular-nums w-20 shrink-0 pt-0.5">{item.date || '—'}</span>
                   <div className="flex-1 min-w-0">
                     {item.type === 'payout' ? (
@@ -293,20 +350,63 @@ export default function EmployeeDetailPage() {
                         </div>
                         {item.data.description && <p className="text-xs text-muted-foreground mt-1 truncate">{item.data.description}</p>}
                       </>
+                    ) : item.type === 'advance' ? (
+                      <>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-medium ${cancelled ? 'line-through' : ''} ${PAYOUT_KIND_TONE.advance}`}>
+                            Аванс{item.data.period ? ` · ${item.data.period}` : ''}
+                          </span>
+                          {cancelled && (
+                            <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                              Отменён
+                            </span>
+                          )}
+                        </div>
+                        {item.data.note && <p className="text-xs text-muted-foreground mt-1">{item.data.note}</p>}
+                      </>
                     ) : (
                       <>
-                        <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-medium bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400">
-                          Удержание
-                        </span>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-medium ${cancelled ? 'line-through' : ''} bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400`}>
+                            Удержание{item.data.period ? ` · ${item.data.period}` : ''}
+                          </span>
+                          {cancelled && (
+                            <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                              Отменено
+                            </span>
+                          )}
+                        </div>
                         <p className="text-xs text-muted-foreground mt-1">{item.data.reason}</p>
                       </>
                     )}
                   </div>
-                  <span className={`text-sm font-bold tabular-nums shrink-0 ${item.type === 'deduction' ? 'text-rose-600 dark:text-rose-400' : 'text-foreground'}`}>
-                    {item.type === 'deduction' ? '−' : ''}{formatCurrency(item.data.amount)}
-                  </span>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-sm font-bold tabular-nums ${item.type === 'deduction' ? 'text-rose-600 dark:text-rose-400' : 'text-foreground'} ${cancelled ? 'line-through' : ''}`}>
+                      {item.type === 'deduction' ? '−' : ''}{formatCurrency(item.data.amount)}
+                    </span>
+                    {!cancelled && item.type === 'advance' && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancelAdvance(item.data.id)}
+                        disabled={cancellingId === item.data.id}
+                        className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+                      >
+                        <XIcon className="size-3" /> Отменить
+                      </button>
+                    )}
+                    {!cancelled && item.type === 'deduction' && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancelDeduction(item.data.id)}
+                        disabled={cancellingId === item.data.id}
+                        className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+                      >
+                        <XIcon className="size-3" /> Отменить
+                      </button>
+                    )}
+                  </div>
                 </div>
-              ))}
+              )})}
             </div>
           )}
         </div>

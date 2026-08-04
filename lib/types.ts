@@ -9,6 +9,7 @@ export type UserRole =
   | 'cook'
   | 'storekeeper'
   | 'accountant'
+  | 'kiosk'
   | 'other'
 
 export type TableStatus = 'free' | 'occupied' | 'reserved' | 'bill_requested'
@@ -468,6 +469,9 @@ export interface StockReceipt {
   accountId?: string
   paid?: boolean
   lines: ReceiptLine[]
+  // isOpeningDebt (067) — долг внесён вручную, без накладной: перенос
+  // задолженности с момента до перехода на систему. lines всегда пуст.
+  isOpeningDebt?: boolean
 }
 
 export interface SupplyExpense {
@@ -534,6 +538,10 @@ export interface FinancialOperation {
   sourceRef?: string
   shiftId?: string
   createdAt?: string // момент ввода — для внутридневной сортировки реестра ДДС
+  // affectsShift — расход: false = не зеркалить в текущую открытую смену
+  // (бухгалтерская проводка на счёте, которая не была физическим движением
+  // денег в сегодняшнем ящике). undefined/true — зеркалить, как раньше.
+  affectsShift?: boolean
 }
 
 export interface BudgetLine {
@@ -815,6 +823,9 @@ export interface CashShift {
   ordersCount: number
   avgCheck: number
   status: CashShiftStatus
+  // closedOpenOrdersCount (068) — сколько заказов было ещё открыто в момент
+  // закрытия ЭТОЙ смены. 0/undefined — обычное закрытие.
+  closedOpenOrdersCount?: number
 }
 
 export interface CashShiftOperation {
@@ -953,6 +964,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   cook: 'Повар',
   storekeeper: 'Кладовщик',
   accountant: 'Бухгалтер',
+  kiosk: 'Терминал самозаказа',
   other: 'Прочий',
 }
 
@@ -1005,7 +1017,7 @@ export const ALL_PERMISSIONS = [
   'orders.service_charge',
   'kitchen.cooking',
   'tables.edit', 'tables.reserve',
-  'shifts.manage', 'shifts.history', 'pos.access',
+  'shifts.manage', 'shifts.history', 'shifts.close_with_open_orders', 'pos.access',
   'showcase.view',
   'inventory.view', 'inventory.manage',
   'suppliers.manage',
@@ -1039,6 +1051,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   'tables.reserve': 'Бронирование столов',
   'shifts.manage': 'Управление сменами',
   'shifts.history': 'История смен (все дни)',
+  'shifts.close_with_open_orders': 'Закрывать смену с открытыми столами',
   'pos.access': 'Доступ к POS-терминалу',
   'inventory.view': 'Просмотр остатков',
   'inventory.manage': 'Управление складом / накладные',
@@ -1061,7 +1074,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
 }
 
 export const PERMISSION_GROUPS: { label: string; keys: PermissionKey[] }[] = [
-  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.edit', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'pos.access', 'showcase.view'] },
+  { label: 'Операции', keys: ['orders.create', 'orders.close', 'orders.cancel', 'orders.void', 'orders.refund', 'orders.edit', 'orders.reprint', 'orders.view_others', 'orders.create_stopped', 'orders.service_charge', 'kitchen.cooking', 'batch_cooking.manage', 'tables.edit', 'tables.reserve', 'shifts.manage', 'shifts.history', 'shifts.close_with_open_orders', 'pos.access', 'showcase.view'] },
   { label: 'Склад', keys: ['inventory.view', 'inventory.manage', 'suppliers.manage', 'menu.view', 'menu.edit', 'menu.view_cost', 'writeoffs.create'] },
   { label: 'Финансы', keys: ['finance.view', 'finance.manage', 'payroll.manage'] },
   { label: 'Аналитика и клиенты', keys: ['analytics.view', 'customers.manage'] },
@@ -1125,6 +1138,9 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
       'showcase.view': true,
       'customers.manage': true,
       'printers.manage': true,
+      // Пересменка с открытыми столами (068) — иначе две смены в один день
+      // не смогут передать кассу друг другу, пока висит хоть один стол.
+      'shifts.close_with_open_orders': true,
     },
   },
   cook: {
@@ -1148,6 +1164,12 @@ export const ROLE_DEFAULT_PERMISSIONS: Record<UserRole, UserPermissions> = {
       'finance.view': true, 'finance.manage': true,
       'menu.view_cost': true, 'analytics.view': true,
       'audit.view': true,
+    },
+  },
+  kiosk: {
+    nav: [],
+    actions: {
+      'orders.create': true, 'menu.view': true, 'showcase.view': true,
     },
   },
   other: {

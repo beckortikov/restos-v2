@@ -98,6 +98,28 @@ type OrderItem struct {
 
 func (OrderItem) TableName() string { return "order_items" }
 
+// OrderItemStageEvent — append-only лог переходов station_status одной позиции
+// (миграция 065). station_status_at на самой позиции хранит только последний
+// переход — эта таблица нужна, чтобы посчитать длительность КАЖДОЙ стадии
+// (очередь/готовка/ожидание выдачи) для отчёта владельца по станциям.
+//
+// station и DishName — снэпшот на момент события, не FK/join на menu_items:
+// правки меню задним числом не переписывают историю.
+type OrderItemStageEvent struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	OrderItemID  string    `gorm:"column:order_item_id;type:uuid;index" json:"order_item_id"`
+	RestaurantID string    `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	MenuItemID   *string   `gorm:"column:menu_item_id;type:uuid" json:"menu_item_id"`
+	DishName     *string   `gorm:"column:dish_name" json:"dish_name"`
+	Station      string    `gorm:"column:station;default:'hot_kitchen'" json:"station"`
+	FromStatus   *string   `gorm:"column:from_status" json:"from_status"`
+	ToStatus     string    `gorm:"column:to_status" json:"to_status"`
+	ChangedBy    *string   `gorm:"column:changed_by" json:"changed_by"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (OrderItemStageEvent) TableName() string { return "order_item_stage_events" }
+
 // OrderItemModifier — выбранный модификатор позиции.
 type OrderItemModifier struct {
 	ID          string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`

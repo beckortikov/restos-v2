@@ -2905,6 +2905,8 @@ export interface paths {
                 content: {
                     "application/json": {
                         closing_balance: string;
+                        /** @description Закрыть, несмотря на открытые столы — требует права shifts.close_with_open_orders */
+                        confirm_open_orders?: boolean;
                     };
                 };
             };
@@ -6279,6 +6281,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/suppliers/{id}/opening-debt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Долг поставщику без накладной (перенос задолженности до перехода на систему)
+         * @description Создаёт запись долга без товарных строк (stock_receipts, is_opening_debt=true)
+         *     и увеличивает `suppliers.current_debt`. Не влияет на остатки склада.
+         *     Гасится тем же `/pay-debt`, учитывается «Пересчитать долги».
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SupplierOpeningDebtInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReceipt"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/reservations": {
         parameters: {
             query?: never;
@@ -9401,6 +9453,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/kitchen-stage-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Время блюда по станциям (очередь/готовка/ожидание выдачи) vs тех-карта */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["KitchenStageReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/tables": {
         parameters: {
             query?: never;
@@ -10205,6 +10296,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/day-multiplier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Переключить день сотрудника ×1 ↔ ×2 («две смены в один день», 066)
+         * @description Тоггл: если на дату уже стоит множитель — снимает его (обратно ×1), иначе ставит ×2. Возвращает свежий WorkedDaysResult за [from, to].
+         */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: {
+                content: {
+                    "application/json": {
+                        user_id?: string;
+                        /** @description YYYY-MM-DD */
+                        date?: string;
+                        from?: string;
+                        to?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WorkedDaysResult"];
+                    };
+                };
+            };
+        };
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/salary/report": {
         parameters: {
             query?: never;
@@ -10312,6 +10452,172 @@ export interface paths {
             };
         };
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/deductions/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отмена удержания (070)
+         * @description Помечает cancelled_at/by и уменьшает users.deductions. Без движения денег по счёту — удержание и не двигало баланс.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryDeduction"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/advance": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Выдача аванса — одна атомарная транзакция (070)
+         * @description Списание счёта + FinancialOperation (категория «Аванс») + запись salary_advances + инкремент users.advance в ОДНОЙ транзакции. Заменяет прежний двухшаговый нетранзакционный поток (PaySalary(kind=advance) + отдельный PATCH users.advance).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["SalaryAdvanceInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryAdvance"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/advances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История авансов сотрудника */
+        get: {
+            parameters: {
+                query: {
+                    user_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryAdvanceList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/salary/advances/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отмена аванса (070)
+         * @description Реверс денег обратно на счёт, с которого выдавали (компенсирующая FinancialOperation, тип "in"), декремент users.advance, пометка cancelled_at/by.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalaryAdvance"];
+                    };
+                };
+            };
+        };
         options?: never;
         head?: never;
         patch?: never;
@@ -12360,6 +12666,8 @@ export interface components {
             total_amount?: components["schemas"]["Decimal"];
             paid_amount?: components["schemas"]["Decimal"];
             debt_amount?: components["schemas"]["Decimal"];
+            /** @description Долг внесён вручную (без накладной) — перенос задолженности до перехода на систему. */
+            is_opening_debt?: boolean;
             /** @description Сумма НЕотменённых возвратов поставщику по накладной (при ?include=lines). UI: статус «Возвращено»/«Возврат части». */
             returned_total?: components["schemas"]["Decimal"];
             /** @description Только при ?include=lines. */
@@ -12629,6 +12937,8 @@ export interface components {
             opened_at?: string;
             /** Format: date-time */
             closed_at?: string;
+            /** @description Сколько заказов было ещё открыто в момент закрытия этой смены. 0 — обычное закрытие. */
+            closed_open_orders_count?: number;
         };
         CashShiftOperation: {
             /** Format: uuid */
@@ -13005,6 +13315,12 @@ export interface components {
             amount: components["schemas"]["Decimal"];
             /** Format: uuid */
             account_id: string;
+        };
+        SupplierOpeningDebtInput: {
+            amount: components["schemas"]["Decimal"];
+            note?: string;
+            /** @description YYYY-MM-DD, когда фактически возник долг. Пусто = сегодня. */
+            date?: string;
         };
         SuppliersList: {
             data?: components["schemas"]["Supplier"][];
@@ -13443,6 +13759,8 @@ export interface components {
             counterparty?: string;
             /** Format: uuid */
             shift_id?: string;
+            /** @description false — не зеркалить расход в текущую открытую смену, даже если счёт совпадает (по умолчанию/omitted — зеркалить, как раньше) */
+            affects_shift?: boolean;
         };
         FinancialOperationsList: {
             data?: components["schemas"]["FinancialOperation"][];
@@ -13662,6 +13980,28 @@ export interface components {
             total_orders?: number;
             total_revenue?: components["schemas"]["Decimal"];
             cells?: components["schemas"]["PeakHoursCell"][];
+        };
+        KitchenStageRow: {
+            menu_item_id?: string;
+            dish_name?: string;
+            category?: string;
+            station?: string;
+            item_count?: number;
+            avg_queue_min?: components["schemas"]["Decimal"];
+            avg_cook_min?: components["schemas"]["Decimal"];
+            avg_hold_min?: components["schemas"]["Decimal"];
+            avg_total_min?: components["schemas"]["Decimal"];
+            tech_cook_time_min?: number | null;
+            delta_min?: components["schemas"]["Decimal"];
+        };
+        KitchenStageReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            rows?: components["schemas"]["KitchenStageRow"][];
         };
         WeekdayRow: {
             /** @description 0=вс … 6=сб (Postgres DOW) */
@@ -14020,6 +14360,8 @@ export interface components {
             daily_rate?: components["schemas"]["Decimal"];
             /** @description Дней с отметкой в табеле за период */
             days_worked?: number;
+            /** @description Оплачиваемых единиц (дни ×2 считаются дважды, 066) */
+            paid_units?: number;
             accrued?: components["schemas"]["Decimal"];
             advance?: components["schemas"]["Decimal"];
             deductions?: components["schemas"]["Decimal"];
@@ -14031,6 +14373,12 @@ export interface components {
             manual_dates?: string[];
             /** @description Уникальных отработанных дней всего */
             count?: number;
+            /** @description Оплачиваемых единиц с учётом множителей ×2 (066) */
+            paid_units?: number;
+            /** @description date → множитель; дни без override отсутствуют (подразумевается ×1) */
+            multipliers?: {
+                [key: string]: number;
+            };
         };
         SalaryReport: {
             from?: string;
@@ -14097,9 +14445,14 @@ export interface components {
             user_id?: string;
             amount?: components["schemas"]["Decimal"];
             reason?: string;
+            /** @description YYYY-MM. Пусто у записей до 070. */
+            period?: string | null;
             created_by?: string;
             /** Format: date-time */
             created_at?: string;
+            /** Format: date-time */
+            cancelled_at?: string | null;
+            cancelled_by?: string | null;
         };
         SalaryDeductionInput: {
             /** Format: uuid */
@@ -14107,9 +14460,47 @@ export interface components {
             amount: components["schemas"]["Decimal"];
             /** @description Обязательна — единственная цель записи в том, чтобы не терять «за что удержали». */
             reason: string;
+            /** @description YYYY-MM */
+            period?: string;
         };
         SalaryDeductionList: {
             data?: components["schemas"]["SalaryDeduction"][];
+        };
+        SalaryAdvance: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            user_id?: string;
+            amount?: components["schemas"]["Decimal"];
+            /** @description YYYY-MM */
+            period?: string;
+            /** Format: uuid */
+            account_id?: string;
+            note?: string | null;
+            /** Format: uuid */
+            source_op_id?: string | null;
+            created_by?: string;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            cancelled_at?: string | null;
+            cancelled_by?: string | null;
+        };
+        SalaryAdvanceInput: {
+            /** Format: uuid */
+            user_id: string;
+            amount: components["schemas"]["Decimal"];
+            /** Format: uuid */
+            account_id: string;
+            /** @description YYYY-MM */
+            period: string;
+            note?: string;
+            /** @description См. SalaryPayInput.override — тот же кап-чек и тот же принцип для аванса. */
+            override?: boolean;
+            override_reason?: string;
+        };
+        SalaryAdvanceList: {
+            data?: components["schemas"]["SalaryAdvance"][];
         };
         ServiceAccrual: {
             /** Format: uuid */

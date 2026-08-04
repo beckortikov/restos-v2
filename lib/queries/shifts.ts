@@ -60,13 +60,16 @@ export async function patchShiftAccount(shiftId: string, accountId: string): Pro
   logAction('shift.account.attach', 'shift', shiftId, 'Привязка счёта к смене', { accountId })
 }
 
-export async function closeShift(shiftId: string, closedBy: string, closingBalance: number): Promise<CashShift> {
+// confirmOpenOrders — «закрыть всё равно», когда в ресторане есть незакрытые
+// заказы (068). Требует права shifts.close_with_open_orders — без него бэк
+// всё равно вернёт CONFLICT, даже если флаг передан.
+export async function closeShift(shiftId: string, closedBy: string, closingBalance: number, confirmOpenOrders?: boolean): Promise<CashShift> {
   const r: any = await unwrap(api.POST('/api/v1/shifts/{id}/close', {
     params: { path: { id: shiftId } },
-    body: { closing_balance: String(closingBalance) } as any,
+    body: { closing_balance: String(closingBalance), confirm_open_orders: confirmOpenOrders || undefined } as any,
   }))
   void closedBy
-  logAction('shift.close', 'shift', shiftId, 'Смена закрыта', { closingBalance })
+  logAction('shift.close', 'shift', shiftId, 'Смена закрыта', { closingBalance, confirmOpenOrders })
   return _mapV4Shift(r)
 }
 

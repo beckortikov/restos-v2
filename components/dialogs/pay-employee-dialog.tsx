@@ -9,13 +9,32 @@
 // сбрасывает форму и предзаполняет сумму, как раньше делал openDialog().
 
 import { useState, useEffect } from 'react'
-import { X, Banknote, CreditCard, CheckCircle } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { X, Banknote, CreditCard, CheckCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { ROLE_LABELS, type User, type FinancialAccount } from '@/lib/types'
 import { updateUser, paySalaryFull, payServiceCharge } from '@/lib/queries'
-import { addSalaryDeduction, type SalaryAccrualRow } from '@/lib/queries/finance'
+import { addSalaryDeduction, giveSalaryAdvance, type SalaryAccrualRow } from '@/lib/queries/finance'
+
+const PERIOD_MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
+function currentPeriod(): string { return new Date().toISOString().slice(0, 7) }
+function periodToDate(p: string): Date {
+  const [y, m] = p.split('-').map(Number)
+  return new Date(y || new Date().getFullYear(), (m || 1) - 1, 1)
+}
+function dateToPeriod(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+function shiftPeriod(p: string, delta: number): string {
+  const d = periodToDate(p)
+  return dateToPeriod(new Date(d.getFullYear(), d.getMonth() + delta, 1))
+}
+function periodLabel(p: string): string {
+  const d = periodToDate(p)
+  return `${PERIOD_MONTHS[d.getMonth()]} ${d.getFullYear()}`
+}
 
 export type PayAction = 'salary' | 'advance' | 'deduction' | 'edit_salary' | 'service'
 
@@ -74,6 +93,7 @@ export function PayEmployeeDialog({
   employee, action, accounts, accrual, salaryPaidThisPeriod, serviceAccrued, servicePaidThisPeriod,
   serviceFrom, serviceTo, shiftId, onClose, onSaved,
 }: PayEmployeeDialogProps) {
+  const navigate = useNavigate()
   const [payAmount, setPayAmount] = useState(0)
   const [deductionReason, setDeductionReason] = useState('')
   // ЗП-4: явный выбор между «По начислению» (сумма по формуле, сервер капает
@@ -84,6 +104,12 @@ export function PayEmployeeDialog({
   const [selectedAccountId, setSelectedAccountId] = useState('')
   const [formPayType, setFormPayType] = useState<'monthly' | 'daily'>('monthly')
   const [paying, setPaying] = useState(false)
+  // Период выплаты (070) — раньше жёстко «сейчас»: выплатить за прошлый
+  // месяц было невозможно. Зарплата/аванс/удержание теперь дают выбрать
+  // любой месяц; «Обслуживание» период не меняет — им управляет фильтр
+  // страницы (serviceFrom/serviceTo).
+  const [payPeriod, setPayPeriod] = useState(currentPeriod)
+  const showPeriodPicker = action === 'salary' || action === 'advance' || action === 'deduction'
 
   // Инициализация при каждом открытии (было в openDialog() до извлечения).
   useEffect(() => {
@@ -92,6 +118,7 @@ export function PayEmployeeDialog({
     setPayMode('accrual')
     setOverrideReason('')
     setSelectedAccountId('')
+    setPayPeriod(currentPeriod())
     if (action === 'advance' || action === 'deduction') {
       setPayAmount(0)
     } else if (action === 'edit_salary') {
@@ -132,26 +159,18 @@ export function PayEmployeeDialog({
       } else if (action === 'advance') {
         if (payAmount <= 0) { setPaying(false); return }
         if (payMode === 'override' && !overrideReason.trim()) { toast.error('Укажите причину свободной выплаты'); setPaying(false); return }
-        const acc = accounts.find(a => a.id === selectedAccountId)
-        // Период — ТЕКУЩИЙ календарный месяц: сервер всегда датирует
-        // созданную проводку сегодняшним днём (payout()), «уже выплачено»
-        // ищет по этому же префиксу. Диапазон UI-фильтра («Квартал»/«Год»)
-        // может начинаться в другом месяце — тогда period не совпал бы с
-        // датой проводки, и кап молча переставал видеть прошлые выплаты.
-        const payPeriod = new Date().toISOString().slice(0, 7)
         const opts = payMode === 'override' ? { override: true, overrideReason: overrideReason.trim() } : undefined
-        // Проводка создаётся ПЕРВОЙ (деньги реально выданы), счётчик advance —
-        // второй шаг: если он упадёт (легаси-схема), выплата всё равно записана.
-        await paySalaryFull(employee.id, payAmount, selectedAccountId, acc?.name ?? '', employee.name, 'advance', payPeriod, opts)
-        const newAdvance = (employee.advance ?? 0) + payAmount
-        try { await updateUser(employee.id, { advance: newAdvance }) } catch (e) { console.warn('advance counter update failed:', e) }
+        // 070: одна атомарная транзакция на бэке (счёт + проводка + строка +
+        // users.advance) — раньше это были два независимых запроса подряд
+        // (payout + отдельный PATCH), и падение второго теряло синхронизацию.
+        await giveSalaryAdvance(employee.id, payAmount, selectedAccountId, payPeriod, undefined, opts)
         toast.success(`Аванс ${formatCurrency(payAmount)}: ${employee.name}`)
       } else if (action === 'deduction') {
         if (payAmount <= 0) { setPaying(false); return }
         if (!deductionReason.trim()) { toast.error('Укажите причину удержания'); setPaying(false); return }
         // ЗП-4: реальная запись (salary_deductions) вместо счётчика без
         // следа — причина раньше терялась в тосте сразу после ввода.
-        await addSalaryDeduction(employee.id, payAmount, deductionReason.trim())
+        await addSalaryDeduction(employee.id, payAmount, deductionReason.trim(), payPeriod)
         toast.success(`Удержание ${formatCurrency(payAmount)}: ${employee.name} — ${deductionReason.trim()}`)
       } else if (action === 'service') {
         if (payAmount <= 0) { setPaying(false); return }
@@ -173,7 +192,6 @@ export function PayEmployeeDialog({
         if (payAmount <= 0) { setPaying(false); return }
         if (payMode === 'override' && !overrideReason.trim()) { toast.error('Укажите причину свободной выплаты'); setPaying(false); return }
         const acc = accounts.find(a => a.id === selectedAccountId)
-        const payPeriod = new Date().toISOString().slice(0, 7)
         const opts = payMode === 'override' ? { override: true, overrideReason: overrideReason.trim() } : undefined
         await paySalaryFull(employee.id, payAmount, selectedAccountId, acc?.name ?? '', employee.name, 'salary', payPeriod, opts)
         try { await updateUser(employee.id, { advance: 0, deductions: 0 }) } catch (e) { console.warn('reset counters failed:', e) }
@@ -187,9 +205,10 @@ export function PayEmployeeDialog({
       // а не просто показываем отказ: ровно то, чего не хватало (ЗП-4).
       if (payMode === 'accrual' && /превышает остаток/.test(msg) && needsPayment(action)) {
         toast.error(msg, {
-          description: 'Если это осознанно (бонус, доплата, коррекция) — переключитесь на «Свободная сумма».',
+          description: 'Если это осознанно (бонус, доплата, коррекция) — переключитесь на «Свободная сумма», или откройте историю сотрудника, чтобы проверить и при необходимости отменить прошлый аванс/удержание.',
           action: { label: 'Свободная сумма', onClick: () => setPayMode('override') },
-          duration: 8000,
+          cancel: { label: 'Смотреть историю →', onClick: () => { onClose(); navigate(`/finance/payroll/${employee.id}`) } },
+          duration: 10000,
         })
       } else {
         toast.error(msg)
@@ -207,14 +226,17 @@ export function PayEmployeeDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-card rounded-2xl border border-border shadow-xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-border">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      {/* Много счетов (список аккаунтов ниже) раздувал диалог за пределы
+          экрана и прятал кнопку «Выплатить» — теперь высота ограничена,
+          заголовок/футер закреплены, а прокручивается только середина. */}
+      <div className="bg-card rounded-2xl border border-border shadow-xl w-full max-w-md max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-border shrink-0">
           <h2 className="text-lg font-bold text-foreground">{DIALOG_TITLE[action]}</h2>
           <button onClick={onClose} className="p-1 text-muted-foreground hover:text-foreground"><X className="size-5" /></button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto flex-1 min-h-0">
           <div className="bg-muted/30 rounded-xl p-4">
             <p className="font-semibold text-foreground">{employee.name}</p>
             <p className="text-xs text-muted-foreground mt-0.5">{employee.position || ROLE_LABELS[employee.role]}</p>
@@ -237,6 +259,34 @@ export function PayEmployeeDialog({
               </div>
             )}
           </div>
+
+          {/* 070: период выплаты — раньше жёстко «сейчас», выплатить за
+              прошлый месяц было невозможно. Своя навигация (◀ ▶), как в
+              WorkedDaysDialog, независимая от фильтра страницы. */}
+          {showPeriodPicker && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">Период</label>
+              <div className="flex items-center justify-between rounded-lg border border-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setPayPeriod(p => shiftPeriod(p, -1))}
+                  className="size-9 flex items-center justify-center hover:bg-muted transition-colors"
+                  aria-label="Предыдущий месяц"
+                >
+                  <ChevronLeft className="size-4" />
+                </button>
+                <span className="text-sm font-medium capitalize">{periodLabel(payPeriod)}</span>
+                <button
+                  type="button"
+                  onClick={() => setPayPeriod(p => shiftPeriod(p, 1))}
+                  className="size-9 flex items-center justify-center hover:bg-muted transition-colors"
+                  aria-label="Следующий месяц"
+                >
+                  <ChevronRight className="size-4" />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Тип оплаты труда (054). Переключатель только в «Оплата труда»:
               в выплатах/авансах менять его нельзя — это настройка карточки,
@@ -370,7 +420,7 @@ export function PayEmployeeDialog({
           )}
         </div>
 
-        <div className="flex gap-2 p-5 border-t border-border">
+        <div className="flex gap-2 p-5 border-t border-border shrink-0">
           <button onClick={onClose} className="flex-1 px-4 py-2.5 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted">Отмена</button>
           <button onClick={handleSubmit}
             disabled={

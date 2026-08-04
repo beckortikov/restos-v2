@@ -61,6 +61,7 @@ export default function SalesReportPage() {
   const [dim, setDim] = useState<Dim>('dish')
   const [kind, setKind] = useState<Kind>('all')
   const [expandedDate, setExpandedDate] = useState<string | null>(null)
+  const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
 
   // Н21: данные считает СЕРВЕР (скидки/voids/closed+refunded, без лимита 5000).
   // Перезапрос при смене периода — серверная фильтрация по датам.
@@ -183,6 +184,20 @@ export default function SalesReportPage() {
     return [...m.values()].sort((a, b) => b.revenue - a.revenue)
   }, [items, expandedDate])
 
+  // Drill-down: блюда выбранной категории за период (по выручке). Только для
+  // dim='category' — в режиме «Блюда» строка уже и есть блюдо, разворачивать нечего.
+  const categoryDetail = useMemo(() => {
+    if (!expandedCategory) return []
+    const m = new Map<string, { name: string; qty: number; revenue: number; isPurchased: boolean }>()
+    for (const r of items) {
+      if (r.category !== expandedCategory) continue
+      const e = m.get(r.name)
+      if (e) { e.qty += r.qty; e.revenue += r.revenue }
+      else m.set(r.name, { name: r.name, qty: r.qty, revenue: r.revenue, isPurchased: r.isPurchased })
+    }
+    return [...m.values()].sort((a, b) => b.revenue - a.revenue)
+  }, [items, expandedCategory])
+
   // Экспорт в Excel: листы «Топ за период» + «По дням».
   function exportReport() {
     const wb = XLSX.utils.book_new()
@@ -264,25 +279,60 @@ export default function SalesReportPage() {
                   <tbody>
                     {rows.map((r, i) => {
                       const pct = rowsTotal > 0 ? (r.revenue / rowsTotal) * 100 : 0
+                      // Раскрытие — только для категорий: в режиме «Блюда» строка уже
+                      // и есть блюдо, разворачивать нечего.
+                      const expandable = dim === 'category'
+                      const isOpen = expandable && expandedCategory === r.key
                       return (
-                        <tr key={r.key} className="border-b border-border/50 last:border-0">
-                          <td className="py-2 pr-2 text-muted-foreground tabular-nums">{i + 1}</td>
-                          <td className="py-2 pr-2 font-medium">
-                            <span className="flex items-center gap-1.5">
-                              <span className="truncate max-w-[220px]">{r.name}</span>
-                              {dim === 'dish' && r.isPurchased && <ShoppingCart className="size-3 text-blue-500 shrink-0" aria-label="Покупной товар" />}
-                            </span>
-                          </td>
-                          {dim === 'dish' && <td className="py-2 pr-2 text-muted-foreground hidden sm:table-cell truncate max-w-[140px]">{r.category}</td>}
-                          <td className="py-2 px-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
-                          <td className="py-2 px-2 text-right font-medium tabular-nums">{formatCurrency(r.revenue)}</td>
-                          <td className="py-2 pl-2">
-                            <div className="flex items-center gap-2 justify-end">
-                              <div className="h-1.5 w-16 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} /></div>
-                              <span className="text-xs text-muted-foreground tabular-nums w-9 text-right">{pct.toFixed(0)}%</span>
-                            </div>
-                          </td>
-                        </tr>
+                        <Fragment key={r.key}>
+                          <tr
+                            className={`border-b border-border/50 last:border-0 ${expandable ? 'cursor-pointer hover:bg-muted/40' : ''}`}
+                            onClick={() => expandable && setExpandedCategory(isOpen ? null : r.key)}
+                          >
+                            <td className="py-2 pr-2 text-muted-foreground tabular-nums">{i + 1}</td>
+                            <td className="py-2 pr-2 font-medium">
+                              <span className="flex items-center gap-1.5">
+                                {expandable && <ChevronDown className={`size-3.5 text-muted-foreground shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />}
+                                <span className="truncate max-w-[220px]">{r.name}</span>
+                                {dim === 'dish' && r.isPurchased && <ShoppingCart className="size-3 text-blue-500 shrink-0" aria-label="Покупной товар" />}
+                              </span>
+                            </td>
+                            {dim === 'dish' && <td className="py-2 pr-2 text-muted-foreground hidden sm:table-cell truncate max-w-[140px]">{r.category}</td>}
+                            <td className="py-2 px-2 text-right tabular-nums">{fmtQty(r.qty)}</td>
+                            <td className="py-2 px-2 text-right font-medium tabular-nums">{formatCurrency(r.revenue)}</td>
+                            <td className="py-2 pl-2">
+                              <div className="flex items-center gap-2 justify-end">
+                                <div className="h-1.5 w-16 rounded-full bg-muted overflow-hidden"><div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} /></div>
+                                <span className="text-xs text-muted-foreground tabular-nums w-9 text-right">{pct.toFixed(0)}%</span>
+                              </div>
+                            </td>
+                          </tr>
+                          {isOpen && (
+                            <tr className="bg-muted/20">
+                              <td colSpan={5} className="px-3 py-2">
+                                {categoryDetail.length === 0 ? (
+                                  <p className="text-xs text-muted-foreground py-1">Нет позиций</p>
+                                ) : (
+                                  <div className="space-y-0.5">
+                                    <p className="text-xs font-medium text-muted-foreground mb-1.5">Продано в категории «{r.name}»:</p>
+                                    {categoryDetail.map(x => (
+                                      <div key={x.name} className="flex items-center justify-between text-xs py-0.5">
+                                        <span className="flex items-center gap-1.5 min-w-0">
+                                          <span className="truncate max-w-[240px]">{x.name}</span>
+                                          {x.isPurchased && <ShoppingCart className="size-3 text-blue-500 shrink-0" />}
+                                        </span>
+                                        <span className="flex items-center gap-3 shrink-0 tabular-nums">
+                                          <span className="text-muted-foreground">{fmtQty(x.qty)} шт</span>
+                                          <span className="font-medium w-20 text-right">{formatCurrency(x.revenue)}</span>
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       )
                     })}
                   </tbody>

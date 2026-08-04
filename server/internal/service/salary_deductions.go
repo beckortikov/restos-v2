@@ -28,6 +28,9 @@ type DeductionInput struct {
 	UserID *string `json:"user_id,omitempty"`
 	Amount *string `json:"amount,omitempty"`
 	Reason *string `json:"reason,omitempty"`
+	// Period — YYYY-MM, к какому месяцу относится удержание (070). Опционально
+	// для обратной совместимости со старыми клиентами.
+	Period *string `json:"period,omitempty"`
 }
 
 // AddDeduction — создаёт запись удержания и увеличивает users.deductions
@@ -67,6 +70,7 @@ func (s *SalaryService) AddDeduction(ctx context.Context, in DeductionInput) (*m
 		UserID:       dedID,
 		Amount:       amount,
 		Reason:       reason,
+		Period:       in.Period,
 		CreatedBy:    &createdBy,
 		CreatedAt:    now,
 	}
@@ -90,6 +94,61 @@ func (s *SalaryService) AddDeduction(ctx context.Context, in DeductionInput) (*m
 		return nil, err
 	}
 	return row, nil
+}
+
+// CancelDeduction — отмена удержания (070): помечает cancelled_at/by и
+// уменьшает users.deductions. Без движения денег по счёту — удержание и не
+// двигало баланс (см. комментарий к SalaryDeduction), отменять там нечего.
+func (s *SalaryService) CancelDeduction(ctx context.Context, id string) (*models.SalaryDeduction, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, apperrors.Wrap("VALIDATION", "id is required", nil)
+	}
+	actor, _ := audit.ActorFromContext(ctx)
+	cancelledBy := actor.UserID
+
+	var row models.SalaryDeduction
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, id).First(&row).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("NOT_FOUND", "deduction not found", nil)
+			}
+			return err
+		}
+		if row.CancelledAt != nil {
+			return apperrors.Wrap("VALIDATION", "удержание уже отменено", nil)
+		}
+		var u models.User
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, row.UserID).First(&u).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("VALIDATION", "user not found", nil)
+			}
+			return err
+		}
+		now := time.Now().UTC()
+		newDeductions := decimal.Normalize(decimal.Sub(u.Deductions, row.Amount))
+		if decimal.IsNegative(newDeductions) {
+			newDeductions = decimal.Zero
+		}
+		if err := tx.Model(&u).Updates(map[string]any{"deductions": newDeductions, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		row.CancelledAt = &now
+		row.CancelledBy = &cancelledBy
+		return tx.Model(&models.SalaryDeduction{}).Where("id = ?", row.ID).
+			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &row, nil
 }
 
 // ListDeductions — история удержаний одного сотрудника, новые сверху.

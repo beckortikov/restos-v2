@@ -23,6 +23,10 @@ const ROLE_HOME: Record<UserRole, string> = {
   cook: '/operations/kitchen',
   storekeeper: '/warehouse/inventory',
   accountant: '/finance/cashflow',
+  // kiosk логинится только из отдельного Android-приложения (терминал
+  // самозаказа), в веб/Electron POS этот PIN не используется — фолбэк
+  // на дашборд чисто для типовой полноты Record<UserRole, ...>.
+  kiosk: '/dashboard',
   other: '/dashboard',
 }
 

@@ -5,7 +5,7 @@ import { formatCurrency } from '@/lib/helpers'
 import type { ABCClass } from '@/lib/types'
 import { fetchABCMenu, type ABCMenuReport, type EngineeringClass } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
-import { Download } from 'lucide-react'
+import { Download, Search, X } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { InsightsRecommendations } from '@/components/insights-recommendations'
@@ -75,6 +75,18 @@ const ME_DESC: Record<Exclude<EngineeringClass, ''>, string> = {
 // поэтому 2.5 порц. — валидно. Целые показываем без хвоста.
 const fmtQty = (v: number) => (v % 1 === 0 ? String(v) : v.toFixed(1))
 
+// Колонки таблицы. sortKey задан → заголовок кликабелен (сортировка).
+type SortKey = 'name' | 'qty' | 'revenue' | 'share' | 'margin'
+const COLUMNS: { header: string; sortKey?: SortKey }[] = [
+  { header: 'Класс' },
+  { header: 'Блюдо', sortKey: 'name' },
+  { header: 'Продано', sortKey: 'qty' },
+  { header: 'Выручка', sortKey: 'revenue' },
+  { header: 'Доля', sortKey: 'share' },
+  { header: 'Маржа', sortKey: 'margin' },
+  { header: 'Класс ME' },
+]
+
 export default function AbcMenuPage() {
   const { canDo } = useAuth()
   const [report, setReport] = useState<ABCMenuReport | null>(null)
@@ -82,6 +94,15 @@ export default function AbcMenuPage() {
   const [period, setPeriod] = useState<PeriodKey>('month')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  // Фильтр таблицы по ABC-классу (сводка/график/KPI показывают всё, фильтруется
+  // только таблица). 'all' — без фильтра.
+  const [filterClass, setFilterClass] = useState<ABCClass | 'all'>('all')
+  // Сортировка таблицы. Дефолт — выручка по убыванию (как отдаёт бэк).
+  const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'revenue', dir: 'desc' })
+  const [search, setSearch] = useState('')
+  // Фильтр таблицы по квадранту Menu Engineering (композится с классом+поиском).
+  const [meFilter, setMeFilter] = useState<Exclude<EngineeringClass, ''> | 'all'>('all')
+  const [showAllRecs, setShowAllRecs] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -158,6 +179,24 @@ export default function AbcMenuPage() {
   if (loading) return <div className="p-6 flex items-center justify-center h-64"><div className="size-8 border-4 border-primary/30 border-t-primary rounded-full animate-spin" /></div>
 
   const byClass = (cls: ABCClass) => items.filter((i) => i.abc === cls)
+  // Строки таблицы: фильтр-чип по классу + поиск по названию (сводка и график
+  // остаются по всем блюдам).
+  const q = search.trim().toLowerCase()
+  const visibleItems = items.filter(
+    (i) =>
+      (filterClass === 'all' || i.abc === filterClass) &&
+      (meFilter === 'all' || i.me === meFilter) &&
+      (q === '' || i.name.toLowerCase().includes(q)),
+  )
+  // + сортировка по выбранной колонке (только представление таблицы; класс
+  // блюда от сортировки не меняется — он свойство блюда, не строки).
+  const sortedItems = [...visibleItems].sort((a, b) => {
+    const { key, dir } = sort
+    const cmp = key === 'name' ? a.name.localeCompare(b.name, 'ru') : (a[key] as number) - (b[key] as number)
+    return dir === 'asc' ? cmp : -cmp
+  })
+  const toggleSort = (key: SortKey) =>
+    setSort((s) => (s.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'desc' }))
 
   const scatterData = items.map((item) => ({
     x: item.qty,
@@ -215,11 +254,39 @@ export default function AbcMenuPage() {
         </div>
       </div>
 
-      {/* ABC group summary */}
+      {/* KPI-сводка — сразу под шапкой: владелец смотрит эти цифры первыми
+          (раньше блок висел в самом низу под таблицей). */}
+      {summaryKPIs && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="bg-muted/30 rounded-lg p-4">
+            <p className="text-xs text-muted-foreground mb-1">Средний Food Cost</p>
+            <p className="text-2xl font-bold text-foreground">{(summaryKPIs.avgFoodCost || 0).toFixed(1)}%</p>
+          </div>
+          <div className="bg-muted/30 rounded-lg p-4">
+            <p className="text-xs text-muted-foreground mb-1">Доля A-класса в выручке</p>
+            <p className="text-2xl font-bold text-emerald-600">{(summaryKPIs.aRevenueShare || 0).toFixed(1)}%</p>
+          </div>
+          <div className="bg-muted/30 rounded-lg p-4">
+            <p className="text-xs text-muted-foreground mb-1">Блюд по классам</p>
+            <p className="text-2xl font-bold text-foreground">
+              <span className="text-emerald-600">{summaryKPIs.aCount}A</span>
+              {' / '}
+              <span className="text-primary">{summaryKPIs.bCount}B</span>
+              {' / '}
+              <span className="text-red-600">{summaryKPIs.cCount}C</span>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* ABC group summary — доля класса в выручке + топ-блюда (без стены имён) */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {(['A', 'B', 'C'] as ABCClass[]).map((cls) => {
-          const group = byClass(cls)
+          const group = byClass(cls) // items уже отсортированы по выручке desc
           const groupRevenue = group.reduce((s, i) => s + i.revenue, 0)
+          const groupShare = totalRevenueAll > 0 ? (groupRevenue / totalRevenueAll) * 100 : 0
+          const top = group.slice(0, 3)
+          const rest = group.length - top.length
           return (
             <div key={cls} className="bg-card rounded-xl border border-border p-5">
               <div className="flex items-center gap-2 mb-3">
@@ -229,10 +296,21 @@ export default function AbcMenuPage() {
                   <p className="text-xs text-muted-foreground">{ABC_DESC[cls]}</p>
                 </div>
               </div>
-              <p className="text-xl font-bold text-foreground">{formatCurrency(groupRevenue)}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {group.map((i) => i.name).join(', ')}
-              </p>
+              <div className="flex items-baseline justify-between gap-2">
+                <p className="text-xl font-bold text-foreground">{formatCurrency(groupRevenue)}</p>
+                <p className="text-xs font-medium text-muted-foreground tabular-nums">{groupShare.toFixed(0)}% выручки</p>
+              </div>
+              <div className="mt-2 h-1.5 rounded-full bg-muted overflow-hidden">
+                <div className="h-full rounded-full" style={{ width: `${Math.min(groupShare, 100)}%`, backgroundColor: ABC_COLORS[cls] }} />
+              </div>
+              {top.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {top.map((i) => (
+                    <span key={i.id} className="max-w-[10rem] truncate rounded-md bg-muted px-2 py-0.5 text-xs text-foreground">{i.name}</span>
+                  ))}
+                  {rest > 0 && <span className="px-1 py-0.5 text-xs text-muted-foreground">+{rest} ещё</span>}
+                </div>
+              )}
             </div>
           )
         })}
@@ -242,12 +320,19 @@ export default function AbcMenuPage() {
       {items.some(i => i.me !== '') && (
         <div className="bg-card rounded-xl border border-border p-5">
           <h2 className="text-sm font-semibold text-foreground mb-1">Menu Engineering (Boston Matrix)</h2>
-          <p className="text-xs text-muted-foreground mb-4">Классификация по медианам объёма продаж и маржи</p>
+          <p className="text-xs text-muted-foreground mb-4">Классификация по медианам объёма продаж и маржи · нажмите квадрант, чтобы отфильтровать таблицу</p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {(['star', 'workhorse', 'puzzle', 'dog'] as const).map(cls => {
               const list = items.filter(i => i.me === cls)
+              const active = meFilter === cls
               return (
-                <div key={cls} className={`rounded-lg p-4 border ${ME_BADGE[cls]} border-current/20`}>
+                <button
+                  key={cls}
+                  type="button"
+                  onClick={() => setMeFilter(active ? 'all' : cls)}
+                  aria-pressed={active}
+                  className={`text-left rounded-lg p-4 border ${ME_BADGE[cls]} ${active ? 'border-current ring-2 ring-current/40' : 'border-current/20 hover:border-current/40'} transition-colors`}
+                >
                   <div className="flex items-center gap-2 mb-2">
                     <span className="text-2xl">{ME_EMOJI[cls]}</span>
                     <div>
@@ -256,8 +341,8 @@ export default function AbcMenuPage() {
                     </div>
                   </div>
                   <p className="text-2xl font-bold">{list.length}</p>
-                  <p className="text-[10px] opacity-80 mt-0.5">блюд</p>
-                </div>
+                  <p className="text-[10px] opacity-80 mt-0.5">{active ? 'фильтр включён' : 'блюд'}</p>
+                </button>
               )
             })}
           </div>
@@ -289,17 +374,63 @@ export default function AbcMenuPage() {
 
       {/* Full table */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
+        {/* Чипы-фильтры по классу — фильтруют только таблицу ниже */}
+        <div className="flex flex-wrap items-center gap-1.5 p-3 border-b border-border">
+          {(['all', 'A', 'B', 'C'] as const).map((key) => {
+            const count = key === 'all' ? items.length : byClass(key).length
+            return (
+              <button
+                key={key}
+                onClick={() => setFilterClass(key)}
+                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${filterClass === key ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'}`}
+              >
+                {key === 'all' ? 'Все' : key} <span className="tabular-nums opacity-70">{count}</span>
+              </button>
+            )
+          })}
+          {meFilter !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setMeFilter('all')}
+              className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium ${ME_BADGE[meFilter]}`}
+              aria-label={`Убрать фильтр: ${ME_LABEL[meFilter]}`}
+            >
+              <span aria-hidden="true">{ME_EMOJI[meFilter]}</span>{ME_LABEL[meFilter]}
+              <X className="size-3" aria-hidden="true" />
+            </button>
+          )}
+          <div className="relative ml-auto">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" aria-hidden="true" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Поиск блюда"
+              aria-label="Поиск блюда"
+              className="w-40 pl-8 pr-3 py-1 text-xs bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+            />
+          </div>
+        </div>
         <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[700px]">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              {['Класс', 'Блюдо', 'Продано', 'Выручка', 'Доля', 'Маржа', 'Класс ME'].map((h) => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
+              {COLUMNS.map((col) => (
+                <th key={col.header} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  {col.sortKey ? (
+                    <button onClick={() => toggleSort(col.sortKey!)} className="inline-flex items-center gap-1 uppercase hover:text-foreground transition-colors">
+                      {col.header}
+                      {sort.key === col.sortKey && <span aria-hidden="true">{sort.dir === 'asc' ? '↑' : '↓'}</span>}
+                    </button>
+                  ) : (
+                    col.header
+                  )}
+                </th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {sortedItems.map((item) => (
               <tr key={item.id} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
                 <td className="px-4 py-3">
                   <span className={`size-6 rounded font-bold text-xs flex items-center justify-center ${ABC_BG[item.abc]}`}>{item.abc}</span>
@@ -325,47 +456,28 @@ export default function AbcMenuPage() {
                 </td>
               </tr>
             ))}
-            {items.length === 0 && (
-              <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+            {visibleItems.length === 0 && (
+              <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">
+                {items.length === 0
+                  ? 'Нет данных за выбранный период'
+                  : q !== ''
+                    ? `Ничего не найдено по запросу «${search.trim()}»`
+                    : 'Нет блюд по выбранным фильтрам'}
+              </td></tr>
             )}
           </tbody>
         </table>
         </div>
       </div>
 
-      {/* Summary KPIs */}
-      {summaryKPIs && (
-        <div className="bg-card rounded-xl border border-border p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4">Сводные показатели</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-muted/30 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-1">Средний Food Cost %</p>
-              <p className="text-2xl font-bold text-foreground">{(summaryKPIs.avgFoodCost || 0).toFixed(1)}%</p>
-            </div>
-            <div className="bg-muted/30 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-1">Количество блюд</p>
-              <p className="text-2xl font-bold text-foreground">
-                <span className="text-emerald-600">{summaryKPIs.aCount}A</span>
-                {' / '}
-                <span className="text-primary">{summaryKPIs.bCount}B</span>
-                {' / '}
-                <span className="text-red-600">{summaryKPIs.cCount}C</span>
-              </p>
-            </div>
-            <div className="bg-muted/30 rounded-lg p-4">
-              <p className="text-xs text-muted-foreground mb-1">Доля A-класса в выручке</p>
-              <p className="text-2xl font-bold text-emerald-600">{(summaryKPIs.aRevenueShare || 0).toFixed(1)}%</p>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Recommendations */}
+      {/* Recommendations — топ-5, остальное под «Показать все» */}
       {recommendations.length > 0 && (
         <div className="bg-card rounded-xl border border-border p-5">
-          <h2 className="text-sm font-semibold text-foreground mb-4">Рекомендации</h2>
+          <h2 className="text-sm font-semibold text-foreground mb-4">
+            Рекомендации <span className="font-normal text-muted-foreground">({recommendations.length})</span>
+          </h2>
           <div className="space-y-3">
-            {recommendations.map((rec, idx) => (
+            {(showAllRecs ? recommendations : recommendations.slice(0, 5)).map((rec, idx) => (
               <div
                 key={idx}
                 className={`rounded-lg p-4 text-sm font-medium ${
@@ -380,6 +492,15 @@ export default function AbcMenuPage() {
               </div>
             ))}
           </div>
+          {recommendations.length > 5 && (
+            <button
+              type="button"
+              onClick={() => setShowAllRecs((v) => !v)}
+              className="mt-3 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+            >
+              {showAllRecs ? 'Свернуть' : `Показать все (${recommendations.length})`}
+            </button>
+          )}
         </div>
       )}
 

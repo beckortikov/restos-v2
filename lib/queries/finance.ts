@@ -107,6 +107,7 @@ export async function createFinancialOperation(op: Omit<FinancialOperation, 'id'
       description: op.description,
       counterparty: op.counterparty || null,
       shift_id: op.shiftId || null,
+      affects_shift: op.affectsShift,
     } as any,
   }))
   logAction('finance.create', 'finance', row?.id, op.category, { amount: op.amount })
@@ -312,12 +313,18 @@ export async function paySalaryFull(
 }
 
 /** Удержание с обязательной причиной (ЗП-4) — заменяет прежний счётчик без следа. */
-export async function addSalaryDeduction(userId: string, amount: number, reason: string): Promise<void> {
+export async function addSalaryDeduction(userId: string, amount: number, reason: string, period?: string): Promise<void> {
   await unwrap(api.POST('/api/v1/finance/salary/deductions', {
-    body: { user_id: userId, amount: String(amount), reason },
+    body: { user_id: userId, amount: String(amount), reason, ...(period ? { period } : {}) } as any,
     headers: { 'Idempotency-Key': randomId() },
   }))
-  logAction('payroll.deduction', 'payroll', userId, undefined, { amount, reason })
+  logAction('payroll.deduction', 'payroll', userId, undefined, { amount, reason, period })
+}
+
+/** Отмена удержания (070) — декремент users.deductions, деньги не двигались. */
+export async function cancelSalaryDeduction(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/finance/salary/deductions/{id}', { params: { path: { id } } }))
+  logAction('payroll.deduction_cancel', 'payroll', id)
 }
 
 export interface SalaryDeductionRow {
@@ -325,8 +332,11 @@ export interface SalaryDeductionRow {
   userId: string
   amount: number
   reason: string
+  period?: string
   createdBy?: string
   createdAt: string
+  cancelledAt?: string
+  cancelledBy?: string
 }
 
 /** История удержаний сотрудника, новые сверху (ЗП-5, карточка сотрудника). */
@@ -340,9 +350,83 @@ export async function fetchSalaryDeductions(userId: string): Promise<SalaryDeduc
     userId: r.user_id ?? '',
     amount: Number(r.amount ?? 0),
     reason: r.reason ?? '',
+    period: r.period || undefined,
     createdBy: r.created_by || undefined,
     createdAt: r.created_at ?? '',
+    cancelledAt: r.cancelled_at || undefined,
+    cancelledBy: r.cancelled_by || undefined,
   }))
+}
+
+/**
+ * Выдача аванса ОДНОЙ атомарной транзакцией (070) — счёт, FinancialOperation
+ * и users.advance обновляются на бэке за один запрос. Заменяет прежний
+ * двухшаговый нетранзакционный поток paySalaryFull(kind='advance') +
+ * отдельный updateUser({advance}): падение второго шага теряло
+ * синхронизацию — деньги списаны, счётчик остался старым.
+ */
+export async function giveSalaryAdvance(
+  userId: string, amount: number, accountId: string, period: string, note?: string,
+  // override — тот же кап и тот же принцип, что и в paySalaryFull (ЗП-4):
+  // сервер отклоняет аванс сверх начисленного, если не передан override.
+  opts?: { override?: boolean; overrideReason?: string },
+): Promise<SalaryAdvanceRow> {
+  const row: any = await unwrap(api.POST('/api/v1/finance/salary/advance', {
+    body: {
+      user_id: userId, amount: String(amount), account_id: accountId, period, ...(note ? { note } : {}),
+      ...(opts?.override ? { override: true, override_reason: opts.overrideReason } : {}),
+    } as any,
+    headers: { 'Idempotency-Key': randomId() },
+  }))
+  logAction('payroll.advance', 'payroll', userId, undefined, { amount, period, override: opts?.override ?? false })
+  return mapSalaryAdvance(row)
+}
+
+/** Отмена аванса (070) — деньги возвращаются на счёт, users.advance декрементируется. */
+export async function cancelSalaryAdvance(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/finance/salary/advances/{id}', { params: { path: { id } } }))
+  logAction('payroll.advance_cancel', 'payroll', id)
+}
+
+export interface SalaryAdvanceRow {
+  id: string
+  userId: string
+  amount: number
+  period: string
+  accountId: string
+  note?: string
+  /** id проводки financial_operations самой выдачи — нужен, чтобы не
+   * задвоить эту же сумму, если она также показана в SalaryReport.payouts. */
+  sourceOpId?: string
+  createdBy?: string
+  createdAt: string
+  cancelledAt?: string
+  cancelledBy?: string
+}
+
+function mapSalaryAdvance(r: any): SalaryAdvanceRow {
+  return {
+    id: r.id ?? '',
+    userId: r.user_id ?? '',
+    amount: Number(r.amount ?? 0),
+    period: r.period ?? '',
+    accountId: r.account_id ?? '',
+    note: r.note || undefined,
+    sourceOpId: r.source_op_id || undefined,
+    createdBy: r.created_by || undefined,
+    createdAt: r.created_at ?? '',
+    cancelledAt: r.cancelled_at || undefined,
+    cancelledBy: r.cancelled_by || undefined,
+  }
+}
+
+/** История авансов сотрудника, новые сверху (070, карточка сотрудника). */
+export async function fetchSalaryAdvances(userId: string): Promise<SalaryAdvanceRow[]> {
+  const res: any = await unwrap(api.GET('/api/v1/finance/salary/advances', {
+    params: { query: { user_id: userId } },
+  }))
+  const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
+  return rows.map(mapSalaryAdvance)
 }
 
 // ─── Отработанные дни (059): табель + ручные отметки ────────────────────────
@@ -351,17 +435,27 @@ export interface WorkedDaysResult {
   shift_dates: string[]   // дни с приходом в табеле (снять нельзя)
   manual_dates: string[]  // ручные отметки (toggleable)
   count: number           // уникальных отработанных дней всего
+  /** Оплачиваемых единиц с учётом дней ×2 (066) — count при отсутствии множителей. */
+  paidUnits: number
+  /** date → множитель; дни без override отсутствуют (подразумевается ×1). */
+  multipliers: Record<string, number>
+}
+
+function mapWorkedDays(r: any): WorkedDaysResult {
+  return {
+    shift_dates: r?.shift_dates ?? [],
+    manual_dates: r?.manual_dates ?? [],
+    count: Number(r?.count ?? 0),
+    paidUnits: Number(r?.paid_units ?? r?.count ?? 0),
+    multipliers: r?.multipliers ?? {},
+  }
 }
 
 export async function fetchWorkedDays(userId: string, from: string, to: string): Promise<WorkedDaysResult> {
   const r: any = await unwrap(api.GET('/api/v1/finance/salary/worked-days', {
     params: { query: { user_id: userId, from, to } },
   }))
-  return {
-    shift_dates: r?.shift_dates ?? [],
-    manual_dates: r?.manual_dates ?? [],
-    count: Number(r?.count ?? 0),
-  }
+  return mapWorkedDays(r)
 }
 
 // Заменяет РУЧНЫЕ отметки дней сотрудника в [from,to] на набор dates (идемпотентно).
@@ -370,11 +464,16 @@ export async function setWorkedDays(userId: string, from: string, to: string, da
     body: { user_id: userId, from, to, dates },
     headers: { 'Idempotency-Key': randomId() },
   }))
-  return {
-    shift_dates: r?.shift_dates ?? [],
-    manual_dates: r?.manual_dates ?? [],
-    count: Number(r?.count ?? 0),
-  }
+  return mapWorkedDays(r)
+}
+
+// Переключает день сотрудника ×1 ↔ ×2 («две смены в один день», 066).
+export async function toggleDayMultiplier(userId: string, date: string, from: string, to: string): Promise<WorkedDaysResult> {
+  const r: any = await unwrap(api.PUT('/api/v1/finance/salary/day-multiplier', {
+    body: { user_id: userId, date, from, to },
+    headers: { 'Idempotency-Key': randomId() },
+  }))
+  return mapWorkedDays(r)
 }
 
 // ─── Остатки по счетам на дату ────────────────────────────────────────────
@@ -450,7 +549,9 @@ export interface SalaryAccrualRow {
   dailyRate: number
   /** Дней с отметкой в табеле за период. Для оклада не используется. */
   daysWorked: number
-  /** Оклад или ставка × дни — в зависимости от payType. */
+  /** Оплачиваемых единиц (дни ×2, 066) — по нему считается accrued, не по daysWorked. */
+  paidUnits: number
+  /** Оклад или ставка × paidUnits — в зависимости от payType. */
   accrued: number
   advance: number
   deductions: number
@@ -469,6 +570,7 @@ export async function fetchSalaryAccrual(from: string, to: string): Promise<Sala
     salary: Number(r.salary ?? 0),
     dailyRate: Number(r.daily_rate ?? 0),
     daysWorked: Number(r.days_worked ?? 0),
+    paidUnits: Number(r.paid_units ?? r.days_worked ?? 0),
     accrued: Number(r.accrued ?? 0),
     advance: Number(r.advance ?? 0),
     deductions: Number(r.deductions ?? 0),

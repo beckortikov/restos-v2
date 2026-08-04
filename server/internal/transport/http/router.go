@@ -424,6 +424,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/analytics/peak-hours", analyticsH.PeakHours)
 			g.Get("/analytics/weekday", analyticsH.Weekday)
 			g.Get("/analytics/waiters", analyticsH.Waiters)
+			g.Get("/analytics/kitchen-stage-report", analyticsH.KitchenStages)
 			g.Get("/analytics/tables", analyticsH.Tables)
 			g.Get("/analytics/sales-report", analyticsH.SalesReport)
 			g.Get("/analytics/food-cost", analyticsH.FoodCost)
@@ -448,6 +449,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/finance/service-payout/by-waiter", salaryH.PayoutByWaiter)
 			g.Get("/finance/service-payout/by-shift/{shift_id}", salaryH.PayoutByShift)
 			g.Get("/finance/salary/deductions", salaryH.ListDeductions)
+			g.Get("/finance/salary/advances", salaryH.ListAdvances)
 
 			// Restaurants (global, Phase 10).
 			g.Get("/restaurants", restaurantsH.List)
@@ -609,6 +611,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/suppliers/recompute-debts", suppliersH.RecomputeDebts)
 			g.Patch("/suppliers/{id}", suppliersH.Patch)
 			g.Post("/suppliers/{id}/pay-debt", suppliersH.PayDebt)
+			g.Post("/suppliers/{id}/opening-debt", suppliersH.CreateOpeningDebt)
 			g.Delete("/suppliers/{id}", suppliersH.Delete)
 			g.Post("/reservations", reservationsH.Create)
 			g.Patch("/reservations/{id}", reservationsH.Patch)
@@ -707,8 +710,12 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/finance/custom-categories/{id}", customCatsH.Delete)
 			g.Post("/finance/salary/pay", salaryH.PaySalary)
 			g.Put("/finance/salary/worked-days", salaryH.SetWorkedDays)
+			g.Put("/finance/salary/day-multiplier", salaryH.ToggleDayMultiplier)
 			g.Post("/finance/service-charge/pay", salaryH.PayServiceCharge)
 			g.Post("/finance/salary/deductions", salaryH.AddDeduction)
+			g.Delete("/finance/salary/deductions/{id}", salaryH.CancelDeduction)
+			g.Post("/finance/salary/advance", salaryH.GiveAdvance)
+			g.Delete("/finance/salary/advances/{id}", salaryH.CancelAdvance)
 
 			// Restaurants write (Phase 10).
 			g.Post("/restaurants", restaurantsH.Create)

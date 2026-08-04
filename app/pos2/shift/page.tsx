@@ -84,6 +84,10 @@ export default function PosV2Shift() {
   // Гард закрытия: бэк называет блокирующие заказы в details.order_ids.
   const [stuckOrders, setStuckOrders] = useState<Order[] | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  // 068: можно ли закрыть смену «всё равно» — право shifts.close_with_open_orders,
+  // приходит с бэка в details.can_force (бэк — источник правды по правам).
+  const [canForceClose, setCanForceClose] = useState(false)
+  const [forcingClose, setForcingClose] = useState(false)
   // Recovery: legacy-смена без счёта — привязываем cash-счёт без закрытия.
   const [attachId, setAttachId] = useState('')
   const [attaching, setAttaching] = useState(false)
@@ -241,7 +245,7 @@ export default function PosV2Shift() {
   async function submitAction() {
     if (busyRef.current || !shift || !action) return
     if (action !== 'close' && num(amt) <= 0) { toast.error('Укажите сумму'); return }
-    if (action === 'close') setStuckOrders(null)
+    if (action === 'close') { setStuckOrders(null); setCanForceClose(false) }
     busyRef.current = true; setBusy(true)
     try {
       if (action === 'cash_in') await addShiftOperation(shift.id, 'cash_in', num(amt), desc)
@@ -254,12 +258,16 @@ export default function PosV2Shift() {
       toast.error(`Ошибка: ${humanizeError(e)}`)
       // Закрытие заблокировано незакрытыми заказами: бэк называет их в
       // details.order_ids. Грузим по id (без scope по смене/дате) — «хвост» из
-      // прошлой смены иначе не найти нигде. Даём отменить их прямо в модалке.
+      // прошлой смены иначе не найти нигде. Даём отменить их прямо в модалке,
+      // либо (068, право shifts.close_with_open_orders) закрыть всё равно —
+      // details.can_force говорит, доступна ли эта кнопка.
       if (action === 'close') {
-        const ids = e instanceof V4Error ? (e.envelope()?.details?.order_ids as unknown) : undefined
+        const details = e instanceof V4Error ? e.envelope()?.details : undefined
+        const ids = details?.order_ids as unknown
         if (Array.isArray(ids) && ids.length > 0) {
           try { setStuckOrders(await fetchOrders({ ids: ids as string[], slim: true })) } catch { /* покажем только текст ошибки */ }
         }
+        setCanForceClose(Boolean(details?.can_force))
       }
     }
     finally { busyRef.current = false; setBusy(false) }
@@ -288,6 +296,27 @@ export default function PosV2Shift() {
     } finally { busyRef.current = false }
   }
 
+  // 068 — «Закрыть всё равно»: подтверждаем закрытие с висящими столами явно
+  // (confirm_open_orders), не тихим повтором того же запроса.
+  async function forceClose() {
+    if (busyRef.current || !shift) return
+    if (!(await confirmDialog({
+      title: 'Закрыть смену с открытыми столами?',
+      message: `Незакрытых заказов: ${stuckOrders?.length ?? 0}. Они прикрепятся к следующей открытой смене, когда будут оплачены.`,
+      confirmLabel: 'Закрыть всё равно',
+      cancelLabel: 'Отмена',
+      danger: true,
+    }))) return
+    busyRef.current = true; setForcingClose(true); setBusy(true)
+    try {
+      await closeShift(shift.id, user?.id ?? '', amt ? num(amt) : expected, true)
+      toast.success('Смена закрыта')
+      setAction(null); setStuckOrders(null); setCanForceClose(false)
+      await load()
+    } catch (e) { toast.error(`Ошибка: ${humanizeError(e)}`) }
+    finally { busyRef.current = false; setForcingClose(false); setBusy(false) }
+  }
+
   async function attachAccount() {
     if (!shift || !attachId) return
     setAttaching(true)
@@ -297,7 +326,7 @@ export default function PosV2Shift() {
   }
 
   function openAction(a: Action) {
-    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0]); setStuckOrders(null); setExpenseCash(true)
+    setAction(a); setDesc(''); setCat(EXPENSE_CATS[0]); setStuckOrders(null); setCanForceClose(false); setExpenseCash(true)
     setAmt(a === 'close' ? String(expected) : '')
   }
 
@@ -617,7 +646,10 @@ export default function PosV2Shift() {
               {action === 'close' && stuckOrders && stuckOrders.length > 0 && (
                 <div className="rounded-xl flex flex-col gap-2" style={{ background: 'var(--pv-bill-soft)', border: '1px solid var(--pv-bill-dot)', padding: '0.8rem 1rem' }}>
                   <div className="flex items-center gap-1.5 font-bold" style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}><AlertTriangle style={{ width: '1rem', height: '1rem' }} />Смена не закрывается — есть незакрытые заказы</div>
-                  <div style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)', opacity: 0.9 }}>Отмените их (или закройте с оплатой из заказа), затем нажмите «Закрыть смену» ещё раз.</div>
+                  <div style={{ color: 'var(--pv-bill-text)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)', opacity: 0.9 }}>
+                    Отмените их (или закройте с оплатой из заказа), затем нажмите «Закрыть смену» ещё раз.
+                    {canForceClose && ' Либо закройте всё равно — столы прикрепятся к следующей смене.'}
+                  </div>
                   <div className="flex flex-col gap-1.5">
                     {stuckOrders.map(o => { const label = o.type === 'takeaway' ? 'С собой' : o.type === 'delivery' ? 'Доставка' : 'Зал'; return (
                       <div key={o.id} className="flex items-center justify-between rounded-lg" style={{ background: 'var(--pv-card)', padding: '0.5rem 0.7rem' }}>
@@ -626,6 +658,11 @@ export default function PosV2Shift() {
                       </div>
                     ) })}
                   </div>
+                  {canForceClose && (
+                    <button disabled={busy} onClick={forceClose} className="flex items-center justify-center gap-1.5 rounded-lg font-semibold disabled:opacity-50" style={{ background: 'var(--pv-bill-dot)', color: '#fff', padding: '0.5rem 0.8rem', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
+                      <Check style={{ width: '0.9rem', height: '0.9rem' }} />{forcingClose ? 'Закрываем…' : 'Закрыть всё равно'}
+                    </button>
+                  )}
                 </div>
               )}
               <button disabled={busy} onClick={submitAction} className="w-full flex items-center justify-center rounded-2xl font-bold text-white disabled:opacity-50 active:scale-[0.98] transition-transform" style={{ background: action === 'close' ? 'var(--pv-occ-dot)' : 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
@@ -660,6 +697,11 @@ export default function PosV2Shift() {
                           <div className="flex items-center gap-2 min-w-0">
                             <span className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{new Date(s.openedAt).toLocaleString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}{s.closedAt ? ` — ${new Date(s.closedAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
                             {isOpen && <span className="rounded-full shrink-0 font-semibold" style={{ background: 'var(--pv-free-soft)', color: 'var(--pv-free-text)', padding: '0.1rem 0.5rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>Открыта</span>}
+                            {!!s.closedOpenOrdersCount && (
+                              <span className="rounded-full shrink-0 font-semibold" style={{ background: 'var(--pv-bill-soft)', color: 'var(--pv-bill-text)', padding: '0.1rem 0.5rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }} title="Закрыта с незакрытыми заказами">
+                                Закрыта с {s.closedOpenOrdersCount} столами
+                              </span>
+                            )}
                           </div>
                           <span className="font-bold shrink-0" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(revenue)}</span>
                         </div>

@@ -24,7 +24,8 @@ export async function createSupplier(sup: Omit<Supplier, 'id'>) {
 }
 
 // Примечание: current_debt НЕ редактируется вручную — он управляется приёмками
-// (кредит/частично → долг растёт) и paySupplierDebt (гашение). Раньше страница
+// (кредит/частично → долг растёт), paySupplierDebt (гашение) и
+// createSupplierOpeningDebt (перенос долга без накладной, ниже). Раньше страница
 // пыталась слать current_debt сюда, но поле молча отбрасывалось (no-op).
 export async function updateSupplier(id: string, data: Partial<{ name: string; contact_person: string; phone: string; categories: string[]; payment_terms_days: number; credit_limit: number }>) {
   const body: Record<string, unknown> = {}
@@ -48,6 +49,18 @@ export async function paySupplierDebt(id: string, amount: number, accountId: str
   }))
   logAction('supplier.pay_debt', 'supplier', id)
   return mapSupplier(data)
+}
+
+// createSupplierOpeningDebt — долг поставщику БЕЗ накладной (067): перенос
+// задолженности с момента до перехода на эту систему. Склад не трогает —
+// синтетическая строка stock_receipts без товарных позиций, увеличивает
+// current_debt. Гасится обычным paySupplierDebt, переживает «Пересчитать долги».
+export async function createSupplierOpeningDebt(id: string, amount: number, note?: string, date?: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/suppliers/{id}/opening-debt', {
+    params: { path: { id } },
+    body: { amount: String(amount), note: note || undefined, date: date || undefined } as any,
+  }))
+  logAction('supplier.opening_debt', 'supplier', id, undefined, { amount })
 }
 
 // recomputeSupplierDebts — пересчёт current_debt всех поставщиков из накладных

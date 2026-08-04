@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
-import { fetchWorkedDays, setWorkedDays } from '@/lib/queries'
+import { fetchWorkedDays, setWorkedDays, toggleDayMultiplier } from '@/lib/queries'
 import { formatCurrency } from '@/lib/helpers'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -34,6 +34,8 @@ export function WorkedDaysDialog({
   )
   const [shiftSet, setShiftSet] = useState<Set<string>>(new Set())
   const [manualSet, setManualSet] = useState<Set<string>>(new Set())
+  const [multipliers, setMultipliers] = useState<Record<string, number>>({})
+  const [togglingDate, setTogglingDate] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [nDays, setNDays] = useState('')
@@ -55,6 +57,7 @@ export function WorkedDaysDialog({
       .then((r) => {
         setShiftSet(new Set(r.shift_dates))
         setManualSet(new Set(r.manual_dates))
+        setMultipliers(r.multipliers)
       })
       .catch(() => toast.error('Не удалось загрузить дни'))
       .finally(() => setLoading(false))
@@ -66,14 +69,46 @@ export function WorkedDaysDialog({
     return u.size
   }, [shiftSet, manualSet])
 
-  function toggle(iso: string) {
-    if (shiftSet.has(iso)) return // табель не трогаем
-    setManualSet((prev) => {
-      const next = new Set(prev)
-      if (next.has(iso)) next.delete(iso)
-      else next.add(iso)
-      return next
-    })
+  // Оплачиваемые единицы: обычный день = 1, день с ×2 (066) = 2. Именно от
+  // этого числа считается начисление, а не от totalDays.
+  const paidUnits = useMemo(() => {
+    const u = new Set(shiftSet)
+    manualSet.forEach((d) => u.add(d))
+    let units = 0
+    u.forEach((d) => { units += multipliers[d] ?? 1 })
+    return units
+  }, [shiftSet, manualSet, multipliers])
+
+  // Единый тап по дню (весь квадрат — не крошечный угловой бейдж, который
+  // физически промахивался на тач-экране в плотной сетке 7×6). Состояния:
+  //   выключен            → тап → включён (×1)               — локально, до «Сохранить дни»
+  //   включён, ×1         → тап → ×2                          — сразу на сервер
+  //   включён, ×2         → тап → ×1                          — сразу на сервер
+  // Дни из табеля всегда «включены» (то же самое, начиная со 2-й строки —
+  // тап на них сразу переключает множитель, включать/выключать нечего).
+  async function handleDayTap(iso: string) {
+    const on = shiftSet.has(iso) || manualSet.has(iso)
+    if (!on) {
+      setManualSet((prev) => {
+        const next = new Set(prev)
+        next.add(iso)
+        return next
+      })
+      return
+    }
+    // Множитель — не черновой набор дат, а самостоятельный факт «в этот день
+    // было две смены»: пишется сразу, не ждёт «Сохранить дни».
+    if (togglingDate) return
+    setTogglingDate(iso)
+    try {
+      const res = await toggleDayMultiplier(employeeId, iso, monthStart, monthEnd)
+      setMultipliers(res.multipliers)
+      onSaved?.(res.count)
+    } catch (err) {
+      toast.error(humanizeError(err, 'Не удалось изменить множитель'))
+    } finally {
+      setTogglingDate(null)
+    }
   }
 
   function markFirstN() {
@@ -115,7 +150,7 @@ export function WorkedDaysDialog({
     }
   }
 
-  const accrued = totalDays * (dailyRate || 0)
+  const accrued = paidUnits * (dailyRate || 0)
   const monthLabel = format(month, 'LLLL yyyy', { locale: ru })
   const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 
@@ -163,20 +198,31 @@ export function WorkedDaysDialog({
                   const isShift = shiftSet.has(iso)
                   const isManual = manualSet.has(iso)
                   const on = isShift || isManual
+                  const isDouble = (multipliers[iso] ?? 1) > 1
                   return (
                     <button
                       key={iso}
-                      onClick={() => toggle(iso)}
-                      disabled={isShift}
-                      title={isShift ? 'Из табеля — снять нельзя' : undefined}
+                      onClick={() => handleDayTap(iso)}
+                      disabled={togglingDate === iso}
+                      title={!on ? undefined : isDouble ? 'Тап — вернуть одну смену' : 'Тап — отметить две смены за день'}
                       className={[
-                        'aspect-square rounded-md text-sm flex items-center justify-center transition-colors tabular-nums',
-                        isShift ? 'bg-primary/30 text-foreground font-semibold cursor-not-allowed ring-1 ring-primary/40' : '',
+                        'relative w-full aspect-square rounded-md text-sm flex items-center justify-center transition-colors tabular-nums',
+                        isShift ? 'bg-primary/30 text-foreground font-semibold ring-1 ring-primary/40' : '',
                         !isShift && isManual ? 'bg-primary text-primary-foreground font-semibold' : '',
                         !on ? 'bg-muted/50 text-foreground hover:bg-muted' : '',
                       ].join(' ')}
                     >
                       {format(d, 'd')}
+                      {/* Пометка «две смены» — чисто визуальная, не отдельная кликабельная
+                          зона: переключает её тап по всему дню (handleDayTap). Гейт по on —
+                          множитель на ещё не сохранённую (несохранённую save()) дату может
+                          существовать на сервере, но показывать ×2 на невключённом дне
+                          вводило бы в заблуждение. */}
+                      {on && isDouble && (
+                        <span className="pointer-events-none absolute -top-1 -right-1 h-3.5 min-w-3.5 px-0.5 rounded-full bg-amber-500 text-white text-[8px] font-bold flex items-center justify-center leading-none">
+                          ×2
+                        </span>
+                      )}
                     </button>
                   )
                 })}
@@ -207,6 +253,9 @@ export function WorkedDaysDialog({
               <div className="flex items-center justify-between rounded-lg bg-muted/40 border border-border px-3 py-2.5">
                 <span className="text-sm text-muted-foreground">
                   Дней: <b className="text-foreground tabular-nums">{totalDays}</b>
+                  {paidUnits !== totalDays && (
+                    <> (<span className="text-amber-600 font-medium tabular-nums">{paidUnits}</span> опл. ед.)</>
+                  )}
                   {dailyRate > 0 && <> × {formatCurrency(dailyRate)}</>}
                 </span>
                 {dailyRate > 0 && (
@@ -218,6 +267,9 @@ export function WorkedDaysDialog({
                   Дни из табеля ({shiftSet.size}) отмечены заранее и снять их нельзя — они посчитаны по приходам.
                 </p>
               )}
+              <p className="text-[11px] text-muted-foreground">
+                Тап по отмеченному дню — переключить <span className="inline-flex items-center justify-center size-3.5 rounded-full bg-amber-500 text-white text-[8px] font-bold align-middle">×2</span>, если сотрудник в этот день отработал две смены. Ещё тап — обратно на одну.
+              </p>
             </>
           )}
         </div>

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -101,6 +102,154 @@ func TestShiftClose_BlockedByOpenOrders(t *testing.T) {
 	cr2, cb2 := f.post(t, fmt.Sprintf("/api/v1/shifts/%s/close", shift.ID), tok, uuid.NewString(), map[string]any{"closing_balance": "50"})
 	if cr2.StatusCode != 200 {
 		t.Fatalf("close shift after closing order: %d %s", cr2.StatusCode, cb2)
+	}
+}
+
+// TestShiftClose_ForceWithOpenOrders — 068: право shifts.close_with_open_orders
+// (кассир имеет его по умолчанию) позволяет закрыть смену с висящими столами,
+// но ТОЛЬКО с явным confirm_open_orders — первый запрос блокирует всё равно
+// (details.can_force=true подсказывает фронту показать кнопку «Закрыть всё
+// равно», а не тихо считает согласие). closed_open_orders_count фиксирует,
+// сколько заказов было открыто в момент закрытия — для истории смен.
+func TestShiftClose_ForceWithOpenOrders(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	cashAccID := uuid.NewString()
+	cashName, cashType := "Касса", "cash"
+	if err := gdb.Create(&models.FinancialAccount{
+		ID: cashAccID, Name: &cashName, Type: &cashType, RestaurantID: &f.rid, Balance: decimal.Zero,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	plovName := "Плов"
+	plov := models.MenuItem{ID: uuid.NewString(), Name: &plovName, Price: decimal.MustFromString("50"), RestaurantID: &f.rid}
+	if err := gdb.Create(&plov).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	// Фикстура — кассир, у роли теперь shifts.close_with_open_orders=true по
+	// умолчанию (не в personal actions, значит берётся из roleDefaults).
+	tok := f.login(t)
+
+	r, b := f.post(t, "/api/v1/shifts", tok, uuid.NewString(), map[string]any{"opening_balance": "0", "account_id": cashAccID})
+	if r.StatusCode != 201 {
+		t.Fatalf("open shift %d: %s", r.StatusCode, b)
+	}
+	var shift models.CashShift
+	_ = json.Unmarshal(b, &shift)
+
+	r, b = f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{{"menu_item_id": plov.ID, "qty": "1"}},
+	})
+	if r.StatusCode != 201 {
+		t.Fatalf("create order %d: %s", r.StatusCode, b)
+	}
+
+	// Первая попытка без confirm — блокирует, даже с правом. can_force=true
+	// подтверждает, что право есть и кнопку «закрыть всё равно» показывать можно.
+	cr, cb := f.post(t, "/api/v1/shifts/"+shift.ID+"/close", tok, uuid.NewString(), map[string]any{"closing_balance": "0"})
+	if cr.StatusCode != 409 {
+		t.Fatalf("close without confirm: got %d, want 409. body=%s", cr.StatusCode, cb)
+	}
+	var env struct {
+		Details struct {
+			CanForce bool `json:"can_force"`
+		} `json:"details"`
+	}
+	if err := json.Unmarshal(cb, &env); err != nil {
+		t.Fatalf("decode error envelope: %v", err)
+	}
+	if !env.Details.CanForce {
+		t.Fatalf("can_force = false, want true — у кассира по умолчанию есть shifts.close_with_open_orders")
+	}
+
+	// С confirm_open_orders=true — закрывается, столы остаются висеть где были,
+	// но смена закрыта и помечена closed_open_orders_count=1.
+	cr2, cb2 := f.post(t, "/api/v1/shifts/"+shift.ID+"/close", tok, uuid.NewString(), map[string]any{
+		"closing_balance": "0", "confirm_open_orders": true,
+	})
+	if cr2.StatusCode != 200 {
+		t.Fatalf("close with confirm: %d %s", cr2.StatusCode, cb2)
+	}
+	var closed models.CashShift
+	if err := json.Unmarshal(cb2, &closed); err != nil {
+		t.Fatalf("decode closed shift: %v", err)
+	}
+	if closed.ClosedOpenOrdersCount != 1 {
+		t.Errorf("closed_open_orders_count = %d, want 1", closed.ClosedOpenOrdersCount)
+	}
+	if closed.Status == nil || *closed.Status != "closed" {
+		t.Errorf("status = %v, want closed", closed.Status)
+	}
+}
+
+// TestShiftClose_ForceWithOpenOrders_DeniedWithoutPermission — без права
+// shifts.close_with_open_orders confirm_open_orders=true НЕ помогает: бэк —
+// источник правды, фронт-флаг сам по себе доступа не даёт.
+func TestShiftClose_ForceWithOpenOrders_DeniedWithoutPermission(t *testing.T) {
+	f := setupE2E(t)
+	gdb, _ := db.Open(testDSN())
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+
+	cashAccID := uuid.NewString()
+	cashName, cashType := "Касса", "cash"
+	if err := gdb.Create(&models.FinancialAccount{
+		ID: cashAccID, Name: &cashName, Type: &cashType, RestaurantID: &f.rid, Balance: decimal.Zero,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	plovName := "Плов"
+	plov := models.MenuItem{ID: uuid.NewString(), Name: &plovName, Price: decimal.MustFromString("50"), RestaurantID: &f.rid}
+	if err := gdb.Create(&plov).Error; err != nil {
+		t.Fatal(err)
+	}
+	tok := f.login(t)
+
+	// Явный оверрайд роли — снимаем право у ЭТОГО конкретного кассира
+	// (например, стажёр, которому владелец решил пересменку без старшего не давать).
+	if err := gdb.Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"shifts.close_with_open_orders":false}}`))).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r, b := f.post(t, "/api/v1/shifts", tok, uuid.NewString(), map[string]any{"opening_balance": "0", "account_id": cashAccID})
+	if r.StatusCode != 201 {
+		t.Fatalf("open shift %d: %s", r.StatusCode, b)
+	}
+	var shift models.CashShift
+	_ = json.Unmarshal(b, &shift)
+
+	r, b = f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{{"menu_item_id": plov.ID, "qty": "1"}},
+	})
+	if r.StatusCode != 201 {
+		t.Fatalf("create order %d: %s", r.StatusCode, b)
+	}
+
+	cr, cb := f.post(t, "/api/v1/shifts/"+shift.ID+"/close", tok, uuid.NewString(), map[string]any{
+		"closing_balance": "0", "confirm_open_orders": true,
+	})
+	if cr.StatusCode != 409 {
+		t.Fatalf("close with confirm but no permission: got %d, want 409. body=%s", cr.StatusCode, cb)
+	}
+	var env struct {
+		Details struct {
+			CanForce bool `json:"can_force"`
+		} `json:"details"`
+	}
+	_ = json.Unmarshal(cb, &env)
+	if env.Details.CanForce {
+		t.Errorf("can_force = true, want false — право явно снято у этого пользователя")
 	}
 }
 
