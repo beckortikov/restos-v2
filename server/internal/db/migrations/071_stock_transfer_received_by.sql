@@ -1,7 +1,9 @@
 -- +goose Up
 -- +goose StatementBegin
 --
--- 065_stock_transfer_received_by — кто принял перемещение (ADR-003).
+-- 071_stock_transfer_received_by — кто принял перемещение (ADR-003).
+-- (Перенумерована с 065 при мерже main → feat/multi-branch-network: main
+-- независимо занял 065-070 своими миграциями после расхождения веток.)
 --
 -- Receive() раньше обновлял только status/received_at — узнать, кто именно
 -- принял перемещение на филиале, было негде (ни в БД, ни в audit_log с
