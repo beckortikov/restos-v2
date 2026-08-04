@@ -129,7 +129,12 @@ export default function EmployeeDetailPage() {
   }, [id, navigate])
 
   const handleCancelAdvance = useCallback(async (advId: string) => {
-    if (!window.confirm('Отменить аванс? Деньги вернутся на счёт, с которого выдавали.')) return
+    const ok = window.confirm('Отменить аванс? Деньги вернутся на счёт, с которого выдавали.')
+    // Electron/Windows: нативный confirm() иногда не возвращает клавиатурный
+    // фокус окну после закрытия — следующий инпут (например «Ставка» в
+    // диалоге «Оклад») выглядит недоступным: курсора нет, ввод не проходит.
+    window.focus()
+    if (!ok) return
     setCancellingId(advId)
     try {
       await cancelSalaryAdvance(advId)
@@ -143,7 +148,10 @@ export default function EmployeeDetailPage() {
   }, [reload])
 
   const handleCancelDeduction = useCallback(async (dedId: string) => {
-    if (!window.confirm('Отменить удержание?')) return
+    const ok = window.confirm('Отменить удержание?')
+    // См. handleCancelAdvance — тот же фикс возврата фокуса окну.
+    window.focus()
+    if (!ok) return
     setCancellingId(dedId)
     try {
       await cancelSalaryDeduction(dedId)

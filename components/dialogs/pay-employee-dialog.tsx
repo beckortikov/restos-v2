@@ -226,14 +226,17 @@ export function PayEmployeeDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-card rounded-2xl border border-border shadow-xl w-full max-w-md mx-4" onClick={e => e.stopPropagation()}>
-        <div className="flex items-center justify-between p-5 border-b border-border">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      {/* Много счетов (список аккаунтов ниже) раздувал диалог за пределы
+          экрана и прятал кнопку «Выплатить» — теперь высота ограничена,
+          заголовок/футер закреплены, а прокручивается только середина. */}
+      <div className="bg-card rounded-2xl border border-border shadow-xl w-full max-w-md max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-border shrink-0">
           <h2 className="text-lg font-bold text-foreground">{DIALOG_TITLE[action]}</h2>
           <button onClick={onClose} className="p-1 text-muted-foreground hover:text-foreground"><X className="size-5" /></button>
         </div>
 
-        <div className="p-5 space-y-4">
+        <div className="p-5 space-y-4 overflow-y-auto flex-1 min-h-0">
           <div className="bg-muted/30 rounded-xl p-4">
             <p className="font-semibold text-foreground">{employee.name}</p>
             <p className="text-xs text-muted-foreground mt-0.5">{employee.position || ROLE_LABELS[employee.role]}</p>
@@ -417,7 +420,7 @@ export function PayEmployeeDialog({
           )}
         </div>
 
-        <div className="flex gap-2 p-5 border-t border-border">
+        <div className="flex gap-2 p-5 border-t border-border shrink-0">
           <button onClick={onClose} className="flex-1 px-4 py-2.5 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted">Отмена</button>
           <button onClick={handleSubmit}
             disabled={

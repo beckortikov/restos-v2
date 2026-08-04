@@ -137,12 +137,15 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-xl">
-        <DialogHeader>
+      {/* max-h + flex-col: заголовок/футер закреплены, прокручивается только
+          список полей — иначе на длинной форме кнопка «Создать» уезжала за
+          пределы экрана и требовала скролла всего диалога целиком. */}
+      <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col rounded-xl">
+        <DialogHeader className="shrink-0">
           <DialogTitle>Новая операция</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="space-y-4 overflow-y-auto flex-1 min-h-0">
           {/* Type */}
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-foreground">Тип</label>
@@ -290,7 +293,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <button
             type="button"
             onClick={() => onOpenChange(false)}
