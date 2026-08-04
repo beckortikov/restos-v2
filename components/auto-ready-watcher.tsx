@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import { checkAutoReadyOrders, fetchOrders, fetchTables } from '@/lib/queries'
 import { startOfToday } from '@/lib/helpers'
 import { api, unwrap } from '@/lib/api'
@@ -60,6 +61,7 @@ function notifyReady(orderInfo?: string) {
 //    - Fallback: slow poll every 30s
 export function AutoReadyWatcher() {
   const { restaurant, user } = useAuth()
+  const isBranchView = useBranchView()
   const lastNotifiedRef = useRef<Set<string>>(new Set())
   const lastStatusRef = useRef<Map<string, string>>(new Map())
   const tablesRef = useRef<Table[]>([])
@@ -79,6 +81,14 @@ export function AutoReadyWatcher() {
 
   useEffect(() => {
     if (!user) return
+    // Смотрим отчёты другого филиала (ADR-003 Ф7) — живые заказы/столы этого
+    // узла не реплицируются, watcher видел бы честный X-Branch-Data-Scope:
+    // unavailable на КАЖДОМ фоновом поллинге и топил бы баннер «не
+    // синхронизируется» на всех страницах разом (баннер глобальный, не
+    // per-страничный — см. branch-data-unavailable-banner.tsx). А сама
+    // функция (чат «заказ готов», авто-ready) для чужого read-only филиала
+    // всё равно бессмысленна — это не твоя касса.
+    if (isBranchView) return
     const isWaiter = user.role === 'waiter'
 
     let cancelled = false
@@ -174,7 +184,7 @@ export function AutoReadyWatcher() {
       clearInterval(interval)
       if (sseUnsub) sseUnsub()
     }
-  }, [restaurant?.autoReadyMode, user])
+  }, [restaurant?.autoReadyMode, user, isBranchView])
 
   return null
 }
