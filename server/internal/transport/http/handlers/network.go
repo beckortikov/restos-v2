@@ -41,6 +41,56 @@ func (h *NetworkHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// PnL — GET /api/v1/network/pnl?from=&to=. Сводный P&L сети (Ф8).
+func (h *NetworkHandler) PnL(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.PnL(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// Cashflow — GET /api/v1/network/cashflow?from=&to=. Сводный ДДС сети (Ф8).
+func (h *NetworkHandler) Cashflow(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.Cashflow(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// Warehouse — GET /api/v1/network/warehouse. Стоимость остатков по сети (Ф8).
+func (h *NetworkHandler) Warehouse(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.Warehouse(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// Accounts — GET /api/v1/network/accounts. Все счета сети с балансами (Ф8).
+func (h *NetworkHandler) Accounts(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.Accounts(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // ListNetworkMenu — GET /api/v1/network/menu.
 func (h *NetworkHandler) ListNetworkMenu(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListNetworkMenu(r.Context())

@@ -699,6 +699,98 @@ paths:
                         kind: { type: string }
                         revenue: { $ref: "#/components/schemas/Decimal" }
 
+  /api/v1/network/pnl:
+    get:
+      tags: [stock]
+      summary: Сводный P&L сети — итог + разбивка по филиалам (ADR-003 Ф8).
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { $ref: "#/components/schemas/NetworkPnLAmounts" }
+                  branches:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/NetworkBranchRef" }
+                        - { $ref: "#/components/schemas/NetworkPnLAmounts" }
+
+  /api/v1/network/cashflow:
+    get:
+      tags: [stock]
+      summary: Сводный ДДС сети — итог + разбивка по филиалам (ADR-003 Ф8).
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total: { $ref: "#/components/schemas/NetworkCashflowAmounts" }
+                  branches:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/NetworkBranchRef" }
+                        - { $ref: "#/components/schemas/NetworkCashflowAmounts" }
+
+  /api/v1/network/warehouse:
+    get:
+      tags: [stock]
+      summary: Стоимость остатков склада по сети — итог + разбивка по филиалам (ADR-003 Ф8).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_value: { $ref: "#/components/schemas/Decimal" }
+                  branches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        kind: { type: string }
+                        value: { $ref: "#/components/schemas/Decimal" }
+
+  /api/v1/network/accounts:
+    get:
+      tags: [stock]
+      summary: Все счета сети с балансами, сгруппированные по филиалу (ADR-003 Ф8).
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_balance: { $ref: "#/components/schemas/Decimal" }
+                  accounts:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/FinancialAccount" }
+                        - type: object
+                          properties:
+                            branch_name: { type: string }
+                            branch_kind: { type: string }
+
   /api/v1/nomenclature:
     get:
       tags: [stock]
@@ -4118,6 +4210,29 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         kind: { type: string, enum: [outlet, central_warehouse] }
+
+    # ── Ф8: сетевые консолидированные отчёты (/network/pnl|cashflow|warehouse|accounts) ──
+    NetworkBranchRef:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        kind: { type: string, enum: [outlet, central_warehouse] }
+    NetworkPnLAmounts:
+      type: object
+      properties:
+        revenue: { $ref: "#/components/schemas/Decimal" }
+        cogs: { $ref: "#/components/schemas/Decimal" }
+        writeoffs: { $ref: "#/components/schemas/Decimal" }
+        supply_expenses: { $ref: "#/components/schemas/Decimal" }
+        gross_profit: { $ref: "#/components/schemas/Decimal" }
+        orders_count: { type: integer }
+    NetworkCashflowAmounts:
+      type: object
+      properties:
+        in: { $ref: "#/components/schemas/Decimal" }
+        out: { $ref: "#/components/schemas/Decimal" }
+        net: { $ref: "#/components/schemas/Decimal" }
 
     CompanyAccount:
       type: object

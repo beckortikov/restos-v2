@@ -328,6 +328,30 @@ type NetworkSummary struct {
 	Branches     []BranchSummary `json:"branches"`
 }
 
+// branchesForAccount — все рестораны сети account, central_warehouse первым
+// (используется Summary + сетевыми отчётами Ф8: PnL/Cashflow/Warehouse/Accounts —
+// единая точка запроса списка филиалов, чтобы порядок и состав не разъезжались
+// между эндпоинтами).
+func (s *NetworkService) branchesForAccount(ctx context.Context, account string) ([]models.Restaurant, error) {
+	var branches []models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).
+		Where("account_id = ?", account).
+		Order("kind DESC, name ASC").
+		Find(&branches).Error; err != nil {
+		return nil, err
+	}
+	return branches, nil
+}
+
+// branchIDs — id'шники филиалов, для WHERE restaurant_id IN (...).
+func branchIDs(branches []models.Restaurant) []string {
+	ids := make([]string, len(branches))
+	for i, b := range branches {
+		ids[i] = b.ID
+	}
+	return ids
+}
+
 // Summary — выручка по сети и по каждому филиалу за период (ADR-003, Фаза 4).
 // Источник — financial_operations(type=in, category=revenue). На центральном
 // узле они собраны со всех филиалов через sync; в однобазовом режиме — там же.
@@ -339,18 +363,11 @@ func (s *NetworkService) Summary(ctx context.Context, from, to string) (*Network
 	if err != nil {
 		return nil, err
 	}
-	// Филиалы сети.
-	var branches []models.Restaurant
-	if err := s.r.Raw().WithContext(ctx).
-		Where("account_id = ?", account).
-		Order("kind DESC, name ASC").
-		Find(&branches).Error; err != nil {
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, len(branches))
-	for i, b := range branches {
-		ids[i] = b.ID
-	}
+	ids := branchIDs(branches)
 
 	// Выручка по филиалам за период.
 	revByRest := make(map[string]decimal.Decimal, len(ids))

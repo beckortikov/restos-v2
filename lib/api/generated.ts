@@ -2093,6 +2093,177 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/pnl": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Сводный P&L сети — итог + разбивка по филиалам (ADR-003 Ф8). */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            total?: components["schemas"]["NetworkPnLAmounts"];
+                            branches?: (components["schemas"]["NetworkBranchRef"] & components["schemas"]["NetworkPnLAmounts"])[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/cashflow": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Сводный ДДС сети — итог + разбивка по филиалам (ADR-003 Ф8). */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            total?: components["schemas"]["NetworkCashflowAmounts"];
+                            branches?: (components["schemas"]["NetworkBranchRef"] & components["schemas"]["NetworkCashflowAmounts"])[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/warehouse": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Стоимость остатков склада по сети — итог + разбивка по филиалам (ADR-003 Ф8). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            total_value?: components["schemas"]["Decimal"];
+                            branches?: {
+                                /** Format: uuid */
+                                id?: string;
+                                name?: string;
+                                kind?: string;
+                                value?: components["schemas"]["Decimal"];
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Все счета сети с балансами, сгруппированные по филиалу (ADR-003 Ф8). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            total_balance?: components["schemas"]["Decimal"];
+                            accounts?: (components["schemas"]["FinancialAccount"] & {
+                                branch_name?: string;
+                                branch_kind?: string;
+                            })[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nomenclature": {
         parameters: {
             query?: never;
@@ -12765,6 +12936,26 @@ export interface components {
             name?: string;
             /** @enum {string} */
             kind?: "outlet" | "central_warehouse";
+        };
+        NetworkBranchRef: {
+            /** Format: uuid */
+            id?: string;
+            name?: string;
+            /** @enum {string} */
+            kind?: "outlet" | "central_warehouse";
+        };
+        NetworkPnLAmounts: {
+            revenue?: components["schemas"]["Decimal"];
+            cogs?: components["schemas"]["Decimal"];
+            writeoffs?: components["schemas"]["Decimal"];
+            supply_expenses?: components["schemas"]["Decimal"];
+            gross_profit?: components["schemas"]["Decimal"];
+            orders_count?: number;
+        };
+        NetworkCashflowAmounts: {
+            in?: components["schemas"]["Decimal"];
+            out?: components["schemas"]["Decimal"];
+            net?: components["schemas"]["Decimal"];
         };
         CompanyAccount: {
             /** Format: uuid */

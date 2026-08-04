@@ -159,6 +159,130 @@ export async function fetchNetworkSummary(opts?: { from?: string; to?: string })
   }
 }
 
+// ─── Ф8: сетевые консолидированные отчёты (итог + разбивка по филиалам) ───────
+export interface PnLAmounts {
+  revenue: number
+  cogs: number
+  writeoffs: number
+  supplyExpenses: number
+  grossProfit: number
+  ordersCount: number
+}
+export interface NetworkPnLBranch extends PnLAmounts {
+  id: string
+  name: string
+  kind?: 'outlet' | 'central_warehouse' | null
+}
+export interface NetworkPnL {
+  total: PnLAmounts
+  branches: NetworkPnLBranch[]
+}
+function mapPnLAmounts(r: any): PnLAmounts {
+  return {
+    revenue: Number(r?.revenue ?? 0),
+    cogs: Number(r?.cogs ?? 0),
+    writeoffs: Number(r?.writeoffs ?? 0),
+    supplyExpenses: Number(r?.supply_expenses ?? 0),
+    grossProfit: Number(r?.gross_profit ?? 0),
+    ordersCount: Number(r?.orders_count ?? 0),
+  }
+}
+export async function fetchNetworkPnL(opts?: { from?: string; to?: string }): Promise<NetworkPnL> {
+  const query: Record<string, string> = {}
+  if (opts?.from) query.from = opts.from
+  if (opts?.to) query.to = opts.to
+  const r: any = await unwrap(api.GET('/api/v1/network/pnl', { params: { query: query as any } }))
+  return {
+    total: mapPnLAmounts(r?.total),
+    branches: Array.isArray(r?.branches)
+      ? r.branches.map((b: any) => ({ id: b.id, name: b.name, kind: b.kind, ...mapPnLAmounts(b) }))
+      : [],
+  }
+}
+
+export interface CashflowAmounts {
+  in: number
+  out: number
+  net: number
+}
+export interface NetworkCashflowBranch extends CashflowAmounts {
+  id: string
+  name: string
+  kind?: 'outlet' | 'central_warehouse' | null
+}
+export interface NetworkCashflow {
+  total: CashflowAmounts
+  branches: NetworkCashflowBranch[]
+}
+function mapCashflowAmounts(r: any): CashflowAmounts {
+  return { in: Number(r?.in ?? 0), out: Number(r?.out ?? 0), net: Number(r?.net ?? 0) }
+}
+export async function fetchNetworkCashflow(opts?: { from?: string; to?: string }): Promise<NetworkCashflow> {
+  const query: Record<string, string> = {}
+  if (opts?.from) query.from = opts.from
+  if (opts?.to) query.to = opts.to
+  const r: any = await unwrap(api.GET('/api/v1/network/cashflow', { params: { query: query as any } }))
+  return {
+    total: mapCashflowAmounts(r?.total),
+    branches: Array.isArray(r?.branches)
+      ? r.branches.map((b: any) => ({ id: b.id, name: b.name, kind: b.kind, ...mapCashflowAmounts(b) }))
+      : [],
+  }
+}
+
+export interface NetworkWarehouseBranch {
+  id: string
+  name: string
+  kind?: 'outlet' | 'central_warehouse' | null
+  value: number
+}
+export interface NetworkWarehouse {
+  totalValue: number
+  branches: NetworkWarehouseBranch[]
+}
+export async function fetchNetworkWarehouse(): Promise<NetworkWarehouse> {
+  const r: any = await unwrap(api.GET('/api/v1/network/warehouse'))
+  return {
+    totalValue: Number(r?.total_value ?? 0),
+    branches: Array.isArray(r?.branches)
+      ? r.branches.map((b: any) => ({ id: b.id, name: b.name, kind: b.kind, value: Number(b.value ?? 0) }))
+      : [],
+  }
+}
+
+export interface NetworkAccountRow {
+  id: string
+  name?: string | null
+  type?: string | null
+  balance: number
+  isEnabled: boolean
+  branchId: string
+  branchName: string
+  branchKind?: 'outlet' | 'central_warehouse' | null
+}
+export interface NetworkAccounts {
+  totalBalance: number
+  accounts: NetworkAccountRow[]
+}
+export async function fetchNetworkAccounts(): Promise<NetworkAccounts> {
+  const r: any = await unwrap(api.GET('/api/v1/network/accounts'))
+  return {
+    totalBalance: Number(r?.total_balance ?? 0),
+    accounts: Array.isArray(r?.accounts)
+      ? r.accounts.map((a: any) => ({
+          id: a.id,
+          name: a.name,
+          type: a.type,
+          balance: Number(a.balance ?? 0),
+          isEnabled: a.is_enabled !== false,
+          branchId: a.restaurant_id,
+          branchName: a.branch_name,
+          branchKind: a.branch_kind,
+        }))
+      : [],
+  }
+}
+
 // ─── Номенклатура сети ─────────────────────────────────────────────────────────
 export async function fetchNomenclature(): Promise<Nomenclature[]> {
   const env: any = await unwrap(api.GET('/api/v1/nomenclature'))
