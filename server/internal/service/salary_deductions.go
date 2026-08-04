@@ -87,8 +87,21 @@ func (s *SalaryService) AddDeduction(ctx context.Context, in DeductionInput) (*m
 		if err := tx.Create(row).Error; err != nil {
 			return err
 		}
+		if err := recordSalaryDeductionSync(tx, row); err != nil {
+			return err
+		}
 		newDeductions := decimal.Normalize(decimal.Add(u.Deductions, amount))
-		return tx.Model(&u).Updates(map[string]any{"deductions": newDeductions, "updated_at": now}).Error
+		if err := tx.Model(&u).Updates(map[string]any{"deductions": newDeductions, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		// users.deductions — денормализованный счётчик, читаемый SalaryAccrual;
+		// без ре-синка строки users central видит новую строку в
+		// salary_deductions, но старую (нулевую) сумму в самой карточке
+		// сотрудника (найдено вживую в Ф5б — central 500'ил на отсутствующей
+		// salary_day_multipliers, а после её восстановления удержание всё
+		// равно не отражалось в начислении).
+		u.Deductions = newDeductions
+		return recordUserSync(tx, &u, "update")
 	})
 	if err != nil {
 		return nil, err
@@ -140,10 +153,17 @@ func (s *SalaryService) CancelDeduction(ctx context.Context, id string) (*models
 		if err := tx.Model(&u).Updates(map[string]any{"deductions": newDeductions, "updated_at": now}).Error; err != nil {
 			return err
 		}
+		u.Deductions = newDeductions
+		if err := recordUserSync(tx, &u, "update"); err != nil {
+			return err
+		}
 		row.CancelledAt = &now
 		row.CancelledBy = &cancelledBy
-		return tx.Model(&models.SalaryDeduction{}).Where("id = ?", row.ID).
-			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy}).Error
+		if err := tx.Model(&models.SalaryDeduction{}).Where("id = ?", row.ID).
+			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy}).Error; err != nil {
+			return err
+		}
+		return recordSalaryDeductionSync(tx, &row)
 	})
 	if err != nil {
 		return nil, err

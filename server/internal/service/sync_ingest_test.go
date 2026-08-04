@@ -1462,3 +1462,311 @@ func TestSyncIngest_FinancialOpDelete(t *testing.T) {
 		t.Errorf("financial_operation still present after delete: count = %d", count)
 	}
 }
+
+// TestSyncIngest_TimeEntry — time_entries (Ф5б): upsert + hard delete
+// (TimeEntriesService.Delete), тот же shape, что recurring_payments.
+func TestSyncIngest_TimeEntry(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	gdb.Exec("DELETE FROM time_entries")
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	userID := uuid.NewString()
+	teID := uuid.NewString()
+	active := "active"
+	te := models.TimeEntry{ID: teID, UserID: &userID, Status: &active, RestaurantID: &branchID}
+	body, _ := json.Marshal(te)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "time_entries", RowID: teID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.TimeEntry
+	if err := gdb.First(&got, "id = ?", teID).Error; err != nil {
+		t.Fatalf("time_entry not upserted: %v", err)
+	}
+	if got.Status == nil || *got.Status != "active" {
+		t.Errorf("status = %v, want active", got.Status)
+	}
+
+	// closed — тот же id, повтор как upsert (ClockOut).
+	closed := "closed"
+	te.Status = &closed
+	body2, _ := json.Marshal(te)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "time_entries", RowID: teID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (repeat): %v", err)
+	}
+	gdb.First(&got, "id = ?", teID)
+	if got.Status == nil || *got.Status != "closed" {
+		t.Errorf("status after upsert = %v, want closed", got.Status)
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "time_entries", RowID: teID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	var count int64
+	gdb.Model(&models.TimeEntry{}).Where("id = ?", teID).Count(&count)
+	if count != 0 {
+		t.Errorf("time_entry still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_SalaryWorkedDay — override-таблица (Ф5б): upsert + hard
+// delete (SetWorkedDays снимает отметку целиком, не патчит поле).
+func TestSyncIngest_SalaryWorkedDay(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	gdb.Exec("DELETE FROM salary_worked_days")
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	userID := uuid.NewString()
+	rowID := uuid.NewString()
+	row := models.SalaryWorkedDay{ID: rowID, RestaurantID: &branchID, UserID: &userID, WorkDate: "2026-08-01"}
+	body, _ := json.Marshal(row)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_worked_days", RowID: rowID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var count int64
+	gdb.Model(&models.SalaryWorkedDay{}).Where("id = ?", rowID).Count(&count)
+	if count != 1 {
+		t.Fatalf("salary_worked_day not upserted: count = %d", count)
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_worked_days", RowID: rowID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	gdb.Model(&models.SalaryWorkedDay{}).Where("id = ?", rowID).Count(&count)
+	if count != 0 {
+		t.Errorf("salary_worked_day still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_SalaryDayMultiplier — тот же shape, что SalaryWorkedDay,
+// отдельная таблица (066, merge из main).
+func TestSyncIngest_SalaryDayMultiplier(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	gdb.Exec("DELETE FROM salary_day_multipliers")
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	userID := uuid.NewString()
+	rowID := uuid.NewString()
+	row := models.SalaryDayMultiplier{ID: rowID, RestaurantID: &branchID, UserID: &userID, WorkDate: "2026-08-01", Multiplier: 2}
+	body, _ := json.Marshal(row)
+
+	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_day_multipliers", RowID: rowID, Op: "update", Payload: body},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Applied != 1 {
+		t.Errorf("applied = %d, want 1", res.Applied)
+	}
+	var got models.SalaryDayMultiplier
+	if err := gdb.First(&got, "id = ?", rowID).Error; err != nil {
+		t.Fatalf("salary_day_multiplier not upserted: %v", err)
+	}
+	if got.Multiplier != 2 {
+		t.Errorf("multiplier = %d, want 2 (проверка на GORM zero-value-default-tag ловушку — default:2 не должен подменить корректно пришедшее значение)", got.Multiplier)
+	}
+
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_day_multipliers", RowID: rowID, Op: "delete", Payload: nil},
+	}})
+	if err != nil {
+		t.Fatalf("Ingest (delete): %v", err)
+	}
+	if res2.Applied != 1 {
+		t.Errorf("delete applied = %d, want 1", res2.Applied)
+	}
+	var count int64
+	gdb.Model(&models.SalaryDayMultiplier{}).Where("id = ?", rowID).Count(&count)
+	if count != 0 {
+		t.Errorf("salary_day_multiplier still present after delete: count = %d", count)
+	}
+}
+
+// TestSyncIngest_SalaryDeduction — create + soft-cancel (Ф5б): НИКОГДА hard
+// delete, оба состояния — upsert одного и того же id.
+func TestSyncIngest_SalaryDeduction(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	gdb.Exec("DELETE FROM salary_deductions")
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	userID := uuid.NewString()
+	rowID := uuid.NewString()
+	row := models.SalaryDeduction{
+		ID: rowID, RestaurantID: &branchID, UserID: userID,
+		Amount: decimal.MustFromString("100"), Reason: "опоздание",
+	}
+	body, _ := json.Marshal(row)
+
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_deductions", RowID: rowID, Op: "update", Payload: body},
+	}}); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	var got models.SalaryDeduction
+	if err := gdb.First(&got, "id = ?", rowID).Error; err != nil {
+		t.Fatalf("salary_deduction not upserted: %v", err)
+	}
+	if got.CancelledAt != nil {
+		t.Errorf("cancelled_at = %v, want nil", got.CancelledAt)
+	}
+
+	// Отмена — повторный upsert с cancelled_at заполненным (CancelDeduction).
+	now := got.CreatedAt
+	row.CancelledAt = &now
+	cancelledBy := uuid.NewString()
+	row.CancelledBy = &cancelledBy
+	body2, _ := json.Marshal(row)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_deductions", RowID: rowID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (cancel): %v", err)
+	}
+	gdb.First(&got, "id = ?", rowID)
+	if got.CancelledAt == nil {
+		t.Errorf("cancelled_at after upsert = nil, want set")
+	}
+}
+
+// TestSyncIngest_SalaryAdvance — тот же shape, что SalaryDeduction: create +
+// soft-cancel, никогда hard delete.
+func TestSyncIngest_SalaryAdvance(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	gdb.Exec("DELETE FROM salary_advances")
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+
+	branchID := uuid.NewString()
+	userID := uuid.NewString()
+	accID := uuid.NewString()
+	rowID := uuid.NewString()
+	row := models.SalaryAdvance{
+		ID: rowID, RestaurantID: &branchID, UserID: userID,
+		Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: accID,
+	}
+	body, _ := json.Marshal(row)
+
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_advances", RowID: rowID, Op: "update", Payload: body},
+	}}); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	var got models.SalaryAdvance
+	if err := gdb.First(&got, "id = ?", rowID).Error; err != nil {
+		t.Fatalf("salary_advance not upserted: %v", err)
+	}
+	if !got.Amount.Equal(decimal.MustFromString("500")) {
+		t.Errorf("amount = %s, want 500", got.Amount.String())
+	}
+
+	// Отмена (CancelAdvance) — повторный upsert с cancelled_at.
+	now := got.CreatedAt
+	row.CancelledAt = &now
+	cancelledBy := uuid.NewString()
+	row.CancelledBy = &cancelledBy
+	body2, _ := json.Marshal(row)
+	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "salary_advances", RowID: rowID, Op: "update", Payload: body2},
+	}}); err != nil {
+		t.Fatalf("Ingest (cancel): %v", err)
+	}
+	gdb.First(&got, "id = ?", rowID)
+	if got.CancelledAt == nil {
+		t.Errorf("cancelled_at after upsert = nil, want set")
+	}
+}

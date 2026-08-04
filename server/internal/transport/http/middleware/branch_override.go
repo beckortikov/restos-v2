@@ -132,22 +132,14 @@ var branchDataBlocked = map[string]bool{
 	"/api/v1/backup/list":            true,
 	"/api/v1/backup/download/{name}": true,
 
-	// ─── Табель — Ф5б «Персонал», отложена по согласованию с владельцем ────
-	"/api/v1/time-entries":        true,
-	"/api/v1/time-entries/active": true,
-	// today-stats — то же (time_entries) + orders БЕЗ статус-фильтра для
-	// orders_count/revenue (комментарий в коде прямо говорит «открытые/закрытые»).
+	// today-stats — orders БЕЗ статус-фильтра для orders_count/revenue
+	// (комментарий в коде прямо говорит «открытые/закрытые») — живая
+	// операционка, репликация Ф5б её не касается (time_entries — лишь
+	// вторая, не единственная причина блокировки).
 	"/api/v1/waiters/{id}/today-stats": true,
 
 	// ─── Аудит-лог — вне плана репликации вовсе ─────────────────────────────
 	"/api/v1/audit-log": true,
-
-	// ─── Зарплата — то, что реально опирается на нереплицированные таблицы ─
-	// (в отличие от /finance/salary/report — только financial_operations+users,
-	// оба реплицированы, оставлен доступным по умолчанию, см. блок ниже).
-	"/api/v1/finance/salary/accrual":     true, // daysWorked ← time_entries UNION salary_worked_days
-	"/api/v1/finance/salary/worked-days": true, // целиком time_entries + salary_worked_days
-	"/api/v1/finance/salary/deductions":  true, // salary_deductions не реплицируется
 
 	// ─── Свободные справочники ДДС/бюджет — свои таблицы, вне плана ────────
 	"/api/v1/finance/custom-categories": true,
@@ -217,7 +209,6 @@ var branchDataBlocked = map[string]bool{
 	"/api/v1/analytics/insights": true, // leakInsights джойнит order_voids (вне плана); lostSalesInsights → StopListService (tech_card_lines)
 	"/api/v1/finance/balance":    true, // semi_finished_stock/assets/liabilities/equity_entries — ни одна не реплицирована, считаются из ВСЕХ разом
 	"/api/v1/reports/audit.xlsx": true, // audit_log вне плана репликации вовсе
-	"/api/v1/analytics/weekday":  true, // time_entries — Ф5б «Персонал», ФОТ входит в NetProfit
 }
 
 // ─── Построчно проверено и подтверждено безопасным (документация, НЕ карта) ─
@@ -263,6 +254,20 @@ var branchDataBlocked = map[string]bool{
 //   /stock/transfers[/{id}] — читает только stock_transfers+stock_transfer_lines,
 //     реплицируются с ADR-003 Фаза 2/5.1 (пред-плановый фундамент, раньше
 //     orders/financial_operations), без JOIN на нереплицированное.
+//
+// Ф5б (персонал — последняя отложенная под-фаза плана, ГОТОВО):
+//   time_entries/salary_worked_days/salary_day_multipliers/salary_deductions/
+//   salary_advances реплицированы → сняты /time-entries[/active],
+//   /finance/salary/accrual|worked-days|deductions (все читали ровно эти
+//   таблицы, см. git blame до Ф5б), /analytics/weekday (ФОТ-колонка читает
+//   time_entries JOIN users, обе реплицированы). /finance/salary/advances
+//   — читает только salary_advances (теперь реплицирован); ПОПУТНО найден
+//   и закрыт живой пробел: этот путь появился ПОСЛЕ Ф7 (миграция 070 через
+//   мерж main) и никогда не попадал ни в allow-, ни в blocklist — до этой
+//   фазы central молча показывал бы честно выглядящий, но ПУСТОЙ список
+//   авансов филиала без единого баннера. /waiters/{id}/today-stats
+//   ОСТАЁТСЯ заблокирован — orders там читаются БЕЗ статус-фильтра (живая
+//   операционка), Ф5б только сняла одну из двух причин.
 //
 // Структурно вне досягаемости самого механизма BranchOverride (эффекта от
 // добавления/неотсутствия в любую карту нет вовсе — Auth и/или BranchOverride

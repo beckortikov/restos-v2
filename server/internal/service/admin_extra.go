@@ -721,8 +721,14 @@ func (s *TimeEntriesService) ClockIn(ctx context.Context, in TimeEntryInput) (*m
 		RestaurantID: &rid,
 		CreatedAt:    now,
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(t).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Create(t).Error; err != nil {
+			return err
+		}
+		return recordTimeEntrySync(tx, t.ID)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -773,8 +779,14 @@ func (s *TimeEntriesService) ClockOut(ctx context.Context, id string, in TimeEnt
 	if in.Note != nil {
 		updates["note"] = *in.Note
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		return recordTimeEntrySync(tx, id)
+	})
+	if err != nil {
 		return nil, err
 	}
 	scoped3, _ := s.r.ForTenant(ctx)
@@ -786,18 +798,21 @@ func (s *TimeEntriesService) ClockOut(ctx context.Context, id string, in TimeEnt
 }
 
 func (s *TimeEntriesService) Delete(ctx context.Context, id string) error {
-	scoped, err := s.r.ForTenant(ctx)
+	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return err
 	}
-	res := scoped.Where("id = ?", id).Delete(&models.TimeEntry{})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		res := tx.Where("id = ? AND restaurant_id = ?", id, rid).Delete(&models.TimeEntry{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		return recordTimeEntryDeleteSync(tx, id, rid)
+	})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

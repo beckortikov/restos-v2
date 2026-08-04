@@ -61,6 +61,35 @@ var schemaSelfHealStmts = []string{
 		created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 	)`,
 	`CREATE INDEX IF NOT EXISTS idx_salary_deductions_user ON salary_deductions (user_id, created_at DESC)`,
+	// 066: «две смены в один день» — множитель дневной оплаты. Найден вживую
+	// (Ф5б, 04.08.2026) собственный экземпляр drift-класса из шапки файла:
+	// эта ветка и main независимо заняли номер 066 разным содержимым
+	// (salary_day_multiplier vs sync_backfilled_at); после переномерации
+	// своей миграции в 072 уже смигрированные БД, где старый 066 успел
+	// применить ЧУЖОЕ содержимое, никогда не увидят настоящую
+	// 066_salary_day_multiplier — goose считает версию 66 закрытой. Симптом:
+	// `relation "salary_day_multipliers" does not exist` при goose_db_version=72.
+	`CREATE TABLE IF NOT EXISTS salary_day_multipliers (
+		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		restaurant_id TEXT NOT NULL,
+		user_id       UUID NOT NULL,
+		work_date     DATE NOT NULL,
+		multiplier    INTEGER NOT NULL DEFAULT 2,
+		created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+		UNIQUE (restaurant_id, user_id, work_date)
+	)`,
+	`DO $$
+	BEGIN
+		IF NOT EXISTS (
+			SELECT 1 FROM pg_constraint WHERE conname = 'salary_day_multipliers_multiplier_chk'
+		) THEN
+			ALTER TABLE salary_day_multipliers
+				ADD CONSTRAINT salary_day_multipliers_multiplier_chk
+				CHECK (multiplier >= 2 AND multiplier <= 3);
+		END IF;
+	END $$`,
+	`CREATE INDEX IF NOT EXISTS idx_salary_day_multipliers_lookup
+		ON salary_day_multipliers (restaurant_id, user_id, work_date)`,
 }
 
 // backfillSelfHealStmts — best-effort раскладка: 3 фиксированных склада на
@@ -122,6 +151,15 @@ func EnsureCriticalSchema(ctx context.Context, gdb *gorm.DB) error {
 	if !hasWarehouseCol {
 		log.Warn().Msg("self-heal схемы: обнаружен рассинхрон (нет ingredients.warehouse_id) — восстанавливаю схему мультисклада")
 	}
+	var hasDayMultipliersTable bool
+	if err := gdb.WithContext(ctx).Raw(
+		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'salary_day_multipliers')`,
+	).Scan(&hasDayMultipliersTable).Error; err != nil {
+		return fmt.Errorf("self-heal detect: %w", err)
+	}
+	if !hasDayMultipliersTable {
+		log.Warn().Msg("self-heal схемы: обнаружен рассинхрон (нет salary_day_multipliers) — восстанавливаю таблицу")
+	}
 
 	for _, stmt := range schemaSelfHealStmts {
 		if err := gdb.WithContext(ctx).Exec(stmt).Error; err != nil {
@@ -136,6 +174,9 @@ func EnsureCriticalSchema(ctx context.Context, gdb *gorm.DB) error {
 
 	if !hasWarehouseCol {
 		log.Info().Msg("self-heal схемы: схема мультисклада восстановлена")
+	}
+	if !hasDayMultipliersTable {
+		log.Info().Msg("self-heal схемы: salary_day_multipliers восстановлена")
 	}
 	return nil
 }

@@ -90,7 +90,7 @@ type backfillEntity struct {
 	run  func(tx *gorm.DB, rid string) (int64, error)
 }
 
-// backfillRegistry — 19 реплицируемых сущностей (Ф1-Ф5 + пред-Ф1 фундамент
+// backfillRegistry — 24 реплицируемые сущности (Ф1-Ф5б + пред-Ф1 фундамент
 // ADR-003 Фаза 2/5.1: orders, stock_transfers). Порядок — по фазам, в
 // которых сущность появилась; central не имеет FK между таблицами (см.
 // CLAUDE.md — tenant-целостность через код), порядок enqueue не влияет на
@@ -327,6 +327,76 @@ var backfillRegistry = []backfillEntity{
 					Entity: "financial_operations", RowID: rows[i].ID, Op: "insert",
 					RestaurantID: rows[i].RestaurantID, Payload: rows[i],
 				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
+
+	// Ф5б — персонал (табель + дневная оплата + удержания/авансы).
+	{name: "time_entries", run: func(tx *gorm.DB, rid string) (int64, error) {
+		// recordTimeEntrySync берёт id и перечитывает строку сам — тот же
+		// вызов, что и на живых точках мутации (ClockIn/ClockOut/Patch).
+		return backfillLoop(tx, "time_entries", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			for _, id := range ids {
+				if err := recordTimeEntrySync(tx, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
+	{name: "salary_worked_days", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "salary_worked_days", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			rows, err := backfillFetch[models.SalaryWorkedDay](tx, ids)
+			if err != nil {
+				return err
+			}
+			for i := range rows {
+				if err := recordSalaryWorkedDaySync(tx, &rows[i]); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
+	{name: "salary_day_multipliers", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "salary_day_multipliers", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			rows, err := backfillFetch[models.SalaryDayMultiplier](tx, ids)
+			if err != nil {
+				return err
+			}
+			for i := range rows {
+				if err := recordSalaryDayMultiplierSync(tx, &rows[i]); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
+	{name: "salary_deductions", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "salary_deductions", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			rows, err := backfillFetch[models.SalaryDeduction](tx, ids)
+			if err != nil {
+				return err
+			}
+			for i := range rows {
+				if err := recordSalaryDeductionSync(tx, &rows[i]); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
+	{name: "salary_advances", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "salary_advances", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			rows, err := backfillFetch[models.SalaryAdvance](tx, ids)
+			if err != nil {
+				return err
+			}
+			for i := range rows {
+				if err := recordSalaryAdvanceSync(tx, &rows[i]); err != nil {
 					return err
 				}
 			}

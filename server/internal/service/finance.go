@@ -2056,9 +2056,18 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 		if err := tx.Create(&advRow).Error; err != nil {
 			return err
 		}
+		if err := recordSalaryAdvanceSync(tx, &advRow); err != nil {
+			return err
+		}
 		newAdvance := decimal.Normalize(decimal.Add(u.Advance, amount))
-		return tx.Model(&models.User{}).Where("restaurant_id = ? AND id = ?", rid, u.ID).
-			Updates(map[string]any{"advance": newAdvance, "updated_at": now}).Error
+		if err := tx.Model(&models.User{}).Where("restaurant_id = ? AND id = ?", rid, u.ID).
+			Updates(map[string]any{"advance": newAdvance, "updated_at": now}).Error; err != nil {
+			return err
+		}
+		// users.advance — денормализованный счётчик, читаемый SalaryAccrual;
+		// см. комментарий у аналогичного места в AddDeduction (salary_deductions.go).
+		u.Advance = newAdvance
+		return recordUserSync(tx, &u, "update")
 	})
 	if err != nil {
 		return nil, err
@@ -2156,10 +2165,17 @@ func (s *SalaryService) CancelAdvance(ctx context.Context, id string) (*models.S
 		if err := tx.Model(&u).Updates(map[string]any{"advance": newAdvance, "updated_at": now}).Error; err != nil {
 			return err
 		}
+		u.Advance = newAdvance
+		if err := recordUserSync(tx, &u, "update"); err != nil {
+			return err
+		}
 		row.CancelledAt = &now
 		row.CancelledBy = &cancelledBy
-		return tx.Model(&models.SalaryAdvance{}).Where("id = ?", row.ID).
-			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy}).Error
+		if err := tx.Model(&models.SalaryAdvance{}).Where("id = ?", row.ID).
+			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy}).Error; err != nil {
+			return err
+		}
+		return recordSalaryAdvanceSync(tx, &row)
 	})
 	if err != nil {
 		return nil, err

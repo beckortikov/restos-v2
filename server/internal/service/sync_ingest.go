@@ -167,6 +167,31 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "time_entries":
+			if err := s.applyTimeEntry(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "salary_worked_days":
+			if err := s.applySalaryWorkedDay(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "salary_day_multipliers":
+			if err := s.applySalaryDayMultiplier(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "salary_deductions":
+			if err := s.applySalaryDeduction(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "salary_advances":
+			if err := s.applySalaryAdvance(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
@@ -795,5 +820,121 @@ func (s *SyncService) applyRecurringPayment(ctx context.Context, e SyncEntry, up
 			return err
 		}
 		return tx.Model(&models.RecurringPayment{ID: rp.ID}).Update("active", wantActive).Error
+	})
+}
+
+// ─── Ф5б «Персонал» ─────────────────────────────────────────────────────────
+// time_entries/salary_worked_days/salary_day_multipliers/salary_deductions/
+// salary_advances — ни у одной нет bool/int-поля с gorm:"default:..." И
+// зоной риска zero-value одновременно (Multiplier у salary_day_multipliers
+// формально имеет default:2, но реально ВСЕГДА создаётся со значением 2 —
+// payload из JSON никогда не даёт Go zero-value для этого поля, поэтому
+// GORM-ловушка из applyFinancialAccount/applyRecurringPayment здесь физически
+// не может сработать — обычный Create+OnConflict без force-Update.
+
+func (s *SyncService) applyTimeEntry(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "time_entries delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.TimeEntry{}).Error
+		})
+	}
+	var row models.TimeEntry
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid time_entries payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "time_entries payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
+	})
+}
+
+func (s *SyncService) applySalaryWorkedDay(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "salary_worked_days delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.SalaryWorkedDay{}).Error
+		})
+	}
+	var row models.SalaryWorkedDay
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid salary_worked_days payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "salary_worked_days payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
+	})
+}
+
+func (s *SyncService) applySalaryDayMultiplier(ctx context.Context, e SyncEntry, updateAll bool) error {
+	if e.Op == "delete" {
+		if e.RowID == "" {
+			return apperrors.Wrap("VALIDATION", "salary_day_multipliers delete missing row_id", nil)
+		}
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			return tx.Where("id = ?", e.RowID).Delete(&models.SalaryDayMultiplier{}).Error
+		})
+	}
+	var row models.SalaryDayMultiplier
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid salary_day_multipliers payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "salary_day_multipliers payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
+	})
+}
+
+// applySalaryDeduction — только upsert: SalaryDeduction никогда не
+// hard-удаляется (CancelDeduction — soft, cancelled_at/by), делать branch
+// нет причин.
+func (s *SyncService) applySalaryDeduction(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var row models.SalaryDeduction
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid salary_deductions payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "salary_deductions payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
+	})
+}
+
+// applySalaryAdvance — только upsert: SalaryAdvance никогда не
+// hard-удаляется (CancelAdvance — soft), тот же случай, что и deduction.
+func (s *SyncService) applySalaryAdvance(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var row models.SalaryAdvance
+	if err := json.Unmarshal(e.Payload, &row); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid salary_advances payload", err)
+	}
+	if row.ID == "" {
+		return apperrors.Wrap("VALIDATION", "salary_advances payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(conflict).Create(&row).Error
 	})
 }

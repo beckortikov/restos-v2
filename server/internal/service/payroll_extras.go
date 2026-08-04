@@ -12,6 +12,7 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/pkg/timeutil"
+	"github.com/restos/restos-v4/server/internal/repo"
 )
 
 // Active — GET /api/v1/time-entries/active?user_id=...
@@ -102,8 +103,14 @@ func (s *TimeEntriesService) Patch(ctx context.Context, id string, in TimeEntryP
 	if len(updates) == 0 {
 		return &existing, nil
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		return recordTimeEntrySync(tx, id)
+	})
+	if err != nil {
 		return nil, err
 	}
 	scoped3, _ := s.r.ForTenant(ctx)

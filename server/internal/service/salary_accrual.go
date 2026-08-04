@@ -421,16 +421,23 @@ func (s *SalaryService) ToggleDayMultiplier(ctx context.Context, userID, date, f
 		err := tx.Where("restaurant_id = ? AND user_id::text = ? AND work_date = ?::date", rid, userID, date).
 			Take(&existing).Error
 		if err == nil {
-			return tx.Delete(&existing).Error
+			if err := tx.Delete(&existing).Error; err != nil {
+				return err
+			}
+			return recordSalaryDayMultiplierDeleteSync(tx, existing.ID, rid)
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
 		uid, ridStr := userID, rid
-		return tx.Create(&models.SalaryDayMultiplier{
+		newRow := &models.SalaryDayMultiplier{
 			ID: uuid.NewString(), RestaurantID: &ridStr, UserID: &uid, WorkDate: date,
 			Multiplier: 2, CreatedAt: time.Now().UTC(),
-		}).Error
+		}
+		if err := tx.Create(newRow).Error; err != nil {
+			return err
+		}
+		return recordSalaryDayMultiplierSync(tx, newRow)
 	})
 	if err != nil {
 		return nil, err
@@ -475,10 +482,21 @@ func (s *SalaryService) SetWorkedDays(ctx context.Context, userID, from, to stri
 
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx)
-		// Снимаем прежние ручные отметки в периоде, ставим новый набор.
+		// Снимаем прежние ручные отметки в периоде, ставим новый набор. Читаем
+		// id ДО удаления — синку delete нечего будет прочитать после DELETE.
+		var toDelete []models.SalaryWorkedDay
+		if err := tx.Where("restaurant_id = ? AND user_id::text = ? AND work_date >= ?::date AND work_date <= ?::date",
+			rid, userID, from, to).Find(&toDelete).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("restaurant_id = ? AND user_id::text = ? AND work_date >= ?::date AND work_date <= ?::date",
 			rid, userID, from, to).Delete(&models.SalaryWorkedDay{}).Error; err != nil {
 			return err
+		}
+		for i := range toDelete {
+			if err := recordSalaryWorkedDayDeleteSync(tx, toDelete[i].ID, rid); err != nil {
+				return err
+			}
 		}
 		now := time.Now().UTC()
 		uid := userID
@@ -488,6 +506,9 @@ func (s *SalaryService) SetWorkedDays(ctx context.Context, userID, from, to stri
 				ID: uuid.NewString(), RestaurantID: &ridStr, UserID: &uid, WorkDate: d, CreatedAt: now,
 			}
 			if err := tx.Create(row).Error; err != nil {
+				return err
+			}
+			if err := recordSalaryWorkedDaySync(tx, row); err != nil {
 				return err
 			}
 		}

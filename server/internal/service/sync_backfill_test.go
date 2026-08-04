@@ -323,3 +323,76 @@ func TestBackfillPagination(t *testing.T) {
 		t.Errorf("sync_log rows = %d, want %d (не задвоилось между страницами)", count, total)
 	}
 }
+
+// TestBackfillPayroll — Ф5б (последняя под-фаза плана): все 5 новых
+// сущностей персонала бэкфиллятся из существующих строк — та же проверка
+// «легаси-данные без единого прежнего sync-следа», что и остальной реестр.
+// Ни одна из пяти таблиц не incl generic-хука (explicit-only, см.
+// sync_payroll.go), поэтому фикстуры Create() НЕ синкают сами себя —
+// в отличие от TestBackfillFinancialAccounts, чистить sync_log перед
+// вызовом Backfill не нужно.
+func TestBackfillPayroll(t *testing.T) {
+	gdb, err := db.Open(syncOrdersTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	cleanDocsTables(t, gdb, "time_entries", "salary_worked_days", "salary_day_multipliers", "salary_deductions", "salary_advances")
+	synclog.SetEnabled(true)
+	t.Cleanup(func() { synclog.SetEnabled(false) })
+
+	restID := uuid.NewString()
+	userID := uuid.NewString()
+	accID := uuid.NewString()
+	active := "active"
+
+	te := models.TimeEntry{ID: uuid.NewString(), UserID: &userID, Status: &active, RestaurantID: &restID}
+	if err := gdb.Create(&te).Error; err != nil {
+		t.Fatalf("create time_entry: %v", err)
+	}
+	wd := models.SalaryWorkedDay{ID: uuid.NewString(), RestaurantID: &restID, UserID: &userID, WorkDate: "2026-08-01"}
+	if err := gdb.Create(&wd).Error; err != nil {
+		t.Fatalf("create salary_worked_day: %v", err)
+	}
+	mult := models.SalaryDayMultiplier{ID: uuid.NewString(), RestaurantID: &restID, UserID: &userID, WorkDate: "2026-08-02", Multiplier: 2}
+	if err := gdb.Create(&mult).Error; err != nil {
+		t.Fatalf("create salary_day_multiplier: %v", err)
+	}
+	ded := models.SalaryDeduction{ID: uuid.NewString(), RestaurantID: &restID, UserID: userID, Amount: decimal.MustFromString("100"), Reason: "опоздание"}
+	if err := gdb.Create(&ded).Error; err != nil {
+		t.Fatalf("create salary_deduction: %v", err)
+	}
+	adv := models.SalaryAdvance{ID: uuid.NewString(), RestaurantID: &restID, UserID: userID, Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: accID}
+	if err := gdb.Create(&adv).Error; err != nil {
+		t.Fatalf("create salary_advance: %v", err)
+	}
+
+	res, err := NewSyncService(repo.New(gdb)).Backfill(ownerCtx(), restID)
+	if err != nil {
+		t.Fatalf("Backfill: %v", err)
+	}
+	for _, name := range []string{"time_entries", "salary_worked_days", "salary_day_multipliers", "salary_deductions", "salary_advances"} {
+		if res.Entities[name] != 1 {
+			t.Errorf("%s backfilled = %d, want 1", name, res.Entities[name])
+		}
+	}
+
+	var multPayload models.SalaryDayMultiplier
+	var row models.SyncLog
+	if err := gdb.Where("table_name = ? AND row_id = ?", "salary_day_multipliers", mult.ID).First(&row).Error; err != nil {
+		t.Fatalf("find salary_day_multiplier sync_log: %v", err)
+	}
+	if err := json.Unmarshal(row.Payload, &multPayload); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if multPayload.Multiplier != 2 {
+		t.Errorf("multiplier = %d, want 2", multPayload.Multiplier)
+	}
+}
