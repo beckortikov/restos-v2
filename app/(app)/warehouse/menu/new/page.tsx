@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Trash2, Timer, Search, X, ArrowLeft, CheckCircle, Network } from 'lucide-react'
+import { Timer, ArrowLeft, CheckCircle, Network } from 'lucide-react'
 import { DishImageUpload } from '@/components/dish-image'
 import {
   UNITS,
@@ -21,7 +21,7 @@ import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Layers } from 'lucide-react'
 import { AttributesForm, ComboPricesEditor, attrsValid, attrsComplete, combosCount, combosOf, comboLabelSetKey, buildCombosPayload, MAX_COMBOS, type AttrForm, type ComboPrices } from '@/components/menu/attributes-editor'
-import { TechCardLinesEditor, emptyTechLine as emptyVariantTechLine } from '@/components/menu/tech-card-lines-editor'
+import { TechCardLinesEditor, emptyTechLine } from '@/components/menu/tech-card-lines-editor'
 
 interface MenuItemForm {
   name: string
@@ -43,123 +43,6 @@ interface MenuItemForm {
   unitSize: number
   saleStep: number
   techCard: TechCardLine[]
-}
-
-const emptyTechLine: TechCardLine = {
-  name: '',
-  qty: 0,
-  unit: '',
-}
-
-// ─── Ingredient/Semi Combobox ──────────────────────────────────────────────
-function IngredientCombobox({
-  ingredients,
-  semiTypes,
-  selectedIngredientId,
-  selectedSemiId,
-  selectedName,
-  onSelectIngredient,
-  onSelectSemi,
-  onClear,
-  onQuickCreate,
-}: {
-  ingredients: Ingredient[]
-  semiTypes: SemiFinishedType[]
-  selectedIngredientId?: string
-  selectedSemiId?: string
-  selectedName: string
-  onSelectIngredient: (id: string) => void
-  onSelectSemi: (id: string) => void
-  onClear: () => void
-  onQuickCreate?: (name: string) => void
-}) {
-  const [query, setQuery] = useState('')
-  const [isOpen, setIsOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setIsOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
-  const q = query.toLowerCase()
-  const filteredIngs = ingredients.filter(i => i.name.toLowerCase().includes(q)).slice(0, 6)
-  const filteredSemis = semiTypes.filter(s => s.name.toLowerCase().includes(q)).slice(0, 4)
-  const hasResults = filteredIngs.length > 0 || filteredSemis.length > 0
-
-  if (selectedIngredientId || selectedSemiId) {
-    return (
-      <div className="flex items-center gap-1.5 px-3 py-2 text-sm bg-background border border-border rounded-lg">
-        <span className="flex-1 truncate font-medium">{selectedName}</span>
-        <button type="button" onClick={onClear} className="shrink-0 p-0.5 hover:bg-muted rounded text-muted-foreground transition-colors">
-          <X className="size-3.5" />
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-        <input
-          type="text"
-          value={query}
-          onChange={e => { setQuery(e.target.value); setIsOpen(true) }}
-          onFocus={() => setIsOpen(true)}
-          placeholder="Поиск ингредиента или полуфабриката..."
-          className="w-full pl-9 pr-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
-        />
-      </div>
-      {isOpen && (hasResults || query.trim() !== '') && (
-        <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto bg-card border border-border rounded-lg shadow-lg">
-          {filteredIngs.length > 0 && (
-            <>
-              <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">Ингредиенты</div>
-              {filteredIngs.map(ing => (
-                <button key={ing.id} type="button"
-                  onClick={() => { onSelectIngredient(ing.id); setQuery(''); setIsOpen(false) }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition-colors flex justify-between items-center">
-                  <span className="text-foreground font-medium">{ing.name}</span>
-                  <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{ing.unit}</span>
-                </button>
-              ))}
-            </>
-          )}
-          {filteredSemis.length > 0 && (
-            <>
-              <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 border-t border-border">Полуфабрикаты</div>
-              {filteredSemis.map(s => (
-                <button key={s.id} type="button"
-                  onClick={() => { onSelectSemi(s.id); setQuery(''); setIsOpen(false) }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition-colors flex justify-between items-center">
-                  <span className="text-foreground font-medium">{s.name}</span>
-                  <span className="text-xs text-muted-foreground bg-primary/10 text-primary px-1.5 py-0.5 rounded font-semibold">{s.outputUnit} (п/ф)</span>
-                </button>
-              ))}
-            </>
-          )}
-          {query.trim() !== '' && (
-            <button
-              type="button"
-              onClick={() => {
-                onQuickCreate?.(query.trim())
-                setQuery('')
-                setIsOpen(false)
-              }}
-              className="w-full text-left px-4 py-2.5 text-xs font-semibold text-primary hover:bg-primary/5 transition-colors border-t border-border flex items-center gap-2"
-            >
-              <Plus className="size-4" />
-              <span>Создать продукт «{query.trim()}»</span>
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ─── Page Component ──────────────────────────────────────────────────────────
@@ -253,24 +136,6 @@ export default function NewMenuItemPage() {
     const ing = customIng || ingredients.find((i) => i.id === id)
     if (!ing) return
     updateTechLine(index, { ingredientId: id, semiId: undefined, name: ing.name, unit: ing.unit })
-  }
-
-  function selectSemi(index: number, id: string) {
-    const semi = semiTypes.find((s) => s.id === id)
-    if (!semi) return
-    updateTechLine(index, { semiId: id, ingredientId: undefined, name: semi.name, unit: semi.outputUnit })
-  }
-
-  function clearTechLine(index: number) {
-    updateTechLine(index, { ingredientId: undefined, semiId: undefined, name: '', unit: '', qty: 0 })
-  }
-
-  function addTechLine() {
-    setForm((prev) => ({ ...prev, techCard: [...prev.techCard, { ...emptyTechLine }] }))
-  }
-
-  function removeTechLine(index: number) {
-    setForm((prev) => ({ ...prev, techCard: prev.techCard.filter((_, i) => i !== index) }))
   }
 
   const handleQuickCreateIngredient = async (e: React.FormEvent) => {
@@ -756,68 +621,18 @@ export default function NewMenuItemPage() {
                 </span>
               </div>
 
-              <div className="space-y-3">
-                {form.techCard.map((line, i) => (
-                  <div key={i} className="flex items-end gap-3 p-3 bg-muted/20 border border-border/50 rounded-xl relative group">
-                    <div className="flex-1 min-w-[200px] space-y-1">
-                      <span className="text-[10px] font-semibold text-muted-foreground block">Ингредиент / Полуфабрикат</span>
-                      <IngredientCombobox
-                        ingredients={ingredients}
-                        semiTypes={semiTypes}
-                        selectedIngredientId={line.ingredientId}
-                        selectedSemiId={line.semiId}
-                        selectedName={line.name}
-                        onSelectIngredient={(id) => selectIngredient(i, id)}
-                        onSelectSemi={(id) => selectSemi(i, id)}
-                        onClear={() => clearTechLine(i)}
-                        onQuickCreate={(name) => {
-                          setQuickCreateName(name)
-                          setQuickCreateTargetIndex(i)
-                          setQuickCreateComboTarget(null)
-                          setQuickCreateOpen(true)
-                        }}
-                      />
-                    </div>
-                    <div className="w-24 space-y-1">
-                      <span className="text-[10px] font-semibold text-muted-foreground block">Кол-во</span>
-                      <DecimalInput
-                        value={line.qty}
-                        onChange={(v) => updateTechLine(i, { qty: v })}
-                        min={0}
-                        className="w-full px-3 py-1.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      />
-                    </div>
-                    <div className="w-20 space-y-1">
-                      <span className="text-[10px] font-semibold text-muted-foreground block">Ед.</span>
-                      <select
-                        value={line.unit}
-                        onChange={(e) => updateTechLine(i, { unit: e.target.value })}
-                        className="w-full px-2 py-1.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      >
-                        <option value="">—</option>
-                        {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
-                      </select>
-                    </div>
-                    {form.techCard.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => removeTechLine(i)}
-                        className="p-2 text-destructive hover:bg-destructive/10 rounded-lg transition-colors mb-0.5"
-                      >
-                        <Trash2 className="size-4.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <button
-                type="button"
-                onClick={addTechLine}
-                className="flex items-center gap-1.5 text-sm font-semibold text-primary hover:text-primary/80 transition-colors py-1.5 px-3 rounded-lg hover:bg-primary/5 border border-dashed border-primary/20 w-full justify-center"
-              >
-                <Plus className="size-4" /> Добавить ингредиент
-              </button>
+              <TechCardLinesEditor
+                lines={form.techCard}
+                onChange={(next) => setForm((p) => ({ ...p, techCard: next }))}
+                ingredients={ingredients}
+                semiTypes={semiTypes}
+                onQuickCreate={(name, idx) => {
+                  setQuickCreateName(name)
+                  setQuickCreateTargetIndex(idx)
+                  setQuickCreateComboTarget(null)
+                  setQuickCreateOpen(true)
+                }}
+              />
             </div>
           ) : null}
 
@@ -876,7 +691,7 @@ export default function NewMenuItemPage() {
                 ))}
               </div>
               <TechCardLinesEditor
-                lines={techCardsByCombo[activeComboKey] ?? [{ ...emptyVariantTechLine }]}
+                lines={techCardsByCombo[activeComboKey] ?? [{ ...emptyTechLine }]}
                 onChange={next => setTechCardsByCombo(prev => ({ ...prev, [activeComboKey]: next }))}
                 ingredients={ingredients}
                 semiTypes={semiTypes}
