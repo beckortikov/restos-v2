@@ -125,6 +125,10 @@ export default function PayrollPage() {
   // «Выплачено» тянуло на клиент всю историю операций и фильтровало её в цикле.
   const [report, setReport] = useState<SalaryReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+  // «История» — свой диапазон, НЕ период начисления вкладки «Сотрудники» (тот =
+  // текущий месяц, для «К выплате»). Владелец хочет видеть всю историю выплат
+  // целиком, поэтому по умолчанию «Всё время».
+  const [historyScope, setHistoryScope] = useState<'month' | 'quarter' | 'year' | 'all'>('all')
 
   // ─── Trend state (ЗП-7) ─────────────────────────────────────────────────────
   // Тренд по месяцам — НЕЗАВИСИМ от выбора периода выше (тот может быть
@@ -261,13 +265,20 @@ export default function PayrollPage() {
   const loadReport = useCallback(async () => {
     setReportLoading(true)
     try {
-      setReport(await fetchSalaryReport(serviceFrom.slice(0, 10), serviceTo.slice(0, 10)))
+      const now = new Date()
+      const to = now.toISOString().slice(0, 10)
+      const pad2 = (n: number) => String(n).padStart(2, '0')
+      let from = '2000-01-01' // 'all' — всё время
+      if (historyScope === 'month') from = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-01`
+      else if (historyScope === 'quarter') from = `${now.getFullYear()}-${pad2(Math.floor(now.getMonth() / 3) * 3 + 1)}-01`
+      else if (historyScope === 'year') from = `${now.getFullYear()}-01-01`
+      setReport(await fetchSalaryReport(from, to))
     } catch (e) {
-      toast.error(humanizeError(e, 'Не удалось загрузить отчёт'))
+      toast.error(humanizeError(e, 'Не удалось загрузить историю'))
     } finally {
       setReportLoading(false)
     }
-  }, [serviceFrom, serviceTo])
+  }, [historyScope])
 
   useEffect(() => {
     if (tab === 'report') loadReport()
@@ -523,7 +534,7 @@ export default function PayrollPage() {
             <button onClick={() => setTab('report')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'report' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
               <FileText className="size-3.5 inline mr-1.5 -mt-0.5" />
-              Отчёт
+              История
             </button>
             <button onClick={() => setTab('timesheet')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'timesheet' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -798,9 +809,28 @@ export default function PayrollPage() {
         </>
       )}
 
-      {/* ═══════════════════════════ REPORT TAB ═══════════════════════════════ */}
+      {/* ═══════════════════════════ HISTORY TAB ══════════════════════════════ */}
       {tab === 'report' && (
         <>
+          {/* Диапазон истории — независим от периода начисления («Сотрудники»).
+              По умолчанию «Всё время»: владелец хочет видеть все выплаты целиком. */}
+          <div className="flex flex-wrap items-center gap-3 bg-muted/30 border border-border rounded-xl p-3">
+            <label className="text-[10px] font-semibold text-muted-foreground uppercase">Показать</label>
+            <div className="flex flex-wrap gap-1 bg-muted/50 p-1 rounded-lg">
+              {([
+                ['all', 'Всё время'],
+                ['year', 'Год'],
+                ['quarter', 'Квартал'],
+                ['month', 'Месяц'],
+              ] as const).map(([key, label]) => (
+                <button key={key} type="button" onClick={() => setHistoryScope(key)}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${historyScope === key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-card'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Тренд ФОТ по месяцам (ЗП-7) — независим от периода выше, всегда
               последние 3/6/12 месяцев по всей команде. */}
           <div className="bg-card rounded-xl border border-border p-4">
