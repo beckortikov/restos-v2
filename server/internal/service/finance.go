@@ -1830,6 +1830,28 @@ func (s *SalaryService) payout(ctx context.Context, in payoutInput) (*models.Fin
 	return op, nil
 }
 
+// periodToOperationDate — бизнес-дата выплаты по периоду начисления (ЗП, вариант
+// А). period в формате YYYY-MM (зарплата/аванс) → операция ложится в ЭТОТ месяц,
+// а не в месяц фактической проводки: зарплату за июнь платят в июле, но в
+// ДДС/ОПиУ она обязана быть июньским расходом (баг: раньше date=сегодня всегда,
+// и всё падало в текущий месяц). Берём min(последний день месяца, сегодня): для
+// прошлого месяца — его последний день, для текущего — сегодня (без будущих дат).
+//
+// Не-YYYY-MM period (обслуживание передаёт диапазон "from...to", свободная
+// выплата без периода) → "" → вызывающий оставляет сегодняшнюю дату.
+func periodToOperationDate(period string, now time.Time) string {
+	t, err := time.Parse("2006-01", period)
+	if err != nil {
+		return ""
+	}
+	lastDay := t.AddDate(0, 1, -1).Format("2006-01-02") // первый день + месяц − день
+	today := now.UTC().Format("2006-01-02")
+	if lastDay < today {
+		return lastDay
+	}
+	return today
+}
+
 // payoutTx — тело выплаты (списание счёта + FinancialOperation + зеркало в
 // кассовую смену), выполняемое ВНУТРИ уже открытой транзакции tr. Вынесено из
 // payout(), чтобы GiveAdvance мог провести выплату аванса и создать
@@ -1851,7 +1873,22 @@ func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*
 		return nil, apperrors.Wrap("VALIDATION", "account_id is required", nil)
 	}
 	now := time.Now().UTC()
-	date := now.Format("2006-01-02")
+	today := now.Format("2006-01-02")
+	// Дата ОПЕРАЦИИ = период начисления (ЗП, вариант А): зарплата/аванс за
+	// прошлый месяц ложится в тот месяц в ДДС/ОПиУ, а не в дату проводки.
+	// Свободная/override-выплата с периодом сюда попадает так же (тот же
+	// payoutInput.Period). Обслуживание (диапазон) и выплата без периода →
+	// periodToOperationDate вернёт "" → остаётся сегодня.
+	//
+	// ВАЖНО: это учётная дата, а НЕ момент движения денег. Наличные из ящика
+	// уходят СЕГОДНЯ независимо от периода, поэтому зеркало кассовой смены
+	// (recordShiftCashOutIfActive ниже) получает today, не date — иначе для
+	// зарплаты за прошлый месяц зеркало пропустилось бы (v3.16.162 отбивает
+	// не-сегодняшние даты) и expected_cash показал бы фантомный излишек.
+	date := today
+	if d := periodToOperationDate(derefOr(in.Period, ""), now); d != "" {
+		date = d
+	}
 	outType := "out"
 	activity := "operational"
 	category := in.Category
@@ -1904,7 +1941,7 @@ func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*
 	// foID — генерируем ЗАРАНЕЕ (а не в поле ниже), чтобы зеркало несло
 	// source_ref на саму эту выплату (069, регресс БАГ #28).
 	foID := uuid.NewString()
-	if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), date, foID, amount, now); err != nil {
+	if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), today, foID, amount, now); err != nil {
 		return nil, err
 	}
 	op := models.FinancialOperation{
