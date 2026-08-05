@@ -15,9 +15,10 @@ import {
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { Users, Wallet, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
-import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
+import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
+import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -94,7 +95,7 @@ export default function PayrollPage() {
   // ─── Salary state ──────────────────────────────────────────────────────────
   const [payAction, setPayAction] = useState<PayAction | null>(null)
   const [selectedEmp, setSelectedEmp] = useState<User | null>(null)
-  // Диалог отметки отработанных дней (дневная оплата, 059).
+  // Отметка отработанных дней (дневная оплата) — из «⋯»-меню строки.
   const [workedDaysEmp, setWorkedDaysEmp] = useState<User | null>(null)
   // Отметка явки за другого сотрудника (054).
   const [attendanceEmpId, setAttendanceEmpId] = useState('')
@@ -128,6 +129,10 @@ export default function PayrollPage() {
   // «Выплачено» тянуло на клиент всю историю операций и фильтровало её в цикле.
   const [report, setReport] = useState<SalaryReport | null>(null)
   const [reportLoading, setReportLoading] = useState(false)
+  // «История» — свой диапазон, НЕ период начисления вкладки «Сотрудники» (тот =
+  // текущий месяц, для «К выплате»). Владелец хочет видеть всю историю выплат
+  // целиком, поэтому по умолчанию «Всё время».
+  const [historyScope, setHistoryScope] = useState<'month' | 'quarter' | 'year' | 'all'>('all')
 
   // ─── Trend state (ЗП-7) ─────────────────────────────────────────────────────
   // Тренд по месяцам — НЕЗАВИСИМ от выбора периода выше (тот может быть
@@ -264,13 +269,20 @@ export default function PayrollPage() {
   const loadReport = useCallback(async () => {
     setReportLoading(true)
     try {
-      setReport(await fetchSalaryReport(serviceFrom.slice(0, 10), serviceTo.slice(0, 10)))
+      const now = new Date()
+      const to = now.toISOString().slice(0, 10)
+      const pad2 = (n: number) => String(n).padStart(2, '0')
+      let from = '2000-01-01' // 'all' — всё время
+      if (historyScope === 'month') from = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-01`
+      else if (historyScope === 'quarter') from = `${now.getFullYear()}-${pad2(Math.floor(now.getMonth() / 3) * 3 + 1)}-01`
+      else if (historyScope === 'year') from = `${now.getFullYear()}-01-01`
+      setReport(await fetchSalaryReport(from, to))
     } catch (e) {
-      toast.error(humanizeError(e, 'Не удалось загрузить отчёт'))
+      toast.error(humanizeError(e, 'Не удалось загрузить историю'))
     } finally {
       setReportLoading(false)
     }
-  }, [serviceFrom, serviceTo])
+  }, [historyScope])
 
   useEffect(() => {
     if (tab === 'report') loadReport()
@@ -520,13 +532,13 @@ export default function PayrollPage() {
           <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
             <button onClick={() => setTab('salary')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'salary' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
-              <Wallet className="size-3.5 inline mr-1.5 -mt-0.5" />
-              Зарплата
+              <Users className="size-3.5 inline mr-1.5 -mt-0.5" />
+              Сотрудники
             </button>
             <button onClick={() => setTab('report')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'report' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
               <FileText className="size-3.5 inline mr-1.5 -mt-0.5" />
-              Отчёт
+              История
             </button>
             <button onClick={() => setTab('timesheet')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'timesheet' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -682,7 +694,7 @@ export default function PayrollPage() {
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Удержания</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 uppercase" title="Выплачено зарплаты/аванса из кассы за выбранный период">Выплачено (ЗП)</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">К выплате</th>
-                    <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase">Действия</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Выплата</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -762,31 +774,46 @@ export default function PayrollPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          {canDo('payroll.manage') && (
-                            <div className="flex items-center justify-center gap-1 flex-wrap">
-                              {/* Дневная оплата: отметить отработанные дни (059) */}
-                              {isDaily && (
-                                <button onClick={(e) => { e.stopPropagation(); setWorkedDaysEmp(emp) }} title="Отметить отработанные дни"
-                                  className="px-2 py-1 text-[11px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-md hover:bg-primary/20 transition-colors inline-flex items-center gap-1">
-                                  <CalendarDays className="size-3" />Дни
+                          {/* Строка — не панель из 4 кнопок: одна primary
+                              «Выплатить» (самое частое) + «⋯» с остальными
+                              деньгами одним тапом (аванс/удержание/дни), без ухода
+                              в карточку. Клик по строке (или шеврон) открывает
+                              карточку со всей историей. «Выплатить» доступно
+                              ВСЕГДА: есть начисление → сервер капит, нет
+                              оклада/ставки → свободная выплата любой суммы. */}
+                          <div className="flex items-center justify-end gap-1.5">
+                            {canDo('payroll.manage') && (
+                              <>
+                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
+                                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shrink-0">
+                                  Выплатить
                                 </button>
-                              )}
-                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'advance') }} title="Аванс"
-                                className="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors">
-                                Аванс
-                              </button>
-                              {/* Выплатить доступно ВСЕГДА: есть начисление → сервер капит,
-                                  нет оклада/ставки → свободная выплата любой суммы. */}
-                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
-                                className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-colors">
-                                Выплатить
-                              </button>
-                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'deduction') }} title="Удержание"
-                                className="px-2 py-1 text-[11px] font-medium text-destructive bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors">
-                                Удерж.
-                              </button>
-                            </div>
-                          )}
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    {/* stopPropagation — иначе клик по «⋯» ещё и уводит в карточку (onClick строки) */}
+                                    <button onClick={(e) => e.stopPropagation()} title="Ещё действия"
+                                      className="size-8 inline-flex items-center justify-center text-muted-foreground border border-border rounded-lg hover:bg-muted transition-colors shrink-0">
+                                      <MoreVertical className="size-4" />
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" className="w-48">
+                                    <DropdownMenuItem onClick={() => openDialog(emp, 'advance')} className="text-sm cursor-pointer">
+                                      Выдать аванс
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => openDialog(emp, 'deduction')} className="text-sm cursor-pointer">
+                                      Внести удержание
+                                    </DropdownMenuItem>
+                                    {isDaily && (
+                                      <DropdownMenuItem onClick={() => setWorkedDaysEmp(emp)} className="text-sm cursor-pointer">
+                                        <CalendarDays className="size-3.5 mr-2" /> Отметить дни
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </>
+                            )}
+                            <ChevronRight className="size-4 text-muted-foreground/40 shrink-0" />
+                          </div>
                         </td>
                       </tr>
                     )
@@ -811,9 +838,28 @@ export default function PayrollPage() {
         </>
       )}
 
-      {/* ═══════════════════════════ REPORT TAB ═══════════════════════════════ */}
+      {/* ═══════════════════════════ HISTORY TAB ══════════════════════════════ */}
       {tab === 'report' && (
         <>
+          {/* Диапазон истории — независим от периода начисления («Сотрудники»).
+              По умолчанию «Всё время»: владелец хочет видеть все выплаты целиком. */}
+          <div className="flex flex-wrap items-center gap-3 bg-muted/30 border border-border rounded-xl p-3">
+            <label className="text-[10px] font-semibold text-muted-foreground uppercase">Показать</label>
+            <div className="flex flex-wrap gap-1 bg-muted/50 p-1 rounded-lg">
+              {([
+                ['all', 'Всё время'],
+                ['year', 'Год'],
+                ['quarter', 'Квартал'],
+                ['month', 'Месяц'],
+              ] as const).map(([key, label]) => (
+                <button key={key} type="button" onClick={() => setHistoryScope(key)}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${historyScope === key ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-card'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Тренд ФОТ по месяцам (ЗП-7) — независим от периода выше, всегда
               последние 3/6/12 месяцев по всей команде. */}
           <div className="bg-card rounded-xl border border-border p-4">
@@ -1267,7 +1313,7 @@ export default function PayrollPage() {
         onSaved={reload}
       />
 
-      {/* Отметка отработанных дней (дневная оплата, 059) */}
+      {/* Отметка отработанных дней (дневная оплата) — из «⋯»-меню строки */}
       {workedDaysEmp && (
         <WorkedDaysDialog
           open={!!workedDaysEmp}

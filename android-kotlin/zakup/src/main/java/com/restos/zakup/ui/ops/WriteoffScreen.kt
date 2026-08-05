@@ -130,7 +130,8 @@ fun WriteoffScreen(
                                 }
                                 CheckStepperRow(
                                     checked = true,
-                                    qtyLabel = formatQty(qty, line.unit),
+                                    qtyText = line.qty,
+                                    unit = line.unit,
                                     checkedColor = ZakupColors.Danger,
                                     onToggle = { viewModel.remove(line.id) },
                                     onDec = {
@@ -141,6 +142,7 @@ fun WriteoffScreen(
                                         val next = (qty + BigDecimal.ONE).coerceAtMost(line.stock)
                                         viewModel.setQty(line.id, next.stripTrailingZeros().toPlainString())
                                     },
+                                    onQtyText = { viewModel.setQty(line.id, it) },
                                 )
                             }
                         }

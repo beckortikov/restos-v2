@@ -6,7 +6,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Pencil, TrendingUp, History, X as XIcon } from 'lucide-react'
+import { ArrowLeft, Pencil, TrendingUp, History, X as XIcon, CalendarDays } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
@@ -23,6 +23,7 @@ import {
   fetchSalaryAdvances, cancelSalaryAdvance, type SalaryAdvanceRow,
 } from '@/lib/queries/finance'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
+import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
 
 const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек']
 function pad(n: number): string { return String(n).padStart(2, '0') }
@@ -54,6 +55,10 @@ export default function EmployeeDetailPage() {
   const [loading, setLoading] = useState(true)
 
   const [payAction, setPayAction] = useState<PayAction | null>(null)
+  // Отметка отработанных дней (дневная оплата) — перенесена сюда со списка:
+  // в новом дизайне на строке остаётся одна кнопка «Выплатить», всё
+  // остальное живёт в карточке сотрудника.
+  const [showDays, setShowDays] = useState(false)
 
   // Текущий месяц — та же формула, что и серверный кап (ЗП-4): период для
   // выплаты всегда «сейчас», иначе капы и это отображение разойдутся.
@@ -75,15 +80,18 @@ export default function EmployeeDetailPage() {
     const now = new Date()
     const monthStart = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-01`
     const today = now.toISOString().slice(0, 10)
-    const trendStart = new Date(now.getFullYear(), now.getMonth() - (TREND_MONTHS - 1), 1)
-    const trendFrom = `${trendStart.getFullYear()}-${pad(trendStart.getMonth() + 1)}-01`
+    // История выплат — ЗА ВСЁ ВРЕМЯ (владелец хочет видеть всё, а не 6 мес.).
+    // Тренд ниже всё равно берёт из этих же payouts только последние
+    // TREND_MONTHS (bucket по monthKey), поэтому широкий fetch его не ломает —
+    // старые месяцы просто не попадают в 6 корзин тренда, но видны в ленте.
+    const HISTORY_FROM = '2000-01-01'
 
     const [users, accs, accrualRows, ops, report, dedRows, advRows] = await Promise.all([
       fetchUsers(),
       fetchFinancialAccounts().then(selectableAccounts),
       fetchSalaryAccrual(monthStart, today).catch(() => []),
       fetchFinancialOperations(),
-      fetchSalaryReport(trendFrom, today).catch(() => null),
+      fetchSalaryReport(HISTORY_FROM, today).catch(() => null),
       fetchSalaryDeductions(id).catch(() => []),
       fetchSalaryAdvances(id).catch(() => []),
     ])
@@ -224,6 +232,7 @@ export default function EmployeeDetailPage() {
 
   const remaining = Math.max(0, (accrual?.accrued ?? employee.salary ?? 0) - (employee.advance ?? 0) - (employee.deductions ?? 0) - salaryOnlyPaidMonth)
   const serviceRemaining = Math.max(0, serviceAccrued - servicePaid)
+  const isDaily = accrual?.payType === 'daily' || employee.payType === 'daily'
 
   return (
     <div className="flex flex-col min-h-screen bg-background">
@@ -279,6 +288,11 @@ export default function EmployeeDetailPage() {
           <button onClick={() => setPayAction('salary')} className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors">Выплатить зарплату</button>
           <button onClick={() => setPayAction('advance')} className="px-4 py-2 rounded-lg text-sm font-medium bg-amber-600 text-white hover:bg-amber-700 transition-colors">Выдать аванс</button>
           <button onClick={() => setPayAction('deduction')} className="px-4 py-2 rounded-lg text-sm font-medium bg-card border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors">Удержание</button>
+          {isDaily && (
+            <button onClick={() => setShowDays(true)} className="px-4 py-2 rounded-lg text-sm font-medium bg-card border border-border text-foreground hover:bg-muted transition-colors inline-flex items-center gap-1.5">
+              <CalendarDays className="size-4" /> Отметить дни
+            </button>
+          )}
           {serviceRemaining > 0.005 && (
             <button onClick={() => setPayAction('service')} className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors">
               Обслуживание {formatCurrency(serviceRemaining)}
@@ -326,7 +340,7 @@ export default function EmployeeDetailPage() {
               <div className="size-6 border-4 border-primary/30 border-t-primary rounded-full animate-spin" />
             </div>
           ) : timeline.length === 0 ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">Пока нет выплат за последние {TREND_MONTHS} мес.</div>
+            <div className="py-10 text-center text-sm text-muted-foreground">Выплат пока не было</div>
           ) : (
             <div className="divide-y divide-border/60">
               {timeline.map((item, i) => {
@@ -425,6 +439,20 @@ export default function EmployeeDetailPage() {
         onClose={() => setPayAction(null)}
         onSaved={reload}
       />
+
+      {/* Отметка отработанных дней (дневная оплата) — только для тех, у кого
+          ставка за день. Начисление «ставка × дни» считает именно эти отметки. */}
+      {showDays && (
+        <WorkedDaysDialog
+          open={showDays}
+          onOpenChange={(v) => { if (!v) setShowDays(false) }}
+          employeeId={employee.id}
+          employeeName={employee.name}
+          dailyRate={accrual?.dailyRate ?? employee.dailyRate ?? 0}
+          initialDate={new Date().toISOString().slice(0, 10)}
+          onSaved={reload}
+        />
+      )}
     </div>
   )
 }

@@ -126,8 +126,16 @@ class ReturnViewModel @Inject constructor(
     fun setReason(r: ReturnReason) = _state.update { it.copy(reason = r) }
     fun setRefund(r: RefundType) = _state.update { it.copy(refund = r) }
     fun selectAccount(id: String) = _state.update { it.copy(accountId = id) }
+    /** Свободный ввод: клэмпим к доступному остатку накладной (available_to_return). */
     fun setQty(lineId: String, v: String) = _state.update { s ->
-        s.copy(lines = s.lines.map { if (it.receiptLineId == lineId) it.copy(qty = v.opSanitize()) else it })
+        s.copy(lines = s.lines.map { line ->
+            if (line.receiptLineId != lineId) return@map line
+            val sanitized = v.opSanitize()
+            val clamped = sanitized.toDecimalOrZero().let { qty ->
+                if (qty > line.available) line.available.stripTrailingZeros().toPlainString() else sanitized
+            }
+            line.copy(qty = clamped)
+        })
     }
 
     fun submit() {
