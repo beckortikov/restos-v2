@@ -15,8 +15,7 @@ import {
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { Users, Wallet, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
-import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
+import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
@@ -94,8 +93,6 @@ export default function PayrollPage() {
   // ─── Salary state ──────────────────────────────────────────────────────────
   const [payAction, setPayAction] = useState<PayAction | null>(null)
   const [selectedEmp, setSelectedEmp] = useState<User | null>(null)
-  // Диалог отметки отработанных дней (дневная оплата, 059).
-  const [workedDaysEmp, setWorkedDaysEmp] = useState<User | null>(null)
   // Отметка явки за другого сотрудника (054).
   const [attendanceEmpId, setAttendanceEmpId] = useState('')
   const [markingAttendance, setMarkingAttendance] = useState(false)
@@ -520,8 +517,8 @@ export default function PayrollPage() {
           <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
             <button onClick={() => setTab('salary')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'salary' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
-              <Wallet className="size-3.5 inline mr-1.5 -mt-0.5" />
-              Зарплата
+              <Users className="size-3.5 inline mr-1.5 -mt-0.5" />
+              Сотрудники
             </button>
             <button onClick={() => setTab('report')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'report' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -682,7 +679,7 @@ export default function PayrollPage() {
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Удержания</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-emerald-600 uppercase" title="Выплачено зарплаты/аванса из кассы за выбранный период">Выплачено (ЗП)</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">К выплате</th>
-                    <th className="px-4 py-3 text-center text-xs font-semibold text-muted-foreground uppercase">Действия</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-muted-foreground uppercase">Выплата</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -762,31 +759,21 @@ export default function PayrollPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          {canDo('payroll.manage') && (
-                            <div className="flex items-center justify-center gap-1 flex-wrap">
-                              {/* Дневная оплата: отметить отработанные дни (059) */}
-                              {isDaily && (
-                                <button onClick={(e) => { e.stopPropagation(); setWorkedDaysEmp(emp) }} title="Отметить отработанные дни"
-                                  className="px-2 py-1 text-[11px] font-medium text-primary bg-primary/10 border border-primary/20 rounded-md hover:bg-primary/20 transition-colors inline-flex items-center gap-1">
-                                  <CalendarDays className="size-3" />Дни
-                                </button>
-                              )}
-                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'advance') }} title="Аванс"
-                                className="px-2 py-1 text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-md hover:bg-amber-100 transition-colors">
-                                Аванс
-                              </button>
-                              {/* Выплатить доступно ВСЕГДА: есть начисление → сервер капит,
-                                  нет оклада/ставки → свободная выплата любой суммы. */}
+                          {/* Одна кнопка на строке — «Выплатить» (самое частое).
+                              Аванс/удержание/дни/оклад — в карточке сотрудника
+                              (клик по строке), чтобы строка не превращалась в
+                              панель из 4 кнопок. Выплатить доступно ВСЕГДА: есть
+                              начисление → сервер капит, нет оклада/ставки →
+                              свободная выплата любой суммы. */}
+                          <div className="flex items-center justify-end gap-2">
+                            {canDo('payroll.manage') && (
                               <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
-                                className="px-2 py-1 text-[11px] font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md hover:bg-emerald-100 transition-colors">
+                                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shrink-0">
                                 Выплатить
                               </button>
-                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'deduction') }} title="Удержание"
-                                className="px-2 py-1 text-[11px] font-medium text-destructive bg-red-50 border border-red-200 rounded-md hover:bg-red-100 transition-colors">
-                                Удерж.
-                              </button>
-                            </div>
-                          )}
+                            )}
+                            <ChevronRight className="size-4 text-muted-foreground/40 shrink-0" />
+                          </div>
                         </td>
                       </tr>
                     )
@@ -1267,18 +1254,6 @@ export default function PayrollPage() {
         onSaved={reload}
       />
 
-      {/* Отметка отработанных дней (дневная оплата, 059) */}
-      {workedDaysEmp && (
-        <WorkedDaysDialog
-          open={!!workedDaysEmp}
-          onOpenChange={(v) => { if (!v) setWorkedDaysEmp(null) }}
-          employeeId={workedDaysEmp.id}
-          employeeName={workedDaysEmp.name}
-          dailyRate={accrualByUser[workedDaysEmp.id]?.dailyRate ?? workedDaysEmp.dailyRate ?? 0}
-          initialDate={serviceTo.slice(0, 10)}
-          onSaved={() => { reload() }}
-        />
-      )}
     </div>
   )
 }
