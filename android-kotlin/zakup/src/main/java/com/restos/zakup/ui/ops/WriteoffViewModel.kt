@@ -129,8 +129,16 @@ class WriteoffViewModel @Inject constructor(
     }
 
     fun isAdded(id: String) = _state.value.lines.any { it.id == id }
+    /** Свободный ввод: клэмпим к остатку — так же, как +/- (нельзя списать больше, чем есть). */
     fun setQty(id: String, qty: String) = _state.update { s ->
-        s.copy(lines = s.lines.map { if (it.id == id) it.copy(qty = qty.opSanitize()) else it })
+        s.copy(lines = s.lines.map { line ->
+            if (line.id != id) return@map line
+            val sanitized = qty.opSanitize()
+            val clamped = sanitized.toDecimalOrZero().let { v ->
+                if (v > line.stock) line.stock.stripTrailingZeros().toPlainString() else sanitized
+            }
+            line.copy(qty = clamped)
+        })
     }
     fun remove(id: String) = _state.update { s -> s.copy(lines = s.lines.filterNot { it.id == id }) }
 

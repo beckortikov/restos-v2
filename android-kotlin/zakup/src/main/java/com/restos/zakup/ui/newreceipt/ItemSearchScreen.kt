@@ -272,33 +272,34 @@ private fun ItemRow(item: SearchItem, line: DraftLine?, onAdd: () -> Unit, onRem
         }
         if (added) {
             QtyStepper(
-                qty = line!!.qty.toDecimalOrZero(),
+                qtyText = line!!.qty,
                 unit = item.unit,
-                onChange = { onQty(it.stripTrailingZeros().toPlainString()) },
+                onQtyText = onQty,
                 onZeroOrBelow = onRemove,
             )
         }
     }
 }
 
-/** Инлайн-степпер кол-ва (#14) — доступен сразу в результатах поиска, без возврата в приёмку. */
+/**
+ * Инлайн-степпер кол-ва (#14) — доступен сразу в результатах поиска, без
+ * возврата в приёмку. Поле между +/- принимает свободный ввод с клавиатуры
+ * (набрать «100», а не тапнуть «+» сто раз).
+ */
 @Composable
-private fun QtyStepper(qty: BigDecimal, unit: String?, onChange: (BigDecimal) -> Unit, onZeroOrBelow: () -> Unit) {
+private fun QtyStepper(qtyText: String, unit: String?, onQtyText: (String) -> Unit, onZeroOrBelow: () -> Unit) {
+    val qty = qtyText.toDecimalOrZero()
     val step = BigDecimal.ONE
     Row(verticalAlignment = Alignment.CenterVertically) {
         StepBtn(Icons.Outlined.Remove) {
             val next = qty - step
-            if (next.signum() <= 0) onZeroOrBelow() else onChange(next)
+            if (next.signum() <= 0) onZeroOrBelow() else onQtyText(next.stripTrailingZeros().toPlainString())
         }
-        Text(
-            formatQty(qty, unit),
-            fontSize = 13.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = ZakupColors.TextPrimary,
-            modifier = Modifier.padding(horizontal = 8.dp).width(56.dp),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
-        StepBtn(Icons.Outlined.Add) { onChange(qty + step) }
+        com.restos.zakup.ui.ops.QtyEditField(value = qtyText, onChange = onQtyText, width = 48.dp)
+        if (!unit.isNullOrBlank()) {
+            Text(unit, fontSize = 11.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(start = 4.dp, end = 4.dp))
+        }
+        StepBtn(Icons.Outlined.Add) { onQtyText((qty + step).stripTrailingZeros().toPlainString()) }
     }
 }
 

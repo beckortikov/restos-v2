@@ -124,7 +124,8 @@ fun ReturnScreen(
                                 }
                                 CheckStepperRow(
                                     checked = checked,
-                                    qtyLabel = formatQty(qty, line.unit),
+                                    qtyText = line.qty,
+                                    unit = line.unit,
                                     checkedColor = ZakupColors.Danger,
                                     onToggle = {
                                         viewModel.setQty(line.receiptLineId, if (checked) "0" else line.available.stripTrailingZeros().toPlainString())
@@ -137,6 +138,7 @@ fun ReturnScreen(
                                         val next = (qty + BigDecimal.ONE).coerceAtMost(line.available)
                                         viewModel.setQty(line.receiptLineId, next.stripTrailingZeros().toPlainString())
                                     },
+                                    onQtyText = { viewModel.setQty(line.receiptLineId, it) },
                                 )
                             }
                         }

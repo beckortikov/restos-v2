@@ -20,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -41,16 +42,24 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.restos.zakup.ui.components.ZakupTopBar
@@ -245,17 +254,21 @@ fun WarehouseChip(warehouses: List<WarehouseTab>, selected: String?, onSelect: (
 }
 
 /**
- * Чекбокс + степпер кол-ва в одной строке (09/10) — тап по кружку переключает
- * включено/выключено (0 ↔ полный доступный объём), +/- подстраивает точечно.
+ * Чекбокс + редактируемое поле кол-ва в одной строке (09/10) — тап по кружку
+ * переключает включено/выключено (0 ↔ полный доступный объём), +/- подстраивает
+ * точечно, а поле между ними — обычный ввод текста: для «100 шт» набрать «100»,
+ * а не тапнуть «+» сто раз.
  */
 @Composable
 fun CheckStepperRow(
     checked: Boolean,
-    qtyLabel: String,
+    qtyText: String,
+    unit: String?,
     checkedColor: Color,
     onToggle: () -> Unit,
     onDec: () -> Unit,
     onInc: () -> Unit,
+    onQtyText: (String) -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Icon(
@@ -270,19 +283,54 @@ fun CheckStepperRow(
                 Icon(Icons.Outlined.Remove, contentDescription = null, tint = ZakupColors.TextSecondary, modifier = Modifier.size(14.dp))
             }
         }
-        Text(
-            qtyLabel,
-            fontSize = 13.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = ZakupColors.TextPrimary,
-            modifier = Modifier.padding(horizontal = 8.dp).width(60.dp),
-            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-        )
+        QtyEditField(value = qtyText, onChange = onQtyText, width = 48.dp)
+        if (!unit.isNullOrBlank()) {
+            Text(unit, fontSize = 11.sp, color = ZakupColors.TextTertiary, modifier = Modifier.padding(end = 6.dp))
+        }
         Surface(onClick = onInc, shape = CircleShape, color = ZakupColors.SurfaceMuted, modifier = Modifier.size(26.dp)) {
             Box(contentAlignment = Alignment.Center) {
                 Icon(Icons.Outlined.Add, contentDescription = null, tint = ZakupColors.TextSecondary, modifier = Modifier.size(14.dp))
             }
         }
+    }
+}
+
+/**
+ * Компактное редактируемое числовое поле для инлайн-степперов — свободный
+ * набор с клавиатуры (не только +/-). При получении фокуса выделяет весь
+ * текст, чтобы первый же тап позволял перетипировать значение целиком.
+ * Внешние изменения value (шаги +/-, программные сбросы) синхронизируются без
+ * сброса позиции курсора при обычном наборе (см. LaunchedEffect ниже).
+ */
+@Composable
+fun QtyEditField(value: String, onChange: (String) -> Unit, width: Dp = 52.dp) {
+    var tfv by remember { mutableStateOf(TextFieldValue(value, selection = TextRange(value.length))) }
+    LaunchedEffect(value) {
+        if (tfv.text != value) tfv = TextFieldValue(value, selection = TextRange(value.length))
+    }
+    Surface(shape = RoundedCornerShape(ZakupRadius.small), color = ZakupColors.SurfaceMuted) {
+        BasicTextField(
+            value = tfv,
+            onValueChange = { new ->
+                tfv = new
+                if (new.text != value) onChange(new.text)
+            },
+            singleLine = true,
+            textStyle = TextStyle(
+                fontSize = 13.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = ZakupColors.TextPrimary,
+                textAlign = TextAlign.Center,
+            ),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            cursorBrush = SolidColor(ZakupColors.Primary),
+            modifier = Modifier
+                .width(width)
+                .padding(horizontal = 6.dp, vertical = 7.dp)
+                .onFocusChanged { fs ->
+                    if (fs.isFocused) tfv = tfv.copy(selection = TextRange(0, tfv.text.length))
+                },
+        )
     }
 }
 
