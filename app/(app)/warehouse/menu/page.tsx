@@ -5,8 +5,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub } from '@/lib/decimal'
-import { type MenuItem, type MenuStation, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
-import { fetchMenuItems, toggleMenuAvailability, updateMenuItem, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
+import { type MenuItem, type MenuStation, type TechCardLine, type Ingredient, type SemiFinishedType, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
+import { fetchMenuItems, toggleMenuAvailability, updateMenuItem, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride, fetchIngredients, fetchSemiTypes, replaceTechCardLines } from '@/lib/queries'
 import { type MenuCategory } from '@/lib/queries'
 import { Search, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X, Ruler, Trash2, Check } from 'lucide-react'
 import { DishImage } from '@/components/dish-image'
@@ -16,6 +16,7 @@ import { useDataSync } from '@/hooks/use-data-sync'
 import { ManageSizeScalesDialog } from '@/components/dialogs/manage-size-scales-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { TechCardLinesEditor, emptyTechLine } from '@/components/menu/tech-card-lines-editor'
 
 export default function MenuPage() {
   const navigate = useNavigate()
@@ -29,6 +30,17 @@ export default function MenuPage() {
   const [quickPrice, setQuickPrice] = useState<number>(0)
   const [savingPrice, setSavingPrice] = useState(false)
   const [deletingItem, setDeletingItem] = useState(false)
+  // Инлайн-правка техкарты прямо из карточки — без перехода в полный
+  // редактор. Справочники (ingredients/semiTypes) тянутся лениво при первом
+  // тапе «Редактировать» за сессию и кэшируются в state — action-sheet сам
+  // по себе новых запросов не делает (techCard уже есть в it из списка).
+  const [editingTechCard, setEditingTechCard] = useState(false)
+  const [techCardLines, setTechCardLines] = useState<TechCardLine[]>([])
+  const [ingredients, setIngredients] = useState<Ingredient[]>([])
+  const [semiTypes, setSemiTypes] = useState<SemiFinishedType[]>([])
+  const [refsLoaded, setRefsLoaded] = useState(false)
+  const [loadingRefs, setLoadingRefs] = useState(false)
+  const [savingTechCard, setSavingTechCard] = useState(false)
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [menuCategoriesFull, setMenuCategoriesFull] = useState<MenuCategory[]>([])
@@ -77,6 +89,38 @@ export default function MenuPage() {
   function openSheet(item: MenuItem) {
     setActionItem(item)
     setQuickPrice(item.price)
+    setEditingTechCard(false)
+  }
+
+  // Тап «Редактировать» у техкарты в карточке — справочники грузятся один
+  // раз за сессию страницы (refsLoaded), сами строки уже есть в it.techCard.
+  function startEditTechCard(it: MenuItem) {
+    setTechCardLines(it.techCard.length > 0 ? it.techCard : [{ ...emptyTechLine }])
+    setEditingTechCard(true)
+    if (!refsLoaded) {
+      setLoadingRefs(true)
+      Promise.all([fetchIngredients(), fetchSemiTypes()])
+        .then(([i, s]) => { setIngredients(i); setSemiTypes(s); setRefsLoaded(true) })
+        .catch(() => toast.error('Не удалось загрузить справочники ингредиентов'))
+        .finally(() => setLoadingRefs(false))
+    }
+  }
+
+  async function handleSaveTechCard() {
+    if (!actionItem || savingTechCard) return
+    const validLines = techCardLines.filter((l) => l.ingredientId || l.semiId)
+    setSavingTechCard(true)
+    try {
+      await replaceTechCardLines(actionItem.id, validLines)
+      setMenuItems((prev) => prev.map((m) => m.id === actionItem.id ? { ...m, techCard: validLines } : m))
+      setActionItem((a) => a ? { ...a, techCard: validLines } : a)
+      setEditingTechCard(false)
+      toast.success('Техкарта сохранена')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось сохранить техкарту'))
+    } finally {
+      setSavingTechCard(false)
+    }
   }
 
   // Быстрая правка цены прямо из карточки-листа — без захода в полный редактор.
@@ -502,7 +546,7 @@ export default function MenuPage() {
       )}
 
       {/* Карточка блюда — тап по строке: техкарта, быстрая цена, действия */}
-      <Dialog open={!!actionItem} onOpenChange={(v) => { if (!v) setActionItem(null) }}>
+      <Dialog open={!!actionItem} onOpenChange={(v) => { if (!v) { setActionItem(null); setEditingTechCard(false) } }}>
         <DialogContent className="sm:max-w-lg rounded-xl max-h-[88vh] overflow-y-auto">
           {actionItem && (() => {
             const it = actionItem
@@ -559,15 +603,67 @@ export default function MenuPage() {
                     </div>
                   )}
 
-                  {/* Техкарта */}
+                  {/* Техкарта — без вариаций правится прямо здесь, с вариациями
+                      (VariantTechCardsEditor per-размер) остаётся read-only,
+                      «Править» ведёт в полный редактор. */}
                   <div>
-                    <div className="flex items-center gap-2 mb-2">
-                      <BookOpen className="size-4 text-primary" />
-                      <p className="text-sm font-semibold text-foreground">Техкарта</p>
-                      <span className="text-xs text-muted-foreground">({it.techCard.length})</span>
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <BookOpen className="size-4 text-primary" />
+                        <p className="text-sm font-semibold text-foreground">Техкарта</p>
+                        <span className="text-xs text-muted-foreground">
+                          ({editingTechCard ? techCardLines.filter((l) => l.ingredientId || l.semiId).length : it.techCard.length})
+                        </span>
+                      </div>
+                      {!hasVariants && canEdit && !editingTechCard && (
+                        <button
+                          type="button"
+                          onClick={() => startEditTechCard(it)}
+                          className="flex items-center gap-1 text-xs font-medium text-primary hover:text-primary/80 transition-colors"
+                        >
+                          <Pencil className="size-3.5" />
+                          Редактировать
+                        </button>
+                      )}
                     </div>
-                    {it.techCard.length === 0 ? (
-                      <p className="text-xs text-muted-foreground px-1 py-2">Техкарта пуста — добавьте ингредиенты в редакторе.</p>
+                    {editingTechCard ? (
+                      loadingRefs ? (
+                        <div className="flex justify-center py-6">
+                          <div className="size-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          <TechCardLinesEditor
+                            lines={techCardLines}
+                            onChange={setTechCardLines}
+                            ingredients={ingredients}
+                            semiTypes={semiTypes}
+                            onIngredientCreated={(ing) => setIngredients((prev) => [...prev, ing])}
+                          />
+                          <div className="flex items-center gap-2 justify-end">
+                            <button
+                              type="button"
+                              onClick={() => setEditingTechCard(false)}
+                              className="px-3.5 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              type="button"
+                              onClick={handleSaveTechCard}
+                              disabled={savingTechCard}
+                              className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50"
+                            >
+                              <Check className="size-4" />
+                              {savingTechCard ? 'Сохранение...' : 'Сохранить техкарту'}
+                            </button>
+                          </div>
+                        </div>
+                      )
+                    ) : it.techCard.length === 0 ? (
+                      <p className="text-xs text-muted-foreground px-1 py-2">
+                        {!hasVariants && canEdit ? 'Техкарта пуста — нажмите «Редактировать», чтобы добавить ингредиенты.' : 'Техкарта пуста.'}
+                      </p>
                     ) : (
                       <div className="rounded-lg border border-border overflow-hidden divide-y divide-border">
                         {it.techCard.map((line, i) => (
