@@ -15,8 +15,10 @@ import {
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ChevronRight, TrendingUp, TrendingDown } from 'lucide-react'
+import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
+import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -93,6 +95,8 @@ export default function PayrollPage() {
   // ─── Salary state ──────────────────────────────────────────────────────────
   const [payAction, setPayAction] = useState<PayAction | null>(null)
   const [selectedEmp, setSelectedEmp] = useState<User | null>(null)
+  // Отметка отработанных дней (дневная оплата) — из «⋯»-меню строки.
+  const [workedDaysEmp, setWorkedDaysEmp] = useState<User | null>(null)
   // Отметка явки за другого сотрудника (054).
   const [attendanceEmpId, setAttendanceEmpId] = useState('')
   const [markingAttendance, setMarkingAttendance] = useState(false)
@@ -770,18 +774,43 @@ export default function PayrollPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          {/* Одна кнопка на строке — «Выплатить» (самое частое).
-                              Аванс/удержание/дни/оклад — в карточке сотрудника
-                              (клик по строке), чтобы строка не превращалась в
-                              панель из 4 кнопок. Выплатить доступно ВСЕГДА: есть
-                              начисление → сервер капит, нет оклада/ставки →
-                              свободная выплата любой суммы. */}
-                          <div className="flex items-center justify-end gap-2">
+                          {/* Строка — не панель из 4 кнопок: одна primary
+                              «Выплатить» (самое частое) + «⋯» с остальными
+                              деньгами одним тапом (аванс/удержание/дни), без ухода
+                              в карточку. Клик по строке (или шеврон) открывает
+                              карточку со всей историей. «Выплатить» доступно
+                              ВСЕГДА: есть начисление → сервер капит, нет
+                              оклада/ставки → свободная выплата любой суммы. */}
+                          <div className="flex items-center justify-end gap-1.5">
                             {canDo('payroll.manage') && (
-                              <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
-                                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shrink-0">
-                                Выплатить
-                              </button>
+                              <>
+                                <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
+                                  className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shrink-0">
+                                  Выплатить
+                                </button>
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    {/* stopPropagation — иначе клик по «⋯» ещё и уводит в карточку (onClick строки) */}
+                                    <button onClick={(e) => e.stopPropagation()} title="Ещё действия"
+                                      className="size-8 inline-flex items-center justify-center text-muted-foreground border border-border rounded-lg hover:bg-muted transition-colors shrink-0">
+                                      <MoreVertical className="size-4" />
+                                    </button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end" className="w-48">
+                                    <DropdownMenuItem onClick={() => openDialog(emp, 'advance')} className="text-sm cursor-pointer">
+                                      Выдать аванс
+                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => openDialog(emp, 'deduction')} className="text-sm cursor-pointer">
+                                      Внести удержание
+                                    </DropdownMenuItem>
+                                    {isDaily && (
+                                      <DropdownMenuItem onClick={() => setWorkedDaysEmp(emp)} className="text-sm cursor-pointer">
+                                        <CalendarDays className="size-3.5 mr-2" /> Отметить дни
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </>
                             )}
                             <ChevronRight className="size-4 text-muted-foreground/40 shrink-0" />
                           </div>
@@ -1284,6 +1313,18 @@ export default function PayrollPage() {
         onSaved={reload}
       />
 
+      {/* Отметка отработанных дней (дневная оплата) — из «⋯»-меню строки */}
+      {workedDaysEmp && (
+        <WorkedDaysDialog
+          open={!!workedDaysEmp}
+          onOpenChange={(v) => { if (!v) setWorkedDaysEmp(null) }}
+          employeeId={workedDaysEmp.id}
+          employeeName={workedDaysEmp.name}
+          dailyRate={accrualByUser[workedDaysEmp.id]?.dailyRate ?? workedDaysEmp.dailyRate ?? 0}
+          initialDate={serviceTo.slice(0, 10)}
+          onSaved={() => { reload() }}
+        />
+      )}
     </div>
   )
 }
