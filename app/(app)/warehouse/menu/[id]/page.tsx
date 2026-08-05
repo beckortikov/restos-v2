@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Plus, Trash2, Timer, Search, X, ArrowLeft, CheckCircle, Archive, Network } from 'lucide-react'
+import { Trash2, Timer, ArrowLeft, CheckCircle, Archive, Network } from 'lucide-react'
 import { DishImageUpload } from '@/components/dish-image'
 import {
   UNITS,
@@ -14,16 +14,16 @@ import {
   type MenuStation,
   type MenuAttribute,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem } from '@/lib/queries'
 import { createNetworkMenuItem, updateNetworkMenuItem } from '@/lib/queries/transfers'
 import { useNetworkStatus } from '@/hooks/use-network-status'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { humanizeError } from '@/lib/errors'
 import { AttributesEditor } from '@/components/menu/attributes-editor'
 import { VariantTechCardsEditor } from '@/components/menu/variant-tech-cards-editor'
+import { TechCardLinesEditor, emptyTechLine } from '@/components/menu/tech-card-lines-editor'
 
 interface MenuItemForm {
   name: string
@@ -45,123 +45,6 @@ interface MenuItemForm {
   unitSize: number
   saleStep: number
   techCard: TechCardLine[]
-}
-
-const emptyTechLine: TechCardLine = {
-  name: '',
-  qty: 0,
-  unit: '',
-}
-
-// ─── Ingredient/Semi Combobox ──────────────────────────────────────────────
-function IngredientCombobox({
-  ingredients,
-  semiTypes,
-  selectedIngredientId,
-  selectedSemiId,
-  selectedName,
-  onSelectIngredient,
-  onSelectSemi,
-  onClear,
-  onQuickCreate,
-}: {
-  ingredients: Ingredient[]
-  semiTypes: SemiFinishedType[]
-  selectedIngredientId?: string
-  selectedSemiId?: string
-  selectedName: string
-  onSelectIngredient: (id: string) => void
-  onSelectSemi: (id: string) => void
-  onClear: () => void
-  onQuickCreate?: (name: string) => void
-}) {
-  const [query, setQuery] = useState('')
-  const [isOpen, setIsOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setIsOpen(false)
-    }
-    document.addEventListener('mousedown', handleClick)
-    return () => document.removeEventListener('mousedown', handleClick)
-  }, [])
-
-  const q = query.toLowerCase()
-  const filteredIngs = ingredients.filter(i => i.name.toLowerCase().includes(q)).slice(0, 6)
-  const filteredSemis = semiTypes.filter(s => s.name.toLowerCase().includes(q)).slice(0, 4)
-  const hasResults = filteredIngs.length > 0 || filteredSemis.length > 0
-
-  if (selectedIngredientId || selectedSemiId) {
-    return (
-      <div className="flex items-center gap-1.5 px-3 py-2 text-sm bg-background border border-border rounded-lg">
-        <span className="flex-1 truncate font-medium">{selectedName}</span>
-        <button type="button" onClick={onClear} className="shrink-0 p-0.5 hover:bg-muted rounded text-muted-foreground transition-colors">
-          <X className="size-3.5" />
-        </button>
-      </div>
-    )
-  }
-
-  return (
-    <div ref={ref} className="relative">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-muted-foreground" />
-        <input
-          type="text"
-          value={query}
-          onChange={e => { setQuery(e.target.value); setIsOpen(true) }}
-          onFocus={() => setIsOpen(true)}
-          placeholder="Поиск ингредиента или полуфабриката..."
-          className="w-full pl-9 pr-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
-        />
-      </div>
-      {isOpen && (hasResults || query.trim() !== '') && (
-        <div className="absolute z-50 mt-1 w-full max-h-56 overflow-y-auto bg-card border border-border rounded-lg shadow-lg">
-          {filteredIngs.length > 0 && (
-            <>
-              <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30">Ингредиенты</div>
-              {filteredIngs.map(ing => (
-                <button key={ing.id} type="button"
-                  onClick={() => { onSelectIngredient(ing.id); setQuery(''); setIsOpen(false) }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition-colors flex justify-between items-center">
-                  <span className="text-foreground font-medium">{ing.name}</span>
-                  <span className="text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{ing.unit}</span>
-                </button>
-              ))}
-            </>
-          )}
-          {filteredSemis.length > 0 && (
-            <>
-              <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/30 border-t border-border">Полуфабрикаты</div>
-              {filteredSemis.map(s => (
-                <button key={s.id} type="button"
-                  onClick={() => { onSelectSemi(s.id); setQuery(''); setIsOpen(false) }}
-                  className="w-full text-left px-4 py-2 text-sm hover:bg-muted transition-colors flex justify-between items-center">
-                  <span className="text-foreground font-medium">{s.name}</span>
-                  <span className="text-xs text-muted-foreground bg-primary/10 text-primary px-1.5 py-0.5 rounded font-semibold">{s.outputUnit} (п/ф)</span>
-                </button>
-              ))}
-            </>
-          )}
-          {query.trim() !== '' && (
-            <button
-              type="button"
-              onClick={() => {
-                onQuickCreate?.(query.trim())
-                setQuery('')
-                setIsOpen(false)
-              }}
-              className="w-full text-left px-4 py-2.5 text-xs font-semibold text-primary hover:bg-primary/5 transition-colors border-t border-border flex items-center gap-2"
-            >
-              <Plus className="size-4" />
-              <span>Создать продукт «{query.trim()}»</span>
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ─── Page Component ──────────────────────────────────────────────────────────
@@ -216,17 +99,6 @@ export default function EditMenuItemPage() {
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
-  // Quick Create States
-  const [quickCreateOpen, setQuickCreateOpen] = useState(false)
-  const [quickCreateName, setQuickCreateName] = useState('')
-  const [quickCreateTargetIndex, setQuickCreateTargetIndex] = useState<number | null>(null)
-  const [newIngUnit, setNewIngUnit] = useState('кг')
-  const [newIngCategory, setNewIngCategory] = useState('Продукты')
-  const [newIngPrice, setNewIngPrice] = useState(0)
-  const [newIngMinQty, setNewIngMinQty] = useState(0)
-  const [newIngIsFood, setNewIngIsFood] = useState(true)
-  const [creatingIngredient, setCreatingIngredient] = useState(false)
-
   useEffect(() => {
     Promise.all([fetchIngredients(), fetchSemiTypes(), fetchMenuCategories(), fetchMenuItems()])
       .then(([i, s, c, items]) => {
@@ -269,71 +141,6 @@ export default function EditMenuItemPage() {
       })
       .catch(() => setLoading(false))
   }, [id])
-
-  function updateTechLine(index: number, patch: Partial<TechCardLine>) {
-    setForm((prev) => {
-      const techCard = [...prev.techCard]
-      techCard[index] = { ...techCard[index], ...patch }
-      return { ...prev, techCard }
-    })
-  }
-
-  function selectIngredient(index: number, id: string, customIng?: Ingredient) {
-    const ing = customIng || ingredients.find((i) => i.id === id)
-    if (!ing) return
-    updateTechLine(index, { ingredientId: id, semiId: undefined, name: ing.name, unit: ing.unit })
-  }
-
-  function selectSemi(index: number, id: string) {
-    const semi = semiTypes.find((s) => s.id === id)
-    if (!semi) return
-    updateTechLine(index, { semiId: id, ingredientId: undefined, name: semi.name, unit: semi.outputUnit })
-  }
-
-  function clearTechLine(index: number) {
-    updateTechLine(index, { ingredientId: undefined, semiId: undefined, name: '', unit: '', qty: 0 })
-  }
-
-  function addTechLine() {
-    setForm((prev) => ({ ...prev, techCard: [...prev.techCard, { ...emptyTechLine }] }))
-  }
-
-  function removeTechLine(index: number) {
-    setForm((prev) => ({ ...prev, techCard: prev.techCard.filter((_, i) => i !== index) }))
-  }
-
-  const handleQuickCreateIngredient = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (creatingIngredient || !quickCreateName.trim() || quickCreateTargetIndex === null) return
-    setCreatingIngredient(true)
-    try {
-      const ing = await createIngredient({
-        name: quickCreateName.trim(),
-        category: newIngCategory.trim() || 'Продукты',
-        qty: 0,
-        min_qty: newIngMinQty || 0,
-        unit: newIngUnit,
-        price_per_unit: newIngPrice || 0,
-        is_food: newIngIsFood,
-      })
-      if (ing) {
-        setIngredients((prev) => [...prev, ing])
-        selectIngredient(quickCreateTargetIndex, ing.id, ing)
-        setQuickCreateOpen(false)
-        setQuickCreateName('')
-        setNewIngUnit('кг')
-        setNewIngCategory('Продукты')
-        setNewIngPrice(0)
-        setNewIngMinQty(0)
-        setNewIngIsFood(true)
-        toast.success(`Товар «${ing.name}» создан и добавлен в техкарту`)
-      }
-    } catch (err) {
-      toast.error('Ошибка создания товара')
-    } finally {
-      setCreatingIngredient(false)
-    }
-  }
 
   const handleSubmit = async () => {
     if (!menuItem || submitting) return
@@ -791,67 +598,13 @@ export default function EditMenuItemPage() {
                 </span>
               </div>
 
-              <div className="space-y-3">
-                {form.techCard.map((line, i) => (
-                  <div key={i} className="flex items-end gap-3 p-3 bg-muted/20 border border-border/50 rounded-xl relative group">
-                    <div className="flex-1 min-w-[200px] space-y-1">
-                      <span className="text-[10px] font-semibold text-muted-foreground block">Ингредиент / Полуфабрикат</span>
-                      <IngredientCombobox
-                        ingredients={ingredients}
-                        semiTypes={semiTypes}
-                        selectedIngredientId={line.ingredientId}
-                        selectedSemiId={line.semiId}
-                        selectedName={line.name}
-                        onSelectIngredient={(id) => selectIngredient(i, id)}
-                        onSelectSemi={(id) => selectSemi(i, id)}
-                        onClear={() => clearTechLine(i)}
-                        onQuickCreate={(name) => {
-                          setQuickCreateName(name)
-                          setQuickCreateTargetIndex(i)
-                          setQuickCreateOpen(true)
-                        }}
-                      />
-                    </div>
-                    <div className="w-24 space-y-1">
-                      <span className="text-[10px] font-semibold text-muted-foreground block">Кол-во</span>
-                      <DecimalInput
-                        value={line.qty}
-                        onChange={(v) => updateTechLine(i, { qty: v })}
-                        min={0}
-                        className="w-full px-3 py-1.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      />
-                    </div>
-                    <div className="w-20 space-y-1">
-                      <span className="text-[10px] font-semibold text-muted-foreground block">Ед.</span>
-                      <select
-                        value={line.unit}
-                        onChange={(e) => updateTechLine(i, { unit: e.target.value })}
-                        className="w-full px-2 py-1.5 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                      >
-                        <option value="">—</option>
-                        {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
-                      </select>
-                    </div>
-                    {form.techCard.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => removeTechLine(i)}
-                        className="p-2 text-destructive hover:bg-destructive/10 rounded-lg transition-colors mb-0.5"
-                      >
-                        <Trash2 className="size-4.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              <button
-                type="button"
-                onClick={addTechLine}
-                className="flex items-center gap-1.5 text-sm font-semibold text-primary hover:text-primary/80 transition-colors py-1.5 px-3 rounded-lg hover:bg-primary/5 border border-dashed border-primary/20 w-full justify-center"
-              >
-                <Plus className="size-4" /> Добавить ингредиент
-              </button>
+              <TechCardLinesEditor
+                lines={form.techCard}
+                onChange={(next) => setForm((p) => ({ ...p, techCard: next }))}
+                ingredients={ingredients}
+                semiTypes={semiTypes}
+                onIngredientCreated={(ing) => setIngredients((prev) => [...prev, ing])}
+              />
             </div>
           ) : null}
 
@@ -887,120 +640,6 @@ export default function EditMenuItemPage() {
           )}
         </div>
       </div>
-
-      {/* Dialog for Quick Ingredient Creation */}
-      <Dialog open={quickCreateOpen} onOpenChange={setQuickCreateOpen}>
-        <DialogContent className="sm:max-w-md rounded-xl z-[60]">
-          <DialogHeader>
-            <DialogTitle>Создать новый продукт</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleQuickCreateIngredient} className="space-y-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-semibold text-foreground">Название</label>
-              <input
-                type="text"
-                required
-                value={quickCreateName}
-                onChange={(e) => setQuickCreateName(e.target.value)}
-                placeholder="Например, Картофель свежий"
-                className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-              />
-            </div>
-            
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-sm font-semibold text-foreground">Ед. измерения</label>
-                <select
-                  value={newIngUnit}
-                  onChange={(e) => setNewIngUnit(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                >
-                  {['кг', 'г', 'л', 'мл', 'шт', 'порц', 'бут', 'пач'].map((u) => (
-                    <option key={u} value={u}>
-                      {u}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              
-              <div className="space-y-1.5">
-                <label className="text-sm font-semibold text-foreground">Категория</label>
-                <input
-                  type="text"
-                  value={newIngCategory}
-                  onChange={(e) => setNewIngCategory(e.target.value)}
-                  placeholder="Продукты"
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-semibold text-foreground">Тип товара</label>
-              <div className="flex gap-2">
-                {(
-                  [
-                    { v: true, label: 'Продукт / ингредиент' },
-                    { v: false, label: 'Хозтовары / другое' },
-                  ] as { v: boolean; label: string }[]
-                ).map((t) => (
-                  <button
-                    key={t.label}
-                    type="button"
-                    onClick={() => setNewIngIsFood(t.v)}
-                    className={`flex-1 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors ${
-                      newIngIsFood === t.v
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background border-border text-foreground hover:bg-muted'
-                    }`}
-                  >
-                    {t.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-sm font-semibold text-foreground">Мин. остаток</label>
-                <DecimalInput
-                  min={0}
-                  value={newIngMinQty}
-                  onChange={(v) => setNewIngMinQty(v)}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="text-sm font-semibold text-foreground">Закупочная цена</label>
-                <DecimalInput
-                  min={0}
-                  value={newIngPrice}
-                  onChange={(v) => setNewIngPrice(v)}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
-                />
-              </div>
-            </div>
-
-            <DialogFooter className="pt-2">
-              <button
-                type="button"
-                onClick={() => setQuickCreateOpen(false)}
-                className="px-4 py-2 text-sm font-semibold text-foreground bg-background border border-border rounded-lg hover:bg-muted transition-colors"
-              >
-                Отмена
-              </button>
-              <button
-                type="submit"
-                disabled={creatingIngredient || !quickCreateName.trim()}
-                className="px-4 py-2 text-sm font-semibold text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
-              >
-                {creatingIngredient ? 'Создание...' : 'Создать и добавить'}
-              </button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
     </div>
   )
 }
