@@ -182,6 +182,17 @@ export async function createMenuCategory(name: string): Promise<MenuCategory> {
   }
 }
 
+export async function updateMenuCategory(
+  id: string,
+  patch: { name?: string; sortOrder?: number },
+): Promise<MenuCategory> {
+  const body: { name?: string; sort_order?: number } = {}
+  if (patch.name !== undefined) body.name = patch.name
+  if (patch.sortOrder !== undefined) body.sort_order = patch.sortOrder
+  const data: any = await unwrap(api.PATCH('/api/v1/menu/categories/{id}', { params: { path: { id } }, body }))
+  return mapMenuCategory(data ?? {})
+}
+
 export async function deleteMenuCategory(id: string): Promise<void> {
   await unwrap(api.DELETE('/api/v1/menu/categories/{id}', { params: { path: { id } } }))
 }

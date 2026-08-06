@@ -4,6 +4,12 @@ import { useState, useEffect } from 'react'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { type SizeScale } from '@/lib/types'
 import { fetchSizeScales, createSizeScale, updateSizeScale, deleteSizeScale } from '@/lib/queries'
 import { Plus, X, Trash2, Pencil } from 'lucide-react'
@@ -40,6 +46,9 @@ export function ManageSizeScalesDialog({ open, onOpenChange }: Props) {
   const [editName, setEditName] = useState('')
   const [editValues, setEditValues] = useState<ValueRow[]>([])
 
+  const [deleteTarget, setDeleteTarget] = useState<SizeScale | null>(null)
+  const [deleting, setDeleting] = useState(false)
+
   const reload = async () => {
     const data = await fetchSizeScales()
     setScales(data)
@@ -70,13 +79,17 @@ export function ManageSizeScalesDialog({ open, onOpenChange }: Props) {
     }
   }
 
-  const handleDeleteScale = async (id: string) => {
-    if (!confirm('Удалить шкалу размеров? Привязанные товары и заготовки останутся, но потеряют привязку.')) return
+  const handleDeleteScale = async () => {
+    if (!deleteTarget || deleting) return
+    setDeleting(true)
     try {
-      await deleteSizeScale(id)
+      await deleteSizeScale(deleteTarget.id)
+      setDeleteTarget(null)
       await reload()
     } catch {
       toast.error('Ошибка удаления')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -146,6 +159,7 @@ export function ManageSizeScalesDialog({ open, onOpenChange }: Props) {
   )
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[85vh] overflow-y-auto rounded-xl">
         <DialogHeader>
@@ -172,13 +186,12 @@ export function ManageSizeScalesDialog({ open, onOpenChange }: Props) {
                     <input
                       value={editName}
                       onChange={e => setEditName(e.target.value)}
-                      className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
+                      className="w-full h-11 px-3 bg-background border border-border rounded-lg text-sm font-medium focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                     {renderValueRows(editValues, setEditValues)}
                     <div className="flex gap-2">
-                      <button onClick={handleSaveEdit} disabled={!editName.trim() || editValues.filter(v => v.code.trim()).length === 0}
-                        className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50">Сохранить</button>
-                      <button onClick={() => setEditingScaleId(null)} className="text-sm text-muted-foreground">Отмена</button>
+                      <Button size="touch" onClick={handleSaveEdit} disabled={!editName.trim() || editValues.filter(v => v.code.trim()).length === 0}>Сохранить</Button>
+                      <Button size="touch" variant="outline" onClick={() => setEditingScaleId(null)}>Отмена</Button>
                     </div>
                   </div>
                 ) : (
@@ -186,12 +199,12 @@ export function ManageSizeScalesDialog({ open, onOpenChange }: Props) {
                     <div className="flex items-center justify-between">
                       <span className="font-medium text-foreground text-sm">{scale.name}</span>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => startEdit(scale)} className="p-1 text-muted-foreground hover:text-primary">
+                        <Button type="button" size="icon-touch" variant="ghost" onClick={() => startEdit(scale)} className="text-muted-foreground hover:text-primary">
                           <Pencil className="size-3.5" />
-                        </button>
-                        <button onClick={() => handleDeleteScale(scale.id)} className="p-1 text-muted-foreground hover:text-destructive">
+                        </Button>
+                        <Button type="button" size="icon-touch" variant="ghost" onClick={() => setDeleteTarget(scale)} className="text-muted-foreground hover:text-destructive">
                           <Trash2 className="size-3.5" />
-                        </button>
+                        </Button>
                       </div>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
@@ -214,18 +227,17 @@ export function ManageSizeScalesDialog({ open, onOpenChange }: Props) {
               <div className="bg-primary/5 rounded-xl p-4 space-y-3 border border-primary/20">
                 <p className="text-sm font-medium text-foreground">Новая шкала</p>
                 <input value={newScaleName} onChange={e => setNewScaleName(e.target.value)} placeholder="Например: Пиццы 25/30/35"
-                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
+                  className="w-full h-11 px-3 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30" />
                 {renderValueRows(newScaleValues, setNewScaleValues)}
                 <div className="flex gap-2">
-                  <button onClick={handleCreateScale} disabled={!newScaleName.trim() || newScaleValues.filter(v => v.code.trim()).length === 0}
-                    className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50">Создать</button>
-                  <button onClick={() => setShowNewScale(false)} className="text-sm text-muted-foreground">Отмена</button>
+                  <Button size="touch" onClick={handleCreateScale} disabled={!newScaleName.trim() || newScaleValues.filter(v => v.code.trim()).length === 0}>Создать</Button>
+                  <Button size="touch" variant="outline" onClick={() => setShowNewScale(false)}>Отмена</Button>
                 </div>
               </div>
             ) : (
               <button
                 onClick={() => setShowNewScale(true)}
-                className="w-full py-2.5 border-2 border-dashed border-border rounded-xl text-sm text-muted-foreground hover:border-primary/30 hover:text-primary transition-colors flex items-center justify-center gap-1.5"
+                className="w-full min-h-11 py-2.5 border-2 border-dashed border-border rounded-xl text-sm text-muted-foreground hover:border-primary/30 hover:text-primary transition-colors flex items-center justify-center gap-1.5"
               >
                 <Plus className="size-4" />Добавить шкалу размеров
               </button>
@@ -234,5 +246,27 @@ export function ManageSizeScalesDialog({ open, onOpenChange }: Props) {
         )}
       </DialogContent>
     </Dialog>
+
+    <AlertDialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null) }}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Удалить шкалу размеров?</AlertDialogTitle>
+          <AlertDialogDescription>
+            «{deleteTarget?.name}» будет удалена. Привязанные товары и заготовки останутся, но потеряют привязку к шкале.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel className={cn(buttonVariants({ variant: 'outline', size: 'touch' }))}>Отмена</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={handleDeleteScale}
+            disabled={deleting}
+            className={cn(buttonVariants({ size: 'touch' }), 'bg-destructive text-white hover:bg-destructive/90')}
+          >
+            {deleting ? 'Удаление...' : 'Удалить'}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   )
 }

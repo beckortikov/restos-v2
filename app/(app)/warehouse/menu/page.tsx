@@ -6,14 +6,14 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub } from '@/lib/decimal'
 import { type MenuItem, type MenuStation, type TechCardLine, type Ingredient, type SemiFinishedType, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
-import { fetchMenuItems, toggleMenuAvailability, updateMenuItem, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride, fetchIngredients, fetchSemiTypes, replaceTechCardLines } from '@/lib/queries'
-import { type MenuCategory } from '@/lib/queries'
-import { Search, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X, Ruler, Trash2, Check } from 'lucide-react'
+import { fetchMenuItems, toggleMenuAvailability, updateMenuItem, fetchMenuCategories, syncMenuCategoriesFromItems, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride, fetchIngredients, fetchSemiTypes, replaceTechCardLines } from '@/lib/queries'
+import { Search, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Ruler, Tags, Trash2, Check } from 'lucide-react'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { ManageSizeScalesDialog } from '@/components/dialogs/manage-size-scales-dialog'
+import { ManageCategoriesDialog } from '@/components/dialogs/manage-categories-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { TechCardLinesEditor, emptyTechLine } from '@/components/menu/tech-card-lines-editor'
@@ -43,9 +43,7 @@ export default function MenuPage() {
   const [savingTechCard, setSavingTechCard] = useState(false)
   const [menuItems, setMenuItems] = useState<MenuItem[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
-  const [menuCategoriesFull, setMenuCategoriesFull] = useState<MenuCategory[]>([])
-  const [addCatOpen, setAddCatOpen] = useState(false)
-  const [newCatName, setNewCatName] = useState('')
+  const [categoriesOpen, setCategoriesOpen] = useState(false)
   const [sizeScalesOpen, setSizeScalesOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [tab, setTab] = useState<'menu' | 'stoplist'>('menu')
@@ -56,10 +54,8 @@ export default function MenuPage() {
     fetchMenuItems().then(setMenuItems).catch(() => {})
     fetchMenuCategories().then(setMenuCategories).catch(() => {})
     // Синхронизируем записи категорий из блюд (для «старых» импортов без записей),
-    // чтобы у чипов категорий появились id и работало удаление/сортировка.
-    syncMenuCategoriesFromItems()
-      .then(setMenuCategoriesFull)
-      .catch(() => { fetchMenuCategoriesFull().then(setMenuCategoriesFull).catch(() => {}) })
+    // чтобы у чипов категорий появились id и работало управление через диалог.
+    syncMenuCategoriesFromItems().catch(() => {})
     fetchStopList().then(setStopList).catch(() => {})
   }
 
@@ -364,74 +360,24 @@ export default function MenuPage() {
           >
             Все
           </button>
-          {menuCategories.map((c) => {
-            const catObj = menuCategoriesFull.find(mc => mc.name === c)
-            return (
-              <div key={c} className="relative group">
-                <button
-                  onClick={() => setCategory(c)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${category === c ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border text-foreground hover:bg-muted'}`}
-                >
-                  {c}
-                </button>
-                {canEdit && catObj && (
-                  <button
-                    onClick={async (e) => {
-                      e.stopPropagation()
-                      if (!window.confirm(`Удалить категорию «${c}»?`)) return
-                      try {
-                        await deleteMenuCategory(catObj.id)
-                        setMenuCategoriesFull(prev => prev.filter(mc => mc.id !== catObj.id))
-                        setMenuCategories(prev => prev.filter(mc => mc !== c))
-                        if (category === c) setCategory('all')
-                        toast.success(`Категория «${c}» удалена`)
-                      } catch { toast.error('Ошибка удаления') }
-                    }}
-                    className="absolute -top-1.5 -right-1.5 size-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 hover:bg-red-600 shadow-sm transition-all"
-                    aria-label="Удалить категорию"
-                  >
-                    <X className="size-2.5" />
-                  </button>
-                )}
-              </div>
-            )
-          })}
+          {menuCategories.map((c) => (
+            <button
+              key={c}
+              onClick={() => setCategory(c)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${category === c ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border text-foreground hover:bg-muted'}`}
+            >
+              {c}
+            </button>
+          ))}
           {canEdit && (
-            addCatOpen ? (
-              <div className="flex items-center gap-1">
-                <input
-                  autoFocus
-                  type="text"
-                  value={newCatName}
-                  onChange={e => setNewCatName(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === 'Enter' && newCatName.trim()) {
-                      try {
-                        const cat = await createMenuCategory(newCatName.trim())
-                        setMenuCategoriesFull(prev => [...prev, cat])
-                        setMenuCategories(prev => [...prev, cat.name].sort())
-                        setNewCatName('')
-                        setAddCatOpen(false)
-                        toast.success(`Категория «${cat.name}» создана`)
-                      } catch (err) { toast.error(err instanceof Error ? err.message : 'Ошибка создания') }
-                    }
-                    if (e.key === 'Escape') { setAddCatOpen(false); setNewCatName('') }
-                  }}
-                  placeholder="Название..."
-                  className="px-2 py-1 text-xs bg-card border border-primary rounded-lg focus:outline-none w-28"
-                />
-                <button onClick={() => { setAddCatOpen(false); setNewCatName('') }} className="text-muted-foreground hover:text-foreground">
-                  <X className="size-3.5" />
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddCatOpen(true)}
-                className="px-2 py-1.5 rounded-lg text-xs font-medium border border-dashed border-primary/40 text-primary hover:bg-primary/5 transition-colors flex items-center gap-1"
-              >
-                <Plus className="size-3" />
-              </button>
-            )
+            <button
+              onClick={() => setCategoriesOpen(true)}
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-border text-foreground hover:bg-muted transition-colors flex items-center gap-1.5"
+              title="Управление категориями (добавить, переименовать, удалить)"
+            >
+              <Tags className="size-3.5" />
+              Категории
+            </button>
           )}
           {canEdit && (
             <button
@@ -445,6 +391,27 @@ export default function MenuPage() {
           )}
         </div>
       </div>
+      <ManageCategoriesDialog
+        open={categoriesOpen}
+        onOpenChange={setCategoriesOpen}
+        onChanged={(cats) => {
+          // Записи категорий не обязаны быть уникальны по имени (диалог
+          // умышленно допускает дубли-по-имени как отдельные редактируемые
+          // строки — полезно как раз чтобы их слить/удалить), а вот чипы
+          // фильтра — плоские строки, дубль имени здесь ломает React key.
+          const seen = new Set<string>()
+          const names: string[] = []
+          for (const c of cats) {
+            const key = c.name.toLocaleLowerCase('ru-RU')
+            if (seen.has(key)) continue
+            seen.add(key)
+            names.push(c.name)
+          }
+          names.sort((a, b) => a.localeCompare(b, 'ru'))
+          setMenuCategories(names)
+          if (category !== 'all' && !cats.some(c => c.name === category)) setCategory('all')
+        }}
+      />
       <ManageSizeScalesDialog open={sizeScalesOpen} onOpenChange={setSizeScalesOpen} />
 
       {/* Card Grid view for waiter/cook/cashier */}
