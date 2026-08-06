@@ -170,7 +170,7 @@ func NewRouter(deps Deps) http.Handler {
 	tablesH := handlers.NewTables(tablesSvc)
 	stockH := handlers.NewStock(stockSvc)
 	transfersH := handlers.NewTransfers(service.NewTransferService(rep))
-	networkH := handlers.NewNetwork(service.NewNetworkService(rep))
+	networkH := handlers.NewNetwork(service.NewNetworkService(rep, deps.SyncToken))
 	syncH := handlers.NewSync(service.NewSyncService(rep))
 	syncSettingsH := handlers.NewSyncSettings(service.NewSyncSettingsService(rep))
 	warehouseH := handlers.NewWarehouse(warehouseSvc)
@@ -255,6 +255,11 @@ func NewRouter(deps Deps) http.Handler {
 			// логина. Возвращает {machine_id, restaurant_id, restaurant_name}.
 			g.Get("/public/machine-info", licenseH.PublicMachineInfo)
 			g.Post("/users/validate-pin", usersH.ValidatePIN)
+			// Обмен кода приглашения на sync-токен+account_id (ADR-003,
+			// продолжение) — bootstrap доверия между узлами сети, токена
+			// ещё нет по определению. Защита — одноразовость кода (used_at)
+			// + короткий TTL, не auth-заголовок.
+			g.Post("/sync/pair", networkH.RedeemInvite)
 		})
 
 		// Восстановление из бэкапа ДО первичной инициализации (пустая база) —
@@ -318,6 +323,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/network/cashflow", networkH.Cashflow)
 			g.Get("/network/warehouse", networkH.Warehouse)
 			g.Get("/network/accounts", networkH.Accounts)
+			g.Get("/network/invites", networkH.ListInvites)
 			g.Get("/settings/sync", syncSettingsH.Get)
 			g.Get("/network/menu", networkH.ListNetworkMenu)
 			g.Get("/nomenclature", networkH.ListNomenclature)
@@ -567,6 +573,9 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/stock/transfers/{id}/receive", transfersH.Receive)
 			g.Post("/network", networkH.CreateNetwork)
 			g.Post("/network/branches/{id}/kind", networkH.SetBranchKind)
+			g.Post("/network/invites", networkH.CreateInvite)
+			g.Delete("/network/invites/{id}", networkH.RevokeInvite)
+			g.Post("/network/pair", networkH.JoinNetwork)
 			g.Post("/network/menu", networkH.CreateNetworkMenuItem)
 			g.Patch("/network/menu/{id}", networkH.UpdateNetworkMenuItem)
 			g.Put("/settings/sync", syncSettingsH.Update)

@@ -23,10 +23,17 @@ import (
 // залогинен пользователь.
 type NetworkService struct {
 	r *repo.Repo
+	// syncToken — АКТИВНЫЙ sync-секрет этого узла (тот, что реально проверяет
+	// SyncAuth middleware прямо сейчас — см. main.go: sync_settings из БД
+	// переопределяет env при старте, но НЕ пишется обратно в БД). RedeemInvite
+	// обязан отдавать именно это значение, не читать sync_settings.token
+	// заново из БД — та колонка может быть пустой/устаревшей относительно
+	// того, что реально забинжено в роутер (см. ADR-003, продолжение).
+	syncToken string
 }
 
-func NewNetworkService(r *repo.Repo) *NetworkService {
-	return &NetworkService{r: r}
+func NewNetworkService(r *repo.Repo, syncToken string) *NetworkService {
+	return &NetworkService{r: r, syncToken: syncToken}
 }
 
 // accountForCtx — account_id ресторана из контекста; ErrValidation если не в сети.

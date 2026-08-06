@@ -30,3 +30,11 @@ export async function saveSyncSettings(s: SyncSettings): Promise<void> {
     } as any,
   }))
 }
+
+// joinNetwork — обменивает код приглашения (ADR-003, продолжение) на central
+// на настоящий sync-токен+account_id и сохраняет всё атомарно на бэке;
+// UI после успеха просто перечитывает fetchSyncSettings().
+export async function joinNetwork(pairingCode: string): Promise<{ centralName: string }> {
+  const r: any = await unwrap(api.POST('/api/v1/network/pair', { body: { pairing_code: pairingCode } as any }))
+  return { centralName: r?.central_name ?? '' }
+}

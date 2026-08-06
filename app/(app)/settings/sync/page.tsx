@@ -2,8 +2,8 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { fetchSyncSettings, saveSyncSettings, type SyncSettings } from '@/lib/queries/sync-settings'
-import { RefreshCw, Save, Info } from 'lucide-react'
+import { fetchSyncSettings, saveSyncSettings, joinNetwork, type SyncSettings } from '@/lib/queries/sync-settings'
+import { RefreshCw, Save, Info, Ticket } from 'lucide-react'
 import { toast } from 'sonner'
 
 export default function SyncSettingsPage() {
@@ -11,12 +11,15 @@ export default function SyncSettingsPage() {
   const [s, setS] = useState<SyncSettings>({ enabled: false, centralUrl: '', token: '', restaurantId: '', intervalSec: 30 })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [pairingCode, setPairingCode] = useState('')
+  const [joining, setJoining] = useState(false)
+
+  const reloadSettings = () =>
+    fetchSyncSettings().then(v => setS({ ...v, restaurantId: v.restaurantId || restaurantId || '' }))
 
   useEffect(() => {
-    fetchSyncSettings()
-      .then(v => setS({ ...v, restaurantId: v.restaurantId || restaurantId || '' }))
-      .catch(() => {})
-      .finally(() => setLoading(false))
+    reloadSettings().catch(() => {}).finally(() => setLoading(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restaurantId])
 
   const set = (patch: Partial<SyncSettings>) => setS(prev => ({ ...prev, ...patch }))
@@ -30,6 +33,21 @@ export default function SyncSettingsPage() {
       toast.error(e?.message ?? 'Не удалось сохранить')
     } finally {
       setSaving(false)
+    }
+  }
+
+  const onJoin = async () => {
+    if (!pairingCode.trim()) return
+    setJoining(true)
+    try {
+      const { centralName } = await joinNetwork(pairingCode.trim())
+      toast.success(`Подключено к сети «${centralName}». Перезапустите приложение для применения.`)
+      setPairingCode('')
+      await reloadSettings()
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Не удалось подключиться по коду')
+    } finally {
+      setJoining(false)
     }
   }
 
@@ -56,6 +74,32 @@ export default function SyncSettingsPage() {
         </span>
       </div>
 
+      <div className="space-y-2 rounded-xl border border-primary/30 bg-primary/5 p-3">
+        <div className="flex items-center gap-1.5">
+          <Ticket className="size-4 text-primary" />
+          <div className="text-sm font-medium text-foreground">Код приглашения</div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Получите код от владельца центрального узла (Настройки → Филиалы сети → Приглашения) и вставьте сюда —
+          адрес, секрет и сеть подставятся сами.
+        </p>
+        <div className="flex items-end gap-2">
+          <input
+            value={pairingCode}
+            onChange={e => setPairingCode(e.target.value)}
+            placeholder="https://central.example.com/pair/ABCD1234"
+            className="input flex-1"
+          />
+          <button
+            onClick={onJoin}
+            disabled={joining || !pairingCode.trim()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 shrink-0"
+          >
+            {joining ? 'Подключение...' : 'Подключиться'}
+          </button>
+        </div>
+      </div>
+
       <label className="flex items-center justify-between rounded-xl border border-border p-3">
         <div>
           <div className="text-sm font-medium text-foreground">Включить синхронизацию</div>
@@ -63,6 +107,8 @@ export default function SyncSettingsPage() {
         </div>
         <input type="checkbox" checked={s.enabled} onChange={e => set({ enabled: e.target.checked })} className="size-5" />
       </label>
+
+      <p className="text-xs text-muted-foreground -mt-2">Поля ниже — ручной способ (например, для подключения через туннель без публичного адреса).</p>
 
       <div className={s.enabled ? 'space-y-4' : 'space-y-4 opacity-50 pointer-events-none'}>
         <Field label="Адрес центрального узла" hint="напр. https://central.moyaset.ru">

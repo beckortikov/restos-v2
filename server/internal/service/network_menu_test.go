@@ -40,7 +40,7 @@ func TestNetworkMenu(t *testing.T) {
 	cw := "central_warehouse"
 	gdb.Create(&models.Restaurant{ID: rid, Name: "Склад", AccountID: &accountID, Kind: &cw})
 
-	svc := service.NewNetworkService(repo.New(gdb))
+	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), rid)
 
 	// Создать.

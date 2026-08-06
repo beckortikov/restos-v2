@@ -94,6 +94,44 @@ export async function createNetwork(name?: string): Promise<{ id: string; name: 
   return { id: r.id, name: r.name }
 }
 
+// ─── Приглашения филиалов (ADR-003, продолжение) ───────────────────────────
+// Central генерирует одноразовый код — филиал вставляет его на странице
+// «Синхронизация» (joinNetwork в sync-settings.ts), без ручного SQL/секретов.
+export interface NetworkInvite {
+  id: string
+  label?: string | null
+  code: string
+  pairingUrl: string
+  expiresAt: string
+  usedAt?: string | null
+  usedByRestaurantName?: string | null
+}
+function mapInvite(r: any): NetworkInvite {
+  return {
+    id: r.id,
+    label: r.label,
+    code: r.code,
+    pairingUrl: r.pairing_url,
+    expiresAt: r.expires_at,
+    usedAt: r.used_at,
+    usedByRestaurantName: r.used_by_restaurant_name,
+  }
+}
+export async function fetchNetworkInvites(): Promise<NetworkInvite[]> {
+  const env: any = await unwrap(api.GET('/api/v1/network/invites'))
+  const rows: any[] = Array.isArray(env?.data) ? env.data : []
+  return rows.map(mapInvite)
+}
+export async function createNetworkInvite(input: { label?: string; publicUrl?: string }): Promise<NetworkInvite> {
+  const r: any = await unwrap(api.POST('/api/v1/network/invites', {
+    body: { label: input.label, public_url: input.publicUrl } as any,
+  }))
+  return mapInvite(r)
+}
+export async function revokeNetworkInvite(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/network/invites/{id}', { params: { path: { id } } }))
+}
+
 // ─── Мастер-меню сети (ADR-004) ────────────────────────────────────────────────
 export interface NetworkMenuItem {
   id: string

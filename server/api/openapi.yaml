@@ -647,6 +647,41 @@ paths:
         content: { application/json: { schema: { type: object, required: [kind], properties: { kind: { type: string, enum: [outlet, central_warehouse] } } } } }
       responses: { "200": { description: OK } }
 
+  /api/v1/network/invites:
+    get:
+      tags: [stock]
+      summary: Список кодов приглашения сети (только central, owner). ADR-003, продолжение.
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkInviteList" } } } } }
+    post:
+      tags: [stock]
+      summary: Сгенерировать код приглашения филиала (только central, owner).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { label: { type: string }, public_url: { type: string } } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkInvite" } } } } }
+
+  /api/v1/network/invites/{id}:
+    delete:
+      tags: [stock]
+      summary: Отозвать код приглашения (только central, owner).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "204": { description: No content } }
+
+  /api/v1/network/pair:
+    post:
+      tags: [stock]
+      summary: Подключить этот ресторан (филиал) к сети по коду приглашения — owner. ADR-003, продолжение.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [pairing_code], properties: { pairing_code: { type: string } } } } }
+      responses:
+        "200":
+          description: OK
+          content: { application/json: { schema: { type: object, properties: { central_name: { type: string } } } } }
+
   /api/v1/network/menu:
     get:
       tags: [stock]
@@ -840,6 +875,39 @@ paths:
                         row_id: { type: string }
                         op: { type: string }
                         payload: { type: object }
+
+  /api/v1/sync/pair:
+    post:
+      tags: [stock]
+      summary: >-
+        ПУБЛИЧНЫЙ (без auth). Обмен одноразового кода приглашения на
+        настоящий sync-токен+account_id (ADR-003, продолжение) — вызывается
+        филиалом server-to-server при подключении к сети. Защита —
+        одноразовость кода + короткий TTL, не заголовок авторизации.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code: { type: string }
+                restaurant_id: { type: string, format: uuid }
+                restaurant_name: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+                  account_id: { type: string, format: uuid }
+                  central_name: { type: string }
+        "404": { description: Код не найден }
+        "409": { description: Код уже использован или истёк }
 
   /api/v1/sync/ingest:
     post:
@@ -4241,6 +4309,19 @@ components:
         name: { type: string }
         owner_name: { type: string }
         phone: { type: string }
+        public_url: { type: string }
+
+    NetworkInvite:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        label: { type: string }
+        code: { type: string }
+        pairing_url: { type: string }
+        expires_at: { type: string, format: date-time }
+        used_at: { type: string, format: date-time }
+        used_by_restaurant_name: { type: string }
+    NetworkInviteList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/NetworkInvite" } }, next_cursor: { type: string } } }
 
     NetworkMenuList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/NetworkMenuItem" } }, next_cursor: { type: string } } }
     NetworkMenuItem:

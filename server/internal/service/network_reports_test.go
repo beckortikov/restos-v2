@@ -127,7 +127,7 @@ func TestNetworkReports(t *testing.T) {
 	gdb.Model(&models.FinancialAccount{ID: acc2}).Update("is_enabled", false)
 	gdb.Create(&models.FinancialAccount{ID: acc3, RestaurantID: &outletID, Name: &name3, Balance: decimal.MustFromString("1000")})
 
-	svc := service.NewNetworkService(repo.New(gdb))
+	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
 
 	t.Run("PnL", func(t *testing.T) {

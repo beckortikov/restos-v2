@@ -37,7 +37,7 @@ func TestNetworkManage(t *testing.T) {
 	if err := gdb.Create(&models.Restaurant{ID: centralID, Name: "Моя точка"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	svc := service.NewNetworkService(repo.New(gdb))
+	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
 
 	// ─── Создать сеть ────────────────────────────────────────────────────

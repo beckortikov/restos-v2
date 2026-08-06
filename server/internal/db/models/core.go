@@ -80,10 +80,14 @@ func (Restaurant) TableName() string { return "restaurants" }
 // CompanyAccount — сеть филиалов (ADR-003). Группирует N ресторанов одного
 // владельца под общим account_id (restaurants.account_id → company_accounts.id).
 type CompanyAccount struct {
-	ID        string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	Name      string    `gorm:"not null" json:"name"`
-	OwnerName *string   `gorm:"column:owner_name" json:"owner_name"`
-	Phone     *string   `json:"phone"`
+	ID        string  `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name      string  `gorm:"not null" json:"name"`
+	OwnerName *string `gorm:"column:owner_name" json:"owner_name"`
+	Phone     *string `json:"phone"`
+	// PublicURL — публичный адрес central-узла (напр. https://central.example.com),
+	// вводится один раз при генерации первого кода приглашения (ADR-003,
+	// продолжение) и переиспользуется для следующих.
+	PublicURL *string   `gorm:"column:public_url" json:"public_url,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

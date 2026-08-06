@@ -59,7 +59,7 @@ func TestNetworkSummary(t *testing.T) {
 	mk(centralID, &out, &purchase, "999") // НЕ выручка → не учитывается
 	mk(outletID, &in, &rev, "50")         // учитывается
 
-	svc := service.NewNetworkService(repo.New(gdb))
+	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
 
 	sum, err := svc.Summary(ctx, "", "")
