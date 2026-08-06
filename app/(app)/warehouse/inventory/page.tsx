@@ -14,6 +14,12 @@ import { Search, Plus, Trash2, X, Check, ArrowRightLeft, ShoppingCart, Pencil, P
 import { ManageIngredientDialog, CREATE_NEW_NOMENCLATURE } from '@/components/dialogs/manage-ingredient-dialog'
 import { createNomenclature, linkIngredientNomenclature } from '@/lib/queries/transfers'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { toast } from 'sonner'
 
 type WhKind = 'products' | 'purchased' | 'supplies'
@@ -43,6 +49,9 @@ export default function InventoryPage() {
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Ingredient | null>(null)
+  const [deletingOne, setDeletingOne] = useState(false)
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false)
 
   const qc = useQueryClient()
   const CATS_KEY = ['stock', 'ingredient-categories'] as const
@@ -132,21 +141,25 @@ export default function InventoryPage() {
   }
   function exitSelect() { setSelectMode(false); setSelectedIds(new Set()) }
 
-  async function deleteOne(ing: Ingredient) {
-    if (!window.confirm(`Удалить «${ing.name}»? Остаток будет списан (отразится в Балансе как убыток).`)) return
+  async function confirmDeleteOne() {
+    if (!deleteTarget || deletingOne) return
+    setDeletingOne(true)
     try {
-      await deleteIngredient(ing.id)
+      await deleteIngredient(deleteTarget.id)
       toast.success('Позиция удалена')
+      setDeleteTarget(null)
       reloadStock()
     } catch (e) {
       toast.error(humanizeError(e, 'Не удалось удалить (используется в техкартах?)'))
+    } finally {
+      setDeletingOne(false)
     }
   }
 
   async function handleBulkDelete() {
     const ids = [...selectedIds]
     if (ids.length === 0) return
-    if (!window.confirm(`Удалить ${ids.length} позиц.? У позиций с остатком он будет списан (отразится в Балансе как убыток).`)) return
+    setBulkDeleteConfirmOpen(false)
     setDeleting(true)
     let ok = 0
     const failed: string[] = []
@@ -200,7 +213,7 @@ export default function InventoryPage() {
         {canManage && (
           selectMode ? (
             <div className="flex items-center gap-2">
-              <button onClick={handleBulkDelete} disabled={deleting || selectedIds.size === 0}
+              <button onClick={() => setBulkDeleteConfirmOpen(true)} disabled={deleting || selectedIds.size === 0}
                 className="flex items-center gap-1.5 bg-destructive text-destructive-foreground px-3 py-2 rounded-lg text-sm font-medium hover:bg-destructive/90 transition-colors disabled:opacity-50">
                 <Trash2 className="size-4" />{deleting ? 'Удаление…' : `Удалить${selectedIds.size ? ` (${selectedIds.size})` : ''}`}
               </button>
@@ -332,7 +345,7 @@ export default function InventoryPage() {
                 )}
                 <ActionBtn icon={PackageMinus} label="Списать" hint="брак · порча" onClick={() => { setActionItem(null); navigate('/warehouse/writeoffs/new') }} />
                 {canManage && (
-                  <ActionBtn icon={Trash2} label="Удалить" danger onClick={() => { const it = actionItem; setActionItem(null); deleteOne(it) }} />
+                  <ActionBtn icon={Trash2} label="Удалить" danger onClick={() => { const it = actionItem; setActionItem(null); setDeleteTarget(it) }} />
                 )}
               </div>
             </>
@@ -371,6 +384,48 @@ export default function InventoryPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить позицию?</AlertDialogTitle>
+            <AlertDialogDescription>
+              «{deleteTarget?.name}» будет удалена. Остаток будет списан (отразится в Балансе как убыток).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className={cn(buttonVariants({ variant: 'outline', size: 'touch' }))}>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteOne}
+              disabled={deletingOne}
+              className={cn(buttonVariants({ size: 'touch' }), 'bg-destructive text-white hover:bg-destructive/90')}
+            >
+              {deletingOne ? 'Удаление...' : 'Удалить'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={bulkDeleteConfirmOpen} onOpenChange={setBulkDeleteConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить {selectedIds.size} позиц.?</AlertDialogTitle>
+            <AlertDialogDescription>
+              У позиций с остатком он будет списан (отразится в Балансе как убыток).
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className={cn(buttonVariants({ variant: 'outline', size: 'touch' }))}>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleBulkDelete}
+              disabled={deleting}
+              className={cn(buttonVariants({ size: 'touch' }), 'bg-destructive text-white hover:bg-destructive/90')}
+            >
+              {deleting ? 'Удаление...' : 'Удалить'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

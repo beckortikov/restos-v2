@@ -15,6 +15,12 @@ import { useDataSync } from '@/hooks/use-data-sync'
 import { ManageSizeScalesDialog } from '@/components/dialogs/manage-size-scales-dialog'
 import { ManageCategoriesDialog } from '@/components/dialogs/manage-categories-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { TechCardLinesEditor, emptyTechLine } from '@/components/menu/tech-card-lines-editor'
 
@@ -30,6 +36,7 @@ export default function MenuPage() {
   const [quickPrice, setQuickPrice] = useState<number>(0)
   const [savingPrice, setSavingPrice] = useState(false)
   const [deletingItem, setDeletingItem] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   // Инлайн-правка техкарты прямо из карточки — без перехода в полный
   // редактор. Справочники (ingredients/semiTypes) тянутся лениво при первом
   // тапе «Редактировать» за сессию и кэшируются в state — action-sheet сам
@@ -137,11 +144,11 @@ export default function MenuPage() {
 
   async function handleDeleteItem() {
     if (!actionItem || deletingItem) return
-    if (!window.confirm(`Удалить блюдо «${actionItem.name}»? Действие необратимо.`)) return
     setDeletingItem(true)
     try {
       await deleteMenuItem(actionItem.id)
       setMenuItems((prev) => prev.filter((m) => m.id !== actionItem.id))
+      setDeleteConfirmOpen(false)
       setActionItem(null)
       toast.success('Блюдо удалено')
     } catch (e) {
@@ -547,17 +554,17 @@ export default function MenuPage() {
                           value={quickPrice}
                           min={0}
                           onChange={setQuickPrice}
-                          className="flex-1 px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                          className="flex-1 h-11 px-3 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
-                        <button
+                        <Button
                           type="button"
+                          size="touch"
                           onClick={handleQuickPriceSave}
                           disabled={savingPrice || quickPrice === it.price}
-                          className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50"
                         >
                           <Check className="size-4" />
                           {savingPrice ? '…' : 'Сохранить'}
-                        </button>
+                        </Button>
                       </div>
                       <p className="text-xs text-muted-foreground">
                         с/с {formatCurrency(it.cogs)} · маржа <span className="text-emerald-600 font-medium">{margin}%</span>
@@ -608,22 +615,23 @@ export default function MenuPage() {
                             onIngredientCreated={(ing) => setIngredients((prev) => [...prev, ing])}
                           />
                           <div className="flex items-center gap-2 justify-end">
-                            <button
+                            <Button
                               type="button"
+                              size="touch"
+                              variant="outline"
                               onClick={() => setEditingTechCard(false)}
-                              className="px-3.5 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
                             >
                               Отмена
-                            </button>
-                            <button
+                            </Button>
+                            <Button
                               type="button"
+                              size="touch"
                               onClick={handleSaveTechCard}
                               disabled={savingTechCard}
-                              className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50"
                             >
                               <Check className="size-4" />
                               {savingTechCard ? 'Сохранение...' : 'Сохранить техкарту'}
-                            </button>
+                            </Button>
                           </div>
                         </div>
                       )
@@ -650,36 +658,39 @@ export default function MenuPage() {
 
                 <DialogFooter className="flex-col-reverse sm:flex-row sm:justify-between gap-2">
                   {canEdit && (
-                    <button
+                    <Button
                       type="button"
-                      onClick={handleDeleteItem}
+                      size="touch"
+                      variant="ghost"
+                      onClick={() => setDeleteConfirmOpen(true)}
                       disabled={deletingItem}
-                      className="flex items-center justify-center gap-1.5 px-3.5 py-2 text-sm font-medium text-destructive bg-destructive/10 hover:bg-destructive/15 rounded-lg disabled:opacity-50"
+                      className="justify-center text-destructive bg-destructive/10 hover:bg-destructive/15 hover:text-destructive"
                     >
                       <Trash2 className="size-4" />
                       Удалить
-                    </button>
+                    </Button>
                   )}
                   <div className="flex gap-2">
                     {canEdit && (
-                      <button
+                      <Button
                         type="button"
+                        size="touch"
+                        variant="outline"
                         onClick={() => handleToggleAvailability(it.id)}
-                        className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
                       >
                         <OctagonX className="size-4" />
                         {it.isAvailable ? 'На стоп' : 'Снять стоп'}
-                      </button>
+                      </Button>
                     )}
                     {canEdit && (
-                      <button
+                      <Button
                         type="button"
+                        size="touch"
                         onClick={() => navigate(`/warehouse/menu/${it.id}`)}
-                        className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90"
                       >
                         <Pencil className="size-4" />
                         Править
-                      </button>
+                      </Button>
                     )}
                   </div>
                 </DialogFooter>
@@ -688,6 +699,27 @@ export default function MenuPage() {
           })()}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={deleteConfirmOpen} onOpenChange={(o) => { if (!o) setDeleteConfirmOpen(false) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить блюдо?</AlertDialogTitle>
+            <AlertDialogDescription>
+              «{actionItem?.name}» будет удалено безвозвратно.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className={cn(buttonVariants({ variant: 'outline', size: 'touch' }))}>Отмена</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteItem}
+              disabled={deletingItem}
+              className={cn(buttonVariants({ size: 'touch' }), 'bg-destructive text-white hover:bg-destructive/90')}
+            >
+              {deletingItem ? 'Удаление...' : 'Удалить'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
