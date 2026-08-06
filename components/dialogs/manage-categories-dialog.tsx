@@ -20,6 +20,12 @@ interface Props {
   // Родитель (menu/page.tsx) держит свой список категорий для чипов-фильтра
   // отдельно от этого диалога — колбэк даёт обновить его без релоада страницы.
   onChanged?: (categories: MenuCategory[]) => void
+  // Точечный колбэк ТОЛЬКО на создание (не на rename/delete) — для входа
+  // «+» рядом с select категории в редакторе блюда: там нужно узнать именно
+  // новую запись, чтобы сразу подставить её в форму и закрыть диалог.
+  // Обычный вход через кнопку «Категории» этот проп не передаёт — диалог
+  // остаётся открытым после создания, как и у ManageSizeScalesDialog.
+  onCreated?: (category: MenuCategory) => void
 }
 
 // ManageCategoriesDialog — справочник категорий меню, 1:1 по образцу
@@ -28,7 +34,7 @@ interface Props {
 // Удаление — через AlertDialog (не window.confirm — тот же класс бага,
 // что и в остальном репо: Electron/Windows не всегда возвращает фокус
 // после native-confirm).
-export function ManageCategoriesDialog({ open, onOpenChange, onChanged }: Props) {
+export function ManageCategoriesDialog({ open, onOpenChange, onChanged, onCreated }: Props) {
   const [categories, setCategories] = useState<MenuCategory[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -66,10 +72,11 @@ export function ManageCategoriesDialog({ open, onOpenChange, onChanged }: Props)
     if (!name || creating) return
     setCreating(true)
     try {
-      await createMenuCategory(name)
+      const created = await createMenuCategory(name)
       setNewName('')
       setShowNew(false)
       await reload()
+      onCreated?.(created)
       toast.success(`Категория «${name}» создана`)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Ошибка создания')

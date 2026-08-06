@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Trash2, Timer, ArrowLeft, CheckCircle, Archive, Network } from 'lucide-react'
+import { Trash2, Timer, ArrowLeft, CheckCircle, Archive, Network, Plus } from 'lucide-react'
 import { DishImageUpload } from '@/components/dish-image'
 import {
   UNITS,
@@ -24,6 +24,7 @@ import { humanizeError } from '@/lib/errors'
 import { AttributesEditor } from '@/components/menu/attributes-editor'
 import { VariantTechCardsEditor } from '@/components/menu/variant-tech-cards-editor'
 import { TechCardLinesEditor, emptyTechLine } from '@/components/menu/tech-card-lines-editor'
+import { ManageCategoriesDialog } from '@/components/dialogs/manage-categories-dialog'
 
 interface MenuItemForm {
   name: string
@@ -96,6 +97,7 @@ export default function EditMenuItemPage() {
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [semiTypes, setSemiTypes] = useState<SemiFinishedType[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
+  const [categoriesDialogOpen, setCategoriesDialogOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
 
@@ -323,16 +325,35 @@ export default function EditMenuItemPage() {
               </div>
               <div>
                 <label className="text-xs font-semibold text-muted-foreground mb-1 block">Категория</label>
-                <select
-                  value={form.category}
-                  onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-                  className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
-                >
-                  <option value="">Выберите категорию</option>
-                  {menuCategories.map((c) => <option key={c} value={c}>{c}</option>)}
-                </select>
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={form.category}
+                    onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
+                    className="flex-1 min-w-0 px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
+                  >
+                    <option value="">Выберите категорию</option>
+                    {menuCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setCategoriesDialogOpen(true)}
+                    title="Новая категория"
+                    className="shrink-0 size-9 flex items-center justify-center border border-dashed border-primary/40 text-primary rounded-lg hover:bg-primary/5 transition-colors"
+                  >
+                    <Plus className="size-4" />
+                  </button>
+                </div>
               </div>
             </div>
+            <ManageCategoriesDialog
+              open={categoriesDialogOpen}
+              onOpenChange={setCategoriesDialogOpen}
+              onCreated={(cat) => {
+                setMenuCategories((prev) => prev.some((c) => c.toLocaleLowerCase('ru-RU') === cat.name.toLocaleLowerCase('ru-RU')) ? prev : [...prev, cat.name].sort((a, b) => a.localeCompare(b, 'ru')))
+                setForm((p) => ({ ...p, category: cat.name }))
+                setCategoriesDialogOpen(false)
+              }}
+            />
 
             {/* Price & CookTime. С атрибутами своей цены нет — цены на значениях. */}
             <div className="grid grid-cols-2 gap-3">
