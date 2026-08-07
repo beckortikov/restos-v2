@@ -388,6 +388,13 @@ export async function cancelSalaryAdvance(id: string): Promise<void> {
   logAction('payroll.advance_cancel', 'payroll', id)
 }
 
+/** Отмена выплаты зарплаты (071) — деньги возвращаются на счёт, проводка
+ *  помечается отменённой (в ленте — «Отменено», из сумм отчёта исключена). */
+export async function cancelSalaryPayout(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/finance/salary/payouts/{id}', { params: { path: { id } } }))
+  logAction('payroll.salary_cancel', 'payroll', id)
+}
+
 export interface SalaryAdvanceRow {
   id: string
   userId: string
@@ -591,6 +598,8 @@ export interface SalaryPayoutRow {
   description?: string
   /** Выплата выше расчётного остатка, проведённая осознанно (ЗП-4). */
   isOverride?: boolean
+  /** Выплата отменена (071) — в ленте зачёркнута, из сумм отчёта исключена. */
+  cancelled?: boolean
 }
 
 export interface SalaryReportRow {
@@ -653,6 +662,7 @@ export async function fetchSalaryReport(from: string, to: string): Promise<Salar
       accountName: p.account_name || undefined,
       description: p.description || undefined,
       isOverride: Boolean(p.is_override),
+      cancelled: Boolean(p.cancelled),
     })),
     totals: {
       salaryPaid: Number(res?.totals?.salary_paid ?? 0),

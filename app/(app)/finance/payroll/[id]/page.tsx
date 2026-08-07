@@ -20,7 +20,7 @@ import {
 import {
   selectableAccounts,
   fetchSalaryDeductions, cancelSalaryDeduction, type SalaryDeductionRow,
-  fetchSalaryAdvances, cancelSalaryAdvance, type SalaryAdvanceRow,
+  fetchSalaryAdvances, cancelSalaryAdvance, cancelSalaryPayout, type SalaryAdvanceRow,
 } from '@/lib/queries/finance'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
@@ -167,6 +167,25 @@ export default function EmployeeDetailPage() {
       await reload()
     } catch (e) {
       toast.error(humanizeError(e, 'Не удалось отменить удержание'))
+    } finally {
+      setCancellingId(null)
+    }
+  }, [reload])
+
+  // Отмена ВЫПЛАТЫ зарплаты (071): деньги возвращаются на счёт, проводка
+  // помечается отменённой (в ленте — «Отменено»). Авансы отменяет
+  // handleCancelAdvance (у них своя строка), удержания — handleCancelDeduction.
+  const handleCancelPayout = useCallback(async (opId: string) => {
+    const ok = window.confirm('Отменить выплату зарплаты? Деньги вернутся на счёт, с которого выплачивали.')
+    window.focus()
+    if (!ok) return
+    setCancellingId(opId)
+    try {
+      await cancelSalaryPayout(opId)
+      toast.success('Выплата отменена')
+      await reload()
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось отменить выплату'))
     } finally {
       setCancellingId(null)
     }
@@ -349,7 +368,7 @@ export default function EmployeeDetailPage() {
           ) : (
             <div className="divide-y divide-border/60">
               {timeline.map((item, i) => {
-                const cancelled = item.type !== 'payout' && !!item.data.cancelledAt
+                const cancelled = item.type === 'payout' ? !!item.data.cancelled : !!item.data.cancelledAt
                 return (
                 <div key={`${item.type}-${item.type === 'payout' ? item.data.id : item.data.id ?? i}`} className={`flex items-start gap-3 py-2.5 ${cancelled ? 'opacity-50' : ''}`}>
                   <span className="text-xs text-muted-foreground tabular-nums w-20 shrink-0 pt-0.5">{item.date || '—'}</span>
@@ -357,10 +376,15 @@ export default function EmployeeDetailPage() {
                     {item.type === 'payout' ? (
                       <>
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-medium ${PAYOUT_KIND_TONE[item.data.kind]}`}>
+                          <span className={`inline-flex px-2 py-0.5 rounded text-[10px] font-medium ${cancelled ? 'line-through' : ''} ${PAYOUT_KIND_TONE[item.data.kind]}`}>
                             {PAYOUT_KIND_LABELS[item.data.kind]}
                           </span>
-                          {item.data.isOverride && (
+                          {cancelled && (
+                            <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-medium bg-muted text-muted-foreground">
+                              Отменено
+                            </span>
+                          )}
+                          {item.data.isOverride && !cancelled && (
                             <span className="inline-flex px-2 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 dark:bg-amber-950/50 dark:text-amber-400">
                               Ручная
                             </span>
@@ -403,6 +427,18 @@ export default function EmployeeDetailPage() {
                     <span className={`text-sm font-bold tabular-nums ${item.type === 'deduction' ? 'text-rose-600 dark:text-rose-400' : 'text-foreground'} ${cancelled ? 'line-through' : ''}`}>
                       {item.type === 'deduction' ? '−' : ''}{formatCurrency(item.data.amount)}
                     </span>
+                    {/* Отмена ВЫПЛАТЫ зарплаты — только kind='salary' (у аванса
+                        своя кнопка ниже, обслуживание отменяется отдельно). */}
+                    {!cancelled && item.type === 'payout' && item.data.kind === 'salary' && (
+                      <button
+                        type="button"
+                        onClick={() => handleCancelPayout(item.data.id)}
+                        disabled={cancellingId === item.data.id}
+                        className="flex items-center gap-0.5 text-[11px] text-muted-foreground hover:text-destructive transition-colors disabled:opacity-50"
+                      >
+                        <XIcon className="size-3" /> Отменить
+                      </button>
+                    )}
                     {!cancelled && item.type === 'advance' && (
                       <button
                         type="button"

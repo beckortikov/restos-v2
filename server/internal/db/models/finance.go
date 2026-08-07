@@ -44,9 +44,14 @@ type FinancialOperation struct {
 	// IsOverride — выплата ЗП/аванса/обслуживания выше расчётного остатка,
 	// проведённая осознанно (владелец подтвердил + указал причину), а не
 	// заблокированная сервером. См. миграцию 064 и SalaryService.payout.
-	IsOverride bool      `gorm:"column:is_override;default:false" json:"is_override"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	IsOverride bool `gorm:"column:is_override;default:false" json:"is_override"`
+	// CancelledAt/CancelledBy — отмена выплаты (071): исходная проводка не
+	// удаляется, а помечается отменённой (для «Отменено» в ленте + защита от
+	// повторной отмены). Деньги возвращаются компенсирующей проводкой + на счёт.
+	CancelledAt *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`
+	CancelledBy *string    `gorm:"column:cancelled_by" json:"cancelled_by"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 func (FinancialOperation) TableName() string { return "financial_operations" }

@@ -384,6 +384,17 @@ func (h *SalaryHandler) CancelAdvance(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// CancelSalary — отмена выплаты зарплаты (financial_operations id), возврат
+// денег на счёт. См. SalaryService.CancelSalary.
+func (h *SalaryHandler) CancelSalary(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.CancelSalary(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // SalaryReport — GET /api/v1/finance/salary/report?from=&to=
 // «Кому сколько выдали и когда» за период: сводка по сотрудникам + плоский
 // список выплат с датой, суммой и счётом.

@@ -681,6 +681,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Delete("/finance/salary/deductions/{id}", salaryH.CancelDeduction)
 			g.Post("/finance/salary/advance", salaryH.GiveAdvance)
 			g.Delete("/finance/salary/advances/{id}", salaryH.CancelAdvance)
+			g.Delete("/finance/salary/payouts/{id}", salaryH.CancelSalary)
 
 			// Restaurants write (Phase 10).
 			g.Post("/restaurants", restaurantsH.Create)
