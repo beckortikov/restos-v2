@@ -28,7 +28,7 @@ export default function SyncSettingsPage() {
     setSaving(true)
     try {
       await saveSyncSettings(s)
-      toast.success('Настройки сохранены. Перезапустите приложение для применения.')
+      toast.success('Настройки сохранены и уже применяются. Изменение интервала вступит в силу после следующего перезапуска.')
     } catch (e: any) {
       toast.error(e?.message ?? 'Не удалось сохранить')
     } finally {
@@ -41,7 +41,7 @@ export default function SyncSettingsPage() {
     setJoining(true)
     try {
       const { centralName } = await joinNetwork(pairingCode.trim())
-      toast.success(`Подключено к сети «${centralName}». Перезапустите приложение для применения.`)
+      toast.success(`Подключено к сети «${centralName}» — уже работает, перезапуск не нужен.`)
       setPairingCode('')
       await reloadSettings()
     } catch (e: any) {
@@ -70,7 +70,8 @@ export default function SyncSettingsPage() {
         <Info className="size-4 mt-0.5 shrink-0" />
         <span>
           Настройка для <b>филиала</b>: касса будет в фоне отправлять свои данные на центральный узел сети
-          и получать входящие перемещения. Изменения применяются <b>после перезапуска приложения</b>.
+          и получать входящие перемещения. Изменения применяются <b>сразу, без перезапуска</b> (кроме интервала —
+          он вступит в силу со следующего запуска).
         </span>
       </div>
 

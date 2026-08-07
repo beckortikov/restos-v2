@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+
+	"github.com/restos/restos-v4/server/internal/repo"
 )
 
 // Puller — сторона ФИЛИАЛА (down-sync, ADR-003 Фаза 2). Периодически тянет с
@@ -19,32 +21,55 @@ import (
 //
 // Симметричен Pusher: тот шлёт свои дельты вверх, этот тянет адресованные вниз.
 type Puller struct {
-	svc          *SyncService
-	client       *http.Client
-	centralURL   string
-	token        string
-	restaurantID string // какой это филиал (за чьими входящими тянем)
+	svc    *SyncService
+	client *http.Client
+	r      *repo.Repo
 }
 
-func NewPuller(svc *SyncService, centralURL, token, restaurantID string) *Puller {
-	return &Puller{
-		svc:          svc,
-		client:       &http.Client{Timeout: 30 * time.Second},
-		centralURL:   centralURL,
-		token:        token,
-		restaurantID: restaurantID,
+func NewPuller(svc *SyncService, r *repo.Repo) *Puller {
+	return &Puller{svc: svc, client: &http.Client{Timeout: 30 * time.Second}, r: r}
+}
+
+// activeConfig — читает АКТУАЛЬНЫЙ sync_settings на КАЖДОМ тике, а не один
+// раз при старте процесса (ADR-003, продолжение — код приглашения подключает
+// филиал без перезапуска приложения). Puller уже в package service — читает
+// через SyncSettingsService напрямую (см. симметричный приём и подробное
+// обоснование в synclog.Pusher.activeConfig, тот же принцип).
+func (p *Puller) activeConfig(ctx context.Context) (centralURL, token, restaurantID string, enabled bool, err error) {
+	st, err := NewSyncSettingsService(p.r).Get(ctx)
+	if err != nil {
+		return "", "", "", false, err
 	}
+	if st.CentralURL != nil {
+		centralURL = *st.CentralURL
+	}
+	if st.Token != nil {
+		token = *st.Token
+	}
+	if st.RestaurantID != nil {
+		restaurantID = *st.RestaurantID
+	}
+	return centralURL, token, restaurantID, st.Enabled, nil
 }
 
-// PullOnce тянет и применяет один батч. Возвращает число применённых дельт.
+// PullOnce тянет и применяет один батч. Возвращает число применённых дельт
+// (0 = нечего тянуть, либо sync выключен/не настроен).
 func (p *Puller) PullOnce(ctx context.Context) (int, error) {
-	u := p.centralURL + "/api/v1/sync/pull?restaurant_id=" + url.QueryEscape(p.restaurantID)
+	centralURL, token, restaurantID, enabled, err := p.activeConfig(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !enabled || centralURL == "" || restaurantID == "" {
+		return 0, nil
+	}
+
+	u := centralURL + "/api/v1/sync/pull?restaurant_id=" + url.QueryEscape(restaurantID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return 0, err
 	}
-	if p.token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -63,19 +88,22 @@ func (p *Puller) PullOnce(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	// insert-if-absent: не перезатираем локальный статус (received).
-	// p.restaurantID — для merge сетевого меню в menu_items этого филиала.
-	res, err := p.svc.ApplyPulled(ctx, in, p.restaurantID)
+	// restaurantID — для merge сетевого меню в menu_items этого филиала.
+	res, err := p.svc.ApplyPulled(ctx, in, restaurantID)
 	if err != nil {
 		return 0, err
 	}
 	return res.Applied, nil
 }
 
-// Run гоняет PullOnce по таймеру до отмены ctx.
+// Run гоняет PullOnce по таймеру до отмены ctx. Запускается БЕЗУСЛОВНО (даже
+// если sync ещё не настроен) — activeConfig на каждом тике сам решает, есть
+// ли что делать; так подключение по коду приглашения подхватывается без
+// перезапуска процесса.
 func (p *Puller) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	log.Info().Str("central", p.centralURL).Str("restaurant", p.restaurantID).Msg("sync puller started")
+	log.Info().Dur("interval", interval).Msg("sync puller started")
 	for {
 		select {
 		case <-ctx.Done():

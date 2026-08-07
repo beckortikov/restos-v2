@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/audit"
@@ -20,6 +21,7 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
+	"github.com/restos/restos-v4/server/internal/synclog"
 )
 
 // Код приглашения филиала в сеть (ADR-003, продолжение). Central генерирует
@@ -335,5 +337,35 @@ func (s *NetworkService) JoinNetwork(ctx context.Context, pairingCode string) (*
 	if err != nil {
 		return nil, err
 	}
+
+	// Recorder (synclog.Record) проверяет ГЛОБАЛЬНЫЙ atomic-флаг, который
+	// Pusher иначе синхронизирует только на СВОЁМ следующем тике (до
+	// interval секунд) — Backfill() ниже сработал бы вхолостую (Record
+	// молча no-op'ит), если бы флаг ещё не включён именно сейчас.
+	synclog.SetEnabled(true)
+
+	// Автозабфилл истории (Ф6, ADR-003 «Central видит всё»), СРАЗУ, без
+	// ожидания рестарта — тот же гвард (backfilled_at IS NULL), что и у
+	// боевого пути в main.go (первое включение sync при старте процесса).
+	// Без этого пуш/пул уже подхватились бы (Pusher/Puller.activeConfig
+	// перечитывают sync_settings на каждом тике), но ИСТОРИЯ (всё, что было
+	// ДО подключения) осталась бы неотправленной до ближайшего рестарта.
+	if existing.BackfilledAt == nil {
+		go func() {
+			bctx := audit.WithActor(context.Background(), audit.Actor{UserName: "system", Role: "owner"})
+			res, err := NewSyncService(s.r).Backfill(bctx, rid)
+			if err != nil {
+				log.Error().Err(err).Msg("sync backfill (auto, подключение по коду): failed")
+				return
+			}
+			log.Info().Interface("entities", res.Entities).Msg("sync backfill (auto, подключение по коду): completed")
+			now := time.Now().UTC()
+			if err := s.r.Raw().WithContext(context.Background()).Model(&models.SyncSettings{}).
+				Where("id = 1").Update("backfilled_at", now).Error; err != nil {
+				log.Error().Err(err).Msg("sync backfill: failed to mark backfilled_at")
+			}
+		}()
+	}
+
 	return &JoinResult{CentralName: out.CentralName}, nil
 }

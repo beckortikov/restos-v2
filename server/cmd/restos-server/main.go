@@ -275,58 +275,57 @@ func main() {
 	// invariant из orders_void.go.
 	go jobs.OrdersCleanupScheduler(ctx, gdb, jobs.OrdersCleanupConfig{})
 
-	// Multi-branch sync pusher (Фаза 2, ADR-003). Только роль branch и только
-	// если задан центральный узел. Автономный режим (по умолчанию) — не стартует.
-	if cfg.SyncEnabled && cfg.SyncCentralURL != "" {
-		interval := time.Duration(cfg.SyncIntervalSec) * time.Second
-		if interval <= 0 {
-			interval = 30 * time.Second
-		}
-		pusher := synclog.NewPusher(repo.New(gdb), cfg.SyncCentralURL, cfg.SyncToken)
-		go pusher.Run(ctx, interval)
+	// Multi-branch sync pusher/puller (Фаза 2, ADR-003; безрестартовое
+	// подключение — ADR-003 продолжение). Стартуют БЕЗУСЛОВНО, даже если sync
+	// сейчас выключен/не настроен — каждый тик сам перечитывает sync_settings
+	// и решает, есть ли что делать (Pusher.activeConfig/Puller.activeConfig).
+	// Так подключение по коду приглашения (JoinNetwork) подхватывается без
+	// перезапуска процесса — раньше эта горутина вообще не создавалась, пока
+	// sync не был настроен ДО старта.
+	interval := time.Duration(cfg.SyncIntervalSec) * time.Second
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	pusher := synclog.NewPusher(repo.New(gdb))
+	go pusher.Run(ctx, interval)
+	puller := service.NewPuller(service.NewSyncService(repo.New(gdb)), repo.New(gdb))
+	go puller.Run(ctx, interval)
 
-		// Down-sync: тянем входящие перемещения, адресованные этому филиалу.
-		if cfg.SyncRestaurantID != "" {
-			puller := service.NewPuller(service.NewSyncService(repo.New(gdb)), cfg.SyncCentralURL, cfg.SyncToken, cfg.SyncRestaurantID)
-			go puller.Run(ctx, interval)
-		}
-
-		// Автозабфилл истории (Ф6, ADR-003 «Central видит всё») — один раз,
-		// при первом включении sync (needsAutoBackfill, см. выше). Enqueue
-		// текущего состояния всех реплицируемых таблиц в sync_log — обычный
-		// пушер (уже запущен строкой выше) доставит батчи на своих циклах.
-		// В фоне: история ресторана может быть большой, кассу нельзя держать
-		// незапущенной (HTTP ещё даже не слушает на этом этапе кода).
-		if needsAutoBackfill && cfg.SyncRestaurantID != "" {
-			go func() {
-				bctx := audit.WithActor(context.Background(), audit.Actor{UserName: "system", Role: "owner"})
-				syncSvc := service.NewSyncService(repo.New(gdb))
-				res, err := syncSvc.Backfill(bctx, cfg.SyncRestaurantID)
-				if err != nil {
-					log.Error().Err(err).Msg("sync backfill (auto, первое включение): failed")
-					return
+	// Автозабфилл истории при старте (Ф6, ADR-003 «Central видит всё») — для
+	// узла, который УЖЕ был настроен на sync до этого запуска (переменные
+	// окружения/сохранённый sync_settings), но ещё ни разу не отправлял
+	// историю. Симметричный триггер для «подключились ПРЯМО СЕЙЧАС кодом
+	// приглашения, без рестарта» — в JoinNetwork (network_invites.go), тем
+	// же вызовом Backfill+пометкой backfilled_at.
+	if needsAutoBackfill && cfg.SyncEnabled && cfg.SyncRestaurantID != "" {
+		go func() {
+			bctx := audit.WithActor(context.Background(), audit.Actor{UserName: "system", Role: "owner"})
+			syncSvc := service.NewSyncService(repo.New(gdb))
+			res, err := syncSvc.Backfill(bctx, cfg.SyncRestaurantID)
+			if err != nil {
+				log.Error().Err(err).Msg("sync backfill (auto, первое включение): failed")
+				return
+			}
+			log.Info().Interface("entities", res.Entities).Msg("sync backfill (auto, первое включение): completed")
+			now := time.Now().UTC()
+			upd := gdb.Model(&models.SyncSettings{}).Where("id = 1").Update("backfilled_at", now)
+			if upd.Error == nil && upd.RowsAffected == 0 {
+				// Строки sync_settings ещё не было (CLI-flag-only конфиг,
+				// без UI) — материализуем её со ЗНАЧЕНИЯМИ ИЗ cfg, а не
+				// пустыми полями: иначе следующий рестарт прочитал бы
+				// новую строку с enabled=false по умолчанию и ВЫКЛЮЧИЛ
+				// бы sync, который сейчас реально работал через флаги.
+				central, token, ridCopy := cfg.SyncCentralURL, cfg.SyncToken, cfg.SyncRestaurantID
+				if err := gdb.Create(&models.SyncSettings{
+					ID: 1, Enabled: cfg.SyncEnabled, CentralURL: &central, Token: &token,
+					RestaurantID: &ridCopy, IntervalSec: cfg.SyncIntervalSec, BackfilledAt: &now,
+				}).Error; err != nil {
+					log.Error().Err(err).Msg("sync backfill: failed to persist sync_settings row")
 				}
-				log.Info().Interface("entities", res.Entities).Msg("sync backfill (auto, первое включение): completed")
-				now := time.Now().UTC()
-				upd := gdb.Model(&models.SyncSettings{}).Where("id = 1").Update("backfilled_at", now)
-				if upd.Error == nil && upd.RowsAffected == 0 {
-					// Строки sync_settings ещё не было (CLI-flag-only конфиг,
-					// без UI) — материализуем её со ЗНАЧЕНИЯМИ ИЗ cfg, а не
-					// пустыми полями: иначе следующий рестарт прочитал бы
-					// новую строку с enabled=false по умолчанию и ВЫКЛЮЧИЛ
-					// бы sync, который сейчас реально работал через флаги.
-					central, token, ridCopy := cfg.SyncCentralURL, cfg.SyncToken, cfg.SyncRestaurantID
-					if err := gdb.Create(&models.SyncSettings{
-						ID: 1, Enabled: cfg.SyncEnabled, CentralURL: &central, Token: &token,
-						RestaurantID: &ridCopy, IntervalSec: cfg.SyncIntervalSec, BackfilledAt: &now,
-					}).Error; err != nil {
-						log.Error().Err(err).Msg("sync backfill: failed to persist sync_settings row")
-					}
-				} else if upd.Error != nil {
-					log.Error().Err(upd.Error).Msg("sync backfill: failed to mark backfilled_at")
-				}
-			}()
-		}
+			} else if upd.Error != nil {
+				log.Error().Err(upd.Error).Msg("sync backfill: failed to mark backfilled_at")
+			}
+		}()
 	}
 
 	// 4. Ждём сигнал или ошибку HTTP.

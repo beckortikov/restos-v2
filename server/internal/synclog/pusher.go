@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/repo"
@@ -24,21 +26,46 @@ import (
 // односторонний и простой: отправил → пометил. Повтор безопасен (ingest
 // идемпотентен по row_id).
 type Pusher struct {
-	r          *repo.Repo
-	client     *http.Client
-	centralURL string // напр. http://central.tailnet:3001
-	token      string // Bearer к центральному узлу
-	batchSize  int
+	r         *repo.Repo
+	client    *http.Client
+	batchSize int
 }
 
-func NewPusher(r *repo.Repo, centralURL, token string) *Pusher {
+func NewPusher(r *repo.Repo) *Pusher {
 	return &Pusher{
-		r:          r,
-		client:     &http.Client{Timeout: 30 * time.Second},
-		centralURL: centralURL,
-		token:      token,
-		batchSize:  200,
+		r:         r,
+		client:    &http.Client{Timeout: 30 * time.Second},
+		batchSize: 200,
 	}
+}
+
+// activeConfig — читает АКТУАЛЬНЫЙ sync_settings на КАЖДОМ тике, а не один
+// раз при старте процесса (ADR-003, продолжение — код приглашения подключает
+// филиал без перезапуска приложения). Не через service.SyncSettingsService —
+// synclog НЕ импортирует service (см. wire-типы выше в файле: та же причина,
+// не создавать цикл), поэтому Raw-запрос напрямую, как уже принято в этом файле.
+//
+// Заодно синхронизирует глобальный recorder-флаг (Record() в этом же пакете
+// молча no-op'ит, если !enabled) — единая точка, оба конца проблемы «настройки
+// применяются только после рестарта» чинятся одним и тем же чтением.
+func (p *Pusher) activeConfig(ctx context.Context) (centralURL, token string, enabled bool, err error) {
+	var st models.SyncSettings
+	err = p.r.Raw().WithContext(ctx).Where("id = 1").First(&st).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		SetEnabled(false)
+		return "", "", false, nil
+	}
+	if err != nil {
+		return "", "", false, err
+	}
+	SetEnabled(st.Enabled)
+	if st.CentralURL != nil {
+		centralURL = *st.CentralURL
+	}
+	if st.Token != nil {
+		token = *st.Token
+	}
+	return centralURL, token, st.Enabled, nil
 }
 
 // wire-типы = контракт POST /api/v1/sync/ingest (дублируем локально, чтобы не
@@ -54,8 +81,16 @@ type wireBatch struct {
 }
 
 // PushOnce отправляет один батч неотправленных дельт. Возвращает число
-// отправленных строк (0 = нечего слать).
+// отправленных строк (0 = нечего слать, либо sync выключен/не настроен).
 func (p *Pusher) PushOnce(ctx context.Context) (int, error) {
+	centralURL, token, enabled, err := p.activeConfig(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !enabled || centralURL == "" {
+		return 0, nil
+	}
+
 	var rows []models.SyncLog
 	if err := p.r.Raw().WithContext(ctx).
 		Where("synced_at IS NULL").
@@ -79,14 +114,14 @@ func (p *Pusher) PushOnce(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.centralURL+"/api/v1/sync/ingest", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, centralURL+"/api/v1/sync/ingest", bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", uuid.NewString())
-	if p.token != "" {
-		req.Header.Set("Authorization", "Bearer "+p.token)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := p.client.Do(req)
@@ -111,11 +146,14 @@ func (p *Pusher) PushOnce(ctx context.Context) (int, error) {
 	return len(rows), nil
 }
 
-// Run гоняет PushOnce по таймеру до отмены ctx. Ошибки логируются, цикл живёт.
+// Run гоняет PushOnce по таймеру до отмены ctx. Запускается БЕЗУСЛОВНО (даже
+// если sync ещё не настроен) — activeConfig на каждом тике сам решает, есть
+// ли что делать; так подключение по коду приглашения подхватывается без
+// перезапуска процесса. Ошибки логируются, цикл живёт.
 func (p *Pusher) Run(ctx context.Context, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-	log.Info().Str("central", p.centralURL).Dur("interval", interval).Msg("sync pusher started")
+	log.Info().Dur("interval", interval).Msg("sync pusher started")
 	for {
 		select {
 		case <-ctx.Done():

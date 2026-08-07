@@ -44,8 +44,13 @@ type UpdateSyncSettingsInput struct {
 	IntervalSec  int    `json:"interval_sec"`
 }
 
-// Update сохраняет конфиг (upsert singleton). Применяется после перезапуска
-// сервера (пушер/пуллер читают конфиг при старте).
+// Update сохраняет конфиг (upsert singleton). Enabled/CentralURL/Token/
+// RestaurantID применяются в течение одного тика, БЕЗ перезапуска сервера —
+// Pusher/Puller перечитывают sync_settings на каждом тике, не один раз при
+// старте (ADR-003, продолжение; см. synclog.Pusher.activeConfig /
+// service.Puller.activeConfig). Исключение — IntervalSec: частота самого
+// тика фиксируется при старте процесса, смена применится со следующего
+// перезапуска (сознательно не в объёме, редкая тонкая настройка).
 func (s *SyncSettingsService) Update(ctx context.Context, in UpdateSyncSettingsInput) (*models.SyncSettings, error) {
 	now := time.Now().UTC()
 	interval := in.IntervalSec
