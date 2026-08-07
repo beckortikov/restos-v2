@@ -773,13 +773,17 @@ func writeJSON(w http.ResponseWriter, code int, body any) {
 }
 
 // corsOriginsFromEnv читает RESTOS_CORS_ALLOWED_ORIGINS=csv,list или
-// возвращает дефолтные dev-origins (Vite на 3000/5173).
+// возвращает дефолтные dev-origins (Vite на 3000/5173, плюс 5174 —
+// .claude/launch.json "vite-dev-branch", второй параллельный dev-сервер для
+// ручного двухузлового тестирования ADR-003, отдельный origin от 5173 нужен
+// именно чтобы localStorage central/branch не делили один и тот же токен).
 func corsOriginsFromEnv() []string {
 	csv := strings.TrimSpace(os.Getenv("RESTOS_CORS_ALLOWED_ORIGINS"))
 	if csv == "" {
 		return []string{
 			"http://localhost:3000", "http://127.0.0.1:3000",
 			"http://localhost:5173", "http://127.0.0.1:5173",
+			"http://localhost:5174", "http://127.0.0.1:5174",
 		}
 	}
 	parts := strings.Split(csv, ",")
