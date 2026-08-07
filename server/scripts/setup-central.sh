@@ -14,6 +14,14 @@
 #
 # Бинарь собирается заранее: cd server && make build-all
 #   → bin/restos-server-linux-amd64 (залить на VPS в $BIN_PATH).
+#
+# Несколько организаций на ОДНОМ VPS: прогнать скрипт повторно с ДРУГИМ
+# PORT (обязательно — два процесса не могут слушать один порт). BIN_PATH
+# общий (одна версия бинаря на все организации) — это нормально, он
+# read-only. Всё остальное (systemd-юнит, data-dir, env-файл с секретом)
+# автоматически разводится по $INSTANCE (по умолчанию — "org-$PORT", так
+# как PORT и так обязан быть уникальным; можно задать своё осмысленное имя
+# явно: INSTANCE=pizza-tashkent PORT=3003 ./setup-central.sh ...).
 set -euo pipefail
 
 PUBLIC_URL="${1:?Использование: setup-central.sh <публичный-адрес> [название] [PIN]}"
@@ -21,8 +29,16 @@ RESTAURANT_NAME="${2:-Центральный склад}"
 OWNER_PIN="${3:-$(( RANDOM % 9000 + 1000 ))}"
 
 BIN_PATH="${BIN_PATH:-/opt/restos/restos-server}"
-DATA_DIR="${DATA_DIR:-/opt/restos/data}"
 PORT="${PORT:-3002}"
+INSTANCE="${INSTANCE:-org-${PORT}}"
+DATA_DIR="${DATA_DIR:-/opt/restos/${INSTANCE}/data}"
+# У каждого инстанса — СВОЙ embedded Postgres (child-процесс restos-server),
+# у него тоже отдельный порт (по умолчанию 54330), а не только у REST API.
+# Если оставить его общим — второй/следующий инстанс на этом же VPS будет
+# падать "process already listening on port 54330" (нашли вживую при
+# тестировании). Сдвигаем на ту же дельту, что и PORT — при PORT=3002 (дефолт
+# одиночной установки) даёт ровно 54330, как раньше, без изменения поведения.
+PG_PORT="${PG_PORT:-$((54330 + PORT - 3002))}"
 API_BASE="${API_BASE:-http://127.0.0.1:${PORT}}"
 API="${API_BASE}/api/v1"
 
@@ -55,32 +71,53 @@ if ! curl -sf "$API/bootstrap/status" > /dev/null 2>&1; then
   mkdir -p "$DATA_DIR"
 
   if command -v systemctl > /dev/null && [ "$(id -u)" = "0" ]; then
-    log "root + systemd — ставлю автозапуск (restos-central.service)"
+    SERVICE_NAME="restos-central-${INSTANCE}"
+    log "root + systemd — ставлю автозапуск (${SERVICE_NAME}.service)"
 
-    # Отдельный системный пользователь ОБЯЗАТЕЛЕН: embedded Postgres — это
-    # обычный дистрибутив PG, а initdb/postgres жёстко отказываются работать
-    # под root («root execution ... not permitted») — юнит под root уходил бы
-    # в crash-loop. HOME нужен валидный: библиотека embedded-postgres качает
-    # архив дистрибутива в ~/.embedded-postgres-go при первом старте.
+    # Уже есть ДРУГОЙ инстанс на этом же порту (юнит есть, но имя другое) —
+    # значит INSTANCE/PORT не согласованы с реальным состоянием VPS. Лучше
+    # остановиться и разобраться, чем молча породить два юнита на один порт.
+    for u in /etc/systemd/system/restos-central-*.service; do
+      [ -e "$u" ] || continue
+      if [ "$u" != "/etc/systemd/system/${SERVICE_NAME}.service" ] && \
+         grep -q "RESTOS_HTTP_ADDR=0.0.0.0:${PORT}$" \
+           "/etc/restos-central-$(basename "$u" .service | sed 's/^restos-central-//').env" 2>/dev/null; then
+        echo "Порт ${PORT} уже занят другим юнитом: $(basename "$u")." >&2
+        echo "Укажите свободный PORT для «${RESTAURANT_NAME}»." >&2
+        exit 1
+      fi
+    done
+
+    # Отдельный системный пользователь ОБЩИЙ для всех организаций на VPS
+    # (не по одному на организацию — БД и файлы всё равно разведены через
+    # DATA_DIR/$INSTANCE, отдельный unix-юзер на каждую орг только усложнил
+    # бы без выигрыша в изоляции). embedded Postgres — обычный дистрибутив
+    # PG, а initdb/postgres жёстко отказываются работать под root («root
+    # execution ... not permitted») — юнит под root уходил бы в crash-loop.
+    # HOME нужен валидный: библиотека embedded-postgres качает архив
+    # дистрибутива в ~/.embedded-postgres-go при первом старте.
     SERVICE_USER="restos"
     if ! id -u "$SERVICE_USER" > /dev/null 2>&1; then
-      useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+      useradd --system --home-dir /opt/restos --shell /usr/sbin/nologin "$SERVICE_USER"
     fi
     chown -R "$SERVICE_USER:" "$DATA_DIR"
 
     # Секрет — НЕ в юните (юниты world-readable, 644), а в env-файле 0600.
-    ENV_FILE=/etc/restos-central.env
+    # Имя файла с $INSTANCE — иначе второй прогон на этом же VPS для другой
+    # организации перезаписал бы секрет и адрес первой.
+    ENV_FILE="/etc/restos-central-${INSTANCE}.env"
     cat > "$ENV_FILE" <<EOF
 RESTOS_SYNC_TOKEN=${SYNC_TOKEN}
 RESTOS_HTTP_ADDR=0.0.0.0:${PORT}
 RESTOS_DATA_DIR=${DATA_DIR}
+RESTOS_PG_PORT=${PG_PORT}
 HOME=${DATA_DIR}
 EOF
     chmod 600 "$ENV_FILE"
 
-    cat > /etc/systemd/system/restos-central.service <<EOF
+    cat > "/etc/systemd/system/${SERVICE_NAME}.service" <<EOF
 [Unit]
-Description=RestOS central node (ADR-003)
+Description=RestOS central node — ${INSTANCE} (ADR-003)
 After=network.target
 
 [Service]
@@ -94,7 +131,7 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now restos-central
+    systemctl enable --now "$SERVICE_NAME"
   else
     if [ "$(id -u)" = "0" ]; then
       echo "Запуск под root без systemd не поддерживается: embedded Postgres" >&2
@@ -105,6 +142,7 @@ EOF
     log "нет systemd — просто запускаю бинарь в фоне (nohup)"
     log "для автозапуска после перезагрузки — прогнать под root на systemd-хосте"
     RESTOS_SYNC_TOKEN="$SYNC_TOKEN" RESTOS_HTTP_ADDR="0.0.0.0:${PORT}" RESTOS_DATA_DIR="$DATA_DIR" \
+      RESTOS_PG_PORT="$PG_PORT" \
       nohup "$BIN_PATH" > "${DATA_DIR}/restos-central.log" 2>&1 &
     disown
   fi
@@ -116,6 +154,19 @@ fi
 # ─── Шаг 2: бутстрап (пропускаем, если уже инициализирован) ────────────────
 STATUS="$(curl -sf "$API/bootstrap/status")"
 if echo "$STATUS" | grep -q '"initialized":true'; then
+  EXISTING_NAMES="$(echo "$STATUS" | grep -o '"name":"[^"]*"' | cut -d'"' -f4)"
+  # На этом PORT уже отвечает КАКОЙ-ТО сервер, но не факт что это наша
+  # организация — если название не совпадает ни с одним существующим,
+  # это, скорее всего, чужой инстанс (PORT перепутан/не задан при повторном
+  # прогоне для другой организации на этом же VPS). Молча продолжать нельзя:
+  # ниже "уже инициализирован, ничего не создаю" был бы враньём про ЧУЖУЮ
+  # организацию, а владелец «${RESTAURANT_NAME}» решил бы, что уже готово.
+  if ! echo "$EXISTING_NAMES" | grep -qxF "$RESTAURANT_NAME"; then
+    echo "На порту ${PORT} уже отвечает ДРУГАЯ организация: ${EXISTING_NAMES}" >&2
+    echo "Это не «${RESTAURANT_NAME}». Укажите свободный PORT, например:" >&2
+    echo "  PORT=3003 INSTANCE=my-org ./setup-central.sh ..." >&2
+    exit 1
+  fi
   log "сервер уже инициализирован — бутстрап/сеть/код НЕ создаю повторно."
   log "текущие рестораны: $(echo "$STATUS" | grep -o '"name":"[^"]*"' | tr '\n' ' ')"
   log "если нужен ещё один код приглашения — сгенерируйте его в UI"
