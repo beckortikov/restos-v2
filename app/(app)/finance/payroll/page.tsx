@@ -462,10 +462,15 @@ export default function PayrollPage() {
   // ФОТ считаем по НАЧИСЛЕННОМУ: у дневников оклад нулевой, и старый подсчёт
   // по e.salary просто не видел бы их в фонде оплаты труда.
   const accruedOf = (e: User) => accrualByUser[e.id]?.accrued ?? (e.salary ?? 0)
+  // Аванс/удержания — period-scoped (из accrual за выбранный период), а НЕ
+  // глобальный счётчик e.advance/deductions: аванс за прошлый месяц не должен
+  // резать остаток текущего (баг владельца, backend-фикс period-scoped).
+  const advOf = (e: User) => accrualByUser[e.id]?.advance ?? 0
+  const dedOf = (e: User) => accrualByUser[e.id]?.deductions ?? 0
   const withSalary = employees.filter(e => accruedOf(e) > 0)
   const totalSalary = withSalary.reduce((s, e) => s + accruedOf(e), 0)
-  const totalAdvance = withSalary.reduce((s, e) => s + (e.advance ?? 0), 0)
-  const totalDeductions = withSalary.reduce((s, e) => s + (e.deductions ?? 0), 0)
+  const totalAdvance = withSalary.reduce((s, e) => s + advOf(e), 0)
+  const totalDeductions = withSalary.reduce((s, e) => s + dedOf(e), 0)
   const totalSalaryPaid = Object.values(salaryPaid).reduce((s, v) => s + v, 0)
   const totalSalaryOnlyPaid = Object.values(salaryOnlyPaid).reduce((s, v) => s + v, 0)
   // «К выплате» считаем ТОЧНО как сервер (accrued − advance − deductions −
@@ -481,8 +486,8 @@ export default function PayrollPage() {
     if (roleFilter !== 'all' && e.role !== roleFilter) return false
     if (statusFilter === 'with_salary' && (e.salary ?? 0) === 0) return false
     if (statusFilter === 'no_salary' && (e.salary ?? 0) > 0) return false
-    if (statusFilter === 'has_advance' && (e.advance ?? 0) === 0) return false
-    if (statusFilter === 'has_deduction' && (e.deductions ?? 0) === 0) return false
+    if (statusFilter === 'has_advance' && advOf(e) === 0) return false
+    if (statusFilter === 'has_deduction' && dedOf(e) === 0) return false
     if (search.trim()) {
       const q = search.toLowerCase()
       return e.name.toLowerCase().includes(q) || (e.position || '').toLowerCase().includes(q) || e.username.toLowerCase().includes(q)
@@ -556,12 +561,13 @@ export default function PayrollPage() {
                   filtered.map(e => ({
                     name: e.name,
                     position: e.position || ROLE_LABELS[e.role],
-                    salary: e.salary ?? 0,
-                    advance: e.advance ?? 0,
-                    deductions: e.deductions ?? 0,
+                    salary: accruedOf(e),
+                    advance: advOf(e),
+                    deductions: dedOf(e),
                     salaryPaidPeriod: salaryPaid[e.id] ?? 0,
-                    // salaryOnlyPaid, не combined — иначе аванс внутри периода вычтется дважды.
-                    toPay: (e.salary ?? 0) - (e.advance ?? 0) - (e.deductions ?? 0) - (salaryOnlyPaid[e.id] ?? 0),
+                    // period-scoped: accrued/advance/deductions из accrual, salaryOnlyPaid
+                    // (не combined) — иначе аванс внутри периода вычтется дважды.
+                    toPay: accruedOf(e) - advOf(e) - dedOf(e) - (salaryOnlyPaid[e.id] ?? 0),
                   })),
                   [
                     { key: 'name', header: 'Сотрудник' },
@@ -641,8 +647,8 @@ export default function PayrollPage() {
                   ['all', `Все (${employees.length})`],
                   ['with_salary', `С окладом (${withSalary.length})`],
                   ['no_salary', `Без оклада (${employees.length - withSalary.length})`],
-                  ['has_advance', `С авансом (${employees.filter(e => (e.advance ?? 0) > 0).length})`],
-                  ['has_deduction', `С удержанием (${employees.filter(e => (e.deductions ?? 0) > 0).length})`],
+                  ['has_advance', `С авансом (${employees.filter(e => advOf(e) > 0).length})`],
+                  ['has_deduction', `С удержанием (${employees.filter(e => dedOf(e) > 0).length})`],
                 ] as const).map(([key, label]) => (
                   <button key={key} onClick={() => setStatusFilter(key)}
                     className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${statusFilter === key ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -700,17 +706,19 @@ export default function PayrollPage() {
                 <tbody>
                   {filtered.map(emp => {
                     const salary = emp.salary ?? 0
-                    const advance = emp.advance ?? 0
-                    const deductions = emp.deductions ?? 0
+                    // Начислено/аванс/удержания — period-scoped из accrual (за
+                    // выбранный период), а НЕ глобальный счётчик emp.advance:
+                    // аванс за прошлый месяц не режет остаток текущего.
+                    const acc = accrualByUser[emp.id]
+                    const advance = acc?.advance ?? 0
+                    const deductions = acc?.deductions ?? 0
                     // combined — для колонки «Выплачено (ЗП)» (оклад+аванс на руки).
                     const paidSalary = salaryPaid[emp.id] ?? 0
-                    // salaryOnly — для «К выплате»: аванс уже вычтен через emp.advance,
+                    // salaryOnly — для «К выплате»: аванс уже вычтен через advance,
                     // вычитать его ещё раз через combined значило бы вычесть дважды.
                     const paidSalaryOnly = salaryOnlyPaid[emp.id] ?? 0
-                    // Начислено за период: оклад или ставка × отработанные дни.
                     // Пока начисления не загрузились — откатываемся на оклад,
                     // чтобы таблица не мигала нулями.
-                    const acc = accrualByUser[emp.id]
                     const isDaily = acc?.payType === 'daily' || emp.payType === 'daily'
                     const accruedPay = acc ? acc.accrued : salary
                     const toPay = accruedPay - advance - deductions - paidSalaryOnly
@@ -1300,7 +1308,7 @@ export default function PayrollPage() {
       {/* ═══ Salary Dialog ═══ */}
       {/* salaryPaidThisPeriod — salaryOnlyPaid, не salaryPaid (combined):
           иначе аванс, выданный внутри периода, вычтется из «К выплате»
-          дважды — он уже вычтен через employee.advance. */}
+          дважды — он уже вычтен через accrual.advance (period-scoped). */}
       <PayEmployeeDialog
         employee={selectedEmp}
         action={payAction}

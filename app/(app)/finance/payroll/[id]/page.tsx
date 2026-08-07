@@ -230,7 +230,12 @@ export default function EmployeeDetailPage() {
     )
   }
 
-  const remaining = Math.max(0, (accrual?.accrued ?? employee.salary ?? 0) - (employee.advance ?? 0) - (employee.deductions ?? 0) - salaryOnlyPaidMonth)
+  // Аванс/удержания — period-scoped (из accrual за текущий месяц), а НЕ
+  // глобальный счётчик employee.advance: аванс за прошлый месяц не режет
+  // остаток текущего (баг владельца, backend-фикс period-scoped).
+  const monthAdvance = accrual?.advance ?? 0
+  const monthDeductions = accrual?.deductions ?? 0
+  const remaining = Math.max(0, (accrual?.accrued ?? employee.salary ?? 0) - monthAdvance - monthDeductions - salaryOnlyPaidMonth)
   const serviceRemaining = Math.max(0, serviceAccrued - servicePaid)
   const isDaily = accrual?.payType === 'daily' || employee.payType === 'daily'
 
@@ -275,7 +280,7 @@ export default function EmployeeDetailPage() {
           </div>
           <div className="bg-card border border-border rounded-xl p-4">
             <p className="text-xs text-muted-foreground">Аванс / удержания</p>
-            <p className="text-xl font-bold text-amber-600 mt-1">{formatCurrency(employee.advance ?? 0)} <span className="text-destructive text-sm">/ {formatCurrency(employee.deductions ?? 0)}</span></p>
+            <p className="text-xl font-bold text-amber-600 mt-1">{formatCurrency(monthAdvance)} <span className="text-destructive text-sm">/ {formatCurrency(monthDeductions)}</span></p>
           </div>
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
             <p className="text-xs text-muted-foreground">Остаток к выплате</p>

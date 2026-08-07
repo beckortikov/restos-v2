@@ -1557,16 +1557,16 @@ func salaryCategory(kind *string) string {
 // что и раньше применялся к kind=advance внутри PaySalary — иначе выдача
 // аванса новым эндпоинтом стала бы неограниченной там, где раньше требовала
 // осознанного Override.
-func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period string) (u models.User, accrued decimal.Decimal, basis string, paid decimal.Decimal, err error) {
+func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period string) (u models.User, accrued decimal.Decimal, basis string, paid, advance, deductions decimal.Decimal, err error) {
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
-		return u, accrued, basis, paid, err
+		return
 	}
 	if err = scoped.Where("id = ?", userID).First(&u).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return u, accrued, basis, paid, apperrors.Wrap("VALIDATION", "user not found", nil)
+			err = apperrors.Wrap("VALIDATION", "user not found", nil)
 		}
-		return u, accrued, basis, paid, err
+		return
 	}
 	// Уже выплачено за период = Σ зарплатных проводок этого сотрудника ЗА
 	// ЭТОТ ПЕРИОД — матчим по тегу периода в description ("Зарплата:2026-07",
@@ -1583,7 +1583,7 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 		Select("COALESCE(SUM(amount), 0)").
 		Where("category = ? AND source_ref = ? AND description LIKE ?", CategorySalary, userID, periodTag).
 		Scan(&paid).Error; err != nil {
-		return u, accrued, basis, paid, err
+		return
 	}
 	// Начислено за период. Для оклада — сумма из карточки, для дневной
 	// оплаты (054) — ставка × отработанные дни из табеля: капить дневника
@@ -1593,7 +1593,8 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 	if payTypeOf(u) == PayTypeDaily {
 		days, units, derr := s.daysWorkedInPeriod(ctx, userID, period)
 		if derr != nil {
-			return u, accrued, basis, paid, derr
+			err = derr
+			return
 		}
 		accrued = accruedFor(u, units)
 		if units != days {
@@ -1602,7 +1603,41 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
 		}
 	}
-	return u, accrued, basis, paid, nil
+	// Аванс/удержания за ЭТОТ период — из period-tagged строк salary_advances/
+	// salary_deductions (не отменённых), а НЕ из глобальных счётчиков
+	// users.advance/deductions: счётчик period-agnostic, поэтому аванс за
+	// прошлый месяц раньше срезал остаток текущего (реальный баг владельца).
+	advance, deductions, err = s.advDedForPeriod(ctx, userID, period)
+	return
+}
+
+// advDedForPeriod — Σ НЕотменённых авансов и удержаний сотрудника за месяц
+// period (YYYY-MM). Источник истины для остатка «К выплате» вместо глобальных
+// счётчиков users.advance/deductions (см. комментарий в salaryCapForPeriod).
+// salary_deductions.period NULL у записей до 070 — "period = ?" их не берёт,
+// легаси-удержания без месяца в остаток периода не попадают (осознанно).
+func (s *SalaryService) advDedForPeriod(ctx context.Context, userID, period string) (adv, ded decimal.Decimal, err error) {
+	sa, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return
+	}
+	if err = sa.Table("salary_advances").
+		Select("COALESCE(SUM(amount), 0)").
+		Where("user_id::text = ? AND period = ? AND cancelled_at IS NULL", userID, period).
+		Scan(&adv).Error; err != nil {
+		return
+	}
+	sd, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return
+	}
+	if err = sd.Table("salary_deductions").
+		Select("COALESCE(SUM(amount), 0)").
+		Where("user_id::text = ? AND period = ? AND cancelled_at IS NULL", userID, period).
+		Scan(&ded).Error; err != nil {
+		return
+	}
+	return decimal.Normalize(adv), decimal.Normalize(ded), nil
 }
 
 func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*models.FinancialOperation, error) {
@@ -1621,7 +1656,7 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 		if perr != nil || !decimal.IsPositive(amount) {
 			return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
 		}
-		u, accrued, basis, paid, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
+		_, accrued, basis, paid, advance, deductions, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
 		if err != nil {
 			return nil, err
 		}
@@ -1637,7 +1672,7 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			})
 		}
 		// Начислено − аванс − удержания − уже выплачено.
-		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, u.Advance), u.Deductions), paid)
+		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, advance), deductions), paid)
 		if decimal.IsNegative(payable) {
 			payable = decimal.Zero
 		}
@@ -1645,7 +1680,7 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			if in.Override == nil || !*in.Override {
 				return nil, apperrors.Wrap("VALIDATION",
 					fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
-						amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+						amount, payable, basis, advance, deductions, paid), nil)
 			}
 			reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
 			if reason == "" {
@@ -2016,7 +2051,7 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 		return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
 	}
 
-	u, accrued, basis, paid, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
+	u, accrued, basis, paid, advance, deductions, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
 	if err != nil {
 		return nil, err
 	}
@@ -2026,7 +2061,7 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 	// что-то положительное — иначе включение дневной оплаты заблокировало бы
 	// авансы до заполнения табеля.
 	if accrued.IsPositive() {
-		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, u.Advance), u.Deductions), paid)
+		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, advance), deductions), paid)
 		if decimal.IsNegative(payable) {
 			payable = decimal.Zero
 		}
@@ -2034,7 +2069,7 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 			if in.Override == nil || !*in.Override {
 				return nil, apperrors.Wrap("VALIDATION",
 					fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
-						amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+						amount, payable, basis, advance, deductions, paid), nil)
 			}
 			reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
 			if reason == "" {

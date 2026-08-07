@@ -72,6 +72,14 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 	if err != nil {
 		return nil, err
 	}
+	// Аванс/удержания за период — из period-tagged строк salary_advances/
+	// salary_deductions, а НЕ из глобальных счётчиков users.advance/deductions:
+	// счётчик period-agnostic, поэтому аванс за прошлый месяц раньше срезал
+	// остаток текущего (баг владельца).
+	advByUser, dedByUser, err := s.advDedByUser(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]SalaryAccrualRow, 0, len(users))
 	for _, u := range users {
@@ -82,8 +90,8 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 			DailyRate:  decimal.Normalize(u.DailyRate),
 			DaysWorked: days[u.ID],
 			PaidUnits:  units[u.ID],
-			Advance:    decimal.Normalize(u.Advance),
-			Deductions: decimal.Normalize(u.Deductions),
+			Advance:    advByUser[u.ID],
+			Deductions: dedByUser[u.ID],
 		}
 		if u.Name != nil {
 			row.UserName = *u.Name
@@ -98,6 +106,57 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 		out = append(out, row)
 	}
 	return out, nil
+}
+
+// advDedByUser — Σ НЕотменённых авансов и удержаний по всем сотрудникам за
+// месяцы, попадающие в диапазон [from, to] (YYYY-MM-DD). Период у строк — тег
+// YYYY-MM; сравниваем с месяцами границ лексикографически (для YYYY-MM это
+// хронологично). Обычный случай — период = один месяц → один месяц-тег.
+func (s *SalaryService) advDedByUser(ctx context.Context, from, to string) (adv, ded map[string]decimal.Decimal, err error) {
+	fromM, toM := monthPrefix(from), monthPrefix(to)
+	adv = map[string]decimal.Decimal{}
+	ded = map[string]decimal.Decimal{}
+	type sumRow struct {
+		UserID string          `gorm:"column:user_id"`
+		Total  decimal.Decimal `gorm:"column:total"`
+	}
+	sa, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var arows []sumRow
+	if err = sa.Table("salary_advances").
+		Select("user_id::text AS user_id, COALESCE(SUM(amount), 0) AS total").
+		Where("period >= ? AND period <= ? AND cancelled_at IS NULL", fromM, toM).
+		Group("user_id").Scan(&arows).Error; err != nil {
+		return nil, nil, err
+	}
+	for _, r := range arows {
+		adv[r.UserID] = decimal.Normalize(r.Total)
+	}
+	sd, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var drows []sumRow
+	if err = sd.Table("salary_deductions").
+		Select("user_id::text AS user_id, COALESCE(SUM(amount), 0) AS total").
+		Where("period >= ? AND period <= ? AND cancelled_at IS NULL", fromM, toM).
+		Group("user_id").Scan(&drows).Error; err != nil {
+		return nil, nil, err
+	}
+	for _, r := range drows {
+		ded[r.UserID] = decimal.Normalize(r.Total)
+	}
+	return adv, ded, nil
+}
+
+// monthPrefix — YYYY-MM-DD → YYYY-MM (для сравнения с тегом period).
+func monthPrefix(ymd string) string {
+	if len(ymd) >= 7 {
+		return ymd[:7]
+	}
+	return ymd
 }
 
 // payTypeOf — с дефолтом. NULL/пусто трактуем как оклад: это поведение до 053,
