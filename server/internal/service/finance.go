@@ -1568,16 +1568,16 @@ func salaryCategory(kind *string) string {
 // что и раньше применялся к kind=advance внутри PaySalary — иначе выдача
 // аванса новым эндпоинтом стала бы неограниченной там, где раньше требовала
 // осознанного Override.
-func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period string) (u models.User, accrued decimal.Decimal, basis string, paid decimal.Decimal, err error) {
+func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period string) (u models.User, accrued decimal.Decimal, basis string, paid, advance, deductions decimal.Decimal, err error) {
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
-		return u, accrued, basis, paid, err
+		return
 	}
 	if err = scoped.Where("id = ?", userID).First(&u).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return u, accrued, basis, paid, apperrors.Wrap("VALIDATION", "user not found", nil)
+			err = apperrors.Wrap("VALIDATION", "user not found", nil)
 		}
-		return u, accrued, basis, paid, err
+		return
 	}
 	// Уже выплачено за период = Σ зарплатных проводок этого сотрудника ЗА
 	// ЭТОТ ПЕРИОД — матчим по тегу периода в description ("Зарплата:2026-07",
@@ -1594,7 +1594,7 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 		Select("COALESCE(SUM(amount), 0)").
 		Where("category = ? AND source_ref = ? AND description LIKE ?", CategorySalary, userID, periodTag).
 		Scan(&paid).Error; err != nil {
-		return u, accrued, basis, paid, err
+		return
 	}
 	// Начислено за период. Для оклада — сумма из карточки, для дневной
 	// оплаты (054) — ставка × отработанные дни из табеля: капить дневника
@@ -1604,7 +1604,8 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 	if payTypeOf(u) == PayTypeDaily {
 		days, units, derr := s.daysWorkedInPeriod(ctx, userID, period)
 		if derr != nil {
-			return u, accrued, basis, paid, derr
+			err = derr
+			return
 		}
 		accrued = accruedFor(u, units)
 		if units != days {
@@ -1613,7 +1614,41 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
 		}
 	}
-	return u, accrued, basis, paid, nil
+	// Аванс/удержания за ЭТОТ период — из period-tagged строк salary_advances/
+	// salary_deductions (не отменённых), а НЕ из глобальных счётчиков
+	// users.advance/deductions: счётчик period-agnostic, поэтому аванс за
+	// прошлый месяц раньше срезал остаток текущего (реальный баг владельца).
+	advance, deductions, err = s.advDedForPeriod(ctx, userID, period)
+	return
+}
+
+// advDedForPeriod — Σ НЕотменённых авансов и удержаний сотрудника за месяц
+// period (YYYY-MM). Источник истины для остатка «К выплате» вместо глобальных
+// счётчиков users.advance/deductions (см. комментарий в salaryCapForPeriod).
+// salary_deductions.period NULL у записей до 070 — "period = ?" их не берёт,
+// легаси-удержания без месяца в остаток периода не попадают (осознанно).
+func (s *SalaryService) advDedForPeriod(ctx context.Context, userID, period string) (adv, ded decimal.Decimal, err error) {
+	sa, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return
+	}
+	if err = sa.Table("salary_advances").
+		Select("COALESCE(SUM(amount), 0)").
+		Where("user_id::text = ? AND period = ? AND cancelled_at IS NULL", userID, period).
+		Scan(&adv).Error; err != nil {
+		return
+	}
+	sd, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return
+	}
+	if err = sd.Table("salary_deductions").
+		Select("COALESCE(SUM(amount), 0)").
+		Where("user_id::text = ? AND period = ? AND cancelled_at IS NULL", userID, period).
+		Scan(&ded).Error; err != nil {
+		return
+	}
+	return decimal.Normalize(adv), decimal.Normalize(ded), nil
 }
 
 func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*models.FinancialOperation, error) {
@@ -1632,7 +1667,7 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 		if perr != nil || !decimal.IsPositive(amount) {
 			return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
 		}
-		u, accrued, basis, paid, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
+		_, accrued, basis, paid, advance, deductions, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
 		if err != nil {
 			return nil, err
 		}
@@ -1648,7 +1683,7 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			})
 		}
 		// Начислено − аванс − удержания − уже выплачено.
-		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, u.Advance), u.Deductions), paid)
+		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, advance), deductions), paid)
 		if decimal.IsNegative(payable) {
 			payable = decimal.Zero
 		}
@@ -1656,7 +1691,7 @@ func (s *SalaryService) PaySalary(ctx context.Context, in SalaryPayInput) (*mode
 			if in.Override == nil || !*in.Override {
 				return nil, apperrors.Wrap("VALIDATION",
 					fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
-						amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+						amount, payable, basis, advance, deductions, paid), nil)
 			}
 			reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
 			if reason == "" {
@@ -2027,7 +2062,7 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 		return nil, apperrors.Wrap("VALIDATION", "amount must be positive", perr)
 	}
 
-	u, accrued, basis, paid, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
+	u, accrued, basis, paid, advance, deductions, err := s.salaryCapForPeriod(ctx, *in.UserID, *in.Period)
 	if err != nil {
 		return nil, err
 	}
@@ -2037,7 +2072,7 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 	// что-то положительное — иначе включение дневной оплаты заблокировало бы
 	// авансы до заполнения табеля.
 	if accrued.IsPositive() {
-		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, u.Advance), u.Deductions), paid)
+		payable := decimal.Sub(decimal.Sub(decimal.Sub(accrued, advance), deductions), paid)
 		if decimal.IsNegative(payable) {
 			payable = decimal.Zero
 		}
@@ -2045,7 +2080,7 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 			if in.Override == nil || !*in.Override {
 				return nil, apperrors.Wrap("VALIDATION",
 					fmt.Sprintf("сумма %s превышает остаток к выплате %s (%s − аванс %s − удержания %s − выплачено %s)",
-						amount, payable, basis, u.Advance, u.Deductions, paid), nil)
+						amount, payable, basis, advance, deductions, paid), nil)
 			}
 			reason := strings.TrimSpace(derefOr(in.OverrideReason, ""))
 			if reason == "" {
@@ -2218,6 +2253,126 @@ func (s *SalaryService) CancelAdvance(ctx context.Context, id string) (*models.S
 		return nil, err
 	}
 	return &row, nil
+}
+
+// CancelSalary — отмена ВЫПЛАТЫ зарплаты (financial_operations, категория
+// «Зарплата», type='out'). Авансы отменяются CancelAdvance (у них своя строка
+// salary_advances), удержания — CancelDeduction. Исходная проводка не
+// удаляется, а помечается cancelled_at (для «Отменено» в ленте + защита от
+// повторной отмены); деньги возвращаются тремя согласованными шагами:
+//   - прямой возврат на счёт (balance += amount);
+//   - компенсирующая проводка type='in' той же категории — ДДС остаётся
+//     сбалансированным (исходный расход + этот приход = 0), история не
+//     переписывается (тот же принцип, что в CancelAdvance);
+//   - снятие зеркала кассовой смены (auto_mirror, source_ref = op.ID) —
+//     деньги вернулись в ящик, expected_cash обязан восстановиться (для
+//     закрытой смены пересчитываем).
+func (s *SalaryService) CancelSalary(ctx context.Context, opID string) (*models.FinancialOperation, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if opID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "id is required", nil)
+	}
+	actor, _ := audit.ActorFromContext(ctx)
+	cancelledBy := actor.UserID
+
+	var op models.FinancialOperation
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, opID).First(&op).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("NOT_FOUND", "операция не найдена", nil)
+			}
+			return err
+		}
+		if op.Category == nil || *op.Category != CategorySalary {
+			return apperrors.Wrap("VALIDATION", "отменить можно только выплату зарплаты (аванс — отдельной кнопкой)", nil)
+		}
+		if op.Type == nil || *op.Type != "out" {
+			return apperrors.Wrap("VALIDATION", "это не расходная операция", nil)
+		}
+		if op.CancelledAt != nil {
+			return apperrors.Wrap("VALIDATION", "выплата уже отменена", nil)
+		}
+		now := time.Now().UTC()
+
+		// Возврат денег на счёт, с которого выплатили.
+		if op.AccountID != nil && *op.AccountID != "" {
+			var acc models.FinancialAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", rid, *op.AccountID).First(&acc).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return apperrors.Wrap("VALIDATION", "счёт выплаты не найден", nil)
+				}
+				return err
+			}
+			newBal := decimal.Normalize(decimal.Add(acc.Balance, op.Amount))
+			if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Снятие зеркала кассовой смены (если выплата зеркалилась в открытую
+		// смену). auto_mirror.source_ref = id исходной проводки (v3.16.245).
+		var mirror models.CashShiftOperation
+		mErr := tx.Where("category = ? AND source_ref = ?", autoMirrorCategory, opID).First(&mirror).Error
+		if mErr == nil && mirror.ShiftID != nil {
+			var mshift models.CashShift
+			if err := tx.Where("restaurant_id = ? AND id = ?", rid, *mirror.ShiftID).First(&mshift).Error; err == nil {
+				if err := tx.Where("id = ?", mirror.ID).Delete(&models.CashShiftOperation{}).Error; err != nil {
+					return err
+				}
+				// Закрытая смена хранит expected_cash — пересчитываем. Открытая
+				// считает его при закрытии, снятия строки достаточно.
+				if mshift.Status == nil || *mshift.Status != "open" {
+					expected, cErr := computeExpectedCash(tx, mshift.ID, &mshift)
+					if cErr != nil {
+						return cErr
+					}
+					if err := tx.Model(&models.CashShift{}).Where("id = ?", mshift.ID).
+						Updates(map[string]any{"expected_cash": expected, "updated_at": now}).Error; err != nil {
+						return err
+					}
+				}
+			}
+		} else if mErr != nil && !errors.Is(mErr, gorm.ErrRecordNotFound) {
+			return mErr
+		}
+
+		// Компенсирующая проводка «приход» — ДДС остаётся сбалансированным.
+		// SalaryReport исключает type='in', поэтому фантомной «выплатой» она не
+		// станет. Зеркало для неё НЕ ставим — исходное уже снято выше.
+		inType := "in"
+		activity := "operational"
+		category := CategorySalary
+		isAuto := false
+		desc := "Отмена выплаты зарплаты"
+		ridStr := rid
+		reverseOp := models.FinancialOperation{
+			ID: uuid.NewString(), Type: &inType, Amount: op.Amount, Category: &category,
+			AccountID: op.AccountID, AccountName: op.AccountName, Activity: &activity,
+			Date: op.Date, Description: &desc, Counterparty: op.Counterparty, IsAuto: &isAuto,
+			SourceRef: op.SourceRef, RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := tx.Create(&reverseOp).Error; err != nil {
+			return err
+		}
+
+		op.CancelledAt = &now
+		op.CancelledBy = &cancelledBy
+		return tx.Model(&models.FinancialOperation{}).Where("id = ?", opID).
+			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy, "updated_at": now}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &op, nil
 }
 
 // ListAdvances — история авансов одного сотрудника, новые сверху.

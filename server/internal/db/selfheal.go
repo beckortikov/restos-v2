@@ -51,6 +51,11 @@ var schemaSelfHealStmts = []string{
 	// с сохранённой причиной. financial_operations читается на каждом
 	// экране финансов — без is_enabled колонки SELECT падает целиком.
 	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS is_override BOOLEAN NOT NULL DEFAULT false`,
+	// 071: отмена выплаты зарплаты. CancelSalary читает/пишет cancelled_at на
+	// каждой отмене, а SalaryReport SELECT'ит колонку на каждом открытии —
+	// без неё отчёт зарплаты и отмена падают.
+	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`,
+	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS cancelled_by TEXT`,
 	`CREATE TABLE IF NOT EXISTS salary_deductions (
 		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		restaurant_id TEXT,

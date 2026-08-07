@@ -60,6 +60,9 @@ type SalaryPayoutRow struct {
 	// IsOverride — выплата выше расчётного остатка, проведённая осознанно
 	// (ЗП-4) — отличает "свободную" выплату от обычного расчёта по формуле.
 	IsOverride bool `json:"is_override"`
+	// Cancelled — выплата отменена (071): в ленте показывается зачёркнутой,
+	// из сумм/сводки отчёта исключена, кнопки «Отменить» больше нет.
+	Cancelled bool `json:"cancelled"`
 }
 
 type SalaryReportTotals struct {
@@ -111,6 +114,7 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 		AccountName  string          `gorm:"column:account_name"`
 		Description  string          `gorm:"column:description"`
 		IsOverride   bool            `gorm:"column:is_override"`
+		Cancelled    bool            `gorm:"column:cancelled"`
 		UserName     string          `gorm:"column:user_name"`
 		Position     string          `gorm:"column:position"`
 		Role         string          `gorm:"column:role"`
@@ -127,12 +131,15 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 		        COALESCE(fo.category,'') AS category, COALESCE(fo.counterparty,'') AS counterparty,
 		        COALESCE(fo.source_ref,'') AS source_ref,
 		        COALESCE(fo.account_id,'') AS account_id, COALESCE(fo.account_name,'') AS account_name,
-		        COALESCE(fo.description,'') AS description, COALESCE(fo.is_override,false) AS is_override,
+		        COALESCE(fo.description,'') AS description, COALESCE(fo.is_override,false) AS is_override, (fo.cancelled_at IS NOT NULL) AS cancelled,
 		        COALESCE(u.name,'') AS user_name, COALESCE(u.position,'') AS position,
 		        COALESCE(u.role,'') AS role, COALESCE(u.salary,0) AS salary`).
 		Joins("LEFT JOIN users u ON u.id::text = fo.source_ref").
 		Where("fo.restaurant_id = ?", rid).
-		Where("fo.category IN ?", []string{CategorySalary, CategoryAdvance, "Сервис"})
+		Where("fo.category IN ?", []string{CategorySalary, CategoryAdvance, "Сервис"}).
+		// Компенсирующие проводки отмен (type='in') — не выплаты: исключаем,
+		// иначе отмена завышала бы суммы отчёта (см. CancelSalary/CancelAdvance).
+		Where("fo.type IS DISTINCT FROM ?", "in")
 	if from != "" {
 		q = q.Where("fo.date >= ?", from)
 	}
@@ -169,7 +176,13 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 			AccountName: op.AccountName,
 			Description: op.Description,
 			IsOverride:  op.IsOverride,
+			Cancelled:   op.Cancelled,
 		})
+		// Отменённая выплата видна в ленте (зачёркнутой), но в суммы и сводку
+		// «по сотрудникам» не входит — иначе отменённое считалось бы выданным.
+		if op.Cancelled {
+			continue
+		}
 
 		row, ok := byUser[op.SourceRef]
 		if !ok {

@@ -3182,6 +3182,18 @@ paths:
       parameters:
         - { in: path, name: id, required: true, schema: { type: string } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalaryAdvance" } } } } }
+  /api/v1/finance/salary/payouts/{id}:
+    delete:
+      tags: [finance, payroll]
+      summary: Отмена выплаты зарплаты (071)
+      description: >
+        Отмена выплаты зарплаты (financial_operations id, категория «Зарплата»,
+        type='out'): возврат денег на счёт, компенсирующая проводка type='in',
+        снятие зеркала кассовой смены, пометка cancelled_at/by. Авансы
+        отменяются отдельным эндпоинтом advances/{id}.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
   /api/v1/finance/service-charge/pay:
     post:
       tags: [finance, payroll]

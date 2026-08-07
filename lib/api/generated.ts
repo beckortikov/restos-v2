@@ -11010,6 +11010,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/salary/payouts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Отмена выплаты зарплаты (071)
+         * @description Отмена выплаты зарплаты (financial_operations id, категория «Зарплата», type='out'): возврат денег на счёт, компенсирующая проводка type='in', снятие зеркала кассовой смены, пометка cancelled_at/by. Авансы отменяются отдельным эндпоинтом advances/{id}.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialOperation"];
+                    };
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/finance/service-charge/pay": {
         parameters: {
             query?: never;

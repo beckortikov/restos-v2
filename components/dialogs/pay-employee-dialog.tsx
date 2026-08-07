@@ -136,7 +136,8 @@ export function PayEmployeeDialog({
       // равно предлагала бы весь оклад заново.
       const acc = accrual?.accrued ?? (employee.salary ?? 0)
       const paid = salaryPaidThisPeriod ?? 0
-      setPayAmount(Math.max(0, acc - (employee.advance ?? 0) - (employee.deductions ?? 0) - paid))
+      // period-scoped аванс/удержания (из accrual за период), не глобальный emp.advance.
+      setPayAmount(Math.max(0, acc - (accrual?.advance ?? 0) - (accrual?.deductions ?? 0) - paid))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employee?.id, action])
@@ -248,12 +249,12 @@ export function PayEmployeeDialog({
                 </div>
                 <div>
                   <p className="text-muted-foreground">Аванс</p>
-                  <p className="font-bold text-amber-600">{formatCurrency(employee.advance ?? 0)}</p>
+                  <p className="font-bold text-amber-600">{formatCurrency(accrual?.advance ?? 0)}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground">К выплате</p>
                   <p className="font-bold text-emerald-600">
-                    {formatCurrency((employee.salary ?? 0) - (employee.advance ?? 0) - (employee.deductions ?? 0))}
+                    {formatCurrency((accrual?.accrued ?? employee.salary ?? 0) - (accrual?.advance ?? 0) - (accrual?.deductions ?? 0) - (salaryPaidThisPeriod ?? 0))}
                   </p>
                 </div>
               </div>
@@ -334,11 +335,11 @@ export function PayEmployeeDialog({
             </label>
             <input type="number" min={0} value={payAmount || ''} onChange={e => setPayAmount(Number(e.target.value))}
               className="w-full px-3 py-2.5 bg-background border border-border rounded-lg text-lg font-bold text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
-            {action === 'advance' && (employee.advance ?? 0) > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">Текущий аванс: {formatCurrency(employee.advance ?? 0)} + {formatCurrency(payAmount)} = {formatCurrency((employee.advance ?? 0) + payAmount)}</p>
+            {action === 'advance' && (accrual?.advance ?? 0) > 0 && (
+              <p className="text-xs text-muted-foreground mt-1">Аванс за период: {formatCurrency(accrual?.advance ?? 0)} + {formatCurrency(payAmount)} = {formatCurrency((accrual?.advance ?? 0) + payAmount)}</p>
             )}
-            {action === 'deduction' && (employee.deductions ?? 0) > 0 && (
-              <p className="text-xs text-muted-foreground mt-1">Текущие удержания: {formatCurrency(employee.deductions ?? 0)} + {formatCurrency(payAmount)} = {formatCurrency((employee.deductions ?? 0) + payAmount)}</p>
+            {action === 'deduction' && (accrual?.deductions ?? 0) > 0 && (
+              <p className="text-xs text-muted-foreground mt-1">Удержания за период: {formatCurrency(accrual?.deductions ?? 0)} + {formatCurrency(payAmount)} = {formatCurrency((accrual?.deductions ?? 0) + payAmount)}</p>
             )}
           </div>
 

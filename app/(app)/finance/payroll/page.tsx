@@ -15,10 +15,11 @@ import {
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
+import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ClipboardList, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { PayrollVedomost, type VedomostRow } from '@/components/finance/payroll-vedomost'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -33,6 +34,18 @@ function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string 
   const start = new Date(fy, (fm || 1) - 1, fd || 1, 0, 0, 0, 0)
   const end = new Date(ty, (tm || 1) - 1, td || 1, 23, 59, 59, 999)
   return { from: start.toISOString(), to: end.toISOString() }
+}
+
+// Подпись периода для ведомости: один месяц → «июль 2026», иначе — диапазон дат.
+const PERIOD_MONTHS_NOM = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
+function periodLabelFromIso(fromIso: string, toIso: string): string {
+  const f = new Date(fromIso), t = new Date(toIso)
+  if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime())) return ''
+  if (f.getFullYear() === t.getFullYear() && f.getMonth() === t.getMonth()) {
+    return `${PERIOD_MONTHS_NOM[f.getMonth()]} ${f.getFullYear()}`
+  }
+  const d = (x: Date) => x.toLocaleDateString('ru-RU')
+  return `${d(f)} — ${d(t)}`
 }
 
 // Тренд ФОТ по месяцам (ЗП-7) — та же связка monthKey/monthLabel, что и в
@@ -55,7 +68,7 @@ function trendTooltipValue(value: number, sum: number): string {
 const TREND_MAX_MONTHS = 12
 type TrendRow = { key: string; label: string; salary: number; advance: number; service: number; total: number }
 
-type TabKey = 'salary' | 'report' | 'timesheet'
+type TabKey = 'salary' | 'report' | 'vedomost' | 'timesheet'
 
 // ─── Elapsed timer hook ──────────────────────────────────────────────────────
 
@@ -462,10 +475,15 @@ export default function PayrollPage() {
   // ФОТ считаем по НАЧИСЛЕННОМУ: у дневников оклад нулевой, и старый подсчёт
   // по e.salary просто не видел бы их в фонде оплаты труда.
   const accruedOf = (e: User) => accrualByUser[e.id]?.accrued ?? (e.salary ?? 0)
+  // Аванс/удержания — period-scoped (из accrual за выбранный период), а НЕ
+  // глобальный счётчик e.advance/deductions: аванс за прошлый месяц не должен
+  // резать остаток текущего (баг владельца, backend-фикс period-scoped).
+  const advOf = (e: User) => accrualByUser[e.id]?.advance ?? 0
+  const dedOf = (e: User) => accrualByUser[e.id]?.deductions ?? 0
   const withSalary = employees.filter(e => accruedOf(e) > 0)
   const totalSalary = withSalary.reduce((s, e) => s + accruedOf(e), 0)
-  const totalAdvance = withSalary.reduce((s, e) => s + (e.advance ?? 0), 0)
-  const totalDeductions = withSalary.reduce((s, e) => s + (e.deductions ?? 0), 0)
+  const totalAdvance = withSalary.reduce((s, e) => s + advOf(e), 0)
+  const totalDeductions = withSalary.reduce((s, e) => s + dedOf(e), 0)
   const totalSalaryPaid = Object.values(salaryPaid).reduce((s, v) => s + v, 0)
   const totalSalaryOnlyPaid = Object.values(salaryOnlyPaid).reduce((s, v) => s + v, 0)
   // «К выплате» считаем ТОЧНО как сервер (accrued − advance − deductions −
@@ -477,12 +495,25 @@ export default function PayrollPage() {
   // display «Выплачено (ЗП)», в этой формуле участвовать не должен.
   const totalToPay = totalSalary - totalAdvance - totalDeductions - totalSalaryOnlyPaid
 
+  // Ведомость (#3): роспись «начислено/аванс/удержания/к выплате» за период,
+  // те же period-scoped цифры, что в списке. Кто получает — с начислением > 0.
+  const vedomostPeriodLabel = periodLabelFromIso(serviceFrom, serviceTo)
+  const vedomostRows: VedomostRow[] = withSalary.map(e => ({
+    id: e.id,
+    name: e.name,
+    position: e.position || ROLE_LABELS[e.role],
+    accrued: accruedOf(e),
+    advance: advOf(e),
+    deductions: dedOf(e),
+    toPay: accruedOf(e) - advOf(e) - dedOf(e) - (salaryOnlyPaid[e.id] ?? 0),
+  }))
+
   const filtered = employees.filter(e => {
     if (roleFilter !== 'all' && e.role !== roleFilter) return false
     if (statusFilter === 'with_salary' && (e.salary ?? 0) === 0) return false
     if (statusFilter === 'no_salary' && (e.salary ?? 0) > 0) return false
-    if (statusFilter === 'has_advance' && (e.advance ?? 0) === 0) return false
-    if (statusFilter === 'has_deduction' && (e.deductions ?? 0) === 0) return false
+    if (statusFilter === 'has_advance' && advOf(e) === 0) return false
+    if (statusFilter === 'has_deduction' && dedOf(e) === 0) return false
     if (search.trim()) {
       const q = search.toLowerCase()
       return e.name.toLowerCase().includes(q) || (e.position || '').toLowerCase().includes(q) || e.username.toLowerCase().includes(q)
@@ -540,6 +571,11 @@ export default function PayrollPage() {
               <FileText className="size-3.5 inline mr-1.5 -mt-0.5" />
               История
             </button>
+            <button onClick={() => setTab('vedomost')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'vedomost' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
+              <ClipboardList className="size-3.5 inline mr-1.5 -mt-0.5" />
+              Ведомость
+            </button>
             <button onClick={() => setTab('timesheet')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'timesheet' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
               <Clock className="size-3.5 inline mr-1.5 -mt-0.5" />
@@ -556,12 +592,13 @@ export default function PayrollPage() {
                   filtered.map(e => ({
                     name: e.name,
                     position: e.position || ROLE_LABELS[e.role],
-                    salary: e.salary ?? 0,
-                    advance: e.advance ?? 0,
-                    deductions: e.deductions ?? 0,
+                    salary: accruedOf(e),
+                    advance: advOf(e),
+                    deductions: dedOf(e),
                     salaryPaidPeriod: salaryPaid[e.id] ?? 0,
-                    // salaryOnlyPaid, не combined — иначе аванс внутри периода вычтется дважды.
-                    toPay: (e.salary ?? 0) - (e.advance ?? 0) - (e.deductions ?? 0) - (salaryOnlyPaid[e.id] ?? 0),
+                    // period-scoped: accrued/advance/deductions из accrual, salaryOnlyPaid
+                    // (не combined) — иначе аванс внутри периода вычтется дважды.
+                    toPay: accruedOf(e) - advOf(e) - dedOf(e) - (salaryOnlyPaid[e.id] ?? 0),
                   })),
                   [
                     { key: 'name', header: 'Сотрудник' },
@@ -641,8 +678,8 @@ export default function PayrollPage() {
                   ['all', `Все (${employees.length})`],
                   ['with_salary', `С окладом (${withSalary.length})`],
                   ['no_salary', `Без оклада (${employees.length - withSalary.length})`],
-                  ['has_advance', `С авансом (${employees.filter(e => (e.advance ?? 0) > 0).length})`],
-                  ['has_deduction', `С удержанием (${employees.filter(e => (e.deductions ?? 0) > 0).length})`],
+                  ['has_advance', `С авансом (${employees.filter(e => advOf(e) > 0).length})`],
+                  ['has_deduction', `С удержанием (${employees.filter(e => dedOf(e) > 0).length})`],
                 ] as const).map(([key, label]) => (
                   <button key={key} onClick={() => setStatusFilter(key)}
                     className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${statusFilter === key ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -700,17 +737,19 @@ export default function PayrollPage() {
                 <tbody>
                   {filtered.map(emp => {
                     const salary = emp.salary ?? 0
-                    const advance = emp.advance ?? 0
-                    const deductions = emp.deductions ?? 0
+                    // Начислено/аванс/удержания — period-scoped из accrual (за
+                    // выбранный период), а НЕ глобальный счётчик emp.advance:
+                    // аванс за прошлый месяц не режет остаток текущего.
+                    const acc = accrualByUser[emp.id]
+                    const advance = acc?.advance ?? 0
+                    const deductions = acc?.deductions ?? 0
                     // combined — для колонки «Выплачено (ЗП)» (оклад+аванс на руки).
                     const paidSalary = salaryPaid[emp.id] ?? 0
-                    // salaryOnly — для «К выплате»: аванс уже вычтен через emp.advance,
+                    // salaryOnly — для «К выплате»: аванс уже вычтен через advance,
                     // вычитать его ещё раз через combined значило бы вычесть дважды.
                     const paidSalaryOnly = salaryOnlyPaid[emp.id] ?? 0
-                    // Начислено за период: оклад или ставка × отработанные дни.
                     // Пока начисления не загрузились — откатываемся на оклад,
                     // чтобы таблица не мигала нулями.
-                    const acc = accrualByUser[emp.id]
                     const isDaily = acc?.payType === 'daily' || emp.payType === 'daily'
                     const accruedPay = acc ? acc.accrued : salary
                     const toPay = accruedPay - advance - deductions - paidSalaryOnly
@@ -1043,6 +1082,33 @@ export default function PayrollPage() {
         </>
       )}
 
+      {/* ═══════════════════════════ VEDOMOST TAB ═════════════════════════════ */}
+      {tab === 'vedomost' && (
+        <>
+          <div className="flex flex-wrap items-center gap-3 bg-muted/30 border border-border rounded-xl p-3">
+            <label className="text-[10px] font-semibold text-muted-foreground uppercase">Период</label>
+            <DateRangePresets
+              value={servicePreset}
+              onChange={(p, r) => {
+                setServicePreset(p)
+                if (p === 'custom') {
+                  setServiceCustomFrom(r.from); setServiceCustomTo(r.to)
+                  if (r.from && r.to) { const iso = isoFromYmd(r.from, r.to); setServiceFrom(iso.from); setServiceTo(iso.to) }
+                } else {
+                  const iso = isoFromYmd(r.from, r.to); setServiceFrom(iso.from); setServiceTo(iso.to)
+                }
+              }}
+              customFrom={serviceCustomFrom}
+              customTo={serviceCustomTo}
+              onCustomFromChange={(v) => { setServicePreset('custom'); setServiceCustomFrom(v); if (v && serviceCustomTo) { const iso = isoFromYmd(v, serviceCustomTo); setServiceFrom(iso.from); setServiceTo(iso.to) } }}
+              onCustomToChange={(v) => { setServicePreset('custom'); setServiceCustomTo(v); if (serviceCustomFrom && v) { const iso = isoFromYmd(serviceCustomFrom, v); setServiceFrom(iso.from); setServiceTo(iso.to) } }}
+              storageKey="payroll:service-preset"
+            />
+          </div>
+          <PayrollVedomost rows={vedomostRows} periodLabel={vedomostPeriodLabel} />
+        </>
+      )}
+
       {/* ═══════════════════════════ TIMESHEET TAB ════════════════════════════ */}
       {tab === 'timesheet' && (
         <>
@@ -1300,7 +1366,7 @@ export default function PayrollPage() {
       {/* ═══ Salary Dialog ═══ */}
       {/* salaryPaidThisPeriod — salaryOnlyPaid, не salaryPaid (combined):
           иначе аванс, выданный внутри периода, вычтется из «К выплате»
-          дважды — он уже вычтен через employee.advance. */}
+          дважды — он уже вычтен через accrual.advance (period-scoped). */}
       <PayEmployeeDialog
         employee={selectedEmp}
         action={payAction}
