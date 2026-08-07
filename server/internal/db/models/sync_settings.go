@@ -3,8 +3,10 @@ package models
 import "time"
 
 // SyncSettings — singleton-конфиг multi-branch sync, редактируемый из UI
-// (ADR-003/004). Одна строка (id=1) на машину. Сервер читает при старте
-// (перекрывает env RESTOS_SYNC_*), применяется после перезапуска.
+// (ADR-003/004). Одна строка (id=1) на машину. Если строка есть — она
+// перекрывает env RESTOS_SYNC_* и перечитывается пушером/пуллером на каждом
+// тике (без перезапуска, кроме interval_sec); если строки нет — работает
+// env-fallback (headless-узлы без UI-оператора).
 type SyncSettings struct {
 	ID           int        `gorm:"primaryKey;default:1" json:"-"`
 	Enabled      bool       `json:"enabled"`

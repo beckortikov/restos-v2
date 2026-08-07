@@ -328,11 +328,18 @@ func (s *NetworkService) JoinNetwork(ctx context.Context, pairingCode string) (*
 			Update("account_id", out.AccountID).Error; err != nil {
 			return err
 		}
-		_, err := NewSyncSettingsService(tr).Update(ctx, UpdateSyncSettingsInput{
+		if _, err := NewSyncSettingsService(tr).Update(ctx, UpdateSyncSettingsInput{
 			Enabled: true, CentralURL: baseURL, Token: out.Token,
 			RestaurantID: rid, IntervalSec: existing.IntervalSec,
-		})
-		return err
+		}); err != nil {
+			return err
+		}
+		// Подключение по коду — ВСЕГДА свежий забфилл (сброс маркера, Update()
+		// его сознательно не трогает): central мог смениться (переезд сети) или
+		// у того же central ротировался токен — в обоих случаях полная повторная
+		// отправка истории корректна и безопасна (ingest идемпотентен по row_id).
+		return tr.Raw().WithContext(ctx).Model(&models.SyncSettings{}).
+			Where("id = 1").Update("backfilled_at", nil).Error
 	})
 	if err != nil {
 		return nil, err
@@ -345,27 +352,35 @@ func (s *NetworkService) JoinNetwork(ctx context.Context, pairingCode string) (*
 	synclog.SetEnabled(true)
 
 	// Автозабфилл истории (Ф6, ADR-003 «Central видит всё»), СРАЗУ, без
-	// ожидания рестарта — тот же гвард (backfilled_at IS NULL), что и у
-	// боевого пути в main.go (первое включение sync при старте процесса).
+	// ожидания рестарта. Безусловно: маркер backfilled_at только что сброшен
+	// в транзакции выше (подключение по коду = всегда свежая полная отправка).
 	// Без этого пуш/пул уже подхватились бы (Pusher/Puller.activeConfig
 	// перечитывают sync_settings на каждом тике), но ИСТОРИЯ (всё, что было
 	// ДО подключения) осталась бы неотправленной до ближайшего рестарта.
-	if existing.BackfilledAt == nil {
-		go func() {
-			bctx := audit.WithActor(context.Background(), audit.Actor{UserName: "system", Role: "owner"})
-			res, err := NewSyncService(s.r).Backfill(bctx, rid)
-			if err != nil {
-				log.Error().Err(err).Msg("sync backfill (auto, подключение по коду): failed")
-				return
-			}
-			log.Info().Interface("entities", res.Entities).Msg("sync backfill (auto, подключение по коду): completed")
-			now := time.Now().UTC()
-			if err := s.r.Raw().WithContext(context.Background()).Model(&models.SyncSettings{}).
-				Where("id = 1").Update("backfilled_at", now).Error; err != nil {
-				log.Error().Err(err).Msg("sync backfill: failed to mark backfilled_at")
-			}
-		}()
-	}
+	go func() {
+		bctx := audit.WithActor(context.Background(), audit.Actor{UserName: "system", Role: "owner"})
+		res, err := NewSyncService(s.r).Backfill(bctx, rid)
+		if err != nil {
+			log.Error().Err(err).Msg("sync backfill (auto, подключение по коду): failed")
+			return
+		}
+		log.Info().Interface("entities", res.Entities).Msg("sync backfill (auto, подключение по коду): completed")
+		// Гвард от гонки: тик Pusher.activeConfig, прочитавший sync_settings
+		// ДО коммита транзакции выше, мог перезаписать SetEnabled(true) на
+		// false уже ПОСЛЕ него (окно микросекундное, но реальное) — тогда
+		// Record внутри Backfill молча no-op'ил. backfilled_at в этом случае
+		// НЕ помечаем: следующий старт процесса честно повторит забфилл
+		// (ingest на central идемпотентен по row_id, дубли безопасны).
+		if !synclog.Enabled() {
+			log.Error().Msg("sync backfill (подключение по коду): recorder выключился во время забфилла — backfilled_at не помечаю, повторится при следующем старте")
+			return
+		}
+		now := time.Now().UTC()
+		if err := s.r.Raw().WithContext(context.Background()).Model(&models.SyncSettings{}).
+			Where("id = 1").Update("backfilled_at", now).Error; err != nil {
+			log.Error().Err(err).Msg("sync backfill: failed to mark backfilled_at")
+		}
+	}()
 
 	return &JoinResult{CentralName: out.CentralName}, nil
 }

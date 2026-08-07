@@ -66,8 +66,17 @@ func (s *SyncSettingsService) Update(ctx context.Context, in UpdateSyncSettingsI
 		IntervalSec:  interval,
 		UpdatedAt:    &now,
 	}
+	// Явный список колонок, НЕ UpdateAll: backfilled_at (маркер «история уже
+	// отправлена», Ф6) живёт в этой же строке, но им управляет только Backfill —
+	// UpdateAll затирал бы его в NULL при каждом «Сохранить» из UI, и следующий
+	// рестарт повторял бы полный забфилл впустую.
 	if err := s.r.Raw().WithContext(ctx).
-		Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "id"}}, UpdateAll: true}).
+		Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{
+				"enabled", "central_url", "token", "restaurant_id", "interval_sec", "updated_at",
+			}),
+		}).
 		Create(st).Error; err != nil {
 		return nil, err
 	}

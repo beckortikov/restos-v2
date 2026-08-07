@@ -29,13 +29,28 @@ type Pusher struct {
 	r         *repo.Repo
 	client    *http.Client
 	batchSize int
+	fallback  FallbackConfig
 }
 
-func NewPusher(r *repo.Repo) *Pusher {
+// FallbackConfig — boot-конфиг из env/CLI-флагов (RESTOS_SYNC_*). Используется,
+// ТОЛЬКО пока строки sync_settings нет в БД — headless-запуски (env-филиал без
+// UI-оператора, CI) конфигурируются флагами и строку могут не иметь вообще
+// (документировано в docs/deploy/multi-branch-sync.md, «Два пути конфигурации»:
+// env используются, если в sync_settings пусто). Как только строка появляется
+// (UI / JoinNetwork / материализация после автозабфилла) — БД побеждает всегда,
+// включая enabled=false.
+type FallbackConfig struct {
+	CentralURL string
+	Token      string
+	Enabled    bool
+}
+
+func NewPusher(r *repo.Repo, fallback FallbackConfig) *Pusher {
 	return &Pusher{
 		r:         r,
 		client:    &http.Client{Timeout: 30 * time.Second},
 		batchSize: 200,
+		fallback:  fallback,
 	}
 }
 
@@ -52,8 +67,8 @@ func (p *Pusher) activeConfig(ctx context.Context) (centralURL, token string, en
 	var st models.SyncSettings
 	err = p.r.Raw().WithContext(ctx).Where("id = 1").First(&st).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		SetEnabled(false)
-		return "", "", false, nil
+		SetEnabled(p.fallback.Enabled)
+		return p.fallback.CentralURL, p.fallback.Token, p.fallback.Enabled, nil
 	}
 	if err != nil {
 		return "", "", false, err

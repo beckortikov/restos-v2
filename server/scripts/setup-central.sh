@@ -56,15 +56,36 @@ if ! curl -sf "$API/bootstrap/status" > /dev/null 2>&1; then
 
   if command -v systemctl > /dev/null && [ "$(id -u)" = "0" ]; then
     log "root + systemd — ставлю автозапуск (restos-central.service)"
+
+    # Отдельный системный пользователь ОБЯЗАТЕЛЕН: embedded Postgres — это
+    # обычный дистрибутив PG, а initdb/postgres жёстко отказываются работать
+    # под root («root execution ... not permitted») — юнит под root уходил бы
+    # в crash-loop. HOME нужен валидный: библиотека embedded-postgres качает
+    # архив дистрибутива в ~/.embedded-postgres-go при первом старте.
+    SERVICE_USER="restos"
+    if ! id -u "$SERVICE_USER" > /dev/null 2>&1; then
+      useradd --system --home-dir "$DATA_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
+    fi
+    chown -R "$SERVICE_USER:" "$DATA_DIR"
+
+    # Секрет — НЕ в юните (юниты world-readable, 644), а в env-файле 0600.
+    ENV_FILE=/etc/restos-central.env
+    cat > "$ENV_FILE" <<EOF
+RESTOS_SYNC_TOKEN=${SYNC_TOKEN}
+RESTOS_HTTP_ADDR=0.0.0.0:${PORT}
+RESTOS_DATA_DIR=${DATA_DIR}
+HOME=${DATA_DIR}
+EOF
+    chmod 600 "$ENV_FILE"
+
     cat > /etc/systemd/system/restos-central.service <<EOF
 [Unit]
 Description=RestOS central node (ADR-003)
 After=network.target
 
 [Service]
-Environment=RESTOS_SYNC_TOKEN=${SYNC_TOKEN}
-Environment=RESTOS_HTTP_ADDR=0.0.0.0:${PORT}
-Environment=RESTOS_DATA_DIR=${DATA_DIR}
+User=${SERVICE_USER}
+EnvironmentFile=${ENV_FILE}
 ExecStart=${BIN_PATH}
 Restart=always
 RestartSec=3
@@ -75,7 +96,13 @@ EOF
     systemctl daemon-reload
     systemctl enable --now restos-central
   else
-    log "нет root/systemd — просто запускаю бинарь в фоне (nohup)"
+    if [ "$(id -u)" = "0" ]; then
+      echo "Запуск под root без systemd не поддерживается: embedded Postgres" >&2
+      echo "отказывается работать под root. Запустите скрипт обычным пользователем" >&2
+      echo "или на systemd-хосте (юнит сам заведёт системного пользователя restos)." >&2
+      exit 1
+    fi
+    log "нет systemd — просто запускаю бинарь в фоне (nohup)"
     log "для автозапуска после перезагрузки — прогнать под root на systemd-хосте"
     RESTOS_SYNC_TOKEN="$SYNC_TOKEN" RESTOS_HTTP_ADDR="0.0.0.0:${PORT}" RESTOS_DATA_DIR="$DATA_DIR" \
       nohup "$BIN_PATH" > "${DATA_DIR}/restos-central.log" 2>&1 &

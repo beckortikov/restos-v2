@@ -79,7 +79,7 @@ func TestPusher_PushOnce(t *testing.T) {
 	if err := gdb.Create(&models.SyncSettings{ID: 1, Enabled: true, CentralURL: &url, IntervalSec: 30}).Error; err != nil {
 		t.Fatalf("seed sync_settings: %v", err)
 	}
-	p := synclog.NewPusher(repo.New(gdb))
+	p := synclog.NewPusher(repo.New(gdb), synclog.FallbackConfig{})
 
 	// ─── Первый пуш ──────────────────────────────────────────────────────
 	n, err := p.PushOnce(t.Context())
@@ -149,7 +149,7 @@ func TestPusher_ReflectsSettingsChangeWithoutRestart(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	p := synclog.NewPusher(repo.New(gdb))
+	p := synclog.NewPusher(repo.New(gdb), synclog.FallbackConfig{})
 
 	// ─── Без строки sync_settings вообще — тихо ничего не делает ─────────
 	n0, err := p.PushOnce(t.Context())
@@ -183,6 +183,82 @@ func TestPusher_ReflectsSettingsChangeWithoutRestart(t *testing.T) {
 	}
 	if !synclog.Enabled() {
 		t.Error("synclog.Enabled() = false after sync configured — recorder would silently drop new deltas")
+	}
+}
+
+// TestPusher_EnvFallbackWithoutSettingsRow — headless-путь (env RESTOS_SYNC_*,
+// без UI-оператора, документирован в docs/deploy/multi-branch-sync.md): строки
+// sync_settings в БД НЕТ вообще, конфиг приходит fallback'ом из boot-cfg —
+// пушер обязан работать, а recorder оставаться включённым. Регресс-пруф:
+// первая версия activeConfig при отсутствии строки выключала всё безусловно.
+func TestPusher_EnvFallbackWithoutSettingsRow(t *testing.T) {
+	gdb, err := db.Open(dsn())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	gdb.Exec("DELETE FROM sync_log")
+	gdb.Exec("DELETE FROM sync_settings")
+
+	if err := gdb.Create(&models.SyncLog{
+		ID: uuid.NewString(), Entity: "stock_transfers", RowID: uuid.NewString(),
+		Op: "insert", Payload: datatypes.JSON(`{"id":"x"}`),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var received int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Entries []map[string]any `json:"entries"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &body)
+		received = len(body.Entries)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"applied":` + itoa(received) + `,"skipped":0}`))
+	}))
+	defer srv.Close()
+
+	p := synclog.NewPusher(repo.New(gdb), synclog.FallbackConfig{
+		CentralURL: srv.URL, Enabled: true,
+	})
+	n, err := p.PushOnce(t.Context())
+	if err != nil {
+		t.Fatalf("PushOnce (env fallback): %v", err)
+	}
+	if n != 1 || received != 1 {
+		t.Errorf("pushed = %d, central received = %d — want 1/1 (env-fallback без строки sync_settings)", n, received)
+	}
+	if !synclog.Enabled() {
+		t.Error("synclog.Enabled() = false при env-fallback Enabled=true — recorder молча выключен")
+	}
+
+	// Строка в БД появляется (напр. UI выключил sync) — БД побеждает fallback.
+	if err := gdb.Create(&models.SyncSettings{ID: 1, Enabled: false, IntervalSec: 30}).Error; err != nil {
+		t.Fatalf("seed disabled row: %v", err)
+	}
+	gdb.Exec("DELETE FROM sync_log")
+	gdb.Create(&models.SyncLog{
+		ID: uuid.NewString(), Entity: "stock_transfers", RowID: uuid.NewString(),
+		Op: "insert", Payload: datatypes.JSON(`{"id":"y"}`),
+	})
+	n2, err := p.PushOnce(t.Context())
+	if err != nil {
+		t.Fatalf("PushOnce (db row wins): %v", err)
+	}
+	if n2 != 0 {
+		t.Errorf("pushed = %d при enabled=false в БД, want 0 (строка БД должна побеждать env)", n2)
+	}
+	if synclog.Enabled() {
+		t.Error("synclog.Enabled() = true при enabled=false в БД")
 	}
 }
 

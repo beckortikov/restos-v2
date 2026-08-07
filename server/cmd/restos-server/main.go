@@ -286,9 +286,17 @@ func main() {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
-	pusher := synclog.NewPusher(repo.New(gdb))
+	// Fallback из boot-cfg (env/CLI RESTOS_SYNC_*) — на случай headless-узла,
+	// у которого строки sync_settings нет вообще (документированный env-путь).
+	// Как только строка в БД появляется — она побеждает на каждом тике.
+	pusher := synclog.NewPusher(repo.New(gdb), synclog.FallbackConfig{
+		CentralURL: cfg.SyncCentralURL, Token: cfg.SyncToken, Enabled: cfg.SyncEnabled,
+	})
 	go pusher.Run(ctx, interval)
-	puller := service.NewPuller(service.NewSyncService(repo.New(gdb)), repo.New(gdb))
+	puller := service.NewPuller(service.NewSyncService(repo.New(gdb)), repo.New(gdb), service.PullerFallback{
+		CentralURL: cfg.SyncCentralURL, Token: cfg.SyncToken,
+		RestaurantID: cfg.SyncRestaurantID, Enabled: cfg.SyncEnabled,
+	})
 	go puller.Run(ctx, interval)
 
 	// Автозабфилл истории при старте (Ф6, ADR-003 «Central видит всё») — для
@@ -307,6 +315,14 @@ func main() {
 				return
 			}
 			log.Info().Interface("entities", res.Entities).Msg("sync backfill (auto, первое включение): completed")
+			// Гвард от гонки с тиком Pusher.activeConfig: если recorder оказался
+			// выключен ВО ВРЕМЯ забфилла (Record no-op'ил → часть истории не
+			// записалась), backfilled_at НЕ помечаем — следующий старт честно
+			// повторит забфилл (ingest на central идемпотентен по row_id).
+			if !synclog.Enabled() {
+				log.Error().Msg("sync backfill: recorder выключился во время забфилла — backfilled_at не помечаю, повторится при следующем старте")
+				return
+			}
 			now := time.Now().UTC()
 			upd := gdb.Model(&models.SyncSettings{}).Where("id = 1").Update("backfilled_at", now)
 			if upd.Error == nil && upd.RowsAffected == 0 {

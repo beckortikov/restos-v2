@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,7 +11,9 @@ import (
 	"time"
 
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 
+	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -21,22 +24,38 @@ import (
 //
 // Симметричен Pusher: тот шлёт свои дельты вверх, этот тянет адресованные вниз.
 type Puller struct {
-	svc    *SyncService
-	client *http.Client
-	r      *repo.Repo
+	svc      *SyncService
+	client   *http.Client
+	r        *repo.Repo
+	fallback PullerFallback
 }
 
-func NewPuller(svc *SyncService, r *repo.Repo) *Puller {
-	return &Puller{svc: svc, client: &http.Client{Timeout: 30 * time.Second}, r: r}
+// PullerFallback — boot-конфиг из env/CLI-флагов (RESTOS_SYNC_*), применяется,
+// только пока строки sync_settings нет в БД (headless env-филиал без UI). Как
+// только строка есть — БД побеждает всегда. Симметрично synclog.FallbackConfig,
+// см. подробное обоснование там.
+type PullerFallback struct {
+	CentralURL   string
+	Token        string
+	RestaurantID string
+	Enabled      bool
+}
+
+func NewPuller(svc *SyncService, r *repo.Repo, fallback PullerFallback) *Puller {
+	return &Puller{svc: svc, client: &http.Client{Timeout: 30 * time.Second}, r: r, fallback: fallback}
 }
 
 // activeConfig — читает АКТУАЛЬНЫЙ sync_settings на КАЖДОМ тике, а не один
 // раз при старте процесса (ADR-003, продолжение — код приглашения подключает
-// филиал без перезапуска приложения). Puller уже в package service — читает
-// через SyncSettingsService напрямую (см. симметричный приём и подробное
-// обоснование в synclog.Pusher.activeConfig, тот же принцип).
+// филиал без перезапуска приложения). Прямой First, а не SyncSettingsService.Get —
+// Get() маскирует отсутствие строки под дефолтную (enabled=false) и не даёт
+// отличить «строки нет → env-fallback» от «строка есть, выключено → выключено».
 func (p *Puller) activeConfig(ctx context.Context) (centralURL, token, restaurantID string, enabled bool, err error) {
-	st, err := NewSyncSettingsService(p.r).Get(ctx)
+	var st models.SyncSettings
+	err = p.r.Raw().WithContext(ctx).Where("id = 1").First(&st).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return p.fallback.CentralURL, p.fallback.Token, p.fallback.RestaurantID, p.fallback.Enabled, nil
+	}
 	if err != nil {
 		return "", "", "", false, err
 	}
