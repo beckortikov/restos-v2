@@ -15,10 +15,11 @@ import {
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
+import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ClipboardList, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { PayrollVedomost, type VedomostRow } from '@/components/finance/payroll-vedomost'
 import { exportToExcel } from '@/lib/export-excel'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -33,6 +34,18 @@ function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string 
   const start = new Date(fy, (fm || 1) - 1, fd || 1, 0, 0, 0, 0)
   const end = new Date(ty, (tm || 1) - 1, td || 1, 23, 59, 59, 999)
   return { from: start.toISOString(), to: end.toISOString() }
+}
+
+// Подпись периода для ведомости: один месяц → «июль 2026», иначе — диапазон дат.
+const PERIOD_MONTHS_NOM = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
+function periodLabelFromIso(fromIso: string, toIso: string): string {
+  const f = new Date(fromIso), t = new Date(toIso)
+  if (Number.isNaN(f.getTime()) || Number.isNaN(t.getTime())) return ''
+  if (f.getFullYear() === t.getFullYear() && f.getMonth() === t.getMonth()) {
+    return `${PERIOD_MONTHS_NOM[f.getMonth()]} ${f.getFullYear()}`
+  }
+  const d = (x: Date) => x.toLocaleDateString('ru-RU')
+  return `${d(f)} — ${d(t)}`
 }
 
 // Тренд ФОТ по месяцам (ЗП-7) — та же связка monthKey/monthLabel, что и в
@@ -55,7 +68,7 @@ function trendTooltipValue(value: number, sum: number): string {
 const TREND_MAX_MONTHS = 12
 type TrendRow = { key: string; label: string; salary: number; advance: number; service: number; total: number }
 
-type TabKey = 'salary' | 'report' | 'timesheet'
+type TabKey = 'salary' | 'report' | 'vedomost' | 'timesheet'
 
 // ─── Elapsed timer hook ──────────────────────────────────────────────────────
 
@@ -482,6 +495,19 @@ export default function PayrollPage() {
   // display «Выплачено (ЗП)», в этой формуле участвовать не должен.
   const totalToPay = totalSalary - totalAdvance - totalDeductions - totalSalaryOnlyPaid
 
+  // Ведомость (#3): роспись «начислено/аванс/удержания/к выплате» за период,
+  // те же period-scoped цифры, что в списке. Кто получает — с начислением > 0.
+  const vedomostPeriodLabel = periodLabelFromIso(serviceFrom, serviceTo)
+  const vedomostRows: VedomostRow[] = withSalary.map(e => ({
+    id: e.id,
+    name: e.name,
+    position: e.position || ROLE_LABELS[e.role],
+    accrued: accruedOf(e),
+    advance: advOf(e),
+    deductions: dedOf(e),
+    toPay: accruedOf(e) - advOf(e) - dedOf(e) - (salaryOnlyPaid[e.id] ?? 0),
+  }))
+
   const filtered = employees.filter(e => {
     if (roleFilter !== 'all' && e.role !== roleFilter) return false
     if (statusFilter === 'with_salary' && (e.salary ?? 0) === 0) return false
@@ -544,6 +570,11 @@ export default function PayrollPage() {
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'report' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
               <FileText className="size-3.5 inline mr-1.5 -mt-0.5" />
               История
+            </button>
+            <button onClick={() => setTab('vedomost')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'vedomost' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
+              <ClipboardList className="size-3.5 inline mr-1.5 -mt-0.5" />
+              Ведомость
             </button>
             <button onClick={() => setTab('timesheet')}
               className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${tab === 'timesheet' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -1048,6 +1079,33 @@ export default function PayrollPage() {
               </div>
             </div>
           )}
+        </>
+      )}
+
+      {/* ═══════════════════════════ VEDOMOST TAB ═════════════════════════════ */}
+      {tab === 'vedomost' && (
+        <>
+          <div className="flex flex-wrap items-center gap-3 bg-muted/30 border border-border rounded-xl p-3">
+            <label className="text-[10px] font-semibold text-muted-foreground uppercase">Период</label>
+            <DateRangePresets
+              value={servicePreset}
+              onChange={(p, r) => {
+                setServicePreset(p)
+                if (p === 'custom') {
+                  setServiceCustomFrom(r.from); setServiceCustomTo(r.to)
+                  if (r.from && r.to) { const iso = isoFromYmd(r.from, r.to); setServiceFrom(iso.from); setServiceTo(iso.to) }
+                } else {
+                  const iso = isoFromYmd(r.from, r.to); setServiceFrom(iso.from); setServiceTo(iso.to)
+                }
+              }}
+              customFrom={serviceCustomFrom}
+              customTo={serviceCustomTo}
+              onCustomFromChange={(v) => { setServicePreset('custom'); setServiceCustomFrom(v); if (v && serviceCustomTo) { const iso = isoFromYmd(v, serviceCustomTo); setServiceFrom(iso.from); setServiceTo(iso.to) } }}
+              onCustomToChange={(v) => { setServicePreset('custom'); setServiceCustomTo(v); if (serviceCustomFrom && v) { const iso = isoFromYmd(serviceCustomFrom, v); setServiceFrom(iso.from); setServiceTo(iso.to) } }}
+              storageKey="payroll:service-preset"
+            />
+          </div>
+          <PayrollVedomost rows={vedomostRows} periodLabel={vedomostPeriodLabel} />
         </>
       )}
 
