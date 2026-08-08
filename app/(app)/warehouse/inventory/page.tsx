@@ -10,7 +10,8 @@ import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIn
 import { queryKeys } from '@/lib/query-client'
 import { humanizeError } from '@/lib/errors'
 
-import { Search, Plus, Trash2, X, Check, ArrowRightLeft, ShoppingCart, Pencil, PackageMinus, ChevronRight } from 'lucide-react'
+import { Search, Plus, Trash2, X, Check, ArrowRightLeft, ShoppingCart, Pencil, PackageMinus, ChevronRight, Download } from 'lucide-react'
+import { exportToExcel } from '@/lib/export-excel'
 import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { toast } from 'sonner'
@@ -166,6 +167,32 @@ export default function InventoryPage() {
 
   const stateOf = (i: Ingredient) => i.qty <= 0 ? 'out' : (i.minQty > 0 && i.qty <= i.minQty ? 'low' : 'ok')
 
+  // Выгрузка склада в Excel (по текущему складу и фильтрам — то, что на экране).
+  const handleExport = () => {
+    const tabLabel = WH_TABS.find(t => t.kind === whKind)?.label ?? 'Склад'
+    exportToExcel(
+      filtered.map(i => ({
+        name: i.name,
+        category: i.category,
+        unit: i.unit,
+        qty: i.qty,
+        minQty: i.minQty,
+        price: i.pricePerUnit,
+        value: i.qty > 0 ? i.qty * i.pricePerUnit : 0,
+      })),
+      [
+        { key: 'name', header: 'Наименование' },
+        { key: 'category', header: 'Категория' },
+        { key: 'unit', header: 'Ед.' },
+        { key: 'qty', header: 'Остаток' },
+        { key: 'minQty', header: 'Мин. остаток' },
+        { key: 'price', header: 'Цена/ед' },
+        { key: 'value', header: 'Стоимость' },
+      ],
+      `Склад — ${tabLabel}`,
+    )
+  }
+
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-4xl mx-auto">
       {/* Header */}
@@ -189,6 +216,10 @@ export default function InventoryPage() {
             </div>
           ) : (
             <div className="flex items-center gap-2">
+              <button onClick={handleExport} disabled={filtered.length === 0} title="Скачать Excel"
+                className="flex items-center justify-center bg-card border border-border text-muted-foreground size-9 rounded-lg hover:bg-muted transition-colors disabled:opacity-40">
+                <Download className="size-4" />
+              </button>
               <button onClick={() => setSelectMode(true)} title="Выбрать и удалить несколько"
                 className="flex items-center justify-center bg-card border border-border text-muted-foreground size-9 rounded-lg hover:bg-muted transition-colors">
                 <Trash2 className="size-4" />
