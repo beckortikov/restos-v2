@@ -853,10 +853,14 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 		}
 		accID := in.AccountID
 		ridStr := rid
+		// SourceRef = supplier.id — привязка платежа к поставщику по ID, а не по
+		// имени: переименование поставщика не теряет историю его платежей.
+		supID := sup.ID
 		fo := &models.FinancialOperation{
 			ID: uuid.NewString(), Type: &opType, Amount: pay, Category: &opCat,
 			AccountID: &accID, AccountName: acc.Name, Activity: &opActivity, Date: &opDate,
 			Description: &desc, Counterparty: sup.Name, IsAuto: &isAuto,
+			SourceRef:    &supID,
 			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(fo).Error; err != nil {

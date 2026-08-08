@@ -101,6 +101,11 @@ func TestPayReceipt(t *testing.T) {
 	if fo.Type == nil || *fo.Type != "out" {
 		t.Errorf("финоп type = %v, want out", fo.Type)
 	}
+	// source_ref = supplier.id — привязка платежа к поставщику по ID (для его
+	// карточки «Платежи»; переименование поставщика не теряет историю платежей).
+	if fo.SourceRef == nil || *fo.SourceRef != sup.ID {
+		t.Errorf("финоп source_ref = %v, want %s (supplier.id)", fo.SourceRef, sup.ID)
+	}
 
 	// ─── Переплата: платим 500, остаток долга 60 → клампится к 60 ────────────
 	r, b = f.post(t, "/api/v1/stock/receipts/"+receipt.ID+"/pay", tok, uuid.NewString(), map[string]any{
