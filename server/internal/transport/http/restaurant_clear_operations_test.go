@@ -48,6 +48,14 @@ func TestRestaurant_ClearOperations_WipesOpsZeroesBalancesKeepsRefs(t *testing.T
 	must(gdb.Create(&models.RecurringPayment{ID: uuid.NewString(), Name: sp("Аренда"), Amount: decimal.MustFromString("1000"), RestaurantID: &rid}).Error)
 	must(gdb.Create(&models.SalaryAdvance{ID: uuid.NewString(), UserID: uuid.NewString(), Amount: decimal.MustFromString("100"), Period: "2026-08", AccountID: accID, RestaurantID: &rid}).Error)
 
+	// ── Гвард: кассир (не владелец) не может сбросить — 403 ──
+	rDenied, _ := f.post(t, "/api/v1/restaurants/"+rid+"/clear-operations", tok, uuid.NewString(), map[string]any{})
+	if rDenied.StatusCode != http.StatusForbidden {
+		t.Fatalf("сброс не-владельцем: %d, want 403 (только владелец)", rDenied.StatusCode)
+	}
+	// Повышаем актора до владельца (гвард перечитывает роль из БД) — теперь можно.
+	must(gdb.Model(&models.User{}).Where("restaurant_id = ?", rid).Update("role", "owner").Error)
+
 	// ── Сброс ──
 	r, b := f.post(t, "/api/v1/restaurants/"+rid+"/clear-operations", tok, uuid.NewString(), map[string]any{})
 	if r.StatusCode != http.StatusOK {

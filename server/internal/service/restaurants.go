@@ -272,6 +272,9 @@ type ClearOperationsResult struct {
 }
 
 func (s *RestaurantsService) ClearOperations(ctx context.Context, id string) (*ClearOperationsResult, error) {
+	if err := requireOwner(ctx, s.r); err != nil {
+		return nil, err
+	}
 	var existing models.Restaurant
 	if err := s.r.Raw().WithContext(ctx).Where("id = ?", id).First(&existing).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -440,6 +443,9 @@ type ClearMenuResult struct {
 }
 
 func (s *RestaurantsService) ClearMenu(ctx context.Context, id string) (*ClearMenuResult, error) {
+	if err := requireOwner(ctx, s.r); err != nil {
+		return nil, err
+	}
 	var existing models.Restaurant
 	if err := s.r.Raw().WithContext(ctx).Where("id = ?", id).First(&existing).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

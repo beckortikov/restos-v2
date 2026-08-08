@@ -53,6 +53,34 @@ func requirePermFor(ctx context.Context, r *repo.Repo, action string) error {
 	return apperrors.Wrap("FORBIDDEN", "недостаточно прав для действия: "+action, nil)
 }
 
+// requireOwner — только владелец (или кросс-тенантный superadmin). Для
+// деструктивных админ-операций, которые матрица прав не покрывает отдельным
+// action (сброс операций/меню). Роль перечитываем из БД, а не из токена: на
+// «стереть всё» полагаться на возможно устаревшую роль в токене нельзя, и
+// демоут владельца обязан действовать сразу. Раньше проверки НЕ было вовсе —
+// любой аутентифицированный мог стереть ресторан (фронт гейтил owner-only, бэк
+// нет).
+func requireOwner(ctx context.Context, r *repo.Repo) error {
+	actor, _ := audit.ActorFromContext(ctx)
+	if actor.Role == "superadmin" {
+		return nil
+	}
+	deny := apperrors.Wrap("FORBIDDEN", "только владелец может выполнить это действие", nil)
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return deny
+	}
+	var u models.User
+	if err := r.Raw().WithContext(ctx).Select("role").
+		Where("restaurant_id = ? AND id = ?", rid, actor.UserID).First(&u).Error; err != nil {
+		return deny
+	}
+	if u.Role != nil && (*u.Role == "owner" || *u.Role == "superadmin") {
+		return nil
+	}
+	return deny
+}
+
 // ── Порядок блокировок в денежно-складских транзакциях ─────────────────────
 //
 // Все транзакции, берущие FOR UPDATE больше чем на одну таблицу, ОБЯЗАНЫ брать
