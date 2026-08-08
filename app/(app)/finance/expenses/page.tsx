@@ -9,7 +9,8 @@ import { fetchFinancialOperations } from '@/lib/queries'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { exportToExcel } from '@/lib/export-excel'
 import { DateRangePresets, getPresetRange, type RangePreset } from '@/components/finance/date-range-presets'
-import { BarChart3, PieChart as PieIcon, Table as TableIcon, Download, TrendingDown, TrendingUp, Layers } from 'lucide-react'
+import { BarChart3, PieChart as PieIcon, Table as TableIcon, Download, TrendingDown, TrendingUp, Layers, ChevronRight } from 'lucide-react'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   PieChart, Pie, Cell,
   BarChart, Bar,
@@ -72,6 +73,10 @@ export default function ExpensesByCategoryPage() {
   const [customTo, setCustomTo] = useState('')
   const [view, setView] = useState<ViewKind>('bars')
   const [gran, setGran] = useState<Gran>('month')
+  // Провал внутрь статьи (запрос владельца): клик по категории → детализация
+  // операций этой статьи (кому/когда/сколько). Напр. «Оплата труда» → кому и
+  // когда платили; «Поставщики» → какому поставщику сколько.
+  const [drillCat, setDrillCat] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     const data = await fetchFinancialOperations()
@@ -132,6 +137,23 @@ export default function ExpensesByCategoryPage() {
     const sorted = [...m.entries()].sort((a, b) => b[1] - a[1])
     return { categories: sorted.map(([name]) => name), byCategory: sorted }
   }, [expenses])
+
+  // Детализация выбранной статьи: операции + разбивка «кому сколько».
+  const drillOps = useMemo(() => {
+    if (!drillCat) return []
+    return expenses
+      .filter((o) => (finopCategoryLabel(o.category) || 'Без статьи') === drillCat)
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  }, [expenses, drillCat])
+  const drillByPayee = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const o of drillOps) {
+      const who = (o.counterparty || o.description || '—').trim() || '—'
+      m.set(who, (m.get(who) ?? 0) + o.amount)
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1])
+  }, [drillOps])
+  const drillTotal = useMemo(() => drillOps.reduce((s, o) => s + o.amount, 0), [drillOps])
 
   const topCategories = useMemo(() => {
     if (categories.length <= TOP_N) return categories
@@ -449,7 +471,9 @@ export default function ExpensesByCategoryPage() {
                       const ci = Math.max(0, topCategories.indexOf(d.name))
                       const pct = b.total > 0 ? Math.round((d.value / b.total) * 100) : 0
                       return (
-                        <div key={d.name} className="flex items-center gap-2 py-1.5 text-xs">
+                        <div key={d.name}
+                          onClick={d.name !== 'Прочее' ? () => setDrillCat(d.name) : undefined}
+                          className={`flex items-center gap-2 py-1.5 text-xs ${d.name !== 'Прочее' ? 'cursor-pointer hover:bg-muted/40 -mx-1 px-1 rounded' : ''}`}>
                           <span className="size-2 rounded-full shrink-0" style={{ background: CHART_COLORS[ci % CHART_COLORS.length] }} />
                           <span className="text-foreground flex-1 truncate">{d.name}</span>
                           <span className="text-muted-foreground tabular-nums">{pct}%</span>
@@ -530,8 +554,11 @@ export default function ExpensesByCategoryPage() {
                   const diff = last - prev
                   const diffPct = prev > 0 ? (diff / prev) * 100 : null
                   return (
-                    <tr key={cat} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-3 py-2 text-foreground sticky left-0 bg-card">{cat}</td>
+                    <tr key={cat} onClick={() => setDrillCat(cat)} title="Открыть операции статьи"
+                      className="hover:bg-muted/30 transition-colors cursor-pointer">
+                      <td className="px-3 py-2 text-foreground sticky left-0 bg-card">
+                        <span className="inline-flex items-center gap-1">{cat}<ChevronRight className="size-3 text-muted-foreground/40" /></span>
+                      </td>
                       {buckets.map((k) => {
                         const v = matrix.get(k)?.get(series) ?? 0
                         // При схлопывании в «Прочее» ячейка общая для хвоста —
@@ -586,6 +613,52 @@ export default function ExpensesByCategoryPage() {
           </div>
         </div>
       )}
+
+      {/* Детализация статьи — кому / когда / сколько (провал внутрь категории) */}
+      <Dialog open={drillCat !== null} onOpenChange={(o) => { if (!o) setDrillCat(null) }}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between gap-3 pr-6">
+              <span className="truncate">{drillCat}</span>
+              <span className="text-sm font-bold text-foreground tabular-nums shrink-0">{formatCurrency(drillTotal)}</span>
+            </DialogTitle>
+          </DialogHeader>
+          {drillOps.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Операций нет</p>
+          ) : (
+            <div className="overflow-y-auto flex-1 min-h-0 space-y-4">
+              {drillByPayee.length > 1 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Кому · {drillByPayee.length}</p>
+                  <div className="divide-y divide-border/60 rounded-lg border border-border">
+                    {drillByPayee.map(([who, sum]) => (
+                      <div key={who} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                        <span className="text-sm text-foreground truncate">{who}</span>
+                        <span className="text-sm font-semibold text-foreground tabular-nums shrink-0">{formatCurrency(sum)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Операции · {drillOps.length}</p>
+                <div className="divide-y divide-border/60">
+                  {drillOps.map((o) => (
+                    <div key={o.id} className="flex items-center gap-3 py-2">
+                      <span className="text-xs text-muted-foreground tabular-nums w-20 shrink-0">{(o.date || '').slice(0, 10) || '—'}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-foreground truncate">{o.counterparty || o.description || finopCategoryLabel(o.category) || '—'}</p>
+                        {o.accountName && <p className="text-[11px] text-muted-foreground truncate">со счёта «{o.accountName}»</p>}
+                      </div>
+                      <span className="text-sm font-semibold text-foreground tabular-nums shrink-0">{formatCurrency(o.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
