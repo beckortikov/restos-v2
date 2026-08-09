@@ -120,6 +120,9 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 		}
 
 		now := time.Now().UTC()
+		// Первый возврат по заказу — уведомляем кухню (как при отмене). Повторные
+		// частичные возвраты кухонный чек не дублируют.
+		firstRefund := !decimal.IsPositive(order.RefundedTotal)
 		newRefundedTotal := decimal.Normalize(decimal.Add(order.RefundedTotal, amount))
 		order.RefundedTotal = newRefundedTotal
 		order.RefundedAt = &now
@@ -219,6 +222,21 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 		// (ложная недостача). No-op для безнала/без активной смены.
 		if err := recordShiftCashOutIfActive(tx, rid, "", accountID, opDesc, opDate, finOp.ID, amount, now); err != nil {
 			return err
+		}
+		// Кухонный чек «ОТМЕНА» на возврат (запрос владельца): как при отмене
+		// заказа кухня должна узнать, что блюда вернули. enqueueCancelRunners
+		// печатает только то, что кухня реально видела (printed_at), и НЕ трогает
+		// склад/выручку — деньги уже вернула проводка выше. Только на первый
+		// возврат, чтобы повторные частичные не дублировали чек.
+		if firstRefund {
+			var items []models.OrderItem
+			if err := tx.Where("order_id = ? AND cancelled_at IS NULL", order.ID).
+				Order("created_at ASC").Find(&items).Error; err != nil {
+				return err
+			}
+			if err := s.enqueueCancelRunners(tx, rid, &order, items, "Возврат: "+reason, now); err != nil {
+				return err
+			}
 		}
 		refunded = amount
 		buf.Add(EventOrderUpdated, map[string]any{
