@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { type Ingredient } from '@/lib/types'
-import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient, deleteIngredient, fetchWarehouses, transferWarehouse } from '@/lib/queries'
+import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIngredient, deleteIngredient, fetchWarehouses, transferWarehouse, fetchMenuItems } from '@/lib/queries'
 import { queryKeys } from '@/lib/query-client'
 import { humanizeError } from '@/lib/errors'
 
@@ -168,8 +168,29 @@ export default function InventoryPage() {
   const stateOf = (i: Ingredient) => i.qty <= 0 ? 'out' : (i.minQty > 0 && i.qty <= i.minQty ? 'low' : 'ok')
 
   // Выгрузка склада в Excel (по текущему складу и фильтрам — то, что на экране).
-  const handleExport = () => {
+  // Цена закупки — pricePerUnit (себестоимость единицы). Цена продажи есть
+  // только у покупных товаров (это блюда is_purchased): берём её с блюда,
+  // матчим по имени — покупной товар и его блюдо ведут одно имя (menu_write.go
+  // синхронит name+price_per_unit ингредиента при правке блюда).
+  const handleExport = async () => {
     const tabLabel = WH_TABS.find(t => t.kind === whKind)?.label ?? 'Склад'
+    const sellByName = new Map<string, number>()
+    if (whKind === 'purchased') {
+      const items = await fetchMenuItems().catch(() => [])
+      for (const mi of items) {
+        if (mi.isPurchased) sellByName.set(mi.name.trim().toLowerCase(), mi.price)
+      }
+    }
+    const cols = [
+      { key: 'name', header: 'Наименование' },
+      { key: 'category', header: 'Категория' },
+      { key: 'unit', header: 'Ед.' },
+      { key: 'qty', header: 'Остаток' },
+      { key: 'minQty', header: 'Мин. остаток' },
+      { key: 'buyPrice', header: 'Цена закупки' },
+      ...(whKind === 'purchased' ? [{ key: 'sellPrice', header: 'Цена продажи' }] : []),
+      { key: 'value', header: 'Стоимость (по закупке)' },
+    ]
     exportToExcel(
       filtered.map(i => ({
         name: i.name,
@@ -177,18 +198,11 @@ export default function InventoryPage() {
         unit: i.unit,
         qty: i.qty,
         minQty: i.minQty,
-        price: i.pricePerUnit,
+        buyPrice: i.pricePerUnit,
+        sellPrice: sellByName.get(i.name.trim().toLowerCase()) ?? '',
         value: i.qty > 0 ? i.qty * i.pricePerUnit : 0,
       })),
-      [
-        { key: 'name', header: 'Наименование' },
-        { key: 'category', header: 'Категория' },
-        { key: 'unit', header: 'Ед.' },
-        { key: 'qty', header: 'Остаток' },
-        { key: 'minQty', header: 'Мин. остаток' },
-        { key: 'price', header: 'Цена/ед' },
-        { key: 'value', header: 'Стоимость' },
-      ],
+      cols,
       `Склад — ${tabLabel}`,
     )
   }
