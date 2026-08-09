@@ -321,6 +321,13 @@ func (s *RestaurantsService) ClearOperations(ctx context.Context, id string) (*C
 		if err := delRest("financial_operations", &models.FinancialOperation{}); err != nil {
 			return err
 		}
+		// Капитал: взносы/изъятия собственника, в т.ч. авто «Взнос собственника —
+		// начальный остаток» склада и счёта. Без очистки после сброса Баланс
+		// показывал бы висящий капитал без актива (актив уже обнулён), а
+		// повторный ввод начального остатка задваивал бы капитал.
+		if err := delRest("equity_entries", &models.EquityEntry{}); err != nil {
+			return err
+		}
 		if err := acc("cash_shift_operations", tx.Where("shift_id IN (?)",
 			tx.Model(&models.CashShift{}).Select("id").Where("restaurant_id = ?", id),
 		).Delete(&models.CashShiftOperation{})); err != nil {

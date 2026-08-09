@@ -47,6 +47,9 @@ func TestRestaurant_ClearOperations_WipesOpsZeroesBalancesKeepsRefs(t *testing.T
 	must(gdb.Create(&models.AuditLog{ID: uuid.NewString(), Action: sp("test"), RestaurantID: &rid}).Error)
 	must(gdb.Create(&models.RecurringPayment{ID: uuid.NewString(), Name: sp("Аренда"), Amount: decimal.MustFromString("1000"), RestaurantID: &rid}).Error)
 	must(gdb.Create(&models.SalaryAdvance{ID: uuid.NewString(), UserID: uuid.NewString(), Amount: decimal.MustFromString("100"), Period: "2026-08", AccountID: accID, RestaurantID: &rid}).Error)
+	// Капитал начального остатка — должен уйти в ноль, иначе Баланс после сброса
+	// висит без актива и повторный ввод начального остатка задваивает капитал.
+	must(gdb.Create(&models.EquityEntry{ID: uuid.NewString(), Name: sp("Взнос собственника — начальный остаток склада"), Amount: decimal.MustFromString("500"), RestaurantID: &rid}).Error)
 
 	// ── Гвард: кассир (не владелец) не может сбросить — 403 ──
 	rDenied, _ := f.post(t, "/api/v1/restaurants/"+rid+"/clear-operations", tok, uuid.NewString(), map[string]any{})
@@ -103,4 +106,5 @@ func TestRestaurant_ClearOperations_WipesOpsZeroesBalancesKeepsRefs(t *testing.T
 	assertEmpty("audit_log", &models.AuditLog{})
 	assertEmpty("recurring_payments", &models.RecurringPayment{})
 	assertEmpty("salary_advances", &models.SalaryAdvance{})
+	assertEmpty("equity_entries", &models.EquityEntry{})
 }
