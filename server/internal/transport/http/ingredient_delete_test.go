@@ -119,3 +119,70 @@ func TestIngredientDelete_InUse_Conflict(t *testing.T) {
 		t.Fatalf("ожидали 409 для используемого ингредиента, получили %d %s", r.StatusCode, b)
 	}
 }
+
+// Каскадное удаление ПОКУПНОГО товара: is_purchased-блюдо + его 1:1 ингредиент.
+// Ингредиент удаляется каскадом (блюдо прячется, техкарта и ингредиент удалены),
+// а не упирается в CONFLICT — иначе покупные дубликаты не убрать с «Остатков».
+func TestIngredientDelete_PurchasedCascades(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb := openTestDB(t)
+	sp := func(s string) *string { return &s }
+
+	miID := uuid.NewString()
+	if err := gdb.Create(&models.MenuItem{
+		ID: miID, Name: sp("Кола"), IsPurchased: true,
+		Price: decimal.MustFromString("12"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	ingID := uuid.NewString()
+	if err := gdb.Create(&models.Ingredient{
+		ID: ingID, Name: sp("Кола"), Unit: sp("шт"),
+		Qty: decimal.MustFromString("5"), PricePerUnit: decimal.MustFromString("7"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&models.TechCardLine{
+		ID: uuid.NewString(), MenuItemID: &miID, IngredientID: &ingID,
+		Name: sp("Кола"), Qty: decimal.MustFromString("1"), Unit: sp("шт"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r, b := f.del(t, "/api/v1/stock/ingredients/"+ingID, tok, uuid.NewString())
+	if r.StatusCode != http.StatusOK && r.StatusCode != http.StatusNoContent {
+		t.Fatalf("удаление покупного ингредиента: %d %s (ожидали каскад, не CONFLICT)", r.StatusCode, b)
+	}
+	var ingCnt, tclCnt int64
+	gdb.Model(&models.Ingredient{}).Where("id = ?", ingID).Count(&ingCnt)
+	if ingCnt != 0 {
+		t.Errorf("ингредиент не удалён: count=%d", ingCnt)
+	}
+	gdb.Model(&models.TechCardLine{}).Where("ingredient_id = ?", ingID).Count(&tclCnt)
+	if tclCnt != 0 {
+		t.Errorf("техкарта осиротела: count=%d", tclCnt)
+	}
+	var mi models.MenuItem
+	gdb.First(&mi, "id = ?", miID)
+	if !mi.IsDeleted {
+		t.Errorf("покупное блюдо не помечено is_deleted (история заказов должна остаться, но из меню/склада — уйти)")
+	}
+
+	// Обычный рецепт (блюдо НЕ покупное): сырьё удалить нельзя — CONFLICT.
+	dishID := uuid.NewString()
+	if err := gdb.Create(&models.MenuItem{ID: dishID, Name: sp("Борщ"), IsPurchased: false, RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rawID := uuid.NewString()
+	if err := gdb.Create(&models.Ingredient{ID: rawID, Name: sp("Свёкла"), Unit: sp("kg"), RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Create(&models.TechCardLine{ID: uuid.NewString(), MenuItemID: &dishID, IngredientID: &rawID, Name: sp("Свёкла"), Qty: decimal.MustFromString("0.2"), Unit: sp("kg"), RestaurantID: &f.rid}).Error; err != nil {
+		t.Fatal(err)
+	}
+	rc, _ := f.del(t, "/api/v1/stock/ingredients/"+rawID, tok, uuid.NewString())
+	if rc.StatusCode != http.StatusConflict {
+		t.Errorf("удаление сырья из обычного рецепта: %d, want 409", rc.StatusCode)
+	}
+}
