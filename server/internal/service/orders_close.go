@@ -656,8 +656,14 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		//     Ошибку НЕ проглатываем (в отличие от чека): без бегунка заказ был бы
 		//     оплачен, но не приготовлен — лучше откатить и дать повторить.
 		if s.kitchenOnPay(tx, rid) {
+			// cancelled_at IS NULL — иначе на кухню при оплате уезжали ОТМЕНЁННЫЕ
+			// позиции (их нет в чеке: выручка/чек ниже уже фильтруют отменённые,
+			// а этот запрос — нет). CancelItem при частичной отмене создаёт
+			// ОТДЕЛЬНУЮ отменённую строку с qty>0, и enqueueRunners печатает
+			// полную qty каждой строки без своей проверки cancelled — поэтому
+			// фильтруем здесь. Симптом: кухня получала блюда, которых нет в счёте.
 			var kitchenItems []models.OrderItem
-			if err := tx.Where("order_id = ?", order.ID).Find(&kitchenItems).Error; err != nil {
+			if err := tx.Where("order_id = ? AND cancelled_at IS NULL", order.ID).Find(&kitchenItems).Error; err != nil {
 				return err
 			}
 			if err := s.enqueueRunners(tx, rid, &order, kitchenItems, now); err != nil {
