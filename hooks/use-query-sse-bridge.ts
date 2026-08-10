@@ -20,6 +20,9 @@ const TABLE_TO_KEYS: Record<string, readonly (readonly string[])[]> = {
   ingredients: [queryKeys.stock.ingredients],
   stock_movements: [queryKeys.stock.ingredients],
   users: [queryKeys.users.all],
+  // ТВ-табло выдачи (/board) на ['kds', 'board']. kds.item.updated (per-dish
+  // статус из кухонного приложения) прилетает как таблица kds_items.
+  kds_items: [['kds']],
 }
 
 /**
