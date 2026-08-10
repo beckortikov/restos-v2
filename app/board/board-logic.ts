@@ -6,6 +6,15 @@ import type { KdsBoardItem } from '@/lib/queries'
 
 export const COOK_TARGET_MIN = 8 // на эту шкалу (мин) растёт полоса готовки
 
+// Заказ, все позиции которого так и остались pending (никто не начал готовить) и
+// старше этого порога, считаем брошенным и убираем с табло. Причина: позиция при
+// создании получает station_status='pending' по умолчанию; заказы, которые
+// никогда не попали на планшет кухни и не были передвинуты (незакрытые черновики,
+// тестовые, заказы прошлого дня в рамках сегодняшней смены), иначе висят в
+// «Готовится» вечно. cooking/ready показываем ВСЕГДА, независимо от возраста —
+// их реально готовят / они ждут выдачи.
+export const HIDE_STUCK_PENDING_MIN = 90
+
 export type BoardOrder = {
   orderNumber: number
   cooking: boolean // есть позиции pending/cooking → ещё готовится
@@ -16,21 +25,32 @@ export type BoardOrder = {
 // Свернуть per-dish позиции в заказы: заказ «готовится», пока есть хоть одна
 // позиция pending/cooking; «готов», когда все оставшиеся позиции ready (served
 // в выборку не попадают — уходят, как только повар отметил «Выдан»).
-export function aggregate(items: KdsBoardItem[]): BoardOrder[] {
-  const byOrder = new Map<number, BoardOrder>()
+//
+// hideStuckPendingSec — заказы, у которых ВСЕ позиции pending и старше порога,
+// отбрасываем (см. HIDE_STUCK_PENDING_MIN): их никто не готовит, это мусор на
+// табло. Заказ остаётся, если есть хоть одна cooking/ready позиция ИЛИ свежий
+// pending (заказ только поступил и ждёт очереди — его показать надо).
+export function aggregate(items: KdsBoardItem[], hideStuckPendingSec = HIDE_STUCK_PENDING_MIN * 60): BoardOrder[] {
+  type Acc = BoardOrder & { active: boolean }
+  const byOrder = new Map<number, Acc>()
   for (const it of items) {
     const n = it.orderNumber || 0
     if (!n) continue
     let o = byOrder.get(n)
     if (!o) {
-      o = { orderNumber: n, cooking: false, maxAgeSeconds: 0, readyAt: '' }
+      o = { orderNumber: n, cooking: false, maxAgeSeconds: 0, readyAt: '', active: false }
       byOrder.set(n, o)
     }
-    if (it.stationStatus === 'pending' || it.stationStatus === 'cooking') o.cooking = true
+    const st = it.stationStatus
+    const started = st === 'cooking' || st === 'ready'
+    const freshPending = st === 'pending' && it.ageSeconds < hideStuckPendingSec
+    if (started || freshPending) o.active = true
+    if (st === 'pending' || st === 'cooking') o.cooking = true
     if (it.ageSeconds > o.maxAgeSeconds) o.maxAgeSeconds = it.ageSeconds
-    if (it.stationStatus === 'ready' && it.statusAt > o.readyAt) o.readyAt = it.statusAt
+    if (st === 'ready' && it.statusAt > o.readyAt) o.readyAt = it.statusAt
   }
-  return [...byOrder.values()]
+  // active=false ⇔ все позиции pending и старше порога → брошенный заказ, скрыть.
+  return [...byOrder.values()].filter(o => o.active).map(({ active: _active, ...o }) => o)
 }
 
 // Прогресс готовки 0..1. Возраст берём по ЧАСАМ СЕРВЕРА (ageSeconds на момент

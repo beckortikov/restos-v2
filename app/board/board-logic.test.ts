@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { aggregate, cookProgress, splitBoard, COOK_TARGET_MIN, type BoardOrder } from './board-logic'
+import { aggregate, cookProgress, splitBoard, COOK_TARGET_MIN, HIDE_STUCK_PENDING_MIN, type BoardOrder } from './board-logic'
 import type { KdsBoardItem } from '@/lib/queries'
+
+const STUCK = HIDE_STUCK_PENDING_MIN * 60 // порог «застрявшего» pending в секундах
 
 function item(p: Partial<KdsBoardItem>): KdsBoardItem {
   return {
@@ -59,6 +61,39 @@ describe('aggregate — свёртка per-dish позиций в заказы',
       item({ orderNumber: 0 }), // не должно создать заказ
     ])
     expect(res.map(o => o.orderNumber).sort()).toEqual([1, 2])
+  })
+})
+
+describe('aggregate — скрытие застрявших pending', () => {
+  it('заказ, все позиции которого pending и старше порога — скрыт', () => {
+    const res = aggregate([
+      item({ orderNumber: 9, stationStatus: 'pending', ageSeconds: STUCK + 60 }),
+      item({ orderNumber: 9, stationStatus: 'pending', ageSeconds: STUCK + 300 }),
+    ])
+    expect(res).toHaveLength(0)
+  })
+
+  it('свежий pending (только поступил) — показывается', () => {
+    const res = aggregate([item({ orderNumber: 9, stationStatus: 'pending', ageSeconds: 30 })])
+    expect(res).toHaveLength(1)
+    expect(res[0].cooking).toBe(true)
+  })
+
+  it('старый pending, но одна позиция cooking — заказ остаётся (его готовят)', () => {
+    const res = aggregate([
+      item({ orderNumber: 9, stationStatus: 'pending', ageSeconds: STUCK + 600 }),
+      item({ orderNumber: 9, stationStatus: 'cooking', ageSeconds: STUCK + 600 }),
+    ])
+    expect(res).toHaveLength(1)
+    expect(res[0].cooking).toBe(true)
+  })
+
+  it('старый заказ, но уже ready — остаётся в «Готово» (ждёт выдачи)', () => {
+    const res = aggregate([
+      item({ orderNumber: 9, stationStatus: 'ready', ageSeconds: STUCK + 600, statusAt: '2026-08-10T10:00:00Z' }),
+    ])
+    expect(res).toHaveLength(1)
+    expect(res[0].cooking).toBe(false)
   })
 })
 
