@@ -98,6 +98,15 @@ export default function BoardPage() {
   }, [ready])
   const newestReady = ready[0]?.orderNumber
 
+  // Авто-уменьшение цифр «Готовится» при большом числе заказов — чтобы влезали
+  // без прокрутки. По умолчанию крупно (как «Готово»); мельче — только когда надо.
+  const n = cooking.length
+  const cookFont =
+    n <= 6 ? 'clamp(40px,6.2vw,104px)'
+      : n <= 12 ? 'clamp(30px,4.4vw,72px)'
+        : n <= 20 ? 'clamp(24px,3.2vw,54px)'
+          : 'clamp(18px,2.4vw,40px)'
+
   return (
     <div className="fixed inset-0 grid" style={{ gridTemplateColumns: '1.15fr 1fr', background: '#0b0e13' }}>
       {/* ─── Готовится ─── */}
@@ -105,22 +114,23 @@ export default function BoardPage() {
         <h2 style={{ textAlign: 'center', color: '#ff5a4d', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', fontSize: 'clamp(20px,2.2vw,34px)', paddingBottom: '0.5em', marginBottom: '0.7em', borderBottom: '2px solid rgba(255,90,77,0.25)' }}>
           Готовится
         </h2>
-        <div className="flex-1 min-h-0 overflow-hidden" style={{ display: 'flex', flexDirection: 'column', gap: 'clamp(10px,1.4vw,20px)' }}>
+        {/* Сетка бейджей: крупные номера (как в «Готово») с красной заливкой-
+            прогрессом, без имён. Переносятся в ряды — влезает много без прокрутки,
+            размер цифр авто-уменьшается при большом числе заказов (cookFont). */}
+        <div className="flex-1 min-h-0 overflow-hidden" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', gap: 'clamp(10px,1.4vw,20px)' }}>
           {cooking.length === 0 ? (
             <p style={{ textAlign: 'center', color: '#3a424e', marginTop: '2em', fontSize: 'clamp(16px,1.6vw,24px)' }}>Нет заказов в работе</p>
           ) : (
             cooking.map(o => {
               const p = cookProgress(o, now, dataUpdatedAt)
               return (
-                <div key={o.orderNumber} style={{ background: '#141a22', borderRadius: 16, padding: 'clamp(10px,1.1vw,18px) clamp(14px,1.4vw,22px)' }}>
-                  <div style={{ color: '#fff', fontWeight: 800, lineHeight: 0.85, fontVariantNumeric: 'tabular-nums', fontSize: 'clamp(40px,5.2vw,92px)', marginBottom: '0.22em' }}>
+                <div key={o.orderNumber} style={{ position: 'relative', overflow: 'hidden', borderRadius: 16, background: '#212a36', padding: 'clamp(4px,0.6vw,12px) clamp(12px,1.6vw,26px)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {/* Красная заливка = прогресс готовки. scaleX (GPU-композит), не
+                      width — плавно и без layout-thrash. */}
+                  <span aria-hidden style={{ position: 'absolute', inset: 0, transformOrigin: 'left', transform: `scaleX(${p})`, borderRadius: 16, background: 'linear-gradient(90deg,#ff3b30,#ff6b5c)', transition: 'transform 1s linear', willChange: 'transform' }} />
+                  <span style={{ position: 'relative', zIndex: 1, color: '#fff', fontWeight: 800, fontVariantNumeric: 'tabular-nums', lineHeight: 0.9, fontSize: cookFont, textShadow: '0 2px 5px rgba(0,0,0,0.5)' }}>
                     {o.orderNumber}
-                  </div>
-                  <div style={{ height: 'clamp(12px,1.1vw,18px)', borderRadius: 9, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
-                    {/* scaleX (GPU-композит), не width — плавно и без layout-thrash;
-                        скруглённый трек с overflow:hidden обрезает прямоугольную заливку. */}
-                    <div style={{ height: '100%', width: '100%', transformOrigin: 'left', transform: `scaleX(${p})`, background: 'linear-gradient(90deg,#ff3b30,#ff6b5c)', transition: 'transform 1s linear', willChange: 'transform' }} />
-                  </div>
+                  </span>
                 </div>
               )
             })
