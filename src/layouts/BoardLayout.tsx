@@ -23,7 +23,9 @@ export function BoardLayout() {
       </div>
     )
   }
-  if (!user) return <Navigate to="/login" replace />
+  // Не залогинен → на PIN-вход, но с ?next=/board: после входа login-страница
+  // вернёт сюда, а не на домашний экран роли (иначе ТВ уезжал на кассу).
+  if (!user) return <Navigate to="/login?next=%2Fboard" replace />
   return (
     <>
       <RealtimeCacheBridge />
