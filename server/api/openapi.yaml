@@ -4229,6 +4229,7 @@ components:
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
         pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
         daily_rate: { $ref: "#/components/schemas/Decimal" }
+        pin: { type: string, description: "PIN входа в кассу. Возвращается ТОЛЬКО привилегированным ролям (owner/manager/superadmin) в GET /users и GET /users/{id} — чтобы «забыл PIN» решалось просмотром, а не перегенерацией. Для остальных ролей поле отсутствует." }
     UserInput:
       type: object
       properties:

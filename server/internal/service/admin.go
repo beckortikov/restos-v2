@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/cursor"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -31,6 +32,28 @@ import (
 type UsersService struct{ r *repo.Repo }
 
 func NewUsersService(r *repo.Repo) *UsersService { return &UsersService{r: r} }
+
+// CanSeePINs — вправе ли вызывающий видеть PIN'ы сотрудников. PIN — это данные
+// входа в кассу: увидев чужой PIN, кассир/официант смог бы войти под чужой ролью
+// и PIN-разделение ролей потеряло бы смысл. Поэтому PIN отдаём (в GET /users и
+// GET /users/{id}) только owner/manager/superadmin. Роль перечитываем из БД —
+// токен мог устареть (как в requireOwner), а на кону — учётные данные.
+func (s *UsersService) CanSeePINs(ctx context.Context) bool {
+	actor, _ := audit.ActorFromContext(ctx)
+	if actor.Role == "superadmin" {
+		return true
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return false
+	}
+	var u models.User
+	if err := s.r.Raw().WithContext(ctx).Select("role").
+		Where("restaurant_id = ? AND id = ?", rid, actor.UserID).First(&u).Error; err != nil {
+		return false
+	}
+	return u.Role != nil && (*u.Role == "owner" || *u.Role == "manager" || *u.Role == "superadmin")
+}
 
 // UserInput — body POST/PATCH /api/v1/users. На PATCH nil поля не меняются.
 type UserInput struct {

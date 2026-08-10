@@ -12416,6 +12416,8 @@ export interface components {
              */
             pay_type?: "monthly" | "daily";
             daily_rate?: components["schemas"]["Decimal"];
+            /** @description PIN входа в кассу. Возвращается ТОЛЬКО привилегированным ролям (owner/manager/superadmin) в GET /users и GET /users/{id} — чтобы «забыл PIN» решалось просмотром, а не перегенерацией. Для остальных ролей поле отсутствует. */
+            pin?: string;
         };
         UserInput: {
             name?: string;

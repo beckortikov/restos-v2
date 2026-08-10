@@ -18,6 +18,24 @@ type UsersHandler struct{ svc *service.UsersService }
 
 func NewUsers(svc *service.UsersService) *UsersHandler { return &UsersHandler{svc: svc} }
 
+// userView — пользователь + PIN для экрана «Пользователи». На модели PIN скрыт
+// (json:"-"), чтобы не течь в остальных ответах (логин, инфо об официанте).
+// Здесь PIN включаем ТОЛЬКО когда вызывающий вправе его видеть (CanSeePINs) —
+// чтобы «забыл PIN» решалось просмотром, а не перегенерацией. Для остальных
+// ролей поле пустое и omitempty его выкинет.
+type userView struct {
+	models.User
+	Pin string `json:"pin,omitempty"`
+}
+
+func toUserView(u models.User, withPIN bool) userView {
+	v := userView{User: u}
+	if withPIN && u.PIN != nil {
+		v.Pin = *u.PIN
+	}
+	return v
+}
+
 func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.List(r.Context(), service.UsersFilter{
 		RestaurantID: queryString(r, "restaurant_id"),
@@ -26,7 +44,12 @@ func (h *UsersHandler) List(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, err)
 		return
 	}
-	respond.JSON(w, http.StatusOK, makeList[models.User](rows, ""))
+	withPIN := h.svc.CanSeePINs(r.Context())
+	views := make([]userView, len(rows))
+	for i := range rows {
+		views[i] = toUserView(rows[i], withPIN)
+	}
+	respond.JSON(w, http.StatusOK, makeList[userView](views, ""))
 }
 
 // ValidatePIN — POST /api/v1/users/validate-pin.
@@ -70,7 +93,7 @@ func (h *UsersHandler) Get(w http.ResponseWriter, r *http.Request) {
 		respond.Error(w, err)
 		return
 	}
-	respond.JSON(w, http.StatusOK, u)
+	respond.JSON(w, http.StatusOK, toUserView(*u, h.svc.CanSeePINs(r.Context())))
 }
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var in service.UserInput
