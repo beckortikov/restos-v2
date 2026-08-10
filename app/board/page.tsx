@@ -13,7 +13,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { fetchKdsItems } from '@/lib/queries'
+import { fetchKdsItems, fetchRestaurantById } from '@/lib/queries'
+import { useAuth } from '@/lib/auth-store'
 import { Maximize2 } from 'lucide-react'
 import { aggregate, cookProgress, splitBoard } from './board-logic'
 
@@ -51,6 +52,18 @@ export default function BoardPage() {
     queryFn: () => fetchKdsItems(['pending', 'cooking', 'ready']),
     refetchInterval: 15_000, // страховка, если SSE пропустит событие
   })
+
+  // Логотип ресторана (грузит владелец в Настройках → сохраняется в
+  // restaurants.logo_url). Стоит фоном за колонкой «Готово» и не убирается.
+  const { user } = useAuth()
+  const rid = user?.restaurantId
+  const { data: restaurant } = useQuery({
+    queryKey: ['restaurant', rid],
+    queryFn: () => fetchRestaurantById(rid!),
+    enabled: !!rid,
+    staleTime: 5 * 60_000,
+  })
+  const boardLogo = restaurant?.logoUrl || ''
 
   // Тик для «оживления» полос прогресса (перерисовываем каждые 5 с).
   const [now, setNow] = useState(() => Date.now())
@@ -107,11 +120,17 @@ export default function BoardPage() {
       </section>
 
       {/* ─── Готово ─── */}
-      <section className="min-h-0 flex flex-col" style={{ padding: 'clamp(16px,2vw,32px)', background: 'linear-gradient(180deg,rgba(34,197,94,0.10),rgba(34,197,94,0.03))' }}>
-        <h2 style={{ textAlign: 'center', color: '#34d17f', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', fontSize: 'clamp(20px,2.2vw,34px)', paddingBottom: '0.5em', marginBottom: '0.7em', borderBottom: '2px solid rgba(52,209,127,0.3)' }}>
+      <section className="min-h-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden', padding: 'clamp(16px,2vw,32px)', background: 'linear-gradient(180deg,rgba(34,197,94,0.10),rgba(34,197,94,0.03))' }}>
+        {/* Логотип ресторана — фоновый слой: всегда позади номеров, не убирается. */}
+        {boardLogo && (
+          <div aria-hidden style={{ position: 'absolute', inset: 0, zIndex: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.13, pointerEvents: 'none' }}>
+            <img src={boardLogo} alt="" style={{ maxWidth: '62%', maxHeight: '70%', objectFit: 'contain' }} />
+          </div>
+        )}
+        <h2 style={{ position: 'relative', zIndex: 1, textAlign: 'center', color: '#34d17f', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', fontSize: 'clamp(20px,2.2vw,34px)', paddingBottom: '0.5em', marginBottom: '0.7em', borderBottom: '2px solid rgba(52,209,127,0.3)' }}>
           Готово
         </h2>
-        <div className="flex-1 min-h-0 overflow-hidden" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', alignItems: 'center', gap: 'clamp(14px,1.6vw,28px)' }}>
+        <div className="flex-1 min-h-0 overflow-hidden" style={{ position: 'relative', zIndex: 1, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', alignItems: 'center', gap: 'clamp(14px,1.6vw,28px)' }}>
           {ready.length === 0 ? (
             <p style={{ color: '#2e6b46', fontSize: 'clamp(16px,1.6vw,24px)' }}>Готовых заказов нет</p>
           ) : (

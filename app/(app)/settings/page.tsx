@@ -10,7 +10,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import * as Sentry from '@sentry/react'
-import { Building2, Save, RefreshCw, Copy, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { Building2, Save, RefreshCw, Copy, ChevronDown, ChevronRight, X, ImagePlus } from 'lucide-react'
 import type { Restaurant } from '@/lib/types'
 
 // ─── Reusable bits ───────────────────────────────────────────────────────────
@@ -61,6 +61,35 @@ function ToggleRow({ title, hint, checked, onChange, disabled }: { title: string
 
 const inputCls = 'w-full px-2.5 py-1.5 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/30'
 
+// fileToLogoDataUrl — картинка логотипа → сжатый PNG data-URI (не файл на диске:
+// v4 локальный, без облачного хранилища — храним прямо в restaurants.logo_url).
+// Ужимаем до maxSize px по большей стороне, PNG сохраняет прозрачность (белый
+// логотип на прозрачном фоне чисто ложится на тёмное табло).
+async function fileToLogoDataUrl(file: File, maxSize = 420): Promise<string> {
+  const src = await new Promise<string>((resolve, reject) => {
+    const fr = new FileReader()
+    fr.onload = () => resolve(String(fr.result))
+    fr.onerror = () => reject(fr.error)
+    fr.readAsDataURL(file)
+  })
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const im = new Image()
+    im.onload = () => resolve(im)
+    im.onerror = () => reject(new Error('bad image'))
+    im.src = src
+  })
+  const scale = Math.min(1, maxSize / Math.max(img.width, img.height))
+  const w = Math.max(1, Math.round(img.width * scale))
+  const h = Math.max(1, Math.round(img.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return src
+  ctx.drawImage(img, 0, 0, w, h)
+  return canvas.toDataURL('image/png')
+}
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -69,6 +98,8 @@ export default function SettingsPage() {
   const [name, setName] = useState('')
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
+  const [logoBusy, setLogoBusy] = useState(false)
   const [servicePercent, setServicePercent] = useState(10)
   const [discountApprovalThreshold, setDiscountApprovalThreshold] = useState(10)
   const [enforceStockCheck, setEnforceStockCheck] = useState(false)
@@ -102,6 +133,7 @@ export default function SettingsPage() {
           setName(r.name)
           setAddress(r.address || '')
           setPhone(r.phone || '')
+          setLogoUrl(r.logoUrl || '')
           setServicePercent(r.servicePercent)
           setDiscountApprovalThreshold(r.discountApprovalThreshold ?? 10)
           setEnforceStockCheck(r.enforceStockCheck ?? false)
@@ -148,12 +180,31 @@ export default function SettingsPage() {
     )
   }
 
+  const handleLogoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // позволяем выбрать тот же файл повторно
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Нужен файл-картинка (PNG, JPG, SVG)')
+      return
+    }
+    setLogoBusy(true)
+    try {
+      setLogoUrl(await fileToLogoDataUrl(file))
+      toast.success('Логотип загружен — нажмите «Сохранить»')
+    } catch {
+      toast.error('Не удалось обработать картинку')
+    } finally {
+      setLogoBusy(false)
+    }
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
+      await updateRestaurantQuery(rest.id, { name, logoUrl, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
+      const updated = { ...rest, name, logoUrl, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -181,6 +232,7 @@ export default function SettingsPage() {
     setName(rest.name)
     setAddress(rest.address || '')
     setPhone(rest.phone || '')
+    setLogoUrl(rest.logoUrl || '')
     setServicePercent(rest.servicePercent)
     setDiscountApprovalThreshold(rest.discountApprovalThreshold ?? 10)
     setEnforceStockCheck(rest.enforceStockCheck ?? false)
@@ -273,6 +325,32 @@ export default function SettingsPage() {
                 inputMode="tel"
                 className={inputCls}
               />
+            </Field>
+          </Card>
+
+          {/* Логотип */}
+          <Card title="Логотип">
+            <Field label="Логотип для табло выдачи" hint="Стоит фоном за колонкой «Готово» на ТВ-табло /board и не убирается. Лучше PNG с прозрачным фоном — на тёмном экране ляжет чисто.">
+              <div className="flex items-center gap-3">
+                <div className="size-20 rounded-lg border border-border flex items-center justify-center overflow-hidden shrink-0" style={{ background: '#0b0e13' }}>
+                  {logoUrl
+                    ? <img src={logoUrl} alt="Логотип" className="max-w-full max-h-full object-contain" />
+                    : <span className="text-[10px] text-muted-foreground">нет</span>}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className={`inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted transition-colors cursor-pointer ${logoBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <ImagePlus className="size-3.5" />
+                    {logoBusy ? 'Обработка…' : (logoUrl ? 'Заменить' : 'Загрузить')}
+                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoPick} disabled={logoBusy} />
+                  </label>
+                  {logoUrl && (
+                    <button type="button" onClick={() => setLogoUrl('')} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors">
+                      <X className="size-3.5" />
+                      Убрать
+                    </button>
+                  )}
+                </div>
+              </div>
             </Field>
           </Card>
 
