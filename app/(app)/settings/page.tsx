@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { updateRestaurant as updateRestaurantQuery, fetchRestaurantById } from '@/lib/queries'
+import { updateRestaurant as updateRestaurantQuery, fetchRestaurantById, fetchKdsStations } from '@/lib/queries'
 import { clearRestaurantOperations, clearRestaurantMenu } from '@/lib/queries'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -90,6 +90,13 @@ async function fileToLogoDataUrl(file: File, maxSize = 420): Promise<string> {
   return canvas.toDataURL('image/png')
 }
 
+// Человекочитаемые метки станций кухни (ключи из menu_items.station).
+const STATION_LABELS: Record<string, string> = {
+  hot_kitchen: 'Горячий цех', cold_kitchen: 'Холодный цех', grill: 'Гриль',
+  bar: 'Бар', bakery: 'Пекарня', pizza: 'Пицца', sushi: 'Суши', drinks: 'Напитки',
+}
+const stationLabel = (s: string) => STATION_LABELS[s] || s
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -100,6 +107,9 @@ export default function SettingsPage() {
   const [phone, setPhone] = useState('')
   const [logoUrl, setLogoUrl] = useState('')
   const [logoBusy, setLogoBusy] = useState(false)
+  const [boardLogoOpacity, setBoardLogoOpacity] = useState(13)
+  const [boardStations, setBoardStations] = useState<string[]>([])
+  const [availableStations, setAvailableStations] = useState<string[]>([])
   const [servicePercent, setServicePercent] = useState(10)
   const [discountApprovalThreshold, setDiscountApprovalThreshold] = useState(10)
   const [enforceStockCheck, setEnforceStockCheck] = useState(false)
@@ -134,6 +144,8 @@ export default function SettingsPage() {
           setAddress(r.address || '')
           setPhone(r.phone || '')
           setLogoUrl(r.logoUrl || '')
+          setBoardLogoOpacity(r.boardLogoOpacity ?? 13)
+          setBoardStations((r.boardStations || '').split(',').map(s => s.trim()).filter(Boolean))
           setServicePercent(r.servicePercent)
           setDiscountApprovalThreshold(r.discountApprovalThreshold ?? 10)
           setEnforceStockCheck(r.enforceStockCheck ?? false)
@@ -155,6 +167,11 @@ export default function SettingsPage() {
       .finally(() => setLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctxRestaurant?.id, user?.restaurantId])
+
+  // Станции кухни — для выбора «какие показывать на табло выдачи».
+  useEffect(() => {
+    fetchKdsStations().then(setAvailableStations).catch(() => {})
+  }, [])
 
   if (!canAccessRoles(['manager'])) {
     return (
@@ -202,9 +219,9 @@ export default function SettingsPage() {
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, logoUrl, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
+      await updateRestaurantQuery(rest.id, { name, logoUrl, boardLogoOpacity, boardStations: boardStations.join(','), address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, logoUrl, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
+      const updated = { ...rest, name, logoUrl, boardLogoOpacity, boardStations: boardStations.join(','), address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -233,6 +250,8 @@ export default function SettingsPage() {
     setAddress(rest.address || '')
     setPhone(rest.phone || '')
     setLogoUrl(rest.logoUrl || '')
+    setBoardLogoOpacity(rest.boardLogoOpacity ?? 13)
+    setBoardStations((rest.boardStations || '').split(',').map(s => s.trim()).filter(Boolean))
     setServicePercent(rest.servicePercent)
     setDiscountApprovalThreshold(rest.discountApprovalThreshold ?? 10)
     setEnforceStockCheck(rest.enforceStockCheck ?? false)
@@ -328,9 +347,9 @@ export default function SettingsPage() {
             </Field>
           </Card>
 
-          {/* Логотип */}
-          <Card title="Логотип">
-            <Field label="Логотип для табло выдачи" hint="Стоит фоном за колонкой «Готово» на ТВ-табло /board и не убирается. Лучше PNG с прозрачным фоном — на тёмном экране ляжет чисто.">
+          {/* Табло выдачи */}
+          <Card title="Табло выдачи (/board)">
+            <Field label="Логотип-фон" hint="Стоит фоном за колонкой «Готово» на ТВ-табло и не убирается. Лучше PNG с прозрачным фоном — на тёмном экране ляжет чисто.">
               <div className="flex items-center gap-3">
                 <div className="size-20 rounded-lg border border-border flex items-center justify-center overflow-hidden shrink-0" style={{ background: '#0b0e13' }}>
                   {logoUrl
@@ -351,6 +370,39 @@ export default function SettingsPage() {
                   )}
                 </div>
               </div>
+            </Field>
+
+            <Field label={`Яркость фона — ${boardLogoOpacity}%`} hint="Насколько заметен логотип позади номеров. Больше — ярче.">
+              <input
+                type="range"
+                min={3}
+                max={30}
+                value={boardLogoOpacity}
+                onChange={e => setBoardLogoOpacity(Number(e.target.value))}
+                className="w-full accent-primary"
+              />
+            </Field>
+
+            <Field label="Показывать станции" hint="Как на кухонном планшете. Ничего не выбрано = все станции. Выбери те же станции, что на планшете кухни, — тогда на табло не будут висеть «чужие» заказы, которых нет на кухне.">
+              {availableStations.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">Станции появятся, когда у блюд будут заданы станции (в меню).</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {availableStations.map(st => {
+                    const on = boardStations.includes(st)
+                    return (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setBoardStations(p => on ? p.filter(x => x !== st) : [...p, st])}
+                        className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${on ? 'bg-primary text-primary-foreground border-primary' : 'bg-background border-border text-foreground hover:bg-muted'}`}
+                      >
+                        {stationLabel(st)}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </Field>
           </Card>
 

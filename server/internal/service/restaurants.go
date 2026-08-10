@@ -51,6 +51,10 @@ type RestaurantCreateInput struct {
 	DeliveryContactsRequired *bool `json:"delivery_contacts_required,omitempty"`
 	// Сортировать меню по продаваемости (060). Default false → алфавит.
 	MenuSortBySales *bool `json:"menu_sort_by_sales,omitempty"`
+	// Табло выдачи /board (072). BoardStations — CSV станций (пусто = все).
+	// BoardLogoOpacity — яркость логотипа-фона, проценты 0–100.
+	BoardStations    *string `json:"board_stations,omitempty"`
+	BoardLogoOpacity *int    `json:"board_logo_opacity,omitempty"`
 }
 
 func (s *RestaurantsService) List(ctx context.Context) ([]models.Restaurant, error) {
@@ -218,6 +222,18 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 	}
 	if in.DeliveryContactsRequired != nil {
 		updates["delivery_contacts_required"] = *in.DeliveryContactsRequired
+	}
+	if in.BoardStations != nil {
+		updates["board_stations"] = *in.BoardStations
+	}
+	if in.BoardLogoOpacity != nil {
+		op := *in.BoardLogoOpacity
+		if op < 0 {
+			op = 0
+		} else if op > 100 {
+			op = 100
+		}
+		updates["board_logo_opacity"] = op
 	}
 	if err := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
 		Where("id = ?", id).Updates(updates).Error; err != nil {

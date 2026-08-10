@@ -47,14 +47,8 @@ function playChime() {
 }
 
 export default function BoardPage() {
-  const { data: items = [], dataUpdatedAt } = useQuery({
-    queryKey: ['kds', 'board'],
-    queryFn: () => fetchKdsItems(['pending', 'cooking', 'ready']),
-    refetchInterval: 15_000, // страховка, если SSE пропустит событие
-  })
-
-  // Логотип ресторана (грузит владелец в Настройках → сохраняется в
-  // restaurants.logo_url). Стоит фоном за колонкой «Готово» и не убирается.
+  // Настройки табло владелец задаёт в разделе «Табло выдачи» (Настройки) →
+  // хранятся на ресторане: логотип-фон + его яркость + какие станции показывать.
   const { user } = useAuth()
   const rid = user?.restaurantId
   const { data: restaurant } = useQuery({
@@ -64,6 +58,21 @@ export default function BoardPage() {
     staleTime: 5 * 60_000,
   })
   const boardLogo = restaurant?.logoUrl || ''
+  const logoOpacity = (restaurant?.boardLogoOpacity ?? 13) / 100
+  // Станции для показа (как у кухонного планшета); пусто = все. Фильтруем ими
+  // KDS-выборку, чтобы табло показывало ровно то, что ведёт кухня, а заказы
+  // «чужих» станций не висели призраками.
+  const stations = useMemo(
+    () => (restaurant?.boardStations || '').split(',').map(s => s.trim()).filter(Boolean),
+    [restaurant?.boardStations],
+  )
+  const stationsCsv = stations.join(',')
+
+  const { data: items = [], dataUpdatedAt } = useQuery({
+    queryKey: ['kds', 'board', stationsCsv],
+    queryFn: () => fetchKdsItems(['pending', 'cooking', 'ready'], stations.length ? stations : undefined),
+    refetchInterval: 15_000, // страховка, если SSE пропустит событие
+  })
 
   // Тик для «оживления» полос прогресса (перерисовываем каждые 5 с).
   const [now, setNow] = useState(() => Date.now())
@@ -123,7 +132,7 @@ export default function BoardPage() {
       <section className="min-h-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden', padding: 'clamp(16px,2vw,32px)', background: 'linear-gradient(180deg,rgba(34,197,94,0.10),rgba(34,197,94,0.03))' }}>
         {/* Логотип ресторана — фоновый слой: всегда позади номеров, не убирается. */}
         {boardLogo && (
-          <div aria-hidden style={{ position: 'absolute', inset: 0, zIndex: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0.13, pointerEvents: 'none' }}>
+          <div aria-hidden style={{ position: 'absolute', inset: 0, zIndex: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: logoOpacity, pointerEvents: 'none' }}>
             <img src={boardLogo} alt="" style={{ maxWidth: '62%', maxHeight: '70%', objectFit: 'contain' }} />
           </div>
         )}

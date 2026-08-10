@@ -23,11 +23,14 @@ export interface KdsBoardItem {
 }
 
 // fetchKdsItems — позиции «в работе» для кухонной доски. statuses — CSV-фильтр
-// (пусто = дефолт бэка «в работе»). Для табло берём pending,cooking,ready:
-// served уходит из выдачи, как только повар отметил «Выдан».
-export async function fetchKdsItems(statuses?: string[]): Promise<KdsBoardItem[]> {
-  const query = statuses && statuses.length ? { status: statuses.join(',') } : undefined
-  const res: any = await unwrap(api.GET('/api/v1/kds/items', { params: { query: query as any } }))
+// (пусто = дефолт бэка «в работе»). stations — CSV станций (пусто = все); табло
+// выдачи фильтрует ими, чтобы показывать ровно то же, что кухонный планшет.
+// Для табло берём pending,cooking,ready: served уходит, как только «Выдан».
+export async function fetchKdsItems(statuses?: string[], stations?: string[]): Promise<KdsBoardItem[]> {
+  const query: Record<string, string> = {}
+  if (statuses && statuses.length) query.status = statuses.join(',')
+  if (stations && stations.length) query.stations = stations.join(',')
+  const res: any = await unwrap(api.GET('/api/v1/kds/items', { params: { query: (Object.keys(query).length ? query : undefined) as any } }))
   const rows: any[] = Array.isArray(res?.data) ? res.data : []
   return rows.map(r => ({
     id: r.id,
@@ -41,4 +44,11 @@ export async function fetchKdsItems(statuses?: string[]): Promise<KdsBoardItem[]
     statusAt: r.status_at ?? r.created_at ?? '',
     ageSeconds: typeof r.age_seconds === 'number' ? r.age_seconds : 0,
   }))
+}
+
+// fetchKdsStations — станции ресторана (уникальные menu_items.station). Нужны
+// для выбора «какие станции показывать на табло» в настройках.
+export async function fetchKdsStations(): Promise<string[]> {
+  const res: any = await unwrap(api.GET('/api/v1/kds/stations'))
+  return Array.isArray(res?.data) ? res.data.filter((s: any) => typeof s === 'string' && s) : []
 }

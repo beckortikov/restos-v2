@@ -56,6 +56,11 @@ var schemaSelfHealStmts = []string{
 	// без неё отчёт зарплаты и отмена падают.
 	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`,
 	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS cancelled_by TEXT`,
+	// 072: настройки ТВ-табло выдачи. restaurants читается на каждом старте
+	// (auth-контекст, настройки, табло) — при дрейфе SELECT по модели с новыми
+	// полями иначе не досчитается колонок; гарантируем до-наличие.
+	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS board_stations     TEXT`,
+	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS board_logo_opacity INTEGER`,
 	`CREATE TABLE IF NOT EXISTS salary_deductions (
 		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		restaurant_id TEXT,
