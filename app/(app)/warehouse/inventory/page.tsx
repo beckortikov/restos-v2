@@ -10,7 +10,7 @@ import { fetchIngredients, fetchIngredientCategories, createIngredient, updateIn
 import { queryKeys } from '@/lib/query-client'
 import { humanizeError } from '@/lib/errors'
 
-import { Search, Plus, Trash2, X, Check, ArrowRightLeft, ShoppingCart, Pencil, PackageMinus, ChevronRight, Download } from 'lucide-react'
+import { Search, Plus, Trash2, X, Check, ArrowRightLeft, ShoppingCart, Pencil, PackageMinus, ChevronRight, Download, Layers } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { ManageIngredientDialog } from '@/components/dialogs/manage-ingredient-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -43,6 +43,7 @@ export default function InventoryPage() {
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleting, setDeleting] = useState(false)
+  const [dupOpen, setDupOpen] = useState(false)
 
   const qc = useQueryClient()
   const CATS_KEY = ['stock', 'ingredient-categories'] as const
@@ -156,6 +157,18 @@ export default function InventoryPage() {
   const lowCount = tabItems.filter(i => i.qty > 0 && i.minQty > 0 && i.qty <= i.minQty).length
   const outCount = tabItems.filter(i => i.qty <= 0).length
   const totalValue = tabItems.reduce((s, i) => s + (i.qty > 0 ? i.qty * i.pricePerUnit : 0), 0)
+  // Дубликаты в текущем складе: одинаковое имя (без регистра/пробелов) у 2+
+  // позиций. Обычно из двойного импорта (один товар заведён в двух категориях).
+  const duplicateGroups = (() => {
+    const byName = new Map<string, Ingredient[]>()
+    for (const i of tabItems) {
+      const key = i.name.trim().toLowerCase()
+      const arr = byName.get(key)
+      if (arr) arr.push(i)
+      else byName.set(key, [i])
+    }
+    return [...byName.values()].filter(g => g.length > 1).sort((a, b) => a[0].name.localeCompare(b[0].name, 'ru'))
+  })()
 
   const filtered = tabItems.filter((i) => {
     if (!i.name.toLowerCase().includes(search.toLowerCase())) return false
@@ -234,6 +247,12 @@ export default function InventoryPage() {
                 className="flex items-center justify-center bg-card border border-border text-muted-foreground size-9 rounded-lg hover:bg-muted transition-colors disabled:opacity-40">
                 <Download className="size-4" />
               </button>
+              {duplicateGroups.length > 0 && (
+                <button onClick={() => setDupOpen(true)} title="Найти и убрать дубликаты"
+                  className="flex items-center gap-1.5 bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-400 border border-amber-200 dark:border-amber-500/30 px-3 py-2 rounded-lg text-sm font-medium hover:bg-amber-200/70 dark:hover:bg-amber-500/25 transition-colors">
+                  <Layers className="size-4" />Дубликаты {duplicateGroups.length}
+                </button>
+              )}
               <button onClick={() => setSelectMode(true)} title="Выбрать и удалить несколько"
                 className="flex items-center justify-center bg-card border border-border text-muted-foreground size-9 rounded-lg hover:bg-muted transition-colors">
                 <Trash2 className="size-4" />
@@ -393,6 +412,46 @@ export default function InventoryPage() {
               )
             })}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Дубликаты — одинаковые названия в текущем складе; лишние удаляем по одному */}
+      <Dialog open={dupOpen} onOpenChange={setDupOpen}>
+        <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Дубликаты · {WH_TABS.find(t => t.kind === whKind)?.label}</DialogTitle>
+          </DialogHeader>
+          {duplicateGroups.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">Дубликатов нет</p>
+          ) : (
+            <div className="overflow-y-auto flex-1 min-h-0 space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Одинаковые названия — обычно из двойного импорта. Оставь нужную позицию, лишние удали (у покупных удалится и блюдо; остаток спишется).
+              </p>
+              {duplicateGroups.map(group => (
+                <div key={group[0].name.trim().toLowerCase()} className="border border-border rounded-xl overflow-hidden">
+                  <div className="px-3 py-2 bg-muted/40 text-sm font-semibold text-foreground flex items-center justify-between gap-2">
+                    <span className="truncate">{group[0].name}</span>
+                    <span className="text-xs text-muted-foreground shrink-0">{group.length} шт.</span>
+                  </div>
+                  <div className="divide-y divide-border">
+                    {group.map(ing => (
+                      <div key={ing.id} className="flex items-center gap-3 px-3 py-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-foreground truncate">{ing.category || 'Без категории'}</p>
+                          <p className="text-[11px] text-muted-foreground">{formatNum(ing.qty)} {ing.unit} · {formatCurrency(ing.pricePerUnit)}/{ing.unit}</p>
+                        </div>
+                        <button onClick={() => deleteOne(ing)}
+                          className="flex items-center gap-1 text-xs font-medium text-destructive border border-destructive/30 rounded-md px-2.5 py-1.5 hover:bg-destructive/10 transition-colors shrink-0">
+                          <Trash2 className="size-3.5" />Удалить
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
