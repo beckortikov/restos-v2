@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchKdsItems, fetchRestaurantById } from '@/lib/queries'
 import { useAuth } from '@/lib/auth-store'
-import { Maximize2 } from 'lucide-react'
+import { Maximize2, Volume2 } from 'lucide-react'
 import { aggregate, cookProgress, splitBoard } from './board-logic'
 
 let audioCtx: AudioContext | null = null
@@ -27,11 +27,12 @@ function beep(freq: number, at: number, ctx: AudioContext) {
   o.type = 'sine'
   o.frequency.value = freq
   g.gain.setValueAtTime(0.0001, at)
-  g.gain.exponentialRampToValueAtTime(0.35, at + 0.02)
-  g.gain.exponentialRampToValueAtTime(0.0001, at + 0.45)
+  g.gain.exponentialRampToValueAtTime(0.4, at + 0.02)
+  g.gain.exponentialRampToValueAtTime(0.0001, at + 0.5)
   o.start(at)
-  o.stop(at + 0.45)
+  o.stop(at + 0.5)
 }
+// Восходящий трёхнотный сигнал — заметнее через зал, чем один «бип».
 function playChime() {
   try {
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -39,8 +40,9 @@ function playChime() {
     if (!audioCtx) audioCtx = new Ctx()
     const ctx = audioCtx
     if (ctx.state === 'suspended') ctx.resume().catch(() => {})
-    beep(880, ctx.currentTime, ctx)
-    beep(1175, ctx.currentTime + 0.18, ctx)
+    beep(784, ctx.currentTime, ctx) // соль
+    beep(988, ctx.currentTime + 0.16, ctx) // си
+    beep(1319, ctx.currentTime + 0.32, ctx) // ми (октавой выше)
   } catch {
     /* автоплей заблокирован до взаимодействия — не критично */
   }
@@ -79,6 +81,32 @@ export default function BoardPage() {
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 5000)
     return () => clearInterval(id)
+  }, [])
+
+  // Разблокировка звука. Браузеры не дают проиграть звук, пока по странице не
+  // было ни одного касания/клика — на ТВ, который сам открыл /board, первый
+  // сигнал иначе будет молчать. По первому взаимодействию (в т.ч. по кнопке-
+  // подсказке ниже) создаём/резюмируем AudioContext и прячем подсказку.
+  const [soundReady, setSoundReady] = useState(false)
+  useEffect(() => {
+    const unlock = () => {
+      try {
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        if (Ctx) {
+          if (!audioCtx) audioCtx = new Ctx()
+          audioCtx.resume().catch(() => {})
+        }
+      } catch { /* нет Web Audio — не критично */ }
+      setSoundReady(true)
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
   }, [])
 
   const { cooking, ready } = useMemo(() => splitBoard(aggregate(items)), [items])
@@ -188,6 +216,19 @@ export default function BoardPage() {
       >
         <Maximize2 style={{ width: 18, height: 18 }} />
       </button>
+
+      {/* Подсказка «включить звук»: браузер не даст сигналу зазвучать до первого
+          касания. Показываем, пока звук не разблокирован; тап проигрывает
+          подтверждающий сигнал, а глобальный обработчик прячет подсказку. */}
+      {!soundReady && (
+        <button
+          onClick={() => playChime()}
+          style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(34,197,94,0.16)', color: '#a7f3c0', border: '1px solid rgba(52,209,127,0.4)', borderRadius: 999, padding: '10px 22px', fontSize: 'clamp(13px,1.4vw,18px)', fontWeight: 600, cursor: 'pointer' }}
+        >
+          <Volume2 style={{ width: 18, height: 18 }} />
+          Нажмите один раз, чтобы включить звук
+        </button>
+      )}
     </div>
   )
 }
