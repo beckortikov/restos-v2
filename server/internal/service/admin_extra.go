@@ -1123,6 +1123,11 @@ func (s *TechCardsService) List(ctx context.Context, menuItemID string) ([]model
 	return rows, nil
 }
 
+// Create — POST /menu/tech-cards. Пишет строку и в той же транзакции
+// пересчитывает menu_items.cogs блюда (см. recomputeMenuItemCogs,
+// menu_cogs.go) — иначе себестоимость осталась бы "замороженной" на
+// последнем ручном/импортном значении, расходясь с тем, что реально показано
+// на экране блюда.
 func (s *TechCardsService) Create(ctx context.Context, in TechCardLineInput) (*models.TechCardLine, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
@@ -1148,14 +1153,27 @@ func (s *TechCardsService) Create(ctx context.Context, in TechCardLineInput) (*m
 		}
 		l.Qty = d
 	}
-	scoped, _ := s.r.ForTenant(ctx)
-	if err := scoped.Create(l).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Create(l).Error; err != nil {
+			return err
+		}
+		recomputeMenuItemCogs(tx, rid, *in.MenuItemID, now)
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return l, nil
 }
 
+// Patch — PATCH /menu/tech-cards/{id}. Тот же пересчёт cogs, что и Create,
+// после применения изменений строки.
 func (s *TechCardsService) Patch(ctx context.Context, id string, in TechCardLineInput) (*models.TechCardLine, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return nil, err
@@ -1190,31 +1208,61 @@ func (s *TechCardsService) Patch(ctx context.Context, id string, in TechCardLine
 	if len(updates) == 0 {
 		return &existing, nil
 	}
-	scoped2, _ := s.r.ForTenant(ctx)
-	if err := scoped2.Model(&existing).Updates(updates).Error; err != nil {
-		return nil, err
-	}
-	scoped3, _ := s.r.ForTenant(ctx)
+	now := time.Now().UTC()
 	var out models.TechCardLine
-	if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Model(&existing).Updates(updates).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id = ?", id).First(&out).Error; err != nil {
+			return err
+		}
+		if existing.MenuItemID != nil {
+			recomputeMenuItemCogs(tx, rid, *existing.MenuItemID, now)
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
+// Delete — DELETE /menu/tech-cards/{id}. Пересчитывает cogs блюда ПОСЛЕ
+// удаления строки (если строк не осталось — recomputeMenuItemCogs не находит
+// что считать и оставляет cogs как есть, не обнуляя себестоимость блюда).
 func (s *TechCardsService) Delete(ctx context.Context, id string) error {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return err
 	}
-	res := scoped.Where("id = ?", id).Delete(&models.TechCardLine{})
-	if res.Error != nil {
-		return res.Error
+	var existing models.TechCardLine
+	if err := scoped.Where("id = ?", id).First(&existing).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return apperrors.ErrNotFound
+		}
+		return err
 	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	now := time.Now().UTC()
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		res := tx.Where("id = ?", id).Delete(&models.TechCardLine{})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		if existing.MenuItemID != nil {
+			recomputeMenuItemCogs(tx, rid, *existing.MenuItemID, now)
+		}
+		return nil
+	})
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

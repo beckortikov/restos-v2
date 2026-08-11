@@ -18,7 +18,6 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/stockcheck"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
-	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -1349,89 +1348,19 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
-// techCardCogs — себестоимость блюда по тех-карте: Σ (расход × цена ингредиента)
-// + Σ (расход × себестоимость полуфабриката). С конвертацией единиц
-// (units.Convert/ConvertToStock) и учётом waste ингредиентов (1/(1-waste/100)).
-// Зеркало фронтового calcCogsFromTechCard (lib/queries/_mappers.ts). Полуфабрикаты
-// (semi_type_id) берутся по price_per_unit из semi_finished_stock — их yield уже
-// зашит в эту цену, поэтому waste к ним не применяется. 0 — если тех-карты/цен нет.
+// techCardCogs — себестоимость блюда по тех-карте: разовая оценка для
+// order_item.cogs, когда сохранённая menu_items.cogs ещё не задана (см.
+// вызов ниже). Формула и guard несводимых единиц — общее ядро в
+// menu_cogs.go (computeTechCardCogsFor), используемое также при автопересчёте
+// menu_items.cogs (recomputeMenuItemCogs). 0 — если тех-карты/цен нет, или
+// какая-то строка не сводится в складскую единицу (см. computeTechCardCogsLines).
 func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
 	if mi.RestaurantID == nil {
 		return decimal.Zero
 	}
-	var lines []models.TechCardLine
-	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", *mi.RestaurantID, mi.ID).
-		Find(&lines).Error; err != nil {
+	res := computeTechCardCogsFor(tx, *mi.RestaurantID, mi.ID)
+	if res.skipped > 0 {
 		return decimal.Zero
 	}
-	ingIDs := make([]string, 0, len(lines))
-	semiIDs := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if l.IngredientID != nil && *l.IngredientID != "" {
-			ingIDs = append(ingIDs, *l.IngredientID)
-		} else if l.SemiTypeID != nil && *l.SemiTypeID != "" {
-			semiIDs = append(semiIDs, *l.SemiTypeID)
-		}
-	}
-	if len(ingIDs) == 0 && len(semiIDs) == 0 {
-		return decimal.Zero
-	}
-	byID := make(map[string]models.Ingredient, len(ingIDs))
-	if len(ingIDs) > 0 {
-		var ings []models.Ingredient
-		if err := tx.Where("id IN ?", ingIDs).Find(&ings).Error; err != nil {
-			return decimal.Zero
-		}
-		for _, i := range ings {
-			byID[i.ID] = i
-		}
-	}
-	// Себестоимость полуфабрикатов: price_per_unit + unit из semi_finished_stock
-	// (одна строка остатка на semi_type в ресторане). last-wins, если строк
-	// несколько.
-	type semiCost struct {
-		price decimal.Decimal
-		unit  string
-	}
-	semiByType := make(map[string]semiCost, len(semiIDs))
-	if len(semiIDs) > 0 {
-		var stocks []models.SemiFinishedStock
-		if err := tx.Where("restaurant_id = ? AND semi_type_id IN ?", *mi.RestaurantID, semiIDs).
-			Find(&stocks).Error; err == nil {
-			for _, s := range stocks {
-				if s.SemiTypeID != nil {
-					semiByType[*s.SemiTypeID] = semiCost{price: s.PricePerUnit, unit: deref(s.Unit)}
-				}
-			}
-		}
-	}
-	hundred := decimal.FromInt(100)
-	one := decimal.FromInt(1)
-	total := decimal.Zero
-	for _, l := range lines {
-		switch {
-		case l.IngredientID != nil && *l.IngredientID != "":
-			ing, ok := byID[*l.IngredientID]
-			if !ok {
-				continue
-			}
-			qty := l.Qty
-			if ing.WastePercent.IsPositive() {
-				divisor := decimal.Sub(one, decimal.DivRound(ing.WastePercent, hundred))
-				if divisor.IsPositive() {
-					qty = decimal.DivRound(qty, divisor)
-				}
-			}
-			qtyStock := units.ConvertToStock(qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
-			total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
-		case l.SemiTypeID != nil && *l.SemiTypeID != "":
-			sc, ok := semiByType[*l.SemiTypeID]
-			if !ok || !sc.price.IsPositive() {
-				continue
-			}
-			qtyStock := units.Convert(l.Qty, deref(l.Unit), sc.unit)
-			total = decimal.Add(total, decimal.Mul(qtyStock, sc.price))
-		}
-	}
-	return decimal.Normalize(total)
+	return res.total
 }

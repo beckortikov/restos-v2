@@ -562,6 +562,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/menu/recompute-cogs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Разовый пересчёт себестоимости всех блюд с тех-картой (Manager)
+         * @description Пересчитывает menu_items.cogs из tech_card_lines по текущим ценам ингредиентов/полуфабрикатов — тот же расчёт, что срабатывает автоматически при изменении тех-карты/цены, но для блюд, у которых cogs мог "замёрзнуть" до появления автопересчёта (импорт, старые правки). Строки с несводимыми единицами измерения пропускаются (себестоимость такого блюда не трогается — см. лог).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Сколько блюд реально обновилось */
+                            updated?: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/menu/popularity": {
         parameters: {
             query?: never;

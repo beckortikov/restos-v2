@@ -10,9 +10,10 @@ import {
   type TechCardLine,
   type Ingredient,
   type SemiFinishedType,
+  type SemiFinishedStock,
   type MenuStation,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes, replaceTechCardLines } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchSemiStock, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes, replaceTechCardLines, previewTechCardCogs } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
@@ -188,6 +189,7 @@ export default function NewMenuItemPage() {
 
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [semiTypes, setSemiTypes] = useState<SemiFinishedType[]>([])
+  const [semiStock, setSemiStock] = useState<SemiFinishedStock[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -223,15 +225,21 @@ export default function NewMenuItemPage() {
   const [creatingIngredient, setCreatingIngredient] = useState(false)
 
   useEffect(() => {
-    Promise.all([fetchIngredients(), fetchSemiTypes(), fetchMenuCategories()])
-      .then(([i, s, c]) => {
+    Promise.all([fetchIngredients(), fetchSemiTypes(), fetchSemiStock(), fetchMenuCategories()])
+      .then(([i, s, ss, c]) => {
         setIngredients(i)
         setSemiTypes(s)
+        setSemiStock(ss)
         setMenuCategories(c)
         setLoading(false)
       })
       .catch(() => setLoading(false))
   }, [])
+
+  // Живой предпросмотр себестоимости по введённым строкам тех-карты — только
+  // подсказка (настоящую себестоимость посчитает и запишет бэк при
+  // сохранении, см. previewTechCardCogs).
+  const techCardPreviewCogs = previewTechCardCogs(form.techCard, ingredients, semiStock)
 
   function updateTechLine(index: number, patch: Partial<TechCardLine>) {
     setForm((prev) => {
@@ -552,6 +560,11 @@ export default function NewMenuItemPage() {
                     min={0}
                     className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
                   />
+                  {realTechLines.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Из тех-карты ниже: ≈{techCardPreviewCogs.toFixed(2)} — при сохранении заменит это поле
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground mb-1 block">Доступно</label>

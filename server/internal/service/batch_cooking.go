@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -174,6 +175,14 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 		if ing.Name != nil {
 			name = *ing.Name
 		}
+		// Несводимые единицы (рецепт в граммах, склад в штуках без unit_weight) —
+		// та же мисконфигурация тех-карты, что #20 в orders_close.go ловит на
+		// списании: не угадываем "как есть" (300 "г" не могут стать 300 "шт"),
+		// строку исключаем из превью целиком вместо уверенного, но неверного числа.
+		conv := ingStockConv{unit: deref(ing.Unit), unitWeight: ing.UnitWeight, weightUnit: deref(ing.UnitWeightUnit)}
+		if !conv.convertible(deref(l.Unit)) {
+			continue
+		}
 		// Расход на 1 порцию приводим к единице склада ингредиента
 		// (300 г при складе в кг → 0.3 кг; штучный склад — через per-unit фактор),
 		// иначе 3 / 300 = 0 порций.
@@ -223,6 +232,11 @@ func (s *BatchCookingService) MaxPortions(ctx context.Context, menuItemID string
 		stockQty := decimal.Zero
 		if st, ok := semiStockByType[*l.SemiTypeID]; ok {
 			stockQty = st.Qty
+		}
+		// Та же несводимость, что и у ингредиентов выше — исключаем строку,
+		// а не считаем "как есть".
+		if !units.Convertible(deref(l.Unit), deref(sft.OutputUnit)) {
+			continue
 		}
 		needPerPortion := units.Convert(l.Qty, deref(l.Unit), deref(sft.OutputUnit))
 		var possible int
@@ -332,8 +346,18 @@ func (s *BatchCookingService) Produce(ctx context.Context, menuItemID string, in
 			}
 			ingID := *l.IngredientID
 			conv := ingConvByID[ingID]
+			recipeUnit := deref(l.Unit)
+			// Тот же guard, что и в writeIngredientDeduct (orders_close.go #20) и
+			// semi_ops.go Prepare — не списываем дикое число при несводимых
+			// единицах, пропускаем строку с предупреждением в логе.
+			if !conv.convertible(recipeUnit) {
+				log.Warn().Str("menu_item_id", menuItemID).Str("ingredient_id", ingID).
+					Str("recipe_unit", recipeUnit).Str("stock_unit", conv.unit).
+					Msg("batch/produce: строка тех-карты не сводится к складской единице — пропущена")
+				continue
+			}
 			stockUnit := conv.unit
-			perPortion := conv.toStock(l.Qty, deref(l.Unit))
+			perPortion := conv.toStock(l.Qty, recipeUnit)
 			deduct := decimal.Normalize(decimal.Mul(perPortion, qtyDec)).Neg()
 			unit := &stockUnit
 			if stockUnit == "" {

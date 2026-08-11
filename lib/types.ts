@@ -175,8 +175,11 @@ export interface MenuItem {
   isAvailable: boolean
   stopListOverride: boolean
   isPurchased?: boolean  // покупной товар (бэк сам ведёт складской ингредиент + 1:1 техкарту)
-  cogs: number          // эффективная (auto из техкарты, иначе ручная) — для маржи/списка
-  cogsManual?: number   // сырое сохранённое значение «себестоимость вручную» (для формы)
+  // Себестоимость. Бэк держит её автоматически: пересчитывает из тех-карты
+  // при любом изменении строк техкарты или цены ингредиента/п-ф (см.
+  // server/internal/service/menu_cogs.go). Без тех-карты (покупной товар,
+  // блюдо без рецепта) — обычное поле, правится вручную.
+  cogs: number
   cookTimeMin?: number | null
   station: MenuStation
   techCard: TechCardLine[]

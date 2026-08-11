@@ -547,6 +547,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Patch("/menu/items/{id}", menuH.PatchItem)
 			g.Delete("/menu/items/{id}", menuH.DeleteItem)
 			g.Put("/menu/items/{id}/attributes", menuH.PutAttributes)
+			g.Post("/menu/recompute-cogs", menuH.RecomputeCogs)
 			g.Post("/menu/categories", menuH.CreateCategory)
 			g.Patch("/menu/categories/{id}", menuH.PatchCategory)
 			g.Delete("/menu/categories/{id}", menuH.DeleteCategory)

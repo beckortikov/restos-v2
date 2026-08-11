@@ -285,6 +285,25 @@ paths:
           description: OK
           content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } }
 
+  /api/v1/menu/recompute-cogs:
+    post:
+      tags: [menu]
+      summary: Разовый пересчёт себестоимости всех блюд с тех-картой (Manager)
+      description: >
+        Пересчитывает menu_items.cogs из tech_card_lines по текущим ценам
+        ингредиентов/полуфабрикатов — тот же расчёт, что срабатывает
+        автоматически при изменении тех-карты/цены, но для блюд, у которых
+        cogs мог "замёрзнуть" до появления автопересчёта (импорт, старые
+        правки). Строки с несводимыми единицами измерения пропускаются
+        (себестоимость такого блюда не трогается — см. лог).
+      parameters: [ $ref: "#/components/parameters/IdempotencyKey" ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { updated: { type: integer, description: "Сколько блюд реально обновилось" } } }
+
   /api/v1/menu/popularity:
     get:
       tags: [menu]

@@ -6,9 +6,9 @@ import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub } from '@/lib/decimal'
 import { type MenuItem, type MenuStation, STATION_LABELS, STATION_ICONS, ALL_STATIONS } from '@/lib/types'
-import { fetchMenuItems, toggleMenuAvailability, updateMenuItem, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride } from '@/lib/queries'
+import { fetchMenuItems, toggleMenuAvailability, updateMenuItem, fetchMenuCategories, fetchMenuCategoriesFull, syncMenuCategoriesFromItems, createMenuCategory, deleteMenuCategory, deleteMenuItem, archiveMenuItem, fetchStopList, toggleStopListOverride, recomputeMenuCogs } from '@/lib/queries'
 import { type MenuCategory } from '@/lib/queries'
-import { Search, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X, Ruler, Trash2, Check } from 'lucide-react'
+import { Search, ChevronRight, BookOpen, Pencil, OctagonX, ShieldCheck, Plus, X, Ruler, Trash2, Check, RefreshCw } from 'lucide-react'
 import { DishImage } from '@/components/dish-image'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -36,6 +36,7 @@ export default function MenuPage() {
   const [newCatName, setNewCatName] = useState('')
   const [sizeScalesOpen, setSizeScalesOpen] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [recomputingCogs, setRecomputingCogs] = useState(false)
   const [tab, setTab] = useState<'menu' | 'stoplist'>('menu')
   const [stopList, setStopList] = useState<{ menuItemId: string; menuItemName: string; emoji: string; category: string; ingredients: { name: string; qty: number; minQty: number; unit: string }[]; manual?: boolean; unavailable?: boolean }[]>([])
 
@@ -56,8 +57,24 @@ export default function MenuPage() {
   }, [])
 
   // SSE-driven auto-refresh при изменении меню (другой кассир добавил позицию,
-  // менеджер обновил техкарту, и т.п.).
-  useDataSync(['menu_items', 'menu_categories', 'tech_card_lines'], () => { reloadAll().catch(console.error) })
+  // менеджер обновил техкарту, и т.п.). 'ingredients' — себестоимость блюда
+  // зависит от цены ингредиента; без подписки открытая страница не узнавала
+  // бы о её смене, пока не перезайти.
+  useDataSync(['menu_items', 'menu_categories', 'tech_card_lines', 'ingredients'], () => { reloadAll().catch(console.error) })
+
+  async function handleRecomputeCogs() {
+    if (recomputingCogs) return
+    setRecomputingCogs(true)
+    try {
+      const n = await recomputeMenuCogs()
+      await reloadAll()
+      toast.success(n > 0 ? `Себестоимость пересчитана: обновлено ${n}` : 'Себестоимость уже актуальна')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Не удалось пересчитать себестоимость'))
+    } finally {
+      setRecomputingCogs(false)
+    }
+  }
 
   async function handleToggleAvailability(id: string) {
     const item = menuItems.find((m) => m.id === id)
@@ -158,12 +175,25 @@ export default function MenuPage() {
           <p className="text-muted-foreground text-sm mt-0.5">{products.length} позиций{stopList.length > 0 ? ` · ${stopList.length} в стоп-листе` : ''}</p>
         </div>
         {canEdit && (
-          <button
-            onClick={() => navigate('/warehouse/menu/new')}
-            className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors w-full sm:w-auto justify-center"
-          >
-            + Добавить блюдо
-          </button>
+          <div className="flex items-center gap-2 w-full sm:w-auto">
+            {canSeeFinancials && (
+              <button
+                onClick={handleRecomputeCogs}
+                disabled={recomputingCogs}
+                title="Пересчитать себестоимость всех блюд по тех-картам и текущим ценам ингредиентов"
+                className="flex items-center gap-2 bg-card border border-border text-foreground px-3 py-2.5 rounded-xl text-sm font-medium hover:bg-muted disabled:opacity-60 transition-colors justify-center"
+              >
+                <RefreshCw className={`size-4 ${recomputingCogs ? 'animate-spin' : ''}`} />
+                {recomputingCogs ? 'Считаем…' : 'Пересчитать с/с'}
+              </button>
+            )}
+            <button
+              onClick={() => navigate('/warehouse/menu/new')}
+              className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors flex-1 sm:flex-none justify-center"
+            >
+              + Добавить блюдо
+            </button>
+          </div>
         )}
       </div>
 

@@ -10,11 +10,12 @@ import {
   type TechCardLine,
   type Ingredient,
   type SemiFinishedType,
+  type SemiFinishedStock,
   type MenuItem,
   type MenuStation,
   type MenuAttribute,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchSemiStock, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient, previewTechCardCogs } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
@@ -205,6 +206,7 @@ export default function EditMenuItemPage() {
 
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [semiTypes, setSemiTypes] = useState<SemiFinishedType[]>([])
+  const [semiStock, setSemiStock] = useState<SemiFinishedStock[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -221,10 +223,11 @@ export default function EditMenuItemPage() {
   const [creatingIngredient, setCreatingIngredient] = useState(false)
 
   useEffect(() => {
-    Promise.all([fetchIngredients(), fetchSemiTypes(), fetchMenuCategories(), fetchMenuItems()])
-      .then(([i, s, c, items]) => {
+    Promise.all([fetchIngredients(), fetchSemiTypes(), fetchSemiStock(), fetchMenuCategories(), fetchMenuItems()])
+      .then(([i, s, ss, c, items]) => {
         setIngredients(i)
         setSemiTypes(s)
+        setSemiStock(ss)
         setMenuCategories(c)
         const found = items.find((item) => item.id === id)
         if (found) {
@@ -239,14 +242,14 @@ export default function EditMenuItemPage() {
             price: found.price,
             emoji: found.emoji,
             imageUrl: found.imageUrl,
-            cogs: found.cogsManual ?? 0, // поле «вручную» — сырое значение, чтобы очистка сохранялась
+            cogs: found.cogs,
             cookTimeMin: found.cookTimeMin ?? null,
             station: found.station || 'hot_kitchen',
             isAvailable: found.isAvailable,
             isBatchCooking: found.isBatchCooking ?? false,
             lowStockThreshold: found.lowStockThreshold ?? 5,
             isPurchased,
-            purchasePrice: backing?.pricePerUnit ?? (found.cogsManual ?? 0),
+            purchasePrice: backing?.pricePerUnit ?? found.cogs,
             purchaseUnit: backing?.unit ?? found.techCard[0]?.unit ?? '',
             purchaseMinQty: backing?.minQty ?? 0,
             unit: found.unit || 'piece',
@@ -381,6 +384,9 @@ export default function EditMenuItemPage() {
   // серым даже при заполненной техкарте: `.every()` падал на пустой строке.
   const realTechLines = form.techCard.filter((l) => l.ingredientId || l.semiId)
   const realTechLinesValid = realTechLines.every((l) => l.qty > 0)
+  // Живой предпросмотр себестоимости по введённым строкам — только подсказка,
+  // настоящую себестоимость посчитает и запишет бэк при сохранении тех-карты.
+  const techCardPreviewCogs = previewTechCardCogs(form.techCard, ingredients, semiStock)
   // Весовое сырьё (на развес) продаётся по весу и НЕ требует техкарты-рецепта.
   const isWeightItem = form.unit !== 'piece'
   const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
@@ -552,6 +558,11 @@ export default function EditMenuItemPage() {
                     min={0}
                     className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
                   />
+                  {realTechLines.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Из тех-карты ниже: ≈{techCardPreviewCogs.toFixed(2)} — при сохранении заменит это поле
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground mb-1 block">Доступно</label>

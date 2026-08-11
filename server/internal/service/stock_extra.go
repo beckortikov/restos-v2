@@ -82,6 +82,9 @@ func (s *IngredientsWriteService) Create(ctx context.Context, in IngredientInput
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad waste_percent", err)
 		}
+		if decimal.IsNegative(d) || d.GreaterThanOrEqual(decimal.FromInt(100)) {
+			return nil, apperrors.Wrap("VALIDATION", "waste_percent must be in [0, 100)", nil)
+		}
 		ing.WastePercent = d
 	}
 	if in.UnitWeight != nil {
@@ -229,6 +232,9 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 		if err != nil {
 			return nil, apperrors.Wrap("VALIDATION", "bad waste_percent", err)
 		}
+		if decimal.IsNegative(d) || d.GreaterThanOrEqual(decimal.FromInt(100)) {
+			return nil, apperrors.Wrap("VALIDATION", "waste_percent must be in [0, 100)", nil)
+		}
 		updates["waste_percent"] = d
 	}
 	if in.UnitWeight != nil {
@@ -241,6 +247,12 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 	if in.UnitWeightUnit != nil {
 		updates["unit_weight_unit"] = *in.UnitWeightUnit
 	}
+	// Пересчёт cogs всех блюд на этом ингредиенте — цена/waste/единицы
+	// (unit, unit_weight*) напрямую влияют на формулу техкартной себестоимости
+	// (см. menu_cogs.go). Без этого блюдо держит cogs по цене на дату последней
+	// правки тех-карты, сколько бы потом ни менялась цена ингредиента.
+	costAffected := in.PricePerUnit != nil || in.WastePercent != nil || in.Unit != nil ||
+		in.UnitWeight != nil || in.UnitWeightUnit != nil
 
 	// Остаток правится НЕ прямым UPDATE (CLAUDE.md правило #5), а корректирующим
 	// движением на дельту (target − current) → хук денормализует qty. Встречная
@@ -303,6 +315,9 @@ func (s *IngredientsWriteService) Patch(ctx context.Context, id string, in Ingre
 					return err
 				}
 			}
+		}
+		if costAffected {
+			recomputeCogsForIngredient(tx, rid, id, now)
 		}
 		return nil
 	})
