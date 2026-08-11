@@ -5,12 +5,12 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ClipboardList, Loader2, Plus } from 'lucide-react'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/lib/auth-store'
-import { fetchOrders } from '@/lib/queries'
+import { fetchOrders, ordersFromBoundary } from '@/lib/queries'
 import type { Order } from '@/lib/types'
 import { ORDER_STATUS_LABELS } from '@/lib/types'
 import { queryKeys } from '@/lib/query-client'
 import { useTables } from '@/hooks/queries'
-import { formatCurrency, getTimeSince, startOfToday } from '@/lib/helpers'
+import { formatCurrency, getTimeSince } from '@/lib/helpers'
 import { useWaiterViewMode } from '@/lib/waiter/view-mode'
 
 type Filter = 'mine' | 'all'
@@ -26,7 +26,7 @@ export default function WaiterOrdersPage() {
   // WebView, где SSE может «замёрзнуть» в фоне (refetchOnWindowFocus off).
   const ordersQuery = useQuery({
     queryKey: [...queryKeys.orders.list('waiter'), 'slim'],
-    queryFn: () => fetchOrders({ from: startOfToday(), slim: true }),
+    queryFn: async () => fetchOrders({ from: await ordersFromBoundary(), slim: true }),
     refetchInterval: 8_000,
   })
   const orders = useMemo(() => ordersQuery.data ?? [], [ordersQuery.data])

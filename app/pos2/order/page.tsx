@@ -14,9 +14,9 @@ import { useOrderData } from '@/components/order/use-order-data'
 import { sortMenuItems } from '@/lib/menu-sort'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
-import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder, fetchMenuPopularity } from '@/lib/queries'
+import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder, fetchMenuPopularity, ordersFromBoundary } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, startOfToday, endOfDay } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
@@ -745,13 +745,19 @@ export default function PosV2Order() {
       // Из-за этого открытые заказы ЗАЛА не попадали в список: их пробивает
       // официант (Kotlin APK, без кассовой смены) или они остались с прошлой
       // смены — их shift_id ≠ текущей смене. Виден был только «С собой» (его
-      // пробивает касса в текущей смене). Скоуп по ДАТЕ (сегодня, любой тип и
-      // смена) + добор открытых заказов занятых столов (currentOrderIds) на
-      // случай заказа, открытого до полуночи — чтобы ни один открытый заказ
-      // не потерялся. Заголовок «Заказы за сегодня» этому и соответствует.
+      // пробивает касса в текущей смене). Скоуп по ДАТЕ + добор открытых
+      // заказов занятых столов (currentOrderIds) — чтобы ни один открытый
+      // заказ не потерялся.
+      //
+      // «Сегодня» — не startOfToday() (полночь по часам браузера), а
+      // ordersFromBoundary(): момент открытия ТЕКУЩЕЙ смены (если она есть).
+      // Если смена идёт через полночь, окно расширяется назад — заказ,
+      // созданный до полуночи, но при ещё открытой смене, не пропадает ровно
+      // в 00:00 (то же самое, из-за чего появился currentOrderIds-добор ниже,
+      // просто для заказов БЕЗ стола — «С собой»).
       const strandedIds = Array.from(new Set(tables.flatMap(t => t.currentOrderIds ?? []).filter(Boolean)))
       const [today, stranded] = await Promise.all([
-        fetchOrders({ from: startOfToday(), to: endOfDay(new Date()), slim: false }).catch(() => [] as Order[]),
+        ordersFromBoundary().then(from => fetchOrders({ from, to: endOfDay(new Date()), slim: false })).catch(() => [] as Order[]),
         strandedIds.length ? fetchOrders({ ids: strandedIds, slim: false }).catch(() => [] as Order[]) : Promise.resolve([] as Order[]),
       ])
       const byId = new Map<string, Order>()

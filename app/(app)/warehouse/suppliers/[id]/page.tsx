@@ -3,14 +3,14 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { ArrowLeft, CheckCircle, Tag, Search, Plus, X, Phone, User, Landmark, Trash2, History, ChevronDown, ChevronRight, Pencil, Undo2, Banknote } from 'lucide-react'
-import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns, createSupplierOpeningDebt } from '@/lib/queries'
+import { fetchIngredientCategories, fetchSuppliers, updateSupplier, deleteSupplier, fetchReceipts, fetchStockReturns, createSupplierOpeningDebt, fetchFinancialOperations } from '@/lib/queries'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { formatCurrency, formatNum } from '@/lib/helpers'
 import { RETURN_REASON_LABELS } from '@/lib/types'
 import { dMul } from '@/lib/decimal'
 import { toast } from 'sonner'
-import type { Supplier, StockReceipt, StockReturn } from '@/lib/types'
+import type { Supplier, StockReceipt, StockReturn, FinancialOperation } from '@/lib/types'
 
 const PAY_BADGE: Record<string, { label: string; cls: string }> = {
   paid: { label: 'Оплачено', cls: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-400' },
@@ -86,6 +86,10 @@ export default function EditSupplierPage() {
   const [loadingReceipts, setLoadingReceipts] = useState(true)
   const [expandedReceipt, setExpandedReceipt] = useState<string | null>(null)
   const [returns, setReturns] = useState<StockReturn[]>([])
+  // Платежи поставщику (гашение долга) — supplier_payment из financial_operations.
+  // Раньше на карточке их не было: платёж лишь уменьшал долг у накладной, а
+  // «когда и сколько заплатили» нигде не показывалось (запрос владельца).
+  const [supplierPayments, setSupplierPayments] = useState<FinancialOperation[]>([])
 
   // Долг поставщику без накладной (067) — перенос задолженности с момента до
   // перехода на систему.
@@ -122,13 +126,25 @@ export default function EditSupplierPage() {
     () => [...receipts].sort((a, b) => (b.date || '').localeCompare(a.date || '')),
     [receipts],
   )
+  // Платежи именно этого поставщика: новые привязаны по source_ref=supplier.id
+  // (переименование не теряет их), старые — по имени контрагента.
+  const payments = useMemo(() => {
+    const name = supplier?.name
+    return supplierPayments
+      .filter(p => p.sourceRef === id || (!!name && p.counterparty === name))
+      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  }, [supplierPayments, id, supplier?.name])
+  const totalPaid = useMemo(() => payments.reduce((s, p) => s + p.amount, 0), [payments])
 
   useEffect(() => {
     if (!id) return
     setLoadingReceipts(true)
-    Promise.all([fetchReceipts({ supplierId: id }), fetchStockReturns({ supplierId: id })])
-      .then(([rc, rt]) => { setReceipts(rc); setReturns(rt) })
-      .catch(() => { setReceipts([]); setReturns([]) })
+    Promise.all([fetchReceipts({ supplierId: id }), fetchStockReturns({ supplierId: id }), fetchFinancialOperations()])
+      .then(([rc, rt, ops]) => {
+        setReceipts(rc); setReturns(rt)
+        setSupplierPayments(ops.filter(o => o.category === 'supplier_payment'))
+      })
+      .catch(() => { setReceipts([]); setReturns([]); setSupplierPayments([]) })
       .finally(() => setLoadingReceipts(false))
   }, [id])
 
@@ -537,6 +553,42 @@ export default function EditSupplierPage() {
       </div>
       )}
 
+      {/* Платежи — гашение долга (supplier_payment): когда и сколько заплатили.
+          Раньше на карточке их не было — платёж лишь «худил» долг накладной. */}
+      <div className="max-w-7xl mx-auto w-full px-4 md:px-6 pb-2">
+        <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between gap-3 pb-2 border-b border-border/60">
+            <div className="flex items-center gap-2">
+              <Banknote className="size-4.5 text-primary" />
+              <h2 className="text-sm font-bold text-foreground">Платежи</h2>
+            </div>
+            {payments.length > 0 && (
+              <span className="text-xs text-muted-foreground">
+                Всего оплачено: <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatCurrency(totalPaid)}</span> · {payments.length}
+              </span>
+            )}
+          </div>
+          {loadingReceipts ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">Загрузка…</p>
+          ) : payments.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">Платежей поставщику ещё не было</p>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {payments.map(p => (
+                <div key={p.id} className="flex items-center gap-3 py-2.5">
+                  <span className="text-xs text-muted-foreground tabular-nums w-24 shrink-0">{p.date || '—'}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm text-foreground truncate">{p.description || 'Оплата долга'}</p>
+                    {p.accountName && <p className="text-[11px] text-muted-foreground truncate">со счёта «{p.accountName}»</p>}
+                  </div>
+                  <span className="text-sm font-bold text-emerald-600 dark:text-emerald-400 tabular-nums shrink-0">{formatCurrency(p.amount)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+
       {/* История закупок — накладные этого поставщика */}
       <div className="max-w-7xl mx-auto w-full px-4 md:px-6 pb-8">
         <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
@@ -549,6 +601,9 @@ export default function EditSupplierPage() {
               <div className="flex items-center gap-4 text-xs">
                 <span className="text-muted-foreground">Накладных: <span className="font-bold text-foreground tabular-nums">{receipts.length}</span></span>
                 <span className="text-muted-foreground">Закуплено: <span className="font-bold text-foreground tabular-nums">{formatCurrency(totalPurchased)}</span></span>
+                {totalPaid > 0.005 && (
+                  <span className="text-muted-foreground">Оплачено: <span className="font-bold text-emerald-600 dark:text-emerald-400 tabular-nums">{formatCurrency(totalPaid)}</span></span>
+                )}
                 {totalReturned > 0.005 && (
                   <span className="text-muted-foreground">Возвращено: <span className="font-bold text-orange-600 dark:text-orange-400 tabular-nums">{formatCurrency(totalReturned)}</span></span>
                 )}

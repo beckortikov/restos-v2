@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
-import { formatCurrency, getTimeSince, startOfToday } from '@/lib/helpers'
+import { formatCurrency, getTimeSince } from '@/lib/helpers'
 import {
   type Order,
   type OrderStatus,
@@ -18,6 +18,7 @@ import {
   fetchOrders,
   updateOrderStatus,
   deductStockForOrder,
+  ordersFromBoundary,
 } from '@/lib/queries'
 import { ChevronRight, CheckCircle2, Circle, Flame, FlaskConical } from 'lucide-react'
 import { toast } from 'sonner'
@@ -219,7 +220,7 @@ export default function KitchenPage() {
 
   const ordersQuery = useQuery({
     queryKey: KITCHEN_ORDERS_KEY,
-    queryFn: () => fetchOrders({ from: startOfToday() }),
+    queryFn: async () => fetchOrders({ from: await ordersFromBoundary() }),
     // Кухня показывает только «в работе» — фильтруем в select, чтобы кэш
     // обновлялся при любом изменении, а UI видел отфильтрованное.
     select: (all: Order[]) => all.filter(

@@ -98,11 +98,27 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 		statuses = KDSStatuses
 	}
 
-	// KDS — «сегодняшняя смена»: только заказы, открытые сегодня (как экран кухни
-	// на кассе, from=startOfToday). Иначе после миграции 033 (все старые позиции
-	// получили station_status='pending') на доску вываливается вся история.
+	// KDS — «текущая смена», а не «созданные сегодня». Раньше граница была
+	// created_at >= startOfToday (полночь по часам сервера) — если смена шла
+	// через полночь, ещё не выданный заказ мгновенно пропадал с доски ровно в
+	// 00:00, хотя повар его ещё не приготовил.
+	//
+	// Граница — МОМЕНТ ОТКРЫТИЯ самой ранней из сейчас открытых смен (если она
+	// есть), иначе — как раньше, начало календарного дня. Специально НЕ через
+	// shift_id: официантские заказы с Kotlin-планшета создаются без привязки к
+	// кассовой смене — жёсткий фильтр по shift_id уже пробовали в
+	// pos2/order/page.tsx и откатили именно из-за этого (см. комментарий там,
+	// строки ~744-751): такие заказы пропадали. Временна́я граница включает их
+	// всех, независимо от shift_id.
 	now := time.Now()
-	startOfToday := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	boundary := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	var earliestOpenShift time.Time
+	if err := s.r.Raw().WithContext(ctx).Model(&models.CashShift{}).
+		Select("MIN(opened_at)").
+		Where("restaurant_id = ? AND status = ?", rid, "open").
+		Scan(&earliestOpenShift).Error; err == nil && !earliestOpenShift.IsZero() && earliestOpenShift.Before(boundary) {
+		boundary = earliestOpenShift
+	}
 
 	q := s.r.Raw().WithContext(ctx).
 		Table("order_items AS oi").
@@ -119,7 +135,7 @@ func (s *KDSService) ListItems(ctx context.Context, stations, statuses []string)
 		Where("o.restaurant_id = ?", rid).
 		Where("oi.cancelled_at IS NULL").
 		Where("o.status NOT IN ?", []string{"done", "served", "cancelled"}).
-		Where("o.created_at >= ?", startOfToday).
+		Where("o.created_at >= ?", boundary).
 		Where("oi.station_status IN ?", statuses)
 	if len(stations) > 0 {
 		q = q.Where("COALESCE(mi.station, 'hot_kitchen') IN ?", stations)

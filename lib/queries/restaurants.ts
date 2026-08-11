@@ -40,6 +40,8 @@ export async function createRestaurant(data: {
 export async function updateRestaurant(id: string, data: Partial<{
   name: string
   logoUrl: string
+  boardStations: string
+  boardLogoOpacity: number
   address: string
   phone: string
   servicePercent: number
@@ -66,6 +68,8 @@ export async function updateRestaurant(id: string, data: Partial<{
   const updates: Record<string, unknown> = {}
   if (data.name !== undefined) updates.name = data.name
   if (data.logoUrl !== undefined) updates.logo_url = data.logoUrl
+  if (data.boardStations !== undefined) updates.board_stations = data.boardStations
+  if (data.boardLogoOpacity !== undefined) updates.board_logo_opacity = data.boardLogoOpacity
   if (data.address !== undefined) updates.address = data.address
   if (data.phone !== undefined) updates.phone = data.phone
   if (data.servicePercent !== undefined) updates.service_percent = String(data.servicePercent)

@@ -70,9 +70,14 @@ type Restaurant struct {
 	DeliveryContactsRequired *bool `gorm:"column:delivery_contacts_required;not null;default:true" json:"delivery_contacts_required"`
 	// MenuSortBySales — сортировать меню в POS/pos2 по продаваемости (окно 30
 	// дней), хиты вверху категории. Default false → алфавит (060).
-	MenuSortBySales *bool     `gorm:"column:menu_sort_by_sales;not null;default:false" json:"menu_sort_by_sales"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	MenuSortBySales *bool `gorm:"column:menu_sort_by_sales;not null;default:false" json:"menu_sort_by_sales"`
+	// Табло выдачи /board (072). BoardStations — CSV станций для показа (как у
+	// кухонного планшета); пусто/NULL = все. BoardLogoOpacity — яркость
+	// логотипа-фона за «Готово», проценты 0–100; NULL = дефолт 13.
+	BoardStations    *string   `gorm:"column:board_stations" json:"board_stations"`
+	BoardLogoOpacity *int      `gorm:"column:board_logo_opacity" json:"board_logo_opacity"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (Restaurant) TableName() string { return "restaurants" }

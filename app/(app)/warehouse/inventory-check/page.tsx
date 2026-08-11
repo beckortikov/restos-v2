@@ -231,14 +231,17 @@ export default function InventoryCheckPage() {
   const dateStr = now.toLocaleDateString('ru', { day: 'numeric', month: 'long', year: 'numeric' })
 
   function handleExport() {
-    const data = lines.filter(l => l.actualQty !== null).map(l => ({
+    // ВСЕ позиции склада (с учётным остатком), а не только уже посчитанные —
+    // иначе до ввода факта файл выгружался пустым. Факт/расхождение/стоимость
+    // заполняются лишь там, где введён факт; остальное — бланк для пересчёта.
+    const data = lines.map(l => ({
       name: l.name,
       unit: l.unit,
       category: l.category,
       systemQty: l.systemQty,
-      actualQty: l.actualQty,
-      diff: l.diff,
-      cost: dMul(l.diff || 0, l.pricePerUnit),
+      actualQty: l.actualQty ?? '',
+      diff: l.actualQty !== null ? l.diff : '',
+      cost: l.actualQty !== null ? dMul(l.diff || 0, l.pricePerUnit) : '',
     }))
     exportToExcel(data, [
       { key: 'name', header: 'Наименование' },

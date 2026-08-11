@@ -1,0 +1,234 @@
+'use client'
+
+// ТВ-табло выдачи (/board) — как в KFC: «Готовится» (красная полоса заполняется
+// по времени готовки) и «Готово» (крупные зелёные номера). Пассивная витрина
+// для телевизора: ТВ открывает http://<ip-кассы>:3002/board в браузере, вход
+// один раз PIN'ом (BoardLayout).
+//
+// Источник статусов — per-dish кухонная доска (order_items.station_status),
+// которой управляет кухонное приложение (Kotlin) через /kds/items/{id}/status.
+// НЕ order.status: в фастфуде заказ оплачен и висит closed/open, а «готовится/
+// готово» живёт на уровне позиций. Табло сворачивает позиции в заказы и обновляет
+// их по SSE (kds.item.updated → useQuerySseBridge инвалидит ['kds']) + поллинг.
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { fetchKdsItems, fetchRestaurantById } from '@/lib/queries'
+import { useAuth } from '@/lib/auth-store'
+import { Maximize2, Volume2 } from 'lucide-react'
+import { aggregate, cookProgress, splitBoard } from './board-logic'
+
+let audioCtx: AudioContext | null = null
+function beep(freq: number, at: number, ctx: AudioContext) {
+  const o = ctx.createOscillator()
+  const g = ctx.createGain()
+  o.connect(g)
+  g.connect(ctx.destination)
+  o.type = 'sine'
+  o.frequency.value = freq
+  g.gain.setValueAtTime(0.0001, at)
+  g.gain.exponentialRampToValueAtTime(0.4, at + 0.02)
+  g.gain.exponentialRampToValueAtTime(0.0001, at + 0.5)
+  o.start(at)
+  o.stop(at + 0.5)
+}
+// Восходящий трёхнотный сигнал — заметнее через зал, чем один «бип».
+function playChime() {
+  try {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    if (!Ctx) return
+    if (!audioCtx) audioCtx = new Ctx()
+    const ctx = audioCtx
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {})
+    beep(784, ctx.currentTime, ctx) // соль
+    beep(988, ctx.currentTime + 0.16, ctx) // си
+    beep(1319, ctx.currentTime + 0.32, ctx) // ми (октавой выше)
+  } catch {
+    /* автоплей заблокирован до взаимодействия — не критично */
+  }
+}
+
+export default function BoardPage() {
+  // Настройки табло владелец задаёт в разделе «Табло выдачи» (Настройки) →
+  // хранятся на ресторане: логотип-фон + его яркость + какие станции показывать.
+  const { user } = useAuth()
+  const rid = user?.restaurantId
+  const { data: restaurant } = useQuery({
+    queryKey: ['restaurant', rid],
+    queryFn: () => fetchRestaurantById(rid!),
+    enabled: !!rid,
+    staleTime: 5 * 60_000,
+  })
+  const boardLogo = restaurant?.logoUrl || ''
+  const logoOpacity = (restaurant?.boardLogoOpacity ?? 13) / 100
+  // Станции для показа (как у кухонного планшета); пусто = все. Фильтруем ими
+  // KDS-выборку, чтобы табло показывало ровно то, что ведёт кухня, а заказы
+  // «чужих» станций не висели призраками.
+  const stations = useMemo(
+    () => (restaurant?.boardStations || '').split(',').map(s => s.trim()).filter(Boolean),
+    [restaurant?.boardStations],
+  )
+  const stationsCsv = stations.join(',')
+
+  const { data: items = [], dataUpdatedAt } = useQuery({
+    queryKey: ['kds', 'board', stationsCsv],
+    queryFn: () => fetchKdsItems(['pending', 'cooking', 'ready'], stations.length ? stations : undefined),
+    refetchInterval: 15_000, // страховка, если SSE пропустит событие
+  })
+
+  // Тик для «оживления» полос прогресса (перерисовываем каждые 5 с).
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Разблокировка звука. Браузеры не дают проиграть звук, пока по странице не
+  // было ни одного касания/клика — на ТВ, который сам открыл /board, первый
+  // сигнал иначе будет молчать. По первому взаимодействию (в т.ч. по кнопке-
+  // подсказке ниже) создаём/резюмируем AudioContext и прячем подсказку.
+  const [soundReady, setSoundReady] = useState(false)
+  useEffect(() => {
+    const unlock = () => {
+      try {
+        const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+        if (Ctx) {
+          if (!audioCtx) audioCtx = new Ctx()
+          audioCtx.resume().catch(() => {})
+        }
+      } catch { /* нет Web Audio — не критично */ }
+      setSoundReady(true)
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+    window.addEventListener('pointerdown', unlock)
+    window.addEventListener('keydown', unlock)
+    return () => {
+      window.removeEventListener('pointerdown', unlock)
+      window.removeEventListener('keydown', unlock)
+    }
+  }, [])
+
+  const { cooking, ready } = useMemo(() => splitBoard(aggregate(items)), [items])
+
+  // Звук + вспышка на НОВЫЙ «Готово». На первой загрузке не звеним.
+  const prevReady = useRef<Set<number> | null>(null)
+  useEffect(() => {
+    const cur = new Set(ready.map(o => o.orderNumber))
+    if (prevReady.current) {
+      for (const n of cur)
+        if (!prevReady.current.has(n)) {
+          playChime()
+          break
+        }
+    }
+    prevReady.current = cur
+  }, [ready])
+  const newestReady = ready[0]?.orderNumber
+
+  // Авто-уменьшение цифр «Готовится» при большом числе заказов — чтобы влезали
+  // без прокрутки. По умолчанию крупно (как «Готово»); мельче — только когда надо.
+  const n = cooking.length
+  const cookFont =
+    n <= 6 ? 'clamp(40px,6.2vw,104px)'
+      : n <= 12 ? 'clamp(30px,4.4vw,72px)'
+        : n <= 20 ? 'clamp(24px,3.2vw,54px)'
+          : 'clamp(18px,2.4vw,40px)'
+
+  return (
+    <div className="fixed inset-0 grid" style={{ gridTemplateColumns: '1.15fr 1fr', background: '#0b0e13' }}>
+      {/* ─── Готовится ─── */}
+      <section className="min-h-0 flex flex-col" style={{ borderRight: '1px solid rgba(255,255,255,0.07)', padding: 'clamp(16px,2vw,32px)' }}>
+        <h2 style={{ textAlign: 'center', color: '#ff5a4d', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', fontSize: 'clamp(20px,2.2vw,34px)', paddingBottom: '0.5em', marginBottom: '0.7em', borderBottom: '2px solid rgba(255,90,77,0.25)' }}>
+          Готовится
+        </h2>
+        {/* Сетка бейджей: крупные номера (как в «Готово») с красной заливкой-
+            прогрессом, без имён. Переносятся в ряды — влезает много без прокрутки,
+            размер цифр авто-уменьшается при большом числе заказов (cookFont). */}
+        <div className="flex-1 min-h-0 overflow-hidden" style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', gap: 'clamp(10px,1.4vw,20px)' }}>
+          {cooking.length === 0 ? (
+            <p style={{ textAlign: 'center', color: '#3a424e', marginTop: '2em', fontSize: 'clamp(16px,1.6vw,24px)' }}>Нет заказов в работе</p>
+          ) : (
+            cooking.map(o => {
+              const p = cookProgress(o, now, dataUpdatedAt)
+              return (
+                <div key={o.orderNumber} style={{ position: 'relative', overflow: 'hidden', borderRadius: 16, background: '#212a36', padding: 'clamp(4px,0.6vw,12px) clamp(12px,1.6vw,26px)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                  {/* Красная заливка = прогресс готовки. scaleX (GPU-композит), не
+                      width — плавно и без layout-thrash. */}
+                  <span aria-hidden style={{ position: 'absolute', inset: 0, transformOrigin: 'left', transform: `scaleX(${p})`, borderRadius: 16, background: 'linear-gradient(90deg,#ff3b30,#ff6b5c)', transition: 'transform 1s linear', willChange: 'transform' }} />
+                  <span style={{ position: 'relative', zIndex: 1, color: '#fff', fontWeight: 800, fontVariantNumeric: 'tabular-nums', lineHeight: 0.9, fontSize: cookFont, textShadow: '0 2px 5px rgba(0,0,0,0.5)' }}>
+                    {o.orderNumber}
+                  </span>
+                </div>
+              )
+            })
+          )}
+        </div>
+      </section>
+
+      {/* ─── Готово ─── */}
+      <section className="min-h-0 flex flex-col" style={{ position: 'relative', overflow: 'hidden', padding: 'clamp(16px,2vw,32px)', background: 'linear-gradient(180deg,rgba(34,197,94,0.10),rgba(34,197,94,0.03))' }}>
+        {/* Логотип ресторана — фоновый слой: всегда позади номеров, не убирается. */}
+        {boardLogo && (
+          <div aria-hidden style={{ position: 'absolute', inset: 0, zIndex: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: logoOpacity, pointerEvents: 'none' }}>
+            <img src={boardLogo} alt="" style={{ maxWidth: '62%', maxHeight: '70%', objectFit: 'contain' }} />
+          </div>
+        )}
+        <h2 style={{ position: 'relative', zIndex: 1, textAlign: 'center', color: '#34d17f', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.14em', fontSize: 'clamp(20px,2.2vw,34px)', paddingBottom: '0.5em', marginBottom: '0.7em', borderBottom: '2px solid rgba(52,209,127,0.3)' }}>
+          Готово
+        </h2>
+        <div className="flex-1 min-h-0 overflow-hidden" style={{ position: 'relative', zIndex: 1, display: 'flex', flexWrap: 'wrap', justifyContent: 'center', alignContent: 'flex-start', alignItems: 'center', gap: 'clamp(14px,1.6vw,28px)' }}>
+          {ready.length === 0 ? (
+            <p style={{ color: '#2e6b46', fontSize: 'clamp(16px,1.6vw,24px)' }}>Готовых заказов нет</p>
+          ) : (
+            ready.map(o => {
+              const isNewest = o.orderNumber === newestReady
+              return (
+                <span
+                  key={o.orderNumber}
+                  style={{
+                    fontWeight: isNewest ? 900 : 800,
+                    fontVariantNumeric: 'tabular-nums',
+                    lineHeight: 0.9,
+                    fontSize: 'clamp(44px,6.4vw,110px)',
+                    color: isNewest ? '#062a13' : '#4ade80',
+                    background: isNewest ? '#22c55e' : 'transparent',
+                    borderRadius: isNewest ? 18 : 0,
+                    padding: isNewest ? '0.06em 0.28em' : 0,
+                    boxShadow: isNewest ? '0 0 44px rgba(34,197,94,0.55)' : 'none',
+                  }}
+                >
+                  {o.orderNumber}
+                </span>
+              )
+            })
+          )}
+        </div>
+      </section>
+
+      {/* Полноэкранный режим для ТВ-браузера (скрывает хром браузера). */}
+      <button
+        onClick={() => {
+          document.documentElement.requestFullscreen?.().catch(() => {})
+        }}
+        title="Полный экран"
+        style={{ position: 'fixed', top: 10, right: 10, background: 'rgba(255,255,255,0.06)', color: 'rgba(255,255,255,0.5)', border: 'none', borderRadius: 8, padding: 8, cursor: 'pointer', opacity: 0.4 }}
+      >
+        <Maximize2 style={{ width: 18, height: 18 }} />
+      </button>
+
+      {/* Подсказка «включить звук»: браузер не даст сигналу зазвучать до первого
+          касания. Показываем, пока звук не разблокирован; тап проигрывает
+          подтверждающий сигнал, а глобальный обработчик прячет подсказку. */}
+      {!soundReady && (
+        <button
+          onClick={() => playChime()}
+          style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(34,197,94,0.16)', color: '#a7f3c0', border: '1px solid rgba(52,209,127,0.4)', borderRadius: 999, padding: '10px 22px', fontSize: 'clamp(13px,1.4vw,18px)', fontWeight: 600, cursor: 'pointer' }}
+        >
+          <Volume2 style={{ width: 18, height: 18 }} />
+          Нажмите один раз, чтобы включить звук
+        </button>
+      )}
+    </div>
+  )
+}

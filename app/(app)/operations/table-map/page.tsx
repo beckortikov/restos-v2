@@ -5,7 +5,7 @@ import { useAuth } from '@/lib/auth-store'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { OnScreenKeyboard } from '@/components/on-screen-keyboard'
 
-import { formatCurrency, getTimeSince, calcLineCogs, calcOrderDisplayTotal, startOfToday } from '@/lib/helpers'
+import { formatCurrency, getTimeSince, calcLineCogs, calcOrderDisplayTotal } from '@/lib/helpers'
 import {
   STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -36,6 +36,7 @@ import {
   fetchMenuItems,
   mergeTables,
   unmergeTables,
+  ordersFromBoundary,
 } from '@/lib/queries'
 import { Users, Clock, AlertCircle, Plus, Pencil } from 'lucide-react'
 import { useDataSync } from '@/hooks/use-data-sync'
@@ -293,7 +294,7 @@ export default function TableMapPage() {
     const [t, z, o, u, mi] = await Promise.all([
       fetchTables(),
       fetchZones(),
-      fetchOrders({ from: startOfToday(), slim: true }),
+      ordersFromBoundary().then(from => fetchOrders({ from, slim: true })),
       fetchUsers(),
       fetchMenuItems(),
     ])

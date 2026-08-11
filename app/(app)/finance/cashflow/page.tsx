@@ -48,6 +48,10 @@ export default function CashflowPage() {
   const { canDo } = useAuth()
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all')
   const [activityFilter, setActivityFilter] = useState<FinancialActivity | 'all'>('all')
+  // Фасетные фильтры реестра (запрос владельца — раньше был только текст-поиск):
+  // по статье и по счёту, помимо типа/вида деятельности.
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [accountFilter, setAccountFilter] = useState('all')
   // Период общий с ОПиУ (вкладки «Отчёты»): выбрал месяц — на соседней вкладке
   // те же границы. Свой ключ страницы остаётся запасным.
   const [preset, setPreset] = useState<RangePreset>(() =>
@@ -114,6 +118,8 @@ export default function CashflowPage() {
   const filtered = operations.filter((op) => {
     const matchType = typeFilter === 'all' || op.type === typeFilter
     const matchActivity = activityFilter === 'all' || op.activity === activityFilter
+    const matchCategory = categoryFilter === 'all' || op.category === categoryFilter
+    const matchAccount = accountFilter === 'all' || op.accountId === accountFilter
     const matchDateFrom = !dateFrom || op.date >= dateFrom
     const matchDateTo = !dateTo || op.date <= dateTo
     // Поиск по описанию / категории (с русской подписью) / счёту / контрагенту —
@@ -125,7 +131,7 @@ export default function CashflowPage() {
       op.accountName,
       op.counterparty,
     ].some((v) => (v ?? '').toLowerCase().includes(q))
-    return matchType && matchActivity && matchDateFrom && matchDateTo && matchSearch
+    return matchType && matchActivity && matchCategory && matchAccount && matchDateFrom && matchDateTo && matchSearch
   }).sort((a, b) => {
     // Реестр читается хронологически: новые сверху. Ключ — бизнес-дата (date),
     // а не порядок прихода с бэка: операция с задней датой раньше стояла вверху
@@ -136,6 +142,16 @@ export default function CashflowPage() {
     if (ca !== cb) return ca < cb ? 1 : -1
     return a.id < b.id ? 1 : -1
   })
+
+  // Опции фасетных фильтров — из операций в выбранном диапазоне дат (чтобы в
+  // списках не висели статьи/счета, которых за период нет).
+  const inDateRange = (op: FinancialOperation) => (!dateFrom || op.date >= dateFrom) && (!dateTo || op.date <= dateTo)
+  const catOptions = Array.from(new Set(operations.filter(inDateRange).map((o) => o.category).filter(Boolean) as string[]))
+    .sort((a, b) => (finopCategoryLabel(a) || a).localeCompare(finopCategoryLabel(b) || b))
+  const acctIdsInRange = new Set(operations.filter(inDateRange).map((o) => o.accountId).filter(Boolean))
+  const acctOptions = accounts.filter((a) => acctIdsInRange.has(a.id))
+  const anyFilterActive = typeFilter !== 'all' || activityFilter !== 'all' || categoryFilter !== 'all' || accountFilter !== 'all' || !!q
+  const resetFilters = () => { setTypeFilter('all'); setActivityFilter('all'); setCategoryFilter('all'); setAccountFilter('all'); setSearch('') }
 
   // Totals from server report (period-aware, decimal-precise).
   // Н23: финансовая активность (переводы между счетами, займы) исключается из
@@ -249,13 +265,13 @@ export default function CashflowPage() {
           storageKey="cashflow:preset"
         />
         <div className="flex gap-1.5">
-          {(['all', 'in', 'out'] as const).map((t) => (
+          {(['all', 'in', 'out', 'transfer'] as const).map((t) => (
             <button
               key={t}
               onClick={() => setTypeFilter(t)}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${typeFilter === t ? 'bg-primary text-primary-foreground border-primary' : 'bg-card border-border text-foreground hover:bg-muted'}`}
             >
-              {t === 'all' ? 'Все' : t === 'in' ? 'Приходы' : 'Расходы'}
+              {t === 'all' ? 'Все' : t === 'in' ? 'Приходы' : t === 'out' ? 'Расходы' : 'Переводы'}
             </button>
           ))}
         </div>
@@ -270,6 +286,24 @@ export default function CashflowPage() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Статья · Счёт · счётчик/сброс — фасеты, которых в реестре не было. */}
+      <div className="flex flex-wrap gap-2 items-center">
+        <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors max-w-[180px]">
+          <option value="all">Все статьи</option>
+          {catOptions.map((c) => <option key={c} value={c}>{finopCategoryLabel(c) || c}</option>)}
+        </select>
+        <select value={accountFilter} onChange={(e) => setAccountFilter(e.target.value)}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium border border-border bg-card text-foreground hover:bg-muted transition-colors max-w-[180px]">
+          <option value="all">Все счета</option>
+          {acctOptions.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+        </select>
+        <span className="text-xs text-muted-foreground ml-auto tabular-nums">{filtered.length} оп.</span>
+        {anyFilterActive && (
+          <button onClick={resetFilters} className="text-xs font-medium text-primary hover:underline">Сбросить</button>
+        )}
       </div>
 
       {/* Реестр операций — тач-карточки; тап открывает детали.

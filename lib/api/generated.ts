@@ -13713,6 +13713,8 @@ export interface components {
              */
             pay_type?: "monthly" | "daily";
             daily_rate?: components["schemas"]["Decimal"];
+            /** @description PIN входа в кассу. Возвращается ТОЛЬКО привилегированным ролям (owner/manager/superadmin) в GET /users и GET /users/{id} — чтобы «забыл PIN» решалось просмотром, а не перегенерацией. Для остальных ролей поле отсутствует. */
+            pin?: string;
         };
         UserInput: {
             name?: string;
@@ -13849,6 +13851,10 @@ export interface components {
             /** Format: date-time */
             license_expires_at?: string;
             is_blocked?: boolean;
+            /** @description ТВ-табло /board: CSV станций для показа (как у кухонного планшета); пусто = все */
+            board_stations?: string;
+            /** @description ТВ-табло /board: яркость логотипа-фона за «Готово», проценты 0–100 (пусто = 13) */
+            board_logo_opacity?: number;
         };
         RestaurantInput: {
             name?: string;
@@ -13874,6 +13880,8 @@ export interface components {
             menu_sort_by_sales?: boolean;
             delivery_enabled?: boolean;
             delivery_contacts_required?: boolean;
+            board_stations?: string;
+            board_logo_opacity?: number;
         };
         BootstrapInput: {
             restaurant_name: string;

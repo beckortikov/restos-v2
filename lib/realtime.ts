@@ -92,6 +92,10 @@ export const EVENT_FANOUT: Record<string, string[]> = {
   // Повар поставил/снял стоп с кухни — меню кассы должно обновиться сразу,
   // иначе стоп-блюдо видно до следующего перезапроса.
   'stop_list.updated': ['menu_items'],
+  // Кухонное приложение сменило per-dish статус (pending→cooking→ready→served)
+  // через /kds/items/{id}/status. Форвардим в виртуальную таблицу kds_items —
+  // ТВ-табло выдачи (/board) слушает её и обновляется мгновенно, а не раз в 15с.
+  'kds.item.updated': ['kds_items'],
 }
 
 function fanout(eventType: string) {

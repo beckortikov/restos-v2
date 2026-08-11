@@ -42,6 +42,13 @@ describe('EVENT_FANOUT mapping', () => {
     expect(EVENT_FANOUT['license.updated']).toContain('license')
   })
 
+  // ТВ-табло выдачи (/board): кухня жмёт «Готово»/«Выдан» → kds.item.updated по
+  // SSE → фанаут в kds_items → useQuerySseBridge инвалидит ['kds'] → табло
+  // обновляется мгновенно. Без этой строки табло реагировало бы только поллингом.
+  it('kds.item.updated fans out to kds_items (табло выдачи обновляется live)', () => {
+    expect(EVENT_FANOUT['kds.item.updated']).toContain('kds_items')
+  })
+
   it('никаких null/undefined значений в fanout таблице', () => {
     for (const [ev, tables] of Object.entries(EVENT_FANOUT)) {
       expect(Array.isArray(tables), `${ev} value must be array`).toBe(true)

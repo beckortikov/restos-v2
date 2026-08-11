@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { humanizeError } from '@/lib/errors'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { UtensilsCrossed, Delete, LogIn, AlertCircle, Settings2 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
 import { api, unwrap, getV4RestaurantId, setV4RestaurantId } from '@/lib/api'
@@ -14,6 +14,12 @@ export default function LoginPage() {
   const [pin, setPin] = useState('')
   const { login, user, homeRoute } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  // ?next=/board — куда вернуться после входа (ТВ-табло редиректит сюда через
+  // BoardLayout). Разрешаем ТОЛЬКО внутренний путь (один ведущий «/», не «//»),
+  // чтобы нельзя было увести на внешний адрес (open-redirect).
+  const nextRaw = searchParams.get('next')
+  const nextRoute = nextRaw && nextRaw.startsWith('/') && !nextRaw.startsWith('//') ? nextRaw : null
 
   // Redirect to /bootstrap if backend has no restaurants yet.
   useEffect(() => {
@@ -49,10 +55,10 @@ export default function LoginPage() {
     return () => { cancel = true }
   }, [navigate])
 
-  // If already logged in, redirect home.
+  // If already logged in, redirect to ?next (e.g. /board) or the role home.
   useEffect(() => {
-    if (user) navigate(homeRoute, { replace: true })
-  }, [user, navigate, homeRoute])
+    if (user) navigate(nextRoute || homeRoute, { replace: true })
+  }, [user, navigate, homeRoute, nextRoute])
 
   async function submitPin(value: string) {
     if (loading) return

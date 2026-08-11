@@ -344,15 +344,47 @@ func (s *IngredientsWriteService) Delete(ctx context.Context, id string) error {
 		}
 		return err
 	}
-	// Check usage in tech_card_lines.
+	// Ссылки на ингредиент в техкартах. Раньше ЛЮБАЯ ссылка → CONFLICT, из-за
+	// чего покупной товар удалить было НЕЛЬЗЯ вообще: is_purchased-блюдо держит
+	// свой ингредиент 1:1 техкартой, поэтому refs всегда ≥1. Теперь: если ВСЕ
+	// ссылки — из покупных блюд, удаляем каскадом (блюдо+техкарта+ингредиент).
+	// Если хоть одна из обычного рецепта — CONFLICT (ингредиент реально нужен).
 	scopedCheck, _ := s.r.ForTenant(ctx)
-	var refs int64
-	if err := scopedCheck.Model(&models.TechCardLine{}).
-		Where("ingredient_id = ?", id).Count(&refs).Error; err != nil {
+	var lines []models.TechCardLine
+	if err := scopedCheck.Where("ingredient_id = ?", id).Find(&lines).Error; err != nil {
 		return err
 	}
-	if refs > 0 {
-		return apperrors.Wrap("CONFLICT", "ingredient is in use by tech cards", nil)
+	var purchasedMenuIDs []string
+	if len(lines) > 0 {
+		// Каскадим ТОЛЬКО если КАЖДАЯ ссылка — из покупного блюда (is_purchased).
+		// Ссылка без menu_item_id, на несуществующее блюдо или на обычный рецепт →
+		// CONFLICT: ингредиент реально используется либо ссылка неоднозначна.
+		menuIDs := make([]string, 0, len(lines))
+		for _, l := range lines {
+			if l.MenuItemID == nil || *l.MenuItemID == "" {
+				return apperrors.Wrap("CONFLICT", "ingredient is in use by tech cards", nil)
+			}
+			menuIDs = append(menuIDs, *l.MenuItemID)
+		}
+		scopedM, _ := s.r.ForTenant(ctx)
+		var mis []models.MenuItem
+		if err := scopedM.Where("id IN ?", menuIDs).Find(&mis).Error; err != nil {
+			return err
+		}
+		miPurchased := make(map[string]bool, len(mis))
+		for _, mi := range mis {
+			miPurchased[mi.ID] = mi.IsPurchased
+		}
+		seen := map[string]struct{}{}
+		for _, mid := range menuIDs {
+			if purchased, ok := miPurchased[mid]; !ok || !purchased {
+				return apperrors.Wrap("CONFLICT", "ingredient is in use by tech cards", nil)
+			}
+			if _, dup := seen[mid]; !dup {
+				seen[mid] = struct{}{}
+				purchasedMenuIDs = append(purchasedMenuIDs, mid)
+			}
+		}
 	}
 
 	actor, _ := audit.ActorFromContext(ctx)
@@ -398,6 +430,21 @@ func (s *IngredientsWriteService) Delete(ctx context.Context, id string) error {
 				return err
 			}
 			if err := recordWriteoffSync(tx, []string{writeoffID}); err != nil {
+				return err
+			}
+		}
+		// Каскад покупного товара: прячем блюдо (soft-delete — история заказов с
+		// замороженными названиями цела) и удаляем его техкарту. Без этого
+		// техкарта осиротела бы и блокировала удаление ингредиента.
+		if len(purchasedMenuIDs) > 0 {
+			if err := tx.Model(&models.MenuItem{}).
+				Where("(id IN ? OR parent_id IN ?) AND restaurant_id = ?", purchasedMenuIDs, purchasedMenuIDs, rid).
+				Updates(map[string]any{"is_deleted": true, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+		if len(lines) > 0 {
+			if err := tx.Where("ingredient_id = ?", id).Delete(&models.TechCardLine{}).Error; err != nil {
 				return err
 			}
 		}

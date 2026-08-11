@@ -180,14 +180,40 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 			Scan(&rTz).Error; err != nil || rTz == "" {
 			rTz = "Asia/Dushanbe"
 		}
+
+		// Счётчик номеров ключуется днём ОТКРЫТИЯ СМЕНЫ, а не календарным
+		// «сейчас» — если смена идёт через полночь, номер должен продолжаться
+		// (#47, #48...), а не обнуляться на #1 посреди работающей смены.
+		// Порядок поиска: смена ЭТОГО заказа (in.ShiftID) → любая открытая
+		// смена ресторана → нет смены вообще — используем текущий момент
+		// (прежнее поведение, для админ-флоу без смены).
+		counterRef := time.Now()
+		{
+			shiftQ := tx.Model(&models.CashShift{}).Select("opened_at").
+				Where("restaurant_id = ? AND status = ?", rid, "open")
+			if in.ShiftID != nil && *in.ShiftID != "" {
+				shiftQ = shiftQ.Where("id = ?", *in.ShiftID)
+			} else {
+				// Без явной смены (напр. официант с Kotlin-планшета) — берём
+				// САМУЮ РАННЮЮ из открытых смен ресторана: та же логика границы,
+				// что в kds.go ListItems, чтобы номер попал в тот же «рабочий
+				// день», что и остальные заказы этой смены.
+				shiftQ = shiftQ.Order("opened_at ASC")
+			}
+			var openedAt time.Time
+			if err := shiftQ.Limit(1).Scan(&openedAt).Error; err == nil && !openedAt.IsZero() {
+				counterRef = openedAt
+			}
+		}
+
 		var nextNum int
 		if err := tx.Raw(`
 			INSERT INTO order_counters (restaurant_id, date, last_number, updated_at)
-			VALUES (?, (now() AT TIME ZONE ?)::date, 1, now())
+			VALUES (?, (?::timestamptz AT TIME ZONE ?)::date, 1, now())
 			ON CONFLICT (restaurant_id, date)
 			DO UPDATE SET last_number = order_counters.last_number + 1, updated_at = now()
 			RETURNING last_number
-		`, rid, rTz).Scan(&nextNum).Error; err != nil {
+		`, rid, counterRef, rTz).Scan(&nextNum).Error; err != nil {
 			return err
 		}
 

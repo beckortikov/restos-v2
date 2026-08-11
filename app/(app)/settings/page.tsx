@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { updateRestaurant as updateRestaurantQuery, fetchRestaurantById } from '@/lib/queries'
+import { updateRestaurant as updateRestaurantQuery, fetchRestaurantById, fetchKdsStations } from '@/lib/queries'
 import { clearRestaurantOperations, clearRestaurantMenu } from '@/lib/queries'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -10,7 +10,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog'
 import * as Sentry from '@sentry/react'
-import { Building2, Save, RefreshCw, Copy, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { Building2, Save, RefreshCw, Copy, ChevronDown, ChevronRight, X, ImagePlus } from 'lucide-react'
 import type { Restaurant } from '@/lib/types'
 
 // ─── Reusable bits ───────────────────────────────────────────────────────────
@@ -61,6 +61,42 @@ function ToggleRow({ title, hint, checked, onChange, disabled }: { title: string
 
 const inputCls = 'w-full px-2.5 py-1.5 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/30'
 
+// fileToLogoDataUrl — картинка логотипа → сжатый PNG data-URI (не файл на диске:
+// v4 локальный, без облачного хранилища — храним прямо в restaurants.logo_url).
+// Ужимаем до maxSize px по большей стороне, PNG сохраняет прозрачность (белый
+// логотип на прозрачном фоне чисто ложится на тёмное табло).
+async function fileToLogoDataUrl(file: File, maxSize = 420): Promise<string> {
+  const src = await new Promise<string>((resolve, reject) => {
+    const fr = new FileReader()
+    fr.onload = () => resolve(String(fr.result))
+    fr.onerror = () => reject(fr.error)
+    fr.readAsDataURL(file)
+  })
+  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
+    const im = new Image()
+    im.onload = () => resolve(im)
+    im.onerror = () => reject(new Error('bad image'))
+    im.src = src
+  })
+  const scale = Math.min(1, maxSize / Math.max(img.width, img.height))
+  const w = Math.max(1, Math.round(img.width * scale))
+  const h = Math.max(1, Math.round(img.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return src
+  ctx.drawImage(img, 0, 0, w, h)
+  return canvas.toDataURL('image/png')
+}
+
+// Человекочитаемые метки станций кухни (ключи из menu_items.station).
+const STATION_LABELS: Record<string, string> = {
+  hot_kitchen: 'Горячий цех', cold_kitchen: 'Холодный цех', grill: 'Гриль',
+  bar: 'Бар', bakery: 'Пекарня', pizza: 'Пицца', sushi: 'Суши', drinks: 'Напитки',
+}
+const stationLabel = (s: string) => STATION_LABELS[s] || s
+
 // ─── Page ────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -69,6 +105,11 @@ export default function SettingsPage() {
   const [name, setName] = useState('')
   const [address, setAddress] = useState('')
   const [phone, setPhone] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
+  const [logoBusy, setLogoBusy] = useState(false)
+  const [boardLogoOpacity, setBoardLogoOpacity] = useState(13)
+  const [boardStations, setBoardStations] = useState<string[]>([])
+  const [availableStations, setAvailableStations] = useState<string[]>([])
   const [servicePercent, setServicePercent] = useState(10)
   const [discountApprovalThreshold, setDiscountApprovalThreshold] = useState(10)
   const [enforceStockCheck, setEnforceStockCheck] = useState(false)
@@ -102,6 +143,9 @@ export default function SettingsPage() {
           setName(r.name)
           setAddress(r.address || '')
           setPhone(r.phone || '')
+          setLogoUrl(r.logoUrl || '')
+          setBoardLogoOpacity(r.boardLogoOpacity ?? 13)
+          setBoardStations((r.boardStations || '').split(',').map(s => s.trim()).filter(Boolean))
           setServicePercent(r.servicePercent)
           setDiscountApprovalThreshold(r.discountApprovalThreshold ?? 10)
           setEnforceStockCheck(r.enforceStockCheck ?? false)
@@ -123,6 +167,11 @@ export default function SettingsPage() {
       .finally(() => setLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ctxRestaurant?.id, user?.restaurantId])
+
+  // Станции кухни — для выбора «какие показывать на табло выдачи».
+  useEffect(() => {
+    fetchKdsStations().then(setAvailableStations).catch(() => {})
+  }, [])
 
   if (!canAccessRoles(['manager'])) {
     return (
@@ -148,12 +197,31 @@ export default function SettingsPage() {
     )
   }
 
+  const handleLogoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = '' // позволяем выбрать тот же файл повторно
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      toast.error('Нужен файл-картинка (PNG, JPG, SVG)')
+      return
+    }
+    setLogoBusy(true)
+    try {
+      setLogoUrl(await fileToLogoDataUrl(file))
+      toast.success('Логотип загружен — нажмите «Сохранить»')
+    } catch {
+      toast.error('Не удалось обработать картинку')
+    } finally {
+      setLogoBusy(false)
+    }
+  }
+
   const handleSave = async () => {
     setSaving(true)
     try {
-      await updateRestaurantQuery(rest.id, { name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
+      await updateRestaurantQuery(rest.id, { name, logoUrl, boardLogoOpacity, boardStations: boardStations.join(','), address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales })
       toast.success('Настройки сохранены')
-      const updated = { ...rest, name, address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
+      const updated = { ...rest, name, logoUrl, boardLogoOpacity, boardStations: boardStations.join(','), address, phone, servicePercent, discountApprovalThreshold, enforceStockCheck, techCardsEnabled, autoReadyMode, autoReadyBufferMin, pinLockEnabled, pinLockTimeoutMin, supplyAllowNegative, onScreenKeyboardEnabled, tablesEnabled, deliveryEnabled, deliveryContactsRequired, posV2Default, menuSortBySales }
       setRest(updated)
       updateAuthRestaurant(updated)
     } catch (e) {
@@ -181,6 +249,9 @@ export default function SettingsPage() {
     setName(rest.name)
     setAddress(rest.address || '')
     setPhone(rest.phone || '')
+    setLogoUrl(rest.logoUrl || '')
+    setBoardLogoOpacity(rest.boardLogoOpacity ?? 13)
+    setBoardStations((rest.boardStations || '').split(',').map(s => s.trim()).filter(Boolean))
     setServicePercent(rest.servicePercent)
     setDiscountApprovalThreshold(rest.discountApprovalThreshold ?? 10)
     setEnforceStockCheck(rest.enforceStockCheck ?? false)
@@ -273,6 +344,65 @@ export default function SettingsPage() {
                 inputMode="tel"
                 className={inputCls}
               />
+            </Field>
+          </Card>
+
+          {/* Табло выдачи */}
+          <Card title="Табло выдачи (/board)">
+            <Field label="Логотип-фон" hint="Стоит фоном за колонкой «Готово» на ТВ-табло и не убирается. Лучше PNG с прозрачным фоном — на тёмном экране ляжет чисто.">
+              <div className="flex items-center gap-3">
+                <div className="size-20 rounded-lg border border-border flex items-center justify-center overflow-hidden shrink-0" style={{ background: '#0b0e13' }}>
+                  {logoUrl
+                    ? <img src={logoUrl} alt="Логотип" className="max-w-full max-h-full object-contain" />
+                    : <span className="text-[10px] text-muted-foreground">нет</span>}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className={`inline-flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium hover:bg-muted transition-colors cursor-pointer ${logoBusy ? 'opacity-50 pointer-events-none' : ''}`}>
+                    <ImagePlus className="size-3.5" />
+                    {logoBusy ? 'Обработка…' : (logoUrl ? 'Заменить' : 'Загрузить')}
+                    <input type="file" accept="image/*" className="hidden" onChange={handleLogoPick} disabled={logoBusy} />
+                  </label>
+                  {logoUrl && (
+                    <button type="button" onClick={() => setLogoUrl('')} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/10 transition-colors">
+                      <X className="size-3.5" />
+                      Убрать
+                    </button>
+                  )}
+                </div>
+              </div>
+            </Field>
+
+            <Field label={`Яркость фона — ${boardLogoOpacity}%`} hint="Насколько заметен логотип позади номеров. Больше — ярче.">
+              <input
+                type="range"
+                min={3}
+                max={30}
+                value={boardLogoOpacity}
+                onChange={e => setBoardLogoOpacity(Number(e.target.value))}
+                className="w-full accent-primary"
+              />
+            </Field>
+
+            <Field label="Показывать станции" hint="Как на кухонном планшете. Ничего не выбрано = все станции. Выбери те же станции, что на планшете кухни, — тогда на табло не будут висеть «чужие» заказы, которых нет на кухне.">
+              {availableStations.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">Станции появятся, когда у блюд будут заданы станции (в меню).</p>
+              ) : (
+                <div className="flex flex-wrap gap-1.5">
+                  {availableStations.map(st => {
+                    const on = boardStations.includes(st)
+                    return (
+                      <button
+                        key={st}
+                        type="button"
+                        onClick={() => setBoardStations(p => on ? p.filter(x => x !== st) : [...p, st])}
+                        className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-colors ${on ? 'bg-primary text-primary-foreground border-primary' : 'bg-background border-border text-foreground hover:bg-muted'}`}
+                      >
+                        {stationLabel(st)}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
             </Field>
           </Card>
 
@@ -471,7 +601,7 @@ function ClearOpsCard({ restaurantId, restaurantName }: { restaurantId: string; 
       <div className="bg-amber-50 rounded-lg border border-amber-200 p-3 space-y-2">
         <h3 className="text-xs font-semibold text-amber-800">Сброс операций ресторана</h3>
         <p className="text-[11px] text-amber-700 leading-snug">
-          Удалит все заказы, смены, фин. операции, движения склада, бронирования, журнал, инвентаризации, накладные, списания, заготовки. Сохранит меню, ингредиенты, тех.карты, столы, сотрудников.
+          Удалит все операции: заказы, смены, фин. операции, весь склад (движения, накладные, инвентаризации, списания, возвраты, заготовки, хозрасходы), ЗП-историю (авансы, удержания, дни), брони, журнал, плановые платежи, капитал (взносы и начальный остаток). Обнулит деньги на счетах, остатки и долги поставщикам — Баланс с нуля, начальный остаток можно завести заново. Сохранит: номенклатуру, поставщиков, меню, тех.карты, столы, сотрудников, счета, клиентов.
         </p>
         <button
           onClick={() => { setConfirmName(''); setOpen(true) }}
@@ -487,7 +617,7 @@ function ClearOpsCard({ restaurantId, restaurantName }: { restaurantId: string; 
           <DialogHeader>
             <DialogTitle className="text-amber-700">Сброс операций ресторана</DialogTitle>
             <DialogDescription>
-              Все операционные данные будут удалены. Меню, склад, сотрудники, столы и зоны останутся. Действие необратимо — после подтверждения данные будут также удалены из облака.
+              Все операции и склад будут стёрты, деньги на счетах, остатки и долги поставщикам — обнулены. Останутся: номенклатура, поставщики, меню, тех.карты, столы, зоны, сотрудники, счета, клиенты. Действие необратимо.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-2">

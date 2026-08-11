@@ -6,8 +6,8 @@ import { LayoutGrid, Users, Plus, CalendarPlus, Combine, Clock, Check, Ban, Penc
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
 import { useOrderData } from '@/components/order/use-order-data'
-import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone, fetchOrders, cleanupStuckTables } from '@/lib/queries'
-import { formatCurrency, formatCurrencyCompact, startOfToday, getTimeSince, calcOrderDisplayTotal } from '@/lib/helpers'
+import { createReservation, fetchReservationForTable, updateReservationStatus, mergeTables, unmergeTables, createTable, updateTableData, deleteTable, createZone, updateZone, deleteZone, fetchOrders, cleanupStuckTables, ordersFromBoundary } from '@/lib/queries'
+import { formatCurrency, formatCurrencyCompact, getTimeSince, calcOrderDisplayTotal } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { PosModal } from '@/components/pos-v2/pos-modal'
 import type { Table, TableStatus, Reservation } from '@/lib/types'
@@ -61,7 +61,7 @@ export default function PosV2Tables() {
   const [tableTotals, setTableTotals] = useState<Map<string, number>>(new Map())
   useEffect(() => {
     let cancelled = false
-    fetchOrders({ from: startOfToday(), slim: true }).then(os => {
+    ordersFromBoundary().then(from => fetchOrders({ from, slim: true })).then(os => {
       if (cancelled) return
       const m = new Map<string, number>()
       for (const o of os) {

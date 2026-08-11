@@ -4,10 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Plus, Users, FileEdit, ClipboardList, Trash2, ArrowLeft } from 'lucide-react'
 import { useAuth } from '@/lib/auth-store'
-import { fetchTables, fetchOrders, fetchZones, fetchUsers } from '@/lib/queries'
+import { fetchTables, fetchOrders, fetchZones, fetchUsers, ordersFromBoundary } from '@/lib/queries'
 import type { Order, Table, Zone, User } from '@/lib/types'
 import { listDrafts, onDraftsChange, deleteDraft, type WaiterDraft } from '@/lib/waiter/drafts'
-import { formatCurrency, getTimeSince, startOfToday } from '@/lib/helpers'
+import { formatCurrency, getTimeSince } from '@/lib/helpers'
 import { dSum } from '@/lib/decimal'
 import { useWaiterViewMode } from '@/lib/waiter/view-mode'
 import { useDataSync } from '@/hooks/use-data-sync'
@@ -40,7 +40,7 @@ export default function WaiterTablesPage() {
         // tip/cancel_*/printed_at JSON which the cards never use, and at
         // peak with 5 waiters refetching on every NOTIFY this dominates
         // wire + PGlite time.
-        fetchOrders({ from: startOfToday(), slim: true }),
+        ordersFromBoundary().then(from => fetchOrders({ from, slim: true })),
         fetchZones(),
         fetchUsers(),
       ])

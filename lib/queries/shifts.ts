@@ -4,11 +4,33 @@ import { randomId } from '../random-id'
 import type { CashShift, CashShiftOperation } from '../types'
 import { logAction } from './audit'
 import { _mapV4Shift } from './_mappers'
+import { startOfToday } from '../helpers'
 
 export async function fetchActiveShift(): Promise<CashShift | null> {
   const r: any = await unwrapOr404(api.GET('/api/v1/shifts/active'))
   if (!r) return null
   return _mapV4Shift(r)
+}
+
+// ordersFromBoundary — нижняя граница «from» для списков активных заказов
+// (касса/официант/кухня). Раньше везде брали startOfToday() — полночь по
+// часам БРАУЗЕРА. Если смена идёт через полночь, любой ещё не закрытый заказ,
+// созданный ДО полуночи, пропадал из выборки в момент, когда часы её
+// пересекали — хотя смена не закрыта.
+//
+// Возвращает момент открытия текущей смены (заказ точно не мог появиться
+// раньше) — если смены нет, откатывается на startOfToday() (прежнее
+// поведение). Специально БЕЗ shiftId-фильтра на вызывающей стороне: заказы
+// официанта с Kotlin-планшета создаются без привязки к кассовой смене,
+// жёсткий фильтр по shift_id уже один раз терял такие заказы (см. комментарий
+// в app/pos2/order/page.tsx openOrders()) — эта граница только РАСШИРЯЕТ окно
+// (никогда не уже startOfToday), поэтому не может повторить ту же ошибку.
+export async function ordersFromBoundary(): Promise<Date> {
+  try {
+    const sh = await fetchActiveShift()
+    if (sh?.openedAt) return new Date(sh.openedAt)
+  } catch { /* нет открытой смены или сбой запроса — используем календарный день */ }
+  return startOfToday()
 }
 
 export async function fetchShifts(limit = 20): Promise<CashShift[]> {

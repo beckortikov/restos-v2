@@ -4770,6 +4770,7 @@ components:
         hourly_rate: { $ref: "#/components/schemas/Decimal" }
         pay_type: { type: string, enum: [monthly, daily], description: "Тип оплаты труда (054): оклад или ставка за день" }
         daily_rate: { $ref: "#/components/schemas/Decimal" }
+        pin: { type: string, description: "PIN входа в кассу. Возвращается ТОЛЬКО привилегированным ролям (owner/manager/superadmin) в GET /users и GET /users/{id} — чтобы «забыл PIN» решалось просмотром, а не перегенерацией. Для остальных ролей поле отсутствует." }
     UserInput:
       type: object
       properties:
@@ -4890,6 +4891,8 @@ components:
         delivery_contacts_required: { type: boolean, description: "Спрашивать телефон и адрес перед оплатой заказа-доставки" }
         license_expires_at: { type: string, format: date-time }
         is_blocked: { type: boolean }
+        board_stations: { type: string, description: "ТВ-табло /board: CSV станций для показа (как у кухонного планшета); пусто = все" }
+        board_logo_opacity: { type: integer, description: "ТВ-табло /board: яркость логотипа-фона за «Готово», проценты 0–100 (пусто = 13)" }
     RestaurantInput:
       type: object
       properties:
@@ -4915,6 +4918,8 @@ components:
         menu_sort_by_sales: { type: boolean }
         delivery_enabled: { type: boolean }
         delivery_contacts_required: { type: boolean }
+        board_stations: { type: string }
+        board_logo_opacity: { type: integer }
 
     # ─── Bootstrap ──
     BootstrapInput:

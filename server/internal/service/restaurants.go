@@ -51,6 +51,10 @@ type RestaurantCreateInput struct {
 	DeliveryContactsRequired *bool `json:"delivery_contacts_required,omitempty"`
 	// Сортировать меню по продаваемости (060). Default false → алфавит.
 	MenuSortBySales *bool `json:"menu_sort_by_sales,omitempty"`
+	// Табло выдачи /board (072). BoardStations — CSV станций (пусто = все).
+	// BoardLogoOpacity — яркость логотипа-фона, проценты 0–100.
+	BoardStations    *string `json:"board_stations,omitempty"`
+	BoardLogoOpacity *int    `json:"board_logo_opacity,omitempty"`
 }
 
 func (s *RestaurantsService) List(ctx context.Context) ([]models.Restaurant, error) {
@@ -219,6 +223,18 @@ func (s *RestaurantsService) Patch(ctx context.Context, id string, in Restaurant
 	if in.DeliveryContactsRequired != nil {
 		updates["delivery_contacts_required"] = *in.DeliveryContactsRequired
 	}
+	if in.BoardStations != nil {
+		updates["board_stations"] = *in.BoardStations
+	}
+	if in.BoardLogoOpacity != nil {
+		op := *in.BoardLogoOpacity
+		if op < 0 {
+			op = 0
+		} else if op > 100 {
+			op = 100
+		}
+		updates["board_logo_opacity"] = op
+	}
 	if err := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
 		Where("id = ?", id).Updates(updates).Error; err != nil {
 		return nil, err
@@ -259,23 +275,22 @@ func (s *RestaurantsService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-// ClearOperations — удалить все операционные данные ресторана: orders, order_items,
-// order_item_modifiers, financial_operations, cash_shifts + ops, time_entries.
-type ClearCounts struct {
-	Orders              int64 `json:"orders"`
-	OrderItems          int64 `json:"order_items"`
-	OrderItemModifiers  int64 `json:"order_item_modifiers"`
-	FinancialOperations int64 `json:"financial_operations"`
-	CashShifts          int64 `json:"cash_shifts"`
-	CashShiftOperations int64 `json:"cash_shift_operations"`
-	TimeEntries         int64 `json:"time_entries"`
-}
-
+// ClearOperations — полный операционный сброс ресторана: удаляет ВСЕ операции
+// (заказы, смены, финоперации; склад: движения/накладные/инвентаризации/
+// списания/возвраты/заготовки/хозрасходы; ЗП-историю, брони, журнал, плановые
+// платежи, очередь печати) и ОБНУЛЯЕТ денормализованные балансы
+// (ingredients.qty, financial_accounts.balance, suppliers.current_debt).
+// Остаются справочники/настройка: номенклатура, поставщики, меню, техкарты,
+// столы, зоны, сотрудники, счета (как записи), клиенты. Всё в одной транзакции
+// (либо чистится целиком, либо никак). Счётчики — map (фронт суммирует).
 type ClearOperationsResult struct {
-	Counts ClearCounts `json:"counts"`
+	Counts map[string]int64 `json:"counts"`
 }
 
 func (s *RestaurantsService) ClearOperations(ctx context.Context, id string) (*ClearOperationsResult, error) {
+	if err := requireOwner(ctx, s.r); err != nil {
+		return nil, err
+	}
 	var existing models.Restaurant
 	if err := s.r.Raw().WithContext(ctx).Where("id = ?", id).First(&existing).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -283,74 +298,151 @@ func (s *RestaurantsService) ClearOperations(ctx context.Context, id string) (*C
 		}
 		return nil, err
 	}
-	out := &ClearOperationsResult{}
+	out := &ClearOperationsResult{Counts: map[string]int64{}}
 	err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
-		tx := tr.Raw().WithContext(ctx)
-		// order_item_modifiers — удаляем по order_items.order_id IN orders ресторана.
-		// Сначала считаем.
-		if err := tx.Model(&models.OrderItemModifier{}).
-			Where("order_item_id IN (?)",
-				tx.Model(&models.OrderItem{}).Select("id").
-					Where("order_id IN (?)", tx.Model(&models.Order{}).Select("id").Where("restaurant_id = ?", id)),
-			).Count(&out.Counts.OrderItemModifiers).Error; err != nil {
-			return err
+		// SkipHooks: массовый сброс НЕ должен плодить per-row audit_log/sync/
+		// domain-события (иначе журнал сразу пере-наполнится своими же
+		// удалениями, а sync захлебнётся тысячами событий). Для wipe это верно.
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		// acc — накопить RowsAffected удаления/обнуления в счётчик по ключу.
+		acc := func(key string, res *gorm.DB) error {
+			if res.Error != nil {
+				return res.Error
+			}
+			out.Counts[key] += res.RowsAffected
+			return nil
 		}
-		if err := tx.Where("order_item_id IN (?)",
-			tx.Model(&models.OrderItem{}).Select("id").
-				Where("order_id IN (?)", tx.Model(&models.Order{}).Select("id").Where("restaurant_id = ?", id)),
-		).Delete(&models.OrderItemModifier{}).Error; err != nil {
-			return err
+		// delRest — удалить всю таблицу модели по restaurant_id.
+		delRest := func(key string, model any) error {
+			return acc(key, tx.Where("restaurant_id = ?", id).Delete(model))
 		}
+		// orderIDs — свежий подзапрос id заказов ресторана (не переиспользуем
+		// один *gorm.DB дважды — билдер мутируется).
+		orderIDs := func() *gorm.DB { return tx.Model(&models.Order{}).Select("id").Where("restaurant_id = ?", id) }
 
-		// order_items.
-		if err := tx.Model(&models.OrderItem{}).
-			Where("order_id IN (?)", tx.Model(&models.Order{}).Select("id").Where("restaurant_id = ?", id)).
-			Count(&out.Counts.OrderItems).Error; err != nil {
+		// ── Заказы (дети → родитель) ──
+		if err := acc("order_item_modifiers", tx.Where("order_item_id IN (?)",
+			tx.Model(&models.OrderItem{}).Select("id").Where("order_id IN (?)", orderIDs()),
+		).Delete(&models.OrderItemModifier{})); err != nil {
 			return err
 		}
-		if err := tx.Where("order_id IN (?)", tx.Model(&models.Order{}).Select("id").Where("restaurant_id = ?", id)).
-			Delete(&models.OrderItem{}).Error; err != nil {
+		if err := acc("order_items", tx.Where("order_id IN (?)", orderIDs()).Delete(&models.OrderItem{})); err != nil {
 			return err
 		}
-
-		// orders.
-		res := tx.Where("restaurant_id = ?", id).Delete(&models.Order{})
-		if res.Error != nil {
-			return res.Error
-		}
-		out.Counts.Orders = res.RowsAffected
-
-		// financial_operations.
-		res = tx.Where("restaurant_id = ?", id).Delete(&models.FinancialOperation{})
-		if res.Error != nil {
-			return res.Error
-		}
-		out.Counts.FinancialOperations = res.RowsAffected
-
-		// cash_shift_operations (по shift_id IN shifts ресторана).
-		if err := tx.Model(&models.CashShiftOperation{}).
-			Where("shift_id IN (?)", tx.Model(&models.CashShift{}).Select("id").Where("restaurant_id = ?", id)).
-			Count(&out.Counts.CashShiftOperations).Error; err != nil {
-			return err
-		}
-		if err := tx.Where("shift_id IN (?)", tx.Model(&models.CashShift{}).Select("id").Where("restaurant_id = ?", id)).
-			Delete(&models.CashShiftOperation{}).Error; err != nil {
+		if err := delRest("orders", &models.Order{}); err != nil {
 			return err
 		}
 
-		// cash_shifts.
-		res = tx.Where("restaurant_id = ?", id).Delete(&models.CashShift{})
-		if res.Error != nil {
-			return res.Error
+		// ── Финансы + кассовые смены ──
+		if err := delRest("financial_operations", &models.FinancialOperation{}); err != nil {
+			return err
 		}
-		out.Counts.CashShifts = res.RowsAffected
+		// Капитал: взносы/изъятия собственника, в т.ч. авто «Взнос собственника —
+		// начальный остаток» склада и счёта. Без очистки после сброса Баланс
+		// показывал бы висящий капитал без актива (актив уже обнулён), а
+		// повторный ввод начального остатка задваивал бы капитал.
+		if err := delRest("equity_entries", &models.EquityEntry{}); err != nil {
+			return err
+		}
+		if err := acc("cash_shift_operations", tx.Where("shift_id IN (?)",
+			tx.Model(&models.CashShift{}).Select("id").Where("restaurant_id = ?", id),
+		).Delete(&models.CashShiftOperation{})); err != nil {
+			return err
+		}
+		if err := delRest("cash_shifts", &models.CashShift{}); err != nil {
+			return err
+		}
+		if err := delRest("time_entries", &models.TimeEntry{}); err != nil {
+			return err
+		}
 
-		// time_entries.
-		res = tx.Where("restaurant_id = ?", id).Delete(&models.TimeEntry{})
-		if res.Error != nil {
-			return res.Error
+		// ── Склад: операции (строки-«дети» без restaurant_id — по родителю) ──
+		if err := acc("stock_receipt_lines", tx.Where("receipt_id IN (?)",
+			tx.Model(&models.StockReceipt{}).Select("id").Where("restaurant_id = ?", id),
+		).Delete(&models.StockReceiptLine{})); err != nil {
+			return err
 		}
-		out.Counts.TimeEntries = res.RowsAffected
+		if err := delRest("stock_receipts", &models.StockReceipt{}); err != nil {
+			return err
+		}
+		if err := acc("stock_writeoff_lines", tx.Where("writeoff_id IN (?)",
+			tx.Model(&models.StockWriteoff{}).Select("id").Where("restaurant_id = ?", id),
+		).Delete(&models.StockWriteoffLine{})); err != nil {
+			return err
+		}
+		if err := delRest("stock_writeoffs", &models.StockWriteoff{}); err != nil {
+			return err
+		}
+		if err := acc("stock_return_lines", tx.Where("return_id IN (?)",
+			tx.Model(&models.StockReturn{}).Select("id").Where("restaurant_id = ?", id),
+		).Delete(&models.StockReturnLine{})); err != nil {
+			return err
+		}
+		if err := delRest("stock_returns", &models.StockReturn{}); err != nil {
+			return err
+		}
+		if err := acc("inventory_check_lines", tx.Where("check_id IN (?)",
+			tx.Model(&models.InventoryCheck{}).Select("id").Where("restaurant_id = ?", id),
+		).Delete(&models.InventoryCheckLine{})); err != nil {
+			return err
+		}
+		if err := delRest("inventory_checks", &models.InventoryCheck{}); err != nil {
+			return err
+		}
+		if err := delRest("stock_movements", &models.StockMovement{}); err != nil {
+			return err
+		}
+		if err := delRest("semi_finished_stock", &models.SemiFinishedStock{}); err != nil {
+			return err
+		}
+		if err := delRest("batch_cooking_logs", &models.BatchCookingLog{}); err != nil {
+			return err
+		}
+		if err := delRest("supply_expenses", &models.SupplyExpense{}); err != nil {
+			return err
+		}
+
+		// ── ЗП-история ──
+		if err := delRest("salary_advances", &models.SalaryAdvance{}); err != nil {
+			return err
+		}
+		if err := delRest("salary_deductions", &models.SalaryDeduction{}); err != nil {
+			return err
+		}
+		if err := delRest("salary_worked_days", &models.SalaryWorkedDay{}); err != nil {
+			return err
+		}
+		if err := delRest("salary_day_multipliers", &models.SalaryDayMultiplier{}); err != nil {
+			return err
+		}
+
+		// ── Прочие операции (по выбору владельца — журнал и плановые платежи тоже) ──
+		if err := delRest("reservations", &models.Reservation{}); err != nil {
+			return err
+		}
+		if err := delRest("print_jobs", &models.PrintJob{}); err != nil {
+			return err
+		}
+		if err := delRest("audit_log", &models.AuditLog{}); err != nil {
+			return err
+		}
+		if err := delRest("recurring_payments", &models.RecurringPayment{}); err != nil {
+			return err
+		}
+
+		// ── Обнуление денормализованных балансов (сами записи остаются) ──
+		if err := acc("ingredients_zeroed", tx.Model(&models.Ingredient{}).
+			Where("restaurant_id = ? AND qty <> 0", id).Update("qty", 0)); err != nil {
+			return err
+		}
+		if err := acc("accounts_zeroed", tx.Model(&models.FinancialAccount{}).
+			Where("restaurant_id = ? AND balance <> 0", id).Update("balance", 0)); err != nil {
+			return err
+		}
+		if err := acc("suppliers_debt_cleared", tx.Model(&models.Supplier{}).
+			Where("restaurant_id = ? AND current_debt <> 0", id).Update("current_debt", 0)); err != nil {
+			return err
+		}
 		return nil
 	})
 	if err != nil {
@@ -374,6 +466,9 @@ type ClearMenuResult struct {
 }
 
 func (s *RestaurantsService) ClearMenu(ctx context.Context, id string) (*ClearMenuResult, error) {
+	if err := requireOwner(ctx, s.r); err != nil {
+		return nil, err
+	}
 	var existing models.Restaurant
 	if err := s.r.Raw().WithContext(ctx).Where("id = ?", id).First(&existing).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {

@@ -9,7 +9,7 @@ import {
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useAuth } from '@/lib/auth-store'
-import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, calcLineCogs, calcLineTotal, voidedItemFlags, startOfToday, getTimeSince, calcOrderDisplayTotal } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, calcLineCogs, calcLineTotal, voidedItemFlags, getTimeSince, calcOrderDisplayTotal } from '@/lib/helpers'
 import { dMul, dDiv, dSum, dRound, dAdd } from '@/lib/decimal'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { WeightInputSheet } from '@/components/dialogs/weight-input-sheet'
@@ -24,7 +24,7 @@ import {
 import {
   createOrder, openTableForOrder, fetchActiveShift, addItemsToOrder, fetchOrders,
   fetchReservationForTable, updateReservationStatus, closeOrderWithPayment, fetchFinancialAccounts,
-  deleteOrder, updateTableStatus, reopenOrder, updateOrderStatus,
+  deleteOrder, updateTableStatus, reopenOrder, updateOrderStatus, ordersFromBoundary,
 } from '@/lib/queries'
 // Direct (non-cached) fetchVoidsForOrder — нужен чтобы после void'а сразу
 // видеть актуальный список с зачёркиванием в «Уже заказано». Cache-обёртка
@@ -488,7 +488,7 @@ export function OrderComposer(props: OrderComposerProps) {
     // OrderActionsPanel переиспользуются. Auto-select НЕ делаем: кассир
     // должен явно выбрать заказ или начать новый («Создать без оплаты»).
     if (orderType === 'takeaway' || orderType === 'delivery') {
-      fetchOrders({ from: startOfToday() }).then(list => {
+      ordersFromBoundary().then(from => fetchOrders({ from })).then(list => {
         if (cancelled) return
         const matches = list
           .filter(o => o.type === orderType && o.status !== 'done' && o.status !== 'cancelled')
@@ -571,7 +571,7 @@ export function OrderComposer(props: OrderComposerProps) {
     if (!ordersDrawerOpen) return
     let cancelled = false
     setRecentOrdersLoading(true)
-    fetchOrders({ from: startOfToday() }).then(list => {
+    ordersFromBoundary().then(from => fetchOrders({ from })).then(list => {
       if (cancelled) return
       // Сортируем свежие сверху (по createdAt desc).
       const sorted = [...list].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())

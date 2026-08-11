@@ -32,6 +32,10 @@ export interface Restaurant {
   name: string
   slug: string
   logoUrl?: string
+  // Табло выдачи /board: станции для показа (CSV, пусто = все) + яркость
+  // логотипа-фона за «Готово» (проценты 0–100, пусто = 13).
+  boardStations?: string
+  boardLogoOpacity?: number
   address?: string
   phone?: string
   currency: string

@@ -179,6 +179,8 @@ export function mapRestaurantRow(r: Record<string, any>): Restaurant {
     name: r.name,
     slug: r.slug,
     logoUrl: r.logo_url,
+    boardStations: r.board_stations ?? undefined,
+    boardLogoOpacity: r.board_logo_opacity ?? undefined,
     address: r.address,
     phone: r.phone,
     currency: r.currency || 'TJS',

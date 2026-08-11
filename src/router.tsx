@@ -4,6 +4,7 @@ import { AppLayout } from './layouts/AppLayout'
 import { AuthLayout } from './layouts/AuthLayout'
 import { AdminLayout } from './layouts/AdminLayout'
 import { PosV2Layout } from './layouts/PosV2Layout'
+import { BoardLayout } from './layouts/BoardLayout'
 
 // Suspense fallback is intentionally empty — pages render their own skeletons
 // once they mount. A spinner here would flash briefly before the skeleton.
@@ -23,6 +24,9 @@ const Connect = () => L(() => import('@/app/connect/page'))
 
 // Dashboard
 const Dashboard = () => L(() => import('@/app/(app)/dashboard/page'))
+
+// ТВ-табло выдачи — полноэкранное, без сайдбара (BoardLayout).
+const Board = () => L(() => import('@/app/board/page'))
 
 // Waiter (dedicated UI for role=waiter)
 const WaiterTables = () => L(() => import('@/app/(app)/waiter/tables/page'))
@@ -139,6 +143,11 @@ export function AppRouter() {
       <Route element={<AuthLayout />}>
         <Route path="/login" element={<Login />} />
         <Route path="/bootstrap" element={<Bootstrap />} />
+      </Route>
+
+      {/* ТВ-табло выдачи — под входом (один раз PIN), но БЕЗ сайдбара/лока. */}
+      <Route element={<BoardLayout />}>
+        <Route path="/board" element={<Board />} />
       </Route>
 
       {/* Main app — protected */}

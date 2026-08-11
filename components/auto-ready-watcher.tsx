@@ -3,8 +3,7 @@
 import { useEffect, useRef } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import { useBranchView } from '@/hooks/use-branch-view'
-import { checkAutoReadyOrders, fetchOrders, fetchTables } from '@/lib/queries'
-import { startOfToday } from '@/lib/helpers'
+import { checkAutoReadyOrders, fetchOrders, fetchTables, ordersFromBoundary } from '@/lib/queries'
 import { api, unwrap } from '@/lib/api'
 import { onDataChange, initRealtime } from '@/lib/realtime'
 import { toast } from 'sonner'
@@ -97,7 +96,7 @@ export function AutoReadyWatcher() {
     // Snapshot current orders without notifying (avoids spam on login)
     const snapshot = async () => {
       try {
-        const [orders, tables] = await Promise.all([fetchOrders({ from: startOfToday() }), fetchTables()])
+        const [orders, tables] = await Promise.all([ordersFromBoundary().then(from => fetchOrders({ from })), fetchTables()])
         if (cancelled) return
         tablesRef.current = tables
         for (const o of orders) {
