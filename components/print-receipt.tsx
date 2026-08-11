@@ -1,7 +1,7 @@
 'use client'
 
 import { forwardRef } from 'react'
-import { formatCurrency, calcLineTotal, formatQty } from '@/lib/helpers'
+import { formatCurrency, calcLineTotal, formatQty, groupByBundle } from '@/lib/helpers'
 import type { PaymentMethod } from '@/lib/types'
 import type { ReceiptPrintData } from '@/lib/receipt-data'
 
@@ -126,28 +126,40 @@ export const PrintReceipt = forwardRef<HTMLDivElement, PrintReceiptProps>(
         </div>
         <div style={{ borderBottom: '1px dashed #000', marginBottom: '6px' }} />
 
-        {/* Items — одна строка «{name} ×{qty}    {lineTotal}», модификаторы отдельно */}
-        {printableItems.map((item, i) => {
-          const portions = item.portions && item.portions > 1 ? item.portions : 1
-          const baseQtyStr = item.unit && item.unit !== 'piece' ? formatQty(item.qty, item.unit) : `×${item.qty}`
-          // Слитые весовые порции: «100г × 3».
-          const qtyStr = portions > 1 ? `${baseQtyStr} × ${portions}` : baseQtyStr
-          const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize) * portions
-          return (
-            <div key={i} style={{ marginBottom: '3px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
-                <span style={{ flex: 1, marginRight: '8px', wordBreak: 'break-word' }}>
-                  {item.name} <span style={{ fontWeight: 600 }}>{qtyStr}</span>
-                </span>
-                <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{formatCurrency(lineTotal)}</span>
-              </div>
-              {item.modifiers && item.modifiers.length > 0 && (
-                <div style={{ fontSize: '11px', paddingLeft: '8px' }}>
-                  {item.modifiers.map((m, mi) => (
-                    <div key={mi}>+ {m.name}{m.price > 0 ? ` (+${formatCurrency(m.price)})` : ''}</div>
-                  ))}
+        {/* Items — одна строка «{name} ×{qty}    {lineTotal}», модификаторы отдельно.
+            Компоненты одного сета (общий bundleGroupId) идут друг за другом с
+            подписью слота вместо отдельных модификаторов — у сета их и нет,
+            это N самостоятельных позиций с собственной ценой внутри сета. */}
+        {groupByBundle(printableItems, it => it.bundleGroupId).map((group, gi) => {
+          const renderItem = (item: typeof printableItems[number], key: number, indented: boolean) => {
+            const portions = item.portions && item.portions > 1 ? item.portions : 1
+            const baseQtyStr = item.unit && item.unit !== 'piece' ? formatQty(item.qty, item.unit) : `×${item.qty}`
+            // Слитые весовые порции: «100г × 3».
+            const qtyStr = portions > 1 ? `${baseQtyStr} × ${portions}` : baseQtyStr
+            const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize) * portions
+            return (
+              <div key={key} style={{ marginBottom: '3px', paddingLeft: indented ? '8px' : undefined }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '13px' }}>
+                  <span style={{ flex: 1, marginRight: '8px', wordBreak: 'break-word' }}>
+                    {indented ? '· ' : ''}{item.bundleSlotLabel ? `${item.bundleSlotLabel}: ` : ''}{item.name} <span style={{ fontWeight: 600 }}>{qtyStr}</span>
+                  </span>
+                  <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{formatCurrency(lineTotal)}</span>
                 </div>
-              )}
+                {item.modifiers && item.modifiers.length > 0 && (
+                  <div style={{ fontSize: '11px', paddingLeft: '8px' }}>
+                    {item.modifiers.map((m, mi) => (
+                      <div key={mi}>+ {m.name}{m.price > 0 ? ` (+${formatCurrency(m.price)})` : ''}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          }
+          if (!group.bundleGroupId) return renderItem(group.items[0], gi, false)
+          return (
+            <div key={`bundle-${group.bundleGroupId}`} style={{ marginBottom: '3px' }}>
+              <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase' }}>Сет</div>
+              {group.items.map((item, ii) => renderItem(item, ii, true))}
             </div>
           )
         })}

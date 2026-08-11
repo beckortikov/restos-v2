@@ -41,9 +41,19 @@ export function cartCogs(cart: CartLine[]): number {
 }
 
 /** Разворачивает корзину в OrderItem[]: весовая строка на N порций → N позиций
- *  по qty каждая (чтобы чек/кухня печатали каждую порцию отдельно). */
+ *  по qty каждая (чтобы чек/кухня печатали каждую порцию отдельно). Сет —
+ *  ОДНА OrderItem с bundle_selection, сервер сам резолвит в N компонентов
+ *  (см. handleSubmit в order-composer.tsx и expandBundleSelections на бэке);
+ *  portionQty к сетам неприменим. */
 export function cartToItems(cart: CartLine[]): OrderItem[] {
   return cart.flatMap(l => {
+    if (l.bundleSelection) {
+      return [{
+        menuItemId: '', name: l.name, qty: 1, price: l.price,
+        cogs: l.cogs, unit: l.unit, unitSize: l.unitSize, emoji: l.emoji,
+        bundleSelection: l.bundleSelection,
+      }]
+    }
     const one: OrderItem = {
       menuItemId: l.menuItemId, name: l.name, qty: l.qty, price: l.price,
       cogs: l.cogs, unit: l.unit, unitSize: l.unitSize, emoji: l.emoji,

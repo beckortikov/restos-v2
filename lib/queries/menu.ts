@@ -469,6 +469,7 @@ function mapMenuItem(r: Record<string, unknown>, techLines: Record<string, unkno
     isAvailable: r.is_available as boolean,
     stopListOverride: (r.stop_list_override as boolean) ?? false,
     isPurchased: (r.is_purchased as boolean) ?? false,
+    isBundle: (r.is_bundle as boolean) ?? false,
     cogs: Number(r.cogs) || 0,
     cookTimeMin: (r.cook_time_min as number | null) ?? null,
     station: ((r.station as MenuItem['station']) || 'hot_kitchen'),

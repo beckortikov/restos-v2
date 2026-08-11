@@ -335,6 +335,18 @@ export interface OrderItem {
    *  rendering in POS lists without re-resolving via menu cache. */
   emoji?: string
   modifiers?: OrderItemModifier[]
+  // Сет: компоненты одного добавления сета делят один bundleGroupId
+  // (присваивается сервером при резолвинге bundle_selection — см.
+  // server/internal/service/orders_write.go expandBundleSelections).
+  // bundleSlotLabel — подпись слота этого конкретного компонента
+  // («Напиток», «Гарнир»), для группировки в корзине/чеке.
+  bundleGroupId?: string
+  bundleSlotLabel?: string
+  // Write-only: заполняется при добавлении сета в заказ (см. CartLine в
+  // components/order/types.ts) — сервер резолвит в N настоящих order_items и
+  // возвращает их с bundleGroupId/bundleSlotLabel выше. Никогда не приходит
+  // с бэка при чтении заказа.
+  bundleSelection?: BundleSelectionInput
   // For weight items: actual sold amount (e.g. 250 when unit='g', unitSize=100)
   unit?: 'piece' | 'g' | 'kg'
   unitSize?: number
@@ -811,6 +823,17 @@ export interface BundleSlotOption {
   price: number
   isDefault: boolean
   sortOrder: number
+}
+
+// Выбор кассира при добавлении сета в заказ — зеркало Go
+// server/internal/service/orders_write.go BundleSelectionInput. Уходит на
+// ОДНОЙ OrderItem (menuItemId роли не играет, бэк резолвит по
+// bundleMenuItemId) — сервер резолвит в N обычных order_items сам
+// (expandBundleSelections), с ценой из BundleSlotOption.price. Клиент id
+// опций не подменяет ценой — цену сервер не читает из запроса вообще.
+export interface BundleSelectionInput {
+  bundleMenuItemId: string
+  slots: { slotId: string; optionIds: string[] }[]
 }
 
 // ─── Stop-List ───────────────────────────────────────────────────────────────

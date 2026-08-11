@@ -312,6 +312,8 @@ export function _mapV4OrderItem(i: Record<string, any>): OrderItem {
     note: (i.note as string | null | undefined) ?? null,
     kitchenStatus: i.kitchen_status ?? null,
     createdAt: i.created_at ?? i.createdAt,
+    bundleGroupId: i.bundle_group_id ?? undefined,
+    bundleSlotLabel: i.bundle_slot_label ?? undefined,
     modifiers: Array.isArray(i.modifiers)
       ? i.modifiers.map((m: any) => ({
           modifierId: m.modifier_id ?? m.id ?? undefined,

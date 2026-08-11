@@ -31,7 +31,7 @@ export interface ReceiptPrintData {
   deliveryAddress?: string
   waiterName?: string
   cashierName?: string
-  items: { name: string; qty: number; price: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; modifiers?: { name: string; price: number }[]; portions?: number }[]
+  items: { name: string; qty: number; price: number; unit?: 'piece' | 'g' | 'kg'; unitSize?: number; modifiers?: { name: string; price: number }[]; portions?: number; bundleGroupId?: string; bundleSlotLabel?: string }[]
   subtotal: number
   discountAmount?: number
   discountReason?: string
@@ -89,12 +89,16 @@ function groupWeightPortions<T extends {
   name: string; qty: number; price: number
   unit?: 'piece' | 'g' | 'kg'; unitSize?: number
   modifiers?: { name: string; price: number }[]
+  bundleGroupId?: string
 }>(items: T[]): (T & { portions: number })[] {
   const out: (T & { portions: number })[] = []
   const idx = new Map<string, number>()
   for (const it of items) {
     if (it.unit === 'g' || it.unit === 'kg') {
-      const key = `${it.name}|${it.price}|${it.unit}|${it.unitSize}|${it.qty}|${modSignature(it.modifiers)}`
+      // bundleGroupId в ключе — иначе одинаковый весовой компонент из ДВУХ
+      // разных добавлений сета (или сета и обычной продажи) слипся бы в одну
+      // печатную строку с portions=2, потеряв привязку к своему сету.
+      const key = `${it.name}|${it.price}|${it.unit}|${it.unitSize}|${it.qty}|${modSignature(it.modifiers)}|${it.bundleGroupId ?? ''}`
       const at = idx.get(key)
       if (at !== undefined) { out[at].portions += 1; continue }
       idx.set(key, out.length)
@@ -153,6 +157,8 @@ export function buildReceiptData(
       unitSize: i.unitSize,
       modifiers: i.modifiers?.map(m => ({ name: m.name, price: m.price })),
       portions: i.portions,
+      bundleGroupId: i.bundleGroupId,
+      bundleSlotLabel: i.bundleSlotLabel,
     })),
     subtotal,
     discountAmount: discountAmount > 0 ? discountAmount : undefined,

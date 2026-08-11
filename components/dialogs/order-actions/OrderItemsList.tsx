@@ -19,7 +19,7 @@
 import { memo } from 'react'
 import { toast } from 'sonner'
 import { XCircle } from 'lucide-react'
-import { formatCurrency, calcLineTotal, formatQty, getTimeSince } from '@/lib/helpers'
+import { formatCurrency, calcLineTotal, formatQty, getTimeSince, groupByBundle } from '@/lib/helpers'
 import { VOID_REASON_LABELS, type Order, type VoidReason, type OrderVoid } from '@/lib/types'
 import { cancelOrderItem, cancelOrderItemPartial } from '@/lib/queries'
 
@@ -66,25 +66,28 @@ function OrderItemsListInner({
   isOwnAsWaiter,
   onItemsChanged,
 }: OrderItemsListProps) {
-  return (
-    <div className="divide-y divide-border">
-      {order.items.map((item, i) => {
-        const mi = menuItemsData.find(m => m.id === item.menuItemId)
-        const isVoided = voidedIndices.has(i) || voidedFlagsFromDb[i] || false
-        const isVoiding = voidingItemIdx === i
-        const isCancelled = !!item.cancelledAt
-        const inActiveStatus = order.status === 'new' || order.status === 'cooking' || order.status === 'ready'
-        const canVoidItem = !isCancelled && !isVoided && inActiveStatus && (canDoVoid || isOwnAsWaiter)
-        const isWeight = item.unit === 'g' || item.unit === 'kg'
-        const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize)
-        const qtyLabel = isWeight ? formatQty(item.qty, item.unit) : `x${item.qty}`
-        const visuallyMuted = isVoided || isCancelled
-        const itemCreatedAt = item.createdAt || order.createdAt
-        const itemTimeSince = itemCreatedAt ? getTimeSince(itemCreatedAt) : null
-        return (
+  // Компоненты одного сета (общий bundleGroupId) — вынесено из .map(), чтобы
+  // переиспользовать и для обычных строк, и для строк внутри конверта сета
+  // (bundled=true просто добавляет подпись слота перед именем — отмена уже
+  // каскадит на бэке независимо от того, что показывает этот список).
+  function renderRow(item: Order['items'][number], i: number, bundled: boolean) {
+    const mi = menuItemsData.find(m => m.id === item.menuItemId)
+    const isVoided = voidedIndices.has(i) || voidedFlagsFromDb[i] || false
+    const isVoiding = voidingItemIdx === i
+    const isCancelled = !!item.cancelledAt
+    const inActiveStatus = order.status === 'new' || order.status === 'cooking' || order.status === 'ready'
+    const canVoidItem = !isCancelled && !isVoided && inActiveStatus && (canDoVoid || isOwnAsWaiter)
+    const isWeight = item.unit === 'g' || item.unit === 'kg'
+    const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize)
+    const qtyLabel = isWeight ? formatQty(item.qty, item.unit) : `x${item.qty}`
+    const visuallyMuted = isVoided || isCancelled
+    const itemCreatedAt = item.createdAt || order.createdAt
+    const itemTimeSince = itemCreatedAt ? getTimeSince(itemCreatedAt) : null
+    return (
           <div key={i} className={`px-3 py-1.5 ${visuallyMuted ? 'opacity-50 bg-muted/30' : ''}`}>
             <div className="flex items-center justify-between">
               <div className="text-[13px] flex items-center gap-1 flex-wrap">
+                {bundled && item.bundleSlotLabel ? <span className="text-muted-foreground">{item.bundleSlotLabel}:</span> : null}
                 <span className={`font-medium ${visuallyMuted ? 'line-through' : ''}`}>{item.name}</span>
                 <span className="text-muted-foreground"> {qtyLabel}</span>
                 {itemTimeSince && (
@@ -184,8 +187,21 @@ function OrderItemsListInner({
               </div>
             )}
           </div>
+    )
+  }
+
+  return (
+    <div className="divide-y divide-border">
+      {groupByBundle(order.items.map((item, i) => ({ item, i })), x => x.item.bundleGroupId).map((group, gi) =>
+        !group.bundleGroupId ? renderRow(group.items[0].item, group.items[0].i, false) : (
+          <div key={`bundle-${group.bundleGroupId}`} className="bg-primary/5">
+            <p className="px-3 pt-1.5 text-[10px] font-bold uppercase tracking-wide text-primary/70">🧩 Сет</p>
+            <div className="divide-y divide-border">
+              {group.items.map(x => renderRow(x.item, x.i, true))}
+            </div>
+          </div>
         )
-      })}
+      )}
     </div>
   )
 }

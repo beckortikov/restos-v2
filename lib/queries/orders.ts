@@ -220,6 +220,13 @@ export async function createOrder(order: { type: OrderType; tableId?: string; wa
             price: m.price !== undefined ? String(m.price) : undefined,
           }))
         : undefined,
+      // Сет: вместо menu_item_id уходит bundle_selection — сервер сам резолвит
+      // в N обычных order_items с ценой из bundle_slot_options.price (клиент
+      // цену не шлёт, см. server/internal/service/orders_write.go).
+      bundle_selection: i.bundleSelection ? {
+        bundle_menu_item_id: i.bundleSelection.bundleMenuItemId,
+        slots: i.bundleSelection.slots.map(s => ({ slot_id: s.slotId, option_ids: s.optionIds })),
+      } : undefined,
     })),
   }
   const created: any = await unwrap(api.POST('/api/v1/orders', { body: body as any }))
@@ -254,6 +261,10 @@ export async function addItemsToOrder(orderId: string, newItems: import('../type
             price: m.price !== undefined ? String(m.price) : undefined,
           }))
         : undefined,
+      bundle_selection: i.bundleSelection ? {
+        bundle_menu_item_id: i.bundleSelection.bundleMenuItemId,
+        slots: i.bundleSelection.slots.map(s => ({ slot_id: s.slotId, option_ids: s.optionIds })),
+      } : undefined,
     })),
   }
   const updated: any = await unwrap(api.POST('/api/v1/orders/{id}/items', {
