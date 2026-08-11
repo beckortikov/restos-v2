@@ -77,9 +77,12 @@ export async function createMenuItem(
     body.purchase_unit = item.purchaseUnit || 'piece'
     body.purchase_min_qty = String(item.purchaseMinQty ?? 0)
   }
+  // Сет: своих техкарты/закупки нет — слоты настраиваются отдельно ПОСЛЕ
+  // создания (нужен реальный id), см. редирект на /warehouse/menu/{id} в форме.
+  if (item.isBundle) body.is_bundle = true
   const data: any = await unwrap(api.POST('/api/v1/menu/items', { body }))
   const newId: string | undefined = data?.id
-  const validTechLines = purchased ? [] : item.techCard.filter(l => l.ingredientId || l.semiId)
+  const validTechLines = (purchased || item.isBundle) ? [] : item.techCard.filter(l => l.ingredientId || l.semiId)
   if (validTechLines.length > 0 && newId) {
     for (const l of validTechLines) {
       await unwrap(api.POST('/api/v1/menu/tech-cards', {
@@ -249,6 +252,7 @@ export async function updateMenuItem(id: string, data: Partial<{
   unit: 'piece' | 'g' | 'kg'; unitSize: number; saleStep: number;
   techCard: { name: string; qty: number; unit: string; ingredientId?: string; semiId?: string }[];
   isPurchased: boolean; purchasePrice: number; purchaseUnit: string; purchaseMinQty: number;
+  isBundle: boolean;
 }>) {
   const updates: Record<string, unknown> = {}
   if (data.name !== undefined) updates.name = data.name
@@ -271,11 +275,14 @@ export async function updateMenuItem(id: string, data: Partial<{
     updates.purchase_unit = data.purchaseUnit || 'piece'
     updates.purchase_min_qty = String(data.purchaseMinQty ?? 0)
   }
+  // Сет: слоты/опции настраиваются отдельными эндпоинтами (BundleSlotsEditor),
+  // здесь только сам флаг.
+  if (data.isBundle !== undefined) updates.is_bundle = data.isBundle
 
   await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: updates as any }))
 
-  // Для покупного техкарту строит бэк — фронт её не трогает.
-  if (data.techCard && !data.isPurchased) {
+  // Для покупного/сета техкарту строит бэк или её не бывает — фронт не трогает.
+  if (data.techCard && !data.isPurchased && !data.isBundle) {
     await replaceTechCardLines(id, data.techCard.filter(l => l.ingredientId || l.semiId))
   }
   logAction('menu.edit', 'menu_item', id, data.name)

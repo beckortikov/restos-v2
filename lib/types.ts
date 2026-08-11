@@ -175,6 +175,10 @@ export interface MenuItem {
   isAvailable: boolean
   stopListOverride: boolean
   isPurchased?: boolean  // покупной товар (бэк сам ведёт складской ингредиент + 1:1 техкарту)
+  // Сет (фастфуд-комбо): собран из настоящих пунктов меню через BundleSlot/
+  // BundleSlotOption. У сета самого нет техкарты/фиксированной цены — цена и
+  // списание живут на компонентах (см. server CLAUDE.md миграция 073).
+  isBundle?: boolean
   // Себестоимость. Бэк держит её автоматически: пересчитывает из тех-карты
   // при любом изменении строк техкарты или цены ингредиента/п-ф (см.
   // server/internal/service/menu_cogs.go). Без тех-карты (покупной товар,
@@ -781,6 +785,32 @@ export interface OrderItemModifier {
   modifierId?: string
   name: string
   price: number
+}
+
+// ─── Bundles (фастфуд-сеты) ────────────────────────────────────────────────
+
+export interface BundleSlot {
+  id: string
+  bundleMenuItemId: string
+  label: string
+  isRequired: boolean
+  minSelect: number
+  maxSelect: number
+  sortOrder: number
+  options: BundleSlotOption[]
+}
+
+export interface BundleSlotOption {
+  id: string
+  slotId: string
+  optionMenuItemId: string
+  /** Имя/цена самого пункта меню (снапшот для отображения — не хранится
+   *  на бэке отдельно, подтягивается на фронте по optionMenuItemId). */
+  optionMenuItemName?: string
+  optionMenuItemPrice?: number
+  price: number
+  isDefault: boolean
+  sortOrder: number
 }
 
 // ─── Stop-List ───────────────────────────────────────────────────────────────

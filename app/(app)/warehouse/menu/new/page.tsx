@@ -38,6 +38,7 @@ interface MenuItemForm {
   purchasePrice?: number
   purchaseUnit?: string
   purchaseMinQty?: number
+  isBundle?: boolean
   unit: 'piece' | 'g' | 'kg'
   unitSize: number
   saleStep: number
@@ -362,9 +363,16 @@ export default function NewMenuItemPage() {
         if (savePromises.length > 0) await Promise.all(savePromises)
         toast.success(`Товар добавлен · вариантов: ${state.variants.length}`)
       } else {
-        toast.success(form.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
+        toast.success(form.isPurchased ? 'Покупной товар добавлен' : form.isBundle ? 'Сет создан — добавьте слоты' : 'Блюдо добавлено')
       }
-      navigate('/warehouse/menu')
+      // Сет без слотов — пустой набор. Уводим сразу на редактирование, а не в
+      // список, чтобы владелец продолжил тем же движением, не разыскивая
+      // только что созданный сет заново.
+      if (form.isBundle && created?.id) {
+        navigate(`/warehouse/menu/${created.id}`)
+      } else {
+        navigate('/warehouse/menu')
+      }
     } catch {
       toast.error('Ошибка при добавлении блюда')
     } finally {
@@ -378,7 +386,7 @@ export default function NewMenuItemPage() {
   const realTechLines = form.techCard.filter((l) => l.ingredientId || l.semiId)
   const realTechLinesValid = realTechLines.every((l) => l.qty > 0)
   const isWeightItem = form.unit !== 'piece'
-  const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
+  const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased && !form.isBundle
   // Техкарты по вариантам (per-combo) — та же проверка полноты/валидности,
   // что и у обычной техкарты, но по каждой комбинации атрибутов отдельно.
   const comboTechCardLines = (key: string) => (techCardsByCombo[key] ?? []).filter(l => l.ingredientId || l.semiId)
@@ -610,7 +618,7 @@ export default function NewMenuItemPage() {
                 <button
                   type="button"
                   // Дефолт единицы закупки «шт.» — чтобы пустой селект не блокировал сохранение.
-                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
+                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, isBundle: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
                   className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                 >
                   <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
@@ -625,7 +633,7 @@ export default function NewMenuItemPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setForm(p => ({ ...p, isBatchCooking: !p.isBatchCooking, isPurchased: false }))}
+                    onClick={() => setForm(p => ({ ...p, isBatchCooking: !p.isBatchCooking, isPurchased: false, isBundle: false }))}
                     className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isBatchCooking ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                   >
                     <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isBatchCooking ? 'translate-x-5' : ''}`} />
@@ -644,6 +652,22 @@ export default function NewMenuItemPage() {
                     />
                   </div>
                 )}
+              </div>
+
+              {/* Сет — слоты настраиваются ПОСЛЕ создания (нужен реальный id),
+                  форма при сохранении сама уводит на экран редактирования. */}
+              <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Сет (комбо)</p>
+                  <p className="text-[10px] text-muted-foreground">Собран из других блюд — своя техкарта не нужна</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setForm(p => ({ ...p, isBundle: !p.isBundle, isPurchased: false, isBatchCooking: false }))}
+                  className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isBundle ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isBundle ? 'translate-x-5' : ''}`} />
+                </button>
               </div>
 
               <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
@@ -665,7 +689,17 @@ export default function NewMenuItemPage() {
 
         {/* Right Column - Tech Card or Purchase Fields */}
         <div className="lg:col-span-7 space-y-6">
-          {form.isPurchased ? (
+          {form.isBundle ? (
+            /* Слоты сета настраиваются ПОСЛЕ создания — нужен реальный id
+               (BundleSlotsEditor живёт на экране редактирования). */
+            <div className="bg-card border border-border rounded-xl p-5 shadow-sm">
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Сохраните сет — дальше откроется редактирование, где можно собрать слоты
+                («Бургер», «Гарнир», «Напиток») из настоящих пунктов меню и задать цену
+                каждого варианта внутри сета.
+              </p>
+            </div>
+          ) : form.isPurchased ? (
             /* Purchased fields */
             <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
               <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
@@ -791,7 +825,9 @@ export default function NewMenuItemPage() {
           ) : null}
 
           {/* Атрибуты (Размер/Вкус): цены задаются на значениях, варианты
-              генерирует бэк сразу после создания товара. */}
+              генерирует бэк сразу после создания товара. Сету не нужны —
+              у него самого варианты собираются из слотов, не из атрибутов. */}
+          {!form.isBundle && (
           <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
             <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
               <Layers className="size-4 text-primary" />
@@ -814,6 +850,7 @@ export default function NewMenuItemPage() {
               </p>
             )}
           </div>
+          )}
 
           {/* Техкарты по вариантам — заполняются ДО сохранения (варианты ещё
               не существуют на бэке): один раз, отдельно на каждую комбинацию

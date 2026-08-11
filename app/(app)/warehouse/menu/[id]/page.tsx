@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { humanizeError } from '@/lib/errors'
 import { AttributesEditor } from '@/components/menu/attributes-editor'
 import { VariantTechCardsEditor } from '@/components/menu/variant-tech-cards-editor'
+import { BundleSlotsEditor } from '@/components/menu/bundle-slots-editor'
 
 interface MenuItemForm {
   name: string
@@ -40,6 +41,7 @@ interface MenuItemForm {
   purchasePrice?: number
   purchaseUnit?: string
   purchaseMinQty?: number
+  isBundle?: boolean
   unit: 'piece' | 'g' | 'kg'
   unitSize: number
   saleStep: number
@@ -188,6 +190,8 @@ export default function EditMenuItemPage() {
   // отдельный fetch проще, чем поднимать состояние наверх через колбэк).
   const [variantAttributes, setVariantAttributes] = useState<MenuAttribute[]>([])
   const [productVariants, setProductVariants] = useState<MenuItem[]>([])
+  // Полный список меню — нужен BundleSlotsEditor (поиск компонентов сета).
+  const [allMenuItems, setAllMenuItems] = useState<MenuItem[]>([])
   const [form, setForm] = useState<MenuItemForm>({
     name: '',
     category: '',
@@ -229,6 +233,7 @@ export default function EditMenuItemPage() {
         setSemiTypes(s)
         setSemiStock(ss)
         setMenuCategories(c)
+        setAllMenuItems(items)
         const found = items.find((item) => item.id === id)
         if (found) {
           setMenuItem(found)
@@ -252,6 +257,7 @@ export default function EditMenuItemPage() {
             purchasePrice: backing?.pricePerUnit ?? found.cogs,
             purchaseUnit: backing?.unit ?? found.techCard[0]?.unit ?? '',
             purchaseMinQty: backing?.minQty ?? 0,
+            isBundle: found.isBundle ?? false,
             unit: found.unit || 'piece',
             unitSize: found.unitSize ?? 1,
             saleStep: found.saleStep ?? 0,
@@ -389,7 +395,7 @@ export default function EditMenuItemPage() {
   const techCardPreviewCogs = previewTechCardCogs(form.techCard, ingredients, semiStock)
   // Весовое сырьё (на развес) продаётся по весу и НЕ требует техкарты-рецепта.
   const isWeightItem = form.unit !== 'piece'
-  const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
+  const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased && !form.isBundle
   // С атрибутами цена и закупка живут на значениях атрибутов.
   const purchasedOk = hasAttributes
     ? !!form.purchaseUnit
@@ -605,7 +611,7 @@ export default function EditMenuItemPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
+                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, isBundle: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
                   className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                 >
                   <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
@@ -620,7 +626,7 @@ export default function EditMenuItemPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setForm(p => ({ ...p, isBatchCooking: !p.isBatchCooking, isPurchased: false }))}
+                    onClick={() => setForm(p => ({ ...p, isBatchCooking: !p.isBatchCooking, isPurchased: false, isBundle: false }))}
                     className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isBatchCooking ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                   >
                     <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isBatchCooking ? 'translate-x-5' : ''}`} />
@@ -639,6 +645,21 @@ export default function EditMenuItemPage() {
                     />
                   </div>
                 )}
+              </div>
+
+              {/* Сет — фастфуд-комбо из настоящих пунктов меню (слоты ниже). */}
+              <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Сет (комбо)</p>
+                  <p className="text-[10px] text-muted-foreground">Собран из других блюд — своя техкарта не нужна</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setForm(p => ({ ...p, isBundle: !p.isBundle, isPurchased: false, isBatchCooking: false }))}
+                  className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isBundle ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isBundle ? 'translate-x-5' : ''}`} />
+                </button>
               </div>
 
               <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
@@ -682,7 +703,9 @@ export default function EditMenuItemPage() {
 
         {/* Right Column - Tech Card or Purchase Fields */}
         <div className="lg:col-span-7 space-y-6">
-          {form.isPurchased ? (
+          {form.isBundle && menuItem ? (
+            <BundleSlotsEditor bundleMenuItemId={menuItem.id} menuItems={allMenuItems} />
+          ) : form.isPurchased ? (
             /* Purchased fields */
             <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
               <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
@@ -806,7 +829,7 @@ export default function EditMenuItemPage() {
           ) : null}
 
           {/* Атрибуты (Размер/Вкус) — только у продукта-родителя, не у варианта. */}
-          {menuItem && !menuItem.parentId && (
+          {menuItem && !menuItem.parentId && !form.isBundle && (
             <AttributesEditor
               productId={menuItem.id}
               isPurchased={form.isPurchased}
@@ -827,7 +850,7 @@ export default function EditMenuItemPage() {
           )}
 
           {/* Техкарта по размерам/вкусам — своя граммовка у каждого варианта. */}
-          {menuItem && !menuItem.parentId && techCardsEnabled && !form.isPurchased && productVariants.length > 0 && (
+          {menuItem && !menuItem.parentId && techCardsEnabled && !form.isPurchased && !form.isBundle && productVariants.length > 0 && (
             <VariantTechCardsEditor
               variants={productVariants}
               ingredients={ingredients}
