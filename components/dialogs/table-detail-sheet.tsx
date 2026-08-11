@@ -22,7 +22,7 @@ import {
   BottomSheetTitle as SheetTitle,
   BottomSheetDescription as SheetDescription,
 } from '@/components/ui/bottom-sheet'
-import { getTimeSince, startOfToday } from '@/lib/helpers'
+import { getTimeSince } from '@/lib/helpers'
 import {
   STATUS_LABELS,
   ORDER_STATUS_LABELS,
@@ -34,7 +34,7 @@ import {
   type User,
   type Zone,
 } from '@/lib/types'
-import { fetchOrders, fetchUsers, fetchZones, fetchReservationForTable, updateReservationStatus, quickUpdateCapacity, patchOrder } from '@/lib/queries'
+import { fetchOrders, fetchUsers, fetchZones, fetchReservationForTable, updateReservationStatus, quickUpdateCapacity, patchOrder, ordersFromBoundary } from '@/lib/queries'
 import { toast } from 'sonner'
 import type { Reservation } from '@/lib/types'
 import { ReservationDialog } from '@/components/dialogs/reservation-dialog'
@@ -105,7 +105,7 @@ export function TableDetailSheet({ table, open, onOpenChange, onAction, hasMerge
   // Data load on open.
   useEffect(() => {
     if (open && !dataLoaded) {
-      Promise.all([fetchOrders({ from: startOfToday() }), fetchUsers(), fetchZones()])
+      Promise.all([ordersFromBoundary().then(from => fetchOrders({ from })), fetchUsers(), fetchZones()])
         .then(async ([o, u, z]) => {
           // Зависший заказ старше суток — догружаем по id, иначе шит остаётся пустым.
           let merged = o

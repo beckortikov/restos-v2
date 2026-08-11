@@ -11,12 +11,12 @@ import { humanizeError } from '@/lib/errors'
 
 import { useAuth } from '@/lib/auth-store'
 import { useDataSync } from '@/hooks/use-data-sync'
-import { startOfToday, endOfDay, calcLineCogs } from '@/lib/helpers'
+import { endOfDay, calcLineCogs } from '@/lib/helpers'
 import {
   type Order, type OrderStatus, type OrderVoid, type Table, type User, type Zone,
 } from '@/lib/types'
 import {
-  fetchOrders, fetchTables, fetchZones, fetchUsers, fetchActiveShift, fetchVoidsForOrders,
+  fetchOrders, fetchTables, fetchZones, fetchUsers, ordersFromBoundary, fetchVoidsForOrders,
   cleanupOrphanOrders, updateOrderStatus, deleteOrder, closeOrderWithPayment, reopenOrder,
 } from '@/lib/queries'
 
@@ -63,16 +63,16 @@ export function ActiveOrdersTab({ typeFilter, search, onQueueCountChange }: Acti
   const [addItemsOrderId, setAddItemsOrderId] = useState<string | null>(null)
 
   const refetchAll = useCallback(async () => {
-    let from: Date = startOfToday()
-    let shiftId: string | undefined
-    try {
-      const sh = await fetchActiveShift()
-      if (sh?.openedAt) from = new Date(sh.openedAt)
-      if (sh?.id) shiftId = sh.id
-    } catch { /* ignore */ }
+    // Специально БЕЗ shiftId-фильтра: заказы официанта с Kotlin-планшета
+    // создаются без привязки к кассовой смене — жёсткий shiftId-фильтр их
+    // исключал бы (тот же баг, что уже словили и откатили в
+    // app/pos2/order/page.tsx openOrders()). from = момент открытия смены
+    // расширяет окно назад, чтобы заказ, созданный до полуночи при ещё
+    // открытой смене, не пропадал.
+    const from = await ordersFromBoundary()
 
     const [o, t, z, u] = await Promise.all([
-      fetchOrders({ from, to: endOfDay(new Date()), shiftId, slim: true }),
+      fetchOrders({ from, to: endOfDay(new Date()), slim: true }),
       fetchTables(),
       fetchZones().catch(() => [] as Zone[]),
       fetchUsers(),

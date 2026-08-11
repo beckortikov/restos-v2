@@ -53,6 +53,7 @@ vi.mock('@/lib/queries', () => {
     __esModule: true,
     // fetchers
     fetchActiveShift: () => Promise.resolve(null),
+    ordersFromBoundary: () => Promise.resolve(new Date(0)),
     fetchShiftRevenue: () => Promise.resolve({ cashRevenue: 0, cardRevenue: 0, ordersCount: 0, avgCheck: 0 }),
     fetchShiftOperations: list,
     fetchShiftZReport: () => Promise.resolve(null),
