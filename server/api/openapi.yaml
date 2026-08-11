@@ -4114,11 +4114,28 @@ components:
         bundle_slot_label: { type: string, nullable: true, description: "Подпись слота сета («Бургер») на момент продажи, для чека." }
     OrderItemInput:
       type: object
-      required: [menu_item_id, qty]
+      description: |
+        Либо обычная позиция (menu_item_id+qty), либо сет — bundle_selection
+        ВМЕСТО menu_item_id (сервер резолвит в N настоящих позиций с ценой из
+        bundle_slot_options, не от клиента).
       properties:
         menu_item_id: { type: string, format: uuid }
-        qty: { type: string, description: Decimal как строка }
+        qty: { type: string, description: "Decimal как строка. У bundle_selection всё равно шлём \"1\" — резолвится в компоненты, каждый qty=1." }
         modifier_ids: { type: array, items: { type: string, format: uuid } }
+        bundle_selection: { $ref: "#/components/schemas/BundleSelectionInput" }
+    BundleSelectionInput:
+      type: object
+      required: [bundle_menu_item_id, slots]
+      properties:
+        bundle_menu_item_id: { type: string, format: uuid }
+        slots:
+          type: array
+          items:
+            type: object
+            required: [slot_id, option_ids]
+            properties:
+              slot_id: { type: string, format: uuid }
+              option_ids: { type: array, items: { type: string, format: uuid } }
     CreateOrderInput:
       type: object
       required: [items]

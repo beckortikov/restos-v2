@@ -12523,12 +12523,27 @@ export interface components {
             /** @description Подпись слота сета («Бургер») на момент продажи, для чека. */
             bundle_slot_label?: string | null;
         };
+        /**
+         * @description Либо обычная позиция (menu_item_id+qty), либо сет — bundle_selection
+         *     ВМЕСТО menu_item_id (сервер резолвит в N настоящих позиций с ценой из
+         *     bundle_slot_options, не от клиента).
+         */
         OrderItemInput: {
             /** Format: uuid */
-            menu_item_id: string;
-            /** @description Decimal как строка */
-            qty: string;
+            menu_item_id?: string;
+            /** @description Decimal как строка. У bundle_selection всё равно шлём "1" — резолвится в компоненты, каждый qty=1. */
+            qty?: string;
             modifier_ids?: string[];
+            bundle_selection?: components["schemas"]["BundleSelectionInput"];
+        };
+        BundleSelectionInput: {
+            /** Format: uuid */
+            bundle_menu_item_id: string;
+            slots: {
+                /** Format: uuid */
+                slot_id: string;
+                option_ids: string[];
+            }[];
         };
         CreateOrderInput: {
             /** Format: uuid */
