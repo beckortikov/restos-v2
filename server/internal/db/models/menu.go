@@ -31,15 +31,19 @@ func (CustomCategory) TableName() string { return "custom_categories" }
 
 // MenuItem — блюдо.
 type MenuItem struct {
-	ID                string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	Name              *string         `json:"name"`
-	Category          *string         `json:"category"`
-	Price             decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"price"`
-	Emoji             *string         `gorm:"default:''" json:"emoji"`
-	ImageURL          *string         `gorm:"column:image_url" json:"image_url"`
-	IsAvailable       *bool           `gorm:"column:is_available;default:true" json:"is_available"`
-	StopListOverride  *bool           `gorm:"column:stop_list_override;default:false" json:"stop_list_override"`
-	IsPurchased       bool            `gorm:"column:is_purchased;not null;default:false" json:"is_purchased"`
+	ID               string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	Name             *string         `json:"name"`
+	Category         *string         `json:"category"`
+	Price            decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"price"`
+	Emoji            *string         `gorm:"default:''" json:"emoji"`
+	ImageURL         *string         `gorm:"column:image_url" json:"image_url"`
+	IsAvailable      *bool           `gorm:"column:is_available;default:true" json:"is_available"`
+	StopListOverride *bool           `gorm:"column:stop_list_override;default:false" json:"stop_list_override"`
+	IsPurchased      bool            `gorm:"column:is_purchased;not null;default:false" json:"is_purchased"`
+	// IsBundle — фастфуд-сет (см. BundleSlot/BundleSlotOption, миграция 073).
+	// Собран из НАСТОЯЩИХ пунктов меню — у сета самого нет техкарты/цены,
+	// цена и списание живут на компонентах.
+	IsBundle          bool            `gorm:"column:is_bundle;not null;default:false" json:"is_bundle"`
 	COGS              decimal.Decimal `gorm:"column:cogs;type:numeric(14,4);default:0" json:"cogs"`
 	CookTimeMin       *int            `gorm:"column:cook_time_min" json:"cook_time_min"`
 	Station           *string         `gorm:"default:'hot_kitchen'" json:"station"`
@@ -86,6 +90,42 @@ type Modifier struct {
 }
 
 func (Modifier) TableName() string { return "modifiers" }
+
+// BundleSlot — слот фастфуд-сета («Бургер»/«Гарнир»/«Напиток», миграция 073).
+// Структурно как ModifierGroup, но у сета ЕСТЬ restaurant_id напрямую (в
+// отличие от Modifier/child-таблиц) — слот не имеет смысла без tenant-скоупа
+// с самого начала, как у самого MenuItem.
+type BundleSlot struct {
+	ID               string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID     *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	BundleMenuItemID string    `gorm:"column:bundle_menu_item_id;type:uuid;not null;index" json:"bundle_menu_item_id"`
+	Label            string    `gorm:"not null" json:"label"`
+	IsRequired       bool      `gorm:"column:is_required;not null;default:true" json:"is_required"`
+	MinSelect        int       `gorm:"column:min_select;not null;default:1" json:"min_select"`
+	MaxSelect        int       `gorm:"column:max_select;not null;default:1" json:"max_select"`
+	SortOrder        int       `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func (BundleSlot) TableName() string { return "bundle_slots" }
+
+// BundleSlotOption — вариант внутри слота. OptionMenuItemID ссылается на
+// НАСТОЯЩИЙ пункт меню (не свободное имя, как у Modifier) — у выбора есть
+// своя техкарта/станция/сток без специальной обработки. Price — цена этого
+// варианта ВНУТРИ сета (не скидка на заказ, см. миграцию 073).
+type BundleSlotOption struct {
+	ID               string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	SlotID           string          `gorm:"column:slot_id;type:uuid;not null;index" json:"slot_id"`
+	OptionMenuItemID string          `gorm:"column:option_menu_item_id;type:uuid;not null;index" json:"option_menu_item_id"`
+	Price            decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"price"`
+	IsDefault        bool            `gorm:"column:is_default;not null;default:false" json:"is_default"`
+	SortOrder        int             `gorm:"column:sort_order;not null;default:0" json:"sort_order"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+func (BundleSlotOption) TableName() string { return "bundle_slot_options" }
 
 // MenuAttribute — атрибут продукта («Размер», «Вкус»). Живёт на продукте-
 // родителе; из декартова произведения значений сервис генерирует варианты.

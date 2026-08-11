@@ -92,8 +92,16 @@ type OrderItem struct {
 	PrintClaimedBy       *string    `gorm:"column:print_claimed_by" json:"print_claimed_by"`
 	CancelPrintClaimedAt *time.Time `gorm:"column:cancel_print_claimed_at" json:"cancel_print_claimed_at"`
 	CancelPrintClaimedBy *string    `gorm:"column:cancel_print_claimed_by" json:"cancel_print_claimed_by"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	// BundleGroupID — общий у всех order_items ОДНОГО добавления сета в заказ
+	// (миграция 073). NULL — обычная позиция. Группировка в корзине/чеке и
+	// каскадная отмена/возврат работают по этому ключу.
+	BundleGroupID *string `gorm:"column:bundle_group_id;type:uuid;index" json:"bundle_group_id"`
+	// BundleSlotLabel — денормализация подписи слота ("Бургер") на момент
+	// продажи. Не JOIN на bundle_slots: сет могли отредактировать/удалить
+	// после продажи — история заказа не должна от этого меняться.
+	BundleSlotLabel *string   `gorm:"column:bundle_slot_label" json:"bundle_slot_label"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (OrderItem) TableName() string { return "order_items" }

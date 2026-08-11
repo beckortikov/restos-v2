@@ -2289,6 +2289,55 @@ paths:
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses: { "204": { description: No content } }
 
+  # ─── Menu: Bundles (фастфуд-сеты) ───────────────────────────────────────
+  /api/v1/menu/bundle-slots:
+    get:
+      tags: [menu]
+      summary: Слоты сета («Бургер»/«Гарнир»/«Напиток»)
+      parameters:
+        - { in: query, name: bundle_menu_item_id, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotsList" } } } } }
+    post:
+      tags: [menu]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlot" } } } } }
+  /api/v1/menu/bundle-slots/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlot" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  /api/v1/menu/bundle-slot-options:
+    get:
+      tags: [menu]
+      summary: Варианты внутри слота сета (ссылаются на настоящий пункт меню)
+      parameters:
+        - { in: query, name: slot_id, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOptionsList" } } } } }
+    post:
+      tags: [menu]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOptionInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOption" } } } } }
+  /api/v1/menu/bundle-slot-options/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOptionInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOption" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
   # ─── Menu: TechCards ────────────────────────────────────────────────────
   /api/v1/menu/tech-cards:
     get:
@@ -3441,6 +3490,7 @@ components:
         unit_size: { $ref: "#/components/schemas/Decimal" }
         sale_step: { $ref: "#/components/schemas/Decimal" }
         low_stock_threshold: { type: integer }
+        is_bundle: { type: boolean, description: "Фастфуд-сет — см. BundleSlot/BundleSlotOption. Собран из настоящих пунктов меню, своей техкарты/цены нет." }
         parent_id:
           type: string
           format: uuid
@@ -3458,6 +3508,7 @@ components:
         cogs: { $ref: "#/components/schemas/Decimal" }
         unit: { type: string }
         unit_size: { $ref: "#/components/schemas/Decimal" }
+        is_bundle: { type: boolean }
     MenuItemWithExtras:
       allOf:
         - $ref: "#/components/schemas/MenuItem"
@@ -4059,6 +4110,8 @@ components:
         cogs: { $ref: "#/components/schemas/Decimal" }
         note: { type: string, nullable: true }
         cancelled_at: { type: string, format: date-time }
+        bundle_group_id: { type: string, format: uuid, nullable: true, description: "Общий у всех order_items одного добавления сета в заказ. NULL — обычная позиция." }
+        bundle_slot_label: { type: string, nullable: true, description: "Подпись слота сета («Бургер») на момент продажи, для чека." }
     OrderItemInput:
       type: object
       required: [menu_item_id, qty]
@@ -4576,6 +4629,48 @@ components:
         is_default: { type: boolean }
         sort_order: { type: integer }
     ModifiersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Modifier" } }, next_cursor: { type: string } } }
+
+    BundleSlot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        bundle_menu_item_id: { type: string, format: uuid }
+        label: { type: string }
+        is_required: { type: boolean }
+        min_select: { type: integer }
+        max_select: { type: integer }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+    BundleSlotInput:
+      type: object
+      properties:
+        bundle_menu_item_id: { type: string, format: uuid }
+        label: { type: string }
+        is_required: { type: boolean }
+        min_select: { type: integer }
+        max_select: { type: integer }
+        sort_order: { type: integer }
+    BundleSlotsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/BundleSlot" } }, next_cursor: { type: string } } }
+
+    BundleSlotOption:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slot_id: { type: string, format: uuid }
+        option_menu_item_id: { type: string, format: uuid, description: "Ссылается на настоящий пункт меню — своя техкарта/станция/сток" }
+        price: { $ref: "#/components/schemas/Decimal", description: "Цена этого варианта ВНУТРИ сета, не скидка на заказ" }
+        is_default: { type: boolean }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+    BundleSlotOptionInput:
+      type: object
+      properties:
+        slot_id: { type: string, format: uuid }
+        option_menu_item_id: { type: string, format: uuid }
+        price: { $ref: "#/components/schemas/Decimal" }
+        is_default: { type: boolean }
+        sort_order: { type: integer }
+    BundleSlotOptionsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/BundleSlotOption" } }, next_cursor: { type: string } } }
 
     TechCardLine:
       type: object

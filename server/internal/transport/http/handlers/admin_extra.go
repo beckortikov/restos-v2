@@ -395,6 +395,108 @@ func (h *ModifiersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ─── BundleSlots ───────────────────────────────────────────────────────────
+
+type BundleSlotsHandler struct{ svc *service.BundleSlotsService }
+
+func NewBundleSlots(svc *service.BundleSlotsService) *BundleSlotsHandler {
+	return &BundleSlotsHandler{svc: svc}
+}
+
+func (h *BundleSlotsHandler) List(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.List(r.Context(), queryString(r, "bundle_menu_item_id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[models.BundleSlot](rows, ""))
+}
+func (h *BundleSlotsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var in service.BundleSlotInput
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	g, err := h.svc.Create(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, g)
+}
+func (h *BundleSlotsHandler) Patch(w http.ResponseWriter, r *http.Request) {
+	var in service.BundleSlotInput
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	g, err := h.svc.Patch(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, g)
+}
+func (h *BundleSlotsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ─── BundleSlotOptions ───────────────────────────────────────────────────────
+
+type BundleSlotOptionsHandler struct {
+	svc *service.BundleSlotOptionsService
+}
+
+func NewBundleSlotOptions(svc *service.BundleSlotOptionsService) *BundleSlotOptionsHandler {
+	return &BundleSlotOptionsHandler{svc: svc}
+}
+
+func (h *BundleSlotOptionsHandler) List(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.List(r.Context(), queryString(r, "slot_id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[models.BundleSlotOption](rows, ""))
+}
+func (h *BundleSlotOptionsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var in service.BundleSlotOptionInput
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	m, err := h.svc.Create(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, m)
+}
+func (h *BundleSlotOptionsHandler) Patch(w http.ResponseWriter, r *http.Request) {
+	var in service.BundleSlotOptionInput
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	m, err := h.svc.Patch(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, m)
+}
+func (h *BundleSlotOptionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.Delete(r.Context(), chi.URLParam(r, "id")); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ─── TechCardLines ─────────────────────────────────────────────────────────
 
 type TechCardsHandler struct{ svc *service.TechCardsService }

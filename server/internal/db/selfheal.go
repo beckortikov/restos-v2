@@ -61,6 +61,39 @@ var schemaSelfHealStmts = []string{
 	// полями иначе не досчитается колонок; гарантируем до-наличие.
 	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS board_stations     TEXT`,
 	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS board_logo_opacity INTEGER`,
+	// 073: сеты (bundle) — фастфуд-комбо из настоящих пунктов меню. Читается на
+	// каждом открытии меню (is_bundle) и на каждом добавлении сета в заказ
+	// (bundle_slots/bundle_slot_options) — без до-гарантии SELECT падает.
+	`ALTER TABLE menu_items ADD COLUMN IF NOT EXISTS is_bundle BOOLEAN NOT NULL DEFAULT false`,
+	`CREATE TABLE IF NOT EXISTS bundle_slots (
+		id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		restaurant_id       TEXT,
+		bundle_menu_item_id UUID NOT NULL,
+		label               TEXT NOT NULL,
+		is_required         BOOLEAN NOT NULL DEFAULT true,
+		min_select          INT NOT NULL DEFAULT 1,
+		max_select          INT NOT NULL DEFAULT 1,
+		sort_order          INT NOT NULL DEFAULT 0,
+		created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+		updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_bundle_slots_restaurant ON bundle_slots (restaurant_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_bundle_slots_bundle_item ON bundle_slots (bundle_menu_item_id)`,
+	`CREATE TABLE IF NOT EXISTS bundle_slot_options (
+		id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		slot_id             UUID NOT NULL,
+		option_menu_item_id UUID NOT NULL,
+		price               NUMERIC(14,4) NOT NULL DEFAULT 0,
+		is_default          BOOLEAN NOT NULL DEFAULT false,
+		sort_order          INT NOT NULL DEFAULT 0,
+		created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+		updated_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+	)`,
+	`CREATE INDEX IF NOT EXISTS idx_bundle_slot_options_slot ON bundle_slot_options (slot_id)`,
+	`CREATE INDEX IF NOT EXISTS idx_bundle_slot_options_item ON bundle_slot_options (option_menu_item_id)`,
+	`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bundle_group_id UUID`,
+	`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS bundle_slot_label TEXT`,
+	`CREATE INDEX IF NOT EXISTS idx_order_items_bundle_group ON order_items (bundle_group_id)`,
 	`CREATE TABLE IF NOT EXISTS salary_deductions (
 		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		restaurant_id TEXT,

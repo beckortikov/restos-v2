@@ -7564,6 +7564,268 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/menu/bundle-slots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Слоты сета («Бургер»/«Гарнир»/«Напиток») */
+        get: {
+            parameters: {
+                query?: {
+                    bundle_menu_item_id?: string;
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlot"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/menu/bundle-slots/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlot"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/v1/menu/bundle-slot-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Варианты внутри слота сета (ссылаются на настоящий пункт меню) */
+        get: {
+            parameters: {
+                query?: {
+                    slot_id?: string;
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotOptionsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotOptionInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotOption"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/menu/bundle-slot-options/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotOptionInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotOption"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/v1/menu/tech-cards": {
         parameters: {
             query?: never;
@@ -11627,6 +11889,8 @@ export interface components {
             unit_size?: components["schemas"]["Decimal"];
             sale_step?: components["schemas"]["Decimal"];
             low_stock_threshold?: number;
+            /** @description Фастфуд-сет — см. BundleSlot/BundleSlotOption. Собран из настоящих пунктов меню, своей техкарты/цены нет. */
+            is_bundle?: boolean;
             /**
              * Format: uuid
              * @description Задан у сгенерированных вариантов; NULL у обычных блюд и продуктов.
@@ -11643,6 +11907,7 @@ export interface components {
             cogs?: components["schemas"]["Decimal"];
             unit?: string;
             unit_size?: components["schemas"]["Decimal"];
+            is_bundle?: boolean;
         };
         MenuItemWithExtras: components["schemas"]["MenuItem"] & {
             /**
@@ -12250,6 +12515,13 @@ export interface components {
             note?: string | null;
             /** Format: date-time */
             cancelled_at?: string;
+            /**
+             * Format: uuid
+             * @description Общий у всех order_items одного добавления сета в заказ. NULL — обычная позиция.
+             */
+            bundle_group_id?: string | null;
+            /** @description Подпись слота сета («Бургер») на момент продажи, для чека. */
+            bundle_slot_label?: string | null;
         };
         OrderItemInput: {
             /** Format: uuid */
@@ -12839,6 +13111,62 @@ export interface components {
         };
         ModifiersList: {
             data?: components["schemas"]["Modifier"][];
+            next_cursor?: string;
+        };
+        BundleSlot: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            bundle_menu_item_id?: string;
+            label?: string;
+            is_required?: boolean;
+            min_select?: number;
+            max_select?: number;
+            sort_order?: number;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        BundleSlotInput: {
+            /** Format: uuid */
+            bundle_menu_item_id?: string;
+            label?: string;
+            is_required?: boolean;
+            min_select?: number;
+            max_select?: number;
+            sort_order?: number;
+        };
+        BundleSlotsList: {
+            data?: components["schemas"]["BundleSlot"][];
+            next_cursor?: string;
+        };
+        BundleSlotOption: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            slot_id?: string;
+            /**
+             * Format: uuid
+             * @description Ссылается на настоящий пункт меню — своя техкарта/станция/сток
+             */
+            option_menu_item_id?: string;
+            /** @description Цена этого варианта ВНУТРИ сета, не скидка на заказ */
+            price?: components["schemas"]["Decimal"];
+            is_default?: boolean;
+            sort_order?: number;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        BundleSlotOptionInput: {
+            /** Format: uuid */
+            slot_id?: string;
+            /** Format: uuid */
+            option_menu_item_id?: string;
+            price?: components["schemas"]["Decimal"];
+            is_default?: boolean;
+            sort_order?: number;
+        };
+        BundleSlotOptionsList: {
+            data?: components["schemas"]["BundleSlotOption"][];
             next_cursor?: string;
         };
         TechCardLine: {
