@@ -138,13 +138,15 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 		}
 		for _, g := range groupPrintItems(items) {
 			in.Items = append(in.Items, escpos.ReceiptItem{
-				Name:      g.Name,
-				Qty:       g.Qty,
-				Price:     g.Price,
-				LineTotal: g.LineTotal,
-				Note:      g.Note,
-				Unit:      g.Unit,
-				Count:     g.Count,
+				Name:            g.Name,
+				Qty:             g.Qty,
+				Price:           g.Price,
+				LineTotal:       g.LineTotal,
+				Note:            g.Note,
+				Unit:            g.Unit,
+				Count:           g.Count,
+				BundleGroupID:   g.BundleGroupID,
+				BundleSlotLabel: g.BundleSlotLabel,
 			})
 		}
 

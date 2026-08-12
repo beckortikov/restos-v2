@@ -95,6 +95,16 @@ type ReceiptItem struct {
 	Unit string
 	// Count — кол-во одинаковых весовых порций, слитых в строку. >1 → «… × N».
 	Count int
+	// BundleGroupID — сет (миграция 073): компоненты одного добавления сета
+	// в заказ печатаются подряд под заголовком «Сет:», а не как случайный
+	// набор строк — гость должен видеть, что бургер и кола куплены вместе
+	// одной ценой, хотя на кухню всё равно уходят отдельными позициями (см.
+	// RunnerLayout — там группировки нет и не нужно, повар готовит по блюду).
+	// Пусто — обычная позиция, поведение печати не меняется.
+	BundleGroupID string
+	// BundleSlotLabel — подпись слота этого компонента («Напиток», «Гарнир»),
+	// печатается перед именем внутри группы «Сет:».
+	BundleSlotLabel string
 }
 
 // ReceiptLayout строит байты гостевого счёта (после оплаты).
@@ -108,6 +118,36 @@ func ReceiptLayout(in ReceiptInput) []byte {
 // «Оплата», футер «Не является фискальным документом».
 func PreBillLayout(in ReceiptInput) []byte {
 	return buildReceipt(in, true)
+}
+
+// receiptItemGroup — items, сгруппированные по BundleGroupID для печати.
+// bundleGroupID == "" — обычная позиция (своя группа из одного элемента).
+type receiptItemGroup struct {
+	bundleGroupID string
+	items         []ReceiptItem
+}
+
+// groupReceiptItemsByBundle группирует позиции чека по BundleGroupID —
+// независимая Go-реализация того же принципа, что и groupByBundle на фронте
+// (lib/helpers.ts): группа встаёт на позицию первого своего элемента, порядок
+// сохраняется. По id, а не по соседству в срезе — компоненты сета в теории
+// могут прийти не подряд, группировка по мапе от этого не ломается.
+func groupReceiptItemsByBundle(items []ReceiptItem) []receiptItemGroup {
+	groups := make([]receiptItemGroup, 0, len(items))
+	byID := make(map[string]int, len(items))
+	for _, it := range items {
+		if it.BundleGroupID != "" {
+			if i, ok := byID[it.BundleGroupID]; ok {
+				groups[i].items = append(groups[i].items, it)
+				continue
+			}
+			byID[it.BundleGroupID] = len(groups)
+			groups = append(groups, receiptItemGroup{bundleGroupID: it.BundleGroupID, items: []ReceiptItem{it}})
+			continue
+		}
+		groups = append(groups, receiptItemGroup{items: []ReceiptItem{it}})
+	}
+	return groups
 }
 
 func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
@@ -213,24 +253,36 @@ func buildReceipt(in ReceiptInput, isPreCheck bool) []byte {
 	if itemLeftMax < 10 {
 		itemLeftMax = 10
 	}
-	for _, it := range in.Items {
-		// Вес печатаем как «100г»/«0,1кг»; штучные — как «x3».
-		qtyStr := fmtQtyDec(it.Qty)
-		if it.Unit == "g" || it.Unit == "kg" {
-			qtyStr = fmtWeightQty(it.Qty, it.Unit)
+	for _, grp := range groupReceiptItemsByBundle(in.Items) {
+		// Сет: заголовок перед своими компонентами + подпись слота у каждого
+		// («Напиток», «Гарнир») — гость видит, что позиции куплены вместе
+		// одной ценой сета, а не как случайный набор строк.
+		if grp.bundleGroupID != "" {
+			b.TextLn("Сет:")
 		}
-		totalStr := fmtMoney(it.LineTotal) + " TJS"
-		nameWithQty := it.Name + " " + qtyStr
-		// Слитые одинаковые весовые порции: «Блюдо 100г × 3».
-		if it.Count > 1 {
-			nameWithQty += " × " + strconv.Itoa(it.Count)
-		}
-		if visibleRuneCount(nameWithQty) > itemLeftMax {
-			nameWithQty = runeSlice(nameWithQty, itemLeftMax)
-		}
-		b.TextLn(PadRow(nameWithQty, totalStr, cols))
-		if it.Note != "" {
-			b.TextLn("  ! " + it.Note)
+		for _, it := range grp.items {
+			// Вес печатаем как «100г»/«0,1кг»; штучные — как «x3».
+			qtyStr := fmtQtyDec(it.Qty)
+			if it.Unit == "g" || it.Unit == "kg" {
+				qtyStr = fmtWeightQty(it.Qty, it.Unit)
+			}
+			totalStr := fmtMoney(it.LineTotal) + " TJS"
+			name := it.Name
+			if grp.bundleGroupID != "" && it.BundleSlotLabel != "" {
+				name = it.BundleSlotLabel + ": " + name
+			}
+			nameWithQty := name + " " + qtyStr
+			// Слитые одинаковые весовые порции: «Блюдо 100г × 3».
+			if it.Count > 1 {
+				nameWithQty += " × " + strconv.Itoa(it.Count)
+			}
+			if visibleRuneCount(nameWithQty) > itemLeftMax {
+				nameWithQty = runeSlice(nameWithQty, itemLeftMax)
+			}
+			b.TextLn(PadRow(nameWithQty, totalStr, cols))
+			if it.Note != "" {
+				b.TextLn("  ! " + it.Note)
+			}
 		}
 	}
 	b.TextLn(hrLight)

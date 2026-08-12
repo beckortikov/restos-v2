@@ -96,6 +96,32 @@ func TestGolden_ReceiptFastFood(t *testing.T) {
 	assertGolden(t, "receipt_fastfood.hex", ReceiptLayout(in))
 }
 
+// Сет (фастфуд-комбо, миграция 073): компоненты одного добавления сета делят
+// BundleGroupID и печатаются под заголовком «Сет:» с подписью слота перед
+// именем. Третья позиция (Мороженое) — обычная, не в сете: проверяем, что
+// группировка не «сползает» на соседние строки и обычный item рендерится
+// как раньше, без заголовка.
+func TestGolden_ReceiptBundle(t *testing.T) {
+	in := ReceiptInput{
+		RestaurantName: "Бургер Хаус",
+		RestaurantAddr: "пр. Сомони, 12",
+		OrderNumber:    43,
+		OpenedAt:       fixedTime,
+		ClosedAt:       fixedTime.Add(5 * time.Minute),
+		CashierName:    "Нафиса",
+		FastFood:       true,
+		Items: []ReceiptItem{
+			{Name: "Бургер Классик", Qty: decimal.MustFromString("1"), Price: decimal.MustFromString("20"), LineTotal: decimal.MustFromString("20"), BundleGroupID: "combo-1", BundleSlotLabel: "Бургер"},
+			{Name: "Кола 0.5", Qty: decimal.MustFromString("1"), Price: decimal.MustFromString("10"), LineTotal: decimal.MustFromString("10"), BundleGroupID: "combo-1", BundleSlotLabel: "Напиток"},
+			{Name: "Мороженое", Qty: decimal.MustFromString("1"), Price: decimal.MustFromString("12"), LineTotal: decimal.MustFromString("12")},
+		},
+		Subtotal:      decimal.MustFromString("42"),
+		Total:         decimal.MustFromString("42"),
+		PaymentMethod: "cash",
+	}
+	assertGolden(t, "receipt_bundle.hex", ReceiptLayout(in))
+}
+
 // Доставка: контакты клиента (телефон/адрес) печатаются на ГОСТЕВОМ чеке —
 // курьер забирает еду вместе с чеком. На кухонный бегунок они не идут.
 func TestGolden_ReceiptDelivery(t *testing.T) {

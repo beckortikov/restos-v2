@@ -99,3 +99,40 @@ func TestGroupPrintItems_PieceDifferentNoteStaySeparate(t *testing.T) {
 		t.Fatalf("разный комментарий не должен сливаться: получили %d групп", len(groups))
 	}
 }
+
+// TestGroupPrintItems_DifferentBundleGroupsStaySeparate — одинаковый компонент
+// («Кола» по той же цене, без комментария) из ДВУХ разных сетов не должен
+// слиться в одну строку «Кола x2»: это два разных заказа сета, и итоговый чек
+// напечатал бы одну «Кола x2» под ОДНИМ заголовком «Сет», хотя реально это
+// компоненты двух разных сетов (или сета и обычной продажи). BundleGroupID
+// должен быть частью merge-ключа — без него этот тест ловит регрессию до
+// (см. groupWeightPortions/lib/receipt-data.ts на фронте — та же ошибка уже
+// была найдена и исправлена там).
+func TestGroupPrintItems_DifferentBundleGroupsStaySeparate(t *testing.T) {
+	name, piece := strp("Кола"), strp("piece")
+	price := decimal.MustFromString("10")
+	g1, g2 := strp("bundle-group-1"), strp("bundle-group-2")
+	items := []models.OrderItem{
+		{Name: name, Price: price, Qty: decimal.MustFromString("1"), Unit: piece, BundleGroupID: g1},
+		{Name: name, Price: price, Qty: decimal.MustFromString("1"), Unit: piece, BundleGroupID: g2},
+	}
+	if groups := groupPrintItems(items); len(groups) != 2 {
+		t.Fatalf("компоненты РАЗНЫХ сетов не должны сливаться: получили %d групп", len(groups))
+	}
+}
+
+// TestGroupPrintItems_BundleVsPlainStaySeparate — тот же компонент («Кола» той
+// же ценой), один раз как часть сета, второй раз как обычная продажа — тоже
+// не должны слиться, иначе гость увидит «Кола x2» под заголовком «Сет», хотя
+// одна из них в сет не входила.
+func TestGroupPrintItems_BundleVsPlainStaySeparate(t *testing.T) {
+	name, piece := strp("Кола"), strp("piece")
+	price := decimal.MustFromString("10")
+	items := []models.OrderItem{
+		{Name: name, Price: price, Qty: decimal.MustFromString("1"), Unit: piece, BundleGroupID: strp("bundle-group-1")},
+		{Name: name, Price: price, Qty: decimal.MustFromString("1"), Unit: piece},
+	}
+	if groups := groupPrintItems(items); len(groups) != 2 {
+		t.Fatalf("сетовая и обычная позиции не должны сливаться: получили %d групп", len(groups))
+	}
+}
