@@ -118,10 +118,20 @@ func (s *AuthService) Validate(ctx context.Context, token string) (*cachedSessio
 	if v, ok := s.cache.Load(token); ok {
 		cs := v.(*cachedSession)
 		if cs.ExpiresAt.After(now) {
-			// Освежаем last_seen_at в БД с throttling'ом.
+			// Освежаем last_seen_at в БД с throttling'ом. Rolling TTL: активность
+			// отодвигает expires_at на ещё SessionTTL вперёд — как и было
+			// заявлено в комментарии к миграции 002 ("12 часов rolling"), но
+			// раньше expires_at писался только один раз при логине и никогда не
+			// продлевался. Для смены (кассир/официант) это было незаметно —
+			// смена короче 12ч. Табло (/board) висит сутками без перезахода и
+			// вылетало на PIN каждые ~12 часов, хотя постоянно опрашивает API
+			// (KDS-поллинг + SSE) — это и есть "активность", которая должна
+			// была продлевать сессию по документированному контракту.
 			if now.After(cs.nextRefreshAt) {
-				go s.touchLastSeen(token, now)
+				newExpiry := now.Add(SessionTTL)
+				go s.touchLastSeen(token, now, newExpiry)
 				cs.nextRefreshAt = now.Add(LastSeenWindow)
+				cs.ExpiresAt = newExpiry
 			}
 			return cs, nil
 		}
@@ -175,11 +185,11 @@ func (cs *cachedSession) Public() SessionInfo {
 	}
 }
 
-func (s *AuthService) touchLastSeen(token string, now time.Time) {
+func (s *AuthService) touchLastSeen(token string, now, newExpiry time.Time) {
 	// fire-and-forget; ошибки логировать в самом updater'е не нужно — не критично.
 	_ = s.db.Model(&models.Session{}).
 		Where("token = ?", token).
-		Update("last_seen_at", now).Error
+		Updates(map[string]any{"last_seen_at": now, "expires_at": newExpiry}).Error
 }
 
 func generateToken() (string, error) {

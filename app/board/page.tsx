@@ -15,7 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchKdsItems, fetchRestaurantById } from '@/lib/queries'
 import { useAuth } from '@/lib/auth-store'
-import { Maximize2, Volume2 } from 'lucide-react'
+import { Maximize2 } from 'lucide-react'
 import { aggregate, cookProgress, splitBoard } from './board-logic'
 
 let audioCtx: AudioContext | null = null
@@ -85,9 +85,9 @@ export default function BoardPage() {
 
   // Разблокировка звука. Браузеры не дают проиграть звук, пока по странице не
   // было ни одного касания/клика — на ТВ, который сам открыл /board, первый
-  // сигнал иначе будет молчать. По первому взаимодействию (в т.ч. по кнопке-
-  // подсказке ниже) создаём/резюмируем AudioContext и прячем подсказку.
-  const [soundReady, setSoundReady] = useState(false)
+  // сигнал иначе будет молчать. Слушаем ЛЮБОЕ взаимодействие со страницей
+  // (тап по «полный экран», касание тачскрина и т.п.) и создаём/резюмируем
+  // AudioContext молча — без видимой подсказки-кнопки внизу экрана.
   useEffect(() => {
     const unlock = () => {
       try {
@@ -97,7 +97,6 @@ export default function BoardPage() {
           audioCtx.resume().catch(() => {})
         }
       } catch { /* нет Web Audio — не критично */ }
-      setSoundReady(true)
       window.removeEventListener('pointerdown', unlock)
       window.removeEventListener('keydown', unlock)
     }
@@ -216,19 +215,6 @@ export default function BoardPage() {
       >
         <Maximize2 style={{ width: 18, height: 18 }} />
       </button>
-
-      {/* Подсказка «включить звук»: браузер не даст сигналу зазвучать до первого
-          касания. Показываем, пока звук не разблокирован; тап проигрывает
-          подтверждающий сигнал, а глобальный обработчик прячет подсказку. */}
-      {!soundReady && (
-        <button
-          onClick={() => playChime()}
-          style={{ position: 'fixed', bottom: 18, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 8, background: 'rgba(34,197,94,0.16)', color: '#a7f3c0', border: '1px solid rgba(52,209,127,0.4)', borderRadius: 999, padding: '10px 22px', fontSize: 'clamp(13px,1.4vw,18px)', fontWeight: 600, cursor: 'pointer' }}
-        >
-          <Volume2 style={{ width: 18, height: 18 }} />
-          Нажмите один раз, чтобы включить звук
-        </button>
-      )}
     </div>
   )
 }
