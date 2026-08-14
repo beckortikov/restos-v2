@@ -21,11 +21,15 @@ import './index.css'
 
 // Применяем сохранённую тему ДО первого рендера — без вспышки светлого.
 initTheme()
-// Bundle Inter font locally — works offline, more readable
+// Bundle Inter font locally — works offline, more readable.
+// 300 — часы на экране блокировки, 800 — табло кухни и чеки: раньше эти два
+// веса приходили из Google Fonts, теперь тоже локальные.
+import '@fontsource/inter/300.css'
 import '@fontsource/inter/400.css'
 import '@fontsource/inter/500.css'
 import '@fontsource/inter/600.css'
 import '@fontsource/inter/700.css'
+import '@fontsource/inter/800.css'
 
 // ── Sentry ──────────────────────────────────────────────────────────────────
 if (import.meta.env.VITE_SENTRY_DSN) {

@@ -7,6 +7,7 @@ import {
   fetchMachineInfo, fetchLicenseStatus, activateLicense,
   type MachineInfo, type LicenseStatus,
 } from '@/lib/queries'
+import { V4Error } from '@/lib/api'
 
 const TG_LINK = 'https://t.me/restos_support' // TODO: реальный канал
 
@@ -24,12 +25,37 @@ export function LicenseGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Ждём бэкенд, а не считаем его молчание отсутствием лицензии.
+  //
+  // Раньше любой сбой запроса вёл к setLoading(false) при status=null, а это
+  // `blocked` → кассиру показывался ЭКРАН АКТИВАЦИИ. Пока Electron ждал healthz
+  // перед показом SPA, это не всплывало. Теперь SPA грузится параллельно со
+  // стартом бэка (так быстрее), и первые запросы штатно приходятся на ещё не
+  // поднятый сервер — на холодном старте это минуты полторы.
+  //
+  // Различаем два случая: V4Error значит сервер ОТВЕТИЛ (пусть и ошибкой) —
+  // решение принимаем сразу; любая другая ошибка это обрыв соединения, т.е.
+  // «бэк ещё стартует» — крутим спиннер и пробуем снова. Дедлайн совпадает с
+  // таймаутом Electron: если за это время сервер не поднялся, ведём себя
+  // по-старому, чтобы экран активации оставался достижим.
   useEffect(() => {
     let mounted = true
-    fetchLicenseStatus()
-      .then(s => { if (mounted) { setStatus(s); setLoading(false) } })
-      .catch(() => { if (mounted) setLoading(false) })
-    return () => { mounted = false }
+    let timer: ReturnType<typeof setTimeout>
+    const deadline = Date.now() + 130_000
+
+    const poll = () => {
+      fetchLicenseStatus()
+        .then(s => { if (mounted) { setStatus(s); setLoading(false) } })
+        .catch((e) => {
+          if (!mounted) return
+          const backendAnswered = e instanceof V4Error
+          if (backendAnswered || Date.now() > deadline) { setLoading(false); return }
+          timer = setTimeout(poll, 400)
+        })
+    }
+    poll()
+
+    return () => { mounted = false; clearTimeout(timer) }
   }, [])
 
   const onActivated = (s: LicenseStatus) => setStatus(s)

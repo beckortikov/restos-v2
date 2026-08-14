@@ -1,9 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Plus } from 'lucide-react'
-import { CreateOrderDialog } from '@/components/dialogs/create-order-dialog'
+
+// Диалог тянет за собой OrderComposer (168 КБ). FAB висит в AppLayout на всех
+// экранах, поэтому статический импорт затаскивал композер в стартовый бандл —
+// его парсили даже на PIN-экране. Грузим только когда кассир реально нажал «+».
+const CreateOrderDialog = lazy(() =>
+  import('@/components/dialogs/create-order-dialog').then((m) => ({ default: m.CreateOrderDialog })),
+)
 
 const VISIBLE_ROUTES = [
   '/operations/table-map',
@@ -31,16 +37,20 @@ export function MobileNewOrderFab() {
         <Plus className="size-7" strokeWidth={2.5} />
       </button>
 
-      <CreateOrderDialog
-        open={open}
-        onOpenChange={setOpen}
-        onSubmitted={() => {
-          setOpen(false)
-          if (pathname !== '/operations/orders') {
-            navigate('/operations/orders')
-          }
-        }}
-      />
+      {open && (
+        <Suspense fallback={null}>
+          <CreateOrderDialog
+            open={open}
+            onOpenChange={setOpen}
+            onSubmitted={() => {
+              setOpen(false)
+              if (pathname !== '/operations/orders') {
+                navigate('/operations/orders')
+              }
+            }}
+          />
+        </Suspense>
+      )}
     </>
   )
 }

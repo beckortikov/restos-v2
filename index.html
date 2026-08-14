@@ -11,9 +11,11 @@
     <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2" />
     <meta name="theme-color" content="#e87c4f" />
     <link rel="manifest" href="/manifest.json" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    <!-- Inter подключается локально через @fontsource в main.tsx. Ссылки на
+         fonts.googleapis.com здесь БЫЛИ и блокировали первый рендер: касса
+         обычно в LAN без интернета, и запрос за стилями висел до таймаута —
+         именно отсюда «то запускается за 3 секунды, то за полминуты». -->
+
   </head>
   <body class="font-sans antialiased">
     <div id="root"></div>
