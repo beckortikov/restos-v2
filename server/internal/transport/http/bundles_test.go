@@ -103,6 +103,63 @@ func TestBundles_CreateSlotsAndOptions_HappyPath(t *testing.T) {
 	}
 }
 
+// Необязательный слот (min_select=0, is_required=false — ровно zero-value
+// обоих Go-полей) должен сохраниться КАК ЕСТЬ, а не стать обязательным.
+// Ablation-verified regression: BundleSlot.IsRequired/MinSelect несут
+// gorm-тег default:true/default:1 — GORM Create() подменяет явный
+// false/0 (совпадающий с zero-value поля) значением из тега и пишет
+// подмену обратно в структуру (см. память "GORM zero-value default-tag
+// gotcha"), если сервис не форсирует map-based Update поверх Create.
+func TestBundles_CreateOptionalSlot_MinSelectZero(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb := openTestDB(t)
+
+	friesID := uuid.NewString()
+	friesName := "Картошка"
+	if err := gdb.Create(&models.MenuItem{
+		ID: friesID, Name: &friesName, Price: decimal.MustFromString("14000"), RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	br, bb := f.post(t, "/api/v1/menu/items", tok, uuid.NewString(),
+		map[string]any{"name": "Комбо №2", "price": "40000", "is_bundle": true})
+	if br.StatusCode != http.StatusCreated {
+		t.Fatalf("create bundle item: %d %s", br.StatusCode, bb)
+	}
+	var bundleItem models.MenuItem
+	_ = json.Unmarshal(bb, &bundleItem)
+
+	sr, sb := f.post(t, "/api/v1/menu/bundle-slots", tok, uuid.NewString(),
+		map[string]any{"bundle_menu_item_id": bundleItem.ID, "label": "Гарнир (по желанию)", "is_required": false, "min_select": 0, "max_select": 1})
+	if sr.StatusCode != http.StatusCreated {
+		t.Fatalf("create slot: %d %s", sr.StatusCode, sb)
+	}
+	var slot models.BundleSlot
+	if err := json.Unmarshal(sb, &slot); err != nil {
+		t.Fatal(err)
+	}
+	if slot.IsRequired {
+		t.Errorf("ответ API: IsRequired=true, want false (min_select=0 — необязательный слот)")
+	}
+	if slot.MinSelect != 0 {
+		t.Errorf("ответ API: MinSelect=%d, want 0", slot.MinSelect)
+	}
+
+	// То, что реально легло в БД, а не только то, что вернул API-ответ —
+	// именно тут GORM Create() без форс-Update молча подменял значения.
+	var fromDB models.BundleSlot
+	if err := gdb.Where("id = ?", slot.ID).First(&fromDB).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fromDB.IsRequired {
+		t.Errorf("в БД IsRequired=true, want false")
+	}
+	if fromDB.MinSelect != 0 {
+		t.Errorf("в БД MinSelect=%d, want 0", fromDB.MinSelect)
+	}
+}
+
 // Слот на пункте меню, который НЕ помечен is_bundle=true — 400, а не тихое
 // создание мусорного слота на обычном блюде.
 func TestBundles_Slot_RequiresBundleFlagOnMenuItem(t *testing.T) {

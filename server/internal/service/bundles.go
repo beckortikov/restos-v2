@@ -124,6 +124,21 @@ func (s *BundleSlotsService) Create(ctx context.Context, in BundleSlotInput) (*m
 	if err := freshScoped.Create(slot).Error; err != nil {
 		return nil, err
 	}
+	// GORM Create() подменяет Go zero-значение поля с default-тегом (is_required
+	// default:true, min_select default:1) значением из тега — и пишет
+	// подменённое значение ОБРАТНО в структуру (см. память "GORM zero-value
+	// default-tag gotcha"). Необязательный слот (isRequired=false, minSelect=0
+	// — ровно zero-value обоих полей) молча становился обязательным. Map-based
+	// Update поверх этой подмене не подвержен; форсируем и саму структуру, чтобы
+	// то, что вернём вызывающему, совпадало с тем, что реально легло в БД.
+	if err := freshScoped.Model(slot).Updates(map[string]any{
+		"is_required": isRequired,
+		"min_select":  minSelect,
+	}).Error; err != nil {
+		return nil, err
+	}
+	slot.IsRequired = isRequired
+	slot.MinSelect = minSelect
 	return slot, nil
 }
 
