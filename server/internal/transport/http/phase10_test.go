@@ -312,6 +312,15 @@ func TestPhase10_Restaurants(t *testing.T) {
 		t.Errorf("delete with users: %d, want 409", dr2.StatusCode)
 	}
 
+	// clear-menu/clear-operations — только владелец (requireOwner, добавлен
+	// после написания этого теста — v3.16.254). Фикстура-кассир по умолчанию
+	// не владелец; гвард перечитывает роль из БД на каждый вызов, так что
+	// повышаем роль напрямую и переиспользуем тот же токен.
+	gdb := openTestDB(t)
+	if err := gdb.Model(&models.User{}).Where("restaurant_id = ?", f.rid).Update("role", "owner").Error; err != nil {
+		t.Fatal(err)
+	}
+
 	// clear-menu на setupE2E ресторане — удалит menu_item (Plov).
 	cmr, cmb := f.post(t, fmt.Sprintf("/api/v1/restaurants/%s/clear-menu", f.rid), tok, uuid.NewString(),
 		map[string]any{})
