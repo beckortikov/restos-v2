@@ -1453,6 +1453,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/stock/receipts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Правка уже созданной накладной ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+         * @description PATCH-семантика: не заданные поля не меняются. Правит qty/price_per_unit
+         *     существующих строк (реверс-и-заново на средневзвешенной себестоимости —
+         *     точно, пока не было расхода ингредиента после приёмки), payment_type/
+         *     paid_amount/долг поставщика, date (каскадом на связанные
+         *     financial_operations), supplier (только пока debt_amount=0). Строки
+         *     добавляются/удаляются ТОЛЬКО через qty=0 у существующей + отдельная
+         *     новая накладная (CreateReceipt) — не через этот эндпоинт.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReceiptUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReceipt"];
+                    };
+                };
+                /** @description Не владелец */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Недостаточно средств/остатка, либо товар уже расходовался после приёмки */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/v1/stock/receipts/{id}/pay": {
         parameters: {
             query?: never;
@@ -12337,6 +12405,29 @@ export interface components {
                 qty: components["schemas"]["Decimal"];
                 unit?: string;
                 price_per_unit: components["schemas"]["Decimal"];
+            }[];
+        };
+        ReceiptUpdateInput: {
+            /** Format: uuid */
+            supplier_id?: string;
+            supplier_name?: string;
+            date?: string;
+            note?: string;
+            due_date?: string;
+            /** @enum {string} */
+            payment_type?: "paid" | "partial" | "credit";
+            /** @description Целевое АБСОЛЮТНОЕ значение (не дельта). */
+            paid_amount?: components["schemas"]["Decimal"];
+            /**
+             * Format: uuid
+             * @description Обязан совпадать со счётом уже связанных проводок (смена счёта оплаты задним числом не поддержана).
+             */
+            account_id?: string;
+            lines?: {
+                /** Format: uuid */
+                line_id: string;
+                qty?: components["schemas"]["Decimal"];
+                price_per_unit?: components["schemas"]["Decimal"];
             }[];
         };
         StockReceipt: {

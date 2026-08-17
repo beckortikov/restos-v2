@@ -285,12 +285,18 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 		// приёмки, после него состояние такое, будто приняли меньше. Поэтому
 		// второй возврат по той же накладной откатывается так же точно, как первый.
 		// Приходы тоже не мешают: стоимость аддитивна по партиям.
+		//
+		// receipt_correction (правка накладной, StockService.UpdateReceipt) —
+		// исключаем по той же причине: это тоже точный, алгебраический ход
+		// (реверс-и-заново на средневзвешенной), не физическое потребление.
+		// Без исключения собственная более ранняя правка накладной задним числом
+		// блокировала бы следующий возврат/правку того же ингредиента.
 		consumedSince := make(map[string]bool, len(ingByID))
 		for ingID := range ingByID {
 			var n int64
 			if err := tx.Model(&models.StockMovement{}).
 				Where("restaurant_id = ? AND ingredient_id = ? AND created_at > ?", rid, ingID, receipt.CreatedAt).
-				Where("qty < 0 AND COALESCE(type, '') <> ?", "return_supplier").
+				Where("qty < 0 AND COALESCE(type, '') NOT IN ?", []string{"return_supplier", "receipt_correction"}).
 				Count(&n).Error; err != nil {
 				return err
 			}

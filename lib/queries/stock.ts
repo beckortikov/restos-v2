@@ -140,6 +140,44 @@ export async function createReceipt(receipt: Omit<StockReceipt, 'id'>) {
   return data
 }
 
+// updateReceipt — правка уже созданной накладной ВЛАДЕЛЬЦЕМ задним числом
+// (PATCH-семантика на бэке: не заданные поля не меняются). Только role=owner.
+// lines — сюда попадают ТОЛЬКО реально меняющиеся строки (line_id обязателен,
+// qty/price_per_unit — что меняем); новые строки через этот вызов не
+// добавляются (мини-CreateReceipt отдельной накладной, если нужен новый товар).
+export async function updateReceipt(id: string, patch: {
+  supplierId?: string
+  supplierName?: string
+  date?: string
+  note?: string
+  dueDate?: string
+  paymentType?: ReceiptPaymentType
+  paidAmount?: number
+  accountId?: string
+  lines?: { lineId: string; qty?: number; pricePerUnit?: number }[]
+}) {
+  const data: any = await unwrap(api.PATCH('/api/v1/stock/receipts/{id}', {
+    params: { path: { id } },
+    body: {
+      supplier_id: patch.supplierId,
+      supplier_name: patch.supplierName,
+      date: patch.date,
+      note: patch.note,
+      due_date: patch.dueDate,
+      payment_type: patch.paymentType,
+      paid_amount: patch.paidAmount !== undefined ? String(patch.paidAmount) : undefined,
+      account_id: patch.accountId,
+      lines: patch.lines?.map(l => ({
+        line_id: l.lineId,
+        qty: l.qty !== undefined ? String(l.qty) : undefined,
+        price_per_unit: l.pricePerUnit !== undefined ? String(l.pricePerUnit) : undefined,
+      })),
+    },
+  }))
+  logAction('receipt.edit', 'receipt', id)
+  return mapStockReceipt(data) as StockReceipt
+}
+
 export async function fetchStockReturns(opts?: { supplierId?: string; receiptId?: string }): Promise<StockReturn[]> {
   const params: Record<string, string> = { include: 'lines' }
   if (opts?.supplierId) params.supplier_id = opts.supplierId

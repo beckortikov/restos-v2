@@ -536,6 +536,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/shifts/{id}/print-service", shiftsH.PrintService)
 
 			g.Post("/stock/receipts", stockH.CreateReceipt)
+			g.Patch("/stock/receipts/{id}", stockH.UpdateReceipt)
 			g.Post("/stock/receipts/{id}/pay", stockH.PayReceipt)
 			g.Post("/stock/returns", stockH.CreateReturn)
 			g.Post("/stock/returns/{id}/cancel", stockH.CancelReturn)

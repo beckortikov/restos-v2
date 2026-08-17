@@ -8,9 +8,10 @@ import { dMul } from '@/lib/decimal'
 import { type StockReceipt, type Supplier, type StockReturn, RETURN_REASON_LABELS } from '@/lib/types'
 import { fetchReceipts, fetchSuppliers, fetchStockReturns } from '@/lib/queries'
 import { useDataSync } from '@/hooks/use-data-sync'
-import { Plus, CheckCircle, Clock, CreditCard, Undo2, Search, ChevronRight } from 'lucide-react'
+import { Plus, CheckCircle, Clock, CreditCard, Undo2, Search, ChevronRight, Pencil } from 'lucide-react'
 import { CreateReturnDialog } from '@/components/dialogs/create-return-dialog'
 import { PayReceiptDialog } from '@/components/dialogs/pay-receipt-dialog'
+import { EditReceiptDialog } from '@/components/dialogs/edit-receipt-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 // Статус-фильтры списка накладных. 'debt' — есть непогашенный долг; 'returns' —
@@ -24,7 +25,8 @@ const PAYMENT_LABELS: Record<string, { label: string; color: string }> = {
 }
 
 export default function ReceiptsPage() {
-  const { canDo } = useAuth()
+  const { canDo, user } = useAuth()
+  const isOwner = user?.role === 'owner'
   const navigate = useNavigate()
   const [detailFor, setDetailFor] = useState<StockReceipt | null>(null)
   const [receipts, setReceipts] = useState<StockReceipt[]>([])
@@ -32,6 +34,7 @@ export default function ReceiptsPage() {
   const [loading, setLoading] = useState(true)
   const [returnFor, setReturnFor] = useState<StockReceipt | null>(null)
   const [payFor, setPayFor] = useState<StockReceipt | null>(null)
+  const [editFor, setEditFor] = useState<StockReceipt | null>(null)
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState<ReceiptFilter>('all')
   const [returns, setReturns] = useState<StockReturn[]>([])
@@ -329,8 +332,18 @@ export default function ReceiptsPage() {
                   >
                     Закрыть
                   </button>
-                  {canDo('inventory.manage') && (
-                    <div className="flex gap-2">
+                  <div className="flex gap-2">
+                    {isOwner && (
+                      <button
+                        type="button"
+                        onClick={() => { setEditFor(r); setDetailFor(null) }}
+                        className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+                      >
+                        <Pencil className="size-4" />
+                        Изменить
+                      </button>
+                    )}
+                    {canDo('inventory.manage') && (
                       <button
                         type="button"
                         onClick={() => { setReturnFor(r); setDetailFor(null) }}
@@ -339,18 +352,18 @@ export default function ReceiptsPage() {
                         <Undo2 className="size-4" />
                         Возврат
                       </button>
-                      {r.debtAmount > 0.005 && (
-                        <button
-                          type="button"
-                          onClick={() => { setPayFor(r); setDetailFor(null) }}
-                          className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90"
-                        >
-                          <CreditCard className="size-4" />
-                          Оплатить {formatCurrency(r.debtAmount)}
-                        </button>
-                      )}
-                    </div>
-                  )}
+                    )}
+                    {canDo('inventory.manage') && r.debtAmount > 0.005 && (
+                      <button
+                        type="button"
+                        onClick={() => { setPayFor(r); setDetailFor(null) }}
+                        className="flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90"
+                      >
+                        <CreditCard className="size-4" />
+                        Оплатить {formatCurrency(r.debtAmount)}
+                      </button>
+                    )}
+                  </div>
                 </DialogFooter>
               </>
             )
@@ -372,6 +385,14 @@ export default function ReceiptsPage() {
         receipt={payFor}
         open={!!payFor}
         onOpenChange={(v) => { if (!v) setPayFor(null) }}
+        onSuccess={() => { void reload() }}
+      />
+
+      {/* Правка накладной владельцем задним числом — строки/оплата/дата/примечание */}
+      <EditReceiptDialog
+        receipt={editFor}
+        open={!!editFor}
+        onOpenChange={(v) => { if (!v) setEditFor(null) }}
         onSuccess={() => { void reload() }}
       />
     </div>

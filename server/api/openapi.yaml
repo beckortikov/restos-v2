@@ -523,6 +523,29 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptInput" } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
 
+  /api/v1/stock/receipts/{id}:
+    patch:
+      tags: [stock]
+      summary: Правка уже созданной накладной ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+      description: |
+        PATCH-семантика: не заданные поля не меняются. Правит qty/price_per_unit
+        существующих строк (реверс-и-заново на средневзвешенной себестоимости —
+        точно, пока не было расхода ингредиента после приёмки), payment_type/
+        paid_amount/долг поставщика, date (каскадом на связанные
+        financial_operations), supplier (только пока debt_amount=0). Строки
+        добавляются/удаляются ТОЛЬКО через qty=0 у существующей + отдельная
+        новая накладная (CreateReceipt) — не через этот эндпоинт.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptUpdateInput" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } }
+        "403": { description: "Не владелец" }
+        "409": { description: "Недостаточно средств/остатка, либо товар уже расходовался после приёмки" }
+
   /api/v1/stock/receipts/{id}/pay:
     post:
       tags: [stock]
@@ -3866,6 +3889,31 @@ components:
               name: { type: string }
               qty: { $ref: "#/components/schemas/Decimal" }
               unit: { type: string }
+              price_per_unit: { $ref: "#/components/schemas/Decimal" }
+    ReceiptUpdateInput:
+      type: object
+      properties:
+        supplier_id: { type: string, format: uuid }
+        supplier_name: { type: string }
+        date: { type: string }
+        note: { type: string }
+        due_date: { type: string }
+        payment_type: { type: string, enum: [paid, partial, credit] }
+        paid_amount:
+          allOf: [{ $ref: "#/components/schemas/Decimal" }]
+          description: Целевое АБСОЛЮТНОЕ значение (не дельта).
+        account_id:
+          type: string
+          format: uuid
+          description: Обязан совпадать со счётом уже связанных проводок (смена счёта оплаты задним числом не поддержана).
+        lines:
+          type: array
+          items:
+            type: object
+            required: [line_id]
+            properties:
+              line_id: { type: string, format: uuid }
+              qty: { $ref: "#/components/schemas/Decimal" }
               price_per_unit: { $ref: "#/components/schemas/Decimal" }
     StockReceipt:
       type: object
