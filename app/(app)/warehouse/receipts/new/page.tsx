@@ -241,6 +241,9 @@ export default function NewReceiptPage() {
     if (k === 'products' || k === 'purchased' || k === 'supplies') return k
     return ing.isFood === false ? 'supplies' : 'products'
   }
+  const KIND_LABELS: Record<'products' | 'purchased' | 'supplies', string> = {
+    products: 'Продукт', purchased: 'Покупной', supplies: 'Хозтовар',
+  }
 
   const filteredIngredients = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -259,6 +262,15 @@ export default function NewReceiptPage() {
     return c
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ingredients, warehouseById])
+
+  // Тёзка среди уже существующих товаров (любого типа) — не блокирует создание,
+  // просто предупреждает: одинаковые названия в разных категориях путают на кассе/закупе.
+  const newIngNameMatch = useMemo(() => {
+    const q = newIngName.trim().toLowerCase()
+    if (!q) return null
+    return ingredients.find((ing) => ing.name.trim().toLowerCase() === q) ?? null
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newIngName, ingredients, warehouseById])
 
   // Категории товаров текущего склада — для чипов-фильтров под поиском.
   const categories = useMemo(() => {
@@ -591,6 +603,10 @@ export default function NewReceiptPage() {
                         <p className="font-semibold text-sm text-foreground leading-tight group-hover:text-primary transition-colors line-clamp-2">
                           {ing.name}
                         </p>
+                        <p className="text-[10px] text-muted-foreground mt-0.5 truncate">
+                          {KIND_LABELS[kindOf(ing)]}
+                          {ing.category ? ` · ${ing.category}` : ''}
+                        </p>
                       </div>
 
                       <div className="flex items-end justify-between mt-3">
@@ -833,8 +849,14 @@ export default function NewReceiptPage() {
                 placeholder="Например, Картофель"
                 className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
+              {newIngNameMatch && (
+                <p className="text-xs text-amber-600 dark:text-amber-500">
+                  Такое название уже есть: «{newIngNameMatch.name}» ({KIND_LABELS[kindOf(newIngNameMatch)]}
+                  {newIngNameMatch.category ? `, ${newIngNameMatch.category}` : ''}). Возможно, это тот же товар.
+                </p>
+              )}
             </div>
-            
+
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-foreground">Ед. измерения</label>
