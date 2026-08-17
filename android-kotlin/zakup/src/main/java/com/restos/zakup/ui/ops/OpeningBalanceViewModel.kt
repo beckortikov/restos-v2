@@ -11,6 +11,7 @@ import com.restos.zakup.data.stock.StockApi
 import com.restos.zakup.data.stock.listAllIngredients
 import com.restos.zakup.util.toDecimalOrZero
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -36,6 +37,7 @@ data class OpeningBalanceUiState(
     val submitError: String? = null,
     val done: Boolean = false,
     val available: List<IngredientDto> = emptyList(),
+    val warehouseKind: Map<String, String> = emptyMap(), // warehouseId -> products|purchased|supplies
     val lines: List<OpeningLine> = emptyList(),
 ) {
     val total: BigDecimal get() = lines.fold(BigDecimal.ZERO) { a, l -> a + l.lineValue }
@@ -62,14 +64,32 @@ class OpeningBalanceViewModel @Inject constructor(
     fun load() {
         _state.update { it.copy(loading = true, loadError = null) }
         viewModelScope.launch {
-            runCatching { stockApi.listAllIngredients() }
-                .onSuccess { items -> _state.update { it.copy(loading = false, available = items) } }
-                .onFailure { e -> _state.update { it.copy(loading = false, loadError = e.message ?: "Ошибка загрузки") } }
+            runCatching {
+                val whD = async { runCatching { stockApi.listWarehouses().data }.getOrDefault(emptyList()) }
+                val ingD = async { stockApi.listAllIngredients() }
+                whD.await() to ingD.await()
+            }.onSuccess { (warehouses, items) ->
+                _state.update {
+                    it.copy(
+                        loading = false,
+                        available = items,
+                        warehouseKind = warehouses.associate { w -> w.id to w.kind },
+                    )
+                }
+            }.onFailure { e -> _state.update { it.copy(loading = false, loadError = e.message ?: "Ошибка загрузки") } }
         }
     }
 
+    // Продукт/Покупной/Хозтовар — та же логика, что в WriteoffViewModel/NewReceiptViewModel.
+    private fun kindLabel(ing: IngredientDto): String = when {
+        !ing.isFood -> "Хозтовар"
+        _state.value.warehouseKind[ing.warehouseId] == "purchased" -> "Покупной"
+        else -> "Продукт"
+    }
+
     fun pickItems(): List<PickItem> = _state.value.available.map { ing ->
-        PickItem(ing.id, ing.name?.takeIf { it.isNotBlank() } ?: "—", ing.unit, ing.category)
+        val secondary = if (ing.category.isNullOrBlank()) kindLabel(ing) else "${kindLabel(ing)} · ${ing.category}"
+        PickItem(ing.id, ing.name?.takeIf { it.isNotBlank() } ?: "—", ing.unit, secondary)
     }
 
     fun toggle(item: PickItem) = _state.update { s ->

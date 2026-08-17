@@ -55,6 +55,7 @@ fun NewItemSheet(
     initialName: String,
     creating: Boolean,
     error: String?,
+    existingItems: List<SearchItem> = emptyList(),
     onDismiss: () -> Unit,
     onCreate: (name: String, unit: String?, isFood: Boolean, price: String?) -> Unit,
 ) {
@@ -64,6 +65,12 @@ fun NewItemSheet(
     var price by remember { mutableStateOf("") }
     var isFood by remember { mutableStateOf(true) }
     val canSave = name.isNotBlank() && !creating
+    // Тёзка среди уже существующих товаров (любого типа) — не блокирует создание,
+    // только предупреждает: одинаковые названия в разных категориях путают в поиске.
+    val nameMatch = remember(name, existingItems) {
+        val q = name.trim()
+        if (q.isEmpty()) null else existingItems.firstOrNull { it.name.equals(q, ignoreCase = true) }
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -86,6 +93,14 @@ fun NewItemSheet(
 
             Label("Название")
             Field(name, { name = it }, "Напр. Салфетки", accent = true)
+            if (nameMatch != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Такое название уже есть: «${nameMatch.name}» (${nameMatch.kind.label}). Возможно, это тот же товар.",
+                    color = ZakupColors.Warn,
+                    fontSize = 12.5.sp,
+                )
+            }
 
             Spacer(Modifier.height(14.dp))
             Label("Тип")

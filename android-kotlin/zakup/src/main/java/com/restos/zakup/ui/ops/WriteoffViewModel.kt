@@ -44,6 +44,7 @@ data class WriteoffUiState(
     val reason: String = REASONS.first(),
     val available: List<IngredientDto> = emptyList(),
     val warehouses: List<WarehouseTab> = listOf(WarehouseTab(null, "Все склады")),
+    val warehouseKind: Map<String, String> = emptyMap(), // warehouseId -> products|purchased|supplies
     val selectedWarehouse: String? = null,
     val lines: List<WriteoffLine> = emptyList(),
 ) {
@@ -83,6 +84,7 @@ class WriteoffViewModel @Inject constructor(
                         loading = false,
                         available = items,
                         warehouses = listOf(WarehouseTab(null, "Все склады")) + warehouses.map { w -> WarehouseTab(w.id, whName(w)) },
+                        warehouseKind = warehouses.associate { w -> w.id to w.kind },
                     )
                 }
             }.onFailure { e -> _state.update { it.copy(loading = false, loadError = e.message ?: "Ошибка загрузки") } }
@@ -100,9 +102,17 @@ class WriteoffViewModel @Inject constructor(
                 id = ing.id,
                 name = ing.name?.takeIf { it.isNotBlank() } ?: "—",
                 unit = ing.unit,
-                secondary = "остаток ${formatQty(stock, ing.unit)} · ${formatMoney(price, "")}/${ing.unit ?: ""}",
+                secondary = "${kindLabel(ing)} · остаток ${formatQty(stock, ing.unit)} · ${formatMoney(price, "")}/${ing.unit ?: ""}",
             )
         }
+
+    // Продукт/Покупной/Хозтовар — так же, как вкладки поиска в приёмке (NewReceiptViewModel):
+    // не-еда единая (не по складу), еда различается складом (обычный/покупной).
+    private fun kindLabel(ing: IngredientDto): String = when {
+        !ing.isFood -> "Хозтовар"
+        _state.value.warehouseKind[ing.warehouseId] == "purchased" -> "Покупной"
+        else -> "Продукт"
+    }
 
     private fun whName(w: WarehouseDto) = w.name.ifBlank {
         when (w.kind) { "products" -> "Продукты"; "purchased" -> "Покупные"; "supplies" -> "Хозтовары"; else -> "Склад" }

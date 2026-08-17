@@ -77,6 +77,7 @@ fun ItemSearchScreen(
             initialName = state.searchQuery,
             creating = state.creatingItem,
             error = state.newItemError,
+            existingItems = state.searchItems,
             onDismiss = { showNewItem = false; viewModel.clearNewItemError() },
             onCreate = { name, unit, isFood, price ->
                 viewModel.createIngredient(name, unit, isFood, price) { showNewItem = false }
