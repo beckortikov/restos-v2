@@ -117,6 +117,7 @@ export default function ExpensesByCategoryPage() {
   const expenses = useMemo(() => {
     return ops.filter((o) => {
       if (o.type !== 'out') return false
+      if (o.activity === 'financial') return false
       const day = (o.date ?? '').slice(0, 10)
       if (!day) return false
       if (range.from && day < range.from) return false

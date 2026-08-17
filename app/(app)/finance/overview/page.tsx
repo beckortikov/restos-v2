@@ -50,6 +50,7 @@ export default function FinanceOverviewPage() {
     let outSum = 0
     for (const o of ops) {
       if ((o.date ?? '').slice(0, 10) !== today) continue
+      if (o.activity === 'financial') continue
       if (o.type === 'in') inSum += o.amount
       else if (o.type === 'out') outSum += o.amount
     }
