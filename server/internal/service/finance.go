@@ -726,6 +726,280 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 	return &op, nil
 }
 
+// Update — редактирование ручной финоперации ВЛАДЕЛЬЦЕМ задним числом
+// (владелец попросил явно: не менеджер/бухгалтер с finance.manage — переписывание
+// уже зафиксированной истории денег требует того же доверия, что ClearMenu/
+// ClearOperations, поэтому requireOwner, а не матрица прав).
+//
+// PATCH-семантика: nil-поле в in — значение не меняется. Реверсит старый эффект
+// на балансе СТАРОГО счёта, применяет новый на НОВОМ (могут совпадать), пересобирает
+// зеркало в кассовую смену (если было — включая пересчёт expected_cash уже
+// ЗАКРЫТОЙ смены, см. computeExpectedCash/DeleteExpense).
+//
+// Системные проводки (auto-созданные накладной/зарплатой/переводом/возвратом,
+// либо зеркало со сменного экрана "shift_expense:") и уже отменённые — не
+// трогает: правка должна идти через их собственный источник истины, иначе
+// накладная/выплата разойдётся с тем, что тут отредактировали в обход.
+func (s *FinancialOperationsService) Update(ctx context.Context, id string, in FinancialOperationInput) (*models.FinancialOperation, error) {
+	if err := requireOwner(ctx, s.r); err != nil {
+		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if id == "" {
+		return nil, apperrors.Wrap("VALIDATION", "id is required", nil)
+	}
+
+	now := time.Now().UTC()
+	var updated models.FinancialOperation
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var op models.FinancialOperation
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", rid, id).First(&op).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("NOT_FOUND", "операция не найдена", nil)
+			}
+			return err
+		}
+		if op.CancelledAt != nil {
+			return apperrors.Wrap("VALIDATION", "операция уже отменена", nil)
+		}
+		if op.IsAuto != nil && *op.IsAuto {
+			return apperrors.Wrap("VALIDATION", "системная проводка — редактируется через её источник (накладную/выплату/перевод)", nil)
+		}
+		oldCategory := derefOr(op.Category, "")
+		switch oldCategory {
+		case "stock_purchase", "supplier_payment", "revenue", "refund", "Перевод",
+			CategorySalary, CategoryAdvance, "Удержание", "Сервис", "Услуги/доставка":
+			return apperrors.Wrap("VALIDATION", "системная проводка — редактируется через её источник (накладную/выплату/перевод)", nil)
+		}
+		if op.Activity != nil && *op.Activity == "financial" {
+			return apperrors.Wrap("VALIDATION", "перевод редактируется только через новый перевод — отменить его нельзя, эта операция не переводом", nil)
+		}
+		if strings.HasPrefix(derefOr(op.SourceRef, ""), "shift_expense:") {
+			return apperrors.Wrap("VALIDATION", "расход внесён со смены — измените/удалите на экране смены", nil)
+		}
+
+		// Целевые значения: заданное поле в in — берём его, иначе оставляем как было.
+		newType := derefOr(in.Type, derefOr(op.Type, ""))
+		if newType != "in" && newType != "out" {
+			return apperrors.Wrap("VALIDATION", "type must be 'in' or 'out'", nil)
+		}
+		newAmount := op.Amount
+		if in.Amount != nil && *in.Amount != "" {
+			a, perr := decimal.FromString(*in.Amount)
+			if perr != nil || !decimal.IsPositive(a) {
+				return apperrors.Wrap("VALIDATION", "amount must be positive", perr)
+			}
+			newAmount = a
+		}
+		newCategory := derefOr(in.Category, oldCategory)
+		if newCategory == "" {
+			return apperrors.Wrap("VALIDATION", "category is required", nil)
+		}
+		switch newCategory {
+		case "stock_purchase", "supplier_payment", "revenue", "refund", "Перевод":
+			return apperrors.Wrap("VALIDATION", "категория «"+newCategory+"» зарезервирована системой", nil)
+		}
+		newActivity := derefOr(in.Activity, derefOr(op.Activity, "operational"))
+		if newActivity == "financial" {
+			return apperrors.Wrap("VALIDATION", "activity=financial зарезервирована (переводы между счетами)", nil)
+		}
+		newAccountID := derefOr(in.AccountID, derefOr(op.AccountID, ""))
+		if newAccountID == "" {
+			return apperrors.Wrap("VALIDATION", "account_id is required", nil)
+		}
+		newDate := derefOr(in.Date, derefOr(op.Date, ""))
+		if newDate == "" {
+			newDate = now.Format("2006-01-02")
+		}
+		newDescription := op.Description
+		if in.Description != nil {
+			newDescription = in.Description
+		}
+		newCounterparty := op.Counterparty
+		if in.Counterparty != nil {
+			newCounterparty = in.Counterparty
+		}
+
+		oldAccountID := derefOr(op.AccountID, "")
+		oldType := derefOr(op.Type, "")
+
+		// Лочим счета в детерминированном порядке (id ASC) — не поймать deadlock
+		// со встречным Update/Transfer по тем же двум счетам (см. Transfer выше).
+		idSet := map[string]bool{}
+		accountIDs := []string{}
+		for _, aid := range []string{oldAccountID, newAccountID} {
+			if aid != "" && !idSet[aid] {
+				idSet[aid] = true
+				accountIDs = append(accountIDs, aid)
+			}
+		}
+		sort.Strings(accountIDs)
+		accs := map[string]*models.FinancialAccount{}
+		if len(accountIDs) > 0 {
+			var rows []models.FinancialAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id IN ?", rid, accountIDs).
+				Order("id ASC").Find(&rows).Error; err != nil {
+				return err
+			}
+			for i := range rows {
+				accs[rows[i].ID] = &rows[i]
+			}
+		}
+		newAcc, ok := accs[newAccountID]
+		if !ok {
+			return apperrors.Wrap("VALIDATION", "account not found", nil)
+		}
+		if !newAcc.IsEnabled {
+			return apperrors.Wrap("CONFLICT", "счёт отключён — выберите другой счёт", nil)
+		}
+
+		// Реверс старого эффекта на старом счёте (no-op, если счёта уже нет —
+		// не должно случаться, но не валим правку из-за осиротевшей ссылки).
+		if oldAcc, ok := accs[oldAccountID]; ok {
+			if oldType == "in" {
+				oldAcc.Balance = decimal.Normalize(decimal.Sub(oldAcc.Balance, op.Amount))
+			} else {
+				oldAcc.Balance = decimal.Normalize(decimal.Add(oldAcc.Balance, op.Amount))
+			}
+		}
+		// Применение нового эффекта на новом счёте (тот же указатель, если счёт не менялся).
+		if newType == "in" {
+			newAcc.Balance = decimal.Normalize(decimal.Add(newAcc.Balance, newAmount))
+		} else {
+			newAcc.Balance = decimal.Normalize(decimal.Sub(newAcc.Balance, newAmount))
+			if decimal.IsNegative(newAcc.Balance) {
+				return apperrors.Wrap("CONFLICT", "insufficient funds on account", nil)
+			}
+		}
+		for _, a := range accs {
+			if err := tx.Model(a).Updates(map[string]any{"balance": a.Balance, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Зеркало смены: если было — снести (баланс уже сведён выше через саму
+		// финоперацию, зеркало деньги не держит), затем создать заново под новые
+		// значения. cash_shift_operations не несёт restaurant_id своей колонкой
+		// (тенант — только через shift_id → cash_shifts.restaurant_id) — matching
+		// по source_ref безопасен и без явного tenant-фильтра: op уже подтверждён
+		// принадлежащим rid выше, а source_ref = op.ID (UUID, глобально уникален).
+		var oldMirrorShift *models.CashShift
+		{
+			var oldMirror models.CashShiftOperation
+			hasMirror := false
+			if err := tx.Where("source_ref = ?", op.ID).
+				First(&oldMirror).Error; err == nil {
+				hasMirror = true
+			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			if hasMirror {
+				if err := tx.Delete(&oldMirror).Error; err != nil {
+					return err
+				}
+				var ms models.CashShift
+				if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+					Where("restaurant_id = ? AND id = ?", rid, derefOr(oldMirror.ShiftID, "")).
+					First(&ms).Error; err == nil {
+					oldMirrorShift = &ms
+				} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+					return err
+				}
+			}
+		}
+
+		// Новое зеркало под новые значения. Если правленная операция была
+		// привязана к смене, УЖЕ закрытой (oldMirrorShift не nil и status≠open) —
+		// recordShiftCashOutIfActive её не найдёт (ищет только открытые), а
+		// молча промолчать нельзя: только что снесли старое зеркало, и без
+		// замены expected_cash закрытой смены осиротеет на «зеркала не было».
+		// Вставляем зеркало напрямую тем же набором полей, что и сама функция
+		// (Type=cash_out, Category=autoMirrorCategory), в обход её open-only
+		// гварда — это та же самая, уже определённая смена, не поиск заново.
+		if newType == "out" && (in.AffectsShift == nil || *in.AffectsShift) {
+			d := "Расход"
+			if newDescription != nil && *newDescription != "" {
+				d = *newDescription
+			}
+			if oldMirrorShift != nil && (oldMirrorShift.Status == nil || *oldMirrorShift.Status != "open") {
+				mirrorType, mirrorCat := "cash_out", autoMirrorCategory
+				srcRef := op.ID
+				if err := tx.Create(&models.CashShiftOperation{
+					ID: uuid.NewString(), ShiftID: &oldMirrorShift.ID, Type: &mirrorType,
+					Amount: decimal.Normalize(newAmount), Description: &d, Category: &mirrorCat,
+					SourceRef: &srcRef, CreatedAt: now, UpdatedAt: now,
+				}).Error; err != nil {
+					return err
+				}
+			} else {
+				shiftRef := derefOr(op.ShiftID, "")
+				if err := recordShiftCashOutIfActive(tx, rid, shiftRef, newAccountID, d, newDate, op.ID, newAmount, now); err != nil {
+					return err
+				}
+			}
+		}
+
+		// Закрытая смена — expected_cash застывший снэпшот (см. DeleteExpense/
+		// computeExpectedCash), пересчитываем и пересохраняем ПОСЛЕ того, как
+		// решили судьбу зеркала (новое либо вставлено выше, либо тип/AffectsShift
+		// больше не требуют зеркала вовсе) — иначе снимок захватит промежуточное
+		// состояние «старое снесено, новое ещё не решено».
+		if oldMirrorShift != nil && (oldMirrorShift.Status == nil || *oldMirrorShift.Status != "open") {
+			expected, err := computeExpectedCash(tx, oldMirrorShift.ID, oldMirrorShift)
+			if err != nil {
+				return err
+			}
+			if err := tx.Model(&models.CashShift{}).Where("id = ?", oldMirrorShift.ID).
+				Updates(map[string]any{"expected_cash": expected, "updated_at": now}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Известное ограничение: audit_log (см. internal/audit/hooks.go buildEntry)
+		// сегодня не хранит diff полей — только факт мутации. Помечаем в самом
+		// Description, чтобы правка была видна прямо в ленте операций.
+		markedDesc := newDescription
+		mark := " [испр. владельцем " + now.Format("02.01") + "]"
+		if markedDesc == nil || !strings.Contains(*markedDesc, mark) {
+			merged := derefOr(markedDesc, "") + mark
+			markedDesc = &merged
+		}
+
+		if err := tx.Model(&op).Updates(map[string]any{
+			"type": newType, "amount": newAmount, "category": newCategory,
+			"account_id": newAccountID, "account_name": newAcc.Name, "activity": newActivity,
+			"date": newDate, "description": markedDesc, "counterparty": newCounterparty,
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		updated = op
+		updated.Type, updated.Amount, updated.Category = &newType, newAmount, &newCategory
+		updated.AccountID, updated.AccountName, updated.Activity = &newAccountID, newAcc.Name, &newActivity
+		updated.Date, updated.Description, updated.Counterparty = &newDate, markedDesc, newCounterparty
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if s.pub != nil {
+		buf := NewBuffer()
+		buf.Add(EventFinanceOperation, map[string]any{
+			"id":         updated.ID,
+			"type":       updated.Type,
+			"account_id": updated.AccountID,
+		})
+		s.pub.Flush(ctx, rid, buf)
+	}
+	return &updated, nil
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CustomCategories CRUD
 // ═══════════════════════════════════════════════════════════════════════════

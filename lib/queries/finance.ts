@@ -114,6 +114,28 @@ export async function createFinancialOperation(op: Omit<FinancialOperation, 'id'
   return row
 }
 
+// updateFinancialOperation — правка расхода/прихода владельцем задним числом
+// (PATCH-семантика на бэке: не заданные поля не меняются). Только role=owner —
+// бэк отклонит 403 иначе.
+export async function updateFinancialOperation(id: string, op: Partial<Omit<FinancialOperation, 'id'>>) {
+  const row: any = await unwrap(api.PATCH('/api/v1/finance/operations/{id}', {
+    params: { path: { id } },
+    body: {
+      type: op.type,
+      amount: op.amount !== undefined ? String(op.amount) : undefined,
+      category: op.category,
+      account_id: op.accountId,
+      activity: op.activity,
+      date: op.date,
+      description: op.description,
+      counterparty: op.counterparty || null,
+      affects_shift: op.affectsShift,
+    } as any,
+  }))
+  logAction('finance.edit', 'finance', id, op.category, { amount: op.amount })
+  return row
+}
+
 export async function fetchBudgetLines(): Promise<BudgetLine[]> {
   const res: any = await unwrap(api.GET('/api/v1/budget', { params: { query: { limit: 500 } } }))
   const rows: any[] = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : []
@@ -917,6 +939,7 @@ function mapFinancialOperation(r: any): FinancialOperation {
     isAuto: r.is_auto,
     sourceRef: r.source_ref ?? undefined,
     shiftId: r.shift_id ?? undefined,
+    cancelledAt: r.cancelled_at ?? undefined,
     createdAt: r.created_at ?? undefined,
   } as FinancialOperation
 }

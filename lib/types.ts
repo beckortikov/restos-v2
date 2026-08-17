@@ -552,11 +552,25 @@ export interface FinancialOperation {
   isAuto: boolean
   sourceRef?: string
   shiftId?: string
+  cancelledAt?: string
   createdAt?: string // момент ввода — для внутридневной сортировки реестра ДДС
   // affectsShift — расход: false = не зеркалить в текущую открытую смену
   // (бухгалтерская проводка на счёте, которая не была физическим движением
   // денег в сегодняшнем ящике). undefined/true — зеркалить, как раньше.
   affectsShift?: boolean
+}
+
+// NON_EDITABLE_FINOP_CATEGORIES/isOperationEditable — системные проводки со
+// своим источником истины (накладная/выплата/перевод); зеркалит проверку на
+// бэке (FinancialOperationsService.Update). Общая для всех мест с кнопкой
+// «Изменить» — не дублировать список по компонентам.
+const NON_EDITABLE_FINOP_CATEGORIES = new Set([
+  'stock_purchase', 'supplier_payment', 'revenue', 'refund', 'Перевод',
+  'Зарплата', 'Аванс', 'Удержание', 'Сервис', 'Услуги/доставка',
+])
+export function isOperationEditable(op: FinancialOperation): boolean {
+  return !op.cancelledAt && !op.isAuto && !NON_EDITABLE_FINOP_CATEGORIES.has(op.category) &&
+    !(op.sourceRef ?? '').startsWith('shift_expense:')
 }
 
 export interface BudgetLine {

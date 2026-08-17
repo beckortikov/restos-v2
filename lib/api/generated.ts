@@ -8419,6 +8419,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/finance/operations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Правка ручной финоперации ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+         * @description PATCH-семантика: не заданные поля не меняются. Реверсит старый эффект на
+         *     балансе старого счёта, применяет новый на новом, пересобирает зеркало в
+         *     кассовую смену (включая пересчёт expected_cash уже закрытой смены).
+         *     Системные проводки (auto-созданные накладной/зарплатой/переводом/возвратом,
+         *     зеркало со сменного экрана) и уже отменённые — отклоняются 400, править
+         *     нужно через их источник.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FinancialOperationInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialOperation"];
+                    };
+                };
+                /** @description Системная/отменённая проводка, либо reserved-категория */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Не владелец */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Недостаточно средств на счёте */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/v1/finance/custom-categories": {
         parameters: {
             query?: never;

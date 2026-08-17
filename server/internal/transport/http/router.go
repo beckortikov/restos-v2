@@ -680,6 +680,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/finance/accounts/{id}/enabled", finAccountsH.SetEnabled)
 			g.Post("/finance/accounts/transfer", finAccountsH.Transfer)
 			g.Post("/finance/operations", finOpsH.Create)
+			g.Patch("/finance/operations/{id}", finOpsH.Update)
 			g.Post("/finance/recurring-payments", recurringPaymentsH.Create)
 			g.Patch("/finance/recurring-payments/{id}", recurringPaymentsH.Patch)
 			g.Delete("/finance/recurring-payments/{id}", recurringPaymentsH.Delete)

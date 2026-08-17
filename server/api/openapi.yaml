@@ -2472,6 +2472,26 @@ paths:
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperationInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+  /api/v1/finance/operations/{id}:
+    patch:
+      tags: [finance]
+      summary: Правка ручной финоперации ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+      description: |
+        PATCH-семантика: не заданные поля не меняются. Реверсит старый эффект на
+        балансе старого счёта, применяет новый на новом, пересобирает зеркало в
+        кассовую смену (включая пересчёт expected_cash уже закрытой смены).
+        Системные проводки (auto-созданные накладной/зарплатой/переводом/возвратом,
+        зеркало со сменного экрана) и уже отменённые — отклоняются 400, править
+        нужно через их источник.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperationInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } }
+        "403": { description: "Не владелец" }
+        "400": { description: "Системная/отменённая проводка, либо reserved-категория" }
+        "409": { description: "Недостаточно средств на счёте" }
 
   # ─── Finance: Custom Categories ─────────────────────────────────────────
   /api/v1/finance/custom-categories:

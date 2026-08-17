@@ -33,7 +33,15 @@ import { join } from 'node:path'
 // modifiers.ts/tables.ts — openapi-fetch типы не регенерятся под generated
 // body-схему); query-параметры в bundles.ts кастов не требуют и не кастуются
 // (см. modifiers.ts). Порог поднят до факта — 156 + 4 = 160.
-const BUDGET_AS_ANY = 160
+
+// 160 → 161: updateFinancialOperation (PATCH /finance/operations/{id},
+// правка расхода владельцем) — тот же паттерн, PATCH body делит generated-схему
+// с POST (FinancialOperationInput), где type/amount/category/account_id
+// required — а PATCH-семантика на бэке (не заданное поле не меняется)
+// принципиально частичная. Без каста TS требует все required-поля даже там,
+// где они optional по смыслу запроса. Проверено: без `as any` 5 ошибок типов
+// именно на этом несовпадении, не на реальной ошибке. Порог 160 + 1 = 161.
+const BUDGET_AS_ANY = 161
 
 describe('lib/queries TypeScript hygiene', () => {
   it(`as-any cast'ов не больше ${BUDGET_AS_ANY} (incremental hardening)`, () => {

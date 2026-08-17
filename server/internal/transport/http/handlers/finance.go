@@ -175,6 +175,22 @@ func (h *FinancialOperationsHandler) Create(w http.ResponseWriter, r *http.Reque
 	respond.JSON(w, http.StatusCreated, out)
 }
 
+// Update — правка ручного расхода/прихода владельцем задним числом.
+// PATCH /api/v1/finance/operations/{id}.
+func (h *FinancialOperationsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	var in service.FinancialOperationInput
+	if err := httpmw.DecodeStrict(r, &in); err != nil {
+		respond.BadRequest(w, "invalid JSON body: "+err.Error())
+		return
+	}
+	out, err := h.svc.Update(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // ─── CustomCategories ──────────────────────────────────────────────────────
 
 type CustomCategoriesHandler struct {
