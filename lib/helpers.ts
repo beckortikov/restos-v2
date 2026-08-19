@@ -77,6 +77,36 @@ export function visibleReceiptItems(items: OrderItem[], voids?: OrderVoid[] | nu
   })
 }
 
+/** Группирует элементы по bundleGroupId (сет — компоненты одного добавления
+ *  сета в заказ делят общий id, см. BundleSlot/expandBundleSelections на
+ *  бэке). Не-сетовые элементы — каждый своей группой (bundleGroupId: null).
+ *  Параметризовано accessor'ом, а не полем `T`, потому что вызывающие места
+ *  группируют то сырые OrderItem[], то уже обёрнутые render-строки (см.
+ *  displayRows в order-actions-panel.tsx, где id лежит на `row.rep`). Порядок
+ *  сохраняется — группа встаёт на позицию первого своего элемента. */
+export function groupByBundle<T>(
+  items: T[],
+  getGroupId: (item: T) => string | null | undefined,
+): { bundleGroupId: string | null; items: T[] }[] {
+  const rows: { bundleGroupId: string | null; items: T[] }[] = []
+  const byGroup = new Map<string, { bundleGroupId: string | null; items: T[] }>()
+  for (const it of items) {
+    const gid = getGroupId(it)
+    if (gid) {
+      let row = byGroup.get(gid)
+      if (!row) {
+        row = { bundleGroupId: gid, items: [] }
+        byGroup.set(gid, row)
+        rows.push(row)
+      }
+      row.items.push(it)
+      continue
+    }
+    rows.push({ bundleGroupId: null, items: [it] })
+  }
+  return rows
+}
+
 /** Начало текущих локальных суток (00:00:00 по таймзоне устройства). Используется операционными
  * страницами как нижняя граница окна `fetchOrders` — кассир и день-в-день флоу видят только сегодня. */
 export function startOfToday(): Date {

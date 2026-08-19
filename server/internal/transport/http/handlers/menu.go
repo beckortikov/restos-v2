@@ -205,3 +205,13 @@ func (h *MenuHandler) DeleteCategory(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// RecomputeCogs — POST /api/v1/menu/recompute-cogs.
+func (h *MenuHandler) RecomputeCogs(w http.ResponseWriter, r *http.Request) {
+	n, err := h.svc.RecomputeCogs(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"updated": n})
+}

@@ -1,4 +1,5 @@
-import type { OrderType, User } from '@/lib/types'
+import type { OrderType, User, BundleSelectionInput } from '@/lib/types'
+import type { BundleCartComponent } from '@/components/dialogs/bundle-picker-sheet'
 
 export interface CartLine {
   /** Устойчивый ID строки корзины. Нужен, чтобы весовые навески одного и того же
@@ -25,6 +26,17 @@ export interface CartLine {
    *  carry `override_stop_list: true`, allowing the backend to accept the
    *  item that would otherwise return 409 ITEM_STOPPED. */
   overrideStopList?: boolean
+  /** Сет: когда задано, эта строка — ОДНО добавление сета (см.
+   *  BundlePickerSheet). qty всегда 1 и степпером не редактируется — бэк не
+   *  поддерживает qty>1 на bundle_selection-обёртке (каждый компонент
+   *  резолвится в свою собственную order_item с qty=1, см.
+   *  expandBundleSelections). Повторный тап по плитке сета — это отдельная
+   *  строка корзины, не инкремент этой. price/cogs строки — сумма
+   *  bundleComponents, для единообразного отображения подытога корзины. */
+  bundleSelection?: BundleSelectionInput
+  /** Разбивка выбранных компонентов — только для отображения (индент под
+   *  строкой в корзине), сумма их price равна `price` этой строки. */
+  bundleComponents?: BundleCartComponent[]
 }
 
 export interface TabInfo {

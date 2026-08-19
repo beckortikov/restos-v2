@@ -250,6 +250,7 @@ export default function BudgetPage() {
   const factByKey = new Map<string, number>()
   for (const op of operations) {
     if (op.type !== 'in' && op.type !== 'out') continue
+    if (op.activity === 'financial') continue
     if ((op.date ?? '').slice(0, 7) !== month) continue
     const key = `${op.type}:${finopCategoryLabel(op.category) || op.category}`
     factByKey.set(key, (factByKey.get(key) ?? 0) + op.amount)

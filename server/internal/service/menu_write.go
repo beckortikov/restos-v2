@@ -48,6 +48,9 @@ type MenuItemInput struct {
 	// Проставляется ТОЛЬКО фронтом центрального узла сразу после того, как он
 	// сам создал/обновил NetworkMenuItem — см. app/(app)/warehouse/menu/*.
 	MasterID *string `json:"master_id,omitempty"`
+	// Сет (bundle): слоты/опции настраиваются отдельными эндпоинтами
+	// (POST /menu/bundle-slots, /menu/bundle-slot-options) после создания.
+	IsBundle *bool `json:"is_bundle,omitempty"`
 }
 
 // parsePurchase валидирует поля покупного товара.
@@ -157,6 +160,7 @@ func (s *MenuService) CreateItem(ctx context.Context, in MenuItemInput) (*models
 		mi.StopListOverride = in.StopListOverride
 	}
 	mi.IsPurchased = in.IsPurchased != nil && *in.IsPurchased
+	mi.IsBundle = in.IsBundle != nil && *in.IsBundle
 
 	// Покупной товар: в одной транзакции создаём складской ингредиент с 0
 	// остатком + 1:1 техкарту + станцию + cogs = цена закупки.
@@ -317,6 +321,9 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 		if *in.IsPurchased {
 			return s.patchPurchased(ctx, &mi, in, updates)
 		}
+	}
+	if in.IsBundle != nil {
+		updates["is_bundle"] = *in.IsBundle
 	}
 
 	if len(updates) == 1 { // только updated_at — нечего обновлять

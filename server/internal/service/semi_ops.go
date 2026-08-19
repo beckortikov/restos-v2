@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -112,7 +113,19 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 			}
 			ingID := *l.IngredientID
 			conv := convByID[ingID]
-			stockQty := conv.toStock(decimal.Mul(l.QtyPerUnit, recipeQty), deref(l.Unit))
+			recipeUnit := deref(l.Unit)
+			// Тот же guard, что и в реальном списании при продаже (orders_close.go
+			// #20): рецепт п/ф в граммах при складе ингредиента в штуках без
+			// unit_weight — несводимо. Не угадываем "как есть" (иначе стоимость
+			// партии, а с ней и cogs блюд на этом п/ф, была бы искажена кратно) —
+			// пропускаем строку рецепта и предупреждаем в логе.
+			if !conv.convertible(recipeUnit) {
+				log.Warn().Str("semi_type_id", in.SemiTypeID).Str("ingredient_id", ingID).
+					Str("recipe_unit", recipeUnit).Str("stock_unit", conv.unit).
+					Msg("semi/prepare: строка рецепта не сводится к складской единице — пропущена")
+				continue
+			}
+			stockQty := conv.toStock(decimal.Mul(l.QtyPerUnit, recipeQty), recipeUnit)
 			producedCost = decimal.Add(producedCost, decimal.Mul(stockQty, conv.pricePerUnit))
 			deduct := decimal.Normalize(stockQty).Neg()
 			unit := l.Unit
@@ -182,6 +195,10 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 				return err
 			}
 		}
+		// Себестоимость единицы п/ф изменилась (новая партия смешалась со
+		// старым остатком) — пересчитываем cogs всех блюд, чья тех-карта
+		// ссылается на этот п/ф (иначе они держат цену на дату прошлой партии).
+		recomputeCogsForSemiType(tx, rid, in.SemiTypeID, now)
 		out = &stock
 		return nil
 	})

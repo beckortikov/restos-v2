@@ -61,15 +61,33 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
+        // ⚠️ Группы 'charts' здесь БОЛЬШЕ НЕТ — и возвращать её нельзя.
+        //
+        // Пока recharts+d3 сводились в чанк 'charts', rolldown укладывал туда же
+        // CJS-обёртку react-ядра (manualChunks на CJS-модулях он не соблюдает —
+        // проверено: правило возвращает 'react', модуль всё равно оказывается в
+        // 'charts'). React нужен всем, поэтому стартовый граф тянул весь чанк
+        // целиком: 439 КБ recharts парсились ради PIN-экрана, где графиков нет.
+        //
+        // Без группы recharts сам уезжает в общий чанк ленивых страниц финансов
+        // и аналитики — дублирования нет, стартовый граф легче на 439 КБ.
+        // Сопоставляем по ИМЕНИ ПАКЕТА, а не по подстроке в пути: старые правила
+        // на includes() перехватывали друг друга (node_modules/recharts/... ловилось
+        // раньше, чем react-модуль доходил до своего правила).
         manualChunks: (id) => {
-          if (!id.includes('node_modules')) return
-          if (id.includes('recharts') || id.includes('d3-')) return 'charts'
-          if (id.includes('xlsx')) return 'xlsx'
-          if (id.includes('react-router')) return 'router'
-          if (id.includes('lucide-react')) return 'icons'
-          if (id.includes('@radix-ui') || id.includes('vaul')) return 'ui'
-          if (id.includes('react-dom') || id.includes('react/') || id.endsWith('/react/index.js')) return 'react'
-          if (id.includes('@sentry')) return 'sentry'
+          const p = id.replace(/\\/g, '/')
+          if (!p.includes('node_modules')) return
+          const m = p.match(/node_modules\/(?:\.pnpm\/[^/]+\/node_modules\/)?((?:@[^/]+\/)?[^/]+)/)
+          const pkg = m?.[1]
+          if (!pkg) return
+          // React-рантайм — первым правилом: он фундамент для всех остальных.
+          if (pkg === 'react' || pkg === 'react-dom' || pkg === 'scheduler'
+            || pkg === 'react-is' || pkg === 'use-sync-external-store') return 'react'
+          if (pkg === 'xlsx') return 'xlsx'
+          if (pkg === 'react-router' || pkg === 'react-router-dom') return 'router'
+          if (pkg === 'lucide-react') return 'icons'
+          if (pkg.startsWith('@radix-ui') || pkg === 'vaul') return 'ui'
+          if (pkg.startsWith('@sentry')) return 'sentry'
         },
       },
     },

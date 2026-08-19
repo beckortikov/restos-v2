@@ -2,7 +2,10 @@ import { api, unwrap, V4Error } from './_client'
 import { randomId } from '../random-id'
 import type { MenuItem, MenuAttribute } from '../types'
 import { logAction } from './audit'
-import { calcCogsFromTechCard } from './_mappers'
+
+// Живой предпросмотр себестоимости при редактировании тех-карты (до
+// сохранения) — используется в формах создания/редактирования блюда.
+export { previewTechCardCogs } from './_mappers'
 
 export interface FetchMenuItemsOptions {
   withTechCards?: boolean
@@ -14,37 +17,20 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
   // Курсорная пагинация. Бэк зажимает limit до cursor.MaxLimit (200), поэтому
   // при >200 блюдах одна страница теряла «хвост» — блюда молча пропадали из
   // меню и из Склад→Меню. Идём по next_cursor, пока он не пуст.
+  //
+  // ingredient_prices/semi_prices НЕ запрашиваем — cogs теперь всегда живой
+  // на бэке (см. mapMenuItem), клиентский пересчёт по ним больше не нужен.
   const items: Record<string, unknown>[] = []
-  const ingredientPrices = new Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>()
-  const semiPrices = new Map<string, { price: number; unit: string }>()
   let cursor: string | undefined
   for (let guard = 0; guard < 200; guard++) {
     const query: { limit: number; include?: string; cursor?: string } = { limit: 200 }
     // attributes — всегда: без них не сгруппировать варианты (parent_id +
     // variant_value_ids) и не показать пикер комбинаций в POS.
-    query.include = includeTC ? 'tech_cards,ingredient_prices,attributes' : 'attributes'
+    query.include = includeTC ? 'tech_cards,attributes' : 'attributes'
     if (cursor) query.cursor = cursor
     const res: any = await unwrap(api.GET('/api/v1/menu/items', { params: { query: query as any } }))
     const page: Record<string, unknown>[] = res?.data ?? []
     items.push(...page)
-    if (includeTC) {
-      const ipMap = (res?.ingredient_prices ?? {}) as Record<string, {
-        price?: unknown; unit?: unknown; waste_percent?: unknown; unit_weight?: unknown; unit_weight_unit?: unknown
-      }>
-      for (const [id, v] of Object.entries(ipMap)) {
-        ingredientPrices.set(id, {
-          price: Number(v?.price) || 0,
-          unit: (v?.unit as string) || '',
-          wastePercent: Number(v?.waste_percent) || 0,
-          unitWeight: Number(v?.unit_weight) || 0,
-          unitWeightUnit: (v?.unit_weight_unit as string) || '',
-        })
-      }
-      const spMap = (res?.semi_prices ?? {}) as Record<string, { price?: unknown; unit?: unknown }>
-      for (const [id, v] of Object.entries(spMap)) {
-        semiPrices.set(id, { price: Number(v?.price) || 0, unit: (v?.unit as string) || '' })
-      }
-    }
     cursor = (res?.next_cursor as string) || undefined
     if (!cursor || page.length === 0) break
   }
@@ -60,7 +46,7 @@ export async function fetchMenuItems(opts?: FetchMenuItemsOptions): Promise<Menu
     }
   }
 
-  return items.map(r => mapMenuItem(r, techByItem.get(r.id as string) ?? [], ingredientPrices, semiPrices)) as MenuItem[]
+  return items.map(r => mapMenuItem(r, techByItem.get(r.id as string) ?? [])) as MenuItem[]
 }
 
 export async function createMenuItem(
@@ -91,9 +77,12 @@ export async function createMenuItem(
     body.purchase_unit = item.purchaseUnit || 'piece'
     body.purchase_min_qty = String(item.purchaseMinQty ?? 0)
   }
+  // Сет: своих техкарты/закупки нет — слоты настраиваются отдельно ПОСЛЕ
+  // создания (нужен реальный id), см. редирект на /warehouse/menu/{id} в форме.
+  if (item.isBundle) body.is_bundle = true
   const data: any = await unwrap(api.POST('/api/v1/menu/items', { body }))
   const newId: string | undefined = data?.id
-  const validTechLines = purchased ? [] : item.techCard.filter(l => l.ingredientId || l.semiId)
+  const validTechLines = (purchased || item.isBundle) ? [] : item.techCard.filter(l => l.ingredientId || l.semiId)
   if (validTechLines.length > 0 && newId) {
     for (const l of validTechLines) {
       await unwrap(api.POST('/api/v1/menu/tech-cards', {
@@ -276,6 +265,7 @@ export async function updateMenuItem(id: string, data: Partial<{
   isPurchased: boolean; purchasePrice: number; purchaseUnit: string; purchaseMinQty: number;
   // masterId — привязка к мастер-блюду сети (ADR-004). '' снимает привязку.
   masterId: string;
+  isBundle: boolean;
 }>) {
   const updates: Record<string, unknown> = {}
   if (data.name !== undefined) updates.name = data.name
@@ -299,11 +289,14 @@ export async function updateMenuItem(id: string, data: Partial<{
     updates.purchase_unit = data.purchaseUnit || 'piece'
     updates.purchase_min_qty = String(data.purchaseMinQty ?? 0)
   }
+  // Сет: слоты/опции настраиваются отдельными эндпоинтами (BundleSlotsEditor),
+  // здесь только сам флаг.
+  if (data.isBundle !== undefined) updates.is_bundle = data.isBundle
 
   await unwrap(api.PATCH('/api/v1/menu/items/{id}', { params: { path: { id } }, body: updates as any }))
 
-  // Для покупного техкарту строит бэк — фронт её не трогает.
-  if (data.techCard && !data.isPurchased) {
+  // Для покупного/сета техкарту строит бэк или её не бывает — фронт не трогает.
+  if (data.techCard && !data.isPurchased && !data.isBundle) {
     await replaceTechCardLines(id, data.techCard.filter(l => l.ingredientId || l.semiId))
   }
   logAction('menu.edit', 'menu_item', id, data.name)
@@ -376,7 +369,7 @@ function mapAttributesState(res: Record<string, unknown>): ProductAttributesStat
       })),
     })),
     variants: variants.map(v => ({
-      ...(mapMenuItem(v, [], new Map())),
+      ...(mapMenuItem(v, [])),
       variantValueIds: Array.isArray(v.value_ids) ? (v.value_ids as string[]) : [],
     })),
   }
@@ -447,6 +440,17 @@ export async function archiveMenuItem(id: string) {
   logAction('menu.archive', 'menu_item', id)
 }
 
+// recomputeMenuCogs — разовый пересчёт себестоимости всех блюд с тех-картой
+// по актуальным ценам ингредиентов/п-ф. Себестоимость теперь пересчитывается
+// автоматически при правке тех-карты/цены — эта кнопка нужна для блюд,
+// заведённых до автопересчёта (импорт, старые правки). Возвращает число
+// реально обновлённых блюд.
+export async function recomputeMenuCogs(): Promise<number> {
+  const data: any = await unwrap(api.POST('/api/v1/menu/recompute-cogs', {}))
+  logAction('menu.recompute_cogs', 'menu_item', undefined)
+  return Number(data?.updated ?? 0)
+}
+
 // ─── Mappers ──────────────────────────────────────────────────────────────
 
 function mapTechCardLine(l: Record<string, unknown>) {
@@ -459,14 +463,16 @@ function mapTechCardLine(l: Record<string, unknown>) {
   }
 }
 
-function mapMenuItem(
-  r: Record<string, unknown>,
-  techLines: Record<string, unknown>[],
-  ingredientPrices: Map<string, { price: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }>,
-  semiPrices?: Map<string, { price: number; unit: string }>,
-): MenuItem {
-  const autoCogs = techLines.length > 0 ? calcCogsFromTechCard(techLines, ingredientPrices, semiPrices) : 0
-  const effectiveCogs = autoCogs > 0 ? autoCogs : (Number(r.cogs) || 0)
+// mapMenuItem — cogs берётся напрямую из бэка (r.cogs): менеджер автоматически
+// пересчитывает и пишет menu_items.cogs при любом изменении тех-карты или
+// цены ингредиента/полуфабриката (см. server/internal/service/menu_cogs.go),
+// поэтому клиентский пересчёт здесь больше не нужен — раньше два независимых
+// вычисления (это и калькулятор в форме редактирования) могли показывать
+// разные числа для одного и того же блюда/варианта в зависимости от того,
+// каким запросом он был загружен. Живой предпросмотр «сколько будет стоить»
+// во время редактирования тех-карты — отдельная функция, см. calcCogsFromTechCard
+// в формах создания/редактирования блюда.
+function mapMenuItem(r: Record<string, unknown>, techLines: Record<string, unknown>[]): MenuItem {
   return {
     id: r.id as string,
     name: r.name as string,
@@ -477,8 +483,8 @@ function mapMenuItem(
     isAvailable: r.is_available as boolean,
     stopListOverride: (r.stop_list_override as boolean) ?? false,
     isPurchased: (r.is_purchased as boolean) ?? false,
-    cogs: effectiveCogs,
-    cogsManual: Number(r.cogs) || 0,
+    isBundle: (r.is_bundle as boolean) ?? false,
+    cogs: Number(r.cogs) || 0,
     cookTimeMin: (r.cook_time_min as number | null) ?? null,
     station: ((r.station as MenuItem['station']) || 'hot_kitchen'),
     isBatchCooking: (r.is_batch_cooking as boolean) ?? false,

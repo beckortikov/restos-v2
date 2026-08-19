@@ -112,12 +112,26 @@ function metricConvert(qty: number, from: string, to: string): number | null {
   return null
 }
 
+// isConvertibleToStock — сводится ли recipeUnit к stockUnit напрямую или через
+// per-unit фактор веса. Зеркалит server ingStockConv.convertible() —
+// используется, чтобы НЕ считать себестоимость по несводимой паре единиц
+// (иначе convertDeductToStockUnit молча вернул бы qty "как есть": "200 г"
+// стали бы "200 шт" и умножились на цену за штуку — кратно неверный итог).
+function isConvertibleToStock(recipeUnit: string, stockUnit: string, unitWeight = 0, unitWeightUnit = ''): boolean {
+  if (!stockUnit) return true
+  if (metricConvert(1, recipeUnit, stockUnit) !== null) return true
+  if (unitWeight > 0 && unitWeightUnit && metricConvert(1, recipeUnit, unitWeightUnit) !== null) return true
+  return false
+}
+
 // convertDeductToStockUnit — приводит рецептурный расход к складской единице.
 // Зеркалит server units.ConvertToStock (см. internal/pkg/units):
 //  1. одна размерность → метрическая конвертация;
 //  2. штучный склад + per-unit фактор (unitWeight в unitWeightUnit) →
 //     приводим к единице фактора и делим (10 г ÷ 340 г/шт = 0.0294 шт);
-//  3. фолбэк — без изменений.
+//  3. фолбэк — без изменений (вызывающий код обязан сначала проверить
+//     isConvertibleToStock — этот фолбэк существует только как последний
+//     рубеж для UI-мест, которым положено показать хоть какое-то число).
 // Только оценка для UI; истина — на бэке.
 export function convertDeductToStockUnit(
   deductQty: number,
@@ -150,7 +164,12 @@ export function calcCogsFromTechCard(
       if (!ing) continue
       const recipeQty = Number(line.qty) || 0
       const recipeUnit = (line.unit as string) || ''
-      const wasteMultiplier = ing.wastePercent > 0 ? 1 / (1 - ing.wastePercent / 100) : 1
+      // Несводимые единицы (рецепт в граммах, склад в штуках без unitWeight) —
+      // пропускаем строку, а не считаем "как есть" (см. isConvertibleToStock).
+      if (!isConvertibleToStock(recipeUnit, ing.unit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')) continue
+      // waste ≥100% не отдаём в 1/(1-w/100) — на 100% это Infinity, выше —
+      // отрицательный множитель. Тот же guard, что и на бэке: не корректируем.
+      const wasteMultiplier = ing.wastePercent > 0 && ing.wastePercent < 100 ? 1 / (1 - ing.wastePercent / 100) : 1
       const adjustedQty = recipeQty * wasteMultiplier
       const qtyInStockUnit = convertDeductToStockUnit(adjustedQty, ing.unit, recipeUnit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
       cogs += qtyInStockUnit * ing.price
@@ -162,13 +181,41 @@ export function calcCogsFromTechCard(
       if (!semi || !(semi.price > 0)) continue
       const recipeQty = Number(line.qty) || 0
       const recipeUnit = (line.unit as string) || ''
-      // yield п/ф уже зашит в цену → waste не применяем. Конвертируем в ед. п/ф;
-      // если единицы несравнимы (шт) — берём qty как есть (фолбэк, как на бэке).
-      const qtyInSemiUnit = metricConvert(recipeQty, recipeUnit, semi.unit) ?? recipeQty
+      // yield п/ф уже зашит в цену → waste не применяем. Несводимые единицы —
+      // пропускаем строку (не берём qty "как есть").
+      const qtyInSemiUnit = metricConvert(recipeQty, recipeUnit, semi.unit)
+      if (qtyInSemiUnit === null) continue
       cogs += qtyInSemiUnit * semi.price
     }
   }
   return dRound(cogs)
+}
+
+// previewTechCardCogs — живой предпросмотр себестоимости ПРИ РЕДАКТИРОВАНИИ
+// тех-карты в форме блюда, до сохранения. Тонкая обёртка над
+// calcCogsFromTechCard: принимает camelCase-строки формы и справочники
+// Ingredient[]/SemiFinishedStock[], которые страница уже грузит для пикеров
+// (ничего не запрашивает заново). Только подсказка — настоящую себестоимость
+// после сохранения посчитает и запишет бэк (server/internal/service/menu_cogs.go).
+export function previewTechCardCogs(
+  lines: { ingredientId?: string; semiId?: string; qty: number; unit: string }[],
+  ingredients: { id: string; pricePerUnit: number; unit: string; wastePercent: number; unitWeight?: number; unitWeightUnit?: string }[],
+  semiStock: { semiTypeId: string; pricePerUnit: number; unit: string }[],
+): number {
+  const real = lines.filter(l => l.ingredientId || l.semiId)
+  if (real.length === 0) return 0
+  const ingredientPrices = new Map(ingredients.map(i => [i.id, {
+    price: i.pricePerUnit, unit: i.unit, wastePercent: i.wastePercent,
+    unitWeight: i.unitWeight, unitWeightUnit: i.unitWeightUnit,
+  }]))
+  const semiPrices = new Map(semiStock.map(s => [s.semiTypeId, { price: s.pricePerUnit, unit: s.unit }]))
+  const techLines = real.map(l => ({
+    ingredient_id: l.ingredientId ?? null,
+    semi_type_id: l.semiId ?? null,
+    qty: l.qty,
+    unit: l.unit,
+  }))
+  return calcCogsFromTechCard(techLines, ingredientPrices, semiPrices)
 }
 
 // ─── Restaurant ───────────────────────────────────────────────────────────
@@ -266,6 +313,8 @@ export function _mapV4OrderItem(i: Record<string, any>): OrderItem {
     note: (i.note as string | null | undefined) ?? null,
     kitchenStatus: i.kitchen_status ?? null,
     createdAt: i.created_at ?? i.createdAt,
+    bundleGroupId: i.bundle_group_id ?? undefined,
+    bundleSlotLabel: i.bundle_slot_label ?? undefined,
     modifiers: Array.isArray(i.modifiers)
       ? i.modifiers.map((m: any) => ({
           modifierId: m.modifier_id ?? m.id ?? undefined,

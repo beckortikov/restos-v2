@@ -15,6 +15,19 @@ desktop/data/
 desktop/dist/
 desktop/frontend/
 
+# Сайдкар и клиентские утилиты PG — сборочные артефакты, не исходники.
+# .github/workflows/desktop-release.yml создаёт весь desktop/resources/ с нуля:
+# собирает restos-server.exe и качает pg_dump/pg_restore + DLL. В git они лежали
+# по недосмотру и устаревали — закоммиченный restos-server был на два месяца
+# старше кода и не содержал разведения pg-bin/pg-runtime, из-за чего локальный
+# запуск стартовал 12 секунд вместо 0,15 (embedded-postgres распаковывал 133 МБ
+# на каждом старте). Для локального запуска desktop: cd server && make build-sidecar.
+desktop/resources/restos-server
+desktop/resources/restos-server.exe
+desktop/resources/*.dll
+desktop/resources/pg_dump*
+desktop/resources/pg_restore*
+
 # Android build artifacts
 android/.gradle/
 android/build/

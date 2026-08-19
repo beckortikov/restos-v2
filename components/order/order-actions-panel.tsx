@@ -15,7 +15,7 @@ import { toast } from 'sonner'
 
 import { useAuth } from '@/lib/auth-store'
 import { humanizeError } from '@/lib/errors'
-import { calcLineCogs, calcLineTotal, formatCurrency, formatQty, getTimeSince, visibleReceiptItems, voidedItemFlags } from '@/lib/helpers'
+import { calcLineCogs, calcLineTotal, formatCurrency, formatQty, getTimeSince, visibleReceiptItems, voidedItemFlags, groupByBundle } from '@/lib/helpers'
 import { dDiv, dMul, dRound, dSub, dSum } from '@/lib/decimal'
 import {
   assignWaiter, cancelOrder, cancelOrderItem, cancelOrderItemPartial, addItemsToOrder, closeOrderWithPayment, fetchActiveShift, fetchFinancialAccounts,
@@ -307,6 +307,122 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
     })
     return rows
   }, [order.items, voidFlags])
+  // Компоненты одного сета (общий bundleGroupId) — визуальный конверт вокруг
+  // их строк. Важно не только для читаемости: отмена ЛЮБОГО компонента уже
+  // каскадно отменяет весь сет на бэке (cascadeCancelBundleSiblings в
+  // orders_extras.go/orders_void.go) — без группировки кассир видел бы
+  // «Бургер»/«Кола» как независимые строки и не ожидал бы, что отмена одной
+  // сотрёт и другую.
+  const groupedRows = useMemo(
+    () => groupByBundle(displayRows, row => row.rep.bundleGroupId),
+    [displayRows],
+  )
+
+  // Рендер одной строки позиции — вынесено из .map(), чтобы переиспользовать
+  // и для обычных строк, и для строк внутри конверта сета (bundled=true).
+  // function-декларация (не const) намеренно: тело зовётся только во время
+  // финального JSX ниже, когда handleDecrementItem/handleIncrementItem/etc.
+  // уже проинициализированы — но именно декларация хоистится, что позволяет
+  // держать её рядом с groupedRows, а не утаскивать в конец компонента.
+  // bundled=true прячет +/- (handleIncrementItem дозаказывает НЕСВЯЗАННУЮ
+  // строку по menuItemId — не «ещё один такой же сет», а обычный доп. item;
+  // decrement на компоненте — full-cancel и остаётся доступен через X).
+  function renderItemRow(row: (typeof displayRows)[number], idx: number, bundled: boolean) {
+    const item = row.rep
+    const voided = row.voided
+    const served = row.served
+    const portions = row.portions
+    const isWeight = item.unit === 'g' || item.unit === 'kg'
+    const isGroup = portions > 1
+    // Мета-строка: вес как «100г × 3», штучное как «×3».
+    const qtyMeta = isWeight
+      ? `${formatQty(item.qty, item.unit)}${isGroup ? ` × ${portions}` : ''}`
+      : `×${item.qty}`
+    const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize) * portions
+    return (
+      <div
+        key={`${item.id ?? idx}-${idx}`}
+        className={`flex items-center gap-2 rounded-xl p-2.5 border ${
+          voided ? 'bg-muted/40 border-dashed border-border/60'
+            : served ? 'bg-status-ready-soft border-status-ready-border'
+            : 'bg-background border-border'
+        }`}
+      >
+        <span className={`text-base shrink-0 ${voided ? 'opacity-40' : ''}`}>{item.emoji ?? '·'}</span>
+        <div className="flex-1 min-w-0">
+          <p className={`text-xs font-medium truncate flex items-center gap-1 ${voided ? 'text-muted-foreground line-through' : served ? 'text-status-ready-text' : 'text-foreground'}`}>
+            {served && <CheckCircle2 className="size-3.5 shrink-0 text-status-ready" />}
+            {bundled && item.bundleSlotLabel ? <span className="font-normal text-primary/70">{item.bundleSlotLabel}: </span> : null}
+            {item.name}
+          </p>
+          <p className={`text-[10px] ${voided ? 'text-muted-foreground/70 line-through' : 'text-muted-foreground'} flex items-center gap-1.5 flex-wrap`}>
+            <span>{qtyMeta} · {formatCurrency(item.price)}</span>
+            {item.createdAt && (
+              <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">⏱ {getTimeSince(item.createdAt)}</span>
+            )}
+          </p>
+          {item.note ? (
+            <p className="text-[10px] italic text-amber-700/90 dark:text-amber-300/90 truncate">
+              ! {item.note}
+            </p>
+          ) : null}
+        </div>
+        <span className={`text-xs font-bold min-w-[5rem] text-right tabular-nums whitespace-nowrap ${
+          voided ? 'text-muted-foreground line-through' : 'text-foreground'
+        }`}>
+          {formatCurrency(lineTotal)}
+        </span>
+        {!voided && item.id && !bundled ? (
+          <>
+            <button
+              onClick={() => isWeight
+                ? setVoidingItem({ id: row.ids[row.ids.length - 1], name: item.name, qty: item.qty, price: item.price, unit: item.unit, unitSize: item.unitSize })
+                : handleDecrementItem(item)}
+              disabled={adjustingItemId === item.id}
+              title={isWeight ? (isGroup ? 'Убрать одну порцию' : 'Отменить позицию') : (item.qty > 1 ? 'Уменьшить (-1)' : 'Отменить позицию')}
+              className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
+            >
+              <Minus className="size-3.5" />
+            </button>
+            <button
+              onClick={() => isWeight ? handleAddPortion(item) : handleIncrementItem(item)}
+              disabled={adjustingItemId === item.id}
+              title={isWeight ? 'Добавить порцию' : 'Увеличить (+1)'}
+              className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
+            >
+              <Plus className="size-3.5" />
+            </button>
+          </>
+        ) : null}
+        {!voided && item.id && !isGroup ? (
+          <button
+            onClick={() => setEditingNote({ id: item.id!, name: item.name, draftNote: item.note ?? '' })}
+            title={item.note ? 'Редактировать комментарий' : 'Добавить комментарий'}
+            className={`size-6 rounded-md flex items-center justify-center transition-colors shrink-0 ${
+              item.note
+                ? 'text-amber-700 dark:text-amber-300 hover:bg-amber-500/10'
+                : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+            }`}
+          >
+            <Pencil className="size-3.5" />
+          </button>
+        ) : null}
+        {!voided && item.id ? (
+          <button
+            onClick={() => setVoidingItem(isGroup
+              ? { id: item.id!, ids: row.ids, name: item.name, qty: item.qty * portions, price: item.price }
+              : { id: item.id!, name: item.name, qty: item.qty, price: item.price })}
+            title={isGroup ? 'Отменить все порции' : bundled ? 'Отменить весь сет' : 'Отменить позицию'}
+            className="size-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex items-center justify-center transition-colors shrink-0"
+          >
+            <X className="size-3.5" />
+          </button>
+        ) : (
+          <span className="size-6 shrink-0" aria-hidden />
+        )}
+      </div>
+    )
+  }
   const subtotal = useMemo(
     () => Number(dRound(dSum(visibleItems.map(i => calcLineTotal(i.price, i.qty, i.unit, i.unitSize))))),
     [visibleItems],
@@ -858,101 +974,12 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
         </div>
         {order.items.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-6">Нет позиций</p>
-        ) : displayRows.map((row, idx) => {
-          const item = row.rep
-          const voided = row.voided
-          const served = row.served
-          const portions = row.portions
-          const isWeight = item.unit === 'g' || item.unit === 'kg'
-          const isGroup = portions > 1
-          // Мета-строка: вес как «100г × 3», штучное как «×3».
-          const qtyMeta = isWeight
-            ? `${formatQty(item.qty, item.unit)}${isGroup ? ` × ${portions}` : ''}`
-            : `×${item.qty}`
-          const lineTotal = calcLineTotal(item.price, item.qty, item.unit, item.unitSize) * portions
-          return (
-            <div
-              key={`${item.id ?? idx}-${idx}`}
-              className={`flex items-center gap-2 rounded-xl p-2.5 border ${
-                voided ? 'bg-muted/40 border-dashed border-border/60'
-                  : served ? 'bg-status-ready-soft border-status-ready-border'
-                  : 'bg-background border-border'
-              }`}
-            >
-              <span className={`text-base shrink-0 ${voided ? 'opacity-40' : ''}`}>{item.emoji ?? '·'}</span>
-              <div className="flex-1 min-w-0">
-                <p className={`text-xs font-medium truncate flex items-center gap-1 ${voided ? 'text-muted-foreground line-through' : served ? 'text-status-ready-text' : 'text-foreground'}`}>
-                  {served && <CheckCircle2 className="size-3.5 shrink-0 text-status-ready" />}
-                  {item.name}
-                </p>
-                <p className={`text-[10px] ${voided ? 'text-muted-foreground/70 line-through' : 'text-muted-foreground'} flex items-center gap-1.5 flex-wrap`}>
-                  <span>{qtyMeta} · {formatCurrency(item.price)}</span>
-                  {item.createdAt && (
-                    <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">⏱ {getTimeSince(item.createdAt)}</span>
-                  )}
-                </p>
-                {item.note ? (
-                  <p className="text-[10px] italic text-amber-700/90 dark:text-amber-300/90 truncate">
-                    ! {item.note}
-                  </p>
-                ) : null}
-              </div>
-              <span className={`text-xs font-bold min-w-[5rem] text-right tabular-nums whitespace-nowrap ${
-                voided ? 'text-muted-foreground line-through' : 'text-foreground'
-              }`}>
-                {formatCurrency(lineTotal)}
-              </span>
-              {!voided && item.id ? (
-                <>
-                  <button
-                    onClick={() => isWeight
-                      ? setVoidingItem({ id: row.ids[row.ids.length - 1], name: item.name, qty: item.qty, price: item.price, unit: item.unit, unitSize: item.unitSize })
-                      : handleDecrementItem(item)}
-                    disabled={adjustingItemId === item.id}
-                    title={isWeight ? (isGroup ? 'Убрать одну порцию' : 'Отменить позицию') : (item.qty > 1 ? 'Уменьшить (-1)' : 'Отменить позицию')}
-                    className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
-                  >
-                    <Minus className="size-3.5" />
-                  </button>
-                  <button
-                    onClick={() => isWeight ? handleAddPortion(item) : handleIncrementItem(item)}
-                    disabled={adjustingItemId === item.id}
-                    title={isWeight ? 'Добавить порцию' : 'Увеличить (+1)'}
-                    className="size-6 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted flex items-center justify-center transition-colors shrink-0 disabled:opacity-50"
-                  >
-                    <Plus className="size-3.5" />
-                  </button>
-                </>
-              ) : null}
-              {!voided && item.id && !isGroup ? (
-                <button
-                  onClick={() => setEditingNote({ id: item.id!, name: item.name, draftNote: item.note ?? '' })}
-                  title={item.note ? 'Редактировать комментарий' : 'Добавить комментарий'}
-                  className={`size-6 rounded-md flex items-center justify-center transition-colors shrink-0 ${
-                    item.note
-                      ? 'text-amber-700 dark:text-amber-300 hover:bg-amber-500/10'
-                      : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                  }`}
-                >
-                  <Pencil className="size-3.5" />
-                </button>
-              ) : null}
-              {!voided && item.id ? (
-                <button
-                  onClick={() => setVoidingItem(isGroup
-                    ? { id: item.id!, ids: row.ids, name: item.name, qty: item.qty * portions, price: item.price }
-                    : { id: item.id!, name: item.name, qty: item.qty, price: item.price })}
-                  title={isGroup ? 'Отменить все порции' : 'Отменить позицию'}
-                  className="size-6 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex items-center justify-center transition-colors shrink-0"
-                >
-                  <X className="size-3.5" />
-                </button>
-              ) : (
-                <span className="size-6 shrink-0" aria-hidden />
-              )}
-            </div>
-          )
-        })}
+        ) : groupedRows.map((group, gi) => !group.bundleGroupId ? renderItemRow(group.items[0], gi, false) : (
+          <div key={`bundle-${group.bundleGroupId}`} className="rounded-xl border border-primary/25 bg-primary/5 p-1.5 space-y-1.5">
+            <p className="px-1 text-[10px] font-bold uppercase tracking-wide text-primary/70">🧩 Сет — отмена компонента отменяет весь</p>
+            {group.items.map((row, idx) => renderItemRow(row, idx, true))}
+          </div>
+        ))}
       </div>
 
       {/* Footer: totals + payment + actions.

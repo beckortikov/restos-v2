@@ -18,7 +18,6 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/stockcheck"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
-	"github.com/restos/restos-v4/server/internal/pkg/units"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -43,18 +42,39 @@ type CreateOrderInput struct {
 //   - menu_item_id: что заказали
 //   - qty: количество (Decimal, потому что бывают весовые блюда)
 //   - modifier_ids: id-шники Modifier'ов (snapshot цены/имени берём из БД)
-//   - name/price/unit/unit_size/cogs/modifiers: опциональные override-поля.
-//     Если переданы — заменяют snapshot из меню (нужно для comp/discount/custom price).
+//   - name/cogs/modifiers: опциональные override-поля, заменяют snapshot из меню.
+//   - price/unit/unit_size: поля ИГНОРИРУЮТСЯ (см. buildOrderItem) — цена/единицы
+//     всегда из меню, приём с клиента был дырой (продажа по любой цене). Поля
+//     остаются в DTO для совместимости.
+//   - bundle_selection: вместо menu_item_id — выбор по слотам сета. Сервер
+//     резолвит в N настоящих order_items с ценой из bundle_slot_options (не от
+//     клиента — тот же принцип, что закрыл прямой price-override).
 type CreateOrderItem struct {
-	MenuItemID  string                    `json:"menu_item_id"`
-	Qty         string                    `json:"qty"`
-	ModifierIDs []string                  `json:"modifier_ids"`
-	Name        *string                   `json:"name,omitempty"`
-	Price       *string                   `json:"price,omitempty"`
-	Unit        *string                   `json:"unit,omitempty"`
-	UnitSize    *string                   `json:"unit_size,omitempty"`
-	COGS        *string                   `json:"cogs,omitempty"`
-	Modifiers   *[]OrderItemModifierInput `json:"modifiers,omitempty"`
+	MenuItemID      string                    `json:"menu_item_id"`
+	Qty             string                    `json:"qty"`
+	ModifierIDs     []string                  `json:"modifier_ids"`
+	Name            *string                   `json:"name,omitempty"`
+	Price           *string                   `json:"price,omitempty"`
+	Unit            *string                   `json:"unit,omitempty"`
+	UnitSize        *string                   `json:"unit_size,omitempty"`
+	COGS            *string                   `json:"cogs,omitempty"`
+	Modifiers       *[]OrderItemModifierInput `json:"modifiers,omitempty"`
+	BundleSelection *BundleSelectionInput     `json:"bundle_selection,omitempty"`
+}
+
+// BundleSelectionInput — выбор кассира по слотам сета (см. миграцию 073).
+// Резолвится в N обычных order_items с ценой из bundle_slot_options.price —
+// клиент присылает только id-шники, не цену.
+type BundleSelectionInput struct {
+	BundleMenuItemID string                     `json:"bundle_menu_item_id"`
+	Slots            []BundleSlotSelectionInput `json:"slots"`
+}
+
+// BundleSlotSelectionInput — выбор внутри одного слота. Обычно один OptionID
+// (слот 1-из-1), но допускает несколько — если у слота max_select > 1.
+type BundleSlotSelectionInput struct {
+	SlotID    string   `json:"slot_id"`
+	OptionIDs []string `json:"option_ids"`
 }
 
 // OrderItemModifierInput — opcional shape для модификатора с overrides.
@@ -111,6 +131,16 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx) // в транзакции; tenant-фильтр выставляем явно ниже
+
+		// Сеты — раньше всего: раскрываем BundleSelection в настоящие позиции
+		// (MenuItemID реальных компонентов), чтобы весь код ниже (snapshot цен,
+		// stop-list, сток, печать на кухню) работал с обычным списком позиций и
+		// не знал про сеты вообще.
+		expandedItems, resolvedBundles, err := expandBundleSelections(tx, rid, in.Items)
+		if err != nil {
+			return err
+		}
+		in.Items = expandedItems
 
 		// Snapshot цен из меню. Один SELECT IN, чтобы не было N+1.
 		menuIDs := make([]string, 0, len(in.Items))
@@ -257,8 +287,8 @@ func (s *OrdersService) Create(ctx context.Context, in CreateOrderInput) (*model
 
 		// items + modifiers + accumulate total
 		total := decimal.Zero
-		for _, it := range in.Items {
-			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx, rid)
+		for i, it := range in.Items {
+			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx, rid, resolvedBundles[i])
 			if err != nil {
 				return err
 			}
@@ -371,6 +401,13 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		}
 		wasCancelled := order.Status != nil && *order.Status == "cancelled"
 
+		// Сеты — см. комментарий в Create.
+		expandedItems, resolvedBundles, err := expandBundleSelections(tx, rid, in.Items)
+		if err != nil {
+			return err
+		}
+		in.Items = expandedItems
+
 		// Загружаем меню/мод-ы аналогично Create.
 		menuIDs := make([]string, 0, len(in.Items))
 		for _, it := range in.Items {
@@ -428,10 +465,19 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 		if err != nil {
 			return err
 		}
-		for _, it := range in.Items {
+		for i, it := range in.Items {
 			key, qty, err := mergeKeyForInput(it)
 			if err != nil {
 				return err
+			}
+			// Компонент сета — ВСЕГДА своя строка, никогда не сливается с уже
+			// существующей (иначе потеряет bundle_group_id/bundle_slot_label —
+			// каскадная отмена всего сета по группе сломается). it.BundleSelection
+			// уже nil на этом этапе (expandBundleSelections его развернул), поэтому
+			// mergeKeyForInput сам не форсит уникальность — форсим здесь по
+			// resolvedBundles[i], который виден только тут.
+			if resolvedBundles[i] != nil {
+				key = "uniq:" + uuid.NewString()
 			}
 			if existing := pickMergeable(existingRows, existingMods, it, key); existing != nil {
 				// Merge: bump qty, не INSERT'им новой строки.
@@ -460,7 +506,7 @@ func (s *OrdersService) AddItems(ctx context.Context, orderID string, in AddItem
 				runnerItems = append(runnerItems, *existing)
 				continue
 			}
-			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx, rid)
+			oi, lineTotal, err := buildOrderItem(it, menuByID, modByID, &order.ID, now, tx, rid, resolvedBundles[i])
 			if err != nil {
 				return err
 			}
@@ -554,8 +600,11 @@ func mergeKeyForInput(it CreateOrderItem) (string, decimal.Decimal, error) {
 	if err != nil {
 		return "", decimal.Zero, apperrors.Wrap("VALIDATION", "bad qty: "+it.Qty, err)
 	}
-	// Override-поля делают позицию «уникальной» — не сливаем.
-	if it.Price != nil || it.Name != nil || it.COGS != nil || it.Unit != nil || it.UnitSize != nil {
+	// Override-поля делают позицию «уникальной» — не сливаем. BundleSelection —
+	// туда же: у него MenuItemID пуст до резолвинга (expandBundleSelections
+	// раскроет ПОСЛЕ pre-merge), слить два разных набора выбора по одному
+	// пустому ключу было бы неверно.
+	if it.Price != nil || it.Name != nil || it.COGS != nil || it.Unit != nil || it.UnitSize != nil || it.BundleSelection != nil {
 		return "uniq:" + uuid.NewString(), qty, nil
 	}
 	if it.Modifiers != nil && len(*it.Modifiers) > 0 {
@@ -743,6 +792,86 @@ func collectModifierIDs(items []CreateOrderItem) []string {
 	return out
 }
 
+// resolvedBundleComponent — результат серверного резолвинга слота сета.
+// НИКОГДА не десериализуется из JSON (клиент физически не может его
+// подделать) — в отличие от CreateOrderItem.Price (уже проигнорированного по
+// той же причине), цена сюда попадает только из bundle_slot_options.price,
+// прочитанного сервером в этой же транзакции.
+type resolvedBundleComponent struct {
+	groupID   string
+	slotLabel string
+	price     decimal.Decimal
+}
+
+// expandBundleSelections разворачивает CreateOrderItem с BundleSelection в
+// плоский список настоящих CreateOrderItem (по одному на выбранную опцию
+// слота, MenuItemID = настоящий пункт меню, Qty="1") + параллельный список
+// resolvedBundleComponent (nil у обычных позиций). Обычные позиции проходят
+// без изменений. Один bundle_group_id на всё содержимое ОДНОГО
+// BundleSelection — так корзина/чек группируют компоненты одного добавления
+// сета, а два сета в одном заказе не перепутаются.
+//
+// Валидация — здесь, а не на bundle-slots CRUD: там нельзя было проверить
+// "сколько выбрал КАССИР", только форму самого слота.
+func expandBundleSelections(tx *gorm.DB, rid string, items []CreateOrderItem) ([]CreateOrderItem, []*resolvedBundleComponent, error) {
+	out := make([]CreateOrderItem, 0, len(items))
+	resolved := make([]*resolvedBundleComponent, 0, len(items))
+	for _, it := range items {
+		if it.BundleSelection == nil {
+			out = append(out, it)
+			resolved = append(resolved, nil)
+			continue
+		}
+		sel := *it.BundleSelection
+		var bundleItem models.MenuItem
+		if err := tx.Where("restaurant_id = ? AND id = ?", rid, sel.BundleMenuItemID).
+			First(&bundleItem).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, nil, apperrors.Wrap("VALIDATION", "bundle menu item not found", nil)
+			}
+			return nil, nil, err
+		}
+		if !bundleItem.IsBundle {
+			return nil, nil, apperrors.Wrap("VALIDATION", "menu item is not a bundle", nil)
+		}
+		var slots []models.BundleSlot
+		if err := tx.Where("restaurant_id = ? AND bundle_menu_item_id = ?", rid, sel.BundleMenuItemID).
+			Order("sort_order ASC").Find(&slots).Error; err != nil {
+			return nil, nil, err
+		}
+		selBySlot := make(map[string][]string, len(sel.Slots))
+		for _, s := range sel.Slots {
+			selBySlot[s.SlotID] = s.OptionIDs
+		}
+		groupID := uuid.NewString()
+		for _, slot := range slots {
+			optionIDs := selBySlot[slot.ID]
+			if len(optionIDs) < slot.MinSelect {
+				return nil, nil, apperrors.Wrap("VALIDATION",
+					fmt.Sprintf("слот %q: нужно выбрать минимум %d", slot.Label, slot.MinSelect), nil)
+			}
+			if len(optionIDs) > slot.MaxSelect {
+				return nil, nil, apperrors.Wrap("VALIDATION",
+					fmt.Sprintf("слот %q: можно выбрать максимум %d", slot.Label, slot.MaxSelect), nil)
+			}
+			for _, optID := range optionIDs {
+				var opt models.BundleSlotOption
+				if err := tx.Where("id = ? AND slot_id = ?", optID, slot.ID).First(&opt).Error; err != nil {
+					if errors.Is(err, gorm.ErrRecordNotFound) {
+						return nil, nil, apperrors.Wrap("VALIDATION", "опция не найдена в этом слоте", nil)
+					}
+					return nil, nil, err
+				}
+				out = append(out, CreateOrderItem{MenuItemID: opt.OptionMenuItemID, Qty: "1"})
+				resolved = append(resolved, &resolvedBundleComponent{
+					groupID: groupID, slotLabel: slot.Label, price: opt.Price,
+				})
+			}
+		}
+	}
+	return out, resolved, nil
+}
+
 // buildOrderItem — общая логика создания OrderItem + его модификаторов.
 // Применяет override-поля из input поверх snapshot'а из меню.
 // Возвращает созданный item и его line-total (включая модификаторы * qty).
@@ -754,6 +883,7 @@ func buildOrderItem(
 	now time.Time,
 	tx *gorm.DB,
 	rid string,
+	resolvedBundle *resolvedBundleComponent,
 ) (*models.OrderItem, decimal.Decimal, error) {
 	qty, err := decimal.FromString(it.Qty)
 	if err != nil {
@@ -796,6 +926,19 @@ func buildOrderItem(
 	// системе нет; если появится — вернуть управляемый override здесь. Поля
 	// it.Price/it.Unit/it.UnitSize остаются в DTO для совместимости, но
 	// игнорируются.
+	//
+	// ИСКЛЮЧЕНИЕ — компонент сета: цена НЕ из mi.Price (то, что этот пункт
+	// меню стоит САМ ПО СЕБЕ), а из bundle_slot_options.price (то, что он
+	// стоит ВНУТРИ сета — обычно дешевле). Источник — resolvedBundle, который
+	// приходит из expandBundleSelections, а не из JSON запроса, поэтому это
+	// НЕ повторное открытие той же дыры: клиент не может продиктовать цену
+	// напрямую, только выбрать существующую опцию существующего слота.
+	if resolvedBundle != nil {
+		oi.Price = resolvedBundle.price
+		oi.BundleGroupID = &resolvedBundle.groupID
+		label := resolvedBundle.slotLabel
+		oi.BundleSlotLabel = &label
+	}
 	if it.COGS != nil {
 		d, err := decimal.FromString(*it.COGS)
 		if err != nil {
@@ -1349,89 +1492,19 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
-// techCardCogs — себестоимость блюда по тех-карте: Σ (расход × цена ингредиента)
-// + Σ (расход × себестоимость полуфабриката). С конвертацией единиц
-// (units.Convert/ConvertToStock) и учётом waste ингредиентов (1/(1-waste/100)).
-// Зеркало фронтового calcCogsFromTechCard (lib/queries/_mappers.ts). Полуфабрикаты
-// (semi_type_id) берутся по price_per_unit из semi_finished_stock — их yield уже
-// зашит в эту цену, поэтому waste к ним не применяется. 0 — если тех-карты/цен нет.
+// techCardCogs — себестоимость блюда по тех-карте: разовая оценка для
+// order_item.cogs, когда сохранённая menu_items.cogs ещё не задана (см.
+// вызов ниже). Формула и guard несводимых единиц — общее ядро в
+// menu_cogs.go (computeTechCardCogsFor), используемое также при автопересчёте
+// menu_items.cogs (recomputeMenuItemCogs). 0 — если тех-карты/цен нет, или
+// какая-то строка не сводится в складскую единицу (см. computeTechCardCogsLines).
 func techCardCogs(tx *gorm.DB, mi models.MenuItem) decimal.Decimal {
 	if mi.RestaurantID == nil {
 		return decimal.Zero
 	}
-	var lines []models.TechCardLine
-	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", *mi.RestaurantID, mi.ID).
-		Find(&lines).Error; err != nil {
+	res := computeTechCardCogsFor(tx, *mi.RestaurantID, mi.ID)
+	if res.skipped > 0 {
 		return decimal.Zero
 	}
-	ingIDs := make([]string, 0, len(lines))
-	semiIDs := make([]string, 0, len(lines))
-	for _, l := range lines {
-		if l.IngredientID != nil && *l.IngredientID != "" {
-			ingIDs = append(ingIDs, *l.IngredientID)
-		} else if l.SemiTypeID != nil && *l.SemiTypeID != "" {
-			semiIDs = append(semiIDs, *l.SemiTypeID)
-		}
-	}
-	if len(ingIDs) == 0 && len(semiIDs) == 0 {
-		return decimal.Zero
-	}
-	byID := make(map[string]models.Ingredient, len(ingIDs))
-	if len(ingIDs) > 0 {
-		var ings []models.Ingredient
-		if err := tx.Where("id IN ?", ingIDs).Find(&ings).Error; err != nil {
-			return decimal.Zero
-		}
-		for _, i := range ings {
-			byID[i.ID] = i
-		}
-	}
-	// Себестоимость полуфабрикатов: price_per_unit + unit из semi_finished_stock
-	// (одна строка остатка на semi_type в ресторане). last-wins, если строк
-	// несколько.
-	type semiCost struct {
-		price decimal.Decimal
-		unit  string
-	}
-	semiByType := make(map[string]semiCost, len(semiIDs))
-	if len(semiIDs) > 0 {
-		var stocks []models.SemiFinishedStock
-		if err := tx.Where("restaurant_id = ? AND semi_type_id IN ?", *mi.RestaurantID, semiIDs).
-			Find(&stocks).Error; err == nil {
-			for _, s := range stocks {
-				if s.SemiTypeID != nil {
-					semiByType[*s.SemiTypeID] = semiCost{price: s.PricePerUnit, unit: deref(s.Unit)}
-				}
-			}
-		}
-	}
-	hundred := decimal.FromInt(100)
-	one := decimal.FromInt(1)
-	total := decimal.Zero
-	for _, l := range lines {
-		switch {
-		case l.IngredientID != nil && *l.IngredientID != "":
-			ing, ok := byID[*l.IngredientID]
-			if !ok {
-				continue
-			}
-			qty := l.Qty
-			if ing.WastePercent.IsPositive() {
-				divisor := decimal.Sub(one, decimal.DivRound(ing.WastePercent, hundred))
-				if divisor.IsPositive() {
-					qty = decimal.DivRound(qty, divisor)
-				}
-			}
-			qtyStock := units.ConvertToStock(qty, deref(l.Unit), deref(ing.Unit), ing.UnitWeight, deref(ing.UnitWeightUnit))
-			total = decimal.Add(total, decimal.Mul(qtyStock, ing.PricePerUnit))
-		case l.SemiTypeID != nil && *l.SemiTypeID != "":
-			sc, ok := semiByType[*l.SemiTypeID]
-			if !ok || !sc.price.IsPositive() {
-				continue
-			}
-			qtyStock := units.Convert(l.Qty, deref(l.Unit), sc.unit)
-			total = decimal.Add(total, decimal.Mul(qtyStock, sc.price))
-		}
-	}
-	return decimal.Normalize(total)
+	return res.total
 }

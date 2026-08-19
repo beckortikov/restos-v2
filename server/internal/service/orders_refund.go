@@ -339,6 +339,12 @@ func (s *OrdersService) ReprintReceipt(ctx context.Context, orderID string) (*Pr
 			if it.Note != nil {
 				ri.Note = *it.Note
 			}
+			if it.BundleGroupID != nil {
+				ri.BundleGroupID = *it.BundleGroupID
+			}
+			if it.BundleSlotLabel != nil {
+				ri.BundleSlotLabel = *it.BundleSlotLabel
+			}
 			in.Items = append(in.Items, ri)
 		}
 		// Настройки принтера — те же, что при оплате. Без этого перепечатка

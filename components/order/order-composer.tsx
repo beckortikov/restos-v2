@@ -9,17 +9,19 @@ import {
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { useAuth } from '@/lib/auth-store'
-import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, calcLineCogs, calcLineTotal, voidedItemFlags, getTimeSince, calcOrderDisplayTotal } from '@/lib/helpers'
+import { formatCurrency, formatCurrencyCompact, formatQty, formatPriceLabel, calcLineCogs, calcLineTotal, voidedItemFlags, getTimeSince, calcOrderDisplayTotal, groupByBundle } from '@/lib/helpers'
 import { dMul, dDiv, dSum, dRound, dAdd } from '@/lib/decimal'
 import { usePersistedState } from '@/hooks/use-persisted-state'
 import { WeightInputSheet } from '@/components/dialogs/weight-input-sheet'
 import { VariantPickerSheet } from '@/components/dialogs/variant-picker-sheet'
+import { BundlePickerSheet, type BundleCartComponent } from '@/components/dialogs/bundle-picker-sheet'
+import { randomId } from '@/lib/random-id'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import {
-  type OrderType, type OrderItem, type MenuItem, type Table, type Order,
+  type OrderType, type OrderItem, type MenuItem, type Table, type Order, type BundleSelectionInput,
 } from '@/lib/types'
 import {
   createOrder, openTableForOrder, fetchActiveShift, addItemsToOrder, fetchOrders,
@@ -373,6 +375,7 @@ export function OrderComposer(props: OrderComposerProps) {
   const [weightValue, setWeightValue] = useState<number>(0)
   // Продукт с атрибутами, для которого открыт пикер вариантов.
   const [variantProduct, setVariantProduct] = useState<MenuItem | null>(null)
+  const [bundleProduct, setBundleProduct] = useState<MenuItem | null>(null)
   // Индекс строки корзины, чей размер/вариант сейчас меняется пикером —
   // null значит «добавление новой позиции» (обычный addToCart-флоу).
   const [editingLineIdx, setEditingLineIdx] = useState<number | null>(null)
@@ -693,6 +696,15 @@ export function OrderComposer(props: OrderComposerProps) {
   }, [variantsByParent])
 
   const addToCart = useCallback((item: MenuItem) => {
+    // Сет: открываем пикер слотов — как и у товара с вариантами, стоп-статус
+    // компонентов внутри пикера только предупреждает (бейдж), не блокирует
+    // вход (см. BundlePickerSheet). В корзину попадает ОДНА строка с
+    // разбивкой на компоненты (bundleComponents) — bundle_selection уходит
+    // на сервер отдельным полем при отправке (handleSubmit).
+    if (item.isBundle) {
+      setBundleProduct(item)
+      return
+    }
     // Продукт с вариантами: открываем пикер комбинации — в корзину попадает
     // menu_item_id конкретного варианта (у него свой price/склад/техкарта).
     if (variantsByParent.has(item.id)) {
@@ -782,6 +794,33 @@ export function OrderComposer(props: OrderComposerProps) {
     setSearch('')
   }, [weightItem, weightValue, stoppedIds])
 
+  // Подтверждение сборки сета из BundlePickerSheet — одна строка корзины на
+  // весь сет (не N строк): qty фиксирован в 1 и степпером не двигается (бэк
+  // не поддерживает qty>1 на bundle_selection-обёртке, см. expandBundleSelections
+  // в orders_write.go — Qty там просто игнорируется при разворачивании).
+  // menuItemId — синтетический (randomId, LAN-safe), чтобы повторное
+  // добавление того же сета с ДРУГИМ выбором не схлопнулось generic
+  // merge-по-menuItemId логикой updateQty/cartByMenuId — она рассчитана на
+  // «один и тот же реальный товар», а не на «два разных набора компонентов».
+  const confirmBundle = useCallback((product: MenuItem, result: { selection: BundleSelectionInput; components: BundleCartComponent[] }) => {
+    const price = dSum(result.components.map(c => c.price))
+    const cogs = dSum(result.components.map(c => c.cogs))
+    setCart(prev => [...prev, {
+      menuItemId: randomId(),
+      name: product.name,
+      emoji: product.emoji,
+      qty: 1,
+      price,
+      cogs,
+      unit: 'piece',
+      unitSize: 1,
+      bundleSelection: result.selection,
+      bundleComponents: result.components,
+    }])
+    setBundleProduct(null)
+    setSearch('')
+  }, [])
+
   const updateQty = useCallback((menuItemId: string, delta: number) => {
     setCart(prev => prev.map(l => {
       if (l.menuItemId !== menuItemId) return l
@@ -840,6 +879,23 @@ export function OrderComposer(props: OrderComposerProps) {
       // OrderItem'ов по qty каждый — чтобы чек и кухонный бегунок печатали порции
       // отдельными строками (бэк печатает по одной строке на order_item).
       const items: OrderItem[] = cart.flatMap(l => {
+        // Сет: ОДНА OrderItem с bundle_selection — сервер сам резолвит в N
+        // компонентов (см. lib/queries/orders.ts). menuItemId у строки корзины
+        // здесь синтетический (см. confirmBundle) — серверу не нужен и не
+        // отправляется. portionQty к сетам неприменим (у бэка нет qty>1 на
+        // bundle_selection-обёртке).
+        if (l.bundleSelection) {
+          return [{
+            menuItemId: '',
+            name: l.name,
+            qty: 1,
+            price: l.price,
+            cogs: l.cogs,
+            unit: l.unit,
+            unitSize: l.unitSize,
+            bundleSelection: l.bundleSelection,
+          }]
+        }
         const portions = l.portionQty && l.portionQty > 1 ? l.portionQty : 1
         const one: OrderItem = {
           menuItemId: l.menuItemId,
@@ -1319,6 +1375,7 @@ export function OrderComposer(props: OrderComposerProps) {
         ) : cart.map((line, idx) => {
           const isWeight = line.unit !== 'piece'
           const isVariantLine = !!menuItemsById.get(line.menuItemId)?.parentId
+          const isBundleLine = !!line.bundleSelection
           return (
             <div key={`${line.menuItemId}-${idx}`} className="flex items-center gap-3 bg-card rounded-xl p-3 border border-border">
               <div className="flex-1 min-w-0">
@@ -1334,19 +1391,34 @@ export function OrderComposer(props: OrderComposerProps) {
                     {isWeight && <span className="text-sm text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
                   </p>
                 )}
+                {isBundleLine && (
+                  <div className="mt-0.5 space-y-0.5">
+                    {line.bundleComponents?.map((c, ci) => (
+                      <p key={ci} className="text-xs text-muted-foreground truncate">
+                        {c.emoji} {c.slotLabel}: {c.name}
+                      </p>
+                    ))}
+                  </div>
+                )}
                 <p className="text-sm text-primary font-semibold">{formatCurrency(lineTotal(line))}</p>
               </div>
-              <div className="flex items-center gap-1">
-                <button onClick={() => updateQty(line.menuItemId, -1)} className="size-10 rounded-xl bg-muted flex items-center justify-center active:scale-90">
-                  {(!isWeight && line.qty === 1) ? <Trash2 className="size-4 text-destructive" /> : <Minus className="size-4" />}
+              {isBundleLine ? (
+                <button onClick={() => updateQty(line.menuItemId, -1)} className="size-10 rounded-xl bg-muted flex items-center justify-center active:scale-90 shrink-0" aria-label="Убрать сет">
+                  <Trash2 className="size-4 text-destructive" />
                 </button>
-                <span className="w-10 text-center text-base font-bold">
-                  {isWeight ? formatQty(line.qty, line.unit) : line.qty}
-                </span>
-                <button onClick={() => updateQty(line.menuItemId, 1)} className="size-10 rounded-xl bg-muted flex items-center justify-center active:scale-90">
-                  <Plus className="size-4" />
-                </button>
-              </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <button onClick={() => updateQty(line.menuItemId, -1)} className="size-10 rounded-xl bg-muted flex items-center justify-center active:scale-90">
+                    {(!isWeight && line.qty === 1) ? <Trash2 className="size-4 text-destructive" /> : <Minus className="size-4" />}
+                  </button>
+                  <span className="w-10 text-center text-base font-bold">
+                    {isWeight ? formatQty(line.qty, line.unit) : line.qty}
+                  </span>
+                  <button onClick={() => updateQty(line.menuItemId, 1)} className="size-10 rounded-xl bg-muted flex items-center justify-center active:scale-90">
+                    <Plus className="size-4" />
+                  </button>
+                </div>
+              )}
             </div>
           )
         })}
@@ -2095,6 +2167,42 @@ export function OrderComposer(props: OrderComposerProps) {
               0,
             )
             const voidedCount = flags.filter(Boolean).length
+            // Компоненты одного сета (общий bundleGroupId, см. expandBundleSelections
+            // на бэке) группируем визуально — иначе кассир видит «Бургер»/«Кола» как
+            // независимые строки и не понимает, что отмена одной каскадно отменит
+            // и другую (см. cascadeCancelBundleSiblings в orders_extras.go/orders_void.go).
+            const rows = groupByBundle(
+              allItems.map((it, i) => ({ item: it, idx: i, voided: flags[i] })),
+              x => x.item.bundleGroupId,
+            )
+            const renderRow = (x: { item: OrderItem; idx: number; voided: boolean }, bundled: boolean) => {
+              const { item: it, idx, voided } = x
+              return (
+                <div
+                  key={`exist-${it.id ?? idx}-${idx}`}
+                  className={`flex items-center gap-2 px-3 py-2 ${voided ? 'opacity-60' : ''}`}
+                >
+                  <span className={`text-base shrink-0 ${voided ? 'opacity-50' : ''}`}>{it.emoji ?? '·'}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className={`text-xs font-medium truncate ${voided ? 'text-muted-foreground line-through' : 'text-amber-950'}`}>
+                      {bundled && it.bundleSlotLabel ? <span className="font-normal text-amber-700/80">{it.bundleSlotLabel}: </span> : null}
+                      {it.name}
+                    </p>
+                    <p className={`text-[10px] ${voided ? 'text-muted-foreground line-through' : 'text-amber-700'} flex items-center gap-1.5 flex-wrap`}>
+                      <span>×{it.unit && it.unit !== 'piece' ? formatQty(it.qty, it.unit) : it.qty} · {formatPriceLabel(it.price, it.unit, it.unitSize)}</span>
+                      {it.createdAt && (
+                        <span className="text-[10px] text-amber-700/80 bg-amber-100/50 px-1.5 py-0.5 rounded shrink-0">⏱ {getTimeSince(it.createdAt)}</span>
+                      )}
+                    </p>
+                  </div>
+                  <span className={`text-xs font-semibold min-w-[5rem] text-right whitespace-nowrap tabular-nums ${
+                    voided ? 'text-muted-foreground line-through' : 'text-amber-900'
+                  }`}>
+                    {formatCurrency(calcLineTotal(it.price, it.qty, it.unit, it.unitSize))}
+                  </span>
+                </div>
+              )
+            }
             return (
               <div className="rounded-xl border border-amber-200 bg-amber-50/60">
                 <div className="flex items-center justify-between px-3 py-2 border-b border-amber-200">
@@ -2107,33 +2215,14 @@ export function OrderComposer(props: OrderComposerProps) {
                   <span className="text-xs font-bold text-amber-900 tabular-nums">{formatCurrency(liveTotal)}</span>
                 </div>
                 <div className="divide-y divide-amber-200/70">
-                  {allItems.map((it, idx) => {
-                    const voided = flags[idx]
-                    return (
-                      <div
-                        key={`exist-${it.id ?? idx}-${idx}`}
-                        className={`flex items-center gap-2 px-3 py-2 ${voided ? 'opacity-60' : ''}`}
-                      >
-                        <span className={`text-base shrink-0 ${voided ? 'opacity-50' : ''}`}>{it.emoji ?? '·'}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-xs font-medium truncate ${voided ? 'text-muted-foreground line-through' : 'text-amber-950'}`}>
-                            {it.name}
-                          </p>
-                          <p className={`text-[10px] ${voided ? 'text-muted-foreground line-through' : 'text-amber-700'} flex items-center gap-1.5 flex-wrap`}>
-                            <span>×{it.unit && it.unit !== 'piece' ? formatQty(it.qty, it.unit) : it.qty} · {formatPriceLabel(it.price, it.unit, it.unitSize)}</span>
-                            {it.createdAt && (
-                              <span className="text-[10px] text-amber-700/80 bg-amber-100/50 px-1.5 py-0.5 rounded shrink-0">⏱ {getTimeSince(it.createdAt)}</span>
-                            )}
-                          </p>
-                        </div>
-                        <span className={`text-xs font-semibold min-w-[5rem] text-right whitespace-nowrap tabular-nums ${
-                          voided ? 'text-muted-foreground line-through' : 'text-amber-900'
-                        }`}>
-                          {formatCurrency(calcLineTotal(it.price, it.qty, it.unit, it.unitSize))}
-                        </span>
+                  {rows.map((row, ri) => row.bundleGroupId ? (
+                    <div key={`bundle-${row.bundleGroupId}`} className="bg-amber-100/40">
+                      <p className="px-3 pt-1.5 text-[10px] font-bold uppercase tracking-wide text-amber-700/70">🧩 Сет — отмена одного компонента отменяет весь</p>
+                      <div className="divide-y divide-amber-200/50">
+                        {row.items.map(x => renderRow(x, true))}
                       </div>
-                    )
-                  })}
+                    </div>
+                  ) : renderRow(row.items[0], false))}
                 </div>
               </div>
             )
@@ -2150,6 +2239,7 @@ export function OrderComposer(props: OrderComposerProps) {
               {cart.map((line, idx) => {
                 const isWeight = line.unit !== 'piece'
                 const isVariantLine = !!menuItemsById.get(line.menuItemId)?.parentId
+                const isBundleLine = !!line.bundleSelection
                 return (
                   <div key={`${line.menuItemId}-${idx}`} className="flex items-center gap-2 bg-background rounded-xl p-2.5 border border-border">
                     <span className="text-lg shrink-0">{line.emoji}</span>
@@ -2166,17 +2256,31 @@ export function OrderComposer(props: OrderComposerProps) {
                           {isWeight && <span className="text-[10px] text-muted-foreground ml-1">{line.portionQty && line.portionQty > 1 ? `${line.portionQty} × ${formatQty(line.qty, line.unit)}` : formatQty(line.qty, line.unit)}</span>}
                         </p>
                       )}
-                      <p className="text-xs text-muted-foreground">{formatPriceLabel(line.price, line.unit, line.unitSize)}</p>
+                      {isBundleLine ? (
+                        <div className="space-y-0.5">
+                          {line.bundleComponents?.map((c, ci) => (
+                            <p key={ci} className="text-[10px] text-muted-foreground truncate">{c.emoji} {c.slotLabel}: {c.name}</p>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">{formatPriceLabel(line.price, line.unit, line.unitSize)}</p>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button onClick={() => updateQty(line.menuItemId, -1)} className="size-10 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:scale-90" aria-label="Убрать">
-                        <Minus className="size-4" />
+                    {isBundleLine ? (
+                      <button onClick={() => updateQty(line.menuItemId, -1)} className="size-10 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:scale-90 shrink-0" aria-label="Убрать сет">
+                        <Trash2 className="size-4 text-destructive" />
                       </button>
-                      <span className="text-base font-bold w-10 text-center">{isWeight ? formatQty(line.qty, line.unit) : line.qty}</span>
-                      <button onClick={() => updateQty(line.menuItemId, 1)} className="size-10 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:scale-90" aria-label="Добавить">
-                        <Plus className="size-4" />
-                      </button>
-                    </div>
+                    ) : (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button onClick={() => updateQty(line.menuItemId, -1)} className="size-10 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:scale-90" aria-label="Убрать">
+                          <Minus className="size-4" />
+                        </button>
+                        <span className="text-base font-bold w-10 text-center">{isWeight ? formatQty(line.qty, line.unit) : line.qty}</span>
+                        <button onClick={() => updateQty(line.menuItemId, 1)} className="size-10 rounded-lg border border-border flex items-center justify-center hover:bg-muted active:scale-90" aria-label="Добавить">
+                          <Plus className="size-4" />
+                        </button>
+                      </div>
+                    )}
                     <span className="text-sm font-bold text-foreground min-w-[5.5rem] text-right whitespace-nowrap tabular-nums">{formatCurrency(lineTotal(line))}</span>
                   </div>
                 )
@@ -2313,6 +2417,14 @@ export function OrderComposer(props: OrderComposerProps) {
           }
           addToCart(v)
         }}
+        nested
+      />
+      <BundlePickerSheet
+        product={bundleProduct}
+        menuItems={menuItems}
+        stoppedIds={stoppedIds}
+        onClose={() => setBundleProduct(null)}
+        onConfirm={(result) => { if (bundleProduct) confirmBundle(bundleProduct, result) }}
         nested
       />
 

@@ -48,6 +48,22 @@ func (h *StockHandler) CreateReceipt(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusCreated, receipt)
 }
 
+// UpdateReceipt — PATCH /api/v1/stock/receipts/{id}. Правка владельцем задним
+// числом — requireOwner внутри сервиса.
+func (h *StockHandler) UpdateReceipt(w http.ResponseWriter, r *http.Request) {
+	var in service.ReceiptUpdateInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	receipt, err := h.svc.UpdateReceipt(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, receipt)
+}
+
 // CreateReturn — POST /api/v1/stock/returns.
 func (h *StockHandler) CreateReturn(w http.ResponseWriter, r *http.Request) {
 	var in service.ReturnInput

@@ -22,6 +22,17 @@ const http = require('http')
 const { spawn, execSync } = require('child_process')
 const { autoUpdater } = require('electron-updater')
 
+// ─── Тайминги старта ───────────────────────────────────────────────────────
+// Кассиры жалуются на долгий запуск, а причин может быть три разных (холодная
+// распаковка PG, парсинг SPA, зомби-процессы от прошлой версии) — по «долго
+// грузится» их не различить. Пишем контрольные точки в main.log, чтобы по
+// логу с любой кассы было видно, ЧТО именно тормозит.
+const T0 = Date.now()
+const ms = () => `+${((Date.now() - T0) / 1000).toFixed(2)}s`
+function timing(stage) {
+  console.log(`[timing] ${ms()} ${stage}`)
+}
+
 // v3.8.0: было 3001 — конфликт с v1 (старая restos слушает 3001).
 // Теперь v2 на 3002 чтобы обе версии могли работать одновременно
 // на одной машине.
@@ -409,6 +420,7 @@ if (!gotTheLock) {
 
   app.on('ready', async () => {
     setupFileLogger()
+    timing('electron ready')
     // 0) v3.8.3: перенос данных из shared restos-desktop dir (было общим с v1).
     migrateUserDataFromSharedDir()
     // 0.5) v3.8.4: best-effort добавление firewall rule (installer его уже
@@ -418,7 +430,7 @@ if (!gotTheLock) {
     // 1) Окно со СПЛЭШЕМ показываем СРАЗУ — не ждём бэк. Иначе пользователь весь
     //    холодный старт (очистка портов + подъём embedded-PG, 15-40с, а при
     //    первой распаковке дольше) видит пустоту и думает, что касса не
-    //    запускается. Реальный SPA грузится в loadApp() по готовности бэка.
+    //    запускается. Сплэш живёт до loadApp() — то есть до конца очистки портов.
     createWindow()
     setupTray()
     setupAutoUpdater()
@@ -428,13 +440,28 @@ if (!gotTheLock) {
     killStaleSidecars()
     await ensurePortFree(API_PORT)
     await ensurePortFree(54330)
+    timing('порты свободны (cleanup завершён)')
     // 3) Стартуем sidecar.
     startSidecar()
+
+    // 4) SPA грузим СРАЗУ, параллельно со стартом бэка — не дожидаясь healthz.
+    //
+    // Раньше здесь стоял `await waitForBackend()`, и Chromium начинал грузить
+    // бандл только после подъёма Postgres. Две самые долгие стадии старта шли
+    // строго друг за другом, хотя SPA лежит локально и бэк ему для загрузки не
+    // нужен: пока сервер поднимается, окно вполне может парсить JS.
+    //
+    // Экраны, которым нужен бэк, ждут его сами: LicenseGate крутит спиннер,
+    // пока соединение не установится (см. components/license-gate.tsx), а
+    // sidecar при падении авто-рестартует (goProc.on('exit')).
+    loadApp()
+
     // 130 с > 90 с StartTimeout embedded-postgres: холодный старт / WAL-recovery
     // после апдейта должен успеть завершиться до показа ошибки.
     const BACKEND_TIMEOUT_MS = 130000
     try {
       await waitForBackend(BACKEND_TIMEOUT_MS)
+      timing('бэкенд ответил healthz')
     } catch (e) {
       console.error('[main] backend failed to start:', e.message)
       Sentry.captureMessage('Backend failed to start within timeout')
@@ -443,12 +470,6 @@ if (!gotTheLock) {
         `Бэкенд не запустился за ${Math.round(BACKEND_TIMEOUT_MS / 1000)} секунд.\n\nВозможные причины:\n• Не хватает интернета для скачивания PostgreSQL (~80 МБ) при первом запуске\n• Антивирус блокирует embedded-postgres или restos-server.exe\n• Порт ${API_PORT} занят другой программой\n\nЧто попробовать: закройте RestOS полностью и запустите заново (или перезагрузите ПК) — это освободит зависшие процессы прошлой версии.\n\nЛог: ${path.join(app.getPath('userData'), 'logs', 'main.log')}`,
       )
     }
-    // 4) Подменяем сплэш реальным SPA. ВСЕГДА, даже если healthz не поднялся за
-    //    таймаут: SPA сам ретраит бэк (login/loading-экран), а sidecar
-    //    авто-рестартует (goProc.on('exit')). Иначе касса зависла бы на сплэше —
-    //    это соответствует прежнему поведению (createWindow вызывался после
-    //    try/catch независимо от исхода).
-    loadApp()
   })
 
   app.on('window-all-closed', () => {
@@ -512,8 +533,15 @@ function createWindow() {
   })
 
   mainWindow.once('ready-to-show', () => {
+    timing('окно показано (сплэш)')
     mainWindow.show()
     mainWindow.maximize()
+  })
+
+  // Ключевая точка: SPA догрузился и отрисовался — это момент, когда кассир
+  // реально видит рабочий экран. Сплэш игнорируем, он дешёвый.
+  mainWindow.webContents.on('did-finish-load', () => {
+    if (currentLoadTarget === INDEX_PATH) timing('SPA отрисован — ГОТОВО')
   })
 
   // Ctrl+Shift+I / Cmd+Opt+I — DevTools для дебага в проде.
@@ -639,7 +667,13 @@ function setupAutoUpdater() {
     console.log('[updater] update-downloaded:', info?.version)
     setUpdateState({ status: 'ready', version: info?.version, percent: 100 })
   })
-  autoUpdater.checkForUpdatesAndNotify().catch(() => {})
+  // Не в момент старта: autoDownload=true и проверка сразу тянула инсталлятор
+  // (десятки МБ) параллельно с распаковкой Postgres и парсингом SPA — на HDD и
+  // слабом канале кассы это отнимало ровно тот ресурс, которого не хватает.
+  // Полминуты роли не играют: обновление ставится при следующем выходе.
+  setTimeout(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch(() => {})
+  }, 30_000)
 }
 
 ipcMain.on('install-update', () => {

@@ -422,6 +422,7 @@ export default function InventoryPage() {
         onOpenChange={setDialogOpen}
         ingredient={editingIngredient}
         defaultIsFood={whKind !== 'supplies'}
+        allIngredients={ingredients}
         onSubmit={handleIngredientSubmit}
       />
 

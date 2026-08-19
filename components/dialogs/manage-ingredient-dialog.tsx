@@ -63,11 +63,12 @@ interface ManageIngredientDialogProps {
   onOpenChange: (open: boolean) => void
   ingredient?: Ingredient
   defaultIsFood?: boolean
+  allIngredients?: Ingredient[]
   onSubmit: (data: IngredientForm) => void
   onDelete?: (id: string) => void
 }
 
-export function ManageIngredientDialog({ open, onOpenChange, ingredient, defaultIsFood = true, onSubmit, onDelete }: ManageIngredientDialogProps) {
+export function ManageIngredientDialog({ open, onOpenChange, ingredient, defaultIsFood = true, allIngredients, onSubmit, onDelete }: ManageIngredientDialogProps) {
   const [form, setForm] = useState<IngredientForm>({
     name: '',
     category: '',
@@ -192,6 +193,14 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
 
   const canSubmit = form.name.trim().length > 0 && form.category.length > 0 && form.unit.length > 0
 
+  // Тёзка среди уже существующих товаров — не блокирует сохранение, только
+  // предупреждает (одинаковые названия в разных категориях путают в закупе/кассе).
+  const nameMatch = useMemo(() => {
+    const q = form.name.trim().toLowerCase()
+    if (!q || !allIngredients) return null
+    return allIngredients.find((i) => i.id !== ingredient?.id && i.name.trim().toLowerCase() === q) ?? null
+  }, [form.name, allIngredients, ingredient?.id])
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto rounded-xl">
@@ -209,6 +218,12 @@ export function ManageIngredientDialog({ open, onOpenChange, ingredient, default
               placeholder="Рис басмати"
               className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
             />
+            {nameMatch && (
+              <p className="text-xs text-amber-600 dark:text-amber-500">
+                Такое название уже есть: «{nameMatch.name}» ({nameMatch.isFood === false ? 'Хозтовар' : 'Продукт'}
+                {nameMatch.category ? `, ${nameMatch.category}` : ''}). Возможно, это тот же товар.
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

@@ -10,9 +10,10 @@ import {
   type TechCardLine,
   type Ingredient,
   type SemiFinishedType,
+  type SemiFinishedStock,
   type MenuStation,
 } from '@/lib/types'
-import { fetchIngredients, fetchSemiTypes, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes, replaceTechCardLines, updateMenuItem } from '@/lib/queries'
+import { fetchIngredients, fetchSemiTypes, fetchSemiStock, fetchMenuCategories, createMenuItem as createMenuItemDb, createIngredient, syncMenuAttributes, replaceTechCardLines, previewTechCardCogs, updateMenuItem } from '@/lib/queries'
 import { createNetworkMenuItem } from '@/lib/queries/transfers'
 import { useNetworkStatus } from '@/hooks/use-network-status'
 import { DecimalInput } from '@/components/ui/decimal-input'
@@ -40,6 +41,7 @@ interface MenuItemForm {
   purchasePrice?: number
   purchaseUnit?: string
   purchaseMinQty?: number
+  isBundle?: boolean
   unit: 'piece' | 'g' | 'kg'
   unitSize: number
   saleStep: number
@@ -80,6 +82,7 @@ export default function NewMenuItemPage() {
 
   const [ingredients, setIngredients] = useState<Ingredient[]>([])
   const [semiTypes, setSemiTypes] = useState<SemiFinishedType[]>([])
+  const [semiStock, setSemiStock] = useState<SemiFinishedStock[]>([])
   const [menuCategories, setMenuCategories] = useState<string[]>([])
   const [categoriesDialogOpen, setCategoriesDialogOpen] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -116,15 +119,21 @@ export default function NewMenuItemPage() {
   const [creatingIngredient, setCreatingIngredient] = useState(false)
 
   useEffect(() => {
-    Promise.all([fetchIngredients(), fetchSemiTypes(), fetchMenuCategories()])
-      .then(([i, s, c]) => {
+    Promise.all([fetchIngredients(), fetchSemiTypes(), fetchSemiStock(), fetchMenuCategories()])
+      .then(([i, s, ss, c]) => {
         setIngredients(i)
         setSemiTypes(s)
+        setSemiStock(ss)
         setMenuCategories(c)
         setLoading(false)
       })
       .catch(() => setLoading(false))
   }, [])
+
+  // Живой предпросмотр себестоимости по введённым строкам тех-карты — только
+  // подсказка (настоящую себестоимость посчитает и запишет бэк при
+  // сохранении, см. previewTechCardCogs).
+  const techCardPreviewCogs = previewTechCardCogs(form.techCard, ingredients, semiStock)
 
   function updateTechLine(index: number, patch: Partial<TechCardLine>) {
     setForm((prev) => {
@@ -229,10 +238,20 @@ export default function NewMenuItemPage() {
         if (savePromises.length > 0) await Promise.all(savePromises)
         toast.success(`Товар добавлен · вариантов: ${state.variants.length}`)
       } else {
-        toast.success(form.isPurchased ? 'Покупной товар добавлен' : 'Блюдо добавлено')
+        toast.success(form.isPurchased ? 'Покупной товар добавлен' : form.isBundle ? 'Сет создан — добавьте слоты' : 'Блюдо добавлено')
+      }
+      // Сет без слотов — пустой набор. Уводим сразу на редактирование, а не в
+      // список, чтобы владелец продолжил тем же движением, не разыскивая
+      // только что созданный сет заново.
+      if (form.isBundle && created?.id) {
+        navigate(`/warehouse/menu/${created.id}`)
+      } else {
+        navigate('/warehouse/menu')
       }
       // Привязка к сети — отдельным шагом, не откатывает уже созданное блюдо
       // при сбое (тот же паттерн, что и линковка номенклатуры у ингредиента).
+      // Без своего navigate() в конце — редирект (список / редактирование
+      // свежесозданного сета) уже решён выше, по form.isBundle.
       if (isNetworkDish && !hasAttrs && created?.id) {
         try {
           const master = await createNetworkMenuItem({
@@ -248,7 +267,6 @@ export default function NewMenuItemPage() {
           toast.error('Блюдо создано, но не удалось сделать его сетевым — привяжите вручную позже')
         }
       }
-      navigate('/warehouse/menu')
     } catch {
       toast.error('Ошибка при добавлении блюда')
     } finally {
@@ -262,7 +280,7 @@ export default function NewMenuItemPage() {
   const realTechLines = form.techCard.filter((l) => l.ingredientId || l.semiId)
   const realTechLinesValid = realTechLines.every((l) => l.qty > 0)
   const isWeightItem = form.unit !== 'piece'
-  const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased
+  const needTechCard = requireTechCard && !isWeightItem && !form.isPurchased && !form.isBundle
   // Техкарты по вариантам (per-combo) — та же проверка полноты/валидности,
   // что и у обычной техкарты, но по каждой комбинации атрибутов отдельно.
   const comboTechCardLines = (key: string) => (techCardsByCombo[key] ?? []).filter(l => l.ingredientId || l.semiId)
@@ -463,6 +481,11 @@ export default function NewMenuItemPage() {
                     min={0}
                     className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30 transition-shadow"
                   />
+                  {realTechLines.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Из тех-карты ниже: ≈{techCardPreviewCogs.toFixed(2)} — при сохранении заменит это поле
+                    </p>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-muted-foreground mb-1 block">Доступно</label>
@@ -508,7 +531,7 @@ export default function NewMenuItemPage() {
                 <button
                   type="button"
                   // Дефолт единицы закупки «шт.» — чтобы пустой селект не блокировал сохранение.
-                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
+                  onClick={() => setForm(p => ({ ...p, isPurchased: !p.isPurchased, isBatchCooking: false, isBundle: false, station: !p.isPurchased ? 'showcase' : p.station, purchaseUnit: p.purchaseUnit || 'шт.' }))}
                   className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isPurchased ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                 >
                   <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isPurchased ? 'translate-x-5' : ''}`} />
@@ -523,7 +546,7 @@ export default function NewMenuItemPage() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setForm(p => ({ ...p, isBatchCooking: !p.isBatchCooking, isPurchased: false }))}
+                    onClick={() => setForm(p => ({ ...p, isBatchCooking: !p.isBatchCooking, isPurchased: false, isBundle: false }))}
                     className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isBatchCooking ? 'bg-primary' : 'bg-muted-foreground/30'}`}
                   >
                     <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isBatchCooking ? 'translate-x-5' : ''}`} />
@@ -542,6 +565,22 @@ export default function NewMenuItemPage() {
                     />
                   </div>
                 )}
+              </div>
+
+              {/* Сет — слоты настраиваются ПОСЛЕ создания (нужен реальный id),
+                  форма при сохранении сама уводит на экран редактирования. */}
+              <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
+                <div>
+                  <p className="text-xs font-semibold text-foreground">Сет (комбо)</p>
+                  <p className="text-[10px] text-muted-foreground">Собран из других блюд — своя техкарта не нужна</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setForm(p => ({ ...p, isBundle: !p.isBundle, isPurchased: false, isBatchCooking: false }))}
+                  className={`relative w-10 h-5 rounded-full transition-colors shrink-0 ml-2 ${form.isBundle ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                >
+                  <span className={`absolute top-0.5 left-0.5 size-4 rounded-full bg-white transition-transform ${form.isBundle ? 'translate-x-5' : ''}`} />
+                </button>
               </div>
 
               <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
@@ -582,7 +621,17 @@ export default function NewMenuItemPage() {
 
         {/* Right Column - Tech Card or Purchase Fields */}
         <div className="lg:col-span-7 space-y-6">
-          {form.isPurchased ? (
+          {form.isBundle ? (
+            /* Слоты сета настраиваются ПОСЛЕ создания — нужен реальный id
+               (BundleSlotsEditor живёт на экране редактирования). */
+            <div className="bg-card border border-border rounded-xl p-5 shadow-sm">
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                Сохраните сет — дальше откроется редактирование, где можно собрать слоты
+                («Бургер», «Гарнир», «Напиток») из настоящих пунктов меню и задать цену
+                каждого варианта внутри сета.
+              </p>
+            </div>
+          ) : form.isPurchased ? (
             /* Purchased fields */
             <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
               <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
@@ -658,7 +707,9 @@ export default function NewMenuItemPage() {
           ) : null}
 
           {/* Атрибуты (Размер/Вкус): цены задаются на значениях, варианты
-              генерирует бэк сразу после создания товара. */}
+              генерирует бэк сразу после создания товара. Сету не нужны —
+              у него самого варианты собираются из слотов, не из атрибутов. */}
+          {!form.isBundle && (
           <div className="bg-card border border-border rounded-xl p-5 shadow-sm space-y-4">
             <h2 className="text-sm font-bold text-foreground flex items-center gap-1.5">
               <Layers className="size-4 text-primary" />
@@ -681,6 +732,7 @@ export default function NewMenuItemPage() {
               </p>
             )}
           </div>
+          )}
 
           {/* Техкарты по вариантам — заполняются ДО сохранения (варианты ещё
               не существуют на бэке): один раз, отдельно на каждую комбинацию

@@ -181,8 +181,15 @@ export interface MenuItem {
   isAvailable: boolean
   stopListOverride: boolean
   isPurchased?: boolean  // покупной товар (бэк сам ведёт складской ингредиент + 1:1 техкарту)
-  cogs: number          // эффективная (auto из техкарты, иначе ручная) — для маржи/списка
-  cogsManual?: number   // сырое сохранённое значение «себестоимость вручную» (для формы)
+  // Сет (фастфуд-комбо): собран из настоящих пунктов меню через BundleSlot/
+  // BundleSlotOption. У сета самого нет техкарты/фиксированной цены — цена и
+  // списание живут на компонентах (см. server CLAUDE.md миграция 073).
+  isBundle?: boolean
+  // Себестоимость. Бэк держит её автоматически: пересчитывает из тех-карты
+  // при любом изменении строк техкарты или цены ингредиента/п-ф (см.
+  // server/internal/service/menu_cogs.go). Без тех-карты (покупной товар,
+  // блюдо без рецепта) — обычное поле, правится вручную.
+  cogs: number
   cookTimeMin?: number | null
   station: MenuStation
   techCard: TechCardLine[]
@@ -336,6 +343,18 @@ export interface OrderItem {
    *  rendering in POS lists without re-resolving via menu cache. */
   emoji?: string
   modifiers?: OrderItemModifier[]
+  // Сет: компоненты одного добавления сета делят один bundleGroupId
+  // (присваивается сервером при резолвинге bundle_selection — см.
+  // server/internal/service/orders_write.go expandBundleSelections).
+  // bundleSlotLabel — подпись слота этого конкретного компонента
+  // («Напиток», «Гарнир»), для группировки в корзине/чеке.
+  bundleGroupId?: string
+  bundleSlotLabel?: string
+  // Write-only: заполняется при добавлении сета в заказ (см. CartLine в
+  // components/order/types.ts) — сервер резолвит в N настоящих order_items и
+  // возвращает их с bundleGroupId/bundleSlotLabel выше. Никогда не приходит
+  // с бэка при чтении заказа.
+  bundleSelection?: BundleSelectionInput
   // For weight items: actual sold amount (e.g. 250 when unit='g', unitSize=100)
   unit?: 'piece' | 'g' | 'kg'
   unitSize?: number
@@ -541,11 +560,25 @@ export interface FinancialOperation {
   isAuto: boolean
   sourceRef?: string
   shiftId?: string
+  cancelledAt?: string
   createdAt?: string // момент ввода — для внутридневной сортировки реестра ДДС
   // affectsShift — расход: false = не зеркалить в текущую открытую смену
   // (бухгалтерская проводка на счёте, которая не была физическим движением
   // денег в сегодняшнем ящике). undefined/true — зеркалить, как раньше.
   affectsShift?: boolean
+}
+
+// NON_EDITABLE_FINOP_CATEGORIES/isOperationEditable — системные проводки со
+// своим источником истины (накладная/выплата/перевод); зеркалит проверку на
+// бэке (FinancialOperationsService.Update). Общая для всех мест с кнопкой
+// «Изменить» — не дублировать список по компонентам.
+const NON_EDITABLE_FINOP_CATEGORIES = new Set([
+  'stock_purchase', 'supplier_payment', 'revenue', 'refund', 'Перевод',
+  'Зарплата', 'Аванс', 'Удержание', 'Сервис', 'Услуги/доставка',
+])
+export function isOperationEditable(op: FinancialOperation): boolean {
+  return !op.cancelledAt && !op.isAuto && !NON_EDITABLE_FINOP_CATEGORIES.has(op.category) &&
+    !(op.sourceRef ?? '').startsWith('shift_expense:')
 }
 
 export interface BudgetLine {
@@ -786,6 +819,43 @@ export interface OrderItemModifier {
   modifierId?: string
   name: string
   price: number
+}
+
+// ─── Bundles (фастфуд-сеты) ────────────────────────────────────────────────
+
+export interface BundleSlot {
+  id: string
+  bundleMenuItemId: string
+  label: string
+  isRequired: boolean
+  minSelect: number
+  maxSelect: number
+  sortOrder: number
+  options: BundleSlotOption[]
+}
+
+export interface BundleSlotOption {
+  id: string
+  slotId: string
+  optionMenuItemId: string
+  /** Имя/цена самого пункта меню (снапшот для отображения — не хранится
+   *  на бэке отдельно, подтягивается на фронте по optionMenuItemId). */
+  optionMenuItemName?: string
+  optionMenuItemPrice?: number
+  price: number
+  isDefault: boolean
+  sortOrder: number
+}
+
+// Выбор кассира при добавлении сета в заказ — зеркало Go
+// server/internal/service/orders_write.go BundleSelectionInput. Уходит на
+// ОДНОЙ OrderItem (menuItemId роли не играет, бэк резолвит по
+// bundleMenuItemId) — сервер резолвит в N обычных order_items сам
+// (expandBundleSelections), с ценой из BundleSlotOption.price. Клиент id
+// опций не подменяет ценой — цену сервер не читает из запроса вообще.
+export interface BundleSelectionInput {
+  bundleMenuItemId: string
+  slots: { slotId: string; optionIds: string[] }[]
 }
 
 // ─── Stop-List ───────────────────────────────────────────────────────────────

@@ -562,6 +562,51 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/menu/recompute-cogs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Разовый пересчёт себестоимости всех блюд с тех-картой (Manager)
+         * @description Пересчитывает menu_items.cogs из tech_card_lines по текущим ценам ингредиентов/полуфабрикатов — тот же расчёт, что срабатывает автоматически при изменении тех-карты/цены, но для блюд, у которых cogs мог "замёрзнуть" до появления автопересчёта (импорт, старые правки). Строки с несводимыми единицами измерения пропускаются (себестоимость такого блюда не трогается — см. лог).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Сколько блюд реально обновилось */
+                            updated?: number;
+                        };
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/menu/popularity": {
         parameters: {
             query?: never;
@@ -1406,6 +1451,74 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/stock/receipts/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Правка уже созданной накладной ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+         * @description PATCH-семантика: не заданные поля не меняются. Правит qty/price_per_unit
+         *     существующих строк (реверс-и-заново на средневзвешенной себестоимости —
+         *     точно, пока не было расхода ингредиента после приёмки), payment_type/
+         *     paid_amount/долг поставщика, date (каскадом на связанные
+         *     financial_operations), supplier (только пока debt_amount=0). Строки
+         *     добавляются/удаляются ТОЛЬКО через qty=0 у существующей + отдельная
+         *     новая накладная (CreateReceipt) — не через этот эндпоинт.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReceiptUpdateInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["StockReceipt"];
+                    };
+                };
+                /** @description Не владелец */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Недостаточно средств/остатка, либо товар уже расходовался после приёмки */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/api/v1/stock/receipts/{id}/pay": {
@@ -8652,6 +8765,268 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/menu/bundle-slots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Слоты сета («Бургер»/«Гарнир»/«Напиток») */
+        get: {
+            parameters: {
+                query?: {
+                    bundle_menu_item_id?: string;
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlot"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/menu/bundle-slots/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlot"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
+    "/api/v1/menu/bundle-slot-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Варианты внутри слота сета (ссылаются на настоящий пункт меню) */
+        get: {
+            parameters: {
+                query?: {
+                    slot_id?: string;
+                    limit?: components["parameters"]["Limit"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotOptionsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotOptionInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotOption"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/menu/bundle-slot-options/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description No content */
+                204: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["BundleSlotOptionInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BundleSlotOption"];
+                    };
+                };
+            };
+        };
+        trace?: never;
+    };
     "/api/v1/menu/tech-cards": {
         parameters: {
             query?: never;
@@ -9243,6 +9618,80 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/operations/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * Правка ручной финоперации ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+         * @description PATCH-семантика: не заданные поля не меняются. Реверсит старый эффект на
+         *     балансе старого счёта, применяет новый на новом, пересобирает зеркало в
+         *     кассовую смену (включая пересчёт expected_cash уже закрытой смены).
+         *     Системные проводки (auto-созданные накладной/зарплатой/переводом/возвратом,
+         *     зеркало со сменного экрана) и уже отменённые — отклоняются 400, править
+         *     нужно через их источник.
+         */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["FinancialOperationInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialOperation"];
+                    };
+                };
+                /** @description Системная/отменённая проводка, либо reserved-категория */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Не владелец */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Недостаточно средств на счёте */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
         trace?: never;
     };
     "/api/v1/finance/custom-categories": {
@@ -12715,6 +13164,8 @@ export interface components {
             unit_size?: components["schemas"]["Decimal"];
             sale_step?: components["schemas"]["Decimal"];
             low_stock_threshold?: number;
+            /** @description Фастфуд-сет — см. BundleSlot/BundleSlotOption. Собран из настоящих пунктов меню, своей техкарты/цены нет. */
+            is_bundle?: boolean;
             /**
              * Format: uuid
              * @description Задан у сгенерированных вариантов; NULL у обычных блюд и продуктов.
@@ -12731,6 +13182,7 @@ export interface components {
             cogs?: components["schemas"]["Decimal"];
             unit?: string;
             unit_size?: components["schemas"]["Decimal"];
+            is_bundle?: boolean;
         };
         MenuItemWithExtras: components["schemas"]["MenuItem"] & {
             /**
@@ -13086,6 +13538,29 @@ export interface components {
                 qty: components["schemas"]["Decimal"];
                 unit?: string;
                 price_per_unit: components["schemas"]["Decimal"];
+            }[];
+        };
+        ReceiptUpdateInput: {
+            /** Format: uuid */
+            supplier_id?: string;
+            supplier_name?: string;
+            date?: string;
+            note?: string;
+            due_date?: string;
+            /** @enum {string} */
+            payment_type?: "paid" | "partial" | "credit";
+            /** @description Целевое АБСОЛЮТНОЕ значение (не дельта). */
+            paid_amount?: components["schemas"]["Decimal"];
+            /**
+             * Format: uuid
+             * @description Обязан совпадать со счётом уже связанных проводок (смена счёта оплаты задним числом не поддержана).
+             */
+            account_id?: string;
+            lines?: {
+                /** Format: uuid */
+                line_id: string;
+                qty?: components["schemas"]["Decimal"];
+                price_per_unit?: components["schemas"]["Decimal"];
             }[];
         };
         StockReceipt: {
@@ -13502,13 +13977,35 @@ export interface components {
             note?: string | null;
             /** Format: date-time */
             cancelled_at?: string;
+            /**
+             * Format: uuid
+             * @description Общий у всех order_items одного добавления сета в заказ. NULL — обычная позиция.
+             */
+            bundle_group_id?: string | null;
+            /** @description Подпись слота сета («Бургер») на момент продажи, для чека. */
+            bundle_slot_label?: string | null;
         };
+        /**
+         * @description Либо обычная позиция (menu_item_id+qty), либо сет — bundle_selection
+         *     ВМЕСТО menu_item_id (сервер резолвит в N настоящих позиций с ценой из
+         *     bundle_slot_options, не от клиента).
+         */
         OrderItemInput: {
             /** Format: uuid */
-            menu_item_id: string;
-            /** @description Decimal как строка */
-            qty: string;
+            menu_item_id?: string;
+            /** @description Decimal как строка. У bundle_selection всё равно шлём "1" — резолвится в компоненты, каждый qty=1. */
+            qty?: string;
             modifier_ids?: string[];
+            bundle_selection?: components["schemas"]["BundleSelectionInput"];
+        };
+        BundleSelectionInput: {
+            /** Format: uuid */
+            bundle_menu_item_id: string;
+            slots: {
+                /** Format: uuid */
+                slot_id: string;
+                option_ids: string[];
+            }[];
         };
         CreateOrderInput: {
             /** Format: uuid */
@@ -14091,6 +14588,62 @@ export interface components {
         };
         ModifiersList: {
             data?: components["schemas"]["Modifier"][];
+            next_cursor?: string;
+        };
+        BundleSlot: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            bundle_menu_item_id?: string;
+            label?: string;
+            is_required?: boolean;
+            min_select?: number;
+            max_select?: number;
+            sort_order?: number;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        BundleSlotInput: {
+            /** Format: uuid */
+            bundle_menu_item_id?: string;
+            label?: string;
+            is_required?: boolean;
+            min_select?: number;
+            max_select?: number;
+            sort_order?: number;
+        };
+        BundleSlotsList: {
+            data?: components["schemas"]["BundleSlot"][];
+            next_cursor?: string;
+        };
+        BundleSlotOption: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            slot_id?: string;
+            /**
+             * Format: uuid
+             * @description Ссылается на настоящий пункт меню — своя техкарта/станция/сток
+             */
+            option_menu_item_id?: string;
+            /** @description Цена этого варианта ВНУТРИ сета, не скидка на заказ */
+            price?: components["schemas"]["Decimal"];
+            is_default?: boolean;
+            sort_order?: number;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        BundleSlotOptionInput: {
+            /** Format: uuid */
+            slot_id?: string;
+            /** Format: uuid */
+            option_menu_item_id?: string;
+            price?: components["schemas"]["Decimal"];
+            is_default?: boolean;
+            sort_order?: number;
+        };
+        BundleSlotOptionsList: {
+            data?: components["schemas"]["BundleSlotOption"][];
             next_cursor?: string;
         };
         TechCardLine: {

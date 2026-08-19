@@ -12,6 +12,7 @@ import {
   type FinancialActivity,
   type FinancialOperationType,
   type FinancialAccount,
+  type FinancialOperation,
 } from '@/lib/types'
 import { fetchFinancialAccounts, fetchCustomCategories, createCustomCategory } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
@@ -62,10 +63,16 @@ interface CreateOperationDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onSubmit: (operation: OperationForm) => void
+  // initialOperation — задан → диалог в режиме редактирования (владелец правит
+  // уже созданную операцию задним числом): заголовок/кнопка меняются, форма
+  // преднаполняется. Сам onSubmit не меняется — какой запрос слать (create/
+  // update) решает вызывающая страница, у неё уже есть editingOperation.
+  initialOperation?: FinancialOperation | null
 }
 
-export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOperationDialogProps) {
+export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOperation }: CreateOperationDialogProps) {
   const today = new Date().toISOString().split('T')[0]
+  const isEdit = !!initialOperation
   const [form, setForm] = useState<OperationForm>({
     type: 'out',
     amount: 0,
@@ -95,14 +102,23 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
       }
     }
     if (open) {
-      setForm({
+      setForm(initialOperation ? {
+        type: initialOperation.type,
+        amount: initialOperation.amount,
+        category: initialOperation.category,
+        accountId: initialOperation.accountId,
+        activity: initialOperation.activity,
+        description: initialOperation.description ?? '',
+        date: initialOperation.date || today,
+        affectsShift: initialOperation.affectsShift ?? true,
+      } : {
         type: 'out', amount: 0, category: '', accountId: '',
         activity: 'operational', description: '', date: today,
         affectsShift: true,
       })
       setSaving(false)
     }
-  }, [open])
+  }, [open, initialOperation])
 
   const categories = useMemo(() => {
     const base = form.type === 'in' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
@@ -142,7 +158,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
           пределы экрана и требовала скролла всего диалога целиком. */}
       <DialogContent className="sm:max-w-lg max-h-[90vh] flex flex-col rounded-xl">
         <DialogHeader className="shrink-0">
-          <DialogTitle>Новая операция</DialogTitle>
+          <DialogTitle>{isEdit ? 'Редактировать операцию' : 'Новая операция'}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 overflow-y-auto flex-1 min-h-0">
@@ -307,7 +323,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit }: CreateOp
             disabled={!canSubmit}
             className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
           >
-            {saving ? 'Создание...' : 'Создать операцию'}
+            {isEdit ? (saving ? 'Сохранение...' : 'Сохранить') : (saving ? 'Создание...' : 'Создать операцию')}
           </button>
         </DialogFooter>
       </DialogContent>

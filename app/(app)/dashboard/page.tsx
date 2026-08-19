@@ -306,9 +306,9 @@ export default function DashboardPage() {
   // Active orders
   const activeOrders = useMemo(() => orders.filter(o => o.status !== 'done'), [orders])
 
-  // Today's expenses
+  // Today's expenses (переводы между счетами — activity=financial — не расход).
   const todayExpenses = useMemo(() => operations
-    .filter(o => o.type === 'out' && inRange(o.date))
+    .filter(o => o.type === 'out' && o.activity !== 'financial' && inRange(o.date))
     .reduce((s, o) => s + o.amount, 0), [operations, dateFrom, dateTo])
 
   // Разбивка выручки по способам оплаты (нал/безнал/перевод) за выбранный день.

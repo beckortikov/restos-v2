@@ -7,6 +7,7 @@ import {
   fetchMachineInfo, fetchLicenseStatus, activateLicense,
   type MachineInfo, type LicenseStatus,
 } from '@/lib/queries'
+import { V4Error } from '@/lib/api'
 
 const TG_LINK = 'https://t.me/restos_support' // TODO: реальный канал
 
@@ -22,41 +23,50 @@ const TG_LINK = 'https://t.me/restos_support' // TODO: реальный кана
 // Read'ы свободны → этот gate работает на их основе.
 //
 // Транзиентную сетевую осечку (не «лицензия невалидна», а «не достучались
-// до бэка») НЕ считаем блокировкой: ретраим несколько раз, и если бэк так и
-// не ответил — открываем UI как есть (fail-open), а не намертво виснем на
-// экране активации. Backend всё равно независимо блокирует write-эндпоинты,
-// если лицензия реально истекла (см. коммент выше) — фронтовый гейт лишь
-// UX-подсказка, не единственная точка защиты, поэтому fail-open здесь
-// безопасен. Нашли вживую: полноэкранный reload (напр. переключатель
-// филиала) поднимает всплеск параллельных запросов, один из них может
-// транзиентно оборваться — раньше это НАВСЕГДА запирало кассу до
-// следующей полной перезагрузки страницы (а если та же осечка повторялась
-// на реюсе — запирало снова).
-const STATUS_RETRY_ATTEMPTS = 3
-const STATUS_RETRY_BASE_MS = 400
+// до бэка») НЕ считаем блокировкой мгновенно — см. поллинг с дедлайном ниже
+// (различает «сервер ответил ошибкой» от «сервер ещё не поднялся»). Backend
+// всё равно независимо блокирует write-эндпоинты, если лицензия реально
+// истекла (см. коммент выше) — фронтовый гейт лишь UX-подсказка, не
+// единственная точка защиты. Нашли вживую: полноэкранный reload (напр.
+// переключатель филиала) поднимает всплеск параллельных запросов, один из
+// них может транзиентно оборваться — раньше (без ретраев вообще) это
+// НАВСЕГДА запирало кассу до следующей полной перезагрузки страницы.
 
 export function LicenseGate({ children }: { children: React.ReactNode }) {
   const [status, setStatus] = useState<LicenseStatus | null>(null)
   const [loading, setLoading] = useState(true)
-  const [unreachable, setUnreachable] = useState(false)
 
+  // Ждём бэкенд, а не считаем его молчание отсутствием лицензии.
+  //
+  // Раньше любой сбой запроса вёл к setLoading(false) при status=null, а это
+  // `blocked` → кассиру показывался ЭКРАН АКТИВАЦИИ. Пока Electron ждал healthz
+  // перед показом SPA, это не всплывало. Теперь SPA грузится параллельно со
+  // стартом бэка (так быстрее), и первые запросы штатно приходятся на ещё не
+  // поднятый сервер — на холодном старте это минуты полторы.
+  //
+  // Различаем два случая: V4Error значит сервер ОТВЕТИЛ (пусть и ошибкой) —
+  // решение принимаем сразу; любая другая ошибка это обрыв соединения, т.е.
+  // «бэк ещё стартует» — крутим спиннер и пробуем снова. Дедлайн совпадает с
+  // таймаутом Electron: если за это время сервер не поднялся, ведём себя
+  // по-старому, чтобы экран активации оставался достижим.
   useEffect(() => {
     let mounted = true
-    async function load() {
-      for (let attempt = 1; attempt <= STATUS_RETRY_ATTEMPTS; attempt++) {
-        try {
-          const s = await fetchLicenseStatus()
-          if (mounted) { setStatus(s); setLoading(false) }
-          return
-        } catch {
-          if (attempt === STATUS_RETRY_ATTEMPTS) break
-          await new Promise(r => setTimeout(r, STATUS_RETRY_BASE_MS * attempt))
-        }
-      }
-      if (mounted) { setUnreachable(true); setLoading(false) }
+    let timer: ReturnType<typeof setTimeout>
+    const deadline = Date.now() + 130_000
+
+    const poll = () => {
+      fetchLicenseStatus()
+        .then(s => { if (mounted) { setStatus(s); setLoading(false) } })
+        .catch((e) => {
+          if (!mounted) return
+          const backendAnswered = e instanceof V4Error
+          if (backendAnswered || Date.now() > deadline) { setLoading(false); return }
+          timer = setTimeout(poll, 400)
+        })
     }
-    load()
-    return () => { mounted = false }
+    poll()
+
+    return () => { mounted = false; clearTimeout(timer) }
   }, [])
 
   const onActivated = (s: LicenseStatus) => setStatus(s)
@@ -69,7 +79,7 @@ export function LicenseGate({ children }: { children: React.ReactNode }) {
     )
   }
 
-  const blocked = !unreachable && (
+  const blocked = (
     !status
     || status.state === 'none'
     || status.state === 'locked'

@@ -34,8 +34,17 @@ func TestAudit_SalaryDoublePay(t *testing.T) {
 
 	uid, uname, salary := uuid.NewString(), "Повар", decimal.MustFromString("1000")
 	if err := gdb.Create(&models.User{
-		ID: uid, Name: &uname, Salary: salary, Advance: decimal.MustFromString("300"),
-		RestaurantID: &f.rid,
+		ID: uid, Name: &uname, Salary: salary, RestaurantID: &f.rid,
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	// Аванс — период-тегированной строкой salary_advances, а не глобальным
+	// счётчиком users.advance: кап читает остаток только из неё (см.
+	// комментарий в salaryCapForPeriod про баг «аванс за прошлый месяц срезал
+	// остаток текущего»). users.advance тут больше ни на что не влияет.
+	if err := gdb.Create(&models.SalaryAdvance{
+		ID: uuid.NewString(), UserID: uid, Amount: decimal.MustFromString("300"),
+		Period: "2026-07", AccountID: accountID, RestaurantID: &f.rid,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

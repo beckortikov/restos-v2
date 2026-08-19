@@ -22,11 +22,13 @@ import { dMul, dDiv } from '@/lib/decimal'
 import { portionsOf, lineTotal, cartSubtotal, cartCount, cartCogs, cartToItems } from '@/lib/pos-v2/cart'
 import { useMenuGrid, menuGridStyle } from '@/lib/pos-v2/menu-grid'
 import { PosModal } from '@/components/pos-v2/pos-modal'
+import { BundlePickerModal } from '@/components/pos-v2/bundle-picker-modal'
+import type { BundleCartComponent } from '@/components/dialogs/bundle-picker-sheet'
 import { buildReceiptData } from '@/lib/receipt-data'
 import { PrintReceipt } from '@/components/print-receipt'
 import { PaymentPanel } from '@/components/pos-v2/payment-panel'
 import { OrderExtras } from '@/components/pos-v2/order-extras'
-import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit, OrderType } from '@/lib/types'
+import type { MenuItem, TableStatus, Order, OrderItem, FinancialAccount, OrderSplit, OrderType, BundleSelectionInput } from '@/lib/types'
 import { ORDER_TYPE_LABELS, ORDER_TYPE_TITLES, availableOrderTypes, canCreateWithoutPayment, isTogo, needsDeliveryContacts } from '@/lib/order-types'
 import { describePayment } from '@/lib/payment-labels'
 import type { CartLine } from '@/components/order/types'
@@ -338,6 +340,24 @@ export default function PosV2Order() {
       return
     }
     if (skipTypeResetRef.current) { skipTypeResetRef.current = false; return }
+    // Незакрытый заказ прежнего типа не должен молча пропадать с экрана: «К
+    // оплате» создаёт заказ СРАЗУ (до подтверждения оплаты) — если кассир
+    // передумал/ошибся типом и закрыл панель оплаты крестиком, активная
+    // группа остаётся open, но после переключения типа выпадает из вида (её
+    // не покажет очередь другого типа). Данные не теряются — заказ жив,
+    // найдётся через «Заказы» — но кассир об этом не знает и рискует набрать
+    // те же блюда заново, оставив дубль-заказ висеть в старой очереди.
+    if (activeGroup && activeGroup.status !== 'done' && activeGroup.status !== 'cancelled') {
+      // activeGroup.type — тип САМОГО заказа (где он реально остаётся), не
+      // orderType состояния: эффект уже сработал ПОСЛЕ смены orderType на
+      // новый, так что новый тип тут был бы неверной подсказкой («останется
+      // в Собой», хотя реально висит в Зале).
+      const total = activeGroup.totalWithService ?? activeGroup.total ?? 0
+      toast.warning(`Заказ №${activeGroup.orderNumber ?? ''} (${ORDER_TYPE_LABELS[activeGroup.type]}) остался открытым — ${formatCurrency(total)}`, {
+        description: 'Найдёте его через «Заказы»',
+        duration: 6000,
+      })
+    }
     // Корзину при смене типа НЕ чистим: кассир набрал блюда и понял, что это
     // «с собой», а не в зал — переключение типа не должно стирать набранное.
     // Контекст заказа (группа/стол) сбрасываем — он привязан к прежнему типу.
@@ -478,6 +498,32 @@ export default function PosV2Order() {
   const [variantItem, setVariantItem] = useState<MenuItem | null>(null)
   const [variantSel, setVariantSel] = useState<Record<string, string>>({}) // attrId → valueId
 
+  // ── Bundle picker (сет) ───────────────────────────────────────
+  const [bundleProduct, setBundleProduct] = useState<MenuItem | null>(null)
+  // Подтверждение сборки сета — ОДНА строка корзины на весь сет (не N строк):
+  // бэк не поддерживает qty>1 на bundle_selection-обёртке (см. expandBundleSelections
+  // на сервере — Qty у обёртки игнорируется при разворачивании). menuItemId —
+  // синтетический (randomId, LAN-safe), чтобы повторное добавление того же сета
+  // с ДРУГИМ выбором не схлопнулось generic merge-логикой по menuItemId.
+  function confirmBundle(product: MenuItem, result: { selection: BundleSelectionInput; components: BundleCartComponent[] }) {
+    const price = result.components.reduce((s, c) => s + c.price, 0)
+    const cogs = result.components.reduce((s, c) => s + c.cogs, 0)
+    setCart(prev => [...prev, {
+      lineId: randomId(),
+      menuItemId: randomId(),
+      name: product.name,
+      emoji: product.emoji,
+      qty: 1,
+      price,
+      cogs,
+      unit: 'piece',
+      unitSize: 1,
+      bundleSelection: result.selection,
+      bundleComponents: result.components,
+    }])
+    setBundleProduct(null)
+  }
+
   function openVariantPicker(m: MenuItem) {
     const sel: Record<string, string> = {}
     for (const a of m.attributes ?? []) {
@@ -501,6 +547,13 @@ export default function PosV2Order() {
   // — отказ с причиной; с правом — info-toast + флаг override ТОЛЬКО для реально
   // backend-стопнутых (иначе POST /orders вернёт 409 ITEM_STOPPED).
   function add(m: MenuItem) {
+    // Сет: открываем нативный /pos2 пикер слотов (BundlePickerModal) — в
+    // корзину попадает ОДНА строка с разбивкой на компоненты, как и в
+    // основной кассе (см. confirmBundle ниже).
+    if (m.isBundle) {
+      setBundleProduct(m)
+      return
+    }
     // Продукт с вариантами: карточка одна, конкретную комбинацию выбирают в
     // пикере (variantItem) — в корзину попадает menu_item_id варианта.
     if (variantsByParent.has(m.id)) {
@@ -1024,18 +1077,32 @@ export default function PosV2Order() {
               {cart.map(l => {
                 const weight = l.unit !== 'piece'
                 const k = lineKey(l)
+                const isBundleLine = !!l.bundleSelection
                 return (
                   <div key={k} className="flex items-center gap-2 rounded-xl" style={{ background: 'var(--pv-bg)', padding: 'clamp(0.5rem,0.8vw,0.75rem)' }}>
                     <div className="flex-1 min-w-0">
                       <div className="font-semibold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{l.emoji} {l.name}{l.overrideStopList ? ' ⚠' : ''}</div>
-                      <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{weight ? `${portionsOf(l)}×${l.qty}${l.unit === 'kg' ? 'кг' : 'г'} · ` : `${formatCurrency(l.price)} × ${l.qty} · `}{formatCurrency(lineTotal(l))}</div>
+                      {isBundleLine ? (
+                        l.bundleComponents?.map((c, ci) => (
+                          <div key={ci} style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)' }}>{c.emoji} {c.slotLabel}: {c.name}</div>
+                        ))
+                      ) : (
+                        <div style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>{weight ? `${portionsOf(l)}×${l.qty}${l.unit === 'kg' ? 'кг' : 'г'} · ` : `${formatCurrency(l.price)} × ${l.qty} · `}{formatCurrency(lineTotal(l))}</div>
+                      )}
                     </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button onClick={() => setQty(k, -1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
-                      <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{weight ? portionsOf(l) : l.qty}</span>
-                      <button onClick={() => setQty(k, +1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-brand)', width: '2rem', height: '2rem' }}><Plus className="size-4 text-white" /></button>
-                      <button onClick={() => removeLine(k)} className="rounded-lg flex items-center justify-center ml-1" style={{ width: '2rem', height: '2rem' }}><Trash2 className="size-4" style={{ color: 'var(--pv-occ-text)' }} /></button>
-                    </div>
+                    {isBundleLine ? (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(lineTotal(l))}</span>
+                        <button onClick={() => removeLine(k)} className="rounded-lg flex items-center justify-center ml-1" style={{ width: '2rem', height: '2rem' }}><Trash2 className="size-4" style={{ color: 'var(--pv-occ-text)' }} /></button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button onClick={() => setQty(k, -1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-card)', border: '1px solid var(--pv-border)', width: '2rem', height: '2rem' }}><Minus className="size-4" style={{ color: 'var(--pv-text-2)' }} /></button>
+                        <span className="text-center font-bold" style={{ color: 'var(--pv-text)', width: '1.75rem', fontSize: 'var(--pv-ctl)' }}>{weight ? portionsOf(l) : l.qty}</span>
+                        <button onClick={() => setQty(k, +1)} className="rounded-lg flex items-center justify-center active:scale-90 transition-transform" style={{ background: 'var(--pv-brand)', width: '2rem', height: '2rem' }}><Plus className="size-4 text-white" /></button>
+                        <button onClick={() => removeLine(k)} className="rounded-lg flex items-center justify-center ml-1" style={{ width: '2rem', height: '2rem' }}><Trash2 className="size-4" style={{ color: 'var(--pv-occ-text)' }} /></button>
+                      </div>
+                    )}
                   </div>
                 )
               })}
@@ -1208,6 +1275,14 @@ export default function PosV2Order() {
           </div>
         </PosModal>
       )}
+
+      <BundlePickerModal
+        product={bundleProduct}
+        menuItems={menuItems}
+        stoppedIds={stoppedIds}
+        onClose={() => setBundleProduct(null)}
+        onConfirm={(result) => { if (bundleProduct) confirmBundle(bundleProduct, result) }}
+      />
 
       {/* ── Variant picker — выбор комбинации атрибутов (Размер/Вкус).
              В корзину уходит menu_item_id конкретного варианта; стоп-лист и

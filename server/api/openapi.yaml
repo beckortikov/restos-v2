@@ -285,6 +285,25 @@ paths:
           description: OK
           content: { application/json: { schema: { $ref: "#/components/schemas/ImportResult" } } }
 
+  /api/v1/menu/recompute-cogs:
+    post:
+      tags: [menu]
+      summary: Разовый пересчёт себестоимости всех блюд с тех-картой (Manager)
+      description: >
+        Пересчитывает menu_items.cogs из tech_card_lines по текущим ценам
+        ингредиентов/полуфабрикатов — тот же расчёт, что срабатывает
+        автоматически при изменении тех-карты/цены, но для блюд, у которых
+        cogs мог "замёрзнуть" до появления автопересчёта (импорт, старые
+        правки). Строки с несводимыми единицами измерения пропускаются
+        (себестоимость такого блюда не трогается — см. лог).
+      parameters: [ $ref: "#/components/parameters/IdempotencyKey" ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { type: object, properties: { updated: { type: integer, description: "Сколько блюд реально обновилось" } } }
+
   /api/v1/menu/popularity:
     get:
       tags: [menu]
@@ -503,6 +522,29 @@ paths:
         required: true
         content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptInput" } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } } }
+
+  /api/v1/stock/receipts/{id}:
+    patch:
+      tags: [stock]
+      summary: Правка уже созданной накладной ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+      description: |
+        PATCH-семантика: не заданные поля не меняются. Правит qty/price_per_unit
+        существующих строк (реверс-и-заново на средневзвешенной себестоимости —
+        точно, пока не было расхода ингредиента после приёмки), payment_type/
+        paid_amount/долг поставщика, date (каскадом на связанные
+        financial_operations), supplier (только пока debt_amount=0). Строки
+        добавляются/удаляются ТОЛЬКО через qty=0 у существующей + отдельная
+        новая накладная (CreateReceipt) — не через этот эндпоинт.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReceiptUpdateInput" } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockReceipt" } } } }
+        "403": { description: "Не владелец" }
+        "409": { description: "Недостаточно средств/остатка, либо товар уже расходовался после приёмки" }
 
   /api/v1/stock/receipts/{id}/pay:
     post:
@@ -2661,6 +2703,55 @@ paths:
       parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
       responses: { "204": { description: No content } }
 
+  # ─── Menu: Bundles (фастфуд-сеты) ───────────────────────────────────────
+  /api/v1/menu/bundle-slots:
+    get:
+      tags: [menu]
+      summary: Слоты сета («Бургер»/«Гарнир»/«Напиток»)
+      parameters:
+        - { in: query, name: bundle_menu_item_id, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotsList" } } } } }
+    post:
+      tags: [menu]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlot" } } } } }
+  /api/v1/menu/bundle-slots/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlot" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
+  /api/v1/menu/bundle-slot-options:
+    get:
+      tags: [menu]
+      summary: Варианты внутри слота сета (ссылаются на настоящий пункт меню)
+      parameters:
+        - { in: query, name: slot_id, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/Limit"
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOptionsList" } } } } }
+    post:
+      tags: [menu]
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOptionInput" } } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOption" } } } } }
+  /api/v1/menu/bundle-slot-options/{id}:
+    patch:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOptionInput" } } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/BundleSlotOption" } } } } }
+    delete:
+      tags: [menu]
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } }, { $ref: "#/components/parameters/IdempotencyKey" } ]
+      responses: { "204": { description: No content } }
+
   # ─── Menu: TechCards ────────────────────────────────────────────────────
   /api/v1/menu/tech-cards:
     get:
@@ -2795,6 +2886,26 @@ paths:
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperationInput" } } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+  /api/v1/finance/operations/{id}:
+    patch:
+      tags: [finance]
+      summary: Правка ручной финоперации ВЛАДЕЛЬЦЕМ задним числом (только role=owner)
+      description: |
+        PATCH-семантика: не заданные поля не меняются. Реверсит старый эффект на
+        балансе старого счёта, применяет новый на новом, пересобирает зеркало в
+        кассовую смену (включая пересчёт expected_cash уже закрытой смены).
+        Системные проводки (auto-созданные накладной/зарплатой/переводом/возвратом,
+        зеркало со сменного экрана) и уже отменённые — отклоняются 400, править
+        нужно через их источник.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody: { required: true, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperationInput" } } } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } }
+        "403": { description: "Не владелец" }
+        "400": { description: "Системная/отменённая проводка, либо reserved-категория" }
+        "409": { description: "Недостаточно средств на счёте" }
 
   # ─── Finance: Custom Categories ─────────────────────────────────────────
   /api/v1/finance/custom-categories:
@@ -3813,6 +3924,7 @@ components:
         unit_size: { $ref: "#/components/schemas/Decimal" }
         sale_step: { $ref: "#/components/schemas/Decimal" }
         low_stock_threshold: { type: integer }
+        is_bundle: { type: boolean, description: "Фастфуд-сет — см. BundleSlot/BundleSlotOption. Собран из настоящих пунктов меню, своей техкарты/цены нет." }
         parent_id:
           type: string
           format: uuid
@@ -3830,6 +3942,7 @@ components:
         cogs: { $ref: "#/components/schemas/Decimal" }
         unit: { type: string }
         unit_size: { $ref: "#/components/schemas/Decimal" }
+        is_bundle: { type: boolean }
     MenuItemWithExtras:
       allOf:
         - $ref: "#/components/schemas/MenuItem"
@@ -4167,6 +4280,31 @@ components:
               name: { type: string }
               qty: { $ref: "#/components/schemas/Decimal" }
               unit: { type: string }
+              price_per_unit: { $ref: "#/components/schemas/Decimal" }
+    ReceiptUpdateInput:
+      type: object
+      properties:
+        supplier_id: { type: string, format: uuid }
+        supplier_name: { type: string }
+        date: { type: string }
+        note: { type: string }
+        due_date: { type: string }
+        payment_type: { type: string, enum: [paid, partial, credit] }
+        paid_amount:
+          allOf: [{ $ref: "#/components/schemas/Decimal" }]
+          description: Целевое АБСОЛЮТНОЕ значение (не дельта).
+        account_id:
+          type: string
+          format: uuid
+          description: Обязан совпадать со счётом уже связанных проводок (смена счёта оплаты задним числом не поддержана).
+        lines:
+          type: array
+          items:
+            type: object
+            required: [line_id]
+            properties:
+              line_id: { type: string, format: uuid }
+              qty: { $ref: "#/components/schemas/Decimal" }
               price_per_unit: { $ref: "#/components/schemas/Decimal" }
     StockReceipt:
       type: object
@@ -4581,13 +4719,32 @@ components:
         cogs: { $ref: "#/components/schemas/Decimal" }
         note: { type: string, nullable: true }
         cancelled_at: { type: string, format: date-time }
+        bundle_group_id: { type: string, format: uuid, nullable: true, description: "Общий у всех order_items одного добавления сета в заказ. NULL — обычная позиция." }
+        bundle_slot_label: { type: string, nullable: true, description: "Подпись слота сета («Бургер») на момент продажи, для чека." }
     OrderItemInput:
       type: object
-      required: [menu_item_id, qty]
+      description: |
+        Либо обычная позиция (menu_item_id+qty), либо сет — bundle_selection
+        ВМЕСТО menu_item_id (сервер резолвит в N настоящих позиций с ценой из
+        bundle_slot_options, не от клиента).
       properties:
         menu_item_id: { type: string, format: uuid }
-        qty: { type: string, description: Decimal как строка }
+        qty: { type: string, description: "Decimal как строка. У bundle_selection всё равно шлём \"1\" — резолвится в компоненты, каждый qty=1." }
         modifier_ids: { type: array, items: { type: string, format: uuid } }
+        bundle_selection: { $ref: "#/components/schemas/BundleSelectionInput" }
+    BundleSelectionInput:
+      type: object
+      required: [bundle_menu_item_id, slots]
+      properties:
+        bundle_menu_item_id: { type: string, format: uuid }
+        slots:
+          type: array
+          items:
+            type: object
+            required: [slot_id, option_ids]
+            properties:
+              slot_id: { type: string, format: uuid }
+              option_ids: { type: array, items: { type: string, format: uuid } }
     CreateOrderInput:
       type: object
       required: [items]
@@ -5098,6 +5255,48 @@ components:
         is_default: { type: boolean }
         sort_order: { type: integer }
     ModifiersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Modifier" } }, next_cursor: { type: string } } }
+
+    BundleSlot:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        bundle_menu_item_id: { type: string, format: uuid }
+        label: { type: string }
+        is_required: { type: boolean }
+        min_select: { type: integer }
+        max_select: { type: integer }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+    BundleSlotInput:
+      type: object
+      properties:
+        bundle_menu_item_id: { type: string, format: uuid }
+        label: { type: string }
+        is_required: { type: boolean }
+        min_select: { type: integer }
+        max_select: { type: integer }
+        sort_order: { type: integer }
+    BundleSlotsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/BundleSlot" } }, next_cursor: { type: string } } }
+
+    BundleSlotOption:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        slot_id: { type: string, format: uuid }
+        option_menu_item_id: { type: string, format: uuid, description: "Ссылается на настоящий пункт меню — своя техкарта/станция/сток" }
+        price: { $ref: "#/components/schemas/Decimal", description: "Цена этого варианта ВНУТРИ сета, не скидка на заказ" }
+        is_default: { type: boolean }
+        sort_order: { type: integer }
+        created_at: { type: string, format: date-time }
+    BundleSlotOptionInput:
+      type: object
+      properties:
+        slot_id: { type: string, format: uuid }
+        option_menu_item_id: { type: string, format: uuid }
+        price: { $ref: "#/components/schemas/Decimal" }
+        is_default: { type: boolean }
+        sort_order: { type: integer }
+    BundleSlotOptionsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/BundleSlotOption" } }, next_cursor: { type: string } } }
 
     TechCardLine:
       type: object

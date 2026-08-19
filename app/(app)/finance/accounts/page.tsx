@@ -7,8 +7,8 @@ import { useDataSync } from '@/hooks/use-data-sync'
 import { useAuth } from '@/lib/auth-store'
 import { DatePeriodFilter, filterByDateRange, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { formatCurrency } from '@/lib/helpers'
-import { type FinancialAccount, type FinancialOperation, finopCategoryLabel } from '@/lib/types'
-import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
+import { type FinancialAccount, type FinancialOperation, finopCategoryLabel, isOperationEditable } from '@/lib/types'
+import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
 import { selectableAccounts, setFinancialAccountEnabled } from '@/lib/queries/finance'
 import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil, ChevronDown } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
@@ -24,12 +24,14 @@ import {
 } from '@/components/ui/dialog'
 
 export default function AccountsPage() {
-  const { canDo } = useAuth()
+  const { canDo, user } = useAuth()
+  const isOwner = user?.role === 'owner'
   const [selectedAccount, setSelectedAccount] = useState<string>('all')
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [operations, setOperations] = useState<FinancialOperation[]>([])
   const [loading, setLoading] = useState(true)
   const [operationDialogOpen, setOperationDialogOpen] = useState(false)
+  const [editingOperation, setEditingOperation] = useState<FinancialOperation | null>(null)
   const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [newAccountName, setNewAccountName] = useState('')
@@ -173,29 +175,44 @@ export default function AccountsPage() {
     }
   }
 
-  async function handleCreateOperation(data: { type: 'in' | 'out' | 'transfer'; amount: number; category: string; accountId: string; activity: 'operational' | 'investment' | 'financial'; description: string; date: string; affectsShift?: boolean }) {
+  async function handleSaveOperation(data: { type: 'in' | 'out' | 'transfer'; amount: number; category: string; accountId: string; activity: 'operational' | 'investment' | 'financial'; description: string; date: string; affectsShift?: boolean }) {
+    const editing = editingOperation
     try {
-      const account = accounts.find((a) => a.id === data.accountId)
-      await createFinancialOperation({
-        type: data.type,
-        amount: data.amount,
-        category: data.category,
-        accountId: data.accountId,
-        accountName: account?.name ?? '',
-        activity: data.activity,
-        date: data.date,
-        description: data.description,
-        isAuto: false,
-        affectsShift: data.affectsShift,
-      })
+      if (editing) {
+        await updateFinancialOperation(editing.id, {
+          type: data.type,
+          amount: data.amount,
+          category: data.category,
+          accountId: data.accountId,
+          activity: data.activity,
+          date: data.date,
+          description: data.description,
+          affectsShift: data.affectsShift,
+        })
+      } else {
+        const account = accounts.find((a) => a.id === data.accountId)
+        await createFinancialOperation({
+          type: data.type,
+          amount: data.amount,
+          category: data.category,
+          accountId: data.accountId,
+          accountName: account?.name ?? '',
+          activity: data.activity,
+          date: data.date,
+          description: data.description,
+          isAuto: false,
+          affectsShift: data.affectsShift,
+        })
+      }
       // Refresh data from DB (+ история по дням — карточки берут остаток из неё).
       const [accs, ops] = await Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
       setAccounts(accs)
       setOperations(ops)
       await reloadBalanceHistory()
-      toast.success('Операция создана')
+      toast.success(editing ? 'Операция изменена' : 'Операция создана')
+      setEditingOperation(null)
     } catch (e) {
-      toast.error(humanizeError(e, 'Ошибка создания операции'))
+      toast.error(humanizeError(e, editing ? 'Ошибка изменения операции' : 'Ошибка создания операции'))
     }
   }
 
@@ -435,7 +452,7 @@ export default function AccountsPage() {
       <div className="flex flex-col sm:flex-row gap-2">
         {canDo('finance.manage') && (
           <button
-            onClick={() => setOperationDialogOpen(true)}
+            onClick={() => { setEditingOperation(null); setOperationDialogOpen(true) }}
             className="flex items-center gap-2 bg-card border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition-colors w-full sm:w-auto justify-center"
           >
             <ArrowDownCircle className="size-4 text-emerald-600" />
@@ -444,7 +461,7 @@ export default function AccountsPage() {
         )}
         {canDo('finance.manage') && (
           <button
-            onClick={() => setOperationDialogOpen(true)}
+            onClick={() => { setEditingOperation(null); setOperationDialogOpen(true) }}
             className="flex items-center gap-2 bg-card border border-border text-foreground px-4 py-2 rounded-lg text-sm font-medium hover:bg-muted transition-colors w-full sm:w-auto justify-center"
           >
             <ArrowUpCircle className="size-4 text-destructive" />
@@ -468,31 +485,40 @@ export default function AccountsPage() {
           <h2 className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Операции</h2>
         </div>
         <div className="divide-y divide-border">
-          {filteredOps.map((op) => (
-            <div key={op.id} className="flex items-center gap-4 px-5 py-3 hover:bg-muted/30 transition-colors">
-              <div className={`size-8 rounded-full flex items-center justify-center shrink-0 ${op.type === 'in' ? 'bg-emerald-100' : 'bg-red-100'}`}>
-                {op.type === 'in' ? (
-                  <ArrowDownCircle className="size-4 text-emerald-600" />
-                ) : (
-                  <ArrowUpCircle className="size-4 text-destructive" />
-                )}
+          {filteredOps.map((op) => {
+            const editable = isOwner && isOperationEditable(op)
+            return (
+              <div
+                key={op.id}
+                onClick={editable ? () => { setEditingOperation(op); setOperationDialogOpen(true) } : undefined}
+                className={`flex items-center gap-4 px-5 py-3 transition-colors ${editable ? 'cursor-pointer hover:bg-muted/40' : 'hover:bg-muted/30'}`}
+              >
+                <div className={`size-8 rounded-full flex items-center justify-center shrink-0 ${op.type === 'in' ? 'bg-emerald-100' : 'bg-red-100'}`}>
+                  {op.type === 'in' ? (
+                    <ArrowDownCircle className="size-4 text-emerald-600" />
+                  ) : (
+                    <ArrowUpCircle className="size-4 text-destructive" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-foreground truncate">{String(op.description || finopCategoryLabel(op.category) || '')}</p>
+                  <p className="text-xs text-muted-foreground">{[finopCategoryLabel(op.category), op.accountName, op.date].filter(Boolean).join(' · ')}</p>
+                </div>
+                <span className={`text-sm font-bold shrink-0 ${op.type === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
+                  {op.type === 'in' ? '+' : '−'}{formatCurrency(op.amount)}
+                </span>
+                {editable && <Pencil className="size-3.5 text-muted-foreground shrink-0" />}
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-foreground truncate">{String(op.description || finopCategoryLabel(op.category) || '')}</p>
-                <p className="text-xs text-muted-foreground">{[finopCategoryLabel(op.category), op.accountName, op.date].filter(Boolean).join(' · ')}</p>
-              </div>
-              <span className={`text-sm font-bold shrink-0 ${op.type === 'in' ? 'text-emerald-600' : 'text-destructive'}`}>
-                {op.type === 'in' ? '+' : '−'}{formatCurrency(op.amount)}
-              </span>
-            </div>
-          ))}
+            )
+          })}
         </div>
       </div>
 
       <CreateOperationDialog
         open={operationDialogOpen}
-        onOpenChange={setOperationDialogOpen}
-        onSubmit={handleCreateOperation}
+        onOpenChange={(o) => { setOperationDialogOpen(o); if (!o) setEditingOperation(null) }}
+        onSubmit={handleSaveOperation}
+        initialOperation={editingOperation}
       />
 
       {/* Add Account Dialog */}

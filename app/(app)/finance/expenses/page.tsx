@@ -4,13 +4,17 @@ import { FinanceTabs } from '@/components/finance/finance-tabs'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { type FinancialOperation, finopCategoryLabel } from '@/lib/types'
-import { fetchFinancialOperations } from '@/lib/queries'
+import { type FinancialOperation, finopCategoryLabel, isOperationEditable } from '@/lib/types'
+import { fetchFinancialOperations, updateFinancialOperation } from '@/lib/queries'
+import { useAuth } from '@/lib/auth-store'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { exportToExcel } from '@/lib/export-excel'
+import { humanizeError } from '@/lib/errors'
+import { toast } from 'sonner'
 import { DateRangePresets, getPresetRange, type RangePreset } from '@/components/finance/date-range-presets'
-import { BarChart3, PieChart as PieIcon, Table as TableIcon, Download, TrendingDown, TrendingUp, Layers, ChevronRight } from 'lucide-react'
+import { BarChart3, PieChart as PieIcon, Table as TableIcon, Download, TrendingDown, TrendingUp, Layers, ChevronRight, Pencil } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import {
   PieChart, Pie, Cell,
   BarChart, Bar,
@@ -66,6 +70,8 @@ function bucketLabelOf(key: string, gran: Gran): string {
 }
 
 export default function ExpensesByCategoryPage() {
+  const { user } = useAuth()
+  const isOwner = user?.role === 'owner'
   const [ops, setOps] = useState<FinancialOperation[]>([])
   const [loading, setLoading] = useState(true)
   const [preset, setPreset] = useState<RangePreset>('month')
@@ -77,6 +83,9 @@ export default function ExpensesByCategoryPage() {
   // операций этой статьи (кому/когда/сколько). Напр. «Оплата труда» → кому и
   // когда платили; «Поставщики» → какому поставщику сколько.
   const [drillCat, setDrillCat] = useState<string | null>(null)
+  // Редактирование прямо из детализации статьи — та же кнопка «Изменить»,
+  // что и на «Деньги» (owner-only, isOperationEditable — см. lib/types.ts).
+  const [editingOperation, setEditingOperation] = useState<FinancialOperation | null>(null)
 
   const load = useCallback(async () => {
     const data = await fetchFinancialOperations()
@@ -85,6 +94,21 @@ export default function ExpensesByCategoryPage() {
 
   useEffect(() => { load().finally(() => setLoading(false)) }, [load])
   useDataSync(['financial_operations'], load)
+
+  async function handleSaveOperation(data: { type: 'in' | 'out' | 'transfer'; amount: number; category: string; accountId: string; activity: 'operational' | 'investment' | 'financial'; description: string; date: string; affectsShift?: boolean }) {
+    if (!editingOperation) return
+    try {
+      await updateFinancialOperation(editingOperation.id, {
+        type: data.type, amount: data.amount, category: data.category, accountId: data.accountId,
+        activity: data.activity, date: data.date, description: data.description, affectsShift: data.affectsShift,
+      })
+      await load()
+      toast.success('Операция изменена')
+      setEditingOperation(null)
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка изменения операции'))
+    }
+  }
 
   const range = useMemo(() => getPresetRange(preset, customFrom, customTo), [preset, customFrom, customTo])
 
@@ -117,6 +141,7 @@ export default function ExpensesByCategoryPage() {
   const expenses = useMemo(() => {
     return ops.filter((o) => {
       if (o.type !== 'out') return false
+      if (o.activity === 'financial') return false
       const day = (o.date ?? '').slice(0, 10)
       if (!day) return false
       if (range.from && day < range.from) return false
@@ -643,22 +668,37 @@ export default function ExpensesByCategoryPage() {
               <div>
                 <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Операции · {drillOps.length}</p>
                 <div className="divide-y divide-border/60">
-                  {drillOps.map((o) => (
-                    <div key={o.id} className="flex items-center gap-3 py-2">
-                      <span className="text-xs text-muted-foreground tabular-nums w-20 shrink-0">{(o.date || '').slice(0, 10) || '—'}</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-foreground truncate">{o.counterparty || o.description || finopCategoryLabel(o.category) || '—'}</p>
-                        {o.accountName && <p className="text-[11px] text-muted-foreground truncate">со счёта «{o.accountName}»</p>}
+                  {drillOps.map((o) => {
+                    const editable = isOwner && isOperationEditable(o)
+                    return (
+                      <div
+                        key={o.id}
+                        onClick={editable ? () => setEditingOperation(o) : undefined}
+                        className={`flex items-center gap-3 py-2 ${editable ? 'cursor-pointer hover:bg-muted/30 -mx-1 px-1 rounded transition-colors' : ''}`}
+                      >
+                        <span className="text-xs text-muted-foreground tabular-nums w-20 shrink-0">{(o.date || '').slice(0, 10) || '—'}</span>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-foreground truncate">{o.counterparty || o.description || finopCategoryLabel(o.category) || '—'}</p>
+                          {o.accountName && <p className="text-[11px] text-muted-foreground truncate">со счёта «{o.accountName}»</p>}
+                        </div>
+                        <span className="text-sm font-semibold text-foreground tabular-nums shrink-0">{formatCurrency(o.amount)}</span>
+                        {editable && <Pencil className="size-3.5 text-muted-foreground shrink-0" />}
                       </div>
-                      <span className="text-sm font-semibold text-foreground tabular-nums shrink-0">{formatCurrency(o.amount)}</span>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </div>
             </div>
           )}
         </DialogContent>
       </Dialog>
+
+      <CreateOperationDialog
+        open={!!editingOperation}
+        onOpenChange={(o) => { if (!o) setEditingOperation(null) }}
+        onSubmit={handleSaveOperation}
+        initialOperation={editingOperation}
+      />
     </div>
   )
 }

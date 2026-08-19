@@ -256,6 +256,12 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 		} else {
 			qtyToVoid = item.Qty
 		}
+		// Компонент сета — только целиком (см. тот же гвард и обоснование в
+		// CancelItem/orders_extras.go): компоненты всегда qty=1, partial не
+		// имеет смысла и оставил бы сет в подвешенном состоянии.
+		if item.BundleGroupID != nil && !fullVoid {
+			return apperrors.Wrap("VALIDATION", "нельзя частично отменить компонент сета — отмените сет целиком", nil)
+		}
 
 		if fullVoid {
 			item.CancelledAt = &now
@@ -324,21 +330,55 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 			return err
 		}
 
-		// 4. Recompute order.total: вычесть line_total.
+		// 3b. Сет — каскад: остальные компоненты того же bundle_group_id
+		// отменяются вместе (см. cascadeCancelBundleSiblings). fullVoid уже
+		// гарантирован проверкой выше. Каждый каскадный компонент тоже получает
+		// свою запись order_voids — иначе менеджер увидит в журнале voids только
+		// одну позицию, хотя фактически отменился весь сет.
+		var cascadeItems []models.OrderItem
+		cascadeTotal := decimal.Zero
+		if item.BundleGroupID != nil {
+			var cerr error
+			cascadeItems, cascadeTotal, cerr = cascadeCancelBundleSiblings(
+				tx, order.ID, *item.BundleGroupID, item.ID, canceller, in.Reason, now)
+			if cerr != nil {
+				return cerr
+			}
+			for _, ci := range cascadeItems {
+				ciQtyInt := 0
+				if f, _ := ci.Qty.Float64(); f > 0 {
+					ciQtyInt = int(f)
+				}
+				cascadeReason := "автоматически вместе с сетом: " + reason
+				if err := tx.Create(&models.OrderVoid{
+					ID: uuid.NewString(), OrderID: &oid, ItemName: ci.Name,
+					ItemQty: &ciQtyInt, ItemPrice: ci.Price, Reason: &cascadeReason,
+					ApprovedBy: &approvedBy, CreatedBy: &createdBy,
+					RestaurantID: &rid, CreatedAt: now,
+				}).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// 4. Recompute order.total: вычесть line_total (основная позиция + каскад).
 		lineTotal := decimal.Normalize(decimal.Mul(item.Price, effectivePortions(item.Unit, item.Qty, item.UnitSize)))
-		order.Total = decimal.Normalize(decimal.Sub(order.Total, lineTotal))
+		totalDelta := decimal.Add(lineTotal, cascadeTotal)
+		order.Total = decimal.Normalize(decimal.Sub(order.Total, totalDelta))
 		order.TotalWithService = order.Total
 		order.UpdatedAt = now
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
 
-		// 5. Cancel-runner на станцию — повар видит «отменить готовку».
+		// 5. Cancel-runner на станцию — повар видит «отменить готовку». Каскадные
+		// компоненты сета — туда же, повар должен увидеть ОТМЕНУ по всему сету.
 		// Эмитим всегда: если повар ещё не начал — просто игнорирует, если
 		// начал — успеет остановиться. Лишний бумажный квиток < риска
 		// испорченной готовки. Heuristic по item.PrintedAt появится в Phase 5
 		// вместе с kitchen_status.
-		if err := s.enqueueCancelRunners(tx, rid, &order, []models.OrderItem{item}, in.Reason, now); err != nil {
+		runnerCancelItems := append([]models.OrderItem{item}, cascadeItems...)
+		if err := s.enqueueCancelRunners(tx, rid, &order, runnerCancelItems, in.Reason, now); err != nil {
 			return err
 		}
 

@@ -788,6 +788,14 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 		} else {
 			qtyToCancel = item.Qty
 		}
+		// Компонент сета — только целиком: partial-cancel одного блюда из сета
+		// оставил бы часть сета «в подвешенном» состоянии (кухня уже готовит,
+		// цена внутри сета остаётся привязана к полному набору). Компоненты
+		// всегда qty=1 (expandBundleSelections), так что частичная отмена тут
+		// в принципе не имеет смысла — блокируем явно, а не тихо разрешаем.
+		if item.BundleGroupID != nil && !fullCancel {
+			return apperrors.Wrap("VALIDATION", "нельзя частично отменить компонент сета — отмените сет целиком", nil)
+		}
 
 		// Загрузим модификаторы (нужны для line-total и для split-копирования).
 		var itemMods []models.OrderItemModifier
@@ -851,8 +859,23 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 			item = split
 		}
 
-		// Recompute order total + cancelled_total.
-		order.Total = decimal.Normalize(decimal.Sub(order.Total, lineDelta))
+		// Сет — каскад: остальные компоненты того же bundle_group_id отменяются
+		// вместе с этим (см. cascadeCancelBundleSiblings). fullCancel уже
+		// гарантирован проверкой выше (partial на компоненте сета отклонён).
+		var cascadeItems []models.OrderItem
+		cascadeTotal := decimal.Zero
+		if item.BundleGroupID != nil {
+			var cerr error
+			cascadeItems, cascadeTotal, cerr = cascadeCancelBundleSiblings(
+				tx, order.ID, *item.BundleGroupID, item.ID, canceller, reason, now)
+			if cerr != nil {
+				return cerr
+			}
+		}
+
+		// Recompute order total + cancelled_total (основная позиция + каскад сета).
+		totalDelta := decimal.Add(lineDelta, cascadeTotal)
+		order.Total = decimal.Normalize(decimal.Sub(order.Total, totalDelta))
 		order.TotalWithService = order.Total
 		// cancelled_total — аккумулятор отменённой суммы (используется Z-отчётом,
 		// P&L и Owner Dashboard). Растёт и при full-cancel, и при partial.
@@ -860,15 +883,17 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 		if order.CancelledTotal != nil {
 			prevCancelled = *order.CancelledTotal
 		}
-		newCancelled := decimal.Normalize(decimal.Add(prevCancelled, lineDelta))
+		newCancelled := decimal.Normalize(decimal.Add(prevCancelled, totalDelta))
 		order.CancelledTotal = &newCancelled
 		order.UpdatedAt = now
 		if err := tx.Save(&order).Error; err != nil {
 			return err
 		}
 		// Cancel runner — для повара. Передаём отменённый row (split при partial,
-		// оригинал при full).
-		if err := s.enqueueCancelRunners(tx, rid, &order, []models.OrderItem{item}, reason, now); err != nil {
+		// оригинал при full) + каскадные компоненты сета — повар должен увидеть
+		// «ОТМЕНА» по ВСЕМУ сету, не только по одной позиции.
+		runnerCancelItems := append([]models.OrderItem{item}, cascadeItems...)
+		if err := s.enqueueCancelRunners(tx, rid, &order, runnerCancelItems, reason, now); err != nil {
 			return err
 		}
 
