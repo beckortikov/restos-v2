@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -233,6 +234,31 @@ func (s *NetworkService) RedeemInvite(ctx context.Context, code, callerRestauran
 		if res.RowsAffected == 0 {
 			// Гонка: кто-то использовал код между First() выше и этим Update.
 			return apperrors.Wrap("CONFLICT", "код приглашения уже использован", nil)
+		}
+
+		// Central иначе никогда не узнаёт о филиале как о РЕСТОРАНЕ: ingest
+		// пишет ingredients/financial_operations и т.д. со restaurant_id
+		// филиала, но саму строку restaurants на central этим не создаёт.
+		// Без неё ListBranches/branchesForAccount (Warehouse, PnL, Cashflow —
+		// все читают restaurants central, не свод по sync_log) никогда не
+		// найдут филиал, сколько ни жди досинхронизации — это не про
+		// задержку, это отсутствующая запись. Заводим лёгкую «теневую» запись
+		// сразу при погашении кода. DoUpdates явным списком (не UpdateAll) —
+		// re-pairing того же филиала должен освежить имя/kind, но не затирать
+		// остальные поля, если central когда-нибудь их для этой записи задаст.
+		accountID := inv.AccountID
+		kind := "outlet"
+		branch := &models.Restaurant{
+			ID:        callerRestaurantID,
+			Name:      callerRestaurantName,
+			AccountID: &accountID,
+			Kind:      &kind,
+		}
+		if err := tr.Raw().WithContext(ctx).Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name", "account_id", "kind"}),
+		}).Create(branch).Error; err != nil {
+			return err
 		}
 		return nil
 	})

@@ -157,7 +157,8 @@ func TestNetworkInvites_Redeem(t *testing.T) {
 	}
 
 	// Happy path.
-	res, err := svc.RedeemInvite(context.Background(), inv.Code, uuid.NewString(), "Филиал X")
+	branchID := uuid.NewString()
+	res, err := svc.RedeemInvite(context.Background(), inv.Code, branchID, "Филиал X")
 	if err != nil {
 		t.Fatalf("RedeemInvite: %v", err)
 	}
@@ -169,6 +170,31 @@ func TestNetworkInvites_Redeem(t *testing.T) {
 	}
 	if res.CentralName != "Central" {
 		t.Errorf("central_name = %q, want Central", res.CentralName)
+	}
+
+	// Регресс-пруф: central обязан завести теневую запись restaurants для
+	// филиала при погашении кода — иначе ListBranches/branchesForAccount
+	// (Warehouse, PnL, Cashflow) никогда его не найдут, сколько бы ingest
+	// потом ни присылал данных с его restaurant_id (найдено вживую — филиал
+	// подключился, данные не появлялись в сетевых отчётах никогда).
+	branches, err := svc.ListBranches(ownerCentral)
+	if err != nil {
+		t.Fatalf("ListBranches: %v", err)
+	}
+	var found bool
+	for _, b := range branches {
+		if b.ID == branchID {
+			found = true
+			if b.Name != "Филиал X" {
+				t.Errorf("branch name = %q, want «Филиал X»", b.Name)
+			}
+			if b.Kind == nil || *b.Kind != "outlet" {
+				t.Errorf("branch kind = %v, want outlet", b.Kind)
+			}
+		}
+	}
+	if !found {
+		t.Error("филиал не появился в ListBranches после RedeemInvite — central не завёл теневую запись restaurants")
 	}
 
 	// Повторный обмен того же кода — конфликт.

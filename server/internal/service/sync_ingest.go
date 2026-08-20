@@ -201,6 +201,15 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "nomenclature":
+			if branchID == "" {
+				res.Skipped++ // как network_menu_items — только down-pull на филиале, up-push пока не пишется (CreateNomenclature не зовёт synclog.Record)
+				continue
+			}
+			if err := s.applyNomenclature(ctx, e); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		default:
 			res.Skipped++ // неизвестная сущность — не роняем весь батч
 		}
@@ -264,6 +273,25 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 			return recordMenuItemsSync(tx, []string{existing.ID})
 		}
 		return nil
+	})
+}
+
+// applyNomenclature — распространение общего каталога номенклатуры сети на
+// филиал (ADR-003 вариант 3B). В отличие от applyNetworkMenu, строка сети И
+// строка филиала — ОДНА и та же запись (тот же id: ingredients.nomenclature_id
+// ссылается на него одинаково на любом узле) — обычный upsert по id, без
+// производной локальной копии.
+func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry) error {
+	var n models.Nomenclature
+	if err := json.Unmarshal(e.Payload, &n); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid nomenclature payload", err)
+	}
+	if n.ID == "" {
+		return apperrors.Wrap("VALIDATION", "nomenclature payload missing id", nil)
+	}
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		return tx.Clauses(onConflict(true)).Create(&n).Error
 	})
 }
 
@@ -712,6 +740,25 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*Ingest
 			}
 			out.Entries = append(out.Entries, SyncEntry{
 				Entity: "network_menu_items", RowID: master[i].ID, Op: "upsert", Payload: payload,
+			})
+		}
+
+		// Номенклатура сети (ADR-003, вариант 3B) — тем же путём, что и мастер-меню
+		// выше: central целиком отдаёт СВОЙ локальный каталог на каждый pull
+		// (account-scoped, без курсора). Раньше эта строка отсутствовала — товар,
+		// заведённый в номенклатуре на central, никогда не попадал на филиал
+		// (найдено вживую: «рис» создан на central, на филиале не появился).
+		var nomenclature []models.Nomenclature
+		if err := s.r.Raw().WithContext(ctx).Where("account_id = ?", *rest.AccountID).Find(&nomenclature).Error; err != nil {
+			return nil, err
+		}
+		for i := range nomenclature {
+			payload, err := json.Marshal(nomenclature[i])
+			if err != nil {
+				return nil, err
+			}
+			out.Entries = append(out.Entries, SyncEntry{
+				Entity: "nomenclature", RowID: nomenclature[i].ID, Op: "upsert", Payload: payload,
 			})
 		}
 	}
