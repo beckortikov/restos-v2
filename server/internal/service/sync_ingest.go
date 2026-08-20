@@ -210,6 +210,15 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				return nil, err
 			}
 			res.Applied++
+		case "restaurants":
+			if branchID == "" {
+				res.Skipped++ // только down-pull на филиале — central сам заводит соседей через RedeemInvite, не через этот путь
+				continue
+			}
+			if err := s.applyRestaurantStub(ctx, e); err != nil {
+				return nil, err
+			}
+			res.Applied++
 		default:
 			res.Skipped++ // неизвестная сущность — не роняем весь батч
 		}
@@ -292,6 +301,36 @@ func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry) error 
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		return tx.Clauses(onConflict(true)).Create(&n).Error
+	})
+}
+
+// applyRestaurantStub — заводит/обновляет НА ФИЛИАЛЕ заглушку-строку соседа
+// по сети (central или другой филиал) — только для cross-node ссылок
+// (to_restaurant_id в перемещениях, ListBranches-дропдаун), НЕ реальные
+// бизнес-данные соседа. Явный список колонок (не UpdateAll) — у Restaurant
+// десятки полей (license_key/license_expires_at/settings и т.д.), которых в
+// этом зеркале нет и заведомо не будет; UpdateAll затёр бы их NULL при
+// каждом pull, если бы id когда-нибудь совпал с чем-то настоящим.
+func (s *SyncService) applyRestaurantStub(ctx context.Context, e SyncEntry) error {
+	var r models.Restaurant
+	if err := json.Unmarshal(e.Payload, &r); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid restaurants payload", err)
+	}
+	if r.ID == "" {
+		return apperrors.Wrap("VALIDATION", "restaurants payload missing id", nil)
+	}
+	stub := models.Restaurant{ID: r.ID, Name: r.Name, AccountID: r.AccountID, Kind: r.Kind}
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		// Select — иначе Create() шлёт INSERT со ВСЕМИ полями модели (Currency/
+		// ServicePercent/... на zero-value); default-теги GORM для указателей
+		// омитит не всегда надёжно (см. gorm-zero-value-default-tag-gotcha).
+		// Явный список колонок — и для insert, и для conflict-update — снимает
+		// вопрос целиком.
+		return tx.Select("id", "name", "account_id", "kind").Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"name", "account_id", "kind"}),
+		}).Create(&stub).Error
 	})
 }
 
@@ -759,6 +798,33 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*Ingest
 			}
 			out.Entries = append(out.Entries, SyncEntry{
 				Entity: "nomenclature", RowID: nomenclature[i].ID, Op: "upsert", Payload: payload,
+			})
+		}
+
+		// Соседи по сети (central + прочие филиалы) — тем же путём. Филиал
+		// узнаёт о central только из JoinNetwork (account_id + sync_settings),
+		// но НИКОГДА не заводит у себя саму строку central как restaurants —
+		// поэтому «Перемещения» (CreateTransfer ищет to_restaurant_id в
+		// ЛОКАЛЬНОЙ restaurants) и ListBranches (dropdown получателя) не
+		// видели вообще никого, включая central. Central после RedeemInvite
+		// уже видит ВСЕХ (см. фикс v3.16.293) — отдаём филиалу зеркало этого
+		// же списка, себя самого исключаем (сам о себе и так всё знает,
+		// перезаписывать НЕ должны — задел бы license_key/license_expires_at
+		// и остальные поля, которых в этом зеркале нет и быть не может).
+		// Найдено вживую: «в перемещении нет филиала пишет» (2026-08-20).
+		var neighbors []models.Restaurant
+		if err := s.r.Raw().WithContext(ctx).
+			Where("account_id = ? AND id != ?", *rest.AccountID, restaurantID).
+			Find(&neighbors).Error; err != nil {
+			return nil, err
+		}
+		for i := range neighbors {
+			payload, err := json.Marshal(neighbors[i])
+			if err != nil {
+				return nil, err
+			}
+			out.Entries = append(out.Entries, SyncEntry{
+				Entity: "restaurants", RowID: neighbors[i].ID, Op: "upsert", Payload: payload,
 			})
 		}
 	}
