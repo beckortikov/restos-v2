@@ -47,8 +47,20 @@ SPA_DIR := internal/transport/http/spa
 
 .PHONY: embed-spa
 embed-spa: ## Build React frontend (Vite) and copy dist into spa/ for go:embed
-	@echo "→ building frontend (vite) for embed"
-	cd .. && npx vite build
+	@echo "→ building frontend (vite, absolute base) for embed"
+	# VITE_BASE_PATH=/ — Electron (desktop/frontend, build-frontend в
+	# desktop/package.json) грузит index.html через file://, там нужны
+	# ОТНОСИТЕЛЬНЫЕ пути (base по умолчанию './'). Но LAN web access отдаёт
+	# SPA по НАСТОЯЩИМ URL (BrowserRouter, /network/summary и т.п.) — при
+	# относительном base браузер резолвит "./assets/x.js" ОТНОСИТЕЛЬНО
+	# ТЕКУЩЕГО пути: с /network/summary получается /network/assets/x.js
+	# вместо /assets/x.js → 404/SPA-фолбэк вместо .js → белый экран на
+	# любом reload/F5 глубже одного сегмента пути. Абсолютный base лечит
+	# для веба; Electron НЕ страдает от смены на абсолютный (HashRouter,
+	# путь всегда просто index.html) — но эта сборка идёт ТОЛЬКО в spa/,
+	# отдельно от desktop/frontend, так что менять было безопасно.
+	# Найдено вживую: central, реальный клиент, 2026-08-20.
+	cd .. && VITE_BASE_PATH=/ npx vite build
 	rm -rf $(SPA_DIR)
 	mkdir -p $(SPA_DIR)
 	cp -r ../dist/. $(SPA_DIR)/

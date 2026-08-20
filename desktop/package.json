@@ -1,12 +1,12 @@
 {
   "name": "restos-desktop-v2",
-  "version": "3.16.294",
+  "version": "3.16.295",
   "description": "RestOS v4 Desktop — POS система для ресторанов (Go-бэк + embedded Postgres, LAN web access)",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build-frontend": "cd .. && npx vite build && rm -rf desktop/frontend && cp -r dist desktop/frontend",
-    "embed-spa": "cd .. && rm -rf server/internal/transport/http/spa && mkdir -p server/internal/transport/http/spa && cp -r dist/. server/internal/transport/http/spa/",
+    "embed-spa": "cd .. && VITE_BASE_PATH=/ npx vite build && rm -rf server/internal/transport/http/spa && mkdir -p server/internal/transport/http/spa && cp -r dist/. server/internal/transport/http/spa/",
     "build-sidecar-win": "npm run embed-spa && cd ../server && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o bin/restos-server-windows-amd64.exe ./cmd/restos-server && cp bin/restos-server-windows-amd64.exe ../desktop/resources/restos-server.exe",
     "pack": "electron-builder --dir",
     "dist": "electron-builder",

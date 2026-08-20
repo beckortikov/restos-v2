@@ -47,8 +47,31 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
-      - name: Build frontend
+      - name: Build frontend (relative base, for Electron file://)
         run: pnpm build
+
+      - name: Copy frontend into desktop/
+        shell: bash
+        run: |
+          rm -rf desktop/frontend
+          cp -r dist desktop/frontend
+
+      # VITE_BASE_PATH=/ — Electron (desktop/frontend, copied above) loads
+      # index.html via file://, which needs RELATIVE asset paths (default
+      # base './'). LAN web access serves the SAME SPA over real HTTP paths
+      # (BrowserRouter — /network/summary etc.) — with a relative base the
+      # browser resolves "./assets/x.js" AGAINST THE CURRENT PATH, so on
+      # /network/summary it requests /network/assets/x.js instead of
+      # /assets/x.js → 404/HTML fallback instead of the real .js → every
+      # module fails to load → white screen on any reload/F5 one directory
+      # level deep. Rebuilding with an absolute base fixes it for web;
+      # Electron already has its own copy above, unaffected by this second
+      # build overwriting dist/. Found live on a real customer deploy
+      # (2026-08-20) — this bug shipped in every prior release.
+      - name: Rebuild frontend (absolute base, for LAN web access)
+        run: pnpm build
+        env:
+          VITE_BASE_PATH: /
 
       - name: Embed SPA into Go server tree
         shell: bash
@@ -57,12 +80,6 @@ jobs:
           mkdir -p server/internal/transport/http/spa
           cp -r dist/. server/internal/transport/http/spa/
           ls -lh server/internal/transport/http/spa/ | head -10
-
-      - name: Copy frontend into desktop/
-        shell: bash
-        run: |
-          rm -rf desktop/frontend
-          cp -r dist desktop/frontend
 
       - name: Build Go sidecar (windows/amd64) with embedded SPA
         working-directory: server
