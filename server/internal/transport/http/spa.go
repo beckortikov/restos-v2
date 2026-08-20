@@ -31,6 +31,8 @@ var spaFS embed.FS
 //     have matched these earlier; defensive guard against accidental masking).
 //   - Existing static file inside spa/ — served with default Content-Type
 //     detection and no-cache for index.html.
+//   - /assets/* miss — explicit 404, never the SPA shell (see comment below —
+//     a stale/missing asset served as 200 index.html poisons SW precaching).
 //   - Anything else — fallback to index.html (BrowserRouter / HashRouter
 //     friendly: F5 on /operations/pos still loads the SPA shell).
 func SPAHandler() http.Handler {
@@ -76,6 +78,23 @@ func SPAHandler() http.Handler {
 				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 			}
 			fileServer.ServeHTTP(w, r)
+			return
+		}
+
+		// /assets/* — ВСЕГДА content-hashed файл конкретной сборки (vite
+		// build.assetsDir), никогда не client-side роут. Промах здесь —
+		// либо стухший у клиента index.html (сборка обновилась, хеш другой),
+		// либо реальная поломка деплоя — в обоих случаях честный 404, НЕ
+		// index.html с 200. Service worker (registerType: autoUpdate,
+		// generateSW) прекеширует ассеты по URL и не проверяет content-type:
+		// 200 с html вместо ожидаемого .js он молча зачтёт как «успешно
+		// закешировал нужный файл», после чего ни hard refresh, ни
+		// повторный деплой уже не лечат — скрипт отдаётся из собственного
+		// Cache Storage браузера, а не с сервера. Ровно так один плохой
+		// деплой (spa/ = плейсхолдер вместо реальной сборки) превратился в
+		// белый экран, который не снимался перезагрузкой (2026-08-20).
+		if strings.HasPrefix(clean, "assets/") {
+			http.NotFound(w, r)
 			return
 		}
 
