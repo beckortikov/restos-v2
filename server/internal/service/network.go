@@ -341,9 +341,16 @@ type NetworkSummary struct {
 // между эндпоинтами).
 func (s *NetworkService) branchesForAccount(ctx context.Context, account string) ([]models.Restaurant, error) {
 	var branches []models.Restaurant
+	// Явный CASE, а не `kind DESC`: последний обещанного порядка НЕ давал —
+	// алфавитно 'central_warehouse' < 'outlet', поэтому DESC ставил первыми
+	// как раз филиалы, а строки с kind = NULL (ресторан в сети, но роль не
+	// назначена) в DESC идут вообще впереди всех (NULLS FIRST — умолчание
+	// Postgres для DESC). Расхождение с комментарием было косметическим:
+	// фронт сортирует сводку сам (по выручке/балансу), но «Персонал сети»
+	// (Фаза П) показывает филиалы именно в этом порядке.
 	if err := s.r.Raw().WithContext(ctx).
 		Where("account_id = ?", account).
-		Order("kind DESC, name ASC").
+		Order("CASE WHEN kind = 'central_warehouse' THEN 0 ELSE 1 END, name ASC").
 		Find(&branches).Error; err != nil {
 		return nil, err
 	}

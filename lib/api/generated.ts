@@ -2711,6 +2711,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/staff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Весь персонал сети с указанием филиала (ADR-003, Фаза П). Только чтение — филиал авторитет по своим учёткам. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            total_count?: number;
+                            branches?: {
+                                /** Format: uuid */
+                                id?: string;
+                                name?: string;
+                                kind?: string | null;
+                                count?: number;
+                            }[];
+                            staff?: (components["schemas"]["User"] & {
+                                branch_name?: string;
+                                branch_kind?: string | null;
+                            })[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nomenclature": {
         parameters: {
             query?: never;

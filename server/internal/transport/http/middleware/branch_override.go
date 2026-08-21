@@ -245,6 +245,8 @@ var branchDataBlocked = map[string]bool{
 //   /network/branches, /network/menu, /nomenclature — account-scoped
 //     (accountForCtx), override физически не меняет ответ: activates ТОЛЬКО
 //     когда curAcc==tgtAcc, а значит account_id инвариантен к подмене.
+//     /network/staff (Фаза П) — из той же account-scoped семьи, ровно по той
+//     же причине; users реплицированы с Ф1.
 //   /finance/operations — только своя таблица, курсорная пагинация, без JOIN.
 //   /finance/salary/report — financial_operations (category IN Зарплата/
 //     Аванс/Сервис) LEFT JOIN users, обе реплицированы; НЕ читает time_entries

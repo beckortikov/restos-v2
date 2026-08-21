@@ -908,6 +908,38 @@ paths:
                             branch_name: { type: string }
                             branch_kind: { type: string }
 
+  /api/v1/network/staff:
+    get:
+      tags: [stock]
+      summary: Весь персонал сети с указанием филиала (ADR-003, Фаза П). Только чтение — филиал авторитет по своим учёткам.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  total_count: { type: integer }
+                  branches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        kind: { type: string, nullable: true }
+                        count: { type: integer }
+                  staff:
+                    type: array
+                    items:
+                      allOf:
+                        - { $ref: "#/components/schemas/User" }
+                        - type: object
+                          properties:
+                            branch_name: { type: string }
+                            branch_kind: { type: string, nullable: true }
+
   /api/v1/nomenclature:
     get:
       tags: [stock]

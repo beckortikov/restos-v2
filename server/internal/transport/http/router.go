@@ -330,6 +330,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/network/cashflow", networkH.Cashflow)
 			g.Get("/network/warehouse", networkH.Warehouse)
 			g.Get("/network/accounts", networkH.Accounts)
+			g.Get("/network/staff", networkH.Staff)
 			g.Get("/network/invites", networkH.ListInvites)
 			g.Get("/settings/sync", syncSettingsH.Get)
 			g.Get("/settings/sync/queue", syncSettingsH.QueueStats)

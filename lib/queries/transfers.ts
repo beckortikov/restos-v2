@@ -321,6 +321,62 @@ export async function fetchNetworkAccounts(): Promise<NetworkAccounts> {
   }
 }
 
+// ─── Персонал сети (Фаза П) ────────────────────────────────────────────────────
+// Только чтение: филиал — авторитет по своим учёткам, правка из центра была бы
+// перезаписана его следующим пушем.
+
+export interface NetworkStaffMember {
+  id: string
+  name: string
+  role: string
+  position?: string | null
+  phone?: string | null
+  payType: 'monthly' | 'daily'
+  salary: number
+  dailyRate: number
+  branchId?: string | null
+  branchName: string
+  branchKind?: 'outlet' | 'central_warehouse' | null
+}
+
+export interface NetworkStaffBranch {
+  id: string
+  name: string
+  kind?: 'outlet' | 'central_warehouse' | null
+  count: number
+}
+
+export interface NetworkStaff {
+  totalCount: number
+  branches: NetworkStaffBranch[]
+  staff: NetworkStaffMember[]
+}
+
+export async function fetchNetworkStaff(): Promise<NetworkStaff> {
+  const r: any = await unwrap(api.GET('/api/v1/network/staff'))
+  return {
+    totalCount: Number(r?.total_count ?? 0),
+    branches: Array.isArray(r?.branches)
+      ? r.branches.map((b: any) => ({ id: b.id, name: b.name, kind: b.kind, count: Number(b.count ?? 0) }))
+      : [],
+    staff: Array.isArray(r?.staff)
+      ? r.staff.map((u: any) => ({
+          id: u.id,
+          name: u.name ?? '',
+          role: u.role ?? '',
+          position: u.position,
+          phone: u.phone,
+          payType: u.pay_type === 'daily' ? 'daily' : 'monthly',
+          salary: Number(u.salary ?? 0),
+          dailyRate: Number(u.daily_rate ?? 0),
+          branchId: u.restaurant_id,
+          branchName: u.branch_name ?? '',
+          branchKind: u.branch_kind,
+        }))
+      : [],
+  }
+}
+
 // ─── Номенклатура сети ─────────────────────────────────────────────────────────
 export async function fetchNomenclature(): Promise<Nomenclature[]> {
   const env: any = await unwrap(api.GET('/api/v1/nomenclature'))

@@ -394,3 +394,97 @@ func (s *NetworkService) Accounts(ctx context.Context) (*NetworkAccounts, error)
 	out.TotalBalance = decimal.Normalize(out.TotalBalance)
 	return out, nil
 }
+
+// ─── Персонал сети (Фаза П) ─────────────────────────────────────────────────
+
+// NetworkStaffRow — сотрудник + подпись его филиала. models.User встраивается
+// целиком: Password/PIN в нём помечены `json:"-"` и не сериализуются никогда
+// (см. комментарий у модели), поэтому встраивание безопасно.
+type NetworkStaffRow struct {
+	models.User
+	BranchName string  `json:"branch_name"`
+	BranchKind *string `json:"branch_kind"`
+}
+
+// NetworkStaffBranch — сводка по филиалу: сколько человек.
+//
+// Суммы ФОТ здесь сознательно НЕТ. Часть сотрудников на окладе (users.salary —
+// сумма за месяц), часть на дневной ставке (users.daily_rate — сумма за день):
+// сложить их в одно число нельзя, получится величина без смысла, но с видом
+// денег. Честный ФОТ считается за период по табелю — это Фаза З (зарплата),
+// там для этого есть SalaryAccrual.
+type NetworkStaffBranch struct {
+	ID    string  `json:"id"`
+	Name  string  `json:"name"`
+	Kind  *string `json:"kind"`
+	Count int     `json:"count"`
+}
+
+type NetworkStaff struct {
+	TotalCount int                  `json:"total_count"`
+	Branches   []NetworkStaffBranch `json:"branches"`
+	Staff      []NetworkStaffRow    `json:"staff"`
+}
+
+// Staff — весь персонал сети одним списком, с указанием филиала (ADR-003,
+// Фаза П). Источник — users, реплицированы с Ф1: central физически хранит
+// учётки всех филиалов, но обычный /users tenant-scoped и показывает только
+// свои — сводного списка «кто где работает» не существовало.
+//
+// Только чтение. Править сотрудника филиала из центра нельзя: филиал —
+// авторитет по своим учёткам, его следующий пуш перезапишет чужую правку
+// (нужны правила разрешения конфликтов — отдельная фаза).
+func (s *NetworkService) Staff(ctx context.Context) (*NetworkStaff, error) {
+	// Оклады и ставки всех филиалов — то же право, что и зарплата, а не общий
+	// finance.view: серверная проверка обязательна, гейт в меню от прямого
+	// запроса к API не защищает.
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
+	}
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	out := &NetworkStaff{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	nameByID := make(map[string]string, len(branches))
+	kindByID := make(map[string]*string, len(branches))
+	for _, b := range branches {
+		nameByID[b.ID] = b.Name
+		kindByID[b.ID] = b.Kind
+	}
+
+	var rows []models.User
+	if err := s.r.Raw().WithContext(ctx).
+		Where("restaurant_id IN ?", ids).
+		Order("restaurant_id, name ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	countByID := make(map[string]int, len(branches))
+	for i := range rows {
+		u := rows[i]
+		row := NetworkStaffRow{User: u}
+		if u.RestaurantID != nil {
+			row.BranchName = nameByID[*u.RestaurantID]
+			row.BranchKind = kindByID[*u.RestaurantID]
+			countByID[*u.RestaurantID]++
+		}
+		out.Staff = append(out.Staff, row)
+	}
+	out.TotalCount = len(rows)
+	// Порядок филиалов — как у branchesForAccount (central первым), чтобы
+	// сводка и остальные сетевые отчёты не разъезжались.
+	for _, b := range branches {
+		out.Branches = append(out.Branches, NetworkStaffBranch{
+			ID: b.ID, Name: b.Name, Kind: b.Kind, Count: countByID[b.ID],
+		})
+	}
+	return out, nil
+}

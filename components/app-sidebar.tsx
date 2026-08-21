@@ -277,7 +277,7 @@ const NAV: NavItem[] = [
       },
       {
         label: 'Деньги', href: '/finance/accounts', icon: Wallet,
-        group: ['/finance/accounts', '/finance/payments'],
+        group: ['/finance/accounts', '/finance/payments', '/finance/network-transfers'],
       },
       {
         label: 'Расходы и бюджет', href: '/finance/expenses', icon: PieChart,
@@ -288,6 +288,7 @@ const NAV: NavItem[] = [
         group: ['/finance/payroll', '/finance/service-report'],
       },
       { label: 'Сводка по сети', href: '/network/summary', icon: Network },
+      { label: 'Персонал сети', href: '/network/staff', icon: Users },
     ],
   },
   {

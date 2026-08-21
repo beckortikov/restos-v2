@@ -91,6 +91,16 @@ func (h *NetworkHandler) Accounts(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// Staff — GET /api/v1/network/staff. Весь персонал сети с указанием филиала.
+func (h *NetworkHandler) Staff(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.Staff(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // ListNetworkMenu — GET /api/v1/network/menu.
 func (h *NetworkHandler) ListNetworkMenu(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListNetworkMenu(r.Context())
