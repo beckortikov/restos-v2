@@ -597,6 +597,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Put("/settings/sync", syncSettingsH.Update)
 			g.Post("/sync/backfill", syncH.Backfill)
 			g.Post("/nomenclature", networkH.CreateNomenclature)
+			g.Delete("/nomenclature/{id}", networkH.DeleteNomenclature)
 			g.Post("/stock/ingredients/{id}/nomenclature", networkH.LinkIngredient)
 			g.Post("/stock/opening-balance", stockH.OpeningBalance)
 			g.Post("/stock/inventory", inventoryH.Create)

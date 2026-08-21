@@ -2945,6 +2945,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/nomenclature/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Убрать запись из каталога сети (ADR-003, Фаза Г). Мягкое удаление
+         *     (tombstone): строка помечается deleted_at и в таком виде доезжает до
+         *     филиалов — при insert-if-absent исчезнувшую строку они бы просто
+         *     сохранили навсегда. Товары ОТВЯЗЫВАЮТСЯ (ingredients.nomenclature_id =
+         *     NULL), но не удаляются: у них остаток и история движений. Право
+         *     inventory.manage.
+         */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/stock/ingredients/{id}/nomenclature": {
         parameters: {
             query?: never;

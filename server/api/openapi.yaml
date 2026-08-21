@@ -1004,6 +1004,21 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/CreateNomenclatureInput" } } }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/Nomenclature" } } } } }
 
+  /api/v1/nomenclature/{id}:
+    delete:
+      tags: [stock]
+      summary: |
+        Убрать запись из каталога сети (ADR-003, Фаза Г). Мягкое удаление
+        (tombstone): строка помечается deleted_at и в таком виде доезжает до
+        филиалов — при insert-if-absent исчезнувшую строку они бы просто
+        сохранили навсегда. Товары ОТВЯЗЫВАЮТСЯ (ingredients.nomenclature_id =
+        NULL), но не удаляются: у них остаток и история движений. Право
+        inventory.manage.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+
   /api/v1/stock/ingredients/{id}/nomenclature:
     post:
       tags: [stock]

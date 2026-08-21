@@ -9,9 +9,11 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
+	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
 	"github.com/restos/restos-v4/server/internal/service"
 	"github.com/restos/restos-v4/server/internal/synclog"
@@ -124,6 +126,157 @@ func TestNomenclaturePropagation(t *testing.T) {
 	gdb.Model(&models.Ingredient{}).Count(&ingAfter)
 	if ingAfter != ingBefore {
 		t.Errorf("приём на central завёл %d товаров — он не должен материализовать склад филиалов", ingAfter-ingBefore)
+	}
+}
+
+// TestNomenclatureTombstoneUnlinks — Фаза Г: удаление записи из каталога сети
+// доезжает до филиала и ОТВЯЗЫВАЕТ его товар, не трогая сам товар.
+//
+// Почему tombstone, а не обычный DELETE: down-sync — insert-if-absent, в нём
+// исчезновение строки НЕОТЛИЧИМО от «её не прислали», поэтому удалённая запись
+// жила бы у филиала вечно. И почему отвязывание, а не удаление товара: у него
+// остаток и вся история движений — уборка справочника не повод их уничтожать.
+func TestNomenclatureTombstoneUnlinks(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{
+		"sync_log", "ingredients", "warehouses", "nomenclature", "restaurants", "company_accounts",
+	} {
+		gdb.Exec("DELETE FROM " + tbl)
+	}
+
+	accountID := uuid.NewString()
+	gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"})
+	centralID, branchID := uuid.NewString(), uuid.NewString()
+	cw, ot := "central_warehouse", "outlet"
+	gdb.Create(&models.Restaurant{ID: centralID, Name: "Центр", AccountID: &accountID, Kind: &cw})
+	gdb.Create(&models.Restaurant{ID: branchID, Name: "Филиал", AccountID: &accountID, Kind: &ot})
+
+	nomID := uuid.NewString()
+	kg := "кг"
+	gdb.Create(&models.Nomenclature{ID: nomID, AccountID: &accountID, Name: "Рис", Unit: &kg})
+
+	// Товар филиала с РЕАЛЬНЫМ остатком, привязанный к этой записи.
+	riceName := "Рис"
+	ingID := uuid.NewString()
+	gdb.Create(&models.Ingredient{
+		ID: ingID, Name: &riceName, Unit: &kg, Qty: decimal.MustFromString("42"),
+		PricePerUnit: decimal.MustFromString("11"), RestaurantID: &branchID, NomenclatureID: &nomID,
+	})
+
+	synclog.SetEnabled(true)
+	t.Cleanup(func() { synclog.SetEnabled(false) })
+
+	netSvc := service.NewNetworkService(repo.New(gdb), "")
+	syncSvc := service.NewSyncService(repo.New(gdb))
+	owner := audit.Actor{UserID: uuid.NewString(), Role: "owner"}
+	ctxCentral := audit.WithActor(tenant.WithRestaurant(context.Background(), centralID), owner)
+
+	// ─── Создание через сервис при ВКЛЮЧЁННОМ синке ───────────────────────
+	// Отдельная проверка, потому что именно этот путь однажды был сломан молча:
+	// recordNomenclatureSync писал op="upsert", которого нет в CHECK-constraint
+	// sync_log (insert|update|delete) — и создание записи каталога на филиале с
+	// включённой синхронизацией роняло всю транзакцию. В тестах ветка не
+	// исполнялась, потому что фикстуры создавали строки напрямую.
+	created, err := netSvc.CreateNomenclature(ctxCentral, service.CreateNomenclatureInput{
+		Name: "Сахар", Unit: &kg,
+	})
+	if err != nil {
+		t.Fatalf("CreateNomenclature при включённом синке: %v", err)
+	}
+	var createdLog int64
+	gdb.Model(&models.SyncLog{}).
+		Where("table_name = ? AND row_id = ?", "nomenclature", created.ID).Count(&createdLog)
+	if createdLog == 0 {
+		t.Error("создание записи каталога не попало в sync_log — central о ней не узнает")
+	}
+
+	// ─── Удаление на центре ───────────────────────────────────────────────
+	if err := netSvc.DeleteNomenclature(ctxCentral, nomID); err != nil {
+		t.Fatalf("DeleteNomenclature: %v", err)
+	}
+	// Из живого каталога пропала...
+	live, err := netSvc.ListNomenclature(ctxCentral)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range live {
+		if n.ID == nomID {
+			t.Error("удалённая запись всё ещё в каталоге")
+		}
+	}
+	// ...но строка НЕ стёрта — иначе филиалу нечего было бы прислать.
+	var stone models.Nomenclature
+	if err := gdb.First(&stone, "id = ?", nomID).Error; err != nil {
+		t.Fatalf("строка удалена физически — tombstone не доедет: %v", err)
+	}
+	if stone.DeletedAt == nil {
+		t.Error("deleted_at не проставлен")
+	}
+	// Повторное удаление — честный 404.
+	if err := netSvc.DeleteNomenclature(ctxCentral, nomID); err == nil {
+		t.Error("повторное удаление должно вернуть NOT_FOUND")
+	}
+
+	// ─── Tombstone доезжает до филиала ────────────────────────────────────
+	pull, err := syncSvc.PullFor(context.Background(), branchID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotStone bool
+	for _, e := range pull.Entries {
+		if e.Entity == "nomenclature" && e.RowID == nomID {
+			gotStone = true
+		}
+	}
+	if !gotStone {
+		t.Fatal("tombstone не уехал филиалу — удалённая запись осталась бы у него навсегда")
+	}
+	if _, err := syncSvc.ApplyPulled(context.Background(), *pull, branchID); err != nil {
+		t.Fatalf("ApplyPulled: %v", err)
+	}
+
+	// ─── Товар отвязан, но ЦЕЛ ────────────────────────────────────────────
+	var ing models.Ingredient
+	if err := gdb.First(&ing, "id = ?", ingID).Error; err != nil {
+		t.Fatalf("ПОТЕРЯ ДАННЫХ: товар удалён вместе с записью каталога: %v", err)
+	}
+	if ing.NomenclatureID != nil {
+		t.Errorf("товар всё ещё привязан к удалённой записи: %v", ing.NomenclatureID)
+	}
+	if !ing.Qty.Equal(decimal.MustFromString("42")) {
+		t.Errorf("остаток товара = %s, want 42 — уборка справочника не должна трогать склад", ing.Qty.String())
+	}
+
+	// ─── Идемпотентность: tombstone приезжает на КАЖДОМ тике ──────────────
+	var deltasBefore int64
+	gdb.Model(&models.SyncLog{}).Count(&deltasBefore)
+	for i := 0; i < 3; i++ {
+		if _, err := syncSvc.ApplyPulled(context.Background(), *pull, branchID); err != nil {
+			t.Fatalf("повторный ApplyPulled: %v", err)
+		}
+	}
+	var deltasAfter int64
+	gdb.Model(&models.SyncLog{}).Count(&deltasAfter)
+	if deltasAfter != deltasBefore {
+		t.Errorf("повторный tombstone создал %d дельт — бесконечный поток туда-обратно",
+			deltasAfter-deltasBefore)
+	}
+
+	// ─── Привязать товар к удалённой записи больше нельзя ─────────────────
+	ctxBranch := audit.WithActor(tenant.WithRestaurant(context.Background(), branchID), owner)
+	if err := netSvc.LinkIngredient(ctxBranch, ingID, nomID); err == nil {
+		t.Error("привязка к удалённой записи должна быть отклонена — tombstone тут же отвязал бы её обратно")
 	}
 }
 

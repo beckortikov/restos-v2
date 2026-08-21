@@ -322,6 +322,30 @@ func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry, branch
 		if err := tx.Clauses(onConflict(true)).Create(&n).Error; err != nil {
 			return err
 		}
+
+		// Tombstone (Фаза Г): запись убрали из каталога сети. ОТВЯЗЫВАЕМ свой
+		// товар, но НЕ удаляем — у него остаток и вся история движений, и
+		// уборка справочника не повод их уничтожать. Идемпотентно: второй
+		// проход не найдёт привязанных и ничего не сделает.
+		if n.DeletedAt != nil {
+			var ids []string
+			if err := tx.Model(&models.Ingredient{}).
+				Where("nomenclature_id = ?", n.ID).Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+			if len(ids) == 0 {
+				return nil
+			}
+			if err := tx.Model(&models.Ingredient{}).Where("id IN ?", ids).
+				Update("nomenclature_id", nil).Error; err != nil {
+				return err
+			}
+			// Снимок наверх: central должен узнать, что товар больше не
+			// привязан, иначе у него останется висеть ссылка на удалённую
+			// запись. На central этот путь no-op (синк там выключен).
+			return recordIngredientSync(tx, ids)
+		}
+
 		if branchID == "" {
 			return nil // приём на central: только запись каталога, без товара
 		}
@@ -927,6 +951,12 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string, mirrorSi
 		// (account-scoped, без курсора). Раньше эта строка отсутствовала — товар,
 		// заведённый в номенклатуре на central, никогда не попадал на филиал
 		// (найдено вживую: «рис» создан на central, на филиале не появился).
+		//
+		// Фильтра deleted_at здесь НЕТ намеренно: удалённые записи обязаны
+		// доехать как tombstone'ы. Пропусти их — и филиал не «узнал бы об
+		// удалении», а просто не получил бы строку, то есть сохранил бы её у
+		// себя навсегда (down-sync — insert-if-absent, исчезновение строки в
+		// нём неотличимо от «её не прислали»). Разбор — в applyNomenclature.
 		var nomenclature []models.Nomenclature
 		if err := s.r.Raw().WithContext(ctx).Where("account_id = ?", *rest.AccountID).Find(&nomenclature).Error; err != nil {
 			return nil, err

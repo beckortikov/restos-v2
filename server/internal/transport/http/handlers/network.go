@@ -198,6 +198,16 @@ func (h *NetworkHandler) PayBranchSalary(w http.ResponseWriter, r *http.Request)
 	respond.JSON(w, http.StatusCreated, op)
 }
 
+// DeleteNomenclature — DELETE /api/v1/nomenclature/{id}. Убирает запись из
+// каталога сети; товары филиалов отвязываются, но не удаляются.
+func (h *NetworkHandler) DeleteNomenclature(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DeleteNomenclature(r.Context(), chi.URLParam(r, "id")); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // ListNomenclature — GET /api/v1/nomenclature.
 func (h *NetworkHandler) ListNomenclature(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListNomenclature(r.Context())

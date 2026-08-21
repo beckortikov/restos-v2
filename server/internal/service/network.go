@@ -96,10 +96,65 @@ func (s *NetworkService) ListNomenclature(ctx context.Context) ([]models.Nomencl
 	}
 	var rows []models.Nomenclature
 	if err := s.r.Raw().WithContext(ctx).
-		Where("account_id = ?", account).Order("name ASC").Find(&rows).Error; err != nil {
+		Where("account_id = ? AND deleted_at IS NULL", account).
+		Order("name ASC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil
+}
+
+// DeleteNomenclature убирает запись из общего каталога сети (Фаза Г).
+//
+// Мягкое удаление: строка помечается deleted_at и в таком виде доезжает до
+// филиалов — иначе они бы её просто не «не получили» и сохранили навсегда
+// (down-sync = insert-if-absent, см. миграцию 081).
+//
+// СВОЙ товар отвязываем сразу, здесь же; товары филиалов отвяжутся у них при
+// получении tombstone (applyNomenclature). Именно ОТВЯЗЫВАЕМ, а не удаляем: у
+// товара есть остаток и история движений, и уборка справочника не повод их
+// уничтожать. Операция означает «перестал быть сетевым», а не «стёрт у всех».
+func (s *NetworkService) DeleteNomenclature(ctx context.Context, id string) error {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return err
+	}
+	if err := requirePermFor(ctx, s.r, "inventory.manage"); err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		res := tx.Model(&models.Nomenclature{}).
+			Where("id = ? AND account_id = ? AND deleted_at IS NULL", id, account).
+			Updates(map[string]any{"deleted_at": now, "updated_at": now})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+
+		// Свои товары — отвязать (не удалять!) и отправить их снапшот наверх,
+		// иначе на central у них остался бы висеть nomenclature_id удалённой
+		// записи.
+		var ids []string
+		if err := tx.Model(&models.Ingredient{}).
+			Where("nomenclature_id = ?", id).Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) > 0 {
+			if err := tx.Model(&models.Ingredient{}).Where("id IN ?", ids).
+				Update("nomenclature_id", nil).Error; err != nil {
+				return err
+			}
+			if err := recordIngredientSync(tx, ids); err != nil {
+				return err
+			}
+		}
+		// Сам tombstone — наверх (если удалял филиал) и вниз (PullFor отдаёт
+		// его вместе с живым каталогом).
+		return recordNomenclatureSync(tx, []string{id})
+	})
 }
 
 // CreateNomenclatureInput — body POST /api/v1/nomenclature.
@@ -166,9 +221,12 @@ func (s *NetworkService) LinkIngredient(ctx context.Context, ingredientID, nomen
 	if err != nil {
 		return err
 	}
-	// Номенклатура должна принадлежать той же сети.
+	// Номенклатура должна принадлежать той же сети и быть живой: привязывать
+	// товар к удалённой записи бессмысленно — tombstone тут же отвязал бы его
+	// обратно на следующем тике синка.
 	var nom models.Nomenclature
-	if err := s.r.Raw().WithContext(ctx).Where("id = ?", nomenclatureID).First(&nom).Error; err != nil {
+	if err := s.r.Raw().WithContext(ctx).
+		Where("id = ? AND deleted_at IS NULL", nomenclatureID).First(&nom).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return apperrors.Wrap("VALIDATION", "nomenclature not found", nil)
 		}

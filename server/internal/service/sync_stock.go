@@ -44,9 +44,15 @@ func recordNomenclatureSync(tx *gorm.DB, ids []string) error {
 	}
 	for i := range rows {
 		if err := synclog.Record(tx, synclog.Entry{
-			Entity:    "nomenclature",
-			RowID:     rows[i].ID,
-			Op:        "upsert",
+			Entity: "nomenclature",
+			RowID:  rows[i].ID,
+			// "update", а не "upsert": sync_log.op ограничен CHECK-constraint'ом
+			// (insert|update|delete, миграция 030) — «upsert» роняет ВСЮ
+			// транзакцию создания записи каталога. Снапшот-семантика тут та же,
+			// что у recordIngredientSync, который тоже пишет "update".
+			// Удаление едет этим же путём: tombstone — обычный снапшот строки,
+			// у которой заполнен deleted_at, отдельного op ему не нужно.
+			Op:        "update",
 			AccountID: rows[i].AccountID,
 			Payload:   rows[i],
 		}); err != nil {

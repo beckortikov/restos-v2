@@ -4,13 +4,15 @@ import { useState, useEffect, useMemo } from 'react'
 import { fetchIngredients } from '@/lib/queries/stock'
 import { fetchIngredientCategories } from '@/lib/queries'
 import {
-  fetchNomenclature, createNomenclature, linkIngredientNomenclature,
+  fetchNomenclature, createNomenclature, deleteNomenclature, linkIngredientNomenclature,
   type Nomenclature,
 } from '@/lib/queries/transfers'
 import { UNITS, type Ingredient } from '@/lib/types'
-import { GitMerge, Plus, Link2, Search, AlertTriangle } from 'lucide-react'
+import { GitMerge, Plus, Link2, Search, AlertTriangle, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
 import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 // Сопоставление товаров — вспомогательный инструмент (Настройки → Филиалы).
 // Сетевой идентификатор (nomenclature) ингредиент получает САМ, при первом
@@ -31,6 +33,10 @@ export default function NomenclaturePage() {
   const [creating, setCreating] = useState(false)
   const [linkSearch, setLinkSearch] = useState('')
   const [onlyUnlinked, setOnlyUnlinked] = useState(true)
+  // Удаление из каталога — через подтверждение: оно доезжает до всех филиалов
+  // и отвязывает их товары.
+  const [deleteFor, setDeleteFor] = useState<Nomenclature | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   const reload = async () => {
     try {
@@ -68,6 +74,21 @@ export default function NomenclaturePage() {
       toast.error(e?.message ?? 'Не удалось создать')
     } finally {
       setCreating(false)
+    }
+  }
+
+  const onDelete = async () => {
+    if (!deleteFor) return
+    setDeleting(true)
+    try {
+      await deleteNomenclature(deleteFor.id)
+      toast.success(`«${deleteFor.name}» убран из каталога сети`)
+      setDeleteFor(null)
+      await reload()
+    } catch (e: any) {
+      toast.error(humanizeError(e))
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -173,7 +194,16 @@ export default function NomenclaturePage() {
         ) : (
           <div className="flex flex-wrap gap-2">
             {items.map(n => (
-              <span key={n.id} className="rounded-full bg-muted px-3 py-1 text-sm">{n.name}{n.unit ? ` · ${n.unit}` : ''}</span>
+              <span key={n.id} className="inline-flex items-center gap-1.5 rounded-full bg-muted py-1 pl-3 pr-1.5 text-sm">
+                {n.name}{n.unit ? ` · ${n.unit}` : ''}
+                <button
+                  onClick={() => setDeleteFor(n)}
+                  title="Убрать из каталога сети"
+                  className="inline-flex items-center justify-center size-5 rounded-full text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </span>
             ))}
           </div>
         )}
@@ -234,6 +264,45 @@ export default function NomenclaturePage() {
           </table>
         </div>
       </div>
+
+      {/* Подтверждение: говорим и что произойдёт, и — главное — чего НЕ будет */}
+      <Dialog open={!!deleteFor} onOpenChange={(v) => { if (!v) setDeleteFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Убрать из каталога сети?</DialogTitle>
+          </DialogHeader>
+          {deleteFor && (
+            <div className="space-y-2 py-1 text-sm">
+              <p className="text-foreground">
+                «{deleteFor.name}» пропадёт из общего каталога, и товары филиалов перестанут быть
+                с ним связаны — перемещать такой товар между филиалами больше не получится, пока
+                он снова не попадёт в каталог.
+              </p>
+              <p className="text-xs text-muted-foreground">
+                Сами товары и их остатки остаются на складах нетронутыми: убирается только запись
+                справочника, а не запасы.
+              </p>
+            </div>
+          )}
+          <DialogFooter className="sm:justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setDeleteFor(null)}
+              className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={deleting}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-white bg-destructive rounded-lg hover:opacity-90 disabled:opacity-50"
+            >
+              <X className="size-4" /> Убрать
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

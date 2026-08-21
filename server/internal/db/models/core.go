@@ -115,6 +115,14 @@ type Nomenclature struct {
 	Category  *string   `json:"category"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// DeletedAt — tombstone (миграция 081). Строка не удаляется физически:
+	// down-sync устроен как insert-if-absent, и исчезнувшую строку филиал
+	// просто сохранил бы навсегда. Помеченная — доезжает и несёт «записи
+	// больше нет»; филиал по ней ОТВЯЗЫВАЕТ свой товар, не удаляя его.
+	// Обычное gorm.DeletedAt НЕ используем: мягкое удаление здесь должно быть
+	// видимым для синка (tombstone надо уметь ВЫБРАТЬ), а gorm.DeletedAt
+	// незаметно прячет строки во всех запросах модели.
+	DeletedAt *time.Time `gorm:"column:deleted_at" json:"deleted_at,omitempty"`
 }
 
 func (Nomenclature) TableName() string { return "nomenclature" }

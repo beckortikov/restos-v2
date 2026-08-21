@@ -431,6 +431,15 @@ export async function createNomenclature(input: { name: string; unit?: string; c
   return { id: r.id, name: r.name, unit: r.unit, category: r.category }
 }
 
+/**
+ * deleteNomenclature — убрать запись из каталога сети.
+ * Товары филиалов, привязанные к ней, ОТВЯЗЫВАЮТСЯ, но не удаляются: у них
+ * остаток и история движений. Удаление доезжает до филиалов как tombstone.
+ */
+export async function deleteNomenclature(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/nomenclature/{id}', { params: { path: { id } } }))
+}
+
 export async function linkIngredientNomenclature(ingredientId: string, nomenclatureId: string): Promise<void> {
   await unwrap(api.POST('/api/v1/stock/ingredients/{id}/nomenclature', {
     params: { path: { id: ingredientId } },
