@@ -209,10 +209,6 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 			}
 			res.Applied++
 		case "nomenclature":
-			if branchID == "" {
-				res.Skipped++ // как network_menu_items — только down-pull на филиале, up-push пока не пишется (CreateNomenclature не зовёт synclog.Record)
-				continue
-			}
 			if err := s.applyNomenclature(ctx, e, branchID); err != nil {
 				return nil, err
 			}
@@ -306,6 +302,13 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 //
 // Если у филиала уже есть свой товар с тем же именем и единицей — он
 // СВЯЗЫВАЕТСЯ с номенклатурой, а не дублируется (см. ensureNomenclatureIngredient).
+//
+// Направление ОБА (Фаза Г): вниз — распространение каталога, вверх — запись,
+// которую завёл филиал (руками или автоматически при первой отправке товара).
+// branchID == "" означает приём на central: там только пишем строку каталога,
+// без материализации товара — у central свой склад и своя номенклатура ему
+// материализуется в CreateNomenclature, а заводить у себя товары всех филиалов
+// он не должен.
 func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry, branchID string) error {
 	var n models.Nomenclature
 	if err := json.Unmarshal(e.Payload, &n); err != nil {
@@ -318,6 +321,9 @@ func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry, branch
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		if err := tx.Clauses(onConflict(true)).Create(&n).Error; err != nil {
 			return err
+		}
+		if branchID == "" {
+			return nil // приём на central: только запись каталога, без товара
 		}
 		name := n.Name
 		_, err := ensureNomenclatureIngredient(tx, branchID, ensureIngredientInput{

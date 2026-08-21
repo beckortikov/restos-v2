@@ -21,6 +21,41 @@ import (
 // в service-слое (импорт, покупные товары меню, приёмка/возврат — переоценка
 // средневзвешенной цены, ручной CRUD склада, перемещение целиком на другой
 // склад).
+// recordNomenclatureSync — отправка записи общего каталога сети НАВЕРХ, на
+// central (Фаза Г).
+//
+// Каталог задуман общим для сети, но ехал он только вниз: запись, созданную
+// ФИЛИАЛОМ, central не узнавал никогда. А филиал создаёт их сам — не только
+// руками, но и автоматически, при первой же отправке товара, которого ещё нет
+// в каталоге (CreateTransfer). В результате «общий» каталог тихо расходился:
+// у филиала-отправителя запись есть, у central и у остальных её нет, и тот же
+// товар заводился второй раз с другим id — то есть ровно та рассинхронизация,
+// от которой каталог и должен был спасать.
+//
+// Как и остальные recordXSync — снапшот строки; применение на central
+// идемпотентно по id.
+func recordNomenclatureSync(tx *gorm.DB, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var rows []models.Nomenclature
+	if err := tx.Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return err
+	}
+	for i := range rows {
+		if err := synclog.Record(tx, synclog.Entry{
+			Entity:    "nomenclature",
+			RowID:     rows[i].ID,
+			Op:        "upsert",
+			AccountID: rows[i].AccountID,
+			Payload:   rows[i],
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func recordIngredientSync(tx *gorm.DB, ids []string) error {
 	if len(ids) == 0 {
 		return nil

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base32"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +180,15 @@ func (s *NetworkService) RevokeInvite(ctx context.Context, id string) error {
 	return nil
 }
 
+// HashSyncToken — SHA-256 в hex. Одна функция и на выдачу (RedeemInvite), и на
+// проверку (middleware.SyncAuth), чтобы формат между ними не разъехался.
+// Живёт здесь, а не в middleware: middleware импортирует service, обратное
+// направление дало бы цикл.
+func HashSyncToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
 // RedeemResult — то, что central отдаёт филиалу при успешном обмене кода.
 type RedeemResult struct {
 	Token       string `json:"token"`
@@ -216,9 +227,12 @@ func (s *NetworkService) RedeemInvite(ctx context.Context, code, callerRestauran
 		First(&central).Error; err != nil {
 		return nil, apperrors.Wrap("INTERNAL", "central-ресторан сети не найден", err)
 	}
-	if s.syncToken == "" {
-		return nil, apperrors.Wrap("PRECONDITION", "на central не настроен sync-токен", nil)
-	}
+	// Персональный секрет филиала (Фаза Г). Раньше всем выдавался ОДИН общий
+	// секрет сети — из-за чего центр не мог отличить узлы друг от друга и,
+	// в частности, по-настоящему отключить филиал (см. DetachBranch). Общий
+	// секрет остаётся принятым для уже подключённых касс, но новые получают
+	// свой; см. middleware.SyncAuth.
+	branchToken := strings.ReplaceAll(uuid.NewString(), "-", "") + strings.ReplaceAll(uuid.NewString(), "-", "")
 
 	now := time.Now().UTC()
 	err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -249,15 +263,17 @@ func (s *NetworkService) RedeemInvite(ctx context.Context, code, callerRestauran
 		// остальные поля, если central когда-нибудь их для этой записи задаст.
 		accountID := inv.AccountID
 		kind := "outlet"
+		hash := HashSyncToken(branchToken)
 		branch := &models.Restaurant{
-			ID:        callerRestaurantID,
-			Name:      callerRestaurantName,
-			AccountID: &accountID,
-			Kind:      &kind,
+			ID:            callerRestaurantID,
+			Name:          callerRestaurantName,
+			AccountID:     &accountID,
+			Kind:          &kind,
+			SyncTokenHash: &hash,
 		}
 		if err := tr.Raw().WithContext(ctx).Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "id"}},
-			DoUpdates: clause.AssignmentColumns([]string{"name", "account_id", "kind"}),
+			DoUpdates: clause.AssignmentColumns([]string{"name", "account_id", "kind", "sync_token_hash"}),
 		}).Create(branch).Error; err != nil {
 			return err
 		}
@@ -266,7 +282,11 @@ func (s *NetworkService) RedeemInvite(ctx context.Context, code, callerRestauran
 	if err != nil {
 		return nil, err
 	}
-	return &RedeemResult{Token: s.syncToken, AccountID: inv.AccountID, CentralName: central.Name}, nil
+	// Филиалу уходит ЕГО токен; на central остаётся только хеш. Повторное
+	// подключение того же филиала выпускает новый токен и обесценивает
+	// предыдущий — это и есть штатный способ «перевыпустить ключ», если старый
+	// скомпрометирован.
+	return &RedeemResult{Token: branchToken, AccountID: inv.AccountID, CentralName: central.Name}, nil
 }
 
 // JoinResult — что фронт филиала показывает после успешного подключения.

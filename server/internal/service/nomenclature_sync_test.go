@@ -97,7 +97,15 @@ func TestNomenclaturePropagation(t *testing.T) {
 		t.Errorf("name after rename = %q, want «Рис жасмин»", got2.Name)
 	}
 
-	// ─── Up-push (branchID="") пока не поддержан — явный Skipped, не применяется вслепую ───
+	// ─── Up-push: запись, заведённая ФИЛИАЛОМ, доезжает до central (Фаза Г) ──
+	// Раньше central её отбрасывал (Skipped), и «общий» каталог тихо расходился:
+	// у филиала-отправителя запись есть, у central нет, и тот же товар заводился
+	// повторно с другим id. Приём на central пишет ТОЛЬКО строку каталога — свой
+	// склад он товарами всех филиалов не засоряет (это проверяет счётчик ниже).
+	gdb.Exec("DELETE FROM nomenclature WHERE id = ?", nomID)
+	var ingBefore int64
+	gdb.Model(&models.Ingredient{}).Count(&ingBefore)
+
 	payload, _ := json.Marshal(got2)
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "nomenclature", RowID: nomID, Op: "upsert", Payload: payload},
@@ -105,8 +113,17 @@ func TestNomenclaturePropagation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
-	if res.Applied != 0 || res.Skipped != 1 {
-		t.Errorf("Ingest(nomenclature) applied=%d skipped=%d, want 0/1 (up-push ещё не реализован)", res.Applied, res.Skipped)
+	if res.Applied != 1 {
+		t.Errorf("Ingest(nomenclature) applied=%d, want 1 — иначе каталог филиала не доедет до central", res.Applied)
+	}
+	var back models.Nomenclature
+	if err := gdb.First(&back, "id = ?", nomID).Error; err != nil {
+		t.Errorf("запись каталога не принята на central: %v", err)
+	}
+	var ingAfter int64
+	gdb.Model(&models.Ingredient{}).Count(&ingAfter)
+	if ingAfter != ingBefore {
+		t.Errorf("приём на central завёл %d товаров — он не должен материализовать склад филиалов", ingAfter-ingBefore)
 	}
 }
 

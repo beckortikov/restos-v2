@@ -192,6 +192,14 @@ func (s *TransferService) CreateTransfer(ctx context.Context, in CreateTransferI
 				if err := recordIngredientSync(tx, []string{pl.ing.ID}); err != nil {
 					return err
 				}
+				// Саму запись каталога — тоже наверх (Фаза Г). Это самая частая
+				// точка её рождения: филиал отправляет товар, которого в
+				// каталоге ещё нет. Без этого получатель принял бы перемещение,
+				// но у central и остальных узлов записи не было бы, и тот же
+				// товар завёлся бы повторно с другим id.
+				if err := recordNomenclatureSync(tx, []string{nom.ID}); err != nil {
+					return err
+				}
 				pl.ing.NomenclatureID = &nom.ID
 			}
 

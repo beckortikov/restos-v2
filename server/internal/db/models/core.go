@@ -46,7 +46,12 @@ type Restaurant struct {
 	AccountID *string `gorm:"column:account_id" json:"account_id,omitempty"`
 	// Kind — тип точки в сети (ADR-003): 'outlet' (обычный филиал) |
 	// 'central_warehouse' (центральный склад). DEFAULT 'outlet'.
-	Kind              *string    `gorm:"column:kind;default:'outlet'" json:"kind,omitempty"`
+	Kind *string `gorm:"column:kind;default:'outlet'" json:"kind,omitempty"`
+	// SyncTokenHash — SHA-256 персонального sync-секрета филиала (Фаза Г,
+	// миграция 080). Живёт на CENTRAL, в теневой строке филиала; сам токен
+	// центру не нужен и не хранится. Никогда не отдаётся наружу (`json:"-"`):
+	// даже хеш — лишняя подсказка в ответе API.
+	SyncTokenHash     *string    `gorm:"column:sync_token_hash" json:"-"`
 	IsBlocked         *bool      `gorm:"column:is_blocked;default:false" json:"is_blocked"`
 	BlockReason       *string    `gorm:"column:block_reason" json:"block_reason"`
 	LastSeenAt        *time.Time `gorm:"column:last_seen_at" json:"last_seen_at"`

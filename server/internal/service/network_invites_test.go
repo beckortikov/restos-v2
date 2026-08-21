@@ -135,10 +135,9 @@ func TestNetworkInvites_Redeem(t *testing.T) {
 	if err := gdb.Create(&models.Restaurant{ID: centralID, Name: "Central"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	// RedeemInvite отдаёт syncToken из конструктора NetworkService — тот же
-	// АКТИВНЫЙ секрет, что реально проверяет SyncAuth middleware прямо
-	// сейчас (не sync_settings.token из БД, который main.go не пишет
-	// обратно при старте из env — см. комментарий у поля NetworkService.syncToken).
+	// Общий секрет сети. С Фазы Г он БОЛЬШЕ НЕ выдаётся филиалам (каждый
+	// получает свой, см. ниже), но остаётся принимаемым для касс, подключённых
+	// раньше, — поэтому сервис его по-прежнему знает.
 	tok := "test-sync-token-123"
 	svc := service.NewNetworkService(repo.New(gdb), tok)
 	ownerCentral := audit.WithActor(tenant.WithRestaurant(context.Background(), centralID), audit.Actor{UserName: "owner", Role: "owner"})
@@ -162,8 +161,25 @@ func TestNetworkInvites_Redeem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RedeemInvite: %v", err)
 	}
-	if res.Token != tok {
-		t.Errorf("token = %q, want %q", res.Token, tok)
+	// Фаза Г: филиалу выдаётся ПЕРСОНАЛЬНЫЙ секрет, а не общий секрет сети.
+	// Пока он был общим, central не мог отличить узлы друг от друга — и,
+	// в частности, по-настоящему отключить филиал.
+	if res.Token == tok {
+		t.Error("выдан ОБЩИЙ секрет сети — филиалы снова неотличимы друг от друга")
+	}
+	if len(res.Token) < 32 {
+		t.Errorf("персональный токен подозрительно короткий: %d символов", len(res.Token))
+	}
+	// На central хранится только ХЕШ токена, сам токен ему не нужен.
+	var stored models.Restaurant
+	if err := gdb.First(&stored, "id = ?", branchID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.SyncTokenHash == nil || *stored.SyncTokenHash != service.HashSyncToken(res.Token) {
+		t.Error("хеш персонального токена не сохранён — SyncAuth не опознает филиал")
+	}
+	if *stored.SyncTokenHash == res.Token {
+		t.Error("токен сохранён в открытом виде вместо хеша")
 	}
 	if res.AccountID != acc.ID {
 		t.Errorf("account_id = %q, want %q", res.AccountID, acc.ID)

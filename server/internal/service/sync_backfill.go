@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 
 	"gorm.io/gorm"
 
@@ -90,9 +91,9 @@ type backfillEntity struct {
 	run  func(tx *gorm.DB, rid string) (int64, error)
 }
 
-// backfillRegistry — 25 реплицируемых сущностей (Ф1-Ф5б + пред-Ф1 фундамент
-// ADR-003 Фаза 2/5.1: orders, stock_transfers + Фаза Д: money_transfers).
-// Порядок — по фазам, в
+// backfillRegistry — 26 реплицируемых сущностей (Ф1-Ф5б + пред-Ф1 фундамент
+// ADR-003 Фаза 2/5.1: orders, stock_transfers; Фаза Д: money_transfers;
+// Фаза Г: nomenclature). Порядок — по фазам, в
 // которых сущность появилась; central не имеет FK между таблицами (см.
 // CLAUDE.md — tenant-целостность через код), порядок enqueue не влияет на
 // корректность.
@@ -135,6 +136,31 @@ var backfillRegistry = []backfillEntity{
 				}
 			}
 			return nil
+		})
+	}},
+
+	// Фаза Г — общий каталог сети. Скоуп по account_id, а не restaurant_id:
+	// таблица account-level, своего ресторана у записи нет. Нужен потому, что
+	// филиал мог завести записи ДО подключения к сети (например, отправляя
+	// товар в рамках прежней конфигурации) — без забфилла они остались бы
+	// только у него.
+	{name: "nomenclature", run: func(tx *gorm.DB, rid string) (int64, error) {
+		var rest models.Restaurant
+		err := tx.Select("account_id").Where("id = ?", rid).First(&rest).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Строки ресторана нет — сети нет, каталога тоже. Молча пропускаем,
+			// а не роняем: иначе одна отсутствующая строка обрывала бы забфилл
+			// ВСЕХ остальных сущностей, и филиал уезжал бы на central пустым.
+			return 0, nil
+		}
+		if err != nil {
+			return 0, err
+		}
+		if rest.AccountID == nil || *rest.AccountID == "" {
+			return 0, nil // не в сети — каталога у него и нет
+		}
+		return backfillLoop(tx, "nomenclature", "account_id = ?", []any{*rest.AccountID}, func(ids []string) error {
+			return recordNomenclatureSync(tx, ids)
 		})
 	}},
 

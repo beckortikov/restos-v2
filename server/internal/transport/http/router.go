@@ -508,7 +508,7 @@ func NewRouter(deps Deps) http.Handler {
 		// секрету сети, НЕ user-сессия. Пушер/пуллер филиала ходят сюда.
 		api.Group(func(g chi.Router) {
 			g.Use(chimw.Timeout(60 * time.Second))
-			g.Use(middleware.SyncAuth(deps.SyncToken))
+			g.Use(middleware.SyncAuth(deps.DB, deps.SyncToken))
 			g.Post("/sync/ingest", syncH.Ingest)
 			g.Get("/sync/pull", syncH.Pull)
 		})
