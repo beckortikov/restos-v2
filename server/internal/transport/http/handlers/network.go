@@ -182,6 +182,22 @@ func (h *NetworkHandler) DetachBranch(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// PayBranchSalary — POST /api/v1/network/payroll/pay. Выплата сотруднику
+// филиала со счёта центрального узла (ADR-003, Фаза Р).
+func (h *NetworkHandler) PayBranchSalary(w http.ResponseWriter, r *http.Request) {
+	var in service.PayBranchSalaryInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	op, err := h.svc.PayBranchSalary(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, op)
+}
+
 // ListNomenclature — GET /api/v1/nomenclature.
 func (h *NetworkHandler) ListNomenclature(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListNomenclature(r.Context())

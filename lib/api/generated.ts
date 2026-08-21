@@ -2757,6 +2757,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/payroll/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Выплатить зарплату сотруднику филиала со счёта центрального узла
+         *     (ADR-003, Фаза Р). Проводок две: реальная у центра (списывает его счёт,
+         *     помечена target_restaurant_id и потому не попадает в ОПиУ центра) и
+         *     зеркальная у филиала (без счёта, помечена paid_by_restaurant_id — не
+         *     попадает в его ДДС и в сетевой ДДС, но попадает в его ОПиУ и в его
+         *     зарплатный кап, что и защищает от повторной выплаты). Зеркало уезжает
+         *     филиалу обычным down-sync. Кап считается по данным филиала; превышение
+         *     требует override с причиной. Только владелец центрального узла + право
+         *     payroll.manage.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        branch_id: string;
+                        /**
+                         * Format: uuid
+                         * @description Сотрудник этого филиала.
+                         */
+                        user_id: string;
+                        amount: components["schemas"]["Decimal"];
+                        /**
+                         * Format: uuid
+                         * @description Счёт ЦЕНТРА
+                         */
+                        account_id: string;
+                        /** @description Период начисления, YYYY-MM. */
+                        period: string;
+                        /** @enum {string} */
+                        kind?: "salary" | "advance";
+                        override?: boolean;
+                        override_reason?: string;
+                        description?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialOperation"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/staff": {
         parameters: {
             query?: never;
@@ -2922,11 +2996,23 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Дельты, адресованные филиалу (down-sync, ADR-003) — входящие sent-перемещения. */
+        /**
+         * Дельты, адресованные филиалу (down-sync, ADR-003): входящие перемещения
+         *     и переводы, эхо статусов по отправленным им, каталог сети, мастер-меню,
+         *     соседи-узлы и зеркала расходов, оплаченных за него центром (Фаза Р).
+         */
         get: {
             parameters: {
                 query: {
                     restaurant_id: string;
+                    /**
+                     * @description Курсор филиала по зеркальным расходам: самая свежая зеркальная
+                     *     проводка, которая у него уже есть (RFC3339). Пусто — прислать все.
+                     *     Нужен потому, что зеркала, в отличие от каталога сети, копятся без
+                     *     предела; курсор ведёт САМ филиал, поэтому касса, простоявшая офлайн
+                     *     сколько угодно долго, ничего не теряет.
+                     */
+                    mirror_since?: string;
                 };
                 header?: never;
                 path?: never;

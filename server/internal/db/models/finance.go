@@ -50,8 +50,16 @@ type FinancialOperation struct {
 	// повторной отмены). Деньги возвращаются компенсирующей проводкой + на счёт.
 	CancelledAt *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`
 	CancelledBy *string    `gorm:"column:cancelled_by" json:"cancelled_by"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	// TargetRestaurantID / PaidByRestaurantID — расход одного узла сети ЗА
+	// другой (Фаза Р, миграция 079). Проставляется ровно одно из двух:
+	// первое — на проводке плательщика («заплатил за филиал X», исключается из
+	// ЕГО ОПиУ), второе — на зеркальной проводке филиала («за нас заплатил
+	// узел Y», без счёта и без движения баланса, исключается из ЕГО ДДС и из
+	// сетевого ДДС). Подробнее — в комментарии миграции.
+	TargetRestaurantID *string   `gorm:"column:target_restaurant_id;type:uuid" json:"target_restaurant_id,omitempty"`
+	PaidByRestaurantID *string   `gorm:"column:paid_by_restaurant_id;type:uuid" json:"paid_by_restaurant_id,omitempty"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func (FinancialOperation) TableName() string { return "financial_operations" }

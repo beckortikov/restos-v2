@@ -388,6 +388,37 @@ export async function fetchNetworkStaff(): Promise<NetworkStaff> {
   }
 }
 
+/**
+ * payBranchSalary — выплата сотруднику филиала со счёта центра (Фаза Р).
+ * Проводок две: реальная у центра и зеркальная у филиала (уезжает ему
+ * down-sync'ом). Благодаря зеркалу зарплатный кап филиала видит выплату и не
+ * даст выплатить повторно.
+ */
+export async function payBranchSalary(input: {
+  branchId: string
+  userId: string
+  amount: number
+  accountId: string
+  period: string
+  kind?: 'salary' | 'advance'
+  override?: boolean
+  overrideReason?: string
+  description?: string
+}): Promise<void> {
+  await unwrap(api.POST('/api/v1/network/payroll/pay', {
+    body: {
+      branch_id: input.branchId,
+      user_id: input.userId,
+      amount: String(input.amount),
+      account_id: input.accountId,
+      period: input.period,
+      ...(input.kind ? { kind: input.kind } : {}),
+      ...(input.override ? { override: true, override_reason: input.overrideReason } : {}),
+      ...(input.description ? { description: input.description } : {}),
+    } as any,
+  }))
+}
+
 // ─── Номенклатура сети ─────────────────────────────────────────────────────────
 export async function fetchNomenclature(): Promise<Nomenclature[]> {
   const env: any = await unwrap(api.GET('/api/v1/nomenclature'))

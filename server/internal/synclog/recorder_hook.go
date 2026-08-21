@@ -69,6 +69,26 @@ var trackedSave = map[string]bool{
 	"financial_accounts": true,
 }
 
+// skipReplicated — запись пришла ИЗ синка (весь apply* в sync_ingest.go идёт
+// сессией SkipHooks), и повторно записывать её в собственный sync_log нельзя.
+//
+// Раньше этой проверки не было, и защита держалась на побочном эффекте: у
+// central синк выключен (enabled=false), а на филиал из всех pull-сущностей ни
+// одна не входила в tracked-списки — то есть совпадение, а не инвариант. Фаза Р
+// это совпадение ломает: филиалу поехали financial_operations (tracked!), и без
+// проверки филиал отправлял бы зеркало обратно наверх, где upsert по тому же id
+// ЗАТИРАЛ БЫ исходную проводку центра её же зеркалом — платёж терял бы счёт и
+// исчезал из кассы центра. Заодно это закрывает бесконечную амплификацию
+// sync_log у узла, синкающегося сам с собой (видели на стенде Фазы О).
+//
+// Соседний хук денормализации склада (audit/stock_hook.go) проверяет SkipHooks
+// ровно так же — приводим к одному правилу. Легитимные SkipHooks-записи вне
+// синка (print_jobs, идемпотентность, аудит) ни в один tracked-список не
+// входят, поэтому ничего не теряется.
+func skipReplicated(tx *gorm.DB) bool {
+	return tx.Statement.SkipHooks
+}
+
 // RegisterRecorder цепляет AfterCreate+AfterUpdate хуки, пишущие дельты
 // tracked-таблиц в sync_log. Регистрируется один раз в db.Open. No-op пока
 // SetEnabled(false).
@@ -84,6 +104,9 @@ func afterCreate(tx *gorm.DB) {
 		return
 	}
 	if tx.Error != nil || tx.DryRun || tx.Statement == nil || tx.Statement.Dest == nil {
+		return
+	}
+	if skipReplicated(tx) {
 		return
 	}
 	if !trackedInsert[tx.Statement.Table] && !trackedSave[tx.Statement.Table] {
@@ -113,6 +136,9 @@ func afterUpdate(tx *gorm.DB) {
 		return
 	}
 	if tx.Error != nil || tx.DryRun || tx.Statement == nil || tx.Statement.Schema == nil {
+		return
+	}
+	if skipReplicated(tx) {
 		return
 	}
 	if !trackedSave[tx.Statement.Table] {

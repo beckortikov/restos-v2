@@ -1162,7 +1162,21 @@ func (s *FinanceReportsService) OpexByDay(ctx context.Context, f PeriodFilter) (
 func applyOpexFilter(q *gorm.DB) *gorm.DB {
 	return q.Where("type = ?", "out").
 		Where("COALESCE(activity, '') <> ?", "financial").
-		Where("COALESCE(category, '') NOT IN ?", opexExcludedCategories)
+		Where("COALESCE(category, '') NOT IN ?", opexExcludedCategories).
+		// Расход, оплаченный ЗА ДРУГОЙ филиал (Фаза Р): деньги ушли отсюда, но
+		// затрата принадлежит тому филиалу — она попадёт в ЕГО ОПиУ зеркальной
+		// проводкой. Иначе центр, платящий зарплату всей сети, выглядел бы
+		// убыточным, а филиалы — неправдоподобно прибыльными.
+		Where("target_restaurant_id IS NULL")
+}
+
+// applyCashflowFilter — какие операции считаются движением ДЕНЕГ узла.
+// Исключает зеркала расходов, оплаченных за нас другим узлом сети (Фаза Р):
+// затрата наша и в ОПиУ она есть, но касса не пустела — платил другой. Без
+// этого филиал видел бы отток, которого у него не было, а сетевой ДДС считал
+// бы один платёж дважды (у плательщика и у получателя затраты).
+func applyCashflowFilter(q *gorm.DB) *gorm.DB {
+	return q.Where("paid_by_restaurant_id IS NULL")
 }
 
 // foBizDay — SQL деловой даты финоперации: date (введённая пользователем), а если
@@ -1461,8 +1475,8 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Type     string          `gorm:"column:type"`
 		Total    decimal.Decimal `gorm:"column:total"`
 	}
-	q := applyFOPeriod(scoped.Table("financial_operations").
-		Select("COALESCE(activity, 'operational') AS activity, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total"), f)
+	q := applyFOPeriod(applyCashflowFilter(scoped.Table("financial_operations").
+		Select("COALESCE(activity, 'operational') AS activity, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total")), f)
 	var rows []actRow
 	if err := q.Group("activity, type").Scan(&rows).Error; err != nil {
 		return nil, err
@@ -1489,8 +1503,8 @@ func (s *FinanceReportsService) Cashflow(ctx context.Context, f PeriodFilter) (*
 		Type  string          `gorm:"column:type"`
 		Total decimal.Decimal `gorm:"column:total"`
 	}
-	q2 := applyFOPeriod(scoped2.Table("financial_operations").
-		Select(foBizDay+" AS day, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total"), f)
+	q2 := applyFOPeriod(applyCashflowFilter(scoped2.Table("financial_operations").
+		Select(foBizDay+" AS day, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total")), f)
 	var drows []dayRow
 	if err := q2.Group("day, type").Order("day ASC").Scan(&drows).Error; err != nil {
 		return nil, err

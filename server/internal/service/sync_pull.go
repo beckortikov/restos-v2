@@ -83,6 +83,22 @@ func (p *Puller) PullOnce(ctx context.Context) (int, error) {
 	}
 
 	u := centralURL + "/api/v1/sync/pull?restaurant_id=" + url.QueryEscape(restaurantID)
+	// Курсор по зеркальным расходам (Фаза Р): сообщаем центру самую свежую
+	// зеркальную проводку, которая у нас уже есть. Без него центр отдавал бы
+	// их все и на каждом тике — они, в отличие от каталога сети, копятся без
+	// предела. Нет ни одной — параметр не шлём, получаем всё.
+	var lastMirror *time.Time
+	var last models.FinancialOperation
+	if err := p.r.Raw().WithContext(ctx).
+		Where("paid_by_restaurant_id IS NOT NULL").
+		Order("created_at DESC").First(&last).Error; err == nil {
+		lastMirror = &last.CreatedAt
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return 0, err
+	}
+	if lastMirror != nil {
+		u += "&mirror_since=" + url.QueryEscape(lastMirror.Format(time.RFC3339Nano))
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return 0, err

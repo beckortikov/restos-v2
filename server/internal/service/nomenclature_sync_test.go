@@ -56,7 +56,7 @@ func TestNomenclaturePropagation(t *testing.T) {
 	ctx := context.Background()
 
 	// ─── PullFor отдаёт номенклатуру central целиком ──────────────────────
-	pull, err := svc.PullFor(ctx, branchID)
+	pull, err := svc.PullFor(ctx, branchID, nil)
 	if err != nil {
 		t.Fatalf("PullFor: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestNomenclaturePropagation(t *testing.T) {
 
 	// ─── Central переименовывает → повторный pull обновляет филиал ────────
 	gdb.Model(&models.Nomenclature{}).Where("id = ?", nomID).Update("name", "Рис жасмин")
-	pull2, err := svc.PullFor(ctx, branchID)
+	pull2, err := svc.PullFor(ctx, branchID, nil)
 	if err != nil {
 		t.Fatalf("PullFor 2: %v", err)
 	}

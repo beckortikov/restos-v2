@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/service"
@@ -36,7 +37,17 @@ func (h *SyncHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 // Pull — GET /api/v1/sync/pull?restaurant_id=X. Центральный узел отдаёт дельты,
 // адресованные филиалу (down-sync): входящие sent-перемещения.
 func (h *SyncHandler) Pull(w http.ResponseWriter, r *http.Request) {
-	out, err := h.svc.PullFor(r.Context(), r.URL.Query().Get("restaurant_id"))
+	// mirror_since — курсор филиала по зеркальным расходам (Фаза Р): он сам
+	// сообщает, что у него уже есть, иначе центр отдавал бы их вечно. Пустой
+	// или неразбираемый параметр = «нет ничего, пришли всё» (так ведёт себя и
+	// касса старой версии, которая его не шлёт).
+	var mirrorSince *time.Time
+	if v := r.URL.Query().Get("mirror_since"); v != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			mirrorSince = &ts
+		}
+	}
+	out, err := h.svc.PullFor(r.Context(), r.URL.Query().Get("restaurant_id"), mirrorSince)
 	if err != nil {
 		respond.Error(w, err)
 		return

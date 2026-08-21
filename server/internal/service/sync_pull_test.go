@@ -79,7 +79,7 @@ func TestSyncDownSync(t *testing.T) {
 	}
 
 	// ─── 3. PullFor отдаёт только sent, адресованные филиалу ──────────────
-	res, err := svc.PullFor(ctx, to)
+	res, err := svc.PullFor(ctx, to, nil)
 	if err != nil {
 		t.Fatalf("PullFor: %v", err)
 	}

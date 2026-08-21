@@ -228,20 +228,23 @@ func TestStockMovementSkipHooksNoDoubleCount(t *testing.T) {
 		t.Fatalf("qty after SkipHooks movement = %s, want 15 (unchanged — denorm must be no-op)", afterIng.Qty.String())
 	}
 
-	// Два РАЗНЫХ механизма реагируют на SkipHooks по-разному, и это важно не
-	// перепутать:
-	//   - stock_movements: generic trackedInsert-хук (synclog/recorder_hook.go)
-	//     проверяет ТОЛЬКО enabled.Load(), не SkipHooks — он всё равно пишет
-	//     дельту. На central это не проблема: enabled там false (central не
-	//     пушит дальше), а не потому что кто-то передал SkipHooks.
-	//   - ingredients: МОЙ снапшот-код внутри stockAfterCreate (audit/stock_hook.go)
-	//     возвращается ПЕРВОЙ строкой при SkipHooks=true — этот путь обязан
-	//     уважать SkipHooks явно, это и есть сам пререквизит Ф3.
+	// Оба механизма — generic-рекордер (synclog/recorder_hook.go) и снапшот
+	// склада (audit/stock_hook.go) — теперь уважают SkipHooks одинаково:
+	// пришедшее ИЗ синка обратно в свой sync_log не пишется.
+	//
+	// Раньше рекордер SkipHooks игнорировал и дельту всё-таки писал, а тест
+	// это закреплял как норму. Нормой оно не было — просто не вредило:
+	// на central рекордер и так молчит (enabled=false), а на филиал из
+	// pull-сущностей ни одна в tracked-списки не входила. Фаза Р это совпадение
+	// сломала: филиалу поехали financial_operations (tracked), и старое
+	// поведение отправляло бы зеркало обратно наверх, где upsert затирал бы
+	// исходную проводку центра её же зеркалом — платёж терял бы счёт и исчезал
+	// из кассы. См. skipReplicated.
 	var mvLog, ingLog []models.SyncLog
 	gdb.Where("table_name = ? AND row_id = ?", "stock_movements", mvID).Find(&mvLog)
 	gdb.Where("table_name = ? AND row_id = ?", "ingredients", ingID).Find(&ingLog)
-	if len(mvLog) != 1 {
-		t.Errorf("stock_movements sync_log rows = %d, want 1 (trackedInsert не смотрит на SkipHooks)", len(mvLog))
+	if len(mvLog) != 0 {
+		t.Errorf("stock_movements sync_log rows = %d, want 0 (реплицированное не рекордится повторно)", len(mvLog))
 	}
 	if len(ingLog) != 0 {
 		t.Errorf("ingredients sync_log rows = %d, want 0 (stockAfterCreate ДОЛЖЕН уважать SkipHooks)", len(ingLog))

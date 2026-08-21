@@ -55,7 +55,7 @@ func TestRestaurantStubPropagation(t *testing.T) {
 	ctx := context.Background()
 
 	// ─── PullFor как филиал А отдаёт central + Филиал Б, но НЕ себя самого ──
-	pull, err := svc.PullFor(ctx, branchAID)
+	pull, err := svc.PullFor(ctx, branchAID, nil)
 	if err != nil {
 		t.Fatalf("PullFor: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestRestaurantStubPropagation(t *testing.T) {
 	if err := gdb.Model(&models.Restaurant{}).Where("id = ?", centralID).Update("license_key", lic).Error; err != nil {
 		t.Fatal(err)
 	}
-	pull2, err := svc.PullFor(ctx, branchAID)
+	pull2, err := svc.PullFor(ctx, branchAID, nil)
 	if err != nil {
 		t.Fatalf("PullFor 2: %v", err)
 	}

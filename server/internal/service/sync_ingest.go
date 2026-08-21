@@ -834,7 +834,24 @@ func (s *SyncService) applySupplyExpense(ctx context.Context, e SyncEntry, updat
 // статусе sent (получатель ещё не принял). Возвращаем в формате ingest, чтобы
 // филиал применил их своим же Ingest (upsert). Идемпотентно и без курсора:
 // после приёма статус станет received и перестанет попадать в выборку.
-func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*IngestInput, error) {
+// mirrorSince — курсор для зеркальных расходов (Фаза Р), который присылает САМ
+// филиал: «самая свежая зеркальная проводка, которая у меня уже есть».
+//
+// Почему курсор именно от филиала, а не окно по дате на стороне central: всё
+// остальное в down-sync самоограничено (каталог сети конечен, перемещения
+// перестают выбираться после приёма), а зеркала расходов копятся без предела —
+// отдавать их целиком каждые 20-30 секунд нельзя. Окно «за последние N дней»
+// было бы проще, но у него есть режим тихой потери: касса, простоявшая офлайн
+// дольше N, никогда не узнала бы о выплате, и её зарплатный кап перестал бы
+// видеть уже выплаченное — то есть вернулся бы риск ДВОЙНОЙ выплаты, ради
+// закрытия которого вся зеркальная схема и существует. Филиал же знает
+// достоверно, что у него есть, сколько бы он ни отсутствовал.
+//
+// Сравнение идёт по created_at, проставленному ЦЕНТРОМ (филиал сохраняет то же
+// значение из payload), поэтому расхождение часов между узлами на него не
+// влияет. Граница нестрогая (>=) — при совпадении меток в одну секунду лучше
+// прислать лишнее: применение идемпотентно (insert-if-absent по id).
+func (s *SyncService) PullFor(ctx context.Context, restaurantID string, mirrorSince *time.Time) (*IngestInput, error) {
 	if restaurantID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "restaurant_id is required", nil)
 	}
@@ -944,8 +961,61 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*Ingest
 				Entity: "restaurants", RowID: neighbors[i].ID, Op: "upsert", Payload: payload,
 			})
 		}
+
+		// Зеркала расходов, которые центр оплатил ЗА этот филиал (Фаза Р).
+		// Именно они делают затрату видимой в ОПиУ филиала и — критично —
+		// в его зарплатном капе, который иначе не знал бы о выплате и
+		// разрешил бы выплатить второй раз. Курсор mirrorSince — см. выше.
+		mirrors := s.r.Raw().WithContext(ctx).
+			Where("target_restaurant_id = ?", restaurantID)
+		if mirrorSince != nil {
+			mirrors = mirrors.Where("created_at >= ?", *mirrorSince)
+		}
+		var ops []models.FinancialOperation
+		if err := mirrors.Order("created_at ASC").Find(&ops).Error; err != nil {
+			return nil, err
+		}
+		for i := range ops {
+			// Филиалу уезжает ЗЕРКАЛО, а не проводка центра: у него не должно
+			// быть ни счёта плательщика, ни признака «заплатил за кого-то»;
+			// вместо этого — «за нас заплатил вот этот узел».
+			m := ops[i]
+			m.ID = mirrorOpID(ops[i].ID)
+			m.AccountID, m.AccountName = nil, nil
+			m.TargetRestaurantID = nil
+			m.PaidByRestaurantID = m.RestaurantID
+			m.RestaurantID = &restaurantID
+			m.ShiftID = nil // смена — понятие кассы плательщика, у филиала её нет
+			payload, err := json.Marshal(m)
+			if err != nil {
+				return nil, err
+			}
+			out.Entries = append(out.Entries, SyncEntry{
+				Entity: "financial_operations", RowID: m.ID, Op: "insert", Payload: payload,
+			})
+		}
 	}
 	return out, nil
+}
+
+// mirrorOpNS — фиксированное пространство имён для id зеркальных проводок.
+// Значение произвольно, но менять его нельзя: от него зависит совпадение id
+// при повторной доставке.
+var mirrorOpNS = uuid.MustParse("6f1b7c2e-9d3a-4f58-8b21-0e5a7c9d4f10")
+
+// mirrorOpID — id зеркальной проводки, ДЕТЕРМИНИРОВАННО выведенный из id
+// проводки плательщика (UUIDv5).
+//
+// Свой id, а не общий с оригиналом, по двум причинам. Во-первых,
+// financial_operations.id — первичный ключ: стоит обеим строкам оказаться в
+// одной БД (а на центре так и есть, если он же и филиал в другой сети, или
+// просто при разборе на копии базы), и вставка ломается либо, что хуже, одна
+// строка молча затирает другую — платёж теряет счёт и исчезает из кассы.
+// Во-вторых, id обязан быть ВОСПРОИЗВОДИМЫМ: зеркало отдаётся повторно, пока
+// филиал не подтвердит его курсором, и каждая доставка должна попадать в ту же
+// строку (insert-if-absent), а не плодить дубли зарплаты в его ОПиУ.
+func mirrorOpID(sourceID string) string {
+	return uuid.NewSHA1(mirrorOpNS, []byte(sourceID)).String()
 }
 
 // applyFinancialOp — upsert денежной операции из payload (для сводки владельцу).

@@ -1,12 +1,18 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { fetchNetworkStaff, type NetworkStaff, type NetworkStaffMember } from '@/lib/queries/transfers'
+import { fetchNetworkStaff, payBranchSalary, type NetworkStaff, type NetworkStaffMember } from '@/lib/queries/transfers'
+import { fetchFinancialAccounts } from '@/lib/queries'
+import { selectableAccounts } from '@/lib/queries/finance'
+import { type FinancialAccount } from '@/lib/types'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
-import { ROLE_LABELS, type UserRole } from '@/lib/types'
-import { Users, Store, Warehouse, Search } from 'lucide-react'
+import { ROLE_LABELS } from '@/lib/types'
+import { Users, Store, Warehouse, Search, Wallet } from 'lucide-react'
+import { toast } from 'sonner'
+import { DecimalInput } from '@/components/ui/decimal-input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 // Персонал сети (ADR-003, Фаза П) — весь штат всех филиалов одним списком на
 // центральном узле. Учётки реплицируются с Ф1, но обычный экран сотрудников
@@ -28,23 +34,72 @@ function payLabel(u: NetworkStaffMember): string {
   return u.salary > 0 ? `${formatCurrency(u.salary)} / мес` : '—'
 }
 
+/** Текущий месяц как YYYY-MM — период выплаты по умолчанию. */
+function currentPeriod(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+}
+
 export default function NetworkStaffPage() {
   const [data, setData] = useState<NetworkStaff | null>(null)
+  const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notInNetwork, setNotInNetwork] = useState(false)
   const [branchFilter, setBranchFilter] = useState<string>('all')
   const [q, setQ] = useState('')
 
+  // Выплата сотруднику филиала из кассы центра (Фаза Р).
+  const [payFor, setPayFor] = useState<NetworkStaffMember | null>(null)
+  const [amount, setAmount] = useState(0)
+  const [accountId, setAccountId] = useState('')
+  const [period, setPeriod] = useState(currentPeriod())
+  const [paying, setPaying] = useState(false)
+
+  const reload = () =>
+    Promise.all([fetchNetworkStaff(), fetchFinancialAccounts()]).then(([s, a]) => {
+      setData(s)
+      setAccounts(a)
+    })
+
   useEffect(() => {
-    fetchNetworkStaff()
-      .then(setData)
+    reload()
       .catch(e => {
         if (isNotInNetwork(e)) setNotInNetwork(true)
         else setError(humanizeError(e))
       })
       .finally(() => setLoading(false))
   }, [])
+
+  const payable = useMemo(() => selectableAccounts(accounts), [accounts])
+
+  const openPay = (u: NetworkStaffMember) => {
+    setPayFor(u)
+    setAmount(u.payType === 'monthly' ? u.salary : 0)
+    setAccountId(payable[0]?.id ?? '')
+    setPeriod(currentPeriod())
+  }
+
+  const onPay = async () => {
+    if (!payFor || !accountId || amount <= 0) return
+    setPaying(true)
+    try {
+      await payBranchSalary({
+        branchId: payFor.branchId!,
+        userId: payFor.id,
+        amount,
+        accountId,
+        period,
+      })
+      toast.success(`Выплачено: ${payFor.name}`)
+      setPayFor(null)
+      await reload()
+    } catch (e: any) {
+      toast.error(humanizeError(e))
+    } finally {
+      setPaying(false)
+    }
+  }
 
   const visible = useMemo(() => {
     const rows = data?.staff ?? []
@@ -129,6 +184,7 @@ export default function NetworkStaffPage() {
                   <th className="px-3 py-2 text-left font-medium">Филиал</th>
                   <th className="px-3 py-2 text-left font-medium">Роль</th>
                   <th className="px-3 py-2 text-right font-medium">Оплата</th>
+                  <th className="w-28 px-3 py-2" aria-hidden />
                 </tr>
               </thead>
               <tbody>
@@ -152,11 +208,24 @@ export default function NetworkStaffPage() {
                     </td>
                     <td className="px-3 py-2 text-muted-foreground">{roleLabel(u.role)}</td>
                     <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{payLabel(u)}</td>
+                    <td className="px-3 py-2 text-right">
+                      {/* Платить можно только сотрудникам ДРУГИХ узлов: для
+                          своих есть обычный экран зарплаты со всей его
+                          механикой (табель, авансы, удержания). */}
+                      {u.branchKind !== 'central_warehouse' && payable.length > 0 && (
+                        <button
+                          onClick={() => openPay(u)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap"
+                        >
+                          <Wallet className="size-3.5" /> Выплатить
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
                 {visible.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
+                    <td colSpan={5} className="px-3 py-6 text-center text-muted-foreground">
                       {q || branchFilter !== 'all' ? 'Никто не найден' : 'В сети пока нет сотрудников'}
                     </td>
                   </tr>
@@ -166,11 +235,81 @@ export default function NetworkStaffPage() {
           </div>
 
           <p className="text-xs text-muted-foreground">
-            Список только для просмотра: сотрудников заводят и меняют в своём филиале — правка
-            отсюда была бы перезаписана при следующей синхронизации.
+            Карточки сотрудников только для просмотра: их заводят и меняют в своём филиале —
+            правка отсюда была бы перезаписана при следующей синхронизации. Зарплату при этом
+            можно выплатить прямо здесь, из своей кассы.
           </p>
         </>
       )}
+
+      {/* Выплата сотруднику филиала из кассы центра */}
+      <Dialog open={!!payFor} onOpenChange={(v) => { if (!v) setPayFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Выплата сотруднику филиала</DialogTitle>
+          </DialogHeader>
+          {payFor && (
+            <div className="space-y-3 py-1">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{payFor.name}</span> · {payFor.branchName}
+                {payFor.payType === 'monthly' && payFor.salary > 0 && <> · оклад {formatCurrency(payFor.salary)}</>}
+              </p>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Период (месяц начисления)</label>
+                <input
+                  type="month"
+                  value={period}
+                  onChange={e => setPeriod(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">С какого счёта</label>
+                <select
+                  value={accountId}
+                  onChange={e => setAccountId(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                >
+                  {payable.map(a => (
+                    <option key={a.id} value={a.id}>{a.name} — {formatCurrency(a.balance)}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Сумма</label>
+                <DecimalInput
+                  min={0}
+                  value={amount}
+                  onChange={setAmount}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Деньги спишутся с вашего счёта, а в отчётах филиала выплата отразится как его
+                расход на зарплату — и его касса больше не предложит выплатить это второй раз.
+              </p>
+            </div>
+          )}
+          <DialogFooter className="sm:justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setPayFor(null)}
+              className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={onPay}
+              disabled={paying || !accountId || amount <= 0}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:opacity-90 disabled:opacity-50"
+            >
+              <Wallet className="size-4" /> Выплатить
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

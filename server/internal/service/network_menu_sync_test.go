@@ -49,7 +49,7 @@ func TestNetworkMenuPropagation(t *testing.T) {
 	ctx := context.Background()
 
 	// ─── Первое распространение: создаётся блюдо филиала ─────────────────
-	pull, err := svc.PullFor(ctx, branchID)
+	pull, err := svc.PullFor(ctx, branchID, nil)
 	if err != nil {
 		t.Fatalf("PullFor: %v", err)
 	}
@@ -70,7 +70,7 @@ func TestNetworkMenuPropagation(t *testing.T) {
 
 	// ─── Мастер меняет имя → повторное распространение ───────────────────
 	gdb.Model(&models.NetworkMenuItem{}).Where("id = ?", masterID).Update("name", "Плов Premium")
-	pull2, _ := svc.PullFor(ctx, branchID)
+	pull2, _ := svc.PullFor(ctx, branchID, nil)
 	if _, err := svc.ApplyPulled(ctx, *pull2, branchID); err != nil {
 		t.Fatalf("ApplyPulled 2: %v", err)
 	}

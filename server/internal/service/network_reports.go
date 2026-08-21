@@ -245,9 +245,13 @@ func (s *NetworkService) Cashflow(ctx context.Context, f PeriodFilter) (*Network
 		Type         string          `gorm:"column:type"`
 		Total        decimal.Decimal `gorm:"column:total"`
 	}
-	q := applyFOPeriod(s.r.Raw().WithContext(ctx).Table("financial_operations").
+	// applyCashflowFilter — тот же, что в локальном ДДС: зеркала расходов,
+	// оплаченных одним узлом за другой, здесь особенно опасны — без фильтра
+	// один платёж посчитался бы дважды (отток у плательщика + «отток» у того,
+	// за кого платили), и сетевой ДДС перестал бы сходиться с кассой.
+	q := applyFOPeriod(applyCashflowFilter(s.r.Raw().WithContext(ctx).Table("financial_operations").
 		Select("restaurant_id, COALESCE(type, '') AS type, COALESCE(SUM(amount), 0) AS total").
-		Where("restaurant_id IN ?", ids), f)
+		Where("restaurant_id IN ?", ids)), f)
 	var rows []row
 	if err := q.Group("restaurant_id, type").Scan(&rows).Error; err != nil {
 		return nil, err

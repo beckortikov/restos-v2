@@ -923,6 +923,39 @@ paths:
                             branch_name: { type: string }
                             branch_kind: { type: string }
 
+  /api/v1/network/payroll/pay:
+    post:
+      tags: [stock]
+      summary: |
+        Выплатить зарплату сотруднику филиала со счёта центрального узла
+        (ADR-003, Фаза Р). Проводок две: реальная у центра (списывает его счёт,
+        помечена target_restaurant_id и потому не попадает в ОПиУ центра) и
+        зеркальная у филиала (без счёта, помечена paid_by_restaurant_id — не
+        попадает в его ДДС и в сетевой ДДС, но попадает в его ОПиУ и в его
+        зарплатный кап, что и защищает от повторной выплаты). Зеркало уезжает
+        филиалу обычным down-sync. Кап считается по данным филиала; превышение
+        требует override с причиной. Только владелец центрального узла + право
+        payroll.manage.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id, user_id, amount, account_id, period]
+              properties:
+                branch_id: { type: string, format: uuid }
+                user_id: { type: string, format: uuid, description: Сотрудник этого филиала. }
+                amount: { $ref: "#/components/schemas/Decimal" }
+                account_id: { type: string, format: uuid, description: Счёт ЦЕНТРА, с которого платим. }
+                period: { type: string, description: "Период начисления, YYYY-MM." }
+                kind: { type: string, enum: [salary, advance] }
+                override: { type: boolean }
+                override_reason: { type: string }
+                description: { type: string }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+
   /api/v1/network/staff:
     get:
       tags: [stock]
@@ -984,9 +1017,22 @@ paths:
   /api/v1/sync/pull:
     get:
       tags: [stock]
-      summary: Дельты, адресованные филиалу (down-sync, ADR-003) — входящие sent-перемещения.
+      summary: |
+        Дельты, адресованные филиалу (down-sync, ADR-003): входящие перемещения
+        и переводы, эхо статусов по отправленным им, каталог сети, мастер-меню,
+        соседи-узлы и зеркала расходов, оплаченных за него центром (Фаза Р).
       parameters:
         - { in: query, name: restaurant_id, required: true, schema: { type: string, format: uuid } }
+        - in: query
+          name: mirror_since
+          required: false
+          schema: { type: string, format: date-time }
+          description: |
+            Курсор филиала по зеркальным расходам: самая свежая зеркальная
+            проводка, которая у него уже есть (RFC3339). Пусто — прислать все.
+            Нужен потому, что зеркала, в отличие от каталога сети, копятся без
+            предела; курсор ведёт САМ филиал, поэтому касса, простоявшая офлайн
+            сколько угодно долго, ничего не теряет.
       responses:
         "200":
           description: OK

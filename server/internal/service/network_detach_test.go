@@ -87,7 +87,7 @@ func TestNetworkDetachBranch(t *testing.T) {
 	if len(before) != 2 {
 		t.Fatalf("филиалов до отключения = %d, want 2", len(before))
 	}
-	pullBefore, err := syncSvc.PullFor(context.Background(), branchID)
+	pullBefore, err := syncSvc.PullFor(context.Background(), branchID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestNetworkDetachBranch(t *testing.T) {
 	}
 	// Down-sync: данные ЧЛЕНСТВА в сети (каталог, мастер-меню, соседи) больше
 	// не уезжают — они приходят только при непустом account_id.
-	pullAfter, err := syncSvc.PullFor(context.Background(), branchID)
+	pullAfter, err := syncSvc.PullFor(context.Background(), branchID, nil)
 	if err != nil {
 		t.Fatalf("PullFor после отключения: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestNetworkDetachBranch(t *testing.T) {
 		ID: pendingID, AccountID: &accountID, FromRestaurantID: &centralID,
 		ToRestaurantID: &branchID, Amount: decimal.MustFromString("2500"), Status: sent,
 	})
-	pullPending, err := syncSvc.PullFor(context.Background(), branchID)
+	pullPending, err := syncSvc.PullFor(context.Background(), branchID, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
