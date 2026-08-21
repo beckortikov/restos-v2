@@ -255,6 +255,13 @@ var branchDataBlocked = map[string]bool{
 //     реплицируются с ADR-003 Фаза 2/5.1 (пред-плановый фундамент, раньше
 //     orders/financial_operations), без JOIN на нереплицированное.
 //
+// Фаза Д (деньги между узлами):
+//   /money/transfers[/{id}] — money_transfers реплицируются в обе стороны
+//     (backfillRegistry + PullFor, ADR-003 Фаза Д), скоуп «me ∈ (from,to)»
+//     без единого JOIN. Central физически имеет ВСЕ переводы сети: отправитель
+//     пушит документ наверх, а сам central — вторая сторона любого перевода,
+//     где он участвует. Под override отдаёт ровно переводы филиала X.
+//
 // Ф5б (персонал — последняя отложенная под-фаза плана, ГОТОВО):
 //   time_entries/salary_worked_days/salary_day_multipliers/salary_deductions/
 //   salary_advances реплицированы → сняты /time-entries[/active],

@@ -90,8 +90,9 @@ type backfillEntity struct {
 	run  func(tx *gorm.DB, rid string) (int64, error)
 }
 
-// backfillRegistry — 24 реплицируемые сущности (Ф1-Ф5б + пред-Ф1 фундамент
-// ADR-003 Фаза 2/5.1: orders, stock_transfers). Порядок — по фазам, в
+// backfillRegistry — 25 реплицируемых сущностей (Ф1-Ф5б + пред-Ф1 фундамент
+// ADR-003 Фаза 2/5.1: orders, stock_transfers + Фаза Д: money_transfers).
+// Порядок — по фазам, в
 // которых сущность появилась; central не имеет FK между таблицами (см.
 // CLAUDE.md — tenant-целостность через код), порядок enqueue не влияет на
 // корректность.
@@ -128,6 +129,26 @@ var backfillRegistry = []backfillEntity{
 				rows[i].Lines = lines
 				if err := synclog.Record(tx, synclog.Entry{
 					Entity: "stock_transfers", RowID: rows[i].ID, Op: "insert",
+					RestaurantID: rows[i].FromRestaurantID, AccountID: rows[i].AccountID, Payload: rows[i],
+				}); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
+
+	// Фаза Д — денежные переводы между узлами. Тот же скоуп по ОТПРАВИТЕЛЮ и по
+	// той же причине, что у stock_transfers выше (не задваивать с получателем).
+	{name: "money_transfers", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "money_transfers", "from_restaurant_id = ?", []any{rid}, func(ids []string) error {
+			rows, err := backfillFetch[models.MoneyTransfer](tx, ids)
+			if err != nil {
+				return err
+			}
+			for i := range rows {
+				if err := synclog.Record(tx, synclog.Entry{
+					Entity: "money_transfers", RowID: rows[i].ID, Op: "insert",
 					RestaurantID: rows[i].FromRestaurantID, AccountID: rows[i].AccountID, Payload: rows[i],
 				}); err != nil {
 					return err

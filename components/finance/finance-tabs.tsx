@@ -38,6 +38,7 @@ export const FINANCE_GROUPS: FinanceGroup[] = [
     tabs: [
       { label: 'Счета и касса', href: '/finance/accounts' },
       { label: 'Платежи', href: '/finance/payments' },
+      { label: 'Переводы в сети', href: '/finance/network-transfers' },
     ],
   },
   {

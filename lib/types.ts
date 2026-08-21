@@ -1172,7 +1172,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'writeoffs.create': ['/warehouse/writeoffs'],
   'batch_cooking.manage': ['/operations/batch-cooking'],
   'finance.view': ['/finance/overview', '/finance/cashflow', '/finance/pnl', '/finance/balance', '/finance/payments', '/network/summary'],
-  'finance.manage': ['/finance/overview', '/finance/cashflow', '/finance/accounts', '/finance/budget', '/finance/payments'],
+  'finance.manage': ['/finance/overview', '/finance/cashflow', '/finance/accounts', '/finance/budget', '/finance/payments', '/finance/network-transfers'],
   'payroll.manage': ['/finance/payroll'],
   'analytics.view': ['/analytics/abc-menu', '/analytics/abc-inventory', '/analytics/tables', '/analytics/waiters', '/analytics/peak-hours', '/analytics/food-cost', '/analytics/forecast'],
   'showcase.view': ['/operations/showcase'],

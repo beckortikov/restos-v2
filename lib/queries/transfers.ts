@@ -375,3 +375,78 @@ export async function receiveTransfer(id: string): Promise<Transfer> {
   const r: any = await unwrap(api.POST('/api/v1/stock/transfers/{id}/receive', { params: { path: { id } } }))
   return mapTransfer(r)
 }
+
+// ─── Переводы денег между узлами сети (ADR-003, Фаза Д) ──────────────────────
+// Инкассация филиал→центр и переброска между филиалами. Двухфазный, как
+// товарное перемещение: отправитель списывает со своего счёта (sent),
+// получатель выбирает СВОЙ счёт и зачисляет (received).
+
+export interface MoneyTransfer {
+  id: string
+  fromRestaurantId?: string | null
+  toRestaurantId?: string | null
+  transferNumber?: number | null
+  amount: number
+  status: 'sent' | 'received' | 'cancelled'
+  note?: string | null
+  fromAccountId?: string | null
+  /** Имя счёта отправителя — денормализовано: у получателя своя БД. */
+  fromAccountName?: string | null
+  toAccountId?: string | null
+  sentAt?: string | null
+  receivedAt?: string | null
+  createdAt?: string | null
+  createdBy?: string | null
+  receivedBy?: string | null
+}
+
+function mapMoneyTransfer(r: any): MoneyTransfer {
+  return {
+    id: r.id,
+    fromRestaurantId: r.from_restaurant_id,
+    toRestaurantId: r.to_restaurant_id,
+    transferNumber: r.transfer_number,
+    amount: Number(r.amount ?? 0),
+    status: r.status,
+    note: r.note,
+    fromAccountId: r.from_account_id,
+    fromAccountName: r.from_account_name,
+    toAccountId: r.to_account_id,
+    sentAt: r.sent_at,
+    receivedAt: r.received_at,
+    createdAt: r.created_at,
+    createdBy: r.created_by,
+    receivedBy: r.received_by,
+  }
+}
+
+export async function fetchMoneyTransfers(): Promise<MoneyTransfer[]> {
+  const env: any = await unwrap(api.GET('/api/v1/money/transfers'))
+  const rows: any[] = Array.isArray(env?.data) ? env.data : []
+  return rows.map(mapMoneyTransfer)
+}
+
+export async function createMoneyTransfer(input: {
+  toRestaurantId: string
+  fromAccountId: string
+  amount: number
+  note?: string
+}): Promise<MoneyTransfer> {
+  const r: any = await unwrap(api.POST('/api/v1/money/transfers', {
+    body: {
+      to_restaurant_id: input.toRestaurantId,
+      from_account_id: input.fromAccountId,
+      amount: String(input.amount),
+      note: input.note,
+    } as any,
+  }))
+  return mapMoneyTransfer(r)
+}
+
+export async function receiveMoneyTransfer(id: string, toAccountId: string): Promise<MoneyTransfer> {
+  const r: any = await unwrap(api.POST('/api/v1/money/transfers/{id}/receive', {
+    params: { path: { id } },
+    body: { to_account_id: toAccountId } as any,
+  }))
+  return mapMoneyTransfer(r)
+}

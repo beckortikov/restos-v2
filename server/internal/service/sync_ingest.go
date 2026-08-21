@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -74,6 +75,11 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 		switch e.Entity {
 		case "stock_transfers":
 			if err := s.applyTransfer(ctx, e, updateAll); err != nil {
+				return nil, err
+			}
+			res.Applied++
+		case "money_transfers":
+			if err := s.applyMoneyTransfer(ctx, e, updateAll); err != nil {
 				return nil, err
 			}
 			res.Applied++
@@ -345,6 +351,43 @@ func onConflict(updateAll bool) clause.OnConflict {
 	return c
 }
 
+// applyStatusEcho — ЕДИНСТВЕННОЕ обновление, разрешённое поверх
+// insert-if-absent при down-pull на филиале (Фаза Д2): перевод статуса
+// sent → received у документа, который филиал ОТПРАВИЛ.
+//
+// Зачем: получатель принимает документ у себя и пушит новый статус на central,
+// но обратно отправителю central его не отдавал никогда — PullFor выбирал
+// только доки, адресованные текущему узлу. У отправителя документ навсегда
+// оставался «отправлено», хотя товар/деньги давно приняты (баг виден в 2 из 3
+// топологий: филиал→central и филиал→филиал; central→филиал работал случайно,
+// потому что там central обновляется прямым пушем получателя).
+//
+// Почему это не ломает insert-if-absent, ради которого pull вообще не
+// перезатирает локальные строки: переход разрешён РОВНО ОДИН, вперёд, и
+// зашит в WHERE status='sent'. Отсюда сразу три свойства:
+//   - откатить локальный received обратно в sent невозможно (гонка «central
+//     ещё sent, филиал уже received» — исходная причина insert-if-absent);
+//   - идемпотентность: второй pull того же received матчит 0 строк;
+//   - нет бесконечного цикла репликации (см. sync-replication-infinite-loop):
+//     запись происходит только когда статус РЕАЛЬНО меняется, а сравнение
+//     атомарно в самом UPDATE, а не read-then-compare.
+//
+// to_account_id получателя намеренно НЕ эхуем: это UUID из ЕГО БД, на стороне
+// отправителя он не резолвится ни во что осмысленное.
+func applyStatusEcho(tx *gorm.DB, table, rowID, status string, receivedAt *time.Time, receivedBy *string) error {
+	if status != "received" || rowID == "" {
+		return nil
+	}
+	return tx.Table(table).
+		Where("id = ? AND status = ?", rowID, "sent").
+		Updates(map[string]any{
+			"status":      "received",
+			"received_at": receivedAt,
+			"received_by": receivedBy,
+			"updated_at":  time.Now().UTC(),
+		}).Error
+}
+
 // applyTransfer — upsert перемещения + его строк из payload. На центральном
 // узле это лишь запись документа (для сводки/доставки получателю); движения
 // остатка НЕ выполняются — их сделает получатель при Receive у себя.
@@ -371,6 +414,35 @@ func (s *SyncService) applyTransfer(ctx context.Context, e SyncEntry, updateAll 
 			if err := tx.Clauses(conflict).Create(&l).Error; err != nil {
 				return err
 			}
+		}
+		if !updateAll {
+			// Филиал: единственный разрешённый апдейт — эхо приёма отправителю.
+			return applyStatusEcho(tx, "stock_transfers", t.ID, t.Status, t.ReceivedAt, t.ReceivedBy)
+		}
+		return nil
+	})
+}
+
+// applyMoneyTransfer — то же для денежного перевода (Фаза Д). Только запись
+// документа: балансы счетов НЕ трогаются ни на одной стороне — списание уже
+// сделал отправитель у себя (Create), зачисление сделает получатель, когда
+// нажмёт «принять» (Receive). Иначе деньги удвоились бы на каждом pull.
+func (s *SyncService) applyMoneyTransfer(ctx context.Context, e SyncEntry, updateAll bool) error {
+	var t models.MoneyTransfer
+	if err := json.Unmarshal(e.Payload, &t); err != nil {
+		return apperrors.Wrap("VALIDATION", "invalid money_transfers payload", err)
+	}
+	if t.ID == "" {
+		return apperrors.Wrap("VALIDATION", "money_transfers payload missing id", nil)
+	}
+	conflict := onConflict(updateAll)
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if err := tx.Clauses(conflict).Create(&t).Error; err != nil {
+			return err
+		}
+		if !updateAll {
+			return applyStatusEcho(tx, "money_transfers", t.ID, t.Status, t.ReceivedAt, t.ReceivedBy)
 		}
 		return nil
 	})
@@ -745,10 +817,15 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*Ingest
 	if restaurantID == "" {
 		return nil, apperrors.Wrap("VALIDATION", "restaurant_id is required", nil)
 	}
+	// Входящие (принять у себя) + Фаза Д2: СВОИ отправленные, которые получатель
+	// уже принял — иначе у отправителя документ навсегда «отправлено»
+	// (см. applyStatusEcho). Один запрос вместо двух: обе выборки узкие и
+	// покрыты индексами по from/to.
 	var transfers []models.StockTransfer
 	if err := s.r.Raw().WithContext(ctx).
 		Preload("Lines").
-		Where("to_restaurant_id = ? AND status = ?", restaurantID, "sent").
+		Where("(to_restaurant_id = ? AND status = ?) OR (from_restaurant_id = ? AND status = ?)",
+			restaurantID, "sent", restaurantID, "received").
 		Order("created_at ASC").
 		Find(&transfers).Error; err != nil {
 		return nil, err
@@ -761,6 +838,25 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string) (*Ingest
 		}
 		out.Entries = append(out.Entries, SyncEntry{
 			Entity: "stock_transfers", RowID: transfers[i].ID, Op: "insert", Payload: payload,
+		})
+	}
+
+	// Денежные переводы (Фаза Д) — та же пара выборок, тот же смысл.
+	var money []models.MoneyTransfer
+	if err := s.r.Raw().WithContext(ctx).
+		Where("(to_restaurant_id = ? AND status = ?) OR (from_restaurant_id = ? AND status = ?)",
+			restaurantID, "sent", restaurantID, "received").
+		Order("created_at ASC").
+		Find(&money).Error; err != nil {
+		return nil, err
+	}
+	for i := range money {
+		payload, err := json.Marshal(money[i])
+		if err != nil {
+			return nil, err
+		}
+		out.Entries = append(out.Entries, SyncEntry{
+			Entity: "money_transfers", RowID: money[i].ID, Op: "insert", Payload: payload,
 		})
 	}
 

@@ -1860,6 +1860,152 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/money/transfers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Переводы денег между узлами сети, где текущий ресторан — отправитель или получатель (ADR-003, Фаза Д). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MoneyTransfersList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Отправить деньги в другой узел сети (списание со счёта отправителя, status=sent). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["CreateMoneyTransferInput"];
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MoneyTransfer"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/money/transfers/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Один денежный перевод. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MoneyTransfer"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/money/transfers/{id}/receive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Принять перевод на свой счёт (зачисление, status=received). Идемпотентно. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["ReceiveMoneyTransferInput"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MoneyTransfer"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/settings/sync": {
         parameters: {
             query?: never;
@@ -13807,6 +13953,73 @@ export interface components {
                 qty: components["schemas"]["Decimal"];
                 cost_per_unit?: components["schemas"]["Decimal"];
             }[];
+        };
+        MoneyTransfersList: {
+            data?: components["schemas"]["MoneyTransfer"][];
+            next_cursor?: string;
+        };
+        /**
+         * @description Перевод денег между узлами сети (ADR-003, Фаза Д). Двухфазный, как
+         *     StockTransfer: списание у отправителя (sent) → зачисление у получателя
+         *     (received). Обе стороны пишут financial_operations с activity=financial,
+         *     поэтому в ОПиУ перевод не попадает ни у кого.
+         */
+        MoneyTransfer: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            account_id?: string;
+            /** Format: uuid */
+            from_restaurant_id?: string;
+            /** Format: uuid */
+            to_restaurant_id?: string;
+            transfer_number?: number;
+            amount?: components["schemas"]["Decimal"];
+            /** @enum {string} */
+            status?: "sent" | "received" | "cancelled";
+            note?: string | null;
+            /** Format: uuid */
+            from_account_id?: string;
+            /** @description Денормализовано — у получателя своя БД и счетов отправителя он не знает. */
+            from_account_name?: string | null;
+            /**
+             * Format: uuid
+             * @description Счёт зачисления; пуст до приёма (выбирает получатель).
+             */
+            to_account_id?: string | null;
+            /** Format: date-time */
+            sent_at?: string;
+            /** Format: date-time */
+            received_at?: string | null;
+            /** Format: uuid */
+            created_by?: string | null;
+            /** Format: uuid */
+            received_by?: string | null;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            updated_at?: string;
+        };
+        CreateMoneyTransferInput: {
+            /**
+             * Format: uuid
+             * @description Узел-получатель (отправитель — ресторан из токена).
+             */
+            to_restaurant_id: string;
+            /**
+             * Format: uuid
+             * @description Счёт списания у отправителя.
+             */
+            from_account_id: string;
+            amount: components["schemas"]["Decimal"];
+            note?: string;
+        };
+        ReceiveMoneyTransferInput: {
+            /**
+             * Format: uuid
+             * @description Счёт получателя для зачисления (его собственный выбор).
+             */
+            to_account_id: string;
         };
         WriteoffInput: {
             reason: string;

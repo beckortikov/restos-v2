@@ -50,3 +50,34 @@ type StockTransferLine struct {
 }
 
 func (StockTransferLine) TableName() string { return "stock_transfer_lines" }
+
+// MoneyTransfer — документ перевода ДЕНЕГ между узлами сети (ADR-003, Фаза Д).
+// Зеркало StockTransfer: списание со счёта отправителя (status=sent) ↔
+// зачисление на счёт получателя (status=received). Сами движения денег — пара
+// financial_operations с activity='financial' (перевод не расход и не доход,
+// в ОПиУ не попадает); здесь — шапка документа. См. миграцию 077.
+//
+// FromAccountName денормализован: у получателя своя БД, счетов отправителя он
+// не знает (та же причина, что у StockTransferLine.IngredientName).
+// ToAccountID пуст до приёма — счёт зачисления выбирает получатель.
+type MoneyTransfer struct {
+	ID               string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	AccountID        *string         `gorm:"column:account_id;type:uuid;index" json:"account_id"`
+	FromRestaurantID *string         `gorm:"column:from_restaurant_id;type:uuid;index" json:"from_restaurant_id"`
+	ToRestaurantID   *string         `gorm:"column:to_restaurant_id;type:uuid;index" json:"to_restaurant_id"`
+	TransferNumber   *int            `gorm:"column:transfer_number" json:"transfer_number"`
+	Amount           decimal.Decimal `gorm:"type:numeric(14,4)" json:"amount"`
+	Status           string          `gorm:"not null;default:'sent'" json:"status"`
+	Note             *string         `json:"note"`
+	FromAccountID    *string         `gorm:"column:from_account_id;type:uuid" json:"from_account_id"`
+	FromAccountName  *string         `gorm:"column:from_account_name" json:"from_account_name"`
+	ToAccountID      *string         `gorm:"column:to_account_id;type:uuid" json:"to_account_id"`
+	SentAt           *time.Time      `gorm:"column:sent_at" json:"sent_at"`
+	ReceivedAt       *time.Time      `gorm:"column:received_at" json:"received_at"`
+	CreatedBy        *string         `gorm:"column:created_by" json:"created_by"`
+	ReceivedBy       *string         `gorm:"column:received_by" json:"received_by"`
+	CreatedAt        time.Time       `json:"created_at"`
+	UpdatedAt        time.Time       `json:"updated_at"`
+}
+
+func (MoneyTransfer) TableName() string { return "money_transfers" }

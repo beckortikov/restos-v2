@@ -648,6 +648,40 @@ paths:
         - $ref: "#/components/parameters/IdempotencyKey"
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/StockTransfer" } } } } }
 
+  /api/v1/money/transfers:
+    get:
+      tags: [finance]
+      summary: Переводы денег между узлами сети, где текущий ресторан — отправитель или получатель (ADR-003, Фаза Д).
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MoneyTransfersList" } } } } }
+    post:
+      tags: [finance]
+      summary: Отправить деньги в другой узел сети (списание со счёта отправителя, status=sent).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/CreateMoneyTransferInput" } } }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/MoneyTransfer" } } } } }
+
+  /api/v1/money/transfers/{id}:
+    get:
+      tags: [finance]
+      summary: Один денежный перевод.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MoneyTransfer" } } } } }
+
+  /api/v1/money/transfers/{id}/receive:
+    post:
+      tags: [finance]
+      summary: Принять перевод на свой счёт (зачисление, status=received). Идемпотентно.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/ReceiveMoneyTransferInput" } } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MoneyTransfer" } } } } }
+
   /api/v1/settings/sync:
     get:
       tags: [stock]
@@ -4558,6 +4592,48 @@ components:
               ingredient_id: { type: string, format: uuid, description: Ингредиент стороны-источника (должен быть привязан к nomenclature_id). }
               qty: { $ref: "#/components/schemas/Decimal" }
               cost_per_unit: { $ref: "#/components/schemas/Decimal" }
+
+    MoneyTransfersList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/MoneyTransfer" } }, next_cursor: { type: string } } }
+    MoneyTransfer:
+      type: object
+      description: |
+        Перевод денег между узлами сети (ADR-003, Фаза Д). Двухфазный, как
+        StockTransfer: списание у отправителя (sent) → зачисление у получателя
+        (received). Обе стороны пишут financial_operations с activity=financial,
+        поэтому в ОПиУ перевод не попадает ни у кого.
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        from_restaurant_id: { type: string, format: uuid }
+        to_restaurant_id: { type: string, format: uuid }
+        transfer_number: { type: integer }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        status: { type: string, enum: [sent, received, cancelled] }
+        note: { type: string, nullable: true }
+        from_account_id: { type: string, format: uuid }
+        from_account_name: { type: string, nullable: true, description: Денормализовано — у получателя своя БД и счетов отправителя он не знает. }
+        to_account_id: { type: string, format: uuid, nullable: true, description: Счёт зачисления; пуст до приёма (выбирает получатель). }
+        sent_at: { type: string, format: date-time }
+        received_at: { type: string, format: date-time, nullable: true }
+        created_by: { type: string, format: uuid, nullable: true }
+        received_by: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateMoneyTransferInput:
+      type: object
+      required: [to_restaurant_id, from_account_id, amount]
+      properties:
+        to_restaurant_id: { type: string, format: uuid, description: Узел-получатель (отправитель — ресторан из токена). }
+        from_account_id: { type: string, format: uuid, description: Счёт списания у отправителя. }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        note: { type: string }
+
+    ReceiveMoneyTransferInput:
+      type: object
+      required: [to_account_id]
+      properties:
+        to_account_id: { type: string, format: uuid, description: Счёт получателя для зачисления (его собственный выбор). }
 
     WriteoffInput:
       type: object
