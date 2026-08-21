@@ -275,6 +275,12 @@ func main() {
 	// invariant из orders_void.go.
 	go jobs.OrdersCleanupScheduler(ctx, gdb, jobs.OrdersCleanupConfig{})
 
+	// Ротация журнала синка (Фаза О, ADR-003) — раз в сутки удаляет УЖЕ
+	// ОТПРАВЛЕННЫЕ дельты старше 30 дней. Неотправленное и карантинное не
+	// трогает никогда. Стартует безусловно: журнал мог накопиться, пока
+	// ресторан был в сети, и продолжать расти после отключения синка.
+	go jobs.SyncLogRotateScheduler(ctx, gdb, jobs.SyncLogRotateConfig{})
+
 	// Multi-branch sync pusher/puller (Фаза 2, ADR-003; безрестартовое
 	// подключение — ADR-003 продолжение). Стартуют БЕЗУСЛОВНО, даже если sync
 	// сейчас выключен/не настроен — каждый тик сам перечитывает sync_settings

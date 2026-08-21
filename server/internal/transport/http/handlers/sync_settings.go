@@ -27,6 +27,17 @@ func (h *SyncSettingsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, st)
 }
 
+// QueueStats — GET /api/v1/settings/sync/queue. Состояние очереди отправки
+// (Фаза О): сколько ждёт, сколько в карантине, когда последний раз уехало.
+func (h *SyncSettingsHandler) QueueStats(w http.ResponseWriter, r *http.Request) {
+	st, err := h.svc.QueueStats(r.Context())
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, st)
+}
+
 // Update — PUT /api/v1/settings/sync.
 func (h *SyncSettingsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	var in service.UpdateSyncSettingsInput

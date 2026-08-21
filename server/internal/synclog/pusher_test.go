@@ -262,6 +262,137 @@ func TestPusher_EnvFallbackWithoutSettingsRow(t *testing.T) {
 	}
 }
 
+// TestPusher_PoisonRowQuarantine — Фаза О: одна строка, которую central не
+// принимает, НЕ должна останавливать синхронизацию филиала навсегда.
+//
+// Регресс-пруф найденной дыры: ingest применяет батч последовательно и на
+// первой ошибке отвергает его ЦЕЛИКОМ (500). Пушер при ошибке не двигался
+// дальше — следующий тик собирал тот же батч и падал так же, до бесконечности
+// и молча. Проверяем: после maxAttempts неудач пушер разбирает очередь
+// поштучно, ядовитую строку изолирует (failed_at + last_error), а ВСЕ
+// остальные доставляет.
+func TestPusher_PoisonRowQuarantine(t *testing.T) {
+	gdb, err := db.Open(dsn())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	gdb.Exec("DELETE FROM sync_log")
+	gdb.Exec("DELETE FROM sync_settings")
+
+	// Три дельты; средняя — «ядовитая» (central её не принимает).
+	poisonRowID := "POISON"
+	ids := make([]string, 3)
+	for i := 0; i < 3; i++ {
+		ids[i] = uuid.NewString()
+		rowID := uuid.NewString()
+		if i == 1 {
+			rowID = poisonRowID
+		}
+		if err := gdb.Create(&models.SyncLog{
+			ID: ids[i], Entity: "stock_transfers", RowID: rowID,
+			Op: "insert", Payload: datatypes.JSON(`{"id":"x"}`),
+		}).Error; err != nil {
+			t.Fatal(err)
+		}
+		// Гарантируем порядок created_at ASC — иначе «средняя» не средняя.
+		gdb.Exec("UPDATE sync_log SET created_at = now() + make_interval(secs => ?) WHERE id = ?", i, ids[i])
+	}
+
+	// Стаб central: любой батч, содержащий ядовитую строку, отвергается.
+	var accepted []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Entries []struct {
+				RowID string `json:"row_id"`
+			} `json:"entries"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(b, &body)
+		for _, e := range body.Entries {
+			if e.RowID == poisonRowID {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"code":"VALIDATION","message":"invalid payload"}`))
+				return
+			}
+		}
+		for _, e := range body.Entries {
+			accepted = append(accepted, e.RowID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"applied":` + itoa(len(body.Entries)) + `,"skipped":0}`))
+	}))
+	defer srv.Close()
+
+	url := srv.URL
+	if err := gdb.Create(&models.SyncSettings{ID: 1, Enabled: true, CentralURL: &url, IntervalSec: 30}).Error; err != nil {
+		t.Fatal(err)
+	}
+	p := synclog.NewPusher(repo.New(gdb), synclog.FallbackConfig{})
+
+	// ─── Батч падает целиком, пока не исчерпаны попытки ───────────────────
+	for i := 0; i < 3; i++ {
+		if _, err := p.PushOnce(t.Context()); err == nil {
+			t.Fatalf("попытка %d: ожидалась ошибка батча (ядовитая строка внутри)", i+1)
+		}
+	}
+	if len(accepted) != 0 {
+		t.Fatalf("до карантина не должно уехать ничего, а уехало %d", len(accepted))
+	}
+
+	// ─── Порог исчерпан → поштучный разбор ────────────────────────────────
+	n, err := p.PushOnce(t.Context())
+	if err != nil {
+		t.Fatalf("поштучный проход не должен возвращать ошибку: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("доставлено = %d, want 2 (обе здоровые строки)", n)
+	}
+
+	// Ядовитая — в карантине с причиной, здоровые — отправлены.
+	var poison models.SyncLog
+	if err := gdb.Where("row_id = ?", poisonRowID).First(&poison).Error; err != nil {
+		t.Fatal(err)
+	}
+	if poison.FailedAt == nil {
+		t.Error("ядовитая строка не изолирована — очередь снова встанет на ней")
+	}
+	if poison.LastError == nil || *poison.LastError == "" {
+		t.Error("причина карантина не сохранена — разбирать будет нечего")
+	}
+	if poison.SyncedAt != nil {
+		t.Error("ядовитая строка помечена отправленной — данные молча потеряны")
+	}
+
+	var pending int64
+	gdb.Model(&models.SyncLog{}).Where("synced_at IS NULL AND failed_at IS NULL").Count(&pending)
+	if pending != 0 {
+		t.Errorf("очередь = %d, want 0 (всё либо отправлено, либо в карантине)", pending)
+	}
+
+	// ─── Очередь разблокирована: новая строка уезжает сразу ───────────────
+	if err := gdb.Create(&models.SyncLog{
+		ID: uuid.NewString(), Entity: "stock_transfers", RowID: uuid.NewString(),
+		Op: "insert", Payload: datatypes.JSON(`{"id":"y"}`),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
+	n2, err := p.PushOnce(t.Context())
+	if err != nil {
+		t.Fatalf("после карантина очередь обязана идти: %v", err)
+	}
+	if n2 != 1 {
+		t.Errorf("новая дельта доставлена = %d, want 1", n2)
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

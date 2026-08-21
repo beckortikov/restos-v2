@@ -2,8 +2,11 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { fetchSyncSettings, saveSyncSettings, joinNetwork, type SyncSettings } from '@/lib/queries/sync-settings'
-import { RefreshCw, Save, Info, Ticket } from 'lucide-react'
+import {
+  fetchSyncSettings, saveSyncSettings, joinNetwork, fetchSyncQueueStats,
+  type SyncSettings, type SyncQueueStats,
+} from '@/lib/queries/sync-settings'
+import { RefreshCw, Save, Info, Ticket, CloudUpload, CheckCircle2, AlertTriangle } from 'lucide-react'
 import { toast } from 'sonner'
 
 export default function SyncSettingsPage() {
@@ -13,14 +16,26 @@ export default function SyncSettingsPage() {
   const [saving, setSaving] = useState(false)
   const [pairingCode, setPairingCode] = useState('')
   const [joining, setJoining] = useState(false)
+  const [queue, setQueue] = useState<SyncQueueStats | null>(null)
 
   const reloadSettings = () =>
     fetchSyncSettings().then(v => setS({ ...v, restaurantId: v.restaurantId || restaurantId || '' }))
+
+  const reloadQueue = () => fetchSyncQueueStats().then(setQueue).catch(() => setQueue(null))
 
   useEffect(() => {
     reloadSettings().catch(() => {}).finally(() => setLoading(false))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restaurantId])
+
+  // Очередь опрашивается сама: оператор смотрит на этот экран именно тогда,
+  // когда ждёт, что накопленное уедет — цифра обязана меняться на глазах,
+  // без ручного обновления страницы.
+  useEffect(() => {
+    reloadQueue()
+    const id = setInterval(reloadQueue, 10_000)
+    return () => clearInterval(id)
+  }, [])
 
   const set = (patch: Partial<SyncSettings>) => setS(prev => ({ ...prev, ...patch }))
 
@@ -109,6 +124,8 @@ export default function SyncSettingsPage() {
         <input type="checkbox" checked={s.enabled} onChange={e => set({ enabled: e.target.checked })} className="size-5" />
       </label>
 
+      {s.enabled && queue && <QueueStatus q={queue} />}
+
       <p className="text-xs text-muted-foreground -mt-2">Поля ниже — ручной способ (например, для подключения через туннель без публичного адреса).</p>
 
       <div className={s.enabled ? 'space-y-4' : 'space-y-4 opacity-50 pointer-events-none'}>
@@ -131,6 +148,89 @@ export default function SyncSettingsPage() {
       </button>
 
       <style>{`.input{width:100%;border-radius:.5rem;border:1px solid hsl(var(--border));background:hsl(var(--background));padding:.5rem .75rem;font-size:.875rem}`}</style>
+    </div>
+  )
+}
+
+// humanizeSyncError — типовые сетевые сбои словами кассира. Сырой текст от Go
+// («dial tcp …: connect: connection refused») точен, но человеку за кассой не
+// говорит ничего и выглядит как поломка программы, хотя это просто нет связи.
+// Всё, что не распознали, показываем как есть — лучше непонятное, чем ничего.
+function humanizeSyncError(msg: string): string {
+  const m = msg.toLowerCase()
+  if (m.includes('connection refused') || m.includes('no such host') || m.includes('dial tcp')) {
+    return 'нет связи с центральным узлом'
+  }
+  if (m.includes('timeout') || m.includes('deadline exceeded')) {
+    return 'центральный узел не отвечает'
+  }
+  if (m.includes('401') || m.includes('unauthorized')) {
+    return 'центральный узел отклонил секрет сети — проверьте настройки'
+  }
+  return msg
+}
+
+function fmtWhen(iso?: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  const mins = Math.floor((Date.now() - d.getTime()) / 60000)
+  if (mins < 1) return 'только что'
+  if (mins < 60) return `${mins} мин назад`
+  return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
+/**
+ * QueueStatus — что сейчас с отправкой данных на центральный узел.
+ *
+ * Касса работает автономно и копит изменения, пока нет связи; когда связь
+ * появляется, очередь уходит сама. Но до Фазы О у оператора не было НИ ОДНОЙ
+ * цифры об этом: после дня без интернета убедиться, что всё доехало, можно
+ * было только по логам бэка. Здесь — три вещи, которые реально отвечают на
+ * вопрос «всё ли уехало»: размер очереди, возраст её головы (растёт → синк
+ * стоит) и время последней успешной отправки.
+ */
+function QueueStatus({ q }: { q: SyncQueueStats }) {
+  const stuck = q.pending > 0 && !!q.lastError
+  const tone = q.failed > 0 || stuck
+    ? 'border-amber-500/40 bg-amber-500/5'
+    : q.pending > 0
+      ? 'border-border'
+      : 'border-emerald-500/40 bg-emerald-500/5'
+
+  return (
+    <div className={`rounded-xl border p-3 space-y-2 ${tone}`}>
+      <div className="flex items-center gap-2">
+        {q.pending === 0 && q.failed === 0
+          ? <CheckCircle2 className="size-4 text-emerald-600" />
+          : <CloudUpload className="size-4 text-muted-foreground" />}
+        <div className="text-sm font-medium text-foreground">
+          {q.pending === 0
+            ? 'Всё отправлено на центральный узел'
+            : `Ожидает отправки: ${q.pending}`}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <span>Последняя отправка: {fmtWhen(q.lastSyncedAt)}</span>
+        {q.pending > 0 && <span>Самая старая в очереди: {fmtWhen(q.oldestPendingAt)}</span>}
+      </div>
+
+      {stuck && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          Последняя попытка не удалась: {humanizeSyncError(q.lastError!)}. Данные копятся
+          на кассе и уедут сами, как только связь появится — работать можно как обычно.
+        </p>
+      )}
+
+      {q.failed > 0 && (
+        <div className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+          <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
+          <span>
+            {q.failed} записей центральный узел не принял — они отложены, чтобы не блокировать
+            остальные, и сохранены для разбора. Сообщите в поддержку.
+          </span>
+        </div>
+      )}
     </div>
   )
 }

@@ -31,6 +31,28 @@ export async function saveSyncSettings(s: SyncSettings): Promise<void> {
   }))
 }
 
+// SyncQueueStats — состояние очереди отправки на central (ADR-003, Фаза О).
+// Единственный способ для оператора убедиться, что накопленное за время без
+// интернета действительно уехало.
+export interface SyncQueueStats {
+  pending: number
+  failed: number
+  oldestPendingAt?: string | null
+  lastSyncedAt?: string | null
+  lastError?: string | null
+}
+
+export async function fetchSyncQueueStats(): Promise<SyncQueueStats> {
+  const r: any = await unwrap(api.GET('/api/v1/settings/sync/queue'))
+  return {
+    pending: Number(r?.pending ?? 0),
+    failed: Number(r?.failed ?? 0),
+    oldestPendingAt: r?.oldest_pending_at ?? null,
+    lastSyncedAt: r?.last_synced_at ?? null,
+    lastError: r?.last_error ?? null,
+  }
+}
+
 // joinNetwork — обменивает код приглашения (ADR-003, продолжение) на central
 // на настоящий sync-токен+account_id и сохраняет всё атомарно на бэке;
 // UI после успеха просто перечитывает fetchSyncSettings().

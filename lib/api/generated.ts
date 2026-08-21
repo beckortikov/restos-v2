@@ -2069,6 +2069,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/sync/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Состояние очереди отправки на central — сколько ждёт, сколько в карантине (ADR-003, Фаза О). */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SyncQueueStats"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/branches": {
         parameters: {
             query?: never;
@@ -13803,6 +13839,25 @@ export interface components {
             interval_sec?: number;
             /** Format: date-time */
             backfilled_at?: string | null;
+        };
+        /**
+         * @description Состояние очереди отправки узла (sync_log). Нужно оператору филиала:
+         *     после работы без интернета это единственный способ убедиться, что
+         *     накопленное уехало на central.
+         */
+        SyncQueueStats: {
+            /** @description Сколько дельт ждёт отправки. */
+            pending?: number;
+            /** @description В карантине — central не принял */
+            failed?: number;
+            /**
+             * Format: date-time
+             * @description Возраст головы очереди; растёт — значит синк стоит.
+             */
+            oldest_pending_at?: string | null;
+            /** Format: date-time */
+            last_synced_at?: string | null;
+            last_error?: string | null;
         };
         BranchesList: {
             data?: components["schemas"]["Branch"][];

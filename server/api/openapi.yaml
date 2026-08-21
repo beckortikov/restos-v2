@@ -696,6 +696,12 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/SyncSettings" } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SyncSettings" } } } } }
 
+  /api/v1/settings/sync/queue:
+    get:
+      tags: [stock]
+      summary: Состояние очереди отправки на central — сколько ждёт, сколько в карантине (ADR-003, Фаза О).
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SyncQueueStats" } } } } }
+
   /api/v1/network/branches:
     get:
       tags: [stock]
@@ -4454,6 +4460,19 @@ components:
         restaurant_id: { type: string, format: uuid }
         interval_sec: { type: integer }
         backfilled_at: { type: string, format: date-time, nullable: true }
+
+    SyncQueueStats:
+      type: object
+      description: |
+        Состояние очереди отправки узла (sync_log). Нужно оператору филиала:
+        после работы без интернета это единственный способ убедиться, что
+        накопленное уехало на central.
+      properties:
+        pending: { type: integer, description: Сколько дельт ждёт отправки. }
+        failed: { type: integer, description: В карантине — central не принял, очередь пошла дальше без них. }
+        oldest_pending_at: { type: string, format: date-time, nullable: true, description: Возраст головы очереди; растёт — значит синк стоит. }
+        last_synced_at: { type: string, format: date-time, nullable: true }
+        last_error: { type: string, nullable: true }
 
     BranchesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Branch" } }, next_cursor: { type: string } } }
     Branch:

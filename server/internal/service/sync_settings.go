@@ -83,6 +83,57 @@ func (s *SyncSettingsService) Update(ctx context.Context, in UpdateSyncSettingsI
 	return st, nil
 }
 
+// SyncQueueStats — состояние очереди отправки (Фаза О). Нужна оператору:
+// после дня без интернета единственный способ убедиться, что всё уехало, —
+// это увидеть очередь. Раньше в UI не было ни одной цифры о синке, и
+// «отправилось ли?» проверялось только по логам бэка.
+type SyncQueueStats struct {
+	// Pending — сколько дельт ждёт отправки прямо сейчас.
+	Pending int64 `json:"pending"`
+	// Failed — в карантине (central не принял, очередь пошла дальше без них).
+	Failed int64 `json:"failed"`
+	// OldestPendingAt — возраст головы очереди: если он растёт, синк стоит.
+	OldestPendingAt *time.Time `json:"oldest_pending_at,omitempty"`
+	// LastSyncedAt — когда в последний раз что-то реально уехало.
+	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+	// LastError — причина последней неудачи (из головы очереди), если есть.
+	LastError *string `json:"last_error,omitempty"`
+}
+
+// QueueStats считает состояние очереди. Три дешёвых агрегата по sync_log:
+// оба COUNT'а покрыты частичным индексом idx_sync_log_pending.
+func (s *SyncSettingsService) QueueStats(ctx context.Context) (*SyncQueueStats, error) {
+	out := &SyncQueueStats{}
+	db := s.r.Raw().WithContext(ctx)
+
+	if err := db.Model(&models.SyncLog{}).
+		Where("synced_at IS NULL AND failed_at IS NULL").Count(&out.Pending).Error; err != nil {
+		return nil, err
+	}
+	if err := db.Model(&models.SyncLog{}).
+		Where("failed_at IS NOT NULL").Count(&out.Failed).Error; err != nil {
+		return nil, err
+	}
+
+	var head models.SyncLog
+	if err := db.Where("synced_at IS NULL AND failed_at IS NULL").
+		Order("created_at ASC").First(&head).Error; err == nil {
+		out.OldestPendingAt = &head.CreatedAt
+		out.LastError = head.LastError
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	var last models.SyncLog
+	if err := db.Where("synced_at IS NOT NULL").
+		Order("synced_at DESC").First(&last).Error; err == nil {
+		out.LastSyncedAt = last.SyncedAt
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	return out, nil
+}
+
 func strPtrOrNil(s string) *string {
 	if s == "" {
 		return nil

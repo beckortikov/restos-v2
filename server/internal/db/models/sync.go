@@ -18,6 +18,12 @@ type SyncLog struct {
 	Payload      datatypes.JSON `gorm:"type:jsonb" json:"payload"`
 	CreatedAt    time.Time      `json:"created_at"`
 	SyncedAt     *time.Time     `gorm:"column:synced_at" json:"synced_at"`
+	// Attempts/FailedAt/LastError — карантин ядовитых строк (Фаза О, миграция
+	// 078). FailedAt != NULL → строка исключена из выборки пушера, очередь идёт
+	// дальше без неё; сама строка остаётся в журнале с причиной в LastError.
+	Attempts  int        `gorm:"column:attempts;default:0" json:"attempts"`
+	FailedAt  *time.Time `gorm:"column:failed_at" json:"failed_at,omitempty"`
+	LastError *string    `gorm:"column:last_error" json:"last_error,omitempty"`
 }
 
 func (SyncLog) TableName() string { return "sync_log" }
