@@ -729,6 +729,21 @@ paths:
         content: { application/json: { schema: { type: object, required: [kind], properties: { kind: { type: string, enum: [outlet, central_warehouse] } } } } }
       responses: { "200": { description: OK } }
 
+  /api/v1/network/branches/{id}/detach:
+    post:
+      tags: [stock]
+      summary: |
+        Отключить филиал от сети (ADR-003, Фаза У). Обнуляет restaurants.account_id
+        теневой строки: филиал пропадает из всех сетевых списков и отчётов, down-sync
+        для него становится пустым. Ни одна строка данных не удаляется — повторное
+        подключение по коду возвращает всё. Пуши филиала при этом НЕ блокируются
+        (ingest аутентифицируется общим токеном сети — см. комментарий у DetachBranch).
+        Только владелец центрального узла; отключить сам central нельзя.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses: { "200": { description: OK } }
+
   /api/v1/network/invites:
     get:
       tags: [stock]

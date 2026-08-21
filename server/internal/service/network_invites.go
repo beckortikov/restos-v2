@@ -65,14 +65,15 @@ func inviteOut(inv *models.NetworkInvite, publicURL string) NetworkInviteOut {
 	}
 }
 
-// requireCentralOwner — общий гвард CreateInvite/ListInvites/RevokeInvite:
-// только owner, и только на central-узле сети (только central выпускает
-// приглашения). Паттерн владелец-only — как SyncService.Backfill
+// requireCentralOwner — общий гвард операций над составом сети:
+// CreateInvite/ListInvites/RevokeInvite + DetachBranch (Фаза У, network.go).
+// Только owner и только на central-узле — кто выпускает приглашения, тот же и
+// отключает филиалы. Паттерн владелец-only — как SyncService.Backfill
 // (sync_backfill.go): audit.ActorFromContext + Role check, не middleware.
 func (s *NetworkService) requireCentralOwner(ctx context.Context) (rid, account string, err error) {
 	actor, _ := audit.ActorFromContext(ctx)
 	if actor.Role != "owner" {
-		return "", "", apperrors.Wrap("FORBIDDEN", "только владелец может управлять приглашениями", nil)
+		return "", "", apperrors.Wrap("FORBIDDEN", "только владелец может управлять составом сети", nil)
 	}
 	rid, err = tenant.MustRestaurantID(ctx)
 	if err != nil {
@@ -83,7 +84,7 @@ func (s *NetworkService) requireCentralOwner(ctx context.Context) (rid, account 
 		return "", "", err
 	}
 	if rest.Kind == nil || *rest.Kind != "central_warehouse" {
-		return "", "", apperrors.Wrap("VALIDATION", "приглашения выпускает только центральный склад сети", nil)
+		return "", "", apperrors.Wrap("VALIDATION", "составом сети управляет только её центральный склад", nil)
 	}
 	if rest.AccountID == nil || *rest.AccountID == "" {
 		return "", "", apperrors.Wrap("VALIDATION", "ресторан не в сети", nil)

@@ -5,11 +5,13 @@ import { Link } from 'react-router-dom'
 import QRCode from 'qrcode'
 import { useAuth } from '@/lib/auth-store'
 import {
-  fetchNetworkSummary, createNetwork, setBranchKind, type BranchSummary,
+  fetchNetworkSummary, createNetwork, setBranchKind, detachBranch, type BranchSummary,
   fetchNetworkInvites, createNetworkInvite, revokeNetworkInvite, type NetworkInvite,
 } from '@/lib/queries/transfers'
-import { Network, Store, Warehouse, Plus, GitMerge, ChevronRight, Ticket, Copy, QrCode, Trash2 } from 'lucide-react'
+import { Network, Store, Warehouse, Plus, GitMerge, ChevronRight, Ticket, Copy, QrCode, Trash2, LogOut, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { humanizeError } from '@/lib/errors'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
 export default function BranchesSettingsPage() {
   const { restaurantId } = useAuth()
@@ -18,6 +20,9 @@ export default function BranchesSettingsPage() {
   const [branches, setBranches] = useState<BranchSummary[]>([])
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
+  // Отключение филиала — через подтверждение: действие меняет состав сети и
+  // сразу убирает точку из всех отчётов.
+  const [detachFor, setDetachFor] = useState<BranchSummary | null>(null)
 
   const isCentral = branches.some(b => b.id === restaurantId && b.kind === 'central_warehouse')
 
@@ -57,6 +62,21 @@ export default function BranchesSettingsPage() {
       await reload()
     } catch (e: any) {
       toast.error(e?.message ?? 'Не удалось изменить тип')
+    }
+  }
+
+  const onDetach = async () => {
+    if (!detachFor) return
+    setBusy(true)
+    try {
+      await detachBranch(detachFor.id)
+      toast.success(`«${detachFor.name}» отключён от сети`)
+      setDetachFor(null)
+      await reload()
+    } catch (e: any) {
+      toast.error(humanizeError(e))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -100,6 +120,7 @@ export default function BranchesSettingsPage() {
                 <tr>
                   <th className="px-3 py-2 text-left font-medium">Филиал</th>
                   <th className="px-3 py-2 text-left font-medium">Тип</th>
+                  {isCentral && <th className="w-10 px-3 py-2" aria-hidden />}
                 </tr>
               </thead>
               <tbody>
@@ -123,6 +144,21 @@ export default function BranchesSettingsPage() {
                         <option value="central_warehouse">Центральный склад</option>
                       </select>
                     </td>
+                    {isCentral && (
+                      <td className="px-3 py-2">
+                        {/* Сам центральный узел отключить нельзя — сеть
+                            перестала бы существовать (бэк это тоже не даст). */}
+                        {b.id !== restaurantId && (
+                          <button
+                            onClick={() => setDetachFor(b)}
+                            title="Отключить от сети"
+                            className="inline-flex items-center justify-center size-8 rounded-lg border border-border text-destructive hover:bg-destructive/10 transition-colors"
+                          >
+                            <LogOut className="size-3.5" />
+                          </button>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -146,6 +182,54 @@ export default function BranchesSettingsPage() {
           {isCentral && <InvitesSection />}
         </>
       )}
+
+      {/* Подтверждение отключения — говорим ровно то, что произойдёт, включая
+          то, чего НЕ произойдёт (данные не удаляются, доступ не отзывается). */}
+      <Dialog open={!!detachFor} onOpenChange={(v) => { if (!v) setDetachFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Отключить филиал от сети?</DialogTitle>
+          </DialogHeader>
+          {detachFor && (
+            <div className="space-y-2 py-1 text-sm">
+              <p className="text-foreground">
+                «{detachFor.name}» перестанет входить в сеть: пропадёт из сетевых отчётов,
+                из списка получателей перемещений и переводов, и больше не будет получать
+                каталог сети.
+              </p>
+              <p className="text-muted-foreground text-xs">
+                Данные, которые филиал уже прислал, останутся в базе — при повторном
+                подключении по коду приглашения всё вернётся.
+              </p>
+              <p className="text-muted-foreground text-xs">
+                Уже отправленные ему перемещения и переводы он всё же получит: деньги и товар
+                по ним списаны, и оборвать доставку значило бы подвесить их навсегда.
+              </p>
+              <p className="text-muted-foreground text-xs">
+                Это не отзывает доступ: если касса филиала продолжит работать, её данные
+                будут по-прежнему приходить, просто нигде не показываться.
+              </p>
+            </div>
+          )}
+          <DialogFooter className="sm:justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setDetachFor(null)}
+              className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={onDetach}
+              disabled={busy}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-white bg-destructive rounded-lg hover:opacity-90 disabled:opacity-50"
+            >
+              <LogOut className="size-4" /> Отключить
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
@@ -202,14 +286,20 @@ function InvitesSection() {
     }
   }
 
-  const onRevoke = async (id: string) => {
-    setRevokingId(id)
+  // Одна операция на бэке (удаление строки), но два разных смысла для
+  // владельца: отозвать ЖИВОЙ код — действие безопасности (перестанет
+  // работать), убрать отработавший — просто уборка списка. Формулировки
+  // должны это различать, иначе «удалить» рядом с использованным кодом
+  // выглядит так, будто отключаешь подключённый по нему филиал.
+  const onRevoke = async (i: NetworkInvite) => {
+    const spent = !!i.usedAt || new Date(i.expiresAt).getTime() < Date.now()
+    setRevokingId(i.id)
     try {
-      await revokeNetworkInvite(id)
-      toast.success('Код отозван')
-      setInvites(prev => prev.filter(i => i.id !== id))
+      await revokeNetworkInvite(i.id)
+      toast.success(spent ? 'Код убран из списка' : 'Код отозван — он больше не сработает')
+      setInvites(prev => prev.filter(x => x.id !== i.id))
     } catch (e: any) {
-      toast.error(e?.message ?? 'Не удалось отозвать код')
+      toast.error(humanizeError(e))
     } finally {
       setRevokingId(null)
     }
@@ -280,7 +370,7 @@ function InvitesSection() {
         <div className="space-y-2">
           {invites.map(i => {
             const status = statusOf(i)
-            const revocable = !i.usedAt
+            const spent = !!i.usedAt || new Date(i.expiresAt).getTime() < Date.now()
             return (
               <div key={i.id} className="rounded-lg border border-border p-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
@@ -289,22 +379,30 @@ function InvitesSection() {
                     <div className={`text-xs ${status.className}`}>{status.label}</div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    <button onClick={() => onCopy(i)} title="Копировать" className="inline-flex items-center justify-center size-8 rounded-lg border border-border hover:bg-muted transition-colors">
-                      <Copy className="size-3.5" />
-                    </button>
-                    <button onClick={() => onToggleQr(i)} title="QR-код" className="inline-flex items-center justify-center size-8 rounded-lg border border-border hover:bg-muted transition-colors">
-                      <QrCode className="size-3.5" />
-                    </button>
-                    {revocable && (
-                      <button
-                        onClick={() => onRevoke(i.id)}
-                        disabled={revokingId === i.id}
-                        title="Отозвать"
-                        className="inline-flex items-center justify-center size-8 rounded-lg border border-border text-destructive hover:bg-destructive/10 transition-colors disabled:opacity-50"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
+                    {/* Копировать/QR — только у живого кода: у отработавшего
+                        это предложение поделиться тем, что уже не сработает. */}
+                    {!spent && (
+                      <>
+                        <button onClick={() => onCopy(i)} title="Копировать" className="inline-flex items-center justify-center size-8 rounded-lg border border-border hover:bg-muted transition-colors">
+                          <Copy className="size-3.5" />
+                        </button>
+                        <button onClick={() => onToggleQr(i)} title="QR-код" className="inline-flex items-center justify-center size-8 rounded-lg border border-border hover:bg-muted transition-colors">
+                          <QrCode className="size-3.5" />
+                        </button>
+                      </>
                     )}
+                    {/* Убрать можно ЛЮБОЙ код: раньше у использованных кнопки
+                        не было вовсе, и список копился навсегда. */}
+                    <button
+                      onClick={() => onRevoke(i)}
+                      disabled={revokingId === i.id}
+                      title={spent ? 'Убрать из списка' : 'Отозвать код'}
+                      className={`inline-flex items-center justify-center size-8 rounded-lg border border-border transition-colors disabled:opacity-50 ${
+                        spent ? 'text-muted-foreground hover:bg-muted' : 'text-destructive hover:bg-destructive/10'
+                      }`}
+                    >
+                      {spent ? <X className="size-3.5" /> : <Trash2 className="size-3.5" />}
+                    </button>
                   </div>
                 </div>
                 {qrFor === i.id && qrDataUrl && (

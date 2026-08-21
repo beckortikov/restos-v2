@@ -184,6 +184,17 @@ export async function setBranchKind(restaurantId: string, kind: 'outlet' | 'cent
   }))
 }
 
+/**
+ * detachBranch — отключить филиал от сети (ADR-003, Фаза У).
+ * Данные, которые он уже прислал, остаются в базе: филиал лишь перестаёт
+ * входить в состав сети (пропадает из списков, отчётов и down-sync).
+ */
+export async function detachBranch(restaurantId: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/network/branches/{id}/detach', {
+    params: { path: { id: restaurantId } },
+  }))
+}
+
 export async function fetchNetworkSummary(opts?: { from?: string; to?: string }): Promise<NetworkSummary> {
   const query: Record<string, string> = {}
   if (opts?.from) query.from = opts.from

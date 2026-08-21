@@ -254,6 +254,47 @@ func (s *NetworkService) SetBranchKind(ctx context.Context, restaurantID, kind s
 	return nil
 }
 
+// DetachBranch — отключить филиал от сети (ADR-003, Фаза У). Владелец
+// центрального узла убирает точку, которая закрылась или больше не его.
+//
+// Механика — обнуление restaurants.account_id теневой строки филиала. Этого
+// достаточно и это не разрушительно:
+//   - branchesForAccount/ListBranches фильтруют по account_id, поэтому филиал
+//     разом пропадает из ВСЕХ сетевых списков и отчётов, без правки шести
+//     запросов по отдельности;
+//   - PullFor для него становится пустым (там же проверка account_id != NULL),
+//     то есть перестают уезжать вниз каталог, мастер-меню и соседи;
+//   - НИ ОДНА строка данных не удаляется: заказы, деньги, склад, что филиал
+//     уже прислал, остаются в БД central. Повторное подключение по коду
+//     (RedeemInvite) возвращает account_id — и всё снова видно.
+//
+// Чего это НЕ делает — и это осознанно: пуши с филиала central не отвергает.
+// Ingest аутентифицируется ОБЩИМ токеном сети, по нему невозможно отличить
+// один узел от другого — настоящая блокировка требует пер-филиальных токенов
+// (Фаза Г). Пока: отключённый филиал может продолжать слать данные, они лягут
+// в таблицы, но нигде не покажутся, потому что во всех отчётах он больше не
+// значится. Для сценария «точка закрылась» этого достаточно; для «отобрать
+// доступ у недоброжелателя» — нет, и обещать этого в интерфейсе нельзя.
+func (s *NetworkService) DetachBranch(ctx context.Context, restaurantID string) error {
+	me, account, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return err
+	}
+	if restaurantID == me {
+		return apperrors.Wrap("VALIDATION", "нельзя отключить сам центральный узел — сеть перестала бы существовать", nil)
+	}
+	res := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
+		Where("id = ? AND account_id = ?", restaurantID, account).
+		Update("account_id", nil)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return apperrors.ErrNotFound
+	}
+	return nil
+}
+
 // ── Мастер-меню сети (ADR-004) ──────────────────────────────────────────────
 
 // ListNetworkMenu — мастер-меню сети текущего ресторана.

@@ -172,6 +172,16 @@ func (h *NetworkHandler) SetBranchKind(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// DetachBranch — POST /api/v1/network/branches/{id}/detach. Отключить филиал
+// от сети. Данные, которые он уже прислал, сохраняются.
+func (h *NetworkHandler) DetachBranch(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DetachBranch(r.Context(), chi.URLParam(r, "id")); err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 // ListNomenclature — GET /api/v1/nomenclature.
 func (h *NetworkHandler) ListNomenclature(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.svc.ListNomenclature(r.Context())

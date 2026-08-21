@@ -587,6 +587,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/money/transfers/{id}/receive", moneyTransfersH.Receive)
 			g.Post("/network", networkH.CreateNetwork)
 			g.Post("/network/branches/{id}/kind", networkH.SetBranchKind)
+			g.Post("/network/branches/{id}/detach", networkH.DetachBranch)
 			g.Post("/network/invites", networkH.CreateInvite)
 			g.Delete("/network/invites/{id}", networkH.RevokeInvite)
 			g.Post("/network/pair", networkH.JoinNetwork)

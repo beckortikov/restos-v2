@@ -2232,6 +2232,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/branches/{id}/detach": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отключить филиал от сети (ADR-003, Фаза У). Обнуляет restaurants.account_id
+         *     теневой строки: филиал пропадает из всех сетевых списков и отчётов, down-sync
+         *     для него становится пустым. Ни одна строка данных не удаляется — повторное
+         *     подключение по коду возвращает всё. Пуши филиала при этом НЕ блокируются
+         *     (ingest аутентифицируется общим токеном сети — см. комментарий у DetachBranch).
+         *     Только владелец центрального узла; отключить сам central нельзя.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/invites": {
         parameters: {
             query?: never;
