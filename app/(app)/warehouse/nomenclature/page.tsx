@@ -114,17 +114,22 @@ export default function NomenclaturePage() {
         <h1 className="text-xl font-bold text-foreground">Сопоставление товаров</h1>
       </div>
       <p className="text-sm text-muted-foreground">
-        Ингредиент получает сетевой идентификатор автоматически — при первом перемещении между
-        филиалами. Загляните сюда, если автосопоставление не сработало (например, один филиал завёл
-        «Мясо», другой — «Мясо говяжье», и это разъехалось на две записи каталога) — здесь это можно
+        Общий каталог продуктов сети. Ингредиент попадает в него и сам — при первом перемещении
+        между филиалами. Загляните сюда, если автосопоставление не сработало (например, один филиал
+        завёл «Мясо», другой — «Мясо говяжье», и это разъехалось на две записи) — здесь это можно
         поправить вручную.
       </p>
 
-      {/* Завести запись каталога заранее — редкий случай, обычно не нужен */}
-      <details className="rounded-xl border border-border p-3">
-        <summary className="cursor-pointer text-sm font-medium text-foreground">
-          Завести запись каталога заранее (необязательно)
-        </summary>
+      {/* Добавление в каталог — раскладывает товар по всем филиалам (Фаза М),
+          поэтому это полноценное действие, а не спрятанная опция «на всякий
+          случай», как было до авто-материализации. */}
+      <div className="rounded-xl border border-border p-3">
+        <div className="text-sm font-medium text-foreground">Добавить продукт в сеть</div>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Появится на складе каждого филиала с нулевым остатком — заводить его в каждой точке
+          вручную не нужно. Если у филиала уже есть товар с таким же названием и единицей, он
+          свяжется с этой записью, а не задвоится.
+        </p>
         <div className="mt-3 space-y-2">
           <div className="flex items-end gap-2">
             <div className="flex-1 space-y-1">
@@ -155,14 +160,15 @@ export default function NomenclaturePage() {
             </p>
           )}
         </div>
-      </details>
+      </div>
 
       {/* Каталог */}
       <div>
         <h2 className="mb-2 text-sm font-semibold text-foreground">Каталог сети ({items.length})</h2>
         {items.length === 0 ? (
           <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-            Каталог пуст — заполнится сам после первого перемещения между филиалами.
+            Каталог пуст. Добавьте продукт выше — он появится на складах всех филиалов; или он
+            попадёт сюда сам после первого перемещения между ними.
           </div>
         ) : (
           <div className="flex flex-wrap gap-2">

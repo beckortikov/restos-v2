@@ -290,49 +290,15 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 		desc := "transfer:" + transferID
 
 		for _, l := range lines {
-			// Ингредиент получателя по (me, nomenclature_id); нет — сперва
-			// пробуем найти уже существующий у получателя НЕпривязанный
-			// ингредиент с тем же именем+единицей (завёл его сам, до первого
-			// перемещения) и связать его, а не плодить дубль на складе;
-			// не нашли — заводим с нуля.
-			var dest models.Ingredient
-			derr := tx.Where("restaurant_id = ? AND nomenclature_id = ?", me, l.NomenclatureID).
-				First(&dest).Error
-			if errors.Is(derr, gorm.ErrRecordNotFound) {
-				matchErr := tx.Where("restaurant_id = ? AND nomenclature_id IS NULL AND name = ? AND unit = ?",
-					me, l.IngredientName, l.Unit).First(&dest).Error
-				switch {
-				case matchErr == nil:
-					if err := tx.Model(&models.Ingredient{}).Where("id = ?", dest.ID).
-						Update("nomenclature_id", l.NomenclatureID).Error; err != nil {
-						return err
-					}
-					dest.NomenclatureID = l.NomenclatureID
-				case errors.Is(matchErr, gorm.ErrRecordNotFound):
-					dest = models.Ingredient{
-						ID:             uuid.NewString(),
-						Name:           l.IngredientName,
-						Unit:           l.Unit,
-						Qty:            decimal.Zero,
-						PricePerUnit:   l.CostPerUnit,
-						RestaurantID:   &me,
-						NomenclatureID: l.NomenclatureID,
-						CreatedAt:      now,
-						UpdatedAt:      now,
-					}
-					if err := tx.Create(&dest).Error; err != nil {
-						return err
-					}
-				default:
-					return matchErr
-				}
-				// Обе ветки (реюз с линковкой / новый ингредиент) меняют dest —
-				// синкаем один раз после switch.
-				if err := recordIngredientSync(tx, []string{dest.ID}); err != nil {
-					return err
-				}
-			} else if derr != nil {
-				return derr
+			dest, err := ensureNomenclatureIngredient(tx, me, ensureIngredientInput{
+				NomenclatureID: l.NomenclatureID,
+				Name:           l.IngredientName,
+				Unit:           l.Unit,
+				PricePerUnit:   l.CostPerUnit,
+				Now:            now,
+			})
+			if err != nil {
+				return err
 			}
 
 			// transfer_in: +qty получателю. Хук увеличит ingredients.qty.
@@ -386,6 +352,87 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 	t.ReceivedAt = &now
 	t.Lines = lines
 	return &t, nil
+}
+
+// ensureIngredientInput — параметры сопоставления товара с номенклатурой сети.
+type ensureIngredientInput struct {
+	NomenclatureID *string
+	Name           *string
+	Unit           *string
+	// PricePerUnit — только для НОВОГО товара (у существующего цену не трогаем:
+	// она средневзвешенная по его собственным приёмкам).
+	PricePerUnit decimal.Decimal
+	Now          time.Time
+}
+
+// ensureNomenclatureIngredient — находит или заводит товар ресторана rid,
+// связанный с номенклатурой сети (ADR-003, вариант 3B). Единая точка для двух
+// вызывающих: приёма перемещения (TransferService.Receive) и авто-материализации
+// каталога сети на филиале (applyNomenclature, Фаза М).
+//
+// Порядок поиска важен и одинаков для обоих:
+//  1. по (rid, nomenclature_id) — уже связан, ничего не делаем;
+//  2. по (rid, name, unit) среди НЕсвязанных — филиал завёл товар сам, до
+//     подключения к сети: связываем существующий, а не плодим дубль на складе;
+//  3. иначе заводим новый с нулевым остатком.
+//
+// Идемпотентность критична: applyNomenclature вызывается на КАЖДОМ тике
+// down-sync (раз в 20-30 с). Шаг 1 гарантирует, что второй и все последующие
+// проходы — чистое чтение: ни записи в ingredients, ни дельты в sync_log,
+// иначе получился бы бесконечный поток «изменений» туда-обратно (ровно тот
+// цикл, что уже ловили на мастер-меню, см. applyNetworkMenu).
+//
+// tx может быть с SkipHooks (путь down-sync) — поэтому BeforeCreate вызываем
+// ЯВНО: без него у нового товара не проставится склад мультисклада.
+func ensureNomenclatureIngredient(tx *gorm.DB, rid string, in ensureIngredientInput) (models.Ingredient, error) {
+	var dest models.Ingredient
+	err := tx.Where("restaurant_id = ? AND nomenclature_id = ?", rid, in.NomenclatureID).First(&dest).Error
+	if err == nil {
+		return dest, nil // уже связан — выходим молча, без записи
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return dest, err
+	}
+
+	matchErr := tx.Where("restaurant_id = ? AND nomenclature_id IS NULL AND name = ? AND unit = ?",
+		rid, in.Name, in.Unit).First(&dest).Error
+	switch {
+	case matchErr == nil:
+		if err := tx.Model(&models.Ingredient{}).Where("id = ?", dest.ID).
+			Update("nomenclature_id", in.NomenclatureID).Error; err != nil {
+			return dest, err
+		}
+		dest.NomenclatureID = in.NomenclatureID
+	case errors.Is(matchErr, gorm.ErrRecordNotFound):
+		dest = models.Ingredient{
+			ID:             uuid.NewString(),
+			Name:           in.Name,
+			Unit:           in.Unit,
+			Qty:            decimal.Zero,
+			PricePerUnit:   in.PricePerUnit,
+			RestaurantID:   &rid,
+			NomenclatureID: in.NomenclatureID,
+			CreatedAt:      in.Now,
+			UpdatedAt:      in.Now,
+		}
+		// Явный вызов хука: под SkipHooks GORM его не выполнит, и товар остался
+		// бы без warehouse_id (см. Ingredient.BeforeCreate — «единый вход для
+		// всех путей создания»).
+		if err := dest.BeforeCreate(tx); err != nil {
+			return dest, err
+		}
+		if err := tx.Create(&dest).Error; err != nil {
+			return dest, err
+		}
+	default:
+		return dest, matchErr
+	}
+	// Обе ветки (реюз со связыванием / новый товар) изменили состояние —
+	// отправляем снимок наверх один раз.
+	if err := recordIngredientSync(tx, []string{dest.ID}); err != nil {
+		return dest, err
+	}
+	return dest, nil
 }
 
 // List возвращает перемещения, где текущий ресторан — источник или получатель.

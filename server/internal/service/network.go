@@ -118,6 +118,10 @@ func (s *NetworkService) CreateNomenclature(ctx context.Context, in CreateNomenc
 	if in.Name == "" {
 		return nil, apperrors.Wrap("VALIDATION", "name is required", nil)
 	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	n := &models.Nomenclature{
 		ID:        uuid.NewString(),
@@ -128,7 +132,24 @@ func (s *NetworkService) CreateNomenclature(ctx context.Context, in CreateNomenc
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.r.Raw().WithContext(ctx).Create(n).Error; err != nil {
+	if err := s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Create(n).Error; err != nil {
+			return err
+		}
+		// Фаза М — материализуем товар и на СВОЁМ узле, а не только на филиалах
+		// (те получат его down-sync'ом, см. applyNomenclature). Иначе выходило
+		// бы странное: владелец завёл продукт в центре, тот появился у всех
+		// филиалов, а на складе самого центра его нет.
+		_, err := ensureNomenclatureIngredient(tx, rid, ensureIngredientInput{
+			NomenclatureID: &n.ID,
+			Name:           &n.Name,
+			Unit:           n.Unit,
+			PricePerUnit:   decimal.Zero,
+			Now:            now,
+		})
+		return err
+	}); err != nil {
 		return nil, err
 	}
 	return n, nil

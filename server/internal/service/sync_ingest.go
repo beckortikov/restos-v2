@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
@@ -212,7 +213,7 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 				res.Skipped++ // как network_menu_items — только down-pull на филиале, up-push пока не пишется (CreateNomenclature не зовёт synclog.Record)
 				continue
 			}
-			if err := s.applyNomenclature(ctx, e); err != nil {
+			if err := s.applyNomenclature(ctx, e, branchID); err != nil {
 				return nil, err
 			}
 			res.Applied++
@@ -296,7 +297,16 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 // строка филиала — ОДНА и та же запись (тот же id: ingredients.nomenclature_id
 // ссылается на него одинаково на любом узле) — обычный upsert по id, без
 // производной локальной копии.
-func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry) error {
+//
+// Фаза М — авто-материализация: следом заводим у филиала сам ТОВАР с нулевым
+// остатком. Без этого запись в каталоге сети оставалась чистой абстракцией:
+// владелец создавал продукт в центре, на складах филиалов не менялось ничего,
+// и товар появлялся там только после первого перемещения. Ожидание владельца
+// («создал в центре → есть у всех») теперь выполняется буквально.
+//
+// Если у филиала уже есть свой товар с тем же именем и единицей — он
+// СВЯЗЫВАЕТСЯ с номенклатурой, а не дублируется (см. ensureNomenclatureIngredient).
+func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry, branchID string) error {
 	var n models.Nomenclature
 	if err := json.Unmarshal(e.Payload, &n); err != nil {
 		return apperrors.Wrap("VALIDATION", "invalid nomenclature payload", err)
@@ -306,7 +316,18 @@ func (s *SyncService) applyNomenclature(ctx context.Context, e SyncEntry) error 
 	}
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
-		return tx.Clauses(onConflict(true)).Create(&n).Error
+		if err := tx.Clauses(onConflict(true)).Create(&n).Error; err != nil {
+			return err
+		}
+		name := n.Name
+		_, err := ensureNomenclatureIngredient(tx, branchID, ensureIngredientInput{
+			NomenclatureID: &n.ID,
+			Name:           &name,
+			Unit:           n.Unit,
+			PricePerUnit:   decimal.Zero, // цену задаст первая приёмка/перемещение
+			Now:            time.Now().UTC(),
+		})
+		return err
 	})
 }
 
