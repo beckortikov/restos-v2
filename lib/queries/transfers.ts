@@ -412,10 +412,11 @@ export async function payBranchSalary(input: {
       amount: String(input.amount),
       account_id: input.accountId,
       period: input.period,
-      ...(input.kind ? { kind: input.kind } : {}),
-      ...(input.override ? { override: true, override_reason: input.overrideReason } : {}),
-      ...(input.description ? { description: input.description } : {}),
-    } as any,
+      kind: input.kind,
+      override: input.override,
+      override_reason: input.overrideReason,
+      description: input.description,
+    },
   }))
 }
 
@@ -464,10 +465,11 @@ export async function payBranchExpense(input: {
       branch_id: input.branchId,
       account_id: input.accountId,
       amount: String(input.amount),
-      ...(input.category ? { category: input.category } : {}),
-      ...(input.description ? { description: input.description } : {}),
-      ...(input.payableKind ? { payable_kind: input.payableKind, payable_id: input.payableId } : {}),
-    } as any,
+      category: input.category,
+      description: input.description,
+      payable_kind: input.payableKind,
+      payable_id: input.payableId,
+    },
   }))
 }
 
@@ -502,7 +504,7 @@ export async function fetchBranchExpenses(branchId: string): Promise<BranchExpen
 export async function cancelBranchExpense(id: string): Promise<void> {
   await unwrap(api.POST('/api/v1/network/expenses/{id}/cancel', {
     params: { path: { id } },
-  } as any))
+  }))
 }
 
 // ─── Номенклатура сети ─────────────────────────────────────────────────────────
@@ -631,7 +633,7 @@ export async function createMoneyTransfer(input: {
       from_account_id: input.fromAccountId,
       amount: String(input.amount),
       note: input.note,
-    } as any,
+    },
   }))
   return mapMoneyTransfer(r)
 }
@@ -639,7 +641,7 @@ export async function createMoneyTransfer(input: {
 export async function receiveMoneyTransfer(id: string, toAccountId: string): Promise<MoneyTransfer> {
   const r: any = await unwrap(api.POST('/api/v1/money/transfers/{id}/receive', {
     params: { path: { id } },
-    body: { to_account_id: toAccountId } as any,
+    body: { to_account_id: toAccountId },
   }))
   return mapMoneyTransfer(r)
 }
