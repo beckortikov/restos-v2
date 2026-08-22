@@ -4868,7 +4868,7 @@ components:
         description: { type: string }
         counterparty: { type: string }
         shift_id: { type: string, format: uuid }
-        affects_shift: { type: boolean, description: "false — не зеркалить расход в текущую открытую смену, даже если счёт совпадает (по умолчанию/omitted — зеркалить, как раньше)" }
+        affects_shift: { type: boolean, description: "true — расход выдан из ящика текущей открытой смены: помимо счёта уменьшить и expected_cash смены. По умолчанию (omitted/false) расход двигает только счёт — ящик кассира отслеживается сменными операциями. Зеркало создаётся и при явном shift_id независимо от флага. В PATCH: omitted сохраняет сменную природу записи (зеркало пересоздаётся, только если было)." }
     FinancialOperationsList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/FinancialOperation" } }, next_cursor: { type: string } } }
 
     RecurringPayment:

@@ -163,8 +163,10 @@ func TestAudit_LiabilityPayment_DebitsAccount(t *testing.T) {
 	}
 }
 
-// БАГ #27: смена и счёт — независимые реестры. Ручной кассовый расход двигает
-// счёт, но не expected_cash смены → фантомная недостача/излишек в Z.
+// БАГ #27 (в новой политике): расход, ЯВНО помеченный «выдано из кассы смены»
+// (affects_shift=true), обязан двигать оба реестра — счёт и expected_cash;
+// иначе фантомная недостача/излишек в Z. Без опт-ина расход двигает только
+// счёт (см. TestFinanceOps_Create_NoMirrorByDefault_UpdateKeepsNone).
 func TestAudit_ManualCashOut_ReflectedInShift(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
@@ -180,9 +182,10 @@ func TestAudit_ManualCashOut_ReflectedInShift(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Кассир платит 200 наличными как ручную финоперацию на кассовый счёт.
+	// Кассир платит 200 наличными ИЗ ЯЩИКА — ручная финоперация с опт-ином.
 	if r, b := f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), map[string]any{
 		"type": "out", "amount": "200", "account_id": accountID, "category": "хозрасход", "activity": "operational",
+		"affects_shift": true,
 	}); r.StatusCode != http.StatusCreated && r.StatusCode != http.StatusOK {
 		t.Fatalf("manual out: %d %s", r.StatusCode, b)
 	}
@@ -279,16 +282,14 @@ func TestAudit_DeleteAutoMirror_KeepsShiftConsistent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	uid, uname := uuid.NewString(), "Официант-ЗП"
-	if err := gdb.Create(&models.User{ID: uid, Name: &uname, RestaurantID: &f.rid}).Error; err != nil {
-		t.Fatal(err)
-	}
-	// Наличная выплата 200 с кассового счёта → account 300 + зеркало cash_out 200
-	// с source_ref на саму эту выплату.
-	if r, b := f.post(t, "/api/v1/finance/salary/pay", tok, uuid.NewString(), map[string]any{
-		"user_id": uid, "amount": "200", "account_id": accountID, "employee_name": uname, "period": "2026-07",
+	// Наличный расход 200 из ящика смены (affects_shift=true) → account 300 +
+	// зеркало cash_out 200 с source_ref на саму эту операцию. (Раньше носителем
+	// была зарплата — она больше не зеркалится: ЗП без shift_id не двигает ящик.)
+	if r, b := f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), map[string]any{
+		"type": "out", "amount": "200", "account_id": accountID,
+		"category": "хозрасход", "activity": "operational", "affects_shift": true,
 	}); r.StatusCode != http.StatusCreated && r.StatusCode != http.StatusOK {
-		t.Fatalf("salary pay: %d %s", r.StatusCode, b)
+		t.Fatalf("manual cash-out: %d %s", r.StatusCode, b)
 	}
 	var mirror models.CashShiftOperation
 	if err := gdb.Where("shift_id = ? AND type = ?", shiftID, "cash_out").First(&mirror).Error; err != nil {

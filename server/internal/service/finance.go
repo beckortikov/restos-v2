@@ -579,13 +579,12 @@ type FinancialOperationInput struct {
 	Description  *string `json:"description,omitempty"`
 	Counterparty *string `json:"counterparty,omitempty"`
 	ShiftID      *string `json:"shift_id,omitempty"`
-	// AffectsShift — явный выбор «Касса» (счёт, ничего больше) vs «Смена»
-	// (тот же счёт + уменьшить «Ожидается касса» текущей открытой смены).
-	// nil/true — как раньше: recordShiftCashOutIfActive решает сам по
-	// совпадению счёта (обратная совместимость со старыми клиентами и
-	// существующими тестами). Явный false — расход НЕ зеркалится в смену,
-	// даже если счёт совпадает: бухгалтерская проводка, которая не была
-	// физическим движением наличных в ящике сегодня.
+	// AffectsShift — явный опт-ин «выдано из ящика текущей открытой смены»:
+	// true — помимо списания со счёта уменьшить и «Ожидается касса» смены.
+	// nil/false — расход двигает только счёт, смену не трогает (дефолт):
+	// счёт «Наличные» один на ресторан, ящик кассира отслеживается только
+	// сменными операциями. Зеркало создаётся и при явном ShiftID (операция
+	// с экрана смены) — независимо от этого флага.
 	AffectsShift *bool `json:"affects_shift,omitempty"`
 }
 
@@ -685,16 +684,17 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 		if err := tx.Create(&op).Error; err != nil {
 			return err
 		}
-		// #27: наличный расход, отбитый ручной операцией на кассовом счёте
-		// открытой смены, обязан уменьшить и expected_cash — иначе смена и счёт
-		// расходятся (фантомная недостача/излишек в Z). Зеркало создаётся только
-		// если счёт принадлежит открытой смене (внутри recordShiftCashOutIfActive).
-		//
-		// AffectsShift=false — явный отказ от зеркала: пользователь говорит, что
-		// эта проводка не была физическим движением денег в сегодняшнем ящике
-		// (бухгалтерская операция на счёте «Касса», а не расход из смены).
-		// nil/true — поведение как раньше (совместимость со старыми клиентами).
-		if *in.Type == "out" && (in.AffectsShift == nil || *in.AffectsShift) {
+		// Ящик смены двигают только операции с ЯВНЫМ сменным контекстом:
+		// affects_shift=true (галка «выдано из кассы смены») или shift_id
+		// (операция оформлена с экрана смены). Бэк-офисный расход из раздела
+		// Финансы списывает счёт «Наличные», но expected_cash открытой смены
+		// не трогает: счёт наличных один на ресторан (ящик + сейф), а ящик
+		// кассира отслеживается только сменными операциями — физическую выдачу
+		// из ящика оформляют расходом/изъятием со смены. Раньше nil зеркалился
+		// по совпадению счёта, и расход из Финансов ложно уменьшал ожидаемую
+		// кассу текущей смены (ложный излишек при закрытии).
+		if *in.Type == "out" &&
+			((in.AffectsShift != nil && *in.AffectsShift) || (in.ShiftID != nil && *in.ShiftID != "")) {
 			shiftRef := ""
 			if in.ShiftID != nil {
 				shiftRef = *in.ShiftID
@@ -890,16 +890,16 @@ func (s *FinancialOperationsService) Update(ctx context.Context, id string, in F
 		// по source_ref безопасен и без явного tenant-фильтра: op уже подтверждён
 		// принадлежащим rid выше, а source_ref = op.ID (UUID, глобально уникален).
 		var oldMirrorShift *models.CashShift
+		hadMirror := false
 		{
 			var oldMirror models.CashShiftOperation
-			hasMirror := false
 			if err := tx.Where("source_ref = ?", op.ID).
 				First(&oldMirror).Error; err == nil {
-				hasMirror = true
+				hadMirror = true
 			} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 				return err
 			}
-			if hasMirror {
+			if hadMirror {
 				if err := tx.Delete(&oldMirror).Error; err != nil {
 					return err
 				}
@@ -914,15 +914,23 @@ func (s *FinancialOperationsService) Update(ctx context.Context, id string, in F
 			}
 		}
 
-		// Новое зеркало под новые значения. Если правленная операция была
-		// привязана к смене, УЖЕ закрытой (oldMirrorShift не nil и status≠open) —
-		// recordShiftCashOutIfActive её не найдёт (ищет только открытые), а
-		// молча промолчать нельзя: только что снесли старое зеркало, и без
-		// замены expected_cash закрытой смены осиротеет на «зеркала не было».
-		// Вставляем зеркало напрямую тем же набором полей, что и сама функция
-		// (Type=cash_out, Category=autoMirrorCategory), в обход её open-only
-		// гварда — это та же самая, уже определённая смена, не поиск заново.
-		if newType == "out" && (in.AffectsShift == nil || *in.AffectsShift) {
+		// Новое зеркало под новые значения — ТОЛЬКО если оно существовало у
+		// старой версии операции (правка сумм/категории не меняет сменной
+		// природы записи; операции без зеркала его правкой не приобретают).
+		// Явный affects_shift в патче может форсировать (true) или снять (false).
+		// Если правленная операция была привязана к смене, УЖЕ закрытой
+		// (oldMirrorShift не nil и status≠open) — recordShiftCashOutIfActive её
+		// не найдёт (ищет только открытые), а молча промолчать нельзя: только
+		// что снесли старое зеркало, и без замены expected_cash закрытой смены
+		// осиротеет на «зеркала не было». Вставляем зеркало напрямую тем же
+		// набором полей, что и сама функция (Type=cash_out,
+		// Category=autoMirrorCategory), в обход её open-only гварда — это та же
+		// самая, уже определённая смена, не поиск заново.
+		mirrorWanted := hadMirror
+		if in.AffectsShift != nil {
+			mirrorWanted = *in.AffectsShift
+		}
+		if newType == "out" && mirrorWanted {
 			d := "Расход"
 			if newDescription != nil && *newDescription != "" {
 				d = *newDescription
@@ -2191,9 +2199,10 @@ func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*
 	//
 	// ВАЖНО: это учётная дата, а НЕ момент движения денег. Наличные из ящика
 	// уходят СЕГОДНЯ независимо от периода, поэтому зеркало кассовой смены
-	// (recordShiftCashOutIfActive ниже) получает today, не date — иначе для
-	// зарплаты за прошлый месяц зеркало пропустилось бы (v3.16.162 отбивает
-	// не-сегодняшние даты) и expected_cash показал бы фантомный излишек.
+	// (recordShiftCashOutIfActive ниже; создаётся только при явном ShiftID)
+	// получает today, не date — иначе для выплаты за прошлый месяц зеркало
+	// пропустилось бы (v3.16.162 отбивает не-сегодняшние даты) и
+	// expected_cash показал бы фантомный излишек.
 	date := today
 	if d := periodToOperationDate(derefOr(in.Period, ""), now); d != "" {
 		date = d
@@ -2244,14 +2253,22 @@ func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*
 	if err := tx.Model(&acc).Updates(map[string]any{"balance": newBal, "updated_at": now}).Error; err != nil {
 		return nil, err
 	}
-	// Наличная выплата (зарплата/обслуживание) со счёта открытой смены →
-	// зеркалим отток в кассовую смену (cash_out), иначе expected_cash в
-	// Z-отчёте покажет ложную недостачу. No-op для безнала/закрытой смены.
+	// Зеркало в кассовую смену — только при ЯВНОМ сменном контексте (ShiftID):
+	// выплата обслуживания с экрана смены его передаёт — наличные реально
+	// уходят из ящика, expected_cash обязан уменьшиться. Зарплата/аванс из
+	// раздела Финансы ShiftID не несут: они платятся из общих наличных
+	// (сейф/бэк-офис), ящик кассира не трогают — физическую выдачу из ящика
+	// оформляют расходом со смены. Раньше зеркало создавалось по совпадению
+	// счёта, и ЗП из Финансов ложно уменьшала ожидаемую кассу текущей смены.
+	// Зеркало (когда есть) датируется today, не учётной датой периода: деньги
+	// из ящика уходят сегодня (v3.16.162 отбивает не-сегодняшние даты).
 	// foID — генерируем ЗАРАНЕЕ (а не в поле ниже), чтобы зеркало несло
 	// source_ref на саму эту выплату (069, регресс БАГ #28).
 	foID := uuid.NewString()
-	if err := recordShiftCashOutIfActive(tx, rid, derefOr(in.ShiftID, ""), *in.AccountID, derefOr(desc, category), today, foID, amount, now); err != nil {
-		return nil, err
+	if sid := derefOr(in.ShiftID, ""); sid != "" {
+		if err := recordShiftCashOutIfActive(tx, rid, sid, *in.AccountID, derefOr(desc, category), today, foID, amount, now); err != nil {
+			return nil, err
+		}
 	}
 	op := models.FinancialOperation{
 		ID:           foID,

@@ -13488,7 +13488,7 @@ export interface components {
             counterparty?: string;
             /** Format: uuid */
             shift_id?: string;
-            /** @description false — не зеркалить расход в текущую открытую смену, даже если счёт совпадает (по умолчанию/omitted — зеркалить, как раньше) */
+            /** @description true — расход выдан из ящика текущей открытой смены: помимо счёта уменьшить и expected_cash смены. По умолчанию (omitted/false) расход двигает только счёт — ящик кассира отслеживается сменными операциями. Зеркало создаётся и при явном shift_id независимо от флага. В PATCH: omitted сохраняет сменную природу записи (зеркало пересоздаётся, только если было). */
             affects_shift?: boolean;
         };
         FinancialOperationsList: {

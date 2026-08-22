@@ -179,6 +179,8 @@ export default function AccountsPage() {
     const editing = editingOperation
     try {
       if (editing) {
+        // affectsShift намеренно не шлём: PATCH без него сохраняет сменную
+        // природу записи (зеркало пересоздаётся, только если оно было).
         await updateFinancialOperation(editing.id, {
           type: data.type,
           amount: data.amount,
@@ -187,7 +189,6 @@ export default function AccountsPage() {
           activity: data.activity,
           date: data.date,
           description: data.description,
-          affectsShift: data.affectsShift,
         })
       } else {
         const account = accounts.find((a) => a.id === data.accountId)

@@ -392,15 +392,18 @@ func TestFinancialFlow_Full(t *testing.T) {
 		}
 	})
 
-	// ─── Flow 6: бонус повару (out 50 с cash) ────────────────────────────
+	// ─── Flow 6: бонус повару (out 50 с cash, из ящика смены) ────────────
 	t.Run("Flow6_Bonus", func(t *testing.T) {
+		// affects_shift=true — явный опт-ин «выдано из кассы смены»: без него
+		// расход из Финансов двигает только счёт, ящик открытой смены не трогает.
 		body := map[string]any{
-			"type":        "out",
-			"amount":      "50",
-			"category":    "bonus",
-			"account_id":  cashAccID,
-			"activity":    "operational",
-			"description": "Бонус повару",
+			"type":          "out",
+			"amount":        "50",
+			"category":      "bonus",
+			"account_id":    cashAccID,
+			"activity":      "operational",
+			"description":   "Бонус повару",
+			"affects_shift": true,
 		}
 		r, b := f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), body)
 		if r.StatusCode != 201 {
@@ -439,7 +442,7 @@ func TestFinancialFlow_Full(t *testing.T) {
 			t.Errorf("MISMATCH cash_revenue at close = %s, want 275", sh.CashRevenue.String())
 		}
 		if sh.ExpectedCash == nil || !sh.ExpectedCash.Equal(decimal.MustFromString("325")) {
-			t.Errorf("MISMATCH expected_cash = %v, want 325 (#27: наличный бонус зеркалится в смену)", sh.ExpectedCash)
+			t.Errorf("MISMATCH expected_cash = %v, want 325 (бонус с affects_shift=true зеркалится в смену)", sh.ExpectedCash)
 		}
 	})
 
