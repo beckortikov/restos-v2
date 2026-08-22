@@ -18,8 +18,9 @@ import (
 // зеркалиться в expected_cash ТЕКУЩЕЙ открытой смены (иначе фантомная
 // недостача/излишек в сегодняшнем Z-отчёте — забыли внести расход за вчера,
 // внесли сегодня с датой "вчера", а оно тихо подвинуло сегодняшнюю кассу).
-// Инцидент 23.07.2026. Операция с сегодняшней датой (или без даты — дефолт)
-// по-прежнему обязана зеркалиться, иначе баг просто переехал в другую сторону.
+// Инцидент 23.07.2026. Обе операции шлются с affects_shift=true (явный опт-ин
+// «выдано из ящика смены» — без него зеркала теперь нет вообще): вчерашняя
+// дата обязана отбить даже опт-ин, сегодняшняя с опт-ином — зеркалиться.
 func TestFinop_Backdated_DoesNotMirrorIntoOpenShift(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
@@ -41,9 +42,13 @@ func TestFinop_Backdated_DoesNotMirrorIntoOpenShift(t *testing.T) {
 	today := time.Now().UTC().Format("2006-01-02")
 
 	// ─── Задним числом (вчера) — зеркала в СЕГОДНЯШНЕЙ смене быть не должно ───
+	// affects_shift=true (новый опт-ин «из ящика смены») задан НАРОЧНО: гвард
+	// по дате в recordShiftCashOutIfActive обязан отбить даже явный опт-ин —
+	// вчерашняя операция не двигает сегодняшний ящик.
 	r, b := f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), map[string]any{
 		"type": "out", "amount": "165", "category": "Закупка продуктов",
 		"account_id": accountID, "date": yesterday, "description": "Шашлик",
+		"affects_shift": true,
 	})
 	if r.StatusCode != http.StatusCreated && r.StatusCode != http.StatusOK {
 		t.Fatalf("create backdated op: %d %s", r.StatusCode, b)
@@ -58,10 +63,11 @@ func TestFinop_Backdated_DoesNotMirrorIntoOpenShift(t *testing.T) {
 		t.Errorf("backdated (вчера) операция создала %d зеркал в текущей открытой смене, want 0 — expected_cash сегодняшней смены не должен двигаться чужой датой", mirrors)
 	}
 
-	// ─── Сегодняшней датой — зеркало ОБЯЗАНО создаться (regression guard) ─────
+	// ─── Сегодня + affects_shift=true — зеркало ОБЯЗАНО создаться ────────────
 	r, b = f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), map[string]any{
 		"type": "out", "amount": "200", "category": "Закупка продуктов",
 		"account_id": accountID, "date": today, "description": "Лаваш",
+		"affects_shift": true,
 	})
 	if r.StatusCode != http.StatusCreated && r.StatusCode != http.StatusOK {
 		t.Fatalf("create today op: %d %s", r.StatusCode, b)

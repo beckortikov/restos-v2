@@ -65,7 +65,25 @@ func TestSalary_CancelPayout_RefundsAccountAndReversesMirror(t *testing.T) {
 		Order("created_at DESC").First(&op).Error; err != nil {
 		t.Fatalf("выплата не найдена: %v", err)
 	}
+	// Новая политика: ЗП из Финансов (без shift_id) ящик смены не трогает —
+	// выплата зеркала НЕ создала. Чтобы проверить снятие зеркала отменой
+	// (ветка CancelSalary жива для легаси-записей и сменных выплат с shift_id),
+	// подсаживаем зеркало вручную — ровно с теми полями, что писал бы
+	// recordShiftCashOutIfActive.
 	var mirrors int64
+	gdb.Model(&models.CashShiftOperation{}).
+		Where("shift_id = ? AND category = ? AND source_ref = ?", shiftID, "__auto_mirror__", op.ID).Count(&mirrors)
+	if mirrors != 0 {
+		t.Fatalf("зеркал после выплаты = %d, want 0 — ЗП без shift_id не должна зеркалиться в смену", mirrors)
+	}
+	mirrorType, mirrorCat, srcRef := "cash_out", "__auto_mirror__", op.ID
+	if err := gdb.Create(&models.CashShiftOperation{
+		ID: uuid.NewString(), ShiftID: &shiftID, Type: &mirrorType,
+		Amount: decimal.MustFromString("3000"), Category: &mirrorCat, SourceRef: &srcRef,
+		CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+	}).Error; err != nil {
+		t.Fatal(err)
+	}
 	gdb.Model(&models.CashShiftOperation{}).
 		Where("shift_id = ? AND category = ? AND source_ref = ?", shiftID, "__auto_mirror__", op.ID).Count(&mirrors)
 	if mirrors != 1 {

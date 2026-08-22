@@ -388,10 +388,10 @@ func (s *LiabilitiesService) Pay(ctx context.Context, id string, in LiabilityPay
 		}).Error; err != nil {
 			return err
 		}
-		// #27: наличное гашение с кассового счёта открытой смены зеркалим в смену.
-		if err := recordShiftCashOutIfActive(tx, rid, "", in.AccountID, desc, opDate, foID, pay, now); err != nil {
-			return err
-		}
+		// Погашение обязательства — бэк-офисный платёж: счёт дебетован, но ящик
+		// открытой смены не трогаем (сменные выдачи оформляются расходом со
+		// смены). Раньше здесь было авто-зеркало по совпадению счёта (#27) —
+		// убрано вместе с зеркалом зарплаты: касса смены ≠ счёт «Наличные».
 		out = &lia
 		return nil
 	})

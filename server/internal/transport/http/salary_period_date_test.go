@@ -15,12 +15,15 @@ import (
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
-// TestSalary_PastMonthPayout_LandsInPeriod_ButMirrorsToday — ЗП, вариант А
+// TestSalary_PastMonthPayout_LandsInPeriod_NoShiftMirror — ЗП, вариант А
 // (баг: раньше выплата за прошлый месяц date=сегодня → падала в ТЕКУЩИЙ месяц в
-// ДДС/ОПиУ). Теперь дата операции = период начисления. НО деньги из ящика ушли
-// СЕГОДНЯ — зеркало кассовой смены обязано сработать сегодня (иначе фантомный
-// излишек в текущем Z-отчёте, конфликт с v3.16.162). Проверяем оба свойства.
-func TestSalary_PastMonthPayout_LandsInPeriod_ButMirrorsToday(t *testing.T) {
+// ДДС/ОПиУ). Теперь дата операции = период начисления. Зеркала кассовой смены
+// при этом НЕТ: зарплата из раздела Финансы платится из общих наличных
+// (бэк-офис), ящик кассира двигают только операции со сменным контекстом
+// (shift_id — сервисная выплата со смены; см. service_payout_test). Раньше
+// зеркало создавалось по совпадению счёта, и ЗП ложно уменьшала ожидаемую
+// кассу открытой смены.
+func TestSalary_PastMonthPayout_LandsInPeriod_NoShiftMirror(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	gdb := openTestDB(t)
@@ -78,15 +81,15 @@ func TestSalary_PastMonthPayout_LandsInPeriod_ButMirrorsToday(t *testing.T) {
 		t.Errorf("date операции = сегодня (%s) — баг не исправлен, выплата упала в текущий месяц", today)
 	}
 
-	// ─── Зеркало смены сработало СЕГОДНЯ (деньги ушли из ящика сейчас) ───────
+	// ─── Зеркала в смене НЕТ: ЗП из Финансов не трогает ящик кассира ─────────
 	var mirrors int64
 	if err := gdb.Model(&models.CashShiftOperation{}).
 		Where("shift_id = ? AND category = ? AND amount = ?", shiftID, "__auto_mirror__", decimal.MustFromString("4000")).
 		Count(&mirrors).Error; err != nil {
 		t.Fatal(err)
 	}
-	if mirrors != 1 {
-		t.Errorf("зеркал в открытой смене = %d, want 1 — деньги ушли из ящика сегодня, expected_cash обязан это отразить", mirrors)
+	if mirrors != 0 {
+		t.Errorf("зеркал в открытой смене = %d, want 0 — зарплата без shift_id платится из общих наличных и не должна уменьшать expected_cash смены", mirrors)
 	}
 
 	// Счёт списан.

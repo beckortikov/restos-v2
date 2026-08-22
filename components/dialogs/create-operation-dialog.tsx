@@ -54,8 +54,11 @@ interface OperationForm {
   activity: FinancialActivity
   description: string
   date: string
-  // affectsShift — только для расхода: зеркалить ли в текущую открытую
-  // смену (уменьшить «Ожидается касса»), если счёт совпадает с её кассой.
+  // affectsShift — только для расхода, опт-ин: наличные физически выданы из
+  // ящика текущей открытой смены → помимо счёта уменьшить и «Ожидается касса».
+  // По умолчанию выключено: счёт «Наличные» один на ресторан, ящик кассира
+  // двигают только сменные операции. В режиме редактирования не показывается
+  // и не отправляется — бэк сам сохраняет сменную природу записи.
   affectsShift: boolean
 }
 
@@ -81,7 +84,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
     activity: 'operational',
     description: '',
     date: today,
-    affectsShift: true,
+    affectsShift: false,
   })
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [dbCategories, setDbCategories] = useState<{ name: string; type: string }[]>([])
@@ -110,11 +113,11 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
         activity: initialOperation.activity,
         description: initialOperation.description ?? '',
         date: initialOperation.date || today,
-        affectsShift: initialOperation.affectsShift ?? true,
+        affectsShift: false,
       } : {
         type: 'out', amount: 0, category: '', accountId: '',
         activity: 'operational', description: '', date: today,
-        affectsShift: true,
+        affectsShift: false,
       })
       setSaving(false)
     }
@@ -238,12 +241,11 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
             </select>
           </div>
 
-          {/* Списать со смены — только для расхода: явный выбор, должна ли эта
-              проводка ещё и уменьшить «Ожидается касса» текущей открытой смены
-              (если счёт совпадает с её кассой), или это чисто бухгалтерская
-              запись на счёте, которая не была движением денег в сегодняшнем
-              ящике. */}
-          {form.type === 'out' && (
+          {/* Выдано из кассы смены — опт-ин только для нового расхода: по
+              умолчанию проводка двигает лишь счёт, ящик открытой смены — нет
+              (сменные выдачи оформляются расходом со смены). В редактировании
+              не показываем: сменную природу записи сохраняет бэк. */}
+          {form.type === 'out' && !isEdit && (
             <label className="flex items-start gap-2.5 rounded-lg border border-border bg-card px-3 py-2.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -252,9 +254,9 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
                 className="mt-0.5 size-4 rounded border-border accent-primary"
               />
               <span>
-                <span className="block text-sm font-medium text-foreground">Списать из текущей смены</span>
+                <span className="block text-sm font-medium text-foreground">Наличные выданы из кассы смены</span>
                 <span className="block text-xs text-muted-foreground mt-0.5">
-                  Уменьшит «Ожидается касса» открытой смены, если счёт — её касса. Выключите, если деньги физически не выходили из ящика сегодня.
+                  Дополнительно уменьшит «Ожидается касса» открытой смены. Включайте, только если деньги физически взяты из ящика кассира.
                 </span>
               </span>
             </label>

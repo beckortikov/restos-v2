@@ -98,9 +98,11 @@ export default function ExpensesByCategoryPage() {
   async function handleSaveOperation(data: { type: 'in' | 'out' | 'transfer'; amount: number; category: string; accountId: string; activity: 'operational' | 'investment' | 'financial'; description: string; date: string; affectsShift?: boolean }) {
     if (!editingOperation) return
     try {
+      // affectsShift намеренно не шлём: PATCH без него сохраняет сменную
+      // природу записи (зеркало пересоздаётся, только если оно было).
       await updateFinancialOperation(editingOperation.id, {
         type: data.type, amount: data.amount, category: data.category, accountId: data.accountId,
-        activity: data.activity, date: data.date, description: data.description, affectsShift: data.affectsShift,
+        activity: data.activity, date: data.date, description: data.description,
       })
       await load()
       toast.success('Операция изменена')
