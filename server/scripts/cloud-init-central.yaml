@@ -1,0 +1,40 @@
+#cloud-config
+#
+# cloud-init для central-узла сети RestOS (ADR-003, продолжение).
+# Вставляется в поле «Cloud-init» на этапе создания VPS (Timeweb Cloud и
+# аналогичные провайдеры на базе стандартного cloud-init).
+#
+# Что закрывает: SSH-ключ сразу при первом старте (без пароля, без ручного
+# добавления через панель), базовый firewall (только 22/80/443), fail2ban,
+# без лишнего дефолтного пользователя ubuntu.
+#
+# Что НЕ закрывает (и не может): сам бинарь restos-server (~37 МБ) и запуск
+# setup-central.sh. user-data у cloud-init рассчитан на небольшие
+# скрипты/конфиги (лимит обычно ~16–64 КБ у провайдера), доставить бинарь
+# такого размера через него нельзя. Этот шаг — по-прежнему вручную:
+#
+#   scp bin/restos-server-linux-amd64 root@<IP>:/opt/restos/restos-server
+#   ssh root@<IP> chmod +x /opt/restos/restos-server
+#   ssh root@<IP> '/opt/restos/restos-server-scripts/setup-central.sh https://ваш-домен.ru "Название сети"'
+#
+# Caddy (HTTPS) тоже не ставится отсюда — его пакета обычно нет в дефолтных
+# репозиториях Ubuntu, нужен отдельный apt-репозиторий Caddy. Порты 80/443
+# уже открыты firewall'ом ниже — сам Caddy после этого ставится вручную
+# (apt install caddy + Caddyfile), см. docs/deploy/multi-branch-sync.md.
+
+users: []
+
+ssh_authorized_keys:
+  - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKDZ89CirY/vXTZAOLaF1ThWVXehD3uJSrAgecLqbt6W restos-central-vps
+
+package_update: true
+packages:
+  - fail2ban
+  - ufw
+
+runcmd:
+  - ufw allow OpenSSH
+  - ufw allow 80/tcp
+  - ufw allow 443/tcp
+  - ufw --force enable
+  - systemctl enable --now fail2ban
