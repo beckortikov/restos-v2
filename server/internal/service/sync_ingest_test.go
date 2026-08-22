@@ -63,7 +63,7 @@ func TestSyncIngest(t *testing.T) {
 	}}
 
 	// ─── Первый ingest ───────────────────────────────────────────────────
-	res, err := svc.Ingest(ctx, batch)
+	res, err := svc.Ingest(ctx, batch, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestSyncIngest(t *testing.T) {
 	payload2, _ := json.Marshal(transfer)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_transfers", RowID: transferID, Op: "update", Payload: payload2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", transferID)
@@ -105,7 +105,7 @@ func TestSyncIngest(t *testing.T) {
 	})
 	fr, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "financial_operations", RowID: finID, Op: "insert", Payload: finPayload},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest finop: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestSyncIngest_Orders(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "orders", RowID: orderID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestSyncIngest_Orders(t *testing.T) {
 	body2, _ := json.Marshal(payload)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "orders", RowID: orderID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", orderID)
@@ -269,7 +269,7 @@ func TestSyncIngest_Shift(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "cash_shifts", RowID: shiftID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestSyncIngest_Shift(t *testing.T) {
 	body2, _ := json.Marshal(shift)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "cash_shifts", RowID: shiftID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", shiftID)
@@ -343,7 +343,7 @@ func TestSyncIngest_ShiftOp(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "cash_shift_operations", RowID: opID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestSyncIngest_ShiftOp(t *testing.T) {
 	// ─── Удаление (DeleteExpense/DeleteOperation на филиале) — payload пуст ─
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "cash_shift_operations", RowID: opID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -409,7 +409,7 @@ func TestSyncIngest_User(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "users", RowID: userID, Op: "insert", Payload: rawPayload},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -464,7 +464,7 @@ func TestSyncIngest_MenuItem(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "menu_items", RowID: itemID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -486,7 +486,7 @@ func TestSyncIngest_MenuItem(t *testing.T) {
 	body2, _ := json.Marshal(mi)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "menu_items", RowID: itemID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", itemID)
@@ -535,7 +535,7 @@ func TestSyncIngest_Table(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "tables", RowID: tableID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -550,7 +550,7 @@ func TestSyncIngest_Table(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "tables", RowID: tableID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -593,7 +593,7 @@ func TestSyncIngest_Zone(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "zones", RowID: zoneID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -608,7 +608,7 @@ func TestSyncIngest_Zone(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "zones", RowID: zoneID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -653,7 +653,7 @@ func TestSyncIngest_Ingredient(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "ingredients", RowID: ingID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestSyncIngest_Ingredient(t *testing.T) {
 	body2, _ := json.Marshal(ing)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "ingredients", RowID: ingID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", ingID)
@@ -683,7 +683,7 @@ func TestSyncIngest_Ingredient(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "ingredients", RowID: ingID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -732,7 +732,7 @@ func TestSyncIngest_StockMovement(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_movements", RowID: mvID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -752,7 +752,7 @@ func TestSyncIngest_StockMovement(t *testing.T) {
 	// использует ту же Session(SkipHooks:true), что и остальные apply*).
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_movements", RowID: mvID, Op: "insert", Payload: body},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	var count int64
@@ -812,7 +812,7 @@ func TestSyncIngest_StockReceipt(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_receipts", RowID: receiptID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -837,7 +837,7 @@ func TestSyncIngest_StockReceipt(t *testing.T) {
 	body2, _ := json.Marshal(payload)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_receipts", RowID: receiptID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", receiptID)
@@ -899,7 +899,7 @@ func TestSyncIngest_StockWriteoff(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_writeoffs", RowID: writeoffID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -970,7 +970,7 @@ func TestSyncIngest_InventoryCheck(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "inventory_checks", RowID: checkID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -995,7 +995,7 @@ func TestSyncIngest_InventoryCheck(t *testing.T) {
 	body2, _ := json.Marshal(payload)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "inventory_checks", RowID: checkID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", checkID)
@@ -1059,7 +1059,7 @@ func TestSyncIngest_StockReturn(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_returns", RowID: returnID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1082,7 +1082,7 @@ func TestSyncIngest_StockReturn(t *testing.T) {
 	body2, _ := json.Marshal(payload)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "stock_returns", RowID: returnID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", returnID)
@@ -1128,7 +1128,7 @@ func TestSyncIngest_Supplier(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "suppliers", RowID: supID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1148,7 +1148,7 @@ func TestSyncIngest_Supplier(t *testing.T) {
 	body2, _ := json.Marshal(sup)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "suppliers", RowID: supID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", supID)
@@ -1158,7 +1158,7 @@ func TestSyncIngest_Supplier(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "suppliers", RowID: supID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -1208,7 +1208,7 @@ func TestSyncIngest_SupplyExpense(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "supply_expenses", RowID: seID, Op: "insert", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1226,7 +1226,7 @@ func TestSyncIngest_SupplyExpense(t *testing.T) {
 	// Повторный приём (идемпотентность Pusher'а) — не задваивает строку.
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "supply_expenses", RowID: seID, Op: "insert", Payload: body},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	var count int64
@@ -1269,7 +1269,7 @@ func TestSyncIngest_FinancialAccount(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "financial_accounts", RowID: accID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1289,7 +1289,7 @@ func TestSyncIngest_FinancialAccount(t *testing.T) {
 	body2, _ := json.Marshal(acc)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "financial_accounts", RowID: accID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", accID)
@@ -1306,7 +1306,7 @@ func TestSyncIngest_FinancialAccount(t *testing.T) {
 	body3, _ := json.Marshal(acc)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "financial_accounts", RowID: accID, Op: "update", Payload: body3},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (disable): %v", err)
 	}
 	gdb.First(&got, "id = ?", accID)
@@ -1316,7 +1316,7 @@ func TestSyncIngest_FinancialAccount(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "financial_accounts", RowID: accID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -1362,7 +1362,7 @@ func TestSyncIngest_RecurringPayment(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "recurring_payments", RowID: rpID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1382,7 +1382,7 @@ func TestSyncIngest_RecurringPayment(t *testing.T) {
 	body2, _ := json.Marshal(rp)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "recurring_payments", RowID: rpID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", rpID)
@@ -1392,7 +1392,7 @@ func TestSyncIngest_RecurringPayment(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "recurring_payments", RowID: rpID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -1439,7 +1439,7 @@ func TestSyncIngest_FinancialOpDelete(t *testing.T) {
 
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "financial_operations", RowID: opID, Op: "insert", Payload: body},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (insert): %v", err)
 	}
 	var count int64
@@ -1450,7 +1450,7 @@ func TestSyncIngest_FinancialOpDelete(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "financial_operations", RowID: opID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -1492,7 +1492,7 @@ func TestSyncIngest_TimeEntry(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "time_entries", RowID: teID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1513,7 +1513,7 @@ func TestSyncIngest_TimeEntry(t *testing.T) {
 	body2, _ := json.Marshal(te)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "time_entries", RowID: teID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (repeat): %v", err)
 	}
 	gdb.First(&got, "id = ?", teID)
@@ -1523,7 +1523,7 @@ func TestSyncIngest_TimeEntry(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "time_entries", RowID: teID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -1565,7 +1565,7 @@ func TestSyncIngest_SalaryWorkedDay(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_worked_days", RowID: rowID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1580,7 +1580,7 @@ func TestSyncIngest_SalaryWorkedDay(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_worked_days", RowID: rowID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -1621,7 +1621,7 @@ func TestSyncIngest_SalaryDayMultiplier(t *testing.T) {
 
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_day_multipliers", RowID: rowID, Op: "update", Payload: body},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -1638,7 +1638,7 @@ func TestSyncIngest_SalaryDayMultiplier(t *testing.T) {
 
 	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_day_multipliers", RowID: rowID, Op: "delete", Payload: nil},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest (delete): %v", err)
 	}
@@ -1683,7 +1683,7 @@ func TestSyncIngest_SalaryDeduction(t *testing.T) {
 
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_deductions", RowID: rowID, Op: "update", Payload: body},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 	var got models.SalaryDeduction
@@ -1702,7 +1702,7 @@ func TestSyncIngest_SalaryDeduction(t *testing.T) {
 	body2, _ := json.Marshal(row)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_deductions", RowID: rowID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (cancel): %v", err)
 	}
 	gdb.First(&got, "id = ?", rowID)
@@ -1743,7 +1743,7 @@ func TestSyncIngest_SalaryAdvance(t *testing.T) {
 
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_advances", RowID: rowID, Op: "update", Payload: body},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 	var got models.SalaryAdvance
@@ -1762,11 +1762,122 @@ func TestSyncIngest_SalaryAdvance(t *testing.T) {
 	body2, _ := json.Marshal(row)
 	if _, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "salary_advances", RowID: rowID, Op: "update", Payload: body2},
-	}}); err != nil {
+	}}, ""); err != nil {
 		t.Fatalf("Ingest (cancel): %v", err)
 	}
 	gdb.First(&got, "id = ?", rowID)
 	if got.CancelledAt == nil {
 		t.Errorf("cancelled_at after upsert = nil, want set")
+	}
+}
+
+// TestIngestRejectsForeignRows — Фаза Г: филиал может писать ТОЛЬКО свои строки.
+//
+// До персональных токенов central принимал батч на веру: он знал лишь «пришёл
+// кто-то с правильным секретом сети», а restaurant_id брал прямо из payload —
+// то есть любой узел мог подделать выручку, расходы или остатки соседнего
+// филиала. Теперь звонящий опознан, и подстановка ловится.
+//
+// Отдельно проверяем, что защита НЕ ломает легитимные случаи: перемещения
+// пушат обе стороны (отправитель и получатель), а account-level сущности
+// (каталог сети) своего ресторана не имеют вовсе.
+func TestIngestRejectsForeignRows(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{"financial_operations", "stock_transfers", "nomenclature"} {
+		gdb.Exec("DELETE FROM " + tbl)
+	}
+
+	svc := service.NewSyncService(repo.New(gdb))
+	ctx := context.Background()
+	me, other := uuid.NewString(), uuid.NewString()
+
+	inType, cat, date := "in", "revenue", "2026-08-01"
+	finOp := func(rid string) (string, json.RawMessage) {
+		id := uuid.NewString()
+		p, _ := json.Marshal(models.FinancialOperation{
+			ID: id, Type: &inType, Category: &cat, Date: &date,
+			Amount: decimal.MustFromString("1000"), RestaurantID: &rid,
+		})
+		return id, p
+	}
+	mineID, minePayload := finOp(me)
+	foreignID, foreignPayload := finOp(other)
+
+	// Перемещение, где звонящий — ПОЛУЧАТЕЛЬ: он его тоже пушит (при приёме),
+	// и from_restaurant_id там чужой — это законно.
+	incomingID := uuid.NewString()
+	incoming, _ := json.Marshal(models.StockTransfer{
+		ID: incomingID, FromRestaurantID: &other, ToRestaurantID: &me, Status: "received",
+	})
+	// Перемещение между ДВУМЯ чужими узлами — звонящий тут ни при чём.
+	aliesID := uuid.NewString()
+	third := uuid.NewString()
+	aliens, _ := json.Marshal(models.StockTransfer{
+		ID: aliesID, FromRestaurantID: &other, ToRestaurantID: &third, Status: "sent",
+	})
+	// Каталог сети — account-level, ресторана нет вовсе.
+	nomID := uuid.NewString()
+	acc := uuid.NewString()
+	kg := "кг"
+	nom, _ := json.Marshal(models.Nomenclature{ID: nomID, AccountID: &acc, Name: "Рис", Unit: &kg})
+
+	batch := service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_operations", RowID: mineID, Op: "insert", Payload: minePayload},
+		{Entity: "financial_operations", RowID: foreignID, Op: "insert", Payload: foreignPayload},
+		{Entity: "stock_transfers", RowID: incomingID, Op: "insert", Payload: incoming},
+		{Entity: "stock_transfers", RowID: aliesID, Op: "insert", Payload: aliens},
+		{Entity: "nomenclature", RowID: nomID, Op: "update", Payload: nom},
+	}}
+
+	res, err := svc.Ingest(ctx, batch, me)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if res.Rejected != 2 {
+		t.Errorf("отвергнуто = %d, want 2 (чужая финопа + перемещение между чужими)", res.Rejected)
+	}
+
+	exists := func(table, id string) bool {
+		var c int64
+		gdb.Table(table).Where("id = ?", id).Count(&c)
+		return c > 0
+	}
+	if !exists("financial_operations", mineID) {
+		t.Error("своя строка не применена")
+	}
+	if exists("financial_operations", foreignID) {
+		t.Error("ПОДДЕЛКА ПРОШЛА: применена финопа за чужой ресторан")
+	}
+	if !exists("stock_transfers", incomingID) {
+		t.Error("входящее перемещение отвергнуто — получатель тоже вправе его пушить")
+	}
+	if exists("stock_transfers", aliesID) {
+		t.Error("ПОДДЕЛКА ПРОШЛА: применено перемещение между двумя чужими узлами")
+	}
+	if !exists("nomenclature", nomID) {
+		t.Error("account-level запись отвергнута — своего ресторана у неё нет, проверять нечего")
+	}
+
+	// ─── Легаси-звонящий (общий секрет, узел не опознан) — проверки нет ───
+	// Иначе кассы, подключённые до Фазы Г, разом перестали бы синхронизироваться.
+	res2, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
+		{Entity: "financial_operations", RowID: foreignID, Op: "insert", Payload: foreignPayload},
+	}}, "")
+	if err != nil {
+		t.Fatalf("Ingest (legacy): %v", err)
+	}
+	if res2.Rejected != 0 || res2.Applied != 1 {
+		t.Errorf("легаси-звонящий: applied=%d rejected=%d, want 1/0", res2.Applied, res2.Rejected)
 	}
 }

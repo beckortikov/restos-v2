@@ -7,6 +7,7 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/service"
+	"github.com/restos/restos-v4/server/internal/transport/http/middleware"
 	"github.com/restos/restos-v4/server/internal/transport/http/respond"
 )
 
@@ -26,7 +27,11 @@ func (h *SyncHandler) Ingest(w http.ResponseWriter, r *http.Request) {
 		respond.BadRequest(w, "invalid JSON body")
 		return
 	}
-	out, err := h.svc.Ingest(r.Context(), in)
+	// Кто звонит — из персонального токена филиала (Фаза Г). Пусто = пришли с
+	// общим секретом сети: узел неотличим, и проверка принадлежности строк не
+	// применяется (иначе сломались бы кассы, подключённые до Фазы Г).
+	caller, _ := middleware.SyncCallerID(r.Context())
+	out, err := h.svc.Ingest(r.Context(), in, caller)
 	if err != nil {
 		respond.Error(w, err)
 		return

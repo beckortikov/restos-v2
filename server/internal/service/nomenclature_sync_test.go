@@ -111,7 +111,7 @@ func TestNomenclaturePropagation(t *testing.T) {
 	payload, _ := json.Marshal(got2)
 	res, err := svc.Ingest(ctx, service.IngestInput{Entries: []service.SyncEntry{
 		{Entity: "nomenclature", RowID: nomID, Op: "upsert", Payload: payload},
-	}})
+	}}, "")
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}

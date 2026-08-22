@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -48,16 +49,26 @@ type IngestInput struct {
 	Entries []SyncEntry `json:"entries"`
 }
 
-// IngestResult — сколько дельт применено/пропущено.
+// IngestResult — сколько дельт применено/пропущено/отвергнуто.
 type IngestResult struct {
 	Applied int `json:"applied"`
 	Skipped int `json:"skipped"`
+	// Rejected — строки, которые филиал прислал ЗА ЧУЖОЙ ресторан (Фаза Г).
+	// Отдельно от Skipped: Skipped — «эту сущность мы не умеем, ничего
+	// страшного», Rejected — «пришло то, чего приходить не должно».
+	Rejected int `json:"rejected,omitempty"`
 }
 
 // Ingest применяет батч UP-пушей на центральном узле — upsert по PK (центр
 // зеркалит авторитетные данные филиала). Идемпотентно.
-func (s *SyncService) Ingest(ctx context.Context, in IngestInput) (*IngestResult, error) {
-	return s.apply(ctx, in, true, "")
+//
+// callerBranchID — узел, опознанный по его персональному токену
+// (middleware.SyncCallerID). Пусто = звонящий пришёл с общим секретом сети и
+// неотличим от остальных: тогда проверка принадлежности не применяется —
+// иначе сломались бы кассы, подключённые до Фазы Г. Как только филиал
+// переподключится и получит свой токен, проверка для него включится сама.
+func (s *SyncService) Ingest(ctx context.Context, in IngestInput, callerBranchID string) (*IngestResult, error) {
+	return s.applyIngest(ctx, in, callerBranchID)
 }
 
 // ApplyPulled применяет DOWN-pull на филиале — insert-if-absent (НЕ перезаписывает).
@@ -68,6 +79,69 @@ func (s *SyncService) Ingest(ctx context.Context, in IngestInput) (*IngestResult
 // с merge, наследуемое из мастера, локальные цена/стоп сохраняются).
 func (s *SyncService) ApplyPulled(ctx context.Context, in IngestInput, branchRestaurantID string) (*IngestResult, error) {
 	return s.apply(ctx, in, false, branchRestaurantID)
+}
+
+// applyIngest — up-push с проверкой принадлежности строк звонящему.
+//
+// До Фазы Г central принимал батч на веру: он знал лишь «пришёл кто-то с
+// правильным секретом сети», а restaurant_id брал из самого payload. То есть
+// любой узел мог писать данные ОТ ИМЕНИ соседнего — подделать выручку, расходы,
+// остатки чужого филиала. Персональные токены дали имя звонящего, и теперь эта
+// подстановка ловится. Ошибкой считаем строку, а не батч: одна чужая запись не
+// повод отбросить сотню нормальных (и не повод загнать очередь филиала в
+// карантин — см. Pusher).
+func (s *SyncService) applyIngest(ctx context.Context, in IngestInput, callerBranchID string) (*IngestResult, error) {
+	if callerBranchID == "" {
+		return s.apply(ctx, in, true, "")
+	}
+	allowed := IngestInput{Entries: make([]SyncEntry, 0, len(in.Entries))}
+	rejected := 0
+	for _, e := range in.Entries {
+		if entryBelongsTo(e, callerBranchID) {
+			allowed.Entries = append(allowed.Entries, e)
+			continue
+		}
+		rejected++
+		log.Warn().
+			Str("entity", e.Entity).Str("row_id", e.RowID).Str("caller", callerBranchID).
+			Msg("sync ingest: отвергнута строка за чужой ресторан")
+	}
+	res, err := s.apply(ctx, allowed, true, "")
+	if err != nil {
+		return nil, err
+	}
+	res.Rejected = rejected
+	return res, nil
+}
+
+// entryBelongsTo — вправе ли узел branchID присылать эту строку.
+//
+// Разбираем payload по трём полям, потому что «принадлежность» у сущностей
+// разная:
+//   - restaurant_id — обычные пер-ресторанные таблицы (заказы, склад, деньги…);
+//   - from/to_restaurant_id — перемещения и переводы: их пушат ОБЕ стороны
+//     (отправитель при создании, получатель при приёме), поэтому годится любая;
+//   - ни одного из них — account-level сущности (nomenclature): своего
+//     ресторана у них нет, проверять нечего.
+func entryBelongsTo(e SyncEntry, branchID string) bool {
+	var p struct {
+		RestaurantID     *string `json:"restaurant_id"`
+		FromRestaurantID *string `json:"from_restaurant_id"`
+		ToRestaurantID   *string `json:"to_restaurant_id"`
+	}
+	if err := json.Unmarshal(e.Payload, &p); err != nil {
+		// Нечитаемый payload отвергать здесь не нужно: он всё равно упадёт в
+		// своём apply* с внятной ошибкой валидации.
+		return true
+	}
+	if p.FromRestaurantID != nil || p.ToRestaurantID != nil {
+		return (p.FromRestaurantID != nil && *p.FromRestaurantID == branchID) ||
+			(p.ToRestaurantID != nil && *p.ToRestaurantID == branchID)
+	}
+	if p.RestaurantID == nil || *p.RestaurantID == "" {
+		return true // account-level или строка без привязки — не наше дело
+	}
+	return *p.RestaurantID == branchID
 }
 
 func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool, branchID string) (*IngestResult, error) {

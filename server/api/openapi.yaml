@@ -1104,7 +1104,15 @@ paths:
   /api/v1/sync/ingest:
     post:
       tags: [stock]
-      summary: Приём дельт на центральном узле сети (multi-branch sync, ADR-003).
+      summary: |
+        Приём дельт на центральном узле сети (multi-branch sync, ADR-003).
+        Если звонящий опознан по персональному токену (Фаза Г), принимаются
+        ТОЛЬКО его собственные строки: попытка прислать данные за чужой
+        ресторан отбрасывается построчно и считается в rejected. Перемещения и
+        переводы законно пушат обе стороны (отправитель и получатель),
+        account-level сущности (каталог сети) не проверяются — своего ресторана
+        у них нет. Звонящий с общим секретом сети неотличим от остальных, и
+        проверка к нему не применяется (совместимость с кассами до Фазы Г).
       parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
       requestBody:
         required: true
@@ -1131,7 +1139,8 @@ paths:
                 type: object
                 properties:
                   applied: { type: integer }
-                  skipped: { type: integer }
+                  skipped: { type: integer, description: Сущность неизвестна этой версии central — forward-compat, не ошибка. }
+                  rejected: { type: integer, description: Строки за чужой ресторан (Фаза Г); присутствует, только если такие были. }
 
   /api/v1/sync/backfill:
     post:
