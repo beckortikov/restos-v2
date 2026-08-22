@@ -1076,13 +1076,18 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string, mirrorSi
 		// Именно они делают затрату видимой в ОПиУ филиала и — критично —
 		// в его зарплатном капе, который иначе не знал бы о выплате и
 		// разрешил бы выплатить второй раз. Курсор mirrorSince — см. выше.
+		// Окно — по updated_at, НЕ по created_at. Курсор обязан пропускать
+		// вниз не только новые расходы, но и отмену старых: бухгалтер сидит в
+		// центре и правит задним числом. Отмена не меняет created_at, поэтому
+		// на окне по нему расход, отменённый после того как филиал получил
+		// более свежие зеркала, не уехал бы вниз никогда.
 		mirrors := s.r.Raw().WithContext(ctx).
 			Where("target_restaurant_id = ?", restaurantID)
 		if mirrorSince != nil {
-			mirrors = mirrors.Where("created_at >= ?", *mirrorSince)
+			mirrors = mirrors.Where("updated_at >= ?", *mirrorSince)
 		}
 		var ops []models.FinancialOperation
-		if err := mirrors.Order("created_at ASC").Find(&ops).Error; err != nil {
+		if err := mirrors.Order("updated_at ASC").Find(&ops).Error; err != nil {
 			return nil, err
 		}
 		for i := range ops {
@@ -1140,7 +1145,31 @@ func (s *SyncService) applyFinancialOp(ctx context.Context, e SyncEntry, updateA
 		}
 		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
-			return tx.Where("id = ?", e.RowID).Delete(&models.FinancialOperation{}).Error
+			// Если удаляют зеркало расхода, оплаченного за нас другим узлом
+			// (Фаза Р), — удалить проводку мало, надо ОТКАТИТЬ её доменные
+			// последствия, иначе долг поставщику остался бы погашенным, а срок
+			// аренды — сдвинутым. Штатная отмена приходит не сюда, а soft-
+			// пометкой cancelled_at (см. ниже), но путь удаления обязан быть
+			// не менее корректным: строку читаем ДО удаления — после него
+			// неоткуда узнать ни сумму, ни на что она ссылалась.
+			var existing models.FinancialOperation
+			err := tx.Where("id = ?", e.RowID).First(&existing).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil // уже удалена — повторная доставка отмены, это норма
+			}
+			if err != nil {
+				return err
+			}
+			res := tx.Where("id = ?", e.RowID).Delete(&models.FinancialOperation{})
+			if res.Error != nil {
+				return res.Error
+			}
+			// Откат — строго при РЕАЛЬНОМ удалении: отмена, как и сам платёж,
+			// доставляется повторно, а долг и срок величины накопительные.
+			if res.RowsAffected == 0 || existing.PaidByRestaurantID == nil {
+				return nil
+			}
+			return reverseMirrorSideEffect(tx, &existing)
 		})
 	}
 	var op models.FinancialOperation
@@ -1157,6 +1186,30 @@ func (s *SyncService) applyFinancialOp(ctx context.Context, e SyncEntry, updateA
 		if res.Error != nil {
 			return res.Error
 		}
+		if updateAll || op.PaidByRestaurantID == nil {
+			return nil
+		}
+		// Зеркало уже лежало у нас: единственное, что могло измениться на
+		// центре — отмена. Гасим её ровно один раз: условие cancelled_at IS
+		// NULL делает это самой БД, поэтому повторные доставки (а зеркало
+		// приходит повторно, пока курсор не сдвинется) откат не удваивают.
+		// updated_at берём ЦЕНТРАЛЬНЫЙ, не свой now: по нему филиал ведёт
+		// курсор, а часы узлов не совпадают.
+		if res.RowsAffected == 0 {
+			if op.CancelledAt == nil {
+				return nil
+			}
+			upd := tx.Model(&models.FinancialOperation{}).
+				Where("id = ? AND cancelled_at IS NULL", op.ID).
+				Updates(map[string]any{
+					"cancelled_at": op.CancelledAt, "cancelled_by": op.CancelledBy,
+					"updated_at": op.UpdatedAt,
+				})
+			if upd.Error != nil || upd.RowsAffected == 0 {
+				return upd.Error
+			}
+			return reverseMirrorSideEffect(tx, &op)
+		}
 		// Доменный эффект зеркального расхода (Фаза Р) — СТРОГО при первой
 		// вставке. Зеркало отдаётся повторно, пока филиал не подтвердит его
 		// курсором, а долг накладной и срок регулярного платежа — величины
@@ -1164,7 +1217,11 @@ func (s *SyncService) applyFinancialOp(ctx context.Context, e SyncEntry, updateA
 		// «строка реально появилась» — RowsAffected от insert-if-absent; при
 		// updateAll (приём на central) эффекта нет вовсе — там просто зеркало
 		// чужой БД, а документы живут у филиала.
-		if updateAll || res.RowsAffected == 0 || op.PaidByRestaurantID == nil {
+		//
+		// Расход, отменённый ещё до того как филиал впервые его увидел (был в
+		// оффлайне всю дорогу), приезжает сразу с cancelled_at — применять его
+		// последствия нельзя, иначе долг погасился бы отменённым платежом.
+		if op.CancelledAt != nil {
 			return nil
 		}
 		return applyMirrorSideEffect(tx, &op)
@@ -1211,6 +1268,97 @@ func applyMirrorSideEffect(tx *gorm.DB, op *models.FinancialOperation) error {
 		return err
 	}
 	return nil
+}
+
+// reverseMirrorSideEffect — откат последствий отменённого расхода. Зеркало
+// applyMirrorSideEffect: тот же поиск по source_ref, обратные операции.
+func reverseMirrorSideEffect(tx *gorm.DB, op *models.FinancialOperation) error {
+	if op.SourceRef == nil || *op.SourceRef == "" || op.RestaurantID == nil {
+		return nil
+	}
+	ref, rid, now := *op.SourceRef, *op.RestaurantID, time.Now().UTC()
+
+	var receipt models.StockReceipt
+	err := tx.Where("id = ? AND restaurant_id = ?", ref, rid).First(&receipt).Error
+	if err == nil {
+		return restoreReceiptDebt(tx, &receipt, op.Amount, now)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	var rp models.RecurringPayment
+	err = tx.Where("id = ? AND restaurant_id = ?", ref, rid).First(&rp).Error
+	if err == nil {
+		return retreatRecurringDue(tx, &rp, now)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return nil
+}
+
+// restoreReceiptDebt — возврат долга накладной после отмены оплаты. Клампим
+// по уже оплаченной сумме: вернуть больше, чем было погашено, нельзя, иначе
+// накладная ушла бы в долг сверх собственной стоимости.
+func restoreReceiptDebt(tx *gorm.DB, receipt *models.StockReceipt, amount decimal.Decimal, now time.Time) error {
+	back := amount
+	if back.GreaterThan(receipt.PaidAmount) {
+		back = receipt.PaidAmount
+	}
+	if !decimal.IsPositive(back) {
+		return nil
+	}
+	receipt.DebtAmount = decimal.Normalize(decimal.Add(receipt.DebtAmount, back))
+	receipt.PaidAmount = decimal.Normalize(decimal.Sub(receipt.PaidAmount, back))
+	payType := "partial"
+	if !decimal.IsPositive(receipt.PaidAmount) {
+		payType = "credit" // не оплачено вовсе — как до первого платежа
+	}
+	if err := tx.Model(receipt).Updates(map[string]any{
+		"debt_amount": receipt.DebtAmount, "paid_amount": receipt.PaidAmount,
+		"payment_type": payType, "updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+	if err := recordReceiptSync(tx, []string{receipt.ID}); err != nil {
+		return err
+	}
+	if receipt.SupplierID == nil || *receipt.SupplierID == "" {
+		return nil
+	}
+	var sup models.Supplier
+	if err := tx.Where("id = ?", *receipt.SupplierID).First(&sup).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	if err := tx.Model(&sup).Updates(map[string]any{
+		"current_debt": decimal.Normalize(decimal.Add(sup.CurrentDebt, back)),
+		"updated_at":   now,
+	}).Error; err != nil {
+		return err
+	}
+	return recordSupplierSync(tx, []string{sup.ID})
+}
+
+// retreatRecurringDue — откат срока регулярного платежа на месяц назад.
+// Симметрично advanceRecurringDue: каждый платёж двигал срок ровно на один
+// шаг, поэтому обратный шаг возвращает его на место и при нескольких платежах
+// подряд. last_paid_at обнуляем: прежнего значения мы не храним, а оставить
+// его от отменённого платежа — соврать, что платёж был.
+func retreatRecurringDue(tx *gorm.DB, rp *models.RecurringPayment, now time.Time) error {
+	if rp.NextDue == nil || *rp.NextDue == "" {
+		return nil
+	}
+	prev := retreatMonth(*rp.NextDue, rp.DayOfMonth)
+	if err := tx.Model(rp).Updates(map[string]any{
+		"next_due": prev, "last_paid_at": nil, "updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+	return recordRecurringPaymentSync(tx, []string{rp.ID})
 }
 
 // payReceiptDebt — гашение долга накладной БЕЗ движения денег (их уже списал

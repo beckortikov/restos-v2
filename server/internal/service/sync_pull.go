@@ -87,12 +87,15 @@ func (p *Puller) PullOnce(ctx context.Context) (int, error) {
 	// зеркальную проводку, которая у нас уже есть. Без него центр отдавал бы
 	// их все и на каждом тике — они, в отличие от каталога сети, копятся без
 	// предела. Нет ни одной — параметр не шлём, получаем всё.
+	//
+	// Именно updated_at, а не created_at: отмена расхода на центре меняет
+	// только его, и курсор по дате создания её бы не пропустил.
 	var lastMirror *time.Time
 	var last models.FinancialOperation
 	if err := p.r.Raw().WithContext(ctx).
 		Where("paid_by_restaurant_id IS NOT NULL").
-		Order("created_at DESC").First(&last).Error; err == nil {
-		lastMirror = &last.CreatedAt
+		Order("updated_at DESC").First(&last).Error; err == nil {
+		lastMirror = &last.UpdatedAt
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return 0, err
 	}

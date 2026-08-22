@@ -2954,6 +2954,108 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/expenses/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отмена расхода, проведённого центром за филиал (ADR-003, Фаза Р). Деньги
+         *     возвращаются на счёт центра компенсирующим приходом, исходная проводка
+         *     помечается cancelled_at. Филиал получает ту же пометку обычным down-sync
+         *     и откатывает доменные последствия: возвращает долг накладной либо
+         *     сдвигает срок регулярного платежа назад — ровно один раз.
+         *     Право finance.manage, только владелец центрального узла.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialOperation"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/branches/{id}/expenses": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Что центр уже оплатил за этот филиал (ADR-003, Фаза Р), новые сверху.
+         *     Отменённые включены — иначе отменённая проводка исчезала бы бесследно.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: {
+                                /** Format: uuid */
+                                id?: string;
+                                date?: string | null;
+                                category?: string | null;
+                                counterparty?: string | null;
+                                description?: string | null;
+                                amount?: components["schemas"]["Decimal"];
+                                account_name?: string | null;
+                                /** Format: date-time */
+                                cancelled_at?: string | null;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/staff": {
         parameters: {
             query?: never;

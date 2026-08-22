@@ -3,7 +3,8 @@
 import { useState, useEffect, useMemo } from 'react'
 import {
   fetchBranches, fetchBranchPayables, payBranchExpense,
-  type Branch, type BranchPayable,
+  fetchBranchExpenses, cancelBranchExpense,
+  type Branch, type BranchPayable, type BranchExpense,
 } from '@/lib/queries/transfers'
 import { fetchFinancialAccounts } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
@@ -13,7 +14,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
 import { DecimalInput } from '@/components/ui/decimal-input'
-import { Wallet, Store, FileText, CalendarClock, Plus } from 'lucide-react'
+import { Wallet, Store, FileText, CalendarClock, Plus, Undo2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
@@ -44,6 +45,7 @@ export default function NetworkExpensesPage() {
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
   const [branchId, setBranchId] = useState('')
   const [payables, setPayables] = useState<BranchPayable[]>([])
+  const [expenses, setExpenses] = useState<BranchExpense[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingPayables, setLoadingPayables] = useState(false)
   const [notInNetwork, setNotInNetwork] = useState(false)
@@ -56,6 +58,8 @@ export default function NetworkExpensesPage() {
   const [category, setCategory] = useState('')
   const [note, setNote] = useState('')
   const [paying, setPaying] = useState(false)
+  const [cancelFor, setCancelFor] = useState<BranchExpense | null>(null)
+  const [cancelling, setCancelling] = useState(false)
 
   useEffect(() => {
     Promise.all([fetchBranches(), fetchFinancialAccounts()])
@@ -82,8 +86,16 @@ export default function NetworkExpensesPage() {
       .finally(() => setLoadingPayables(false))
   }
 
+  const reloadExpenses = (id: string) => {
+    if (!id) return Promise.resolve()
+    return fetchBranchExpenses(id)
+      .then(setExpenses)
+      .catch(e => toast.error(humanizeError(e)))
+  }
+
   useEffect(() => {
     reloadPayables(branchId)
+    reloadExpenses(branchId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchId])
 
@@ -135,11 +147,39 @@ export default function NetworkExpensesPage() {
       // Счета перечитываем тоже: с них только что списали, и в следующем
       // диалоге остаток должен быть настоящим, а не тем, что загрузился при
       // открытии страницы.
-      await Promise.all([reloadPayables(branchId), fetchFinancialAccounts().then(setAccounts)])
+      await Promise.all([
+        reloadPayables(branchId),
+        reloadExpenses(branchId),
+        fetchFinancialAccounts().then(setAccounts),
+      ])
     } catch (e: any) {
       toast.error(humanizeError(e))
     } finally {
       setPaying(false)
+    }
+  }
+
+  const onCancel = async () => {
+    if (!cancelFor) return
+    setCancelling(true)
+    try {
+      await cancelBranchExpense(cancelFor.id)
+      // Деньги вернулись сюда сразу; долг накладной и срок регулярного платежа
+      // откатит сам филиал, получив отмену — то же правило, что и при оплате.
+      toast.success(
+        `Расход отменён, ${formatCurrency(cancelFor.amount)} вернулись на счёт. ` +
+        'У филиала откатится после ближайшей синхронизации.',
+      )
+      setCancelFor(null)
+      await Promise.all([
+        reloadPayables(branchId),
+        reloadExpenses(branchId),
+        fetchFinancialAccounts().then(setAccounts),
+      ])
+    } catch (e: any) {
+      toast.error(humanizeError(e))
+    } finally {
+      setCancelling(false)
     }
   }
 
@@ -239,6 +279,42 @@ export default function NetworkExpensesPage() {
               })}
             </div>
           )}
+
+          {expenses.length > 0 && (
+            <div className="space-y-2">
+              <h2 className="text-sm font-semibold text-foreground">Оплачено за филиал</h2>
+              <div className="bg-card rounded-xl border border-border overflow-hidden divide-y divide-border">
+                {expenses.map(e => {
+                  const off = !!e.cancelledAt
+                  return (
+                    <div key={e.id} className={`flex items-center gap-3 px-4 py-3 ${off ? 'opacity-60' : ''}`}>
+                      <div className="min-w-0 flex-1">
+                        <p className={`text-sm font-medium truncate ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                          {e.description || (e.category ? finopCategoryLabel(e.category) : 'Расход')}
+                        </p>
+                        <p className="text-xs text-muted-foreground truncate">
+                          {[fmtDue(e.date), e.counterparty, e.accountName].filter(Boolean).join(' · ')}
+                        </p>
+                      </div>
+                      <span className={`text-sm font-bold tabular-nums whitespace-nowrap ${off ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                        {formatCurrency(e.amount)}
+                      </span>
+                      {off ? (
+                        <span className="text-xs text-muted-foreground whitespace-nowrap shrink-0">Отменён</span>
+                      ) : (
+                        <button
+                          onClick={() => setCancelFor(e)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium hover:bg-muted transition-colors whitespace-nowrap shrink-0"
+                        >
+                          <Undo2 className="size-3.5" /> Отменить
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
         </>
       )}
 
@@ -320,6 +396,44 @@ export default function NetworkExpensesPage() {
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:opacity-90 disabled:opacity-50"
             >
               <Wallet className="size-4" /> Оплатить
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={!!cancelFor} onOpenChange={(v) => { if (!v) setCancelFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Отменить расход?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-1 text-sm text-muted-foreground">
+            <p>
+              <span className="font-medium text-foreground">
+                {cancelFor?.description || (cancelFor?.category ? finopCategoryLabel(cancelFor.category) : 'Расход')}
+              </span>
+              {' · '}{formatCurrency(cancelFor?.amount ?? 0)}{' · '}{branchName}
+            </p>
+            <p>
+              {formatCurrency(cancelFor?.amount ?? 0)} вернутся на счёт
+              {cancelFor?.accountName ? ` «${cancelFor.accountName}»` : ''}. У филиала расход
+              пометится отменённым, а если он гасил долг по накладной или двигал срок
+              регулярного платежа — то и это откатится, с ближайшей синхронизацией.
+            </p>
+          </div>
+          <DialogFooter className="sm:justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setCancelFor(null)}
+              className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+            >
+              Не отменять
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={cancelling}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-white bg-destructive rounded-lg hover:opacity-90 disabled:opacity-50"
+            >
+              <Undo2 className="size-4" /> Отменить расход
             </button>
           </DialogFooter>
         </DialogContent>

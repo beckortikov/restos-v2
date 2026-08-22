@@ -471,6 +471,40 @@ export async function payBranchExpense(input: {
   }))
 }
 
+export interface BranchExpense {
+  id: string
+  date?: string | null
+  category?: string | null
+  counterparty?: string | null
+  description?: string | null
+  amount: number
+  accountName?: string | null
+  cancelledAt?: string | null
+}
+
+export async function fetchBranchExpenses(branchId: string): Promise<BranchExpense[]> {
+  const env: any = await unwrap(api.GET('/api/v1/network/branches/{id}/expenses', {
+    params: { path: { id: branchId } },
+  }))
+  const rows: any[] = Array.isArray(env?.data) ? env.data : []
+  return rows.map(r => ({
+    id: r.id,
+    date: r.date,
+    category: r.category,
+    counterparty: r.counterparty,
+    description: r.description,
+    amount: Number(r.amount ?? 0),
+    accountName: r.account_name,
+    cancelledAt: r.cancelled_at,
+  }))
+}
+
+export async function cancelBranchExpense(id: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/network/expenses/{id}/cancel', {
+    params: { path: { id } },
+  } as any))
+}
+
 // ─── Номенклатура сети ─────────────────────────────────────────────────────────
 export async function fetchNomenclature(): Promise<Nomenclature[]> {
   const env: any = await unwrap(api.GET('/api/v1/nomenclature'))

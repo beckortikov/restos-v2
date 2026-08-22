@@ -1878,9 +1878,14 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 	// здесь второй раз означало бы вычесть аванс дважды.
 	scopedP, _ := s.r.ForTenant(ctx)
 	periodTag := "%" + CategorySalary + ":" + period + "%"
+	// cancelled_at IS NULL — отменённая выплата деньгами вернулась, считать её
+	// выплаченной значит запереть повторную выплату за тот же период (кап
+	// упрётся в сумму, которой уже нет). Касается и отмены расхода за филиал,
+	// проведённого центром: его зеркало помечается тем же полем.
 	if err = scopedP.Table("financial_operations").
 		Select("COALESCE(SUM(amount), 0)").
-		Where("category = ? AND source_ref = ? AND description LIKE ?", CategorySalary, userID, periodTag).
+		Where("category = ? AND source_ref = ? AND description LIKE ? AND cancelled_at IS NULL",
+			CategorySalary, userID, periodTag).
 		Scan(&paid).Error; err != nil {
 		return
 	}

@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
@@ -339,6 +340,10 @@ func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpen
 	category := in.Category
 	var sourceRef *string
 	counterparty := branch.Name
+	// Описание по умолчанию — название документа. Без него и в ленте центра, и
+	// в ОПиУ филиала строка подписана одной лишь статьёй («Аренда»), и через
+	// месяц уже не понять, за что именно платили.
+	desc := in.Description
 
 	// Привязка к документу: проверяем, что он действительно принадлежит этому
 	// филиалу — иначе source_ref увёл бы доменный эффект в чужие данные.
@@ -357,6 +362,16 @@ func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpen
 		}
 		category = "supplier_payment"
 		sourceRef = &r.ID
+		if desc == nil || *desc == "" {
+			d := "Оплата накладной"
+			if r.SupplierName != nil && *r.SupplierName != "" {
+				d += " · " + *r.SupplierName
+			}
+			if r.Date != nil && *r.Date != "" {
+				d += " от " + *r.Date
+			}
+			desc = &d
+		}
 	case "recurring":
 		var rp models.RecurringPayment
 		if err := s.r.Raw().WithContext(ctx).
@@ -370,6 +385,9 @@ func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpen
 			counterparty = *rp.Counterparty
 		}
 		sourceRef = &rp.ID
+		if (desc == nil || *desc == "") && rp.Name != nil && *rp.Name != "" {
+			desc = rp.Name
+		}
 	case "":
 		if category == "" {
 			return nil, apperrors.Wrap("VALIDATION", "category обязательна", nil)
@@ -409,7 +427,7 @@ func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpen
 		op := &models.FinancialOperation{
 			ID: uuid.NewString(), Type: &outType, Amount: amount,
 			Category: &category, AccountID: &acc.ID, AccountName: acc.Name,
-			Activity: &activity, Date: &date, Description: in.Description,
+			Activity: &activity, Date: &date, Description: desc,
 			Counterparty: &counterparty, IsAuto: &isAuto, SourceRef: sourceRef,
 			RestaurantID: &meID, TargetRestaurantID: &branchID,
 			CreatedAt: now, UpdatedAt: now,
@@ -424,6 +442,145 @@ func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpen
 		return nil, err
 	}
 	return created, nil
+}
+
+// CancelBranchExpense — отмена расхода/выплаты, проведённой центром за филиал
+// (Фаза Р). Бухгалтер сидит в центре, ошибки и правки там — обычное дело, а
+// без распространения отмены данные молча расходятся: деньги вернулись бы на
+// счёт центра, а у филиала остались бы и проводка в ОПиУ, и погашенный долг.
+//
+// На ЦЕНТРЕ — как в обычной отмене выплаты (SalaryService.CancelSalary):
+// деньги обратно на счёт, компенсирующий приход (ДДС остаётся сбалансированным)
+// и пометка cancelled_at на исходной проводке.
+//
+// На ФИЛИАЛЕ зеркало помечается тем же cancelled_at — не удаляется. Строка
+// нужна там как курсор: филиал тянет зеркала окном по updated_at, и снеси мы
+// её, отметке «отменено» негде было бы храниться, а центр слал бы отмену на
+// каждом тике вечно. Заодно у филиала отменённый расход виден, а не исчезает
+// молча. Откат долга накладной и срока регулярного платежа делает приём на
+// стороне филиала (reverseMirrorSideEffect), ровно один раз.
+func (s *NetworkService) CancelBranchExpense(ctx context.Context, opID string) (*models.FinancialOperation, error) {
+	me, _, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
+		return nil, err
+	}
+	actor, _ := audit.ActorFromContext(ctx)
+	cancelledBy := actor.UserID
+
+	var op models.FinancialOperation
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", me, opID).First(&op).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("NOT_FOUND", "операция не найдена", nil)
+			}
+			return err
+		}
+		if op.TargetRestaurantID == nil || *op.TargetRestaurantID == "" {
+			return apperrors.Wrap("VALIDATION", "это не расход за филиал — отменяйте обычным способом", nil)
+		}
+		if op.CancelledAt != nil {
+			return apperrors.Wrap("VALIDATION", "расход уже отменён", nil)
+		}
+		now := time.Now().UTC()
+
+		if op.AccountID != nil && *op.AccountID != "" {
+			var acc models.FinancialAccount
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+				Where("restaurant_id = ? AND id = ?", me, *op.AccountID).First(&acc).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return apperrors.Wrap("VALIDATION", "счёт выплаты не найден", nil)
+				}
+				return err
+			}
+			if err := tx.Model(&acc).Updates(map[string]any{
+				"balance":    decimal.Normalize(decimal.Add(acc.Balance, op.Amount)),
+				"updated_at": now,
+			}).Error; err != nil {
+				return err
+			}
+		}
+
+		// Компенсирующий приход — чтобы ДДС центра сошёлся. Activity берём ТУ
+		// ЖЕ, что у отменяемого расхода: ДДС группирует по ней, и приход в
+		// чужой корзине не погасил бы отток, а нарисовал бы центру и лишний
+		// расход, и лишний доход. SourceRef НЕ копируем: он адресует документ
+		// филиала и на компенсации выглядел бы как ещё одно к нему обращение.
+		inType, isAuto := "in", false
+		activity := "operational"
+		if op.Activity != nil && *op.Activity != "" {
+			activity = *op.Activity
+		}
+		desc := "Отмена расхода за филиал"
+		meID := me
+		reverse := models.FinancialOperation{
+			ID: uuid.NewString(), Type: &inType, Amount: op.Amount,
+			Category: op.Category, AccountID: op.AccountID, AccountName: op.AccountName,
+			Activity: &activity, Date: op.Date, Description: &desc,
+			Counterparty: op.Counterparty, IsAuto: &isAuto, RestaurantID: &meID,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := tx.Create(&reverse).Error; err != nil {
+			return err
+		}
+
+		op.CancelledAt = &now
+		op.CancelledBy = &cancelledBy
+		return tx.Model(&models.FinancialOperation{}).Where("id = ?", opID).
+			Updates(map[string]any{"cancelled_at": now, "cancelled_by": cancelledBy, "updated_at": now}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &op, nil
+}
+
+// BranchExpense — проведённый центром расход за филиал (для списка с отменой).
+type BranchExpense struct {
+	ID           string          `json:"id"`
+	Date         *string         `json:"date"`
+	Category     *string         `json:"category"`
+	Counterparty *string         `json:"counterparty"`
+	Description  *string         `json:"description"`
+	Amount       decimal.Decimal `json:"amount"`
+	AccountName  *string         `json:"account_name"`
+	CancelledAt  *time.Time      `json:"cancelled_at"`
+}
+
+// BranchExpenses — что центр уже оплатил за этот филиал, новые сверху.
+// Отменённые тоже показываем: иначе отменённая по ошибке проводка исчезала бы
+// бесследно и владелец не понимал бы, куда делись деньги.
+func (s *NetworkService) BranchExpenses(ctx context.Context, branchID string, limit int) ([]BranchExpense, error) {
+	me, _, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	var rows []models.FinancialOperation
+	if err := s.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ? AND target_restaurant_id = ?", me, branchID).
+		Order("created_at DESC").Limit(limit).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]BranchExpense, 0, len(rows))
+	for i := range rows {
+		r := rows[i]
+		out = append(out, BranchExpense{
+			ID: r.ID, Date: r.Date, Category: r.Category, Counterparty: r.Counterparty,
+			Description: r.Description, Amount: r.Amount, AccountName: r.AccountName,
+			CancelledAt: r.CancelledAt,
+		})
+	}
+	return out, nil
 }
 
 func containsStr(s, sub string) bool {

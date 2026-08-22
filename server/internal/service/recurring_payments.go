@@ -378,3 +378,22 @@ func clampedDay(y int, m time.Month, dom int) int {
 func dateStr(y int, m time.Month, d int) string {
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
 }
+
+// retreatMonth — обратный advanceMonth: тот же день месяца, но на месяц назад,
+// с тем же клампом по длине месяца (31 → 28/29 в феврале). Нужен для отката
+// срока при отмене платежа (Фаза Р, reverseMirrorSideEffect).
+func retreatMonth(cur string, dom int) string {
+	t, err := time.Parse("2006-01-02", cur)
+	if err != nil {
+		return cur
+	}
+	py, pm := prevMonth(t.Year(), t.Month())
+	return dateStr(py, pm, clampedDay(py, pm, dom))
+}
+
+func prevMonth(y int, m time.Month) (int, time.Month) {
+	if m == time.January {
+		return y - 1, time.December
+	}
+	return y, m - 1
+}

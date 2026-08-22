@@ -1017,6 +1017,52 @@ paths:
                 payable_id: { type: string, format: uuid }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
 
+  /api/v1/network/expenses/{id}/cancel:
+    post:
+      tags: [stock]
+      summary: |
+        Отмена расхода, проведённого центром за филиал (ADR-003, Фаза Р). Деньги
+        возвращаются на счёт центра компенсирующим приходом, исходная проводка
+        помечается cancelled_at. Филиал получает ту же пометку обычным down-sync
+        и откатывает доменные последствия: возвращает долг накладной либо
+        сдвигает срок регулярного платежа назад — ровно один раз.
+        Право finance.manage, только владелец центрального узла.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } }
+
+  /api/v1/network/branches/{id}/expenses:
+    get:
+      tags: [stock]
+      summary: |
+        Что центр уже оплатил за этот филиал (ADR-003, Фаза Р), новые сверху.
+        Отменённые включены — иначе отменённая проводка исчезала бы бесследно.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        date: { type: string, nullable: true }
+                        category: { type: string, nullable: true }
+                        counterparty: { type: string, nullable: true }
+                        description: { type: string, nullable: true }
+                        amount: { $ref: "#/components/schemas/Decimal" }
+                        account_name: { type: string, nullable: true }
+                        cancelled_at: { type: string, format: date-time, nullable: true }
+
   /api/v1/network/staff:
     get:
       tags: [stock]
