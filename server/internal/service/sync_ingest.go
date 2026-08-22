@@ -1153,8 +1153,133 @@ func (s *SyncService) applyFinancialOp(ctx context.Context, e SyncEntry, updateA
 	conflict := onConflict(updateAll)
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
-		return tx.Clauses(conflict).Create(&op).Error
+		res := tx.Clauses(conflict).Create(&op)
+		if res.Error != nil {
+			return res.Error
+		}
+		// Доменный эффект зеркального расхода (Фаза Р) — СТРОГО при первой
+		// вставке. Зеркало отдаётся повторно, пока филиал не подтвердит его
+		// курсором, а долг накладной и срок регулярного платежа — величины
+		// накопительные: применить их дважды значит испортить данные. Признак
+		// «строка реально появилась» — RowsAffected от insert-if-absent; при
+		// updateAll (приём на central) эффекта нет вовсе — там просто зеркало
+		// чужой БД, а документы живут у филиала.
+		if updateAll || res.RowsAffected == 0 || op.PaidByRestaurantID == nil {
+			return nil
+		}
+		return applyMirrorSideEffect(tx, &op)
 	})
+}
+
+// applyMirrorSideEffect — что филиал доделывает, получив расход, оплаченный за
+// него другим узлом (Фаза Р). Сама проводка уже записана; здесь — доменные
+// последствия, без которых его учёт разъедется:
+//
+//   - source_ref указывает на его накладную → гасим долг ровно так же, как это
+//     сделала бы локальная оплата (StockService.PayReceipt): долг −сумма,
+//     оплачено +сумма, payment_type пересчитан, у поставщика current_debt тоже
+//     уменьшен. Без этого филиал считал бы, что всё ещё должен поставщику.
+//   - source_ref указывает на его регулярный платёж → двигаем срок, как
+//     RecurringPaymentsService.Pay. Без этого «Аренда» осталась бы вечно
+//     просроченной, хотя её оплатил центр.
+//
+// Различаем по тому, КУДА указывает source_ref: id уникальны, поиск по двум
+// таблицам однозначен. Отдельного поля-маркера не заводим — оно дублировало бы
+// то, что и так выводится из данных. Ничего не нашли (например, source_ref —
+// это user_id зарплатной выплаты) → эффекта нет, и это штатно.
+func applyMirrorSideEffect(tx *gorm.DB, op *models.FinancialOperation) error {
+	if op.SourceRef == nil || *op.SourceRef == "" || op.RestaurantID == nil {
+		return nil
+	}
+	ref, rid, now := *op.SourceRef, *op.RestaurantID, time.Now().UTC()
+
+	var receipt models.StockReceipt
+	err := tx.Where("id = ? AND restaurant_id = ?", ref, rid).First(&receipt).Error
+	if err == nil {
+		return payReceiptDebt(tx, &receipt, op.Amount, now)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+
+	var rp models.RecurringPayment
+	err = tx.Where("id = ? AND restaurant_id = ?", ref, rid).First(&rp).Error
+	if err == nil {
+		return advanceRecurringDue(tx, &rp, now)
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	return nil
+}
+
+// payReceiptDebt — гашение долга накладной БЕЗ движения денег (их уже списал
+// плательщик). Арифметика и клампы — как в StockService.PayReceipt, включая
+// защиту current_debt от ухода в минус при дрейфе денормализации.
+func payReceiptDebt(tx *gorm.DB, receipt *models.StockReceipt, amount decimal.Decimal, now time.Time) error {
+	pay := amount
+	if pay.GreaterThan(receipt.DebtAmount) {
+		pay = receipt.DebtAmount // не переплачиваем долг накладной
+	}
+	if !decimal.IsPositive(pay) {
+		return nil
+	}
+	receipt.DebtAmount = decimal.Normalize(decimal.Sub(receipt.DebtAmount, pay))
+	receipt.PaidAmount = decimal.Normalize(decimal.Add(receipt.PaidAmount, pay))
+	payType := "partial"
+	if !decimal.IsPositive(receipt.DebtAmount) {
+		payType = "paid"
+	}
+	if err := tx.Model(receipt).Updates(map[string]any{
+		"debt_amount": receipt.DebtAmount, "paid_amount": receipt.PaidAmount,
+		"payment_type": payType, "updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+	// Изменённый долг — наверх. Это НЕ эхо репликации, а собственное следствие
+	// доменной логики филиала, и central обязан его увидеть: иначе в сетевых
+	// отчётах долг поставщику остался бы прежним, хотя центр его уже погасил.
+	// Цикла нет: накладные и поставщики вниз не ездят.
+	if err := recordReceiptSync(tx, []string{receipt.ID}); err != nil {
+		return err
+	}
+	if receipt.SupplierID == nil || *receipt.SupplierID == "" {
+		return nil
+	}
+	var sup models.Supplier
+	if err := tx.Where("id = ?", *receipt.SupplierID).First(&sup).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	nd := decimal.Sub(sup.CurrentDebt, pay)
+	if decimal.IsNegative(nd) {
+		nd = decimal.Zero
+	}
+	if err := tx.Model(&sup).Updates(map[string]any{
+		"current_debt": decimal.Normalize(nd), "updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+	return recordSupplierSync(tx, []string{sup.ID})
+}
+
+// advanceRecurringDue — сдвиг срока регулярного платежа. База — сам next_due,
+// а не сегодня: ритм дня месяца сохраняется, даже если платёж провели раньше
+// или позже (та же логика, что в RecurringPaymentsService.Pay).
+func advanceRecurringDue(tx *gorm.DB, rp *models.RecurringPayment, now time.Time) error {
+	base := now.Format("2006-01-02")
+	if rp.NextDue != nil && *rp.NextDue != "" {
+		base = *rp.NextDue
+	}
+	nd := advanceMonth(base, rp.DayOfMonth)
+	if err := tx.Model(rp).Updates(map[string]any{
+		"next_due": nd, "last_paid_at": now, "updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+	return recordRecurringPaymentSync(tx, []string{rp.ID})
 }
 
 // applyFinancialAccount — upsert/delete снапшота счёта (Ф5). Приходит на

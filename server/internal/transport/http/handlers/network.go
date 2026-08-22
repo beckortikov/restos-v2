@@ -198,6 +198,33 @@ func (h *NetworkHandler) PayBranchSalary(w http.ResponseWriter, r *http.Request)
 	respond.JSON(w, http.StatusCreated, op)
 }
 
+// BranchPayables — GET /api/v1/network/branches/{id}/payables. Что филиал
+// должен: долги по накладным + регулярные платежи (ADR-003, Фаза Р).
+func (h *NetworkHandler) BranchPayables(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.BranchPayables(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(rows, ""))
+}
+
+// PayBranchExpense — POST /api/v1/network/expenses/pay. Центр оплачивает
+// расход филиала (ADR-003, Фаза Р).
+func (h *NetworkHandler) PayBranchExpense(w http.ResponseWriter, r *http.Request) {
+	var in service.PayBranchExpenseInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	op, err := h.svc.PayBranchExpense(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, op)
+}
+
 // DeleteNomenclature — DELETE /api/v1/nomenclature/{id}. Убирает запись из
 // каталога сети; товары филиалов отвязываются, но не удаляются.
 func (h *NetworkHandler) DeleteNomenclature(w http.ResponseWriter, r *http.Request) {

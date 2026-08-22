@@ -2833,6 +2833,127 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/branches/{id}/payables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Что филиал должен: непогашенные накладные поставщиков + активные
+         *     регулярные платежи (ADR-003, Фаза Р). Обе таблицы реплицированы, список
+         *     считается на центре без обращения к филиалу.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: {
+                                /** @enum {string} */
+                                kind?: "receipt" | "recurring";
+                                /** Format: uuid */
+                                id?: string;
+                                title?: string;
+                                counterparty?: string | null;
+                                amount?: components["schemas"]["Decimal"];
+                                due_date?: string | null;
+                                category?: string | null;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/expenses/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Центр оплачивает расход филиала (ADR-003, Фаза Р). Тот же механизм двух
+         *     проводок, что у зарплаты: реальная у центра (target_restaurant_id, вне
+         *     ЕГО ОПиУ) и зеркальная у филиала (paid_by_restaurant_id, вне ЕГО ДДС, но
+         *     в ЕГО ОПиУ). С привязкой payable_kind/payable_id филиал дополнительно
+         *     доводит своё состояние: гасит долг накладной либо сдвигает срок
+         *     регулярного платежа — ровно один раз, при первой доставке зеркала.
+         *     Право finance.manage, только владелец центрального узла.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        branch_id: string;
+                        /**
+                         * Format: uuid
+                         * @description Счёт ЦЕНТРА
+                         */
+                        account_id: string;
+                        amount: components["schemas"]["Decimal"];
+                        /** @description Обязательна */
+                        category?: string;
+                        description?: string;
+                        /** @enum {string} */
+                        payable_kind?: "receipt" | "recurring";
+                        /** Format: uuid */
+                        payable_id?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialOperation"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/staff": {
         parameters: {
             query?: never;

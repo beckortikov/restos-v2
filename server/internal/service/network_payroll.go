@@ -209,6 +209,223 @@ func (s *NetworkService) PayBranchSalary(ctx context.Context, in PayBranchSalary
 	return created, nil
 }
 
+// ── Прочие расходы за филиал (Фаза Р: Р2/Р3/Р4) ─────────────────────────────
+
+// BranchPayable — то, что филиалу предстоит заплатить и что центр может взять
+// на себя: непогашенная накладная поставщика либо регулярный платёж.
+// Единый тип на оба вида — экран у них один, а различает их Kind.
+type BranchPayable struct {
+	Kind         string          `json:"kind"` // receipt | recurring
+	ID           string          `json:"id"`
+	Title        string          `json:"title"`
+	Counterparty *string         `json:"counterparty,omitempty"`
+	Amount       decimal.Decimal `json:"amount"`
+	DueDate      *string         `json:"due_date,omitempty"`
+	Category     *string         `json:"category,omitempty"`
+}
+
+// BranchPayables — что филиал должен: долги по накладным + регулярные платежи.
+// Обе таблицы реплицированы (Ф4/Ф5), поэтому список считается на центре без
+// обращения к филиалу.
+func (s *NetworkService) BranchPayables(ctx context.Context, branchID string) ([]BranchPayable, error) {
+	_, account, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
+		return nil, err
+	}
+	var branch models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Where("id = ?", branchID).First(&branch).Error; err != nil {
+		return nil, apperrors.Wrap("VALIDATION", "филиал не найден", nil)
+	}
+	if branch.AccountID == nil || *branch.AccountID != account {
+		return nil, apperrors.Wrap("VALIDATION", "филиал не входит в эту сеть", nil)
+	}
+
+	out := []BranchPayable{}
+
+	var receipts []models.StockReceipt
+	if err := s.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ? AND debt_amount > 0", branchID).
+		Order("created_at ASC").Find(&receipts).Error; err != nil {
+		return nil, err
+	}
+	for i := range receipts {
+		r := receipts[i]
+		// «Долг поставщику» без накладной (067, is_opening_debt) и обычная
+		// приёмка выглядят по-разному, но платятся одинаково.
+		title := "Приёмка"
+		if r.IsOpeningDebt {
+			title = "Долг поставщику"
+		}
+		if r.Date != nil && *r.Date != "" {
+			title += " от " + *r.Date
+		}
+		out = append(out, BranchPayable{
+			Kind: "receipt", ID: r.ID, Title: title,
+			Counterparty: r.SupplierName, Amount: r.DebtAmount, DueDate: r.DueDate,
+		})
+	}
+
+	var rps []models.RecurringPayment
+	if err := s.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ?", branchID).Order("next_due ASC").Find(&rps).Error; err != nil {
+		return nil, err
+	}
+	for i := range rps {
+		rp := rps[i]
+		if !rp.Active {
+			continue
+		}
+		out = append(out, BranchPayable{
+			Kind: "recurring", ID: rp.ID, Title: derefOr(rp.Name, "Регулярный платёж"),
+			Counterparty: rp.Counterparty, Amount: rp.Amount,
+			DueDate: rp.NextDue, Category: rp.Category,
+		})
+	}
+	return out, nil
+}
+
+// PayBranchExpenseInput — body POST /api/v1/network/expenses/pay.
+type PayBranchExpenseInput struct {
+	BranchID    string  `json:"branch_id"`
+	AccountID   string  `json:"account_id"` // счёт ЦЕНТРА
+	Amount      string  `json:"amount"`
+	Category    string  `json:"category"`
+	Description *string `json:"description,omitempty"`
+	// PayableKind/PayableID — необязательная привязка к документу филиала
+	// (receipt | recurring). С ней филиал не просто увидит расход, но и
+	// доведёт своё состояние: погасит долг накладной либо сдвинет срок
+	// платежа (см. applyMirrorSideEffect).
+	PayableKind string `json:"payable_kind,omitempty"`
+	PayableID   string `json:"payable_id,omitempty"`
+}
+
+// PayBranchExpense — центр оплачивает расход филиала (Фаза Р, Р2/Р3/Р4).
+//
+// Тот же механизм двух проводок, что и у зарплаты: реальная у центра с
+// target_restaurant_id, зеркальная у филиала с paid_by_restaurant_id. Разница
+// одна — необязательная привязка к документу через source_ref, по которой
+// филиал доводит долг накладной или срок регулярного платежа.
+func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpenseInput) (*models.FinancialOperation, error) {
+	me, account, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
+		return nil, err
+	}
+	if in.BranchID == "" || in.AccountID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "branch_id и account_id обязательны", nil)
+	}
+	if in.BranchID == me {
+		return nil, apperrors.Wrap("VALIDATION", "для своих расходов используйте обычные операции", nil)
+	}
+	amount, err := decimal.FromString(in.Amount)
+	if err != nil || !decimal.IsPositive(amount) {
+		return nil, apperrors.Wrap("VALIDATION", "amount must be positive", err)
+	}
+	amount = decimal.Normalize(amount)
+
+	var branch models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Where("id = ?", in.BranchID).First(&branch).Error; err != nil {
+		return nil, apperrors.Wrap("VALIDATION", "филиал не найден", nil)
+	}
+	if branch.AccountID == nil || *branch.AccountID != account {
+		return nil, apperrors.Wrap("VALIDATION", "филиал не входит в эту сеть", nil)
+	}
+
+	category := in.Category
+	var sourceRef *string
+	counterparty := branch.Name
+
+	// Привязка к документу: проверяем, что он действительно принадлежит этому
+	// филиалу — иначе source_ref увёл бы доменный эффект в чужие данные.
+	switch in.PayableKind {
+	case "receipt":
+		var r models.StockReceipt
+		if err := s.r.Raw().WithContext(ctx).
+			Where("id = ? AND restaurant_id = ?", in.PayableID, in.BranchID).First(&r).Error; err != nil {
+			return nil, apperrors.Wrap("VALIDATION", "накладная не найдена у этого филиала", nil)
+		}
+		if !decimal.IsPositive(r.DebtAmount) {
+			return nil, apperrors.Wrap("CONFLICT", "по этой накладной нет долга", nil)
+		}
+		if amount.GreaterThan(r.DebtAmount) {
+			return nil, apperrors.Wrap("VALIDATION", "сумма больше долга по накладной", nil)
+		}
+		category = "supplier_payment"
+		sourceRef = &r.ID
+	case "recurring":
+		var rp models.RecurringPayment
+		if err := s.r.Raw().WithContext(ctx).
+			Where("id = ? AND restaurant_id = ?", in.PayableID, in.BranchID).First(&rp).Error; err != nil {
+			return nil, apperrors.Wrap("VALIDATION", "платёж не найден у этого филиала", nil)
+		}
+		if rp.Category != nil && *rp.Category != "" {
+			category = *rp.Category
+		}
+		if rp.Counterparty != nil && *rp.Counterparty != "" {
+			counterparty = *rp.Counterparty
+		}
+		sourceRef = &rp.ID
+	case "":
+		if category == "" {
+			return nil, apperrors.Wrap("VALIDATION", "category обязательна", nil)
+		}
+	default:
+		return nil, apperrors.Wrap("VALIDATION", "payable_kind must be receipt or recurring", nil)
+	}
+
+	now := time.Now().UTC()
+	date := now.Format("2006-01-02")
+	outType, activity, isAuto := "out", "operational", false
+	branchID, meID := in.BranchID, me
+	var created *models.FinancialOperation
+
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var acc models.FinancialAccount
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("restaurant_id = ? AND id = ?", me, in.AccountID).First(&acc).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.Wrap("VALIDATION", "счёт не найден", nil)
+			}
+			return err
+		}
+		if !acc.IsEnabled {
+			return apperrors.Wrap("CONFLICT", "счёт отключён", nil)
+		}
+		if decimal.IsNegative(decimal.Sub(acc.Balance, amount)) {
+			return apperrors.Wrap("CONFLICT", "insufficient funds", nil)
+		}
+		if err := tx.Model(&acc).Updates(map[string]any{
+			"balance":    decimal.Normalize(decimal.Sub(acc.Balance, amount)),
+			"updated_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		op := &models.FinancialOperation{
+			ID: uuid.NewString(), Type: &outType, Amount: amount,
+			Category: &category, AccountID: &acc.ID, AccountName: acc.Name,
+			Activity: &activity, Date: &date, Description: in.Description,
+			Counterparty: &counterparty, IsAuto: &isAuto, SourceRef: sourceRef,
+			RestaurantID: &meID, TargetRestaurantID: &branchID,
+			CreatedAt: now, UpdatedAt: now,
+		}
+		if err := tx.Create(op).Error; err != nil {
+			return err
+		}
+		created = op
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
 func containsStr(s, sub string) bool {
 	return len(sub) > 0 && len(s) >= len(sub) && indexOfStr(s, sub) >= 0
 }

@@ -419,6 +419,58 @@ export async function payBranchSalary(input: {
   }))
 }
 
+// ─── Расходы за филиал (Фаза Р) ────────────────────────────────────────────────
+// Центр платит из своей кассы. Затрата попадает в ОПиУ филиала, деньги — в ДДС
+// центра; при привязке к документу филиал ещё и доводит своё состояние (гасит
+// долг накладной / сдвигает срок регулярного платежа).
+
+export interface BranchPayable {
+  kind: 'receipt' | 'recurring'
+  id: string
+  title: string
+  counterparty?: string | null
+  amount: number
+  dueDate?: string | null
+  category?: string | null
+}
+
+export async function fetchBranchPayables(branchId: string): Promise<BranchPayable[]> {
+  const env: any = await unwrap(api.GET('/api/v1/network/branches/{id}/payables', {
+    params: { path: { id: branchId } },
+  }))
+  const rows: any[] = Array.isArray(env?.data) ? env.data : []
+  return rows.map(r => ({
+    kind: r.kind,
+    id: r.id,
+    title: r.title,
+    counterparty: r.counterparty,
+    amount: Number(r.amount ?? 0),
+    dueDate: r.due_date,
+    category: r.category,
+  }))
+}
+
+export async function payBranchExpense(input: {
+  branchId: string
+  accountId: string
+  amount: number
+  category?: string
+  description?: string
+  payableKind?: 'receipt' | 'recurring'
+  payableId?: string
+}): Promise<void> {
+  await unwrap(api.POST('/api/v1/network/expenses/pay', {
+    body: {
+      branch_id: input.branchId,
+      account_id: input.accountId,
+      amount: String(input.amount),
+      ...(input.category ? { category: input.category } : {}),
+      ...(input.description ? { description: input.description } : {}),
+      ...(input.payableKind ? { payable_kind: input.payableKind, payable_id: input.payableId } : {}),
+    } as any,
+  }))
+}
+
 // ─── Номенклатура сети ─────────────────────────────────────────────────────────
 export async function fetchNomenclature(): Promise<Nomenclature[]> {
   const env: any = await unwrap(api.GET('/api/v1/nomenclature'))

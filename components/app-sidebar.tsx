@@ -289,6 +289,7 @@ const NAV: NavItem[] = [
       },
       { label: 'Сводка по сети', href: '/network/summary', icon: Network },
       { label: 'Персонал сети', href: '/network/staff', icon: Users },
+      { label: 'Расходы за филиалы', href: '/network/expenses', icon: Wallet },
     ],
   },
   {

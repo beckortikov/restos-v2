@@ -1172,7 +1172,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'writeoffs.create': ['/warehouse/writeoffs'],
   'batch_cooking.manage': ['/operations/batch-cooking'],
   'finance.view': ['/finance/overview', '/finance/cashflow', '/finance/pnl', '/finance/balance', '/finance/payments', '/network/summary'],
-  'finance.manage': ['/finance/overview', '/finance/cashflow', '/finance/accounts', '/finance/budget', '/finance/payments', '/finance/network-transfers'],
+  'finance.manage': ['/finance/overview', '/finance/cashflow', '/finance/accounts', '/finance/budget', '/finance/payments', '/finance/network-transfers', '/network/expenses'],
   // Персонал сети показывает оклады/ставки всех филиалов — гейтим тем же
   // правом, что и зарплату, а не общим finance.view.
   'payroll.manage': ['/finance/payroll', '/network/staff'],

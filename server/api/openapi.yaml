@@ -958,6 +958,65 @@ paths:
                 description: { type: string }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
 
+  /api/v1/network/branches/{id}/payables:
+    get:
+      tags: [stock]
+      summary: |
+        Что филиал должен: непогашенные накладные поставщиков + активные
+        регулярные платежи (ADR-003, Фаза Р). Обе таблицы реплицированы, список
+        считается на центре без обращения к филиалу.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kind: { type: string, enum: [receipt, recurring] }
+                        id: { type: string, format: uuid }
+                        title: { type: string }
+                        counterparty: { type: string, nullable: true }
+                        amount: { $ref: "#/components/schemas/Decimal" }
+                        due_date: { type: string, nullable: true }
+                        category: { type: string, nullable: true }
+
+  /api/v1/network/expenses/pay:
+    post:
+      tags: [stock]
+      summary: |
+        Центр оплачивает расход филиала (ADR-003, Фаза Р). Тот же механизм двух
+        проводок, что у зарплаты: реальная у центра (target_restaurant_id, вне
+        ЕГО ОПиУ) и зеркальная у филиала (paid_by_restaurant_id, вне ЕГО ДДС, но
+        в ЕГО ОПиУ). С привязкой payable_kind/payable_id филиал дополнительно
+        доводит своё состояние: гасит долг накладной либо сдвигает срок
+        регулярного платежа — ровно один раз, при первой доставке зеркала.
+        Право finance.manage, только владелец центрального узла.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id, account_id, amount]
+              properties:
+                branch_id: { type: string, format: uuid }
+                account_id: { type: string, format: uuid, description: Счёт ЦЕНТРА, с которого платим. }
+                amount: { $ref: "#/components/schemas/Decimal" }
+                category: { type: string, description: Обязательна, если нет привязки к документу. }
+                description: { type: string }
+                payable_kind: { type: string, enum: [receipt, recurring] }
+                payable_id: { type: string, format: uuid }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
+
   /api/v1/network/staff:
     get:
       tags: [stock]
