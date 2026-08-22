@@ -468,3 +468,97 @@ func TestStockTransfer_ListIncludesLines(t *testing.T) {
 		t.Errorf("list[0].Lines[0].Qty = %s, want 3", list[0].Lines[0].Qty.String())
 	}
 }
+
+// TestStockTransfer_RepricesOnReceive — приход перемещением участвует в
+// средневзвешенной себестоимости получателя.
+//
+// Критично для ЦЕНТРАЛИЗОВАННОЙ ЗАКУПКИ (товар приходит в центр, оттуда
+// перемещается по филиалам): филиал сам не закупает, и раньше цена ставилась
+// ему один раз — при первом появлении товара — и держалась вечно. Центр берёт
+// мясо по 50, передаёт; через месяц берёт по 70 и передаёт — у филиала в
+// себестоимости остаётся 50. Фудкост занижен, прибыль завышена, и молча.
+func TestStockTransfer_RepricesOnReceive(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{
+		"sync_log", "stock_transfer_lines", "stock_transfers", "stock_movements",
+		"ingredients", "nomenclature", "restaurants", "company_accounts",
+	} {
+		gdb.Exec("DELETE FROM " + tbl)
+	}
+
+	accountID := uuid.NewString()
+	gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"})
+	centralID, branchID := uuid.NewString(), uuid.NewString()
+	cw, ot := "central_warehouse", "outlet"
+	gdb.Create(&models.Restaurant{ID: centralID, Name: "Центр", AccountID: &accountID, Kind: &cw})
+	gdb.Create(&models.Restaurant{ID: branchID, Name: "Филиал", AccountID: &accountID, Kind: &ot})
+
+	meat, kg := "Мясо", "kg"
+	nomID := uuid.NewString()
+	gdb.Create(&models.Nomenclature{ID: nomID, AccountID: &accountID, Name: meat, Unit: &kg})
+	srcID := uuid.NewString()
+	gdb.Create(&models.Ingredient{
+		ID: srcID, Name: &meat, Unit: &kg, Qty: decimal.MustFromString("1000"),
+		PricePerUnit: decimal.MustFromString("50"), RestaurantID: &centralID, NomenclatureID: &nomID,
+	})
+
+	svc := service.NewTransferService(repo.New(gdb))
+	ctxCentral := audit.WithActor(tenant.WithRestaurant(context.Background(), centralID), audit.Actor{UserID: uuid.NewString()})
+	ctxBranch := audit.WithActor(tenant.WithRestaurant(context.Background(), branchID), audit.Actor{UserID: uuid.NewString()})
+
+	send := func(qty, cost string) {
+		t.Helper()
+		tr, err := svc.CreateTransfer(ctxCentral, service.CreateTransferInput{
+			ToRestaurantID: branchID,
+			Lines:          []service.TransferLineInput{{IngredientID: srcID, Qty: qty, CostPerUnit: cost}},
+		})
+		if err != nil {
+			t.Fatalf("CreateTransfer: %v", err)
+		}
+		if _, err := svc.Receive(ctxBranch, tr.ID); err != nil {
+			t.Fatalf("Receive: %v", err)
+		}
+	}
+
+	// Первая передача: 10 кг по 50 → у филиала 10 кг по 50.
+	send("10", "50")
+	var dst models.Ingredient
+	if err := gdb.Where("restaurant_id = ? AND nomenclature_id = ?", branchID, nomID).First(&dst).Error; err != nil {
+		t.Fatalf("товар филиала не создан: %v", err)
+	}
+	if !dst.PricePerUnit.Equal(decimal.MustFromString("50")) {
+		t.Fatalf("цена после первой передачи = %s, want 50", dst.PricePerUnit.String())
+	}
+
+	// Вторая передача: ещё 10 кг, но уже по 70.
+	// Средневзвешенная: (10*50 + 10*70) / 20 = 60.
+	send("10", "70")
+	gdb.First(&dst, "id = ?", dst.ID)
+	if !dst.Qty.Equal(decimal.MustFromString("20")) {
+		t.Errorf("остаток = %s, want 20", dst.Qty.String())
+	}
+	if !dst.PricePerUnit.Equal(decimal.MustFromString("60")) {
+		t.Errorf("СЕБЕСТОИМОСТЬ НЕ ПЕРЕОЦЕНЕНА: цена = %s, want 60 — фудкост филиала занижен",
+			dst.PricePerUnit.String())
+	}
+
+	// Передача без явной цены берёт цену ИСТОЧНИКА (см. CreateTransfer), то
+	// есть перемещение всегда несёт настоящую стоимость, а не ноль. Здесь у
+	// центра 50 → (20*60 + 5*50) / 25 = 58.
+	send("5", "")
+	gdb.First(&dst, "id = ?", dst.ID)
+	if !dst.PricePerUnit.Equal(decimal.MustFromString("58")) {
+		t.Errorf("цена после передачи по цене источника = %s, want 58", dst.PricePerUnit.String())
+	}
+}

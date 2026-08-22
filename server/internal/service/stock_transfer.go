@@ -309,6 +309,20 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 				return err
 			}
 
+			// Переоценка средневзвешенной — ДО движения (formула считает от
+			// остатка ДО прихода, дальше хук добавит qty).
+			//
+			// Раньше приход перемещением цену получателя не трогал вовсе, и это
+			// молча ломало учёт при ЦЕНТРАЛИЗОВАННОЙ ЗАКУПКЕ: филиал, который
+			// сам ничего не закупает, получал цену один раз — при появлении
+			// товара — и держал её вечно. Центр покупает мясо по 50, передаёт;
+			// через месяц покупает по 70 и передаёт — у филиала в себестоимости
+			// по-прежнему 50, фудкост занижен, прибыль завышена. Приход товара
+			// по цене обязан участвовать в средневзвешенной так же, как приёмка.
+			if err := repriceOnInbound(tx, me, dest, l.Qty, l.CostPerUnit, now); err != nil {
+				return err
+			}
+
 			// transfer_in: +qty получателю. Хук увеличит ingredients.qty.
 			mvType := "transfer_in"
 			mv := &models.StockMovement{
@@ -360,6 +374,42 @@ func (s *TransferService) Receive(ctx context.Context, transferID string) (*mode
 	t.ReceivedAt = &now
 	t.Lines = lines
 	return &t, nil
+}
+
+// repriceOnInbound — средневзвешенная переоценка товара при поступлении qty по
+// цене cost. Формула и клампы — те же, что в приёмке (StockService.CreateReceipt),
+// чтобы себестоимость считалась одинаково независимо от того, пришёл товар от
+// поставщика или перемещением из другого узла сети.
+//
+// Нулевая цена прихода не трогает оценку: перемещение без указанной стоимости
+// (или материализация товара с нулевой ценой) не должно обнулять уже
+// накопленную себестоимость.
+func repriceOnInbound(tx *gorm.DB, rid string, dest models.Ingredient, qty, cost decimal.Decimal, now time.Time) error {
+	if !decimal.IsPositive(qty) || !decimal.IsPositive(cost) {
+		return nil
+	}
+	denom := decimal.Add(dest.Qty, qty)
+	var newPrice decimal.Decimal
+	if decimal.IsPositive(denom) && !decimal.IsNegative(dest.Qty) {
+		newPrice = decimal.DivRound(
+			decimal.Add(decimal.Mul(dest.Qty, dest.PricePerUnit), decimal.Mul(qty, cost)), denom)
+	} else {
+		// Остаток был нулевым/отрицательным — историческая стоимость невалидна
+		// (товар уходил в минус при выключенном контроле остатков), смешивать
+		// нельзя: берём чистую цену прихода. Та же защита, что в приёмке —
+		// иначе средневзвешенная выдавала отрицательную себестоимость.
+		newPrice = cost
+	}
+	newPrice = decimal.Normalize(newPrice)
+	if newPrice.Equal(dest.PricePerUnit) {
+		return nil // цена не изменилась — не плодим дельту синка
+	}
+	if err := tx.Model(&models.Ingredient{}).
+		Where("restaurant_id = ? AND id = ?", rid, dest.ID).
+		Updates(map[string]any{"price_per_unit": newPrice, "updated_at": now}).Error; err != nil {
+		return err
+	}
+	return recordIngredientSync(tx, []string{dest.ID})
 }
 
 // ensureIngredientInput — параметры сопоставления товара с номенклатурой сети.
