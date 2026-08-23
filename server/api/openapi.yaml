@@ -6325,6 +6325,8 @@ components:
         accrued: { $ref: "#/components/schemas/Decimal" }
         advance: { $ref: "#/components/schemas/Decimal" }
         deductions: { $ref: "#/components/schemas/Decimal" }
+        paid_salary: { $ref: "#/components/schemas/Decimal", description: "Выплачено ЗА ЭТОТ ПЕРИОД (категория «Зарплата», по structural salary_period) — источник истины для остатка «К выплате»" }
+        paid_combined: { $ref: "#/components/schemas/Decimal", description: "Выплачено за период (Зарплата+Аванс) — только для отображения «Выплачено (ЗП)»" }
     WorkedDaysResult:
       type: object
       properties:

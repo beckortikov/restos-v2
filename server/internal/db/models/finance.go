@@ -39,8 +39,14 @@ type FinancialOperation struct {
 	Counterparty *string         `json:"counterparty"`
 	IsAuto       *bool           `gorm:"column:is_auto;default:false" json:"is_auto"`
 	SourceRef    *string         `gorm:"column:source_ref" json:"source_ref"`
-	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	ShiftID      *string         `gorm:"column:shift_id;index" json:"shift_id"`
+	// SalaryPeriod — период начисления (YYYY-MM) зарплатной/авансовой
+	// проводки (082). Источник истины для «выплачено за месяц X» — НЕ дата
+	// проводки (зарплату часто платят в начале следующего месяца) и не тег
+	// в Description (устарел вместе с этим полем, но продолжаем писать для
+	// человекочитаемости ленты).
+	SalaryPeriod *string `gorm:"column:salary_period" json:"salary_period,omitempty"`
+	RestaurantID *string `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	ShiftID      *string `gorm:"column:shift_id;index" json:"shift_id"`
 	// IsOverride — выплата ЗП/аванса/обслуживания выше расчётного остатка,
 	// проведённая осознанно (владелец подтвердил + указал причину), а не
 	// заблокированная сервером. См. миграцию 064 и SalaryService.payout.

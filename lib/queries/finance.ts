@@ -584,6 +584,10 @@ export interface SalaryAccrualRow {
   accrued: number
   advance: number
   deductions: number
+  /** Выплачено ЗА ЭТОТ ПЕРИОД (категория «Зарплата», по salary_period на сервере) — источник для остатка «К выплате». */
+  paidSalary: number
+  /** Выплачено за период (Зарплата+Аванс) — только для отображения «Выплачено (ЗП)». */
+  paidCombined: number
 }
 
 export async function fetchSalaryAccrual(from: string, to: string): Promise<SalaryAccrualRow[]> {
@@ -603,6 +607,8 @@ export async function fetchSalaryAccrual(from: string, to: string): Promise<Sala
     accrued: Number(r.accrued ?? 0),
     advance: Number(r.advance ?? 0),
     deductions: Number(r.deductions ?? 0),
+    paidSalary: Number(r.paid_salary ?? 0),
+    paidCombined: Number(r.paid_combined ?? 0),
   }))
 }
 

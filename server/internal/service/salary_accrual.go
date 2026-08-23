@@ -46,6 +46,16 @@ type SalaryAccrualRow struct {
 	Accrued    decimal.Decimal `json:"accrued"`
 	Advance    decimal.Decimal `json:"advance"`
 	Deductions decimal.Decimal `json:"deductions"`
+	// PaidSalary/PaidCombined (082) — Σ проводок category=«Зарплата»/
+	// («Зарплата»+«Аванс») с salary_period = периоду запроса, не отменённых.
+	// Единственный источник истины для «выплачено за этот месяц» — раньше
+	// клиент считал то же самое сам, по ДАТЕ проводки в окне месяца (не по
+	// периоду начисления), и выплата «за июль», проведённая в августе,
+	// задваивала «выплачено» в августе → «К выплате» уходило в минус.
+	// PaidSalary — для расчёта остатка (авансы уже вычтены через Advance).
+	// PaidCombined — только для display «Выплачено (ЗП)» (оклад+аванс на руки).
+	PaidSalary   decimal.Decimal `json:"paid_salary"`
+	PaidCombined decimal.Decimal `json:"paid_combined"`
 }
 
 // SalaryAccrual — начисления по всем сотрудникам за период [from, to].
@@ -80,18 +90,28 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 	if err != nil {
 		return nil, err
 	}
+	// Выплачено за период — из structural salary_period (082), той же
+	// колонки, что и кап на выплату (salaryCapForPeriod). Один источник
+	// истины: клиент больше не тянет всю ленту операций и не фильтрует её
+	// сам по дате проводки (см. историю бага в комментарии PaidSalary).
+	paidSalaryByUser, paidCombinedByUser, err := s.paidByUser(ctx, from, to)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]SalaryAccrualRow, 0, len(users))
 	for _, u := range users {
 		row := SalaryAccrualRow{
-			UserID:     u.ID,
-			PayType:    payTypeOf(u),
-			Salary:     decimal.Normalize(u.Salary),
-			DailyRate:  decimal.Normalize(u.DailyRate),
-			DaysWorked: days[u.ID],
-			PaidUnits:  units[u.ID],
-			Advance:    advByUser[u.ID],
-			Deductions: dedByUser[u.ID],
+			UserID:       u.ID,
+			PayType:      payTypeOf(u),
+			Salary:       decimal.Normalize(u.Salary),
+			DailyRate:    decimal.Normalize(u.DailyRate),
+			DaysWorked:   days[u.ID],
+			PaidUnits:    units[u.ID],
+			Advance:      advByUser[u.ID],
+			Deductions:   dedByUser[u.ID],
+			PaidSalary:   paidSalaryByUser[u.ID],
+			PaidCombined: paidCombinedByUser[u.ID],
 		}
 		if u.Name != nil {
 			row.UserName = *u.Name
@@ -149,6 +169,56 @@ func (s *SalaryService) advDedByUser(ctx context.Context, from, to string) (adv,
 		ded[r.UserID] = decimal.Normalize(r.Total)
 	}
 	return adv, ded, nil
+}
+
+// paidByUser — Σ НЕотменённых зарплатных/авансовых проводок по всем
+// сотрудникам за месяцы, попадающие в диапазон [from, to] (YYYY-MM-DD).
+// Матчим по structural salary_period (082) — тем же, что и кап на выплату
+// (salaryCapForPeriod) — а НЕ по дате самой проводки: зарплату за прошлый
+// месяц часто платят в начале следующего, и "date проводки в окне месяца"
+// приписывает такую выплату не тому месяцу (реальный баг владельца —
+// «К выплате» уходило в минус на сумму чужого периода).
+// salaryOnly — для расчёта остатка (авансы уже вычтены через advByUser).
+// combined — только для display «Выплачено (ЗП)» (оклад+аванс на руки).
+func (s *SalaryService) paidByUser(ctx context.Context, from, to string) (salaryOnly, combined map[string]decimal.Decimal, err error) {
+	fromM, toM := monthPrefix(from), monthPrefix(to)
+	salaryOnly = map[string]decimal.Decimal{}
+	combined = map[string]decimal.Decimal{}
+	type sumRow struct {
+		UserID string          `gorm:"column:user_id"`
+		Total  decimal.Decimal `gorm:"column:total"`
+	}
+	so, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var srows []sumRow
+	if err = so.Table("financial_operations").
+		Select("source_ref AS user_id, COALESCE(SUM(amount), 0) AS total").
+		Where("category = ? AND salary_period >= ? AND salary_period <= ? AND cancelled_at IS NULL",
+			CategorySalary, fromM, toM).
+		Group("source_ref").Scan(&srows).Error; err != nil {
+		return nil, nil, err
+	}
+	for _, r := range srows {
+		salaryOnly[r.UserID] = decimal.Normalize(r.Total)
+	}
+	co, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	var crows []sumRow
+	if err = co.Table("financial_operations").
+		Select("source_ref AS user_id, COALESCE(SUM(amount), 0) AS total").
+		Where("category IN ? AND salary_period >= ? AND salary_period <= ? AND cancelled_at IS NULL",
+			[]string{CategorySalary, CategoryAdvance}, fromM, toM).
+		Group("source_ref").Scan(&crows).Error; err != nil {
+		return nil, nil, err
+	}
+	for _, r := range crows {
+		combined[r.UserID] = decimal.Normalize(r.Total)
+	}
+	return salaryOnly, combined, nil
 }
 
 // monthPrefix — YYYY-MM-DD → YYYY-MM (для сравнения с тегом period).

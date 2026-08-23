@@ -16123,6 +16123,10 @@ export interface components {
             accrued?: components["schemas"]["Decimal"];
             advance?: components["schemas"]["Decimal"];
             deductions?: components["schemas"]["Decimal"];
+            /** @description Выплачено ЗА ЭТОТ ПЕРИОД (категория «Зарплата», по structural salary_period) — источник истины для остатка «К выплате» */
+            paid_salary?: components["schemas"]["Decimal"];
+            /** @description Выплачено за период (Зарплата+Аванс) — только для отображения «Выплачено (ЗП)» */
+            paid_combined?: components["schemas"]["Decimal"];
         };
         WorkedDaysResult: {
             /** @description Дни с приходом в табеле (снять нельзя) */

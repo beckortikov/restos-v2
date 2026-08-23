@@ -56,6 +56,11 @@ var schemaSelfHealStmts = []string{
 	// без неё отчёт зарплаты и отмена падают.
 	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`,
 	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS cancelled_by TEXT`,
+	// 082: период начисления (YYYY-MM) зарплатной/авансовой проводки. Кап на
+	// выплату (salaryCapForPeriod) и начисления (SalaryAccrual) читают её на
+	// каждой открытии «Зарплаты» и на каждой попытке выплатить — без колонки
+	// оба падают целиком, а не просто теряют функциональность.
+	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS salary_period TEXT`,
 	// 072: настройки ТВ-табло выдачи. restaurants читается на каждом старте
 	// (auth-контекст, настройки, табло) — при дрейфе SELECT по модели с новыми
 	// полями иначе не досчитается колонок; гарантируем до-наличие.

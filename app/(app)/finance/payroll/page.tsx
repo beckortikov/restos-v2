@@ -11,7 +11,7 @@ import {
   fetchUsers, fetchFinancialAccounts,
   fetchTimeEntries, fetchActiveClockIn, clockIn as apiClockIn, clockOut as apiClockOut,
   updateTimeEntry, deleteTimeEntry,
-  fetchFinancialOperations, fetchSalaryReport, type SalaryReport, type SalaryPayoutRow,
+  fetchSalaryReport, type SalaryReport, type SalaryPayoutRow,
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
@@ -28,11 +28,21 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from 'recharts'
 
+// isoFromYmd — YYYY-MM-DD (пресет/пикер, локальный календарный день) → ISO-
+// границы для запроса. Date.UTC (не локальный конструктор Date) — иначе в
+// часовых поясах восточнее UTC (Asia/Dushanbe UTC+5 и весь регион, где
+// работает продукт) «1 августа 00:00 местного» конвертируется в
+// «31 июля 19:00 UTC», и .slice(0,10) на бэкенде читает это как 31 июля —
+// пресет «Месяц» (август) молча захватывал последний день ИЮЛЯ. Для
+// зарплаты это не косметика: paidByUser/advDedByUser округляют период до
+// МЕСЯЦА (monthPrefix), так что один просочившийся день от TZ-сдвига
+// протаскивал в фильтр «выплачено за август» весь предыдущий месяц целиком —
+// ровно та путаница, которую 082 (structural salary_period) должен был убрать.
 function isoFromYmd(fromYmd: string, toYmd: string): { from: string; to: string } {
   const [fy, fm, fd] = fromYmd.split('-').map(Number)
   const [ty, tm, td] = toYmd.split('-').map(Number)
-  const start = new Date(fy, (fm || 1) - 1, fd || 1, 0, 0, 0, 0)
-  const end = new Date(ty, (tm || 1) - 1, td || 1, 23, 59, 59, 999)
+  const start = new Date(Date.UTC(fy, (fm || 1) - 1, fd || 1, 0, 0, 0, 0))
+  const end = new Date(Date.UTC(ty, (tm || 1) - 1, td || 1, 23, 59, 59, 999))
   return { from: start.toISOString(), to: end.toISOString() }
 }
 
@@ -125,13 +135,6 @@ export default function PayrollPage() {
   const [serviceTo, setServiceTo] = useState<string>(_initIso.to)
   const [serviceCustomFrom, setServiceCustomFrom] = useState<string>(getPresetRange('month').from)
   const [serviceCustomTo, setServiceCustomTo] = useState<string>(getPresetRange('month').to)
-  // Выплаченная зарплата/аванс за период (из реальных операций «Зарплата» по
-  // кассе, сгруппированы по сотруднику). Раньше выплата минусовала счёт, но в
-  // разделе не отражалась — теперь читаем её и показываем. combined — для
-  // display «Выплачено (ЗП)»; salaryOnly — для расчёта остатка (см. loadSalaryPaid).
-  const [salaryPaid, setSalaryPaid] = useState<Record<string, number>>({})
-  const [salaryOnlyPaid, setSalaryOnlyPaid] = useState<Record<string, number>>({})
-
   // ─── Accrual state (054) ───────────────────────────────────────────────────
   // Начислено за период: для оклада — сумма из карточки, для дневной оплаты —
   // ставка × дни с отметкой в табеле. Считает сервер: дни живут в time_entries.
@@ -175,42 +178,21 @@ export default function PayrollPage() {
   const [editBreak, setEditBreak] = useState(0)
   const elapsed = useElapsed(myActiveEntry?.clockIn, !!myActiveEntry)
 
-  // loadSalaryPaid — два РАЗНЫХ по смыслу среза за период, легко перепутать:
-  //  - combined («Зарплата»+«Аванс») — сколько всего человек ПОЛУЧИЛ на руки
-  //    за период. Для отображения (колонка/Excel «Выплачено (ЗП)»).
-  //  - salaryOnly (только «Зарплата») — для расчёта ОСТАТКА. Аванс уже
-  //    вычитается через emp.advance (счётчик); вычесть его ЕЩЁ и через
-  //    combined значило бы вычесть дважды — ровно то, от чего сервер
-  //    специально уберёгся (см. комментарий #7 в PaySalary). Баг был
-  //    реальным: аванс, выданный внутри текущего периода, срезал «К выплате»
-  //    вдвое больше положенного (проверено на живых данных).
-  const loadSalaryPaid = useCallback(async () => {
-    const fromD = serviceFrom.slice(0, 10)
-    const toD = serviceTo.slice(0, 10)
-    const ops = await fetchFinancialOperations()
-    const combined: Record<string, number> = {}
-    const salaryOnly: Record<string, number> = {}
-    for (const op of ops) {
-      if ((op.category !== 'Зарплата' && op.category !== 'Аванс') || !op.sourceRef) continue
-      const d = (op.date || '').slice(0, 10)
-      if (d && (d < fromD || d > toD)) continue
-      combined[op.sourceRef] = (combined[op.sourceRef] ?? 0) + op.amount
-      if (op.category === 'Зарплата') salaryOnly[op.sourceRef] = (salaryOnly[op.sourceRef] ?? 0) + op.amount
-    }
-    return { combined, salaryOnly }
-  }, [serviceFrom, serviceTo])
-
-  // loadAccrual — начисления за тот же период, что и обслуживание.
+  // loadAccrual — начисления за период, включая «выплачено за период»
+  // (paidSalary/paidCombined — structural salary_period на сервере, см.
+  // salary_accrual.go). Раньше «выплачено» тянулось отдельным запросом на
+  // клиенте и фильтровалось по ДАТЕ проводки в окне периода — выплата «за
+  // июль», проведённая в августе (обычное дело), задваивалась в августе и
+  // «К выплате» уходило в минус. Один источник истины вместо двух разных.
   const loadAccrual = useCallback(async (): Promise<Record<string, SalaryAccrualRow>> => {
     const rows = await fetchSalaryAccrual(serviceFrom.slice(0, 10), serviceTo.slice(0, 10)).catch(() => [])
     return Object.fromEntries(rows.map(r => [r.userId, r]))
   }, [serviceFrom, serviceTo])
 
   const reload = async () => {
-    const [users, accs, salPaid, accrualRows] = await Promise.all([
+    const [users, accs, accrualRows] = await Promise.all([
       fetchUsers(),
       fetchFinancialAccounts().then(selectableAccounts),
-      loadSalaryPaid(),
       loadAccrual(),
     ])
     setEmployees(users.filter(u => u.role !== 'owner' && u.role !== 'superadmin'))
@@ -221,8 +203,6 @@ export default function PayrollPage() {
     // с того же счёта, что и прошлая. Деньги уходили не оттуда, откуда думал
     // кассир. Теперь выбор обязателен и делается заново на каждую выплату
     // (сброс — в openDialog).
-    setSalaryPaid(salPaid.combined)
-    setSalaryOnlyPaid(salPaid.salaryOnly)
     setAccrualByUser(accrualRows)
   }
 
@@ -262,14 +242,7 @@ export default function PayrollPage() {
   // Перезапрашиваем зарплатные данные при смене периода (users/accounts уже загружены).
   useEffect(() => {
     if (loading) return
-    Promise.all([
-      loadSalaryPaid(),
-      loadAccrual(),
-    ]).then(([salPaid, accrualRows]) => {
-      setSalaryPaid(salPaid.combined)
-      setSalaryOnlyPaid(salPaid.salaryOnly)
-      setAccrualByUser(accrualRows)
-    }).catch(() => {})
+    loadAccrual().then(setAccrualByUser).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceFrom, serviceTo])
 
@@ -480,12 +453,18 @@ export default function PayrollPage() {
   // резать остаток текущего (баг владельца, backend-фикс period-scoped).
   const advOf = (e: User) => accrualByUser[e.id]?.advance ?? 0
   const dedOf = (e: User) => accrualByUser[e.id]?.deductions ?? 0
+  // Выплачено за период — из accrual (server-side, structural salary_period),
+  // НЕ из отдельного клиентского запроса по дате проводки (см. историю бага
+  // в комментарии loadAccrual). paidOf — только «Зарплата», для остатка;
+  // paidCombinedOf — «Зарплата»+«Аванс», только для display «Выплачено (ЗП)».
+  const paidOf = (e: User) => accrualByUser[e.id]?.paidSalary ?? 0
+  const paidCombinedOf = (e: User) => accrualByUser[e.id]?.paidCombined ?? 0
   const withSalary = employees.filter(e => accruedOf(e) > 0)
   const totalSalary = withSalary.reduce((s, e) => s + accruedOf(e), 0)
   const totalAdvance = withSalary.reduce((s, e) => s + advOf(e), 0)
   const totalDeductions = withSalary.reduce((s, e) => s + dedOf(e), 0)
-  const totalSalaryPaid = Object.values(salaryPaid).reduce((s, v) => s + v, 0)
-  const totalSalaryOnlyPaid = Object.values(salaryOnlyPaid).reduce((s, v) => s + v, 0)
+  const totalSalaryPaid = withSalary.reduce((s, e) => s + paidCombinedOf(e), 0)
+  const totalSalaryOnlyPaid = withSalary.reduce((s, e) => s + paidOf(e), 0)
   // «К выплате» считаем ТОЧНО как сервер (accrued − advance − deductions −
   // paid[категория «Зарплата» СТРОГО]) — иначе получаем один из двух багов:
   // без вычитания paid вообще — после полной выплаты оклада всё ещё
@@ -497,6 +476,8 @@ export default function PayrollPage() {
 
   // Ведомость (#3): роспись «начислено/аванс/удержания/к выплате» за период,
   // те же period-scoped цифры, что в списке. Кто получает — с начислением > 0.
+  // payType/daysWorked — для колонки «Дней» (только у дневников: у оклада
+  // отметки в табеле начисление не меняют, показывать там нечего).
   const vedomostPeriodLabel = periodLabelFromIso(serviceFrom, serviceTo)
   const vedomostRows: VedomostRow[] = withSalary.map(e => ({
     id: e.id,
@@ -505,7 +486,9 @@ export default function PayrollPage() {
     accrued: accruedOf(e),
     advance: advOf(e),
     deductions: dedOf(e),
-    toPay: accruedOf(e) - advOf(e) - dedOf(e) - (salaryOnlyPaid[e.id] ?? 0),
+    toPay: accruedOf(e) - advOf(e) - dedOf(e) - paidOf(e),
+    payType: accrualByUser[e.id]?.payType ?? 'monthly',
+    daysWorked: accrualByUser[e.id]?.paidUnits ?? 0,
   }))
 
   const filtered = employees.filter(e => {
@@ -595,10 +578,10 @@ export default function PayrollPage() {
                     salary: accruedOf(e),
                     advance: advOf(e),
                     deductions: dedOf(e),
-                    salaryPaidPeriod: salaryPaid[e.id] ?? 0,
-                    // period-scoped: accrued/advance/deductions из accrual, salaryOnlyPaid
-                    // (не combined) — иначе аванс внутри периода вычтется дважды.
-                    toPay: accruedOf(e) - advOf(e) - dedOf(e) - (salaryOnlyPaid[e.id] ?? 0),
+                    salaryPaidPeriod: paidCombinedOf(e),
+                    // period-scoped: accrued/advance/deductions из accrual, paidOf
+                    // (не paidCombinedOf) — иначе аванс внутри периода вычтется дважды.
+                    toPay: accruedOf(e) - advOf(e) - dedOf(e) - paidOf(e),
                   })),
                   [
                     { key: 'name', header: 'Сотрудник' },
@@ -743,11 +726,12 @@ export default function PayrollPage() {
                     const acc = accrualByUser[emp.id]
                     const advance = acc?.advance ?? 0
                     const deductions = acc?.deductions ?? 0
-                    // combined — для колонки «Выплачено (ЗП)» (оклад+аванс на руки).
-                    const paidSalary = salaryPaid[emp.id] ?? 0
-                    // salaryOnly — для «К выплате»: аванс уже вычтен через advance,
-                    // вычитать его ещё раз через combined значило бы вычесть дважды.
-                    const paidSalaryOnly = salaryOnlyPaid[emp.id] ?? 0
+                    // paidCombined (Зарплата+Аванс) — для колонки «Выплачено (ЗП)».
+                    const paidSalary = acc?.paidCombined ?? 0
+                    // paidSalary (только «Зарплата») — для «К выплате»: аванс уже
+                    // вычтен через advance, вычитать его ещё раз через paidCombined
+                    // значило бы вычесть дважды.
+                    const paidSalaryOnly = acc?.paidSalary ?? 0
                     // Пока начисления не загрузились — откатываемся на оклад,
                     // чтобы таблица не мигала нулями.
                     const isDaily = acc?.payType === 'daily' || emp.payType === 'daily'
@@ -1364,7 +1348,7 @@ export default function PayrollPage() {
       )}
 
       {/* ═══ Salary Dialog ═══ */}
-      {/* salaryPaidThisPeriod — salaryOnlyPaid, не salaryPaid (combined):
+      {/* salaryPaidThisPeriod — accrual.paidSalary, не paidCombined:
           иначе аванс, выданный внутри периода, вычтется из «К выплате»
           дважды — он уже вычтен через accrual.advance (period-scoped). */}
       <PayEmployeeDialog
@@ -1372,7 +1356,7 @@ export default function PayrollPage() {
         action={payAction}
         accounts={accounts}
         accrual={selectedEmp ? accrualByUser[selectedEmp.id] : undefined}
-        salaryPaidThisPeriod={selectedEmp ? salaryOnlyPaid[selectedEmp.id] : undefined}
+        salaryPaidThisPeriod={selectedEmp ? accrualByUser[selectedEmp.id]?.paidSalary : undefined}
         serviceFrom={serviceFrom}
         serviceTo={serviceTo}
         onClose={closeDialog}

@@ -1876,24 +1876,27 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 		return
 	}
 	// Уже выплачено за период = Σ зарплатных проводок этого сотрудника ЗА
-	// ЭТОТ ПЕРИОД — матчим по тегу периода в description ("Зарплата:2026-07",
-	// см. payoutTx()), НЕ по фактической дате проводки: зарплату за июль часто
-	// платят в начале августа, и "date LIKE период%" эту прошлую выплату
-	// никогда не найдёт — кап молча переставал работать (ЗП-баг, нашли по
-	// TestSalary_WorkedDays_AccrualCapAndFreePayout).
+	// ЭТОТ ПЕРИОД — матчим по структурной колонке salary_period (082), НЕ по
+	// фактической дате проводки: зарплату за июль часто платят в начале
+	// августа, и "date LIKE период%" эту прошлую выплату никогда не найдёт —
+	// кап молча переставал работать (ЗП-баг, нашли по
+	// TestSalary_WorkedDays_AccrualCapAndFreePayout). До 082 период матчился
+	// LIKE-ом по тегу в description ("Зарплата:2026-07") — тот же баг класс,
+	// что владелец поймал в UI: колонка была единственным источником истины
+	// для сервера, а список сотрудников считал «выплачено» отдельно, по дате
+	// проводки в окне месяца — два разных ответа на один вопрос.
 	// Только категория «Зарплата»: авансы теперь пишутся отдельной
 	// категорией и вычитаются из остатка через u.Advance — считать их
 	// здесь второй раз означало бы вычесть аванс дважды.
 	scopedP, _ := s.r.ForTenant(ctx)
-	periodTag := "%" + CategorySalary + ":" + period + "%"
 	// cancelled_at IS NULL — отменённая выплата деньгами вернулась, считать её
 	// выплаченной значит запереть повторную выплату за тот же период (кап
 	// упрётся в сумму, которой уже нет). Касается и отмены расхода за филиал,
 	// проведённого центром: его зеркало помечается тем же полем.
 	if err = scopedP.Table("financial_operations").
 		Select("COALESCE(SUM(amount), 0)").
-		Where("category = ? AND source_ref = ? AND description LIKE ? AND cancelled_at IS NULL",
-			CategorySalary, userID, periodTag).
+		Where("category = ? AND source_ref = ? AND salary_period = ? AND cancelled_at IS NULL",
+			CategorySalary, userID, period).
 		Scan(&paid).Error; err != nil {
 		return
 	}
@@ -2243,6 +2246,16 @@ func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*
 	isAuto := false
 	srcRef := *in.UserID
 	ridStr := rid
+	// salary_period (082) — только для Зарплаты/Аванса: там in.Period ВСЕГДА
+	// YYYY-MM (один месяц начисления). Для «Сервис» (PayServiceCharge) Period
+	// несёт диапазон дат ("2026-08-01...2026-08-31", произвольный интервал
+	// обслуживания) — писать его в это поле означало бы нарушить инвариант
+	// «salary_period — либо YYYY-MM, либо NULL», которым пользуется
+	// salaryCapForPeriod/SalaryAccrual.
+	var salaryPeriod *string
+	if category == CategorySalary || category == CategoryAdvance {
+		salaryPeriod = in.Period
+	}
 
 	// Тег периода в описании ("Зарплата:2026-07") — не просто человекочитаемая
 	// подпись: PaySalary матчит по нему уже выплаченное за период (ниже,
@@ -2313,6 +2326,7 @@ func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*
 		Counterparty: in.Counterparty,
 		IsAuto:       &isAuto,
 		SourceRef:    &srcRef,
+		SalaryPeriod: salaryPeriod,
 		ShiftID:      in.ShiftID,
 		IsOverride:   in.IsOverride,
 		RestaurantID: &ridStr,

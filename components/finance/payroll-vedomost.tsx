@@ -18,7 +18,13 @@ export type VedomostRow = {
   advance: number
   deductions: number
   toPay: number
+  /** Тип оплаты — колонка «Дней» показывается только у дневников (у оклада число дней не влияет на начисление). */
+  payType?: 'monthly' | 'daily'
+  /** Оплачиваемых единиц за период (дни, дни ×2 считаются дважды) — то же число, что даёт rate × daysWorked = accrued. */
+  daysWorked?: number
 }
+
+const daysCell = (r: VedomostRow) => (r.payType === 'daily' ? String(r.daysWorked ?? 0) : '—')
 
 const RU = (n: number) => Math.round(n).toLocaleString('ru-RU')
 
@@ -51,6 +57,7 @@ function buildPrintHTML(periodLabel: string, rows: VedomostRow[], t: VedomostRow
     <td class="c">${i + 1}</td>
     <td>${escapeHtml(r.name)}<div class="sub">${escapeHtml(r.position)}</div></td>
     <td class="r">${RU(r.accrued)}</td>
+    <td class="c">${escapeHtml(daysCell(r))}</td>
     <td class="r">${r.advance ? RU(r.advance) : '—'}</td>
     <td class="r">${r.deductions ? RU(r.deductions) : '—'}</td>
     <td class="r b">${RU(r.toPay)}</td>
@@ -80,13 +87,13 @@ function buildPrintHTML(periodLabel: string, rows: VedomostRow[], t: VedomostRow
     <table>
       <thead><tr>
         <th class="c">№</th><th>Сотрудник</th>
-        <th class="r">Начислено</th><th class="r">Аванс</th><th class="r">Удержания</th>
+        <th class="r">Начислено</th><th class="c">Дней</th><th class="r">Аванс</th><th class="r">Удержания</th>
         <th class="r">К выплате</th><th>Подпись</th>
       </tr></thead>
       <tbody>${body}</tbody>
       <tfoot><tr>
         <td></td><td>Итого · ${rows.length} чел.</td>
-        <td class="r">${RU(t.accrued)}</td><td class="r">${RU(t.advance)}</td>
+        <td class="r">${RU(t.accrued)}</td><td></td><td class="r">${RU(t.advance)}</td>
         <td class="r">${RU(t.deductions)}</td><td class="r">${RU(t.toPay)}</td><td></td>
       </tr></tfoot>
     </table>
@@ -111,13 +118,14 @@ export function PayrollVedomost({ rows, periodLabel }: { rows: VedomostRow[]; pe
     exportToExcel(
       rows.map((r, i) => ({
         n: i + 1, name: r.name, position: r.position,
-        accrued: r.accrued, advance: r.advance, deductions: r.deductions, toPay: r.toPay,
+        accrued: r.accrued, days: daysCell(r), advance: r.advance, deductions: r.deductions, toPay: r.toPay,
       })),
       [
         { key: 'n', header: '№' },
         { key: 'name', header: 'Сотрудник' },
         { key: 'position', header: 'Должность' },
         { key: 'accrued', header: 'Начислено' },
+        { key: 'days', header: 'Дней' },
         { key: 'advance', header: 'Аванс' },
         { key: 'deductions', header: 'Удержания' },
         { key: 'toPay', header: 'К выплате' },
@@ -162,6 +170,7 @@ export function PayrollVedomost({ rows, periodLabel }: { rows: VedomostRow[]; pe
                 <th className="px-3 py-3 text-center w-10">№</th>
                 <th className="px-4 py-3 text-left">Сотрудник</th>
                 <th className="px-4 py-3 text-right">Начислено</th>
+                <th className="px-4 py-3 text-center w-16">Дней</th>
                 <th className="px-4 py-3 text-right">Аванс</th>
                 <th className="px-4 py-3 text-right">Удержания</th>
                 <th className="px-4 py-3 text-right">К выплате</th>
@@ -170,7 +179,7 @@ export function PayrollVedomost({ rows, periodLabel }: { rows: VedomostRow[]; pe
             </thead>
             <tbody>
               {rows.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground text-sm">За период некому начислять</td></tr>
+                <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground text-sm">За период некому начислять</td></tr>
               )}
               {rows.map((r, i) => (
                 <tr key={r.id} className="border-b border-border last:border-0 hover:bg-muted/20">
@@ -180,6 +189,7 @@ export function PayrollVedomost({ rows, periodLabel }: { rows: VedomostRow[]; pe
                     <div className="text-[11px] text-muted-foreground">{r.position}</div>
                   </td>
                   <td className="px-4 py-2.5 text-right tabular-nums">{formatCurrency(r.accrued)}</td>
+                  <td className="px-4 py-2.5 text-center tabular-nums text-muted-foreground">{daysCell(r)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-amber-600">{r.advance ? formatCurrency(r.advance) : <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-destructive">{r.deductions ? formatCurrency(r.deductions) : <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums font-bold text-foreground">{formatCurrency(r.toPay)}</td>
@@ -193,6 +203,7 @@ export function PayrollVedomost({ rows, periodLabel }: { rows: VedomostRow[]; pe
                   <td className="px-3 py-3" />
                   <td className="px-4 py-3 text-xs text-muted-foreground uppercase">Итого · {rows.length} чел.</td>
                   <td className="px-4 py-3 text-right tabular-nums text-foreground">{formatCurrency(totals.accrued)}</td>
+                  <td className="px-4 py-3" />
                   <td className="px-4 py-3 text-right tabular-nums text-amber-600">{formatCurrency(totals.advance)}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-destructive">{formatCurrency(totals.deductions)}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-emerald-600">{formatCurrency(totals.toPay)}</td>
