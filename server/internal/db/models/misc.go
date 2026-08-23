@@ -36,6 +36,11 @@ type TimeEntry struct {
 	Note         *string         `json:"note"`
 	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
 	CreatedAt    time.Time       `json:"created_at"`
+	// UserName — НЕ колонка (gorm:"-"), проставляется вручную в
+	// TimeEntriesService.List/ClockIn/ClockOut (JOIN-по-карте, не SQL JOIN —
+	// см. комментарий там). Без имени табель показывал «Неизвестно» на
+	// каждой строке и в «Кто на смене».
+	UserName *string `gorm:"-" json:"user_name,omitempty"`
 }
 
 // SalaryWorkedDay — ручная отметка отработанного дня для дневной оплаты (059).

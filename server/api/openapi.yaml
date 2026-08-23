@@ -5523,6 +5523,7 @@ components:
         status: { type: string, enum: [active, closed] }
         note: { type: string }
         created_at: { type: string, format: date-time }
+        user_name: { type: string, description: "Проставляется сервером (не колонка БД) — имя сотрудника для табеля/«Кто на смене»" }
     TimeEntryInput:
       type: object
       properties:

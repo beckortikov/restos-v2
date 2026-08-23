@@ -15249,6 +15249,8 @@ export interface components {
             note?: string;
             /** Format: date-time */
             created_at?: string;
+            /** @description Проставляется сервером (не колонка БД) — имя сотрудника для табеля/«Кто на смене» */
+            user_name?: string;
         };
         TimeEntryInput: {
             /**

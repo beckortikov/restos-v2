@@ -690,6 +690,13 @@ func (s *TimeEntriesService) List(ctx context.Context, f TimeEntriesFilter) ([]m
 	if err := q.Order("clock_in DESC").Find(&rows).Error; err != nil {
 		return nil, err
 	}
+	ptrs := make([]*models.TimeEntry, len(rows))
+	for i := range rows {
+		ptrs[i] = &rows[i]
+	}
+	if err := s.attachUserNames(ctx, ptrs...); err != nil {
+		return nil, err
+	}
 	return rows, nil
 }
 
@@ -729,6 +736,9 @@ func (s *TimeEntriesService) ClockIn(ctx context.Context, in TimeEntryInput) (*m
 		return recordTimeEntrySync(tx, t.ID)
 	})
 	if err != nil {
+		return nil, err
+	}
+	if err := s.attachUserNames(ctx, t); err != nil {
 		return nil, err
 	}
 	return t, nil
@@ -792,6 +802,9 @@ func (s *TimeEntriesService) ClockOut(ctx context.Context, id string, in TimeEnt
 	scoped3, _ := s.r.ForTenant(ctx)
 	var refreshed models.TimeEntry
 	if err := scoped3.Where("id = ?", id).First(&refreshed).Error; err != nil {
+		return nil, err
+	}
+	if err := s.attachUserNames(ctx, &refreshed); err != nil {
 		return nil, err
 	}
 	return &refreshed, nil

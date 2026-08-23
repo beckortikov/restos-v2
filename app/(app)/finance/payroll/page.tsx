@@ -171,6 +171,10 @@ export default function PayrollPage() {
   const [timeEntries, setTimeEntries] = useState<TimeEntry[]>([])
   const [myActiveEntry, setMyActiveEntry] = useState<TimeEntry | null>(null)
   const [timePeriod, setTimePeriod] = useState<'week' | 'month' | 'all'>('week')
+  // Фильтр по сотруднику (Фаза 3) — «» = все. Отдельно от statusFilter/roleFilter
+  // вкладки «Сотрудники»: тот работает над accrual за общий период страницы, этот
+  // — над лентой табеля за скользящее окно timePeriod.
+  const [timesheetEmpFilter, setTimesheetEmpFilter] = useState('')
   const [timeLoading, setTimeLoading] = useState(false)
   const [editingEntry, setEditingEntry] = useState<string | null>(null)
   const [editClockIn, setEditClockIn] = useState('')
@@ -524,11 +528,13 @@ export default function PayrollPage() {
 
   const activeEntries = timeEntries.filter(e => e.status === 'active')
 
-  // Visible entries: managers see all, others see their own
+  // Visible entries: managers see all (опционально сузить фильтром по
+  // сотруднику — Фаза 3), остальные видят только свои записи.
   const isManager = canDo('payroll.manage')
-  const visibleEntries = isManager
+  const visibleEntries = (isManager
     ? timeEntries
     : timeEntries.filter(e => e.userId === currentUser?.id)
+  ).filter(e => !timesheetEmpFilter || e.userId === timesheetEmpFilter)
 
   // Summary: hours per employee
   const hoursSummary = visibleEntries.reduce<Record<string, { name: string; hours: number; count: number }>>((acc, e) => {
@@ -1231,8 +1237,11 @@ export default function PayrollPage() {
             </div>
           )}
 
-          {/* Period filter */}
-          <div className="flex items-center gap-2">
+          {/* Period + сотрудник (Фаза 3) — фильтр по сотруднику только для
+              менеджера (остальные и так видят только себя). «Доп. смены» —
+              тот же WorkedDaysDialog, что и в списке «Сотрудники», чтобы не
+              уходить со вкладки Табель для отметки дня. */}
+          <div className="flex flex-wrap items-center gap-2">
             <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
               {([
                 ['week', '7 дней'],
@@ -1245,6 +1254,30 @@ export default function PayrollPage() {
                 </button>
               ))}
             </div>
+            {isManager && (
+              <select
+                value={timesheetEmpFilter}
+                onChange={e => setTimesheetEmpFilter(e.target.value)}
+                className="px-2.5 py-1.5 text-xs bg-card border border-border rounded-lg"
+              >
+                <option value="">Все сотрудники</option>
+                {employees.map(e => (
+                  <option key={e.id} value={e.id}>{e.name}</option>
+                ))}
+              </select>
+            )}
+            {isManager && timesheetEmpFilter && (
+              <button
+                onClick={() => {
+                  const emp = employees.find(e => e.id === timesheetEmpFilter)
+                  if (emp) setWorkedDaysEmp(emp)
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium border border-border rounded-lg hover:bg-muted transition-colors"
+              >
+                <CalendarDays className="size-3.5" />
+                {employees.find(e => e.id === timesheetEmpFilter)?.payType === 'daily' ? 'Отметить дни' : 'Доп. смены'}
+              </button>
+            )}
             {timeLoading && <div className="size-4 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />}
           </div>
 

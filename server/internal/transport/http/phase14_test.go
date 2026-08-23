@@ -607,8 +607,14 @@ func TestPhase14_TimeEntriesActive(t *testing.T) {
 	}
 	var te models.TimeEntry
 	_ = json.Unmarshal(b1, &te)
+	// user_name (Фаза 3, табель) — проставляется сервером на КАЖДОМ ответе
+	// TimeEntriesService, не только List: без имени табель/«Кто на смене»
+	// показывали «Неизвестно» на каждой строке.
+	if te.UserName == nil || *te.UserName != *user.Name {
+		t.Errorf("clock-in user_name = %v, want %q", te.UserName, *user.Name)
+	}
 
-	// GET active → matches.
+	// GET active → matches, несёт user_name.
 	r2, b2 := f.get(t, fmt.Sprintf("/api/v1/time-entries/active?user_id=%s", user.ID), tok)
 	if r2.StatusCode != 200 {
 		t.Fatalf("active: %d %s", r2.StatusCode, b2)
@@ -618,6 +624,33 @@ func TestPhase14_TimeEntriesActive(t *testing.T) {
 	if got.ID != te.ID {
 		t.Errorf("active.id = %s, want %s", got.ID, te.ID)
 	}
+	if got.UserName == nil || *got.UserName != *user.Name {
+		t.Errorf("active user_name = %v, want %q", got.UserName, *user.Name)
+	}
+
+	// GET /time-entries (лента табеля) — та же запись несёт user_name.
+	rl, bl := f.get(t, "/api/v1/time-entries?user_id="+user.ID, tok)
+	if rl.StatusCode != 200 {
+		t.Fatalf("list: %d %s", rl.StatusCode, bl)
+	}
+	var listEnv struct {
+		Data []models.TimeEntry `json:"data"`
+	}
+	if err := json.Unmarshal(bl, &listEnv); err != nil {
+		t.Fatalf("unmarshal list: %v — %s", err, bl)
+	}
+	foundInList := false
+	for _, row := range listEnv.Data {
+		if row.ID == te.ID {
+			foundInList = true
+			if row.UserName == nil || *row.UserName != *user.Name {
+				t.Errorf("list row user_name = %v, want %q", row.UserName, *user.Name)
+			}
+		}
+	}
+	if !foundInList {
+		t.Fatalf("clock-in %s не найден в GET /time-entries", te.ID)
+	}
 
 	// PATCH /time-entries/{id} — add a note.
 	rp, bp := f.patch(t, fmt.Sprintf("/api/v1/time-entries/%s", te.ID), tok, uuid.NewString(),
@@ -625,11 +658,21 @@ func TestPhase14_TimeEntriesActive(t *testing.T) {
 	if rp.StatusCode != 200 {
 		t.Fatalf("patch: %d %s", rp.StatusCode, bp)
 	}
+	var patched models.TimeEntry
+	_ = json.Unmarshal(bp, &patched)
+	if patched.UserName == nil || *patched.UserName != *user.Name {
+		t.Errorf("patch user_name = %v, want %q", patched.UserName, *user.Name)
+	}
 
 	// Clock-out.
 	rc, bc := f.patch(t, fmt.Sprintf("/api/v1/time-entries/%s/clock-out", te.ID), tok, uuid.NewString(), map[string]any{})
 	if rc.StatusCode != 200 {
 		t.Fatalf("clock-out: %d %s", rc.StatusCode, bc)
+	}
+	var clockedOut models.TimeEntry
+	_ = json.Unmarshal(bc, &clockedOut)
+	if clockedOut.UserName == nil || *clockedOut.UserName != *user.Name {
+		t.Errorf("clock-out user_name = %v, want %q", clockedOut.UserName, *user.Name)
 	}
 
 	// Active again → 404.

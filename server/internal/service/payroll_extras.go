@@ -15,6 +15,55 @@ import (
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
+// attachUserNames — проставляет UserName (models.TimeEntry, НЕ колонка) на
+// переданные записи табеля, одним запросом на все уникальные user_id разом.
+// Без него табель показывал «Неизвестно» на каждой строке и в «Кто на смене»
+// (userID есть, а не имени — фронт ждал user_name, бэк никогда его не слал).
+// nil-элементы пропускаются молча (удобно звать с одним *models.TimeEntry,
+// который может быть nil после ErrNotFound-обработки у вызывающего).
+func (s *TimeEntriesService) attachUserNames(ctx context.Context, entries ...*models.TimeEntry) error {
+	ids := make(map[string]struct{}, len(entries))
+	for _, e := range entries {
+		if e != nil && e.UserID != nil && *e.UserID != "" {
+			ids[*e.UserID] = struct{}{}
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	idList := make([]string, 0, len(ids))
+	for id := range ids {
+		idList = append(idList, id)
+	}
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+	var users []struct {
+		ID   string  `gorm:"column:id"`
+		Name *string `gorm:"column:name"`
+	}
+	if err := scoped.Table("users").Select("id, name").Where("id IN ?", idList).Scan(&users).Error; err != nil {
+		return err
+	}
+	names := make(map[string]string, len(users))
+	for _, u := range users {
+		if u.Name != nil {
+			names[u.ID] = *u.Name
+		}
+	}
+	for _, e := range entries {
+		if e == nil || e.UserID == nil {
+			continue
+		}
+		if name, ok := names[*e.UserID]; ok {
+			n := name
+			e.UserName = &n
+		}
+	}
+	return nil
+}
+
 // Active — GET /api/v1/time-entries/active?user_id=...
 // Текущая открытая запись для пользователя (clock_out IS NULL). 404 если нет.
 func (s *TimeEntriesService) Active(ctx context.Context, userID string) (*models.TimeEntry, error) {
@@ -32,6 +81,9 @@ func (s *TimeEntriesService) Active(ctx context.Context, userID string) (*models
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, apperrors.ErrNotFound
 		}
+		return nil, err
+	}
+	if err := s.attachUserNames(ctx, &t); err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -101,6 +153,9 @@ func (s *TimeEntriesService) Patch(ctx context.Context, id string, in TimeEntryP
 		updates["total_hours"] = total
 	}
 	if len(updates) == 0 {
+		if err := s.attachUserNames(ctx, &existing); err != nil {
+			return nil, err
+		}
 		return &existing, nil
 	}
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -116,6 +171,9 @@ func (s *TimeEntriesService) Patch(ctx context.Context, id string, in TimeEntryP
 	scoped3, _ := s.r.ForTenant(ctx)
 	var out models.TimeEntry
 	if err := scoped3.Where("id = ?", id).First(&out).Error; err != nil {
+		return nil, err
+	}
+	if err := s.attachUserNames(ctx, &out); err != nil {
 		return nil, err
 	}
 	return &out, nil
