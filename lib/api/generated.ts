@@ -16127,6 +16127,8 @@ export interface components {
             paid_salary?: components["schemas"]["Decimal"];
             /** @description Выплачено за период (Зарплата+Аванс) — только для отображения «Выплачено (ЗП)» */
             paid_combined?: components["schemas"]["Decimal"];
+            /** @description Гибрид «оклад + доп. смены»: оплачиваемых единиц из РУЧНЫХ отметок (без табеля) за период — то, что добавляется к окладу сверху */
+            extra_shift_units?: number;
         };
         WorkedDaysResult: {
             /** @description Дни с приходом в табеле (снять нельзя) */

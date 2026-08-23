@@ -18,13 +18,29 @@ export type VedomostRow = {
   advance: number
   deductions: number
   toPay: number
-  /** Тип оплаты — колонка «Дней» показывается только у дневников (у оклада число дней не влияет на начисление). */
+  /** Тип оплаты — колонка «Дней» показывает разное в зависимости от него (см. daysCell). */
   payType?: 'monthly' | 'daily'
-  /** Оплачиваемых единиц за период (дни, дни ×2 считаются дважды) — то же число, что даёт rate × daysWorked = accrued. */
+  /** Оплачиваемых единиц за период (дни, дни ×2 считаются дважды) — то же число, что даёт rate × daysWorked = accrued. Только для payType='daily'. */
   daysWorked?: number
+  /** Доп. смен за период (гибрид «оклад + доп.смены», payType='monthly') — ручные отметки, без табеля. 0 = обычный оклад без доп.смен. */
+  extraShiftUnits?: number
 }
 
-const daysCell = (r: VedomostRow) => (r.payType === 'daily' ? String(r.daysWorked ?? 0) : '—')
+// daysCell — дневник: оплаченные дни как есть («3»). Оклад: «—», если доп.
+// смен не было (обычный случай, не засорять колонку нулями), иначе «+N» —
+// префикс отличает «доп. смены сверх оклада» от «это и есть все его дни».
+function daysCell(r: VedomostRow): string {
+  if (r.payType === 'daily') return String(r.daysWorked ?? 0)
+  if ((r.extraShiftUnits ?? 0) > 0) return `+${r.extraShiftUnits}`
+  return '—'
+}
+
+// toPayCell — отрицательный «К выплате» это переплата (выдали больше
+// начисленного за период), не долг — «Переплата N» вместо голого минуса,
+// та же логика, что и в списке сотрудников.
+function toPayCell(r: VedomostRow): string {
+  return r.toPay < -0.5 ? `Переплата ${RU(Math.abs(r.toPay))}` : RU(r.toPay)
+}
 
 const RU = (n: number) => Math.round(n).toLocaleString('ru-RU')
 
@@ -60,7 +76,7 @@ function buildPrintHTML(periodLabel: string, rows: VedomostRow[], t: VedomostRow
     <td class="c">${escapeHtml(daysCell(r))}</td>
     <td class="r">${r.advance ? RU(r.advance) : '—'}</td>
     <td class="r">${r.deductions ? RU(r.deductions) : '—'}</td>
-    <td class="r b">${RU(r.toPay)}</td>
+    <td class="r b">${escapeHtml(toPayCell(r))}</td>
     <td class="sig"></td>
   </tr>`).join('')
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><title>Ведомость на выплату — ${escapeHtml(periodLabel)}</title>
@@ -118,7 +134,7 @@ export function PayrollVedomost({ rows, periodLabel }: { rows: VedomostRow[]; pe
     exportToExcel(
       rows.map((r, i) => ({
         n: i + 1, name: r.name, position: r.position,
-        accrued: r.accrued, days: daysCell(r), advance: r.advance, deductions: r.deductions, toPay: r.toPay,
+        accrued: r.accrued, days: daysCell(r), advance: r.advance, deductions: r.deductions, toPay: toPayCell(r),
       })),
       [
         { key: 'n', header: '№' },
@@ -192,7 +208,9 @@ export function PayrollVedomost({ rows, periodLabel }: { rows: VedomostRow[]; pe
                   <td className="px-4 py-2.5 text-center tabular-nums text-muted-foreground">{daysCell(r)}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-amber-600">{r.advance ? formatCurrency(r.advance) : <span className="text-muted-foreground">—</span>}</td>
                   <td className="px-4 py-2.5 text-right tabular-nums text-destructive">{r.deductions ? formatCurrency(r.deductions) : <span className="text-muted-foreground">—</span>}</td>
-                  <td className="px-4 py-2.5 text-right tabular-nums font-bold text-foreground">{formatCurrency(r.toPay)}</td>
+                  <td className={`px-4 py-2.5 text-right tabular-nums font-bold ${r.toPay < -0.5 ? 'text-amber-600' : 'text-foreground'}`}>
+                    {r.toPay < -0.5 ? `Переплата ${formatCurrency(Math.abs(r.toPay))}` : formatCurrency(r.toPay)}
+                  </td>
                   <td className="px-4 py-2.5"><span className="block border-b border-dashed border-muted-foreground/40 h-4" /></td>
                 </tr>
               ))}

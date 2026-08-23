@@ -1900,22 +1900,29 @@ func (s *SalaryService) salaryCapForPeriod(ctx context.Context, userID, period s
 		Scan(&paid).Error; err != nil {
 		return
 	}
-	// Начислено за период. Для оклада — сумма из карточки, для дневной
-	// оплаты (054) — ставка × отработанные дни из табеля: капить дневника
-	// по u.Salary было бы неверно, у него оклад равен нулю.
-	accrued = u.Salary
-	basis = fmt.Sprintf("оклад %s", u.Salary)
+	// Начислено за период. Для оклада — сумма из карточки (+ доп. смены, если
+	// отмечены), для дневной оплаты (054) — ставка × отработанные дни из
+	// табеля: капить дневника по u.Salary было бы неверно, у него оклад
+	// равен нулю. daysWorkedInPeriod нужен ВСЕГДА (не только дневнику) —
+	// extraShiftUnits гибрида считается из тех же ручных отметок.
+	days, units, extraUnits, derr := s.daysWorkedInPeriod(ctx, userID, period)
+	if derr != nil {
+		err = derr
+		return
+	}
 	if payTypeOf(u) == PayTypeDaily {
-		days, units, derr := s.daysWorkedInPeriod(ctx, userID, period)
-		if derr != nil {
-			err = derr
-			return
-		}
-		accrued = accruedFor(u, units)
+		accrued = accruedFor(u, units, 0)
 		if units != days {
 			basis = fmt.Sprintf("ставка %s × %d опл.ед. (%d дн., есть дни ×2) = %s", u.DailyRate, units, days, accrued)
 		} else {
 			basis = fmt.Sprintf("ставка %s × %d дн. = %s", u.DailyRate, days, accrued)
+		}
+	} else {
+		accrued = accruedFor(u, 0, extraUnits)
+		if extraUnits > 0 {
+			basis = fmt.Sprintf("оклад %s + %d доп.смен × %s = %s", u.Salary, extraUnits, u.DailyRate, accrued)
+		} else {
+			basis = fmt.Sprintf("оклад %s", u.Salary)
 		}
 	}
 	// Аванс/удержания за ЭТОТ период — из period-tagged строк salary_advances/

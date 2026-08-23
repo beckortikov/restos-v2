@@ -56,6 +56,15 @@ type SalaryAccrualRow struct {
 	// PaidCombined — только для display «Выплачено (ЗП)» (оклад+аванс на руки).
 	PaidSalary   decimal.Decimal `json:"paid_salary"`
 	PaidCombined decimal.Decimal `json:"paid_combined"`
+	// ExtraShiftUnits — гибрид «оклад + доп. смены»: оплачиваемых единиц из
+	// РУЧНЫХ отметок (salary_worked_days) за период, БЕЗ табеля (time_entries).
+	// У оклада начисление не зависит от того, отмечался ли сотрудник в
+	// табеле каждый день — это его обычная работа, уже покрытая окладом.
+	// Доп. смена — осознанная отметка владельцем/менеджером сверх обычного
+	// графика, поэтому источник только один: та же ручная отметка (календарь
+	// «Доп. смены»), что и раньше использовалась только для дневной оплаты.
+	// Множители ×2 (066) учтены — тот же механизм, что и в PaidUnits.
+	ExtraShiftUnits int `json:"extra_shift_units"`
 }
 
 // SalaryAccrual — начисления по всем сотрудникам за период [from, to].
@@ -78,7 +87,7 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 		return []SalaryAccrualRow{}, nil
 	}
 
-	days, units, err := s.daysWorked(ctx, rid, from, to)
+	days, units, extraUnits, err := s.daysWorked(ctx, rid, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -102,16 +111,17 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 	out := make([]SalaryAccrualRow, 0, len(users))
 	for _, u := range users {
 		row := SalaryAccrualRow{
-			UserID:       u.ID,
-			PayType:      payTypeOf(u),
-			Salary:       decimal.Normalize(u.Salary),
-			DailyRate:    decimal.Normalize(u.DailyRate),
-			DaysWorked:   days[u.ID],
-			PaidUnits:    units[u.ID],
-			Advance:      advByUser[u.ID],
-			Deductions:   dedByUser[u.ID],
-			PaidSalary:   paidSalaryByUser[u.ID],
-			PaidCombined: paidCombinedByUser[u.ID],
+			UserID:          u.ID,
+			PayType:         payTypeOf(u),
+			Salary:          decimal.Normalize(u.Salary),
+			DailyRate:       decimal.Normalize(u.DailyRate),
+			DaysWorked:      days[u.ID],
+			PaidUnits:       units[u.ID],
+			Advance:         advByUser[u.ID],
+			Deductions:      dedByUser[u.ID],
+			PaidSalary:      paidSalaryByUser[u.ID],
+			PaidCombined:    paidCombinedByUser[u.ID],
+			ExtraShiftUnits: extraUnits[u.ID],
 		}
 		if u.Name != nil {
 			row.UserName = *u.Name
@@ -122,7 +132,11 @@ func (s *SalaryService) SalaryAccrual(ctx context.Context, from, to string) ([]S
 		if u.Role != nil {
 			row.Role = *u.Role
 		}
-		row.Accrued = accruedFor(u, row.PaidUnits)
+		if payTypeOf(u) == PayTypeDaily {
+			row.Accrued = accruedFor(u, row.PaidUnits, 0)
+		} else {
+			row.Accrued = accruedFor(u, 0, row.ExtraShiftUnits)
+		}
 		out = append(out, row)
 	}
 	return out, nil
@@ -238,13 +252,23 @@ func payTypeOf(u models.User) string {
 	return PayTypeMonthly
 }
 
-// accruedFor — начислено за период. paidUnits — не «дни», а оплачиваемые
-// единицы: обычный день = 1, день с множителем ×2 (066) = 2. См. daysWorked.
-func accruedFor(u models.User, paidUnits int) decimal.Decimal {
+// accruedFor — начислено за период.
+//   - Дневная оплата: paidUnits × ставка. paidUnits — не «дни», а оплачиваемые
+//     единицы: обычный день = 1, день с множителем ×2 (066) = 2. Табель И
+//     ручные отметки — оба источника пay-relevant (см. daysWorked).
+//   - Оклад (в т.ч. гибрид «оклад + доп. смены»): фиксированный Salary,
+//     ПЛЮС extraShiftUnits × DailyRate (ставка доп. смены — то же поле,
+//     что и дневная ставка, переиспользуется по смыслу). extraShiftUnits —
+//     ТОЛЬКО ручные отметки (без табеля): обычная явка окладника уже
+//     покрыта окладом, начисление не должно расти от факта, что он ходит
+//     на работу каждый день — расти должно только от ОСОЗНАННОЙ отметки
+//     «доп. смена» тем же календарём.
+func accruedFor(u models.User, paidUnits, extraShiftUnits int) decimal.Decimal {
 	if payTypeOf(u) == PayTypeDaily {
 		return decimal.Normalize(decimal.Mul(u.DailyRate, decimal.FromInt(int64(paidUnits))))
 	}
-	return decimal.Normalize(u.Salary)
+	extra := decimal.Mul(u.DailyRate, decimal.FromInt(int64(extraShiftUnits)))
+	return decimal.Normalize(decimal.Add(u.Salary, extra))
 }
 
 // dayMultipliers — ручные множители (066) одного сотрудника за период, в
@@ -278,17 +302,20 @@ func (s *SalaryService) dayMultipliers(ctx context.Context, restaurantID, userID
 // daysWorkedInPeriod — отработанные дни и оплачиваемые единицы ОДНОГО
 // сотрудника за месяц period («YYYY-MM»). Используется капом на выплату: там
 // период приходит месяцем, а не парой дат. paidUnits учитывает множители
-// (066): день с ×2 добавляет 2 единицы вместо 1.
-func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period string) (daysWorked, paidUnits int, err error) {
+// (066): день с ×2 добавляет 2 единицы вместо 1. extraShiftUnits — то же, но
+// ТОЛЬКО из ручных отметок (без табеля) — источник для доп. смен оклада,
+// см. accruedFor.
+func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period string) (daysWorked, paidUnits, extraShiftUnits int, err error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	// «2026-07» → [2026-07-01, 2026-07-31]. Верхнюю границу не вычисляем
 	// вручную: сравнение идёт по префиксу месяца.
 	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
 	// Дни из табеля (уникальные даты прихода) за месяц.
 	dates := map[string]struct{}{}
+	manualDates := map[string]struct{}{}
 	var te []struct {
 		D string `gorm:"column:d"`
 	}
@@ -297,12 +324,14 @@ func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period s
 		Where("restaurant_id = ? AND user_id::text = ? AND clock_in IS NOT NULL", rid, userID).
 		Where("to_char(clock_in, 'YYYY-MM') = ?", period).
 		Scan(&te).Error; err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	for _, x := range te {
 		dates[x.D] = struct{}{}
 	}
-	// + ручные отметки (059) за месяц.
+	// + ручные отметки (059) за месяц. Отдельный набор manualDates — БЕЗ
+	// объединения с табелем: для гибрида «оклад + доп.смены» именно этот
+	// набор (и только он) считает extraShiftUnits.
 	var md []struct {
 		D string `gorm:"column:d"`
 	}
@@ -311,15 +340,27 @@ func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period s
 		Where("restaurant_id = ? AND user_id::text = ?", rid, userID).
 		Where("to_char(work_date, 'YYYY-MM') = ?", period).
 		Scan(&md).Error; err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	for _, x := range md {
 		dates[x.D] = struct{}{}
+		manualDates[x.D] = struct{}{}
 	}
-	monthFrom, monthTo := period+"-01", period+"-31"
+	// Последний день месяца — НЕ всегда 31 (июнь/апрель/сентябрь/ноябрь: 30,
+	// февраль: 28/29): "period+'-31'" валится на PG date-касте в короткие
+	// месяцы (SQLSTATE 22008). Раньше это молчало — daysWorkedInPeriod
+	// вызывался только для payType=daily, и ни один daily-тест не пришёлся
+	// на короткий месяц; теперь функция вызывается всегда (extraShiftUnits
+	// нужен и окладу), баг стал видимым сразу. Тот же приём, что в
+	// periodToOperationDate: +1 месяц − 1 день от первого числа.
+	periodStart, perr := time.Parse("2006-01", period)
+	if perr != nil {
+		return 0, 0, 0, apperrors.Wrap("VALIDATION", "bad period: "+period, nil)
+	}
+	monthFrom, monthTo := period+"-01", periodStart.AddDate(0, 1, -1).Format("2006-01-02")
 	mult, err := s.dayMultipliers(ctx, rid, userID, monthFrom, monthTo)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 	units := 0
 	for d := range dates {
@@ -329,12 +370,22 @@ func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period s
 			units++
 		}
 	}
-	return len(dates), units, nil
+	extraUnits := 0
+	for d := range manualDates {
+		if m, ok := mult[d]; ok {
+			extraUnits += m
+		} else {
+			extraUnits++
+		}
+	}
+	return len(dates), units, extraUnits, nil
 }
 
 // daysWorked — сколько РАЗНЫХ дней сотрудник отмечен в табеле за период
-// (daysWorked), и сколько из этого ОПЛАЧИВАЕМЫХ единиц (paidUnits) с учётом
-// ручных множителей (066, «две смены в один день»).
+// (daysWorked), сколько из этого ОПЛАЧИВАЕМЫХ единиц (paidUnits, табель ∪
+// ручные — источник дневной оплаты) с учётом ручных множителей (066, «две
+// смены в один день»), и отдельно extraShiftUnits (ТОЛЬКО ручные отметки,
+// без табеля — источник доп. смен у оклада, см. accruedFor).
 //
 // Дни считаем по дате прихода (clock_in), а не по числу записей: две отметки
 // в один день — это один рабочий день, иначе сотрудник, отметившийся после
@@ -342,7 +393,7 @@ func (s *SalaryService) daysWorkedInPeriod(ctx context.Context, userID, period s
 // (проставляется вручную через календарь) — единственный способ учесть
 // реальную вторую смену, не полагаясь на ненадёжную эвристику по интервалу
 // между отметками. Без override paidUnits[u] == daysWorked[u].
-func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to string) (daysWorked, paidUnits map[string]int, err error) {
+func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to string) (daysWorked, paidUnits, extraShiftUnits map[string]int, err error) {
 	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
 	// (user, date) из табеля и из ручных отметок → union в Go, чтобы один и тот
 	// же день из двух источников не задваивался.
@@ -361,7 +412,7 @@ func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to s
 	}
 	var r1 []ud
 	if err := q1.Scan(&r1).Error; err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	q2 := raw.Table("salary_worked_days").
 		Select("user_id::text AS user_id, work_date::text AS d").
@@ -374,19 +425,21 @@ func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to s
 	}
 	var r2 []ud
 	if err := q2.Scan(&r2).Error; err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	sets := map[string]map[string]struct{}{}
-	addRows := func(rows []ud) {
+	sets := map[string]map[string]struct{}{}       // табель ∪ ручные — дневная оплата
+	manualSets := map[string]map[string]struct{}{} // ТОЛЬКО ручные — доп. смены оклада
+	addRows := func(dst map[string]map[string]struct{}, rows []ud) {
 		for _, x := range rows {
-			if sets[x.UserID] == nil {
-				sets[x.UserID] = map[string]struct{}{}
+			if dst[x.UserID] == nil {
+				dst[x.UserID] = map[string]struct{}{}
 			}
-			sets[x.UserID][x.D] = struct{}{}
+			dst[x.UserID][x.D] = struct{}{}
 		}
 	}
-	addRows(r1)
-	addRows(r2)
+	addRows(sets, r1)
+	addRows(sets, r2)
+	addRows(manualSets, r2)
 
 	// Множители (066) за период, по ВСЕМ сотрудникам сразу — один запрос.
 	q3 := raw.Table("salary_day_multipliers").
@@ -404,7 +457,7 @@ func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to s
 		Multiplier int    `gorm:"column:multiplier"`
 	}
 	if err := q3.Scan(&r3).Error; err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	mult := map[string]map[string]int{}
 	for _, x := range r3 {
@@ -414,21 +467,29 @@ func (s *SalaryService) daysWorked(ctx context.Context, restaurantID, from, to s
 		mult[x.UserID][x.D] = x.Multiplier
 	}
 
+	unitsOf := func(sets map[string]map[string]struct{}) map[string]int {
+		out := make(map[string]int, len(sets))
+		for u, d := range sets {
+			units := 0
+			for date := range d {
+				if m, ok := mult[u][date]; ok {
+					units += m
+				} else {
+					units++
+				}
+			}
+			out[u] = units
+		}
+		return out
+	}
+
 	daysWorked = make(map[string]int, len(sets))
-	paidUnits = make(map[string]int, len(sets))
 	for u, d := range sets {
 		daysWorked[u] = len(d)
-		units := 0
-		for date := range d {
-			if m, ok := mult[u][date]; ok {
-				units += m
-			} else {
-				units++
-			}
-		}
-		paidUnits[u] = units
 	}
-	return daysWorked, paidUnits, nil
+	paidUnits = unitsOf(sets)
+	extraShiftUnits = unitsOf(manualSets)
+	return daysWorked, paidUnits, extraShiftUnits, nil
 }
 
 // ─── Ручная отметка отработанных дней (059) ─────────────────────────────────

@@ -576,11 +576,13 @@ export interface SalaryAccrualRow {
   payType: 'monthly' | 'daily'
   salary: number
   dailyRate: number
-  /** Дней с отметкой в табеле за период. Для оклада не используется. */
+  /** Дней с отметкой в табеле за период (общая явка, информационно). Для оклада начисление НЕ меняет — см. extraShiftUnits. */
   daysWorked: number
-  /** Оплачиваемых единиц (дни ×2, 066) — по нему считается accrued, не по daysWorked. */
+  /** Оплачиваемых единиц (дни ×2, 066), табель ∪ ручные — источник accrued только для payType='daily'. */
   paidUnits: number
-  /** Оклад или ставка × paidUnits — в зависимости от payType. */
+  /** Оплачиваемых единиц ТОЛЬКО из ручных отметок (без табеля, дни ×2 учтены) — источник доп. смен для payType='monthly' (гибрид «оклад + доп.смены»). */
+  extraShiftUnits: number
+  /** Дневная: ставка × paidUnits. Оклад: salary + dailyRate × extraShiftUnits. */
   accrued: number
   advance: number
   deductions: number
@@ -604,6 +606,7 @@ export async function fetchSalaryAccrual(from: string, to: string): Promise<Sala
     dailyRate: Number(r.daily_rate ?? 0),
     daysWorked: Number(r.days_worked ?? 0),
     paidUnits: Number(r.paid_units ?? r.days_worked ?? 0),
+    extraShiftUnits: Number(r.extra_shift_units ?? 0),
     accrued: Number(r.accrued ?? 0),
     advance: Number(r.advance ?? 0),
     deductions: Number(r.deductions ?? 0),

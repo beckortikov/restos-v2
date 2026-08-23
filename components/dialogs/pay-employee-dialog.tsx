@@ -16,7 +16,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { ROLE_LABELS, type User, type FinancialAccount } from '@/lib/types'
 import { updateUser, paySalaryFull, payServiceCharge } from '@/lib/queries'
-import { addSalaryDeduction, giveSalaryAdvance, type SalaryAccrualRow } from '@/lib/queries/finance'
+import { addSalaryDeduction, giveSalaryAdvance, fetchSalaryAccrual, type SalaryAccrualRow } from '@/lib/queries/finance'
 
 const PERIOD_MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
 function currentPeriod(): string { return new Date().toISOString().slice(0, 7) }
@@ -103,7 +103,16 @@ export function PayEmployeeDialog({
   const [overrideReason, setOverrideReason] = useState('')
   const [selectedAccountId, setSelectedAccountId] = useState('')
   const [formPayType, setFormPayType] = useState<'monthly' | 'daily'>('monthly')
+  // extraShiftRate — гибрид «оклад + доп. смены»: ставка доп. смены (то же
+  // поле daily_rate, что у дневной оплаты, но для formPayType='monthly' не
+  // заменяет оклад, а добавляется к нему за отмеченные в календаре дни).
+  const [extraShiftRate, setExtraShiftRate] = useState(0)
   const [paying, setPaying] = useState(false)
+  // Долг за предыдущий период (Фаза 2): владелец мог забыть переключить
+  // период выплаты с текущего месяца на прошлый — пикер по умолчанию всегда
+  // «сейчас». Проверяем ровно ОДИН месяц назад (не открытую историю) —
+  // самый частый случай, не отдельный экран.
+  const [prevPeriodDebt, setPrevPeriodDebt] = useState<{ period: string; amount: number } | null>(null)
   // Период выплаты (070) — раньше жёстко «сейчас»: выплатить за прошлый
   // месяц было невозможно. Зарплата/аванс/удержание теперь дают выбрать
   // любой месяц; «Обслуживание» период не меняет — им управляет фильтр
@@ -125,6 +134,11 @@ export function PayEmployeeDialog({
       const pt = employee.payType === 'daily' ? 'daily' : 'monthly'
       setFormPayType(pt)
       setPayAmount(pt === 'daily' ? (employee.dailyRate ?? 0) : (employee.salary ?? 0))
+      // daily_rate осмыслен как «ставка доп. смены» только если сотрудник
+      // УЖЕ оклад — если он был на дневной, его daily_rate это ставка ЗА
+      // ДЕНЬ, переносить её в доп.смены при смене типа было бы совпадением,
+      // а не осознанным значением.
+      setExtraShiftRate(pt === 'monthly' ? (employee.dailyRate ?? 0) : 0)
     } else if (action === 'service') {
       const acc = serviceAccrued ?? 0
       const paid = servicePaidThisPeriod ?? 0
@@ -142,21 +156,43 @@ export function PayEmployeeDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employee?.id, action])
 
+  // Долг за прошлый месяц — только для «Выплатить зарплату» (у аванса/
+  // удержания и «доп.смен» такого паттерна нет). Один доп. запрос за один
+  // конкретный месяц, не открытая история — дёшево и решает реальный случай
+  // («забыл переключить период»), не открытый.
+  useEffect(() => {
+    if (!employee || action !== 'salary') { setPrevPeriodDebt(null); return }
+    const prev = shiftPeriod(currentPeriod(), -1)
+    const [py, pm] = prev.split('-').map(Number)
+    const from = `${prev}-01`
+    const to = new Date(py, pm, 0).toISOString().slice(0, 10)
+    let cancelled = false
+    fetchSalaryAccrual(from, to).then((rows) => {
+      if (cancelled) return
+      const row = rows.find((r) => r.userId === employee.id)
+      if (!row) { setPrevPeriodDebt(null); return }
+      const debt = row.accrued - row.advance - row.deductions - row.paidSalary
+      setPrevPeriodDebt(debt > 0.5 ? { period: prev, amount: debt } : null)
+    }).catch(() => setPrevPeriodDebt(null))
+    return () => { cancelled = true }
+  }, [employee?.id, action])
+
   if (!employee || !action) return null
 
   const handleSubmit = async () => {
     setPaying(true)
     try {
       if (action === 'edit_salary') {
-        // Пишем и тип, и соответствующую ему сумму. Второе поле обнуляем,
-        // чтобы не осталось «оклад 3000 + ставка 120» — по такой карточке
-        // непонятно, за что человеку платят.
+        // Дневная оплата — daily_rate = ставка за день, salary обнуляем (не
+        // осталось «оклад 3000 + ставка 120», по карточке непонятно, за что
+        // платят). Оклад — daily_rate теперь НЕ обнуляется: это гибрид
+        // «оклад + доп. смены» (extraShiftRate, 0 если не задано владельцем).
         await updateUser(employee.id, formPayType === 'daily'
           ? { pay_type: 'daily', daily_rate: payAmount, salary: 0 }
-          : { pay_type: 'monthly', salary: payAmount, daily_rate: 0 })
+          : { pay_type: 'monthly', salary: payAmount, daily_rate: extraShiftRate })
         toast.success(formPayType === 'daily'
           ? `${employee.name}: ${formatCurrency(payAmount)} за день`
-          : `Оклад ${employee.name}: ${formatCurrency(payAmount)}`)
+          : `Оклад ${employee.name}: ${formatCurrency(payAmount)}${extraShiftRate > 0 ? ` + доп.смена ${formatCurrency(extraShiftRate)}` : ''}`)
       } else if (action === 'advance') {
         if (payAmount <= 0) { setPaying(false); return }
         if (payMode === 'override' && !overrideReason.trim()) { toast.error('Укажите причину свободной выплаты'); setPaying(false); return }
@@ -289,6 +325,25 @@ export function PayEmployeeDialog({
             </div>
           )}
 
+          {/* Фаза 2: за прошлый месяц не выплачено — пикер выше по умолчанию
+              всегда «сейчас», легко забыть переключить и выплатить не за тот
+              период. Показываем, только пока выбран НЕ этот прошлый месяц —
+              переключились сами, подсказка не нужна. */}
+          {prevPeriodDebt && payPeriod !== prevPeriodDebt.period && (
+            <div className="flex items-center justify-between gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 px-3 py-2">
+              <span className="text-xs text-amber-800 dark:text-amber-400">
+                За {periodLabel(prevPeriodDebt.period)} не выплачено {formatCurrency(prevPeriodDebt.amount)}
+              </span>
+              <button
+                type="button"
+                onClick={() => { setPayPeriod(prevPeriodDebt.period); setPayAmount(prevPeriodDebt.amount) }}
+                className="shrink-0 text-xs font-medium text-amber-800 dark:text-amber-400 underline hover:no-underline"
+              >
+                Выплатить за {periodLabel(prevPeriodDebt.period).split(' ')[0]}
+              </button>
+            </div>
+          )}
+
           {/* Тип оплаты труда (054). Переключатель только в «Оплата труда»:
               в выплатах/авансах менять его нельзя — это настройка карточки,
               а не свойство конкретной операции. */}
@@ -306,6 +361,7 @@ export function PayEmployeeDialog({
                     onClick={() => {
                       setFormPayType(v)
                       setPayAmount(v === 'daily' ? (employee.dailyRate ?? 0) : (employee.salary ?? 0))
+                      setExtraShiftRate(v === 'monthly' && employee.payType !== 'daily' ? (employee.dailyRate ?? 0) : 0)
                     }}
                     className={`flex-1 px-3 py-2 text-xs font-medium transition-colors ${
                       formPayType === v ? 'bg-primary text-primary-foreground' : 'hover:bg-muted'
@@ -342,6 +398,25 @@ export function PayEmployeeDialog({
               <p className="text-xs text-muted-foreground mt-1">Удержания за период: {formatCurrency(accrual?.deductions ?? 0)} + {formatCurrency(payAmount)} = {formatCurrency((accrual?.deductions ?? 0) + payAmount)}</p>
             )}
           </div>
+
+          {/* Гибрид «оклад + доп. смены»: та же ставка, что у дневной оплаты
+              (daily_rate), но сверх оклада — за дни, отмеченные отдельно в
+              календаре «⋯ → Доп. смены». Необязательно: 0 = обычный оклад
+              без доп. смен, как раньше. */}
+          {action === 'edit_salary' && formPayType === 'monthly' && (
+            <div>
+              <label className="text-xs font-medium text-muted-foreground mb-1 block">
+                Ставка доп. смены (необязательно, TJS)
+              </label>
+              <input type="number" min={0} value={extraShiftRate || ''} onChange={e => setExtraShiftRate(Number(e.target.value))}
+                placeholder="0"
+                className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-medium text-foreground focus:outline-none focus:ring-2 focus:ring-primary/30" />
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Если сотрудник иногда выходит доп. сменой сверх оклада — отметьте дни в календаре
+                («⋯» → Доп. смены на строке сотрудника), они добавятся к начислению автоматически.
+              </p>
+            </div>
+          )}
 
           {action === 'deduction' && (
             <div>

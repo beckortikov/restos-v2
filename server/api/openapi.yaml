@@ -6327,6 +6327,7 @@ components:
         deductions: { $ref: "#/components/schemas/Decimal" }
         paid_salary: { $ref: "#/components/schemas/Decimal", description: "Выплачено ЗА ЭТОТ ПЕРИОД (категория «Зарплата», по structural salary_period) — источник истины для остатка «К выплате»" }
         paid_combined: { $ref: "#/components/schemas/Decimal", description: "Выплачено за период (Зарплата+Аванс) — только для отображения «Выплачено (ЗП)»" }
+        extra_shift_units: { type: integer, description: "Гибрид «оклад + доп. смены»: оплачиваемых единиц из РУЧНЫХ отметок (без табеля) за период — то, что добавляется к окладу сверху" }
     WorkedDaysResult:
       type: object
       properties:

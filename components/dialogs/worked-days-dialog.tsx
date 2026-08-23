@@ -14,12 +14,20 @@ import {
 } from 'date-fns'
 import { ru } from 'date-fns/locale'
 
-// Отметка отработанных дней для дневной оплаты (059). Календарь МЕСЯЦА со своей
+// Отметка отработанных дней для дневной оплаты (059) — ИЛИ доп. смен для
+// гибрида «оклад + доп. смены» (mode='extra'). Календарь МЕСЯЦА со своей
 // навигацией (◀ ▶) — независимой от периода-фильтра сверху: рабочие дни всегда
 // отмечаются помесячно. Тык по дням ИЛИ быстрый ввод «N дней» / «Будни».
 // Дни из табеля (реальные приходы) заблокированы — их снять нельзя.
+//
+// mode='extra': табельные дни (shift_dates) ИГНОРИРУЮТСЯ намеренно — обычная
+// явка окладника уже покрыта окладом и не должна маячить «уже отмечено,
+// нельзя снять» в календаре, который здесь означает СВЕРХ обычного графика.
+// Единственный источник — ручные отметки (то же поле manual_dates, что и в
+// daily-режиме); backend (accruedFor/daysWorked) считает доп.смены ровно так
+// же — только по ручным отметкам, без табеля.
 export function WorkedDaysDialog({
-  open, onOpenChange, employeeId, employeeName, dailyRate, initialDate, onSaved,
+  open, onOpenChange, employeeId, employeeName, dailyRate, initialDate, onSaved, mode = 'daily',
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -28,6 +36,7 @@ export function WorkedDaysDialog({
   dailyRate: number
   initialDate?: string // YYYY-MM-DD — какой месяц открыть первым (обычно конец периода)
   onSaved?: (count: number) => void
+  mode?: 'daily' | 'extra'
 }) {
   const [month, setMonth] = useState<Date>(() =>
     startOfMonth(initialDate ? new Date(initialDate + 'T00:00:00') : new Date()),
@@ -55,13 +64,15 @@ export function WorkedDaysDialog({
     setLoading(true)
     fetchWorkedDays(employeeId, monthStart, monthEnd)
       .then((r) => {
-        setShiftSet(new Set(r.shift_dates))
+        // extra: табель не источник доп.смен (см. комментарий над компонентом) —
+        // shiftSet остаётся пустым, все дни в календаре toggleable.
+        setShiftSet(mode === 'extra' ? new Set() : new Set(r.shift_dates))
         setManualSet(new Set(r.manual_dates))
         setMultipliers(r.multipliers)
       })
       .catch(() => toast.error('Не удалось загрузить дни'))
       .finally(() => setLoading(false))
-  }, [open, employeeId, monthStart, monthEnd])
+  }, [open, employeeId, monthStart, monthEnd, mode])
 
   const totalDays = useMemo(() => {
     const u = new Set(shiftSet)
@@ -140,7 +151,7 @@ export function WorkedDaysDialog({
     setSaving(true)
     try {
       const res = await setWorkedDays(employeeId, monthStart, monthEnd, [...manualSet])
-      toast.success(`${format(month, 'LLLL', { locale: ru })}: отмечено дней ${res.count}`)
+      toast.success(`${format(month, 'LLLL', { locale: ru })}: ${mode === 'extra' ? 'доп.смен' : 'отмечено дней'} ${res.count}`)
       onSaved?.(res.count)
       onOpenChange(false)
     } catch (e) {
@@ -158,7 +169,7 @@ export function WorkedDaysDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Отработанные дни — {employeeName}</DialogTitle>
+          <DialogTitle>{mode === 'extra' ? 'Дополнительные смены' : 'Отработанные дни'} — {employeeName}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -252,7 +263,7 @@ export function WorkedDaysDialog({
               {/* Итог */}
               <div className="flex items-center justify-between rounded-lg bg-muted/40 border border-border px-3 py-2.5">
                 <span className="text-sm text-muted-foreground">
-                  Дней: <b className="text-foreground tabular-nums">{totalDays}</b>
+                  {mode === 'extra' ? 'Доп. смен' : 'Дней'}: <b className="text-foreground tabular-nums">{totalDays}</b>
                   {paidUnits !== totalDays && (
                     <> (<span className="text-amber-600 font-medium tabular-nums">{paidUnits}</span> опл. ед.)</>
                   )}

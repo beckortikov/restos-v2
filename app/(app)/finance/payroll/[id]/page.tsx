@@ -254,7 +254,13 @@ export default function EmployeeDetailPage() {
   // остаток текущего (баг владельца, backend-фикс period-scoped).
   const monthAdvance = accrual?.advance ?? 0
   const monthDeductions = accrual?.deductions ?? 0
-  const remaining = Math.max(0, (accrual?.accrued ?? employee.salary ?? 0) - monthAdvance - monthDeductions - salaryOnlyPaidMonth)
+  const remainingRaw = (accrual?.accrued ?? employee.salary ?? 0) - monthAdvance - monthDeductions - salaryOnlyPaidMonth
+  const remaining = Math.max(0, remainingRaw)
+  // Фаза 2: переплата (выдали больше начисленного за месяц) — «Остаток к
+  // выплате» и так корректно показывает 0 (нечего больше платить), но само
+  // отрицательное значение молча пропадало в Math.max — владелец не видел,
+  // что вообще есть переплата, не только что остаток нулевой.
+  const overpaid = remainingRaw < -0.5 ? Math.abs(remainingRaw) : 0
   const serviceRemaining = Math.max(0, serviceAccrued - servicePaid)
   const isDaily = accrual?.payType === 'daily' || employee.payType === 'daily'
 
@@ -304,6 +310,9 @@ export default function EmployeeDetailPage() {
           <div className="bg-primary/5 border border-primary/20 rounded-xl p-4">
             <p className="text-xs text-muted-foreground">Остаток к выплате</p>
             <p className="text-xl font-bold text-primary mt-1">{formatCurrency(remaining)}</p>
+            {overpaid > 0 && (
+              <p className="text-[11px] text-amber-600 font-medium mt-0.5">Переплата {formatCurrency(overpaid)}</p>
+            )}
           </div>
         </div>
 
@@ -312,11 +321,12 @@ export default function EmployeeDetailPage() {
           <button onClick={() => setPayAction('salary')} className="px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-colors">Выплатить зарплату</button>
           <button onClick={() => setPayAction('advance')} className="px-4 py-2 rounded-lg text-sm font-medium bg-amber-600 text-white hover:bg-amber-700 transition-colors">Выдать аванс</button>
           <button onClick={() => setPayAction('deduction')} className="px-4 py-2 rounded-lg text-sm font-medium bg-card border border-destructive/30 text-destructive hover:bg-destructive/10 transition-colors">Удержание</button>
-          {isDaily && (
-            <button onClick={() => setShowDays(true)} className="px-4 py-2 rounded-lg text-sm font-medium bg-card border border-border text-foreground hover:bg-muted transition-colors inline-flex items-center gap-1.5">
-              <CalendarDays className="size-4" /> Отметить дни
-            </button>
-          )}
+          {/* Дневная оплата — отметка отработанных дней. Оклад — доп. смены
+              (гибрид): всегда доступно, не только когда ставка уже задана —
+              иначе владельцу негде включить функцию впервые. */}
+          <button onClick={() => setShowDays(true)} className="px-4 py-2 rounded-lg text-sm font-medium bg-card border border-border text-foreground hover:bg-muted transition-colors inline-flex items-center gap-1.5">
+            <CalendarDays className="size-4" /> {isDaily ? 'Отметить дни' : 'Доп. смены'}
+          </button>
           {serviceRemaining > 0.005 && (
             <button onClick={() => setPayAction('service')} className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 transition-colors">
               Обслуживание {formatCurrency(serviceRemaining)}
@@ -481,8 +491,8 @@ export default function EmployeeDetailPage() {
         onSaved={reload}
       />
 
-      {/* Отметка отработанных дней (дневная оплата) — только для тех, у кого
-          ставка за день. Начисление «ставка × дни» считает именно эти отметки. */}
+      {/* Отметка отработанных дней (дневная оплата, начисление = ставка × дни)
+          ИЛИ доп. смен (гибрид «оклад + доп.смены», сверх оклада). */}
       {showDays && (
         <WorkedDaysDialog
           open={showDays}
@@ -490,6 +500,7 @@ export default function EmployeeDetailPage() {
           employeeId={employee.id}
           employeeName={employee.name}
           dailyRate={accrual?.dailyRate ?? employee.dailyRate ?? 0}
+          mode={isDaily ? 'daily' : 'extra'}
           initialDate={new Date().toISOString().slice(0, 10)}
           onSaved={reload}
         />

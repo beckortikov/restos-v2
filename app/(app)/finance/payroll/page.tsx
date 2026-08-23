@@ -473,11 +473,24 @@ export default function PayrollPage() {
   // totalAdvance = Σ emp.advance). totalSalaryPaid (combined) — только для
   // display «Выплачено (ЗП)», в этой формуле участвовать не должен.
   const totalToPay = totalSalary - totalAdvance - totalDeductions - totalSalaryOnlyPaid
+  // Фаза 2: сводка «К выплате» — Σ только положительных остатков (реально
+  // причитается), а не чистое нетто totalToPay (тот остаётся для футера
+  // таблицы, где строки должны арифметически суммироваться в то, что видно
+  // построчно). Иначе переплата одному сотруднику молча гасит недоплату
+  // другому в headline-цифре — оба случая требуют внимания владельца, а не
+  // взаимного сокращения в одну неприметную сумму.
+  const perEmployeeToPay = withSalary.map(e => ({
+    employee: e,
+    toPay: accruedOf(e) - advOf(e) - dedOf(e) - paidOf(e),
+  }))
+  const totalToPayPositive = perEmployeeToPay.reduce((s, r) => s + Math.max(0, r.toPay), 0)
+  const overpaidRows = perEmployeeToPay.filter(r => r.toPay < -0.005)
+  const totalOverpaid = overpaidRows.reduce((s, r) => s + Math.abs(r.toPay), 0)
 
   // Ведомость (#3): роспись «начислено/аванс/удержания/к выплате» за период,
   // те же period-scoped цифры, что в списке. Кто получает — с начислением > 0.
-  // payType/daysWorked — для колонки «Дней» (только у дневников: у оклада
-  // отметки в табеле начисление не меняют, показывать там нечего).
+  // payType/daysWorked/extraShiftUnits — для колонки «Дней»: у дневника
+  // оплаченные единицы, у оклада — доп. смены, если реально были отмечены.
   const vedomostPeriodLabel = periodLabelFromIso(serviceFrom, serviceTo)
   const vedomostRows: VedomostRow[] = withSalary.map(e => ({
     id: e.id,
@@ -489,6 +502,7 @@ export default function PayrollPage() {
     toPay: accruedOf(e) - advOf(e) - dedOf(e) - paidOf(e),
     payType: accrualByUser[e.id]?.payType ?? 'monthly',
     daysWorked: accrualByUser[e.id]?.paidUnits ?? 0,
+    extraShiftUnits: accrualByUser[e.id]?.extraShiftUnits ?? 0,
   }))
 
   const filtered = employees.filter(e => {
@@ -649,7 +663,12 @@ export default function PayrollPage() {
             </div>
             <div className="bg-card rounded-xl border border-border p-4">
               <p className="text-xs text-muted-foreground">К выплате (оклад)</p>
-              <p className="text-2xl font-bold text-emerald-600 mt-1">{formatCurrency(totalToPay)}</p>
+              <p className="text-2xl font-bold text-emerald-600 mt-1">{formatCurrency(totalToPayPositive)}</p>
+              {overpaidRows.length > 0 && (
+                <p className="text-[11px] text-amber-600 font-medium mt-1">
+                  Переплаты: {formatCurrency(totalOverpaid)} у {overpaidRows.length} чел.
+                </p>
+              )}
             </div>
           </div>
 
@@ -770,14 +789,21 @@ export default function PayrollPage() {
                                 </span>
                               )}
                             </span>
-                            {/* Расшифровка дневной оплаты: без неё сумма выглядит
-                                необъяснимым числом и её нельзя проверить. */}
-                            {isDaily && (
+                            {/* Расшифровка дневной оплаты / доп. смен оклада: без
+                                неё сумма выглядит необъяснимым числом и её нельзя
+                                проверить. У гибрида показываем только если доп.
+                                смены реально были — иначе для 99% окладников без
+                                них это был бы шум («+ 0 доп.смен» у всех подряд). */}
+                            {isDaily ? (
                               <span className="text-[10px] text-muted-foreground">
                                 {formatCurrency(acc?.dailyRate ?? emp.dailyRate ?? 0)} × {acc?.paidUnits ?? acc?.daysWorked ?? 0} дн.
                                 {acc && acc.paidUnits !== acc.daysWorked && (
                                   <span className="text-amber-600"> (есть дни ×2)</span>
                                 )}
+                              </span>
+                            ) : (acc?.extraShiftUnits ?? 0) > 0 && (
+                              <span className="text-[10px] text-muted-foreground">
+                                + {acc?.extraShiftUnits} доп.смен × {formatCurrency(acc?.dailyRate ?? emp.dailyRate ?? 0)}
                               </span>
                             )}
                           </button>
@@ -792,9 +818,21 @@ export default function PayrollPage() {
                           {paidSalary > 0 ? <span className="text-emerald-600 font-medium">{formatCurrency(paidSalary)}</span> : <span className="text-muted-foreground">—</span>}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <span className={`font-bold ${toPay > 0 ? 'text-foreground' : toPay < 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                            {accruedPay > 0 ? formatCurrency(toPay) : '—'}
-                          </span>
+                          {/* Фаза 2: отрицательный «К выплате» — это не долг, а
+                              переплата (выдали больше начисленного за период).
+                              Красный минус читался как ошибка/проблема; бейдж
+                              «Переплата N» называет вещь тем, чем она является. */}
+                          {accruedPay > 0 ? (
+                            toPay < -0.005 ? (
+                              <span className="font-bold text-amber-600" title="Выплачено больше начисленного за этот период">
+                                Переплата {formatCurrency(Math.abs(toPay))}
+                              </span>
+                            ) : (
+                              <span className={`font-bold ${toPay > 0.005 ? 'text-foreground' : 'text-muted-foreground'}`}>
+                                {formatCurrency(toPay)}
+                              </span>
+                            )
+                          ) : '—'}
                         </td>
                         <td className="px-4 py-3">
                           {/* Строка — не панель из 4 кнопок: одна primary
@@ -826,11 +864,14 @@ export default function PayrollPage() {
                                     <DropdownMenuItem onClick={() => openDialog(emp, 'deduction')} className="text-sm cursor-pointer">
                                       Внести удержание
                                     </DropdownMenuItem>
-                                    {isDaily && (
-                                      <DropdownMenuItem onClick={() => setWorkedDaysEmp(emp)} className="text-sm cursor-pointer">
-                                        <CalendarDays className="size-3.5 mr-2" /> Отметить дни
-                                      </DropdownMenuItem>
-                                    )}
+                                    {/* Дневная оплата — отметка отработанных дней (от них
+                                        считается начисление). Оклад — доп. смены (гибрид):
+                                        не заменяют оклад, добавляются сверху. Показываем
+                                        всегда, не только когда ставка уже задана — иначе
+                                        владельцу негде включить функцию впервые. */}
+                                    <DropdownMenuItem onClick={() => setWorkedDaysEmp(emp)} className="text-sm cursor-pointer">
+                                      <CalendarDays className="size-3.5 mr-2" /> {isDaily ? 'Отметить дни' : 'Доп. смены'}
+                                    </DropdownMenuItem>
                                   </DropdownMenuContent>
                                 </DropdownMenu>
                               </>
@@ -1363,7 +1404,8 @@ export default function PayrollPage() {
         onSaved={reload}
       />
 
-      {/* Отметка отработанных дней (дневная оплата) — из «⋯»-меню строки */}
+      {/* Отметка отработанных дней (дневная оплата) ИЛИ доп. смен (гибрид
+          «оклад + доп.смены») — из «⋯»-меню строки. */}
       {workedDaysEmp && (
         <WorkedDaysDialog
           open={!!workedDaysEmp}
@@ -1371,6 +1413,7 @@ export default function PayrollPage() {
           employeeId={workedDaysEmp.id}
           employeeName={workedDaysEmp.name}
           dailyRate={accrualByUser[workedDaysEmp.id]?.dailyRate ?? workedDaysEmp.dailyRate ?? 0}
+          mode={(accrualByUser[workedDaysEmp.id]?.payType ?? workedDaysEmp.payType) === 'daily' ? 'daily' : 'extra'}
           initialDate={serviceTo.slice(0, 10)}
           onSaved={() => { reload() }}
         />
