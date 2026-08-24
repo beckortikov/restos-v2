@@ -4,7 +4,7 @@ import { FinanceTabs } from '@/components/finance/finance-tabs'
 
 import { useState, useEffect, useMemo } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, formatDateTime } from '@/lib/helpers'
 import { type RecurringPayment } from '@/lib/types'
 import { fetchRecurringPayments, updateRecurringPayment, deleteRecurringPayment } from '@/lib/queries'
 import {
@@ -24,6 +24,13 @@ function daysUntil(due?: string): number | null {
   const now = new Date()
   const todayMs = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())
   return Math.round((dueMs - todayMs) / 86400000)
+}
+
+// dueAmount — сколько реально причитается СЕЙЧАС. Частичная оплата не
+// закрывает цикл (см. RecurringPaymentsService.Pay) — remainingAmount, если
+// задан, всегда приоритетнее полной amount шаблона.
+function dueAmount(p: RecurringPayment): number {
+  return p.remainingAmount ?? p.amount
 }
 
 // Статус срока: просрочено / сегодня-скоро (≤7 дней) / позже / пауза.
@@ -56,7 +63,7 @@ export default function PaymentsPage() {
     const overdue = active.filter(p => { const d = daysUntil(p.nextDue); return d !== null && d < 0 })
     return {
       monthly: active.reduce((s, p) => s + p.amount, 0),
-      dueSoonTotal: dueSoon.reduce((s, p) => s + p.amount, 0),
+      dueSoonTotal: dueSoon.reduce((s, p) => s + dueAmount(p), 0),
       dueSoonCount: dueSoon.length,
       overdueCount: overdue.length,
     }
@@ -158,7 +165,7 @@ export default function PaymentsPage() {
               {group.title} <span className="text-muted-foreground font-normal">· {group.items.length}</span>
             </h2>
             <span className="text-xs font-medium text-muted-foreground tabular-nums">
-              {formatCurrency(group.items.reduce((s, p) => s + p.amount, 0))}
+              {formatCurrency(group.items.reduce((s, p) => s + dueAmount(p), 0))}
             </span>
           </div>
           {group.items.map(p => {
@@ -172,13 +179,26 @@ export default function PaymentsPage() {
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-foreground truncate">{p.name}</span>
                     <span className={`text-[11px] px-2 py-0.5 rounded font-medium ${st.color}`}>{st.label}</span>
+                    {p.remainingAmount != null && (
+                      <span className="text-[11px] px-2 py-0.5 rounded font-medium bg-blue-100 text-blue-700">Частично оплачено</span>
+                    )}
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     {p.category ? `${p.category} · ` : ''}каждое {p.dayOfMonth}-е число
                     {p.active && p.nextDue ? ` · след. ${p.nextDue}` : ''}
                   </p>
+                  {p.lastPaidAt && (
+                    <p className="text-[11px] text-muted-foreground/80 mt-0.5">
+                      Последний платёж: {formatCurrency(p.lastPaidAmount ?? 0)} · {formatDateTime(p.lastPaidAt)}
+                    </p>
+                  )}
                 </div>
-                <span className="font-semibold text-foreground tabular-nums whitespace-nowrap">{formatCurrency(p.amount)}</span>
+                <div className="text-right shrink-0">
+                  <p className="font-semibold text-foreground tabular-nums whitespace-nowrap">{formatCurrency(dueAmount(p))}</p>
+                  {p.remainingAmount != null && (
+                    <p className="text-[11px] text-muted-foreground whitespace-nowrap">из {formatCurrency(p.amount)}</p>
+                  )}
+                </div>
                 {manage && (
                   <div className="flex items-center gap-1 shrink-0">
                     {p.active && (

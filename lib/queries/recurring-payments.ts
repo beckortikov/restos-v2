@@ -14,6 +14,8 @@ function mapRecurringPayment(r: any): RecurringPayment {
     dayOfMonth: Number(r.day_of_month ?? 1),
     nextDue: r.next_due ?? undefined,
     lastPaidAt: r.last_paid_at ?? undefined,
+    lastPaidAmount: r.last_paid_amount != null ? Number(r.last_paid_amount) : undefined,
+    remainingAmount: r.remaining_amount != null ? Number(r.remaining_amount) : undefined,
     active: r.active ?? true,
     note: r.note ?? undefined,
   }

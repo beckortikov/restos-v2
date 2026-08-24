@@ -30,7 +30,7 @@ export function PayRecurringDialog({ payment, open, onOpenChange, onSuccess }: {
 
   useEffect(() => {
     if (!open || !payment) return
-    setAmount(String(payment.amount ?? 0))
+    setAmount(String(payment.remainingAmount ?? payment.amount ?? 0))
     setIdemKey(randomId())
     fetchFinancialAccounts().then(selectableAccounts)
       .then(accs => {
@@ -75,6 +75,11 @@ export function PayRecurringDialog({ payment, open, onOpenChange, onSuccess }: {
             <div className="rounded-lg border border-border bg-muted/30 px-3 py-2.5">
               <p className="text-sm font-medium text-foreground">{payment.name}</p>
               {payment.category && <p className="text-xs text-muted-foreground">{payment.category}</p>}
+              {payment.remainingAmount != null && (
+                <p className="text-xs text-blue-700 mt-1">
+                  Уже оплачено частично в этом цикле — остаток {formatCurrency(payment.remainingAmount)} из {formatCurrency(payment.amount)}
+                </p>
+              )}
             </div>
 
             <div className="space-y-1.5">
@@ -85,6 +90,11 @@ export function PayRecurringDialog({ payment, open, onOpenChange, onSuccess }: {
                 onChange={e => setAmount(e.target.value)}
                 className="w-full px-3 py-2.5 text-sm bg-card border border-border rounded-lg tabular-nums focus:outline-none focus:ring-2 focus:ring-primary/30"
               />
+              {amountNum > 0 && amountNum < (payment.remainingAmount ?? payment.amount) && (
+                <p className="text-xs text-muted-foreground">
+                  Меньше остатка — платёж проведётся как частичный, срок не сдвинется, останется доплатить {formatCurrency((payment.remainingAmount ?? payment.amount) - amountNum)}
+                </p>
+              )}
             </div>
 
             <div className="space-y-1.5">

@@ -61,6 +61,11 @@ var schemaSelfHealStmts = []string{
 	// каждой открытии «Зарплаты» и на каждой попытке выплатить — без колонки
 	// оба падают целиком, а не просто теряют функциональность.
 	`ALTER TABLE financial_operations ADD COLUMN IF NOT EXISTS salary_period TEXT`,
+	// 083: остаток текущего цикла регулярного платежа при частичной оплате.
+	// RecurringPaymentsService.Pay читает/пишет обе колонки на КАЖДОЙ оплате
+	// (аренда/погашение долга и т.п.) — без них платёж падает целиком.
+	`ALTER TABLE recurring_payments ADD COLUMN IF NOT EXISTS remaining_amount NUMERIC(14,4)`,
+	`ALTER TABLE recurring_payments ADD COLUMN IF NOT EXISTS last_paid_amount NUMERIC(14,4)`,
 	// 072: настройки ТВ-табло выдачи. restaurants читается на каждом старте
 	// (auth-контекст, настройки, табло) — при дрейфе SELECT по модели с новыми
 	// полями иначе не досчитается колонок; гарантируем до-наличие.

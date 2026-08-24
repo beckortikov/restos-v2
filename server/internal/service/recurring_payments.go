@@ -208,10 +208,17 @@ func (s *RecurringPaymentsService) Delete(ctx context.Context, id string) error 
 }
 
 // Pay — провести платёж по шаблону. Атомарно: списывает сумму со счёта, создаёт
-// financial_operation out, двигает next_due на следующий месяц и ставит
-// last_paid_at. Сумма/счёт по умолчанию из шаблона, но правятся во входе
-// (коммуналка меняется помесячно). Это НЕ гашение долга — обычный операционный
-// расход (аренда/коммуналка попадают в opex ОПиУ, в отличие от supplier_payment).
+// financial_operation out, ставит last_paid_at/last_paid_amount. Сумма/счёт по
+// умолчанию из шаблона, но правятся во входе (коммуналка меняется помесячно).
+// Это НЕ гашение долга — обычный операционный расход (аренда/коммуналка
+// попадают в opex ОПиУ, в отличие от supplier_payment).
+//
+// Частичная оплата (amount < остатка текущего цикла — «Погащение» долями):
+// next_due НЕ двигается, remaining_amount уменьшается на amount. Цикл
+// закрывается (next_due на месяц вперёд, remaining_amount сбрасывается)
+// только когда amount покрывает остаток целиком — иначе доплата молча
+// терялась: next_due двигался безусловно, а строка тут же снова показывала
+// полную Amount шаблона как будто ничего не платили.
 func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in RecurringPaymentPayInput) (*models.RecurringPayment, error) {
 	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
 		return nil, err
@@ -235,8 +242,14 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 			return err
 		}
 
-		// Сумма: override или из шаблона.
-		amount := rp.Amount
+		// Остаток текущего цикла: ничего не платили — вся Amount шаблона.
+		owed := rp.Amount
+		if rp.RemainingAmount != nil {
+			owed = *rp.RemainingAmount
+		}
+		// Сумма: override или остаток текущего цикла (не всегда полная Amount —
+		// если цикл уже частично оплачен, дефолт должен быть «долить остаток»).
+		amount := owed
 		if in.Amount != nil {
 			d, err := decimal.FromString(*in.Amount)
 			if err != nil {
@@ -277,6 +290,11 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 			return err
 		}
 
+		// Остаток ПОСЛЕ этого платежа: >0 — цикл не закрыт (доплата), иначе
+		// (0 или переплата) — цикл закрыт целиком.
+		remaining := decimal.Normalize(decimal.Sub(owed, amount))
+		partial := decimal.IsPositive(remaining)
+
 		opType := "out"
 		opActivity := "operational"
 		if rp.Activity != nil && *rp.Activity != "" {
@@ -287,6 +305,9 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 		desc := "Платёж"
 		if rp.Name != nil && *rp.Name != "" {
 			desc = "Платёж: " + *rp.Name
+		}
+		if partial {
+			desc += " (частично)"
 		}
 		ridStr := rid
 		fo := &models.FinancialOperation{
@@ -299,25 +320,42 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 			return err
 		}
 
-		// Двигаем срок на следующий месяц от текущего next_due (а не от now):
-		// если платёж провели заранее/с опозданием, ритм дня-месяца сохраняется.
-		base := opDate
-		if rp.NextDue != nil && *rp.NextDue != "" {
-			base = *rp.NextDue
+		updates := map[string]any{
+			"last_paid_at":     now,
+			"last_paid_amount": amount,
+			"updated_at":       now,
 		}
-		nd := advanceMonth(base, rp.DayOfMonth)
-		if err := tx.Model(&rp).Updates(map[string]any{
-			"next_due":     nd,
-			"last_paid_at": now,
-			"updated_at":   now,
-		}).Error; err != nil {
+		nd := ""
+		if partial {
+			// Доплата не покрыла остаток — цикл остаётся открытым на том же
+			// сроке, следующий раз к оплате предлагается именно остаток.
+			updates["remaining_amount"] = remaining
+		} else {
+			// Остаток закрыт (ровно или с переплатой) — двигаем срок на
+			// следующий месяц от текущего next_due (а не от now): если платёж
+			// провели заранее/с опозданием, ритм дня-месяца сохраняется.
+			base := opDate
+			if rp.NextDue != nil && *rp.NextDue != "" {
+				base = *rp.NextDue
+			}
+			nd = advanceMonth(base, rp.DayOfMonth)
+			updates["next_due"] = nd
+			updates["remaining_amount"] = nil
+		}
+		if err := tx.Model(&rp).Updates(updates).Error; err != nil {
 			return err
 		}
 		if err := recordRecurringPaymentSync(tx, []string{rp.ID}); err != nil {
 			return err
 		}
-		rp.NextDue = &nd
+		if partial {
+			rp.RemainingAmount = &remaining
+		} else {
+			rp.NextDue = &nd
+			rp.RemainingAmount = nil
+		}
 		rp.LastPaidAt = &now
+		rp.LastPaidAmount = &amount
 		out = &rp
 		return nil
 	})

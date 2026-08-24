@@ -604,6 +604,11 @@ export interface RecurringPayment {
   dayOfMonth: number
   nextDue?: string        // YYYY-MM-DD
   lastPaidAt?: string
+  lastPaidAmount?: number
+  // remainingAmount — остаток ТЕКУЩЕГО цикла после частичной оплаты.
+  // undefined — ничего не платили, к оплате вся amount. Показывать/предлагать
+  // к оплате всегда remainingAmount ?? amount, не голую amount.
+  remainingAmount?: number
   active: boolean
   note?: string
 }

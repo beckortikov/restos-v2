@@ -11,7 +11,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import type { Ingredient, StockMovement } from '@/lib/types'
 import { fetchStockMovements } from '@/lib/queries'
-import { formatNum, formatTime, formatCurrency } from '@/lib/helpers'
+import { formatNum, formatDateTime, formatCurrency } from '@/lib/helpers'
 import {
   MOVEMENT_TYPE_META, movementSubtitle, movementRefPrefix, movementRefId, movementKind,
 } from '@/lib/warehouse-movements'
@@ -135,7 +135,7 @@ export function ItemStockCard({ ingredient, enrich }: { ingredient: Ingredient; 
                   const src = source(m)
                   return (
                     <tr key={m.id} className="hover:bg-muted/20">
-                      <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{formatTime(m.timestamp)}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground whitespace-nowrap">{formatDateTime(m.timestamp)}</td>
                       <td className="px-3 py-2">
                         <span className={`inline-flex text-[11px] px-2 py-0.5 rounded font-medium ${meta.bg} ${meta.color}`}>{meta.label}</span>
                         {m.belowZero && <span className="ml-1 inline-flex text-[11px] px-2 py-0.5 rounded font-medium bg-destructive/10 text-destructive">ниже 0</span>}

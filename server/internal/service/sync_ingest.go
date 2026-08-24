@@ -1413,9 +1413,16 @@ func payReceiptDebt(tx *gorm.DB, receipt *models.StockReceipt, amount decimal.De
 	return recordSupplierSync(tx, []string{sup.ID})
 }
 
-// advanceRecurringDue — сдвиг срока регулярного платежа. База — сам next_due,
-// а не сегодня: ритм дня месяца сохраняется, даже если платёж провели раньше
-// или позже (та же логика, что в RecurringPaymentsService.Pay).
+// advanceRecurringDue — сдвиг срока регулярного платежа, когда его оплатил
+// central за филиал (Фаза Р). База — сам next_due, а не сегодня: ритм дня
+// месяца сохраняется, даже если платёж провели раньше или позже.
+//
+// ⚠️ В ОТЛИЧИЕ от RecurringPaymentsService.Pay (остаток текущего цикла при
+// частичной оплате) — здесь amount не участвует, срок двигается безусловно.
+// Мирроринг центр→филиал пока не знает о remaining_amount; если центр гасит
+// филиальский долг частями, это не отражается тут же, как в локальной
+// оплате. Не совпадающий с локальным путём кусок, а не забытый — не трогаем,
+// пока в частичных платежах через сеть нет реального кейса.
 func advanceRecurringDue(tx *gorm.DB, rp *models.RecurringPayment, now time.Time) error {
 	base := now.Format("2006-01-02")
 	if rp.NextDue != nil && *rp.NextDue != "" {

@@ -190,10 +190,11 @@ type BudgetLine struct {
 
 func (BudgetLine) TableName() string { return "budget_lines" }
 
-// RecurringPayment — шаблон повторяющегося платежа (аренда, коммуналка, оклад).
-// Не авто-списание: напоминает и подставляет сумму/счёт, деньги уходят по
-// кнопке «Оплатить». next_due — следующая дата платежа (двигается на месяц
-// вперёд при каждой оплате).
+// RecurringPayment — шаблон повторяющегося платежа (аренда, коммуналка, оклад,
+// долг долями). Не авто-списание: напоминает и подставляет сумму/счёт, деньги
+// уходят по кнопке «Оплатить». next_due — следующая дата платежа, двигается на
+// месяц вперёд, только когда оплата закрывает остаток текущего цикла целиком
+// (см. RemainingAmount) — иначе платёж частичный, срок остаётся на месте.
 type RecurringPayment struct {
 	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 	Name         *string         `json:"name"`
@@ -205,11 +206,16 @@ type RecurringPayment struct {
 	DayOfMonth   int             `gorm:"column:day_of_month;default:1" json:"day_of_month"`
 	NextDue      *string         `gorm:"column:next_due" json:"next_due"`
 	LastPaidAt   *time.Time      `gorm:"column:last_paid_at" json:"last_paid_at"`
-	Active       bool            `gorm:"default:true" json:"active"`
-	Note         *string         `json:"note"`
-	RestaurantID *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
+	// RemainingAmount — остаток ТЕКУЩЕГО цикла после частичной оплаты. NULL —
+	// ничего не платили в этом цикле, к оплате вся Amount. Ставится в Pay():
+	// пока остаток > 0, next_due не двигается — цикл считается незакрытым.
+	RemainingAmount *decimal.Decimal `gorm:"column:remaining_amount;type:numeric(14,4)" json:"remaining_amount"`
+	LastPaidAmount  *decimal.Decimal `gorm:"column:last_paid_amount;type:numeric(14,4)" json:"last_paid_amount"`
+	Active          bool             `gorm:"default:true" json:"active"`
+	Note            *string          `json:"note"`
+	RestaurantID    *string          `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
 }
 
 func (RecurringPayment) TableName() string { return "recurring_payments" }

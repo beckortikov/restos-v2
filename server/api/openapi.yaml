@@ -5745,6 +5745,8 @@ components:
         day_of_month: { type: integer, minimum: 1, maximum: 31 }
         next_due: { type: string, description: "YYYY-MM-DD — следующая дата платежа" }
         last_paid_at: { type: string, format: date-time }
+        last_paid_amount: { $ref: "#/components/schemas/Decimal" }
+        remaining_amount: { $ref: "#/components/schemas/Decimal", description: "Остаток текущего цикла после частичной оплаты. Отсутствует/null — ничего не платили, к оплате вся amount." }
         active: { type: boolean }
         note: { type: string }
         created_at: { type: string, format: date-time }

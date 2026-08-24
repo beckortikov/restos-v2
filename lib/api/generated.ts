@@ -15542,6 +15542,9 @@ export interface components {
             next_due?: string;
             /** Format: date-time */
             last_paid_at?: string;
+            last_paid_amount?: components["schemas"]["Decimal"];
+            /** @description Остаток текущего цикла после частичной оплаты. Отсутствует/null — ничего не платили, к оплате вся amount. */
+            remaining_amount?: components["schemas"]["Decimal"];
             active?: boolean;
             note?: string;
             /** Format: date-time */

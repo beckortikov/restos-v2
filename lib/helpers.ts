@@ -242,6 +242,10 @@ export function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
 }
 
+export function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+}
+
 export function getTimeSince(iso: string | null | undefined, endIso?: string | null): string {
   if (!iso) return '0 мин'
   const start = new Date(iso).getTime()
