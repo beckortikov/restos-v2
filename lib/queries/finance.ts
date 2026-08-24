@@ -592,9 +592,19 @@ export interface SalaryAccrualRow {
   paidCombined: number
 }
 
-export async function fetchSalaryAccrual(from: string, to: string): Promise<SalaryAccrualRow[]> {
+/**
+ * branchId — начисления ГЛАЗАМИ филиала (multi-branch, Ф5б): X-Branch-Id
+ * подменяет tenant на сервере (owner central + филиал своей сети, иначе
+ * заголовок игнорируется/блокируется middleware'ом BranchOverride). Все
+ * нужные таблицы (users, табель, salary_*, проводки) реплицированы, поэтому
+ * расчёт на центре даёт ровно тот же ответ, что дал бы сам филиал.
+ */
+export async function fetchSalaryAccrual(from: string, to: string, branchId?: string): Promise<SalaryAccrualRow[]> {
   const res: any = await unwrap(
-    api.GET('/api/v1/finance/salary/accrual', { params: { query: { from, to } } as any }),
+    api.GET('/api/v1/finance/salary/accrual', {
+      params: { query: { from, to } } as any,
+      ...(branchId ? { headers: { 'X-Branch-Id': branchId } } : {}),
+    }),
   )
   return (res?.data ?? []).map((r: any) => ({
     userId: r.user_id ?? '',

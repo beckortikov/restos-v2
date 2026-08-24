@@ -15,7 +15,10 @@ import {
   fetchSalaryAccrual, type SalaryAccrualRow,
 } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
-import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ClipboardList, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown } from 'lucide-react'
+import { fetchNetworkStaff, payBranchSalary, type NetworkStaff, type NetworkStaffMember } from '@/lib/queries/transfers'
+import { DecimalInput } from '@/components/ui/decimal-input'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Users, Pencil, Search, Download, Clock, Play, Square, Trash2, Timer, FileText, ClipboardList, ChevronRight, MoreVertical, CalendarDays, TrendingUp, TrendingDown, Store, Wallet } from 'lucide-react'
 import { PayEmployeeDialog, PAYOUT_KIND_LABELS, PAYOUT_KIND_TONE, type PayAction } from '@/components/dialogs/pay-employee-dialog'
 import { WorkedDaysDialog } from '@/components/dialogs/worked-days-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -109,7 +112,7 @@ function ElapsedBadge({ since }: { since: string }) {
 
 export default function PayrollPage() {
   const navigate = useNavigate()
-  const { user: currentUser, canDo, canAccessRoles } = useAuth()
+  const { user: currentUser, canDo, canAccessRoles, restaurantId } = useAuth()
   const [tab, setTab] = useState<TabKey>('salary')
   const [employees, setEmployees] = useState<User[]>([])
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
@@ -118,6 +121,26 @@ export default function PayrollPage() {
   // ─── Salary state ──────────────────────────────────────────────────────────
   const [payAction, setPayAction] = useState<PayAction | null>(null)
   const [selectedEmp, setSelectedEmp] = useState<User | null>(null)
+  // ─── Единый персонал сети (по просьбе владельца, 2026-08-24) ─────────────
+  // На ЦЕНТРАЛЬНОМ узле этот экран показывает и сотрудников филиалов: в
+  // центре штата почти нет (узел для управления и отчётов), а зарплату всей
+  // сети платят отсюда. Отдельная страница «Персонал сети» упразднена.
+  // networkStaff != null означает «я central и в сети» — на филиалах и вне
+  // сети экран остаётся строго локальным.
+  const [networkStaff, setNetworkStaff] = useState<NetworkStaff | null>(null)
+  const [branchFilter, setBranchFilter] = useState('all')
+  // Выплата сотруднику филиала — свой мини-диалог поверх payBranchSalary
+  // (Ф-Р): деньги списываются со счёта ЦЕНТРА, зеркало едет в филиал; кап
+  // «не выплатить дважды» сервер считает глазами филиала. PayEmployeeDialog
+  // сюда не годится: он работает через локальные зарплатные API узла.
+  const [branchPayFor, setBranchPayFor] = useState<(User & { branchId?: string; branchName?: string }) | null>(null)
+  const [branchPayAmount, setBranchPayAmount] = useState(0)
+  const [branchPayAccountId, setBranchPayAccountId] = useState('')
+  const [branchPayPeriod, setBranchPayPeriod] = useState(() => {
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  })
+  const [branchPaying, setBranchPaying] = useState(false)
   // Отметка отработанных дней (дневная оплата) — из «⋯»-меню строки.
   const [workedDaysEmp, setWorkedDaysEmp] = useState<User | null>(null)
   // Отметка явки за другого сотрудника (054).
@@ -193,12 +216,40 @@ export default function PayrollPage() {
     return Object.fromEntries(rows.map(r => [r.userId, r]))
   }, [serviceFrom, serviceTo])
 
+  // Сетевой персонал: только когда Я — центральный склад своей сети. На
+  // филиале/вне сети network/staff либо не отдаётся, либо отдаётся, но
+  // вливать чужой штат в локальный экран филиала не нужно — платить за
+  // других может только центр (requireCentralOwner на PayBranchSalary).
+  const loadNetworkStaff = async (): Promise<NetworkStaff | null> => {
+    try {
+      const ns = await fetchNetworkStaff()
+      const meCentral = ns.branches.some(b => b.id === restaurantId && b.kind === 'central_warehouse')
+      return meCentral ? ns : null
+    } catch {
+      return null // не в сети / нет права — экран остаётся локальным
+    }
+  }
+
   const reload = async () => {
-    const [users, accs, accrualRows] = await Promise.all([
+    const [users, accs, accrualRows, ns] = await Promise.all([
       fetchUsers(),
       fetchFinancialAccounts().then(selectableAccounts),
       loadAccrual(),
+      loadNetworkStaff(),
     ])
+    setNetworkStaff(ns)
+    // Начисления филиалов — глазами каждого филиала (X-Branch-Id, Ф5б):
+    // все нужные таблицы реплицированы, расчёт на центре даёт тот же ответ.
+    // Ошибки филиала не валят общий экран — его строки просто без начислений.
+    if (ns) {
+      const branchIds = ns.branches.filter(b => b.id !== restaurantId).map(b => b.id)
+      const perBranch = await Promise.all(branchIds.map(bid =>
+        fetchSalaryAccrual(serviceFrom.slice(0, 10), serviceTo.slice(0, 10), bid).catch(() => []),
+      ))
+      for (const rows of perBranch) {
+        for (const r of rows) accrualRows[r.userId] = r
+      }
+    }
     setEmployees(users.filter(u => u.role !== 'owner' && u.role !== 'superadmin'))
     setAccounts(accs)
     // Счёт НЕ преднастраиваем. Раньше здесь подставлялся accs[0], а
@@ -246,7 +297,19 @@ export default function PayrollPage() {
   // Перезапрашиваем зарплатные данные при смене периода (users/accounts уже загружены).
   useEffect(() => {
     if (loading) return
-    loadAccrual().then(setAccrualByUser).catch(() => {})
+    ;(async () => {
+      const rows = await loadAccrual().catch(() => ({} as Record<string, SalaryAccrualRow>))
+      if (networkStaff) {
+        const branchIds = networkStaff.branches.filter(b => b.id !== restaurantId).map(b => b.id)
+        const perBranch = await Promise.all(branchIds.map(bid =>
+          fetchSalaryAccrual(serviceFrom.slice(0, 10), serviceTo.slice(0, 10), bid).catch(() => []),
+        ))
+        for (const brRows of perBranch) {
+          for (const r of brRows) rows[r.userId] = r
+        }
+      }
+      setAccrualByUser(rows)
+    })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serviceFrom, serviceTo])
 
@@ -366,6 +429,28 @@ export default function PayrollPage() {
 
   const closeDialog = () => { setPayAction(null); setSelectedEmp(null) }
 
+  // Выплата сотруднику филиала со счёта центра (Ф-Р, payBranchSalary).
+  const onBranchPay = async () => {
+    if (!branchPayFor?.branchId || !branchPayAccountId || branchPayAmount <= 0) return
+    setBranchPaying(true)
+    try {
+      await payBranchSalary({
+        branchId: branchPayFor.branchId,
+        userId: branchPayFor.id,
+        amount: branchPayAmount,
+        accountId: branchPayAccountId,
+        period: branchPayPeriod,
+      })
+      toast.success(`Выплачено: ${branchPayFor.name}`)
+      setBranchPayFor(null)
+      await reload()
+    } catch (e) {
+      toast.error(humanizeError(e))
+    } finally {
+      setBranchPaying(false)
+    }
+  }
+
   // ─── Timesheet helpers ─────────────────────────────────────────────────────
 
   // handleMarkAttendance — менеджер отмечает выход сотрудника на смену.
@@ -449,6 +534,34 @@ export default function PayrollPage() {
 
   // ─── Salary computed ───────────────────────────────────────────────────────
 
+  // ─── Единый персонал: свои + филиальные ────────────────────────────────
+  // Филиальный сотрудник мапится в ту же форму строки User + метка филиала:
+  // одна таблица, одни фильтры, один поиск. У чужих строк нет username/
+  // permissions — в таблице они и не нужны.
+  type RowU = User & { branchId?: string; branchName?: string }
+  const branchRows: RowU[] = networkStaff
+    ? networkStaff.staff
+        .filter(u => u.branchId && u.branchId !== restaurantId && u.role !== 'superadmin')
+        .map(u => ({
+          id: u.id,
+          name: u.name,
+          username: '',
+          role: u.role as User['role'],
+          roleDisplay: (ROLE_LABELS as Record<string, string>)[u.role] ?? u.role,
+          restaurantId: u.branchId!,
+          position: u.position ?? undefined,
+          salary: u.salary,
+          dailyRate: u.dailyRate,
+          payType: u.payType,
+          branchId: u.branchId!,
+          branchName: u.branchName,
+        } as RowU))
+    : []
+  const mergedEmployees: RowU[] = [...employees, ...branchRows]
+  const branchNameOf = (e: RowU) => e.branchName
+  // Счётчики для фильтра по филиалам (свои — под именем узла-центра).
+  const myBranchMeta = networkStaff?.branches.find(b => b.id === restaurantId)
+
   // ФОТ считаем по НАЧИСЛЕННОМУ: у дневников оклад нулевой, и старый подсчёт
   // по e.salary просто не видел бы их в фонде оплаты труда.
   const accruedOf = (e: User) => accrualByUser[e.id]?.accrued ?? (e.salary ?? 0)
@@ -463,7 +576,7 @@ export default function PayrollPage() {
   // paidCombinedOf — «Зарплата»+«Аванс», только для display «Выплачено (ЗП)».
   const paidOf = (e: User) => accrualByUser[e.id]?.paidSalary ?? 0
   const paidCombinedOf = (e: User) => accrualByUser[e.id]?.paidCombined ?? 0
-  const withSalary = employees.filter(e => accruedOf(e) > 0)
+  const withSalary = mergedEmployees.filter(e => accruedOf(e) > 0)
   const totalSalary = withSalary.reduce((s, e) => s + accruedOf(e), 0)
   const totalAdvance = withSalary.reduce((s, e) => s + advOf(e), 0)
   const totalDeductions = withSalary.reduce((s, e) => s + dedOf(e), 0)
@@ -509,7 +622,11 @@ export default function PayrollPage() {
     extraShiftUnits: accrualByUser[e.id]?.extraShiftUnits ?? 0,
   }))
 
-  const filtered = employees.filter(e => {
+  const filtered = mergedEmployees.filter(e => {
+    if (branchFilter !== 'all') {
+      const home = e.branchId ?? restaurantId ?? ''
+      if (home !== branchFilter) return false
+    }
     if (roleFilter !== 'all' && e.role !== roleFilter) return false
     if (statusFilter === 'with_salary' && (e.salary ?? 0) === 0) return false
     if (statusFilter === 'no_salary' && (e.salary ?? 0) > 0) return false
@@ -522,7 +639,7 @@ export default function PayrollPage() {
     return true
   })
 
-  const roleStats = employees.reduce<Record<string, number>>((acc, e) => { acc[e.role] = (acc[e.role] || 0) + 1; return acc }, {})
+  const roleStats = mergedEmployees.reduce<Record<string, number>>((acc, e) => { acc[e.role] = (acc[e.role] || 0) + 1; return acc }, {})
 
   // ─── Timesheet computed ────────────────────────────────────────────────────
 
@@ -588,7 +705,7 @@ export default function PayrollPage() {
         </div>
         {tab === 'salary' && (
           <div className="flex items-center gap-2">
-            <p className="text-muted-foreground text-sm">{employees.length} сотрудников</p>
+            <p className="text-muted-foreground text-sm">{mergedEmployees.length} сотрудников</p>
             <button
               onClick={() => {
                 exportToExcel(
@@ -678,16 +795,42 @@ export default function PayrollPage() {
             </div>
           </div>
 
+          {/* Филиалы: единый персонал сети — фильтр по узлам (центр + филиалы).
+              Виден только на центральном узле сети; сотрудники филиалов в общем
+              списке помечены бейджем филиала. */}
+          {networkStaff && branchRows.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
+                <button onClick={() => setBranchFilter('all')}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${branchFilter === 'all' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
+                  Вся сеть ({mergedEmployees.length})
+                </button>
+                {restaurantId && (
+                  <button onClick={() => setBranchFilter(restaurantId)}
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${branchFilter === restaurantId ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
+                    {myBranchMeta?.name ?? 'Центр'} ({employees.length})
+                  </button>
+                )}
+                {networkStaff.branches.filter(b => b.id !== restaurantId).map(b => (
+                  <button key={b.id} onClick={() => setBranchFilter(branchFilter === b.id ? 'all' : b.id)}
+                    className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors inline-flex items-center gap-1 ${branchFilter === b.id ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
+                    <Store className="size-3" /> {b.name} ({branchRows.filter(r => r.branchId === b.id).length})
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Filters */}
-          {employees.length > 5 && (
+          {mergedEmployees.length > 5 && (
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
                 {([
-                  ['all', `Все (${employees.length})`],
+                  ['all', `Все (${mergedEmployees.length})`],
                   ['with_salary', `С окладом (${withSalary.length})`],
-                  ['no_salary', `Без оклада (${employees.length - withSalary.length})`],
-                  ['has_advance', `С авансом (${employees.filter(e => advOf(e) > 0).length})`],
-                  ['has_deduction', `С удержанием (${employees.filter(e => dedOf(e) > 0).length})`],
+                  ['no_salary', `Без оклада (${mergedEmployees.length - withSalary.length})`],
+                  ['has_advance', `С авансом (${mergedEmployees.filter(e => advOf(e) > 0).length})`],
+                  ['has_deduction', `С удержанием (${mergedEmployees.filter(e => dedOf(e) > 0).length})`],
                 ] as const).map(([key, label]) => (
                   <button key={key} onClick={() => setStatusFilter(key)}
                     className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors ${statusFilter === key ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}>
@@ -719,7 +862,7 @@ export default function PayrollPage() {
 
               {(roleFilter !== 'all' || statusFilter !== 'all' || search) && (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span>{filtered.length} из {employees.length}</span>
+                  <span>{filtered.length} из {mergedEmployees.length}</span>
                   <button onClick={() => { setRoleFilter('all'); setStatusFilter('all'); setSearch('') }} className="text-primary hover:underline">Сбросить</button>
                 </div>
               )}
@@ -762,10 +905,13 @@ export default function PayrollPage() {
                     const isDaily = acc?.payType === 'daily' || emp.payType === 'daily'
                     const accruedPay = acc ? acc.accrued : salary
                     const toPay = accruedPay - advance - deductions - paidSalaryOnly
+                    // Филиальный сотрудник: карточка/правка оклада/табель —
+                    // авторитет его филиала; с центра — только выплата (Ф-Р).
+                    const isBranch = !!emp.branchId
 
                     return (
-                      <tr key={emp.id} onClick={() => navigate('/finance/payroll/' + emp.id)}
-                        className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors cursor-pointer">
+                      <tr key={emp.id} onClick={() => { if (!isBranch) navigate('/finance/payroll/' + emp.id) }}
+                        className={`border-b border-border last:border-0 hover:bg-muted/30 transition-colors ${isBranch ? '' : 'cursor-pointer'}`}>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2.5">
                             <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-xs font-bold shrink-0">
@@ -774,6 +920,11 @@ export default function PayrollPage() {
                             <div>
                               <span className="font-medium text-foreground text-sm">{emp.name}</span>
                               {emp.shiftNumber ? <span className="text-[10px] text-muted-foreground ml-1">{emp.shiftNumber} см.</span> : null}
+                              {isBranch && (
+                                <span className="block text-[10px] text-muted-foreground inline-flex items-center gap-1 mt-0.5">
+                                  <Store className="size-3" /> {branchNameOf(emp)}
+                                </span>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -781,13 +932,19 @@ export default function PayrollPage() {
                           <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{emp.position || ROLE_LABELS[emp.role]}</span>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'edit_salary') }} className="group inline-flex flex-col items-end gap-0.5">
+                          <button
+                            disabled={isBranch}
+                            title={isBranch ? 'Оклад/ставку меняет сам филиал' : undefined}
+                            onClick={(e) => { e.stopPropagation(); if (!isBranch) openDialog(emp, 'edit_salary') }}
+                            className={`group inline-flex flex-col items-end gap-0.5 ${isBranch ? 'cursor-default' : ''}`}>
                             <span className="inline-flex items-center gap-1">
                               {accruedPay > 0 ? (
                                 <>
                                   <span className="font-medium text-foreground">{formatCurrency(accruedPay)}</span>
                                   <Pencil className="size-3 text-muted-foreground/0 group-hover:text-primary transition-colors" />
                                 </>
+                              ) : isBranch ? (
+                                <span className="text-muted-foreground">—</span>
                               ) : (
                                 // Нет оклада/ставки — явный призыв, а не тихий «Не указан».
                                 <span className="inline-flex items-center gap-1 text-primary font-medium">
@@ -849,7 +1006,28 @@ export default function PayrollPage() {
                               ВСЕГДА: есть начисление → сервер капит, нет
                               оклада/ставки → свободная выплата любой суммы. */}
                           <div className="flex items-center justify-end gap-1.5">
-                            {canDo('payroll.manage') && (
+                            {canDo('payroll.manage') && isBranch && (
+                              // Сотрудник филиала: выплата через сеть (Ф-Р) —
+                              // деньги со счёта ЦЕНТРА, зеркало едет в филиал,
+                              // кап «не выплатить дважды» сервер считает
+                              // глазами филиала. Аванс/удержания/дни — в самом
+                              // филиале, поэтому «⋯»-меню здесь нет.
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setBranchPayFor(emp)
+                                  setBranchPayAmount(Math.max(0, toPay > 0.005 ? Math.round(toPay * 100) / 100 : (emp.payType !== 'daily' ? (emp.salary ?? 0) : 0)))
+                                  setBranchPayAccountId('')
+                                  const d = new Date(serviceTo)
+                                  setBranchPayPeriod(Number.isNaN(d.getTime())
+                                    ? `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`
+                                    : `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`)
+                                }}
+                                className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shrink-0 inline-flex items-center gap-1.5">
+                                <Wallet className="size-3.5" /> Выплатить
+                              </button>
+                            )}
+                            {canDo('payroll.manage') && !isBranch && (
                               <>
                                 <button onClick={(e) => { e.stopPropagation(); openDialog(emp, 'salary') }} title={accruedPay > 0 ? 'Выплатить' : 'Свободная выплата'}
                                   className="px-3.5 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shrink-0">
@@ -882,7 +1060,7 @@ export default function PayrollPage() {
                                 </DropdownMenu>
                               </>
                             )}
-                            <ChevronRight className="size-4 text-muted-foreground/40 shrink-0" />
+                            {!isBranch && <ChevronRight className="size-4 text-muted-foreground/40 shrink-0" />}
                           </div>
                         </td>
                       </tr>
@@ -1436,6 +1614,76 @@ export default function PayrollPage() {
         onClose={closeDialog}
         onSaved={reload}
       />
+
+      {/* ═══ Выплата сотруднику ФИЛИАЛА (единый персонал сети) ═══ */}
+      <Dialog open={!!branchPayFor} onOpenChange={(v) => { if (!v) setBranchPayFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Выплата сотруднику филиала</DialogTitle>
+          </DialogHeader>
+          {branchPayFor && (
+            <div className="space-y-3 py-1">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{branchPayFor.name}</span> · {branchPayFor.branchName}
+                {branchPayFor.payType !== 'daily' && (branchPayFor.salary ?? 0) > 0 && <> · оклад {formatCurrency(branchPayFor.salary ?? 0)}</>}
+              </p>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Период (месяц начисления)</label>
+                <input
+                  type="month"
+                  value={branchPayPeriod}
+                  onChange={e => setBranchPayPeriod(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">С какого счёта</label>
+                <select
+                  value={branchPayAccountId}
+                  onChange={e => setBranchPayAccountId(e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">— выберите счёт —</option>
+                  {accounts.map(a => (
+                    <option key={a.id} value={a.id}>{a.name} — {formatCurrency(a.balance)}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-muted-foreground">Сумма</label>
+                <DecimalInput
+                  min={0}
+                  value={branchPayAmount}
+                  onChange={setBranchPayAmount}
+                  placeholder="0"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Деньги спишутся с вашего счёта, а в отчётах филиала выплата отразится как его
+                расход на зарплату — и его касса больше не предложит выплатить это второй раз.
+              </p>
+            </div>
+          )}
+          <DialogFooter className="sm:justify-between gap-2">
+            <button
+              type="button"
+              onClick={() => setBranchPayFor(null)}
+              className="px-4 py-2 text-sm font-medium bg-card border border-border rounded-lg hover:bg-muted"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={onBranchPay}
+              disabled={branchPaying || !branchPayAccountId || branchPayAmount <= 0}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:opacity-90 disabled:opacity-50"
+            >
+              <Wallet className="size-4" /> Выплатить
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Отметка отработанных дней (дневная оплата) ИЛИ доп. смен (гибрид
           «оклад + доп.смены») — из «⋯»-меню строки. */}

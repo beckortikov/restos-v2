@@ -77,7 +77,9 @@ const branchMiddleware: Middleware = {
     if (request.method.toUpperCase() !== 'GET') return request
     if (typeof localStorage !== 'undefined') {
       const b = localStorage.getItem('restos-branch-view')
-      if (b) request.headers.set('X-Branch-Id', b)
+      // Точечный заголовок вызова (fetchSalaryAccrual(..., branchId) и т.п.)
+      // важнее глобального «вида филиала» — иначе set() молча перетирал бы его.
+      if (b && !request.headers.has('X-Branch-Id')) request.headers.set('X-Branch-Id', b)
     }
     return request
   },
