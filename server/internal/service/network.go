@@ -1,11 +1,15 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -386,6 +390,108 @@ type NetworkMenuInput struct {
 	Station   string `json:"station,omitempty"`
 	Unit      string `json:"unit,omitempty"`
 	Emoji     string `json:"emoji,omitempty"`
+	// Attributes — вариации мастера (миграция 084). Семантика поля:
+	// отсутствует (nil) — не трогать; JSON null — очистить (блюдо снова
+	// плоское); объект — заменить. Форма — NetworkMenuAttrs.
+	Attributes json.RawMessage `json:"attributes,omitempty"`
+}
+
+// NetworkMenuAttrs — валидируемая форма network_menu_items.attributes.
+// Повторяет SyncAttributesInput, но без id: id атрибутов/значений/шкал
+// локальны для каждого узла и через сеть не ездят.
+type NetworkMenuAttrs struct {
+	Attributes []NetworkMenuAttr  `json:"attributes"`
+	Combos     []NetworkMenuCombo `json:"combos"`
+}
+
+type NetworkMenuAttr struct {
+	Name string `json:"name"`
+	// Scale — применяющая сторона связывает атрибут со СВОЕЙ шкалой размеров
+	// с этим именем (find-or-create), чтобы техкарты вариантов могли цеплять
+	// заготовки по размеру.
+	Scale  bool     `json:"scale,omitempty"`
+	Values []string `json:"values"`
+}
+
+type NetworkMenuCombo struct {
+	Labels []string `json:"labels"`
+	Price  string   `json:"price"`
+}
+
+// parseNetworkMenuAttrs — разбор и проверка attributes из NetworkMenuInput.
+// Возвращает (nil, false, nil) когда поле отсутствует, (nil, true, nil) когда
+// прислан явный null (очистка). Лимиты — те же, что у локальных атрибутов
+// (validateAttributesInput): до 3 атрибутов, до 10 значений, цена на каждую
+// комбинацию — иначе материализация на филиале упадёт на ровно этих проверках.
+func parseNetworkMenuAttrs(raw json.RawMessage) (*NetworkMenuAttrs, bool, error) {
+	if raw == nil {
+		return nil, false, nil
+	}
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return nil, true, nil
+	}
+	var a NetworkMenuAttrs
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return nil, false, apperrors.Wrap("VALIDATION", "attributes: некорректный JSON", err)
+	}
+	if len(a.Attributes) == 0 {
+		return nil, true, nil // пустой объект — тоже очистка
+	}
+	if len(a.Attributes) > 3 {
+		return nil, false, apperrors.Wrap("VALIDATION", "attributes: максимум 3 атрибута", nil)
+	}
+	total := 1
+	for _, attr := range a.Attributes {
+		if strings.TrimSpace(attr.Name) == "" {
+			return nil, false, apperrors.Wrap("VALIDATION", "attributes: атрибут без имени", nil)
+		}
+		if len(attr.Values) == 0 || len(attr.Values) > 10 {
+			return nil, false, apperrors.Wrap("VALIDATION", "attributes: у атрибута должно быть 1–10 значений", nil)
+		}
+		seen := map[string]bool{}
+		for _, v := range attr.Values {
+			lv := strings.ToLower(strings.TrimSpace(v))
+			if lv == "" {
+				return nil, false, apperrors.Wrap("VALIDATION", "attributes: пустое значение", nil)
+			}
+			if seen[lv] {
+				return nil, false, apperrors.Wrap("VALIDATION", "attributes: значение повторяется: "+v, nil)
+			}
+			seen[lv] = true
+		}
+		total *= len(attr.Values)
+	}
+	if total > 60 {
+		return nil, false, apperrors.Wrap("VALIDATION", "attributes: слишком много комбинаций", nil)
+	}
+	// Полнота цен: комбинация без положительной цены сломает материализацию.
+	prices := map[string]bool{}
+	for _, c := range a.Combos {
+		p, err := decimal.FromString(c.Price)
+		if err != nil || !decimal.IsPositive(p) {
+			return nil, false, apperrors.Wrap("VALIDATION", "attributes: цена комбинации должна быть положительной", nil)
+		}
+		prices[comboLabelKey(c.Labels)] = true
+	}
+	var walk func(idx int, labels []string) error
+	walk = func(idx int, labels []string) error {
+		if idx == len(a.Attributes) {
+			if !prices[comboLabelKey(labels)] {
+				return apperrors.Wrap("VALIDATION", "attributes: не задана цена комбинации: "+strings.Join(labels, " "), nil)
+			}
+			return nil
+		}
+		for _, v := range a.Attributes[idx].Values {
+			if err := walk(idx+1, append(labels, strings.TrimSpace(v))); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(0, nil); err != nil {
+		return nil, false, err
+	}
+	return &a, false, nil
 }
 
 // CreateNetworkMenuItem заводит блюдо в мастер-меню сети.
@@ -403,12 +509,23 @@ func (s *NetworkService) CreateNetworkMenuItem(ctx context.Context, in NetworkMe
 			price = decimal.Normalize(p)
 		}
 	}
+	attrs, _, err := parseNetworkMenuAttrs(in.Attributes)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().UTC()
 	m := &models.NetworkMenuItem{
 		ID: uuid.NewString(), AccountID: &account, Name: in.Name,
 		Category: strPtrOrNil(in.Category), BasePrice: price,
 		Station: strPtrOrNil(in.Station), Unit: strPtrOrNil(in.Unit), Emoji: strPtrOrNil(in.Emoji),
 		CreatedAt: now, UpdatedAt: now,
+	}
+	if attrs != nil {
+		b, merr := json.Marshal(attrs)
+		if merr != nil {
+			return nil, merr
+		}
+		m.Attributes = datatypes.JSON(b)
 	}
 	if err := s.r.Raw().WithContext(ctx).Create(m).Error; err != nil {
 		return nil, err
@@ -434,6 +551,19 @@ func (s *NetworkService) UpdateNetworkMenuItem(ctx context.Context, id string, i
 		if p, err := decimal.FromString(in.BasePrice); err == nil {
 			patch["base_price"] = decimal.Normalize(p)
 		}
+	}
+	attrs, clear, err := parseNetworkMenuAttrs(in.Attributes)
+	if err != nil {
+		return nil, err
+	}
+	if clear {
+		patch["attributes"] = nil
+	} else if attrs != nil {
+		b, merr := json.Marshal(attrs)
+		if merr != nil {
+			return nil, merr
+		}
+		patch["attributes"] = datatypes.JSON(b)
 	}
 	res := s.r.Raw().WithContext(ctx).Model(&models.NetworkMenuItem{}).
 		Where("id = ? AND account_id = ?", id, account).Updates(patch)

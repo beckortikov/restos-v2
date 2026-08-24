@@ -149,6 +149,55 @@ export interface NetworkMenuInput {
   station?: string
   unit?: string
   emoji?: string
+  /**
+   * Вариации мастера (миграция 084). Филиалы материализуют их вместе с блюдом:
+   * атрибут + значения + цены комбинаций; scale=true — атрибут связывается со
+   * шкалой размеров узла (find-or-create по имени). undefined — не трогать,
+   * null — очистить (блюдо снова плоское).
+   */
+  attributes?: NetworkMenuAttrs | null
+}
+
+export interface NetworkMenuAttrs {
+  attributes: { name: string; scale?: boolean; values: string[] }[]
+  combos: { labels: string[]; price: string }[]
+}
+
+/**
+ * buildNetworkAttrs — снапшот вариаций локального продукта для мастера сети.
+ * Берёт фактическое состояние (атрибуты + варианты с ценами) и переводит его
+ * в форму без id: имена, лейблы, цены комбинаций. scale — атрибут связан со
+ * шкалой размеров локально; филиалы сделают то же самое у себя.
+ * null — у продукта нет вариаций (мастер станет/останется плоским нельзя —
+ * отсутствие поля означает «не трогать», поэтому null возвращаем явно только
+ * когда вариаций нет и мастер надо очистить; вызывающий решает, слать ли).
+ */
+export function buildNetworkAttrs(
+  attributes: { name: string; sizeScaleId?: string | null; values: { id: string; label: string }[] }[],
+  variants: { price: number; variantValueIds?: string[] }[],
+): NetworkMenuAttrs | null {
+  if (attributes.length === 0 || variants.length === 0) return null
+  const labelByValueId = new Map<string, { attrIdx: number; label: string }>()
+  attributes.forEach((a, ai) => a.values.forEach(v => labelByValueId.set(v.id, { attrIdx: ai, label: v.label })))
+  const combos: { labels: string[]; price: string }[] = []
+  for (const v of variants) {
+    const labels = new Array<string>(attributes.length).fill('')
+    for (const vid of v.variantValueIds ?? []) {
+      const info = labelByValueId.get(vid)
+      if (info) labels[info.attrIdx] = info.label
+    }
+    if (labels.some(l => !l) || !(v.price > 0)) continue
+    combos.push({ labels, price: String(v.price) })
+  }
+  if (combos.length === 0) return null
+  return {
+    attributes: attributes.map(a => ({
+      name: a.name,
+      scale: a.sizeScaleId ? true : undefined,
+      values: a.values.map(v => v.label),
+    })),
+    combos,
+  }
 }
 function mapNetMenu(r: any): NetworkMenuItem {
   return { id: r.id, name: r.name, category: r.category, basePrice: Number(r.base_price ?? 0), station: r.station, unit: r.unit, emoji: r.emoji }
@@ -161,6 +210,9 @@ function netMenuBody(i: NetworkMenuInput) {
     station: i.station,
     unit: i.unit,
     emoji: i.emoji,
+    // undefined выбрасывается сериализацией (= не трогать), null уходит
+    // явным null (= очистить) — семантика бэка, см. NetworkMenuInput.
+    attributes: i.attributes,
   }
 }
 export async function fetchNetworkMenu(): Promise<NetworkMenuItem[]> {

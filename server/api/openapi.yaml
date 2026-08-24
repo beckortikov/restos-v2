@@ -4762,6 +4762,7 @@ components:
         station: { type: string }
         unit: { type: string }
         emoji: { type: string }
+        attributes: { $ref: "#/components/schemas/NetworkMenuAttrs" }
     NetworkMenuInput:
       type: object
       required: [name]
@@ -4772,6 +4773,40 @@ components:
         station: { type: string }
         unit: { type: string }
         emoji: { type: string }
+        attributes:
+          allOf: [{ $ref: "#/components/schemas/NetworkMenuAttrs" }]
+          nullable: true
+          description: |
+            Вариации мастера. Отсутствует — не трогать; null — очистить
+            (блюдо снова плоское); объект — заменить. Id атрибутов/значений/
+            шкал через сеть не ездят — только имена, лейблы и цены комбинаций.
+    NetworkMenuAttrs:
+      type: object
+      description: |
+        Снапшот вариаций мастер-блюда (миграция 084). Филиал материализует их
+        через тот же механизм, что локальная форма атрибутов; scale=true —
+        применяющая сторона связывает атрибут со своей шкалой размеров с этим
+        именем (find-or-create), чтобы техкарты вариантов цепляли заготовки
+        нужного размера.
+      properties:
+        attributes:
+          type: array
+          maxItems: 3
+          items:
+            type: object
+            required: [name, values]
+            properties:
+              name: { type: string }
+              scale: { type: boolean }
+              values: { type: array, maxItems: 10, items: { type: string } }
+        combos:
+          type: array
+          items:
+            type: object
+            required: [labels, price]
+            properties:
+              labels: { type: array, items: { type: string } }
+              price: { $ref: "#/components/schemas/Decimal" }
 
     NomenclatureList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Nomenclature" } }, next_cursor: { type: string } } }
     Nomenclature:

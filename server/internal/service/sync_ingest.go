@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,7 @@ import (
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
+	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
@@ -315,7 +318,8 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 	if m.ID == "" {
 		return apperrors.Wrap("VALIDATION", "network_menu_items payload missing id", nil)
 	}
-	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+	var localProductID string
+	txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		var existing models.MenuItem
 		err := tx.Where("restaurant_id = ? AND master_id = ?", branchID, m.ID).First(&existing).Error
@@ -329,6 +333,7 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 			if err := tx.Create(item).Error; err != nil {
 				return err
 			}
+			localProductID = item.ID
 			// Унаследованный от мастера товар — тоже часть меню ЭТОГО филиала:
 			// пишем в sync_log филиала, чтобы обычный Pusher отправил его
 			// central обратно (иначе central никогда не увидит товары сети в
@@ -338,6 +343,7 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 		if err != nil {
 			return err
 		}
+		localProductID = existing.ID
 		// Есть ли РЕАЛЬНОЕ изменение наследуемых полей? applyNetworkMenu вызывается
 		// на КАЖДЫЙ down-pull (раз в --sync-interval-sec, т.е. постоянно, а не
 		// только когда мастер реально поменялся) — без этой проверки
@@ -360,6 +366,191 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 		}
 		return nil
 	})
+	if txErr != nil {
+		return txErr
+	}
+	return s.applyNetworkMenuAttributes(ctx, branchID, localProductID, &m)
+}
+
+// applyNetworkMenuAttributes — вариации мастера на филиале (миграция 084).
+// Пустое attributes у мастера означает «мастер вариациями не управляет», а не
+// «снять вариации»: у всех мастеров, заведённых до 082, поле NULL, и снятие
+// уничтожило бы вариации, которые филиал завёл сам.
+//
+// Повторный pull приходит каждый тик — от бесконечного пересинка (и потока
+// пустых дельт в sync_log, см. головной коммент applyNetworkMenu) защищает
+// сравнение канонической сигнатуры: атрибуты+значения+цены комбинаций мастера
+// против фактического состояния продукта. Совпало — выходим без записи.
+//
+// Применение — через MenuService.SyncAttributes с подменённым tenant: та же
+// логика диффа/генерации вариантов, что и у локальной формы (вторая
+// реализация неизбежно разошлась бы). Хуки при этом ВКЛЮЧЕНЫ — созданные
+// варианты уезжают на central обычным пушем, как и сам материализованный
+// продукт.
+func (s *SyncService) applyNetworkMenuAttributes(ctx context.Context, branchID, productID string, m *models.NetworkMenuItem) error {
+	if productID == "" || len(m.Attributes) == 0 || string(m.Attributes) == "null" {
+		return nil
+	}
+	var attrs NetworkMenuAttrs
+	if err := json.Unmarshal(m.Attributes, &attrs); err != nil || len(attrs.Attributes) == 0 {
+		return nil // битый/пустой снапшот мастера не должен ронять весь pull
+	}
+
+	tctx := tenant.WithRestaurant(ctx, branchID)
+	menuSvc := NewMenuService(s.r)
+	state, err := menuSvc.GetAttributes(tctx, productID)
+	if err != nil {
+		return err
+	}
+	if localAttrsSignature(state) == masterAttrsSignature(&attrs) {
+		return nil
+	}
+
+	in := SyncAttributesInput{}
+	for _, a := range attrs.Attributes {
+		ai := MenuAttributeInput{Name: a.Name}
+		scaleID := ""
+		if a.Scale {
+			scaleID, err = s.ensureSizeScale(ctx, branchID, a.Name, a.Values)
+			if err != nil {
+				return err
+			}
+		}
+		if scaleID != "" {
+			ai.SizeScaleID = &scaleID
+		} else {
+			for _, v := range a.Values {
+				ai.Values = append(ai.Values, MenuAttributeValueInput{Label: v})
+			}
+		}
+		in.Attributes = append(in.Attributes, ai)
+	}
+	for i := range attrs.Combos {
+		price := attrs.Combos[i].Price
+		in.Combos = append(in.Combos, ComboPriceInput{Labels: attrs.Combos[i].Labels, Price: &price})
+	}
+	_, err = menuSvc.SyncAttributes(tctx, productID, in)
+	return err
+}
+
+// ensureSizeScale — локальная шкала размеров для scale-атрибута мастера:
+// ищем по имени (без регистра); совпадающую по НАБОРУ значений — используем,
+// отличающуюся — не трогаем (вернём "" → атрибут получит свободные значения:
+// scale-linked атрибут зеркалит ВСЕ значения шкалы, и чужая расширенная шкала
+// породила бы варианты без цен — SyncAttributes падает ровно на этом). Нет
+// вовсе — создаём по значениям мастера.
+func (s *SyncService) ensureSizeScale(ctx context.Context, rid, name string, labels []string) (string, error) {
+	db := s.r.Raw().WithContext(ctx)
+	want := map[string]bool{}
+	for _, l := range labels {
+		want[strings.ToLower(strings.TrimSpace(l))] = true
+	}
+
+	var scales []models.SizeScale
+	if err := db.Where("restaurant_id = ? AND LOWER(name) = LOWER(?)", rid, strings.TrimSpace(name)).
+		Find(&scales).Error; err != nil {
+		return "", err
+	}
+	for i := range scales {
+		var vals []models.SizeScaleValue
+		if err := db.Where("size_scale_id = ?", scales[i].ID).Find(&vals).Error; err != nil {
+			return "", err
+		}
+		if len(vals) != len(want) {
+			continue
+		}
+		match := true
+		for _, v := range vals {
+			label := v.Code
+			if v.Title != nil && *v.Title != "" {
+				label = *v.Title
+			}
+			if !want[strings.ToLower(strings.TrimSpace(label))] {
+				match = false
+				break
+			}
+		}
+		if match {
+			return scales[i].ID, nil
+		}
+	}
+	if len(scales) > 0 {
+		return "", nil // шкала с этим именем есть, но другая — не вмешиваемся
+	}
+
+	now := time.Now().UTC()
+	scale := models.SizeScale{ID: uuid.NewString(), Name: strings.TrimSpace(name), RestaurantID: &rid, CreatedAt: now, UpdatedAt: now}
+	if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&scale).Error; err != nil {
+		return "", err
+	}
+	for i, l := range labels {
+		v := models.SizeScaleValue{
+			ID: uuid.NewString(), SizeScaleID: scale.ID, Code: strings.TrimSpace(l),
+			SortOrder: i, RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := db.Session(&gorm.Session{SkipHooks: true}).Create(&v).Error; err != nil {
+			return "", err
+		}
+	}
+	return scale.ID, nil
+}
+
+// masterAttrsSignature / localAttrsSignature — каноническая форма «атрибуты+
+// значения+цены комбинаций» для сравнения мастера с фактическим состоянием
+// продукта. Цены нормализуются decimal'ом («25» == «25.00»), комбинации
+// сортируются по ключу лейблов. Привязка к шкале в сигнатуру сознательно НЕ
+// входит: она best-effort (чужую шкалу не трогаем) и не должна вызывать
+// пересинк каждый тик, когда всё остальное совпадает.
+func masterAttrsSignature(a *NetworkMenuAttrs) string {
+	var b strings.Builder
+	for _, attr := range a.Attributes {
+		b.WriteString("a:" + strings.TrimSpace(attr.Name) + "=")
+		for _, v := range attr.Values {
+			b.WriteString(strings.TrimSpace(v) + ",")
+		}
+		b.WriteString(";")
+	}
+	combos := make([]string, 0, len(a.Combos))
+	for _, c := range a.Combos {
+		price := c.Price
+		if d, err := decimal.FromString(c.Price); err == nil {
+			price = decimal.Normalize(d).String()
+		}
+		combos = append(combos, comboLabelKey(c.Labels)+"="+price)
+	}
+	sort.Strings(combos)
+	return b.String() + "|" + strings.Join(combos, ";")
+}
+
+func localAttrsSignature(state *ProductAttributesState) string {
+	labelByValID := map[string]struct {
+		attrIdx int
+		label   string
+	}{}
+	var b strings.Builder
+	for ai, attr := range state.Attributes {
+		b.WriteString("a:" + strings.TrimSpace(attr.Name) + "=")
+		for _, v := range attr.Values {
+			b.WriteString(strings.TrimSpace(v.Label) + ",")
+			labelByValID[v.ID] = struct {
+				attrIdx int
+				label   string
+			}{ai, v.Label}
+		}
+		b.WriteString(";")
+	}
+	combos := make([]string, 0, len(state.Variants))
+	for _, v := range state.Variants {
+		labels := make([]string, len(state.Attributes))
+		for _, vid := range v.ValueIDs {
+			if info, ok := labelByValID[vid]; ok && info.attrIdx < len(labels) {
+				labels[info.attrIdx] = info.label
+			}
+		}
+		combos = append(combos, comboLabelKey(labels)+"="+decimal.Normalize(v.Price).String())
+	}
+	sort.Strings(combos)
+	return b.String() + "|" + strings.Join(combos, ";")
 }
 
 // applyNomenclature — распространение общего каталога номенклатуры сети на

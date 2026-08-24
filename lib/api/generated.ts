@@ -14393,6 +14393,7 @@ export interface components {
             station?: string;
             unit?: string;
             emoji?: string;
+            attributes?: components["schemas"]["NetworkMenuAttrs"];
         };
         NetworkMenuInput: {
             name: string;
@@ -14401,6 +14402,30 @@ export interface components {
             station?: string;
             unit?: string;
             emoji?: string;
+            /**
+             * @description Вариации мастера. Отсутствует — не трогать; null — очистить
+             *     (блюдо снова плоское); объект — заменить. Id атрибутов/значений/
+             *     шкал через сеть не ездят — только имена, лейблы и цены комбинаций.
+             */
+            attributes?: components["schemas"]["NetworkMenuAttrs"] | null;
+        };
+        /**
+         * @description Снапшот вариаций мастер-блюда (миграция 084). Филиал материализует их
+         *     через тот же механизм, что локальная форма атрибутов; scale=true —
+         *     применяющая сторона связывает атрибут со своей шкалой размеров с этим
+         *     именем (find-or-create), чтобы техкарты вариантов цепляли заготовки
+         *     нужного размера.
+         */
+        NetworkMenuAttrs: {
+            attributes?: {
+                name: string;
+                scale?: boolean;
+                values: string[];
+            }[];
+            combos?: {
+                labels: string[];
+                price: components["schemas"]["Decimal"];
+            }[];
         };
         NomenclatureList: {
             data?: components["schemas"]["Nomenclature"][];

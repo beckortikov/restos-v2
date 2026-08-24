@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-store'
-import { createZone, createTable, fetchZones, fetchTables, createMenuItem, createIngredient, fetchMenuItems, fetchIngredients, createMenuCategory, fetchMenuCategoriesFull, syncMenuAttributes } from '@/lib/queries'
+import { createZone, createTable, fetchZones, fetchTables, createMenuItem, updateMenuItem, createIngredient, fetchMenuItems, fetchIngredients, createMenuCategory, fetchMenuCategoriesFull, syncMenuAttributes, fetchSizeScales, createSizeScale } from '@/lib/queries'
+import { fetchBranches, createNetworkMenuItem, type NetworkMenuAttrs } from '@/lib/queries/transfers'
 import { api, unwrap, getBaseURL } from '@/lib/api'
 import { randomId } from '@/lib/random-id'
 import {
@@ -86,6 +87,17 @@ export default function ImportPage() {
   const [parsedIngredients, setParsedIngredients] = useState<ParsedIngredientList | null>(null)
   const [parsedTechCards, setParsedTechCards] = useState<ParsedTechCards | null>(null)
   const [importResult, setImportResult] = useState<{ created: number; label: string; errors: string[]; zonesCreated?: number; tablesCreated?: number } | null>(null)
+
+  // «Сделать блюдами сети»: доступно только узлу, состоящему в сети (иначе
+  // мастеров некому доставлять). По умолчанию включено — модель клиента:
+  // каталог ведётся из центра и должен появляться во всех филиалах.
+  const [inNetwork, setInNetwork] = useState(false)
+  const [toNetwork, setToNetwork] = useState(false)
+  useEffect(() => {
+    fetchBranches()
+      .then(() => { setInNetwork(true); setToNetwork(true) })
+      .catch(() => setInNetwork(false))
+  }, [])
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -269,7 +281,41 @@ export default function ImportPage() {
       try { await createMenuCategory(name); existingLc.add(key) } catch {}
     }
 
+    // Шкалы размеров: атрибут «Размер» связываем со шкалой ресторана — иначе
+    // техкарты вариантов не смогут цеплять заготовки нужного размера
+    // («Тесто-30»). Правило: шкала с именем атрибута и РОВНО тем же набором
+    // значений → используем; нет вовсе → создаём; есть, но с другим набором →
+    // не вмешиваемся (scale-linked атрибут зеркалит ВСЕ значения шкалы, и
+    // расширенная чужая шкала породила бы варианты без цен).
+    const scaleCache = new Map<string, string | null>()
+    const ensureScale = async (attrName: string, labels: string[]): Promise<string | undefined> => {
+      if (attrName.trim().toLocaleLowerCase('ru-RU') !== 'размер') return undefined
+      const key = labels.map(l => l.trim().toLocaleLowerCase('ru-RU')).sort().join('\x1f')
+      if (scaleCache.has(key)) return scaleCache.get(key) ?? undefined
+      try {
+        const scales = await fetchSizeScales()
+        const want = new Set(labels.map(l => l.trim().toLocaleLowerCase('ru-RU')))
+        const byName = scales.filter(sc => sc.name.trim().toLocaleLowerCase('ru-RU') === 'размер')
+        for (const sc of byName) {
+          const have = new Set(sc.values.map(v => (v.title || v.code).trim().toLocaleLowerCase('ru-RU')))
+          if (have.size === want.size && [...want].every(l => have.has(l))) {
+            scaleCache.set(key, sc.id)
+            return sc.id
+          }
+        }
+        if (byName.length > 0) { scaleCache.set(key, null); return undefined }
+        const createdScale = await createSizeScale('Размер', labels.map((l, i) => ({ code: l, sortOrder: i })))
+        scaleCache.set(key, createdScale.id)
+        return createdScale.id
+      } catch {
+        scaleCache.set(key, null)
+        return undefined // шкала — best-effort, импорт из-за неё не падает
+      }
+    }
+
     let variantsCreated = 0
+    let mastersCreated = 0
+    const makeNetwork = inNetwork && toNetwork
     for (const dish of parsedDishes.dishes) {
       const hasVariants = !!dish.attrName && (dish.variants?.length ?? 0) > 0
       try {
@@ -282,20 +328,46 @@ export default function ImportPage() {
           unit: dish.unit, unitSize: dish.unitSize, saleStep: dish.saleStep,
           isBatchCooking: false, preparedQty: 0,
         })
+        const id = (item as { id?: string } | undefined)?.id
+        let scaleId: string | undefined
         if (hasVariants) {
-          const id = (item as { id?: string } | undefined)?.id
           if (!id) throw new Error('бэк не вернул id — вариации не созданы')
+          scaleId = await ensureScale(dish.attrName!, dish.variants!.map(v => v.label))
           await syncMenuAttributes(
             id,
-            [{ name: dish.attrName!, values: dish.variants!.map(v => ({ label: v.label })) }],
+            [{ name: dish.attrName!, sizeScaleId: scaleId, values: dish.variants!.map(v => ({ label: v.label })) }],
             dish.variants!.map(v => ({ labels: [v.label], price: v.price })),
           )
           variantsCreated += dish.variants!.length
         }
+        // Блюдо сети: мастер с вариациями — филиалы материализуют его вместе
+        // с размерами и своей шкалой. Ошибка здесь блюдо не откатывает:
+        // локально оно уже создано, привязать к сети можно позже из карточки.
+        if (makeNetwork && id) {
+          try {
+            const attrs: NetworkMenuAttrs | undefined = hasVariants
+              ? {
+                  attributes: [{ name: dish.attrName!, scale: !!scaleId, values: dish.variants!.map(v => v.label) }],
+                  combos: dish.variants!.map(v => ({ labels: [v.label], price: String(v.price) })),
+                }
+              : undefined
+            const master = await createNetworkMenuItem({
+              name: dish.name, category: dish.category, basePrice: hasVariants ? 0 : dish.price,
+              station: dish.station, ...(attrs ? { attributes: attrs } : {}),
+            })
+            await updateMenuItem(id, { masterId: master.id })
+            mastersCreated++
+          } catch (err) {
+            errors.push(`"${dish.name}": в сеть не привязано (${err instanceof Error ? err.message : 'ошибка'}) — можно привязать из карточки блюда`)
+          }
+        }
         created++
       } catch (err) { errors.push(`"${dish.name}": ${err instanceof Error ? err.message : 'ошибка'}`) }
     }
-    const label = variantsCreated > 0 ? `${created} блюд (${variantsCreated} вариантов)` : `${created} блюд`
+    const parts = [`${created} блюд`]
+    if (variantsCreated > 0) parts.push(`${variantsCreated} вариантов`)
+    if (mastersCreated > 0) parts.push(`${mastersCreated} в меню сети`)
+    const label = parts.join(', ')
     setImportResult({ created, label, errors })
     setStep('done')
     if (errors.length === 0) toast.success(`Импорт: ${label}`)
@@ -845,6 +917,23 @@ export default function ImportPage() {
                   </table>
                 </div>
               </div>
+              {inNetwork && (
+                <label className="flex items-start gap-2.5 bg-card border border-border rounded-xl p-4 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={toNetwork}
+                    onChange={e => setToNetwork(e.target.checked)}
+                    className="mt-0.5 size-4 accent-primary"
+                  />
+                  <span className="text-sm">
+                    <span className="font-medium text-foreground">Сделать блюдами сети</span>
+                    <span className="block text-xs text-muted-foreground mt-0.5">
+                      Блюда появятся во всех филиалах сети — вместе с вариациями (размерами)
+                      и ценами. Цену дальше каждый филиал может менять у себя.
+                    </span>
+                  </span>
+                </label>
+              )}
               <div className="flex gap-3">
                 <button onClick={goBack} className="flex-1 px-4 py-2.5 text-sm font-medium text-foreground bg-card border border-border rounded-xl hover:bg-muted">Назад</button>
                 <button onClick={handleImportDishes} className="flex-1 px-4 py-2.5 text-sm font-medium text-primary-foreground bg-primary rounded-xl hover:bg-primary/90 flex items-center justify-center gap-2">

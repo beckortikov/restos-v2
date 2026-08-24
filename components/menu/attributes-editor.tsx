@@ -298,11 +298,14 @@ export function ComboPricesEditor({ attrs, prices, onChange, showPurchase }: {
  * продукта (грузит и сохраняет на бэк). Варианты — реальные menu_items с
  * parent_id; генерирует их бэк на PUT /menu/items/{id}/attributes.
  */
-export function AttributesEditor({ productId, isPurchased, onHasAttributesChange, onDirtyChange, onVariantsChange, onEnsurePurchased }: {
+export function AttributesEditor({ productId, isPurchased, onHasAttributesChange, onDirtyChange, onVariantsChange, onEnsurePurchased, onAttributesSaved }: {
   productId: string
   isPurchased?: boolean
   /** Родительская форма скрывает поля цены/закупки, когда атрибуты есть. */
   onHasAttributesChange?: (has: boolean) => void
+  /** Вызывается ТОЛЬКО после успешного «Сохранить варианты» (не при загрузке) —
+   *  родитель пушит свежие вариации в мастера сети, если блюдо привязано. */
+  onAttributesSaved?: (attrs: MenuAttribute[], variants: MenuItem[]) => void
   /** Есть несохранённые правки атрибутов/цен — родитель не должен молча
    *  уходить со страницы («Сохранить изменения» их не затрагивает). */
   onDirtyChange?: (dirty: boolean) => void
@@ -399,6 +402,7 @@ export function AttributesEditor({ productId, isPurchased, onHasAttributesChange
       setDirty(false)
       onHasAttributesChange?.(state.attributes.length > 0)
       onVariantsChange?.(state.attributes, state.variants)
+      onAttributesSaved?.(state.attributes, state.variants)
       toast.success(state.variants.length > 0
         ? `Варианты обновлены: ${state.variants.length}`
         : 'Атрибуты удалены — товар снова обычный')

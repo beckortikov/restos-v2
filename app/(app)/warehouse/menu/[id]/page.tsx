@@ -16,7 +16,7 @@ import {
   type MenuAttribute,
 } from '@/lib/types'
 import { fetchIngredients, fetchSemiTypes, fetchSemiStock, fetchMenuCategories, fetchMenuItems, updateMenuItem, deleteMenuItem, archiveMenuItem, createIngredient, previewTechCardCogs } from '@/lib/queries'
-import { createNetworkMenuItem, updateNetworkMenuItem } from '@/lib/queries/transfers'
+import { createNetworkMenuItem, updateNetworkMenuItem, buildNetworkAttrs } from '@/lib/queries/transfers'
 import { useNetworkStatus } from '@/hooks/use-network-status'
 import { DecimalInput } from '@/components/ui/decimal-input'
 import { useAuth } from '@/lib/auth-store'
@@ -180,11 +180,16 @@ export default function EditMenuItemPage() {
         } catch {
           toast.error('Блюдо обновлено локально, но не синхронизировалось с мастером сети')
         }
-      } else if (isNetworkDish && !hasAttributes && !menuItem.parentId) {
+      } else if (isNetworkDish && !menuItem.parentId) {
         try {
+          // Продукт с вариациями: мастер несёт и их (миграция 084) — филиалы
+          // материализуют блюдо сразу с размерами и ценами комбинаций.
+          const attrs = hasAttributes ? buildNetworkAttrs(variantAttributes, productVariants) : null
           const master = await createNetworkMenuItem({
-            name: form.name, category: form.category, basePrice: form.price,
+            name: form.name, category: form.category,
+            basePrice: hasAttributes ? 0 : form.price,
             station: form.station, unit: form.unit, emoji: form.emoji,
+            ...(attrs ? { attributes: attrs } : {}),
           })
           await updateMenuItem(menuItem.id, { masterId: master.id })
           setMenuItem(prev => prev ? { ...prev, masterId: master.id } : prev)
@@ -545,7 +550,7 @@ export default function EditMenuItemPage() {
                       <p className="text-[10px] text-muted-foreground">Название/категория/станция/ед. синхронизируются с мастером при сохранении</p>
                     </div>
                   </div>
-                ) : !hasAttributes && !menuItem?.parentId ? (
+                ) : !menuItem?.parentId ? (
                   <div className="flex items-center justify-between px-3 py-2.5 rounded-lg border border-border bg-muted/10">
                     <div className="flex items-start gap-2">
                       <Network className="size-3.5 text-muted-foreground mt-0.5 shrink-0" />
@@ -671,6 +676,19 @@ export default function EditMenuItemPage() {
               onHasAttributesChange={setHasAttributes}
               onDirtyChange={setAttrsDirty}
               onVariantsChange={(attrs, variants) => { setVariantAttributes(attrs); setProductVariants(variants) }}
+              onAttributesSaved={async (attrs, variants) => {
+                // Блюдо сети: вариации мастера ведёт эта карточка — иначе
+                // филиалы навсегда остались бы со старыми размерами/ценами.
+                if (!menuItem?.masterId) return
+                try {
+                  await updateNetworkMenuItem(menuItem.masterId, {
+                    name: form.name,
+                    attributes: buildNetworkAttrs(attrs, variants),
+                  })
+                } catch {
+                  toast.error('Варианты сохранены локально, но не синхронизировались с мастером сети')
+                }
+              }}
               onEnsurePurchased={async () => {
                 // Конвертация в покупной ещё не сохранена на бэке (тумблер
                 // переключён, но «Сохранить изменения» не нажимали) → делаем

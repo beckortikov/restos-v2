@@ -1,6 +1,7 @@
 package models
 
 import (
+	"gorm.io/datatypes"
 	"time"
 
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -79,8 +80,12 @@ type NetworkMenuItem struct {
 	Station   *string         `gorm:"default:'hot_kitchen'" json:"station"`
 	Unit      *string         `gorm:"default:'piece'" json:"unit"`
 	Emoji     *string         `json:"emoji"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	// Attributes — JSON-снапшот вариаций мастера (миграция 084): форма
+	// SyncAttributesInput без id (id атрибутов/значений/шкал локальны для
+	// каждого узла). NULL — обычное блюдо без вариаций.
+	Attributes datatypes.JSON `gorm:"type:jsonb" json:"attributes,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 }
 
 func (NetworkMenuItem) TableName() string { return "network_menu_items" }
