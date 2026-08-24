@@ -189,6 +189,7 @@ export default function EditMenuItemPage() {
             name: form.name, category: form.category,
             basePrice: hasAttributes ? 0 : form.price,
             station: form.station, unit: form.unit, emoji: form.emoji,
+            available: form.isAvailable,
             ...(attrs ? { attributes: attrs } : {}),
           })
           await updateMenuItem(menuItem.id, { masterId: master.id })

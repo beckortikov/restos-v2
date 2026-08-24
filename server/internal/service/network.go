@@ -394,6 +394,10 @@ type NetworkMenuInput struct {
 	// отсутствует (nil) — не трогать; JSON null — очистить (блюдо снова
 	// плоское); объект — заменить. Форма — NetworkMenuAttrs.
 	Attributes json.RawMessage `json:"attributes,omitempty"`
+	// Available — стартовая доступность (миграция 086), только для Create:
+	// применяется ОДИН РАЗ при первой материализации на филиале, дальше не
+	// синкается (доступность — локальное решение узла). Опущено → true.
+	Available *bool `json:"available,omitempty"`
 }
 
 // NetworkMenuAttrs — валидируемая форма network_menu_items.attributes.
@@ -513,12 +517,16 @@ func (s *NetworkService) CreateNetworkMenuItem(ctx context.Context, in NetworkMe
 	if err != nil {
 		return nil, err
 	}
+	available := true
+	if in.Available != nil {
+		available = *in.Available
+	}
 	now := time.Now().UTC()
 	m := &models.NetworkMenuItem{
 		ID: uuid.NewString(), AccountID: &account, Name: in.Name,
 		Category: strPtrOrNil(in.Category), BasePrice: price,
 		Station: strPtrOrNil(in.Station), Unit: strPtrOrNil(in.Unit), Emoji: strPtrOrNil(in.Emoji),
-		CreatedAt: now, UpdatedAt: now,
+		Available: available, CreatedAt: now, UpdatedAt: now,
 	}
 	if attrs != nil {
 		b, merr := json.Marshal(attrs)

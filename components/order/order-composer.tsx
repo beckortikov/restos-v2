@@ -103,6 +103,8 @@ export function pickGridLayout(count: number): GridLayout {
 interface DishTileProps {
   name: string
   price: number
+  /** Готовая подпись цены («от 25 с.», «25 с. / 100г») — приоритетнее price. */
+  priceLabel?: string
   unitLabel?: string
   emoji?: string
   onClick?: () => void
@@ -119,7 +121,7 @@ const FAVORITES_KEY = '__favorites__'
 /** Плитка блюда: с emoji — имя сверху + emoji-герой по центру + цена внизу;
  *  без emoji — имя по центру (визуально балансирует пустое пространство),
  *  цена внизу. Размер плитки фиксированный (aspect-square). */
-export function DishTile({ name, price, unitLabel, emoji, onClick, qtyInCart, isStopped, batchAvailable }: DishTileProps) {
+export function DishTile({ name, price, priceLabel, unitLabel, emoji, onClick, qtyInCart, isStopped, batchAvailable }: DishTileProps) {
   return (
     <button
       onClick={onClick}
@@ -150,7 +152,7 @@ export function DishTile({ name, price, unitLabel, emoji, onClick, qtyInCart, is
         </span>
       )}
       <span className={`font-bold shrink-0 text-[13px] ${isStopped ? 'text-muted-foreground' : 'text-primary'}`}>
-        {formatCurrencyCompact(price)}{unitLabel ? ` / ${unitLabel}` : ''}
+        {priceLabel ?? `${formatCurrencyCompact(price)}${unitLabel ? ` / ${unitLabel}` : ''}`}
       </span>
       {qtyInCart && qtyInCart > 0 ? (
         <span className="absolute top-1 right-1 bg-primary text-primary-foreground rounded-full min-w-[20px] h-5 px-1.5 flex items-center justify-center text-[11px] font-bold">
@@ -1918,6 +1920,7 @@ export function OrderComposer(props: OrderComposerProps) {
                         <DishTile
                           name={item.name}
                           price={item.price}
+                          priceLabel={tilePriceLabel(item)}
                           emoji={item.emoji}
                           qtyInCart={inCart?.qty}
                           isStopped={!item.isAvailable || stoppedIds.has(item.id)}
@@ -2086,7 +2089,7 @@ export function OrderComposer(props: OrderComposerProps) {
                     >
                       <span className={`text-base leading-none ${isStopped ? 'grayscale opacity-60' : ''}`}>{item.emoji ?? '·'}</span>
                       <span className="truncate max-w-[10rem]">{item.name}</span>
-                      <span className={isStopped ? 'text-muted-foreground/70 tabular-nums' : 'text-muted-foreground tabular-nums'}>{formatCurrencyCompact(item.price)}</span>
+                      <span className={isStopped ? 'text-muted-foreground/70 tabular-nums' : 'text-muted-foreground tabular-nums'}>{tilePriceLabel(item)}</span>
                       {inCart && inCart.qty > 0 ? (
                         <span className="ml-0.5 size-4 rounded-full bg-primary text-primary-foreground text-[10px] font-bold inline-flex items-center justify-center">
                           {inCart.qty}

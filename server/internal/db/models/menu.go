@@ -88,8 +88,21 @@ type NetworkMenuItem struct {
 	// ингредиенты адресуются nomenclature_id, полуфабрикаты — (имя, размер).
 	// NULL — мастер техкартами не управляет, филиал ведёт свои сам.
 	TechCards datatypes.JSON `gorm:"column:tech_cards;type:jsonb" json:"tech_cards,omitempty"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
+	// Available — стартовая доступность (миграция 086). Отдаётся филиалу
+	// РОВНО ОДИН РАЗ, при первой материализации локальной копии — дальше,
+	// как цена и emoji, доступность целиком локальная для каждого узла.
+	//
+	// БЕЗ gorm-тега default: — с ним GORM.Create() подменяет Go zero-значение
+	// (false — ровно то, что нужно легаси-позициям) значением из тега (true),
+	// см. [[gorm-zero-value-default-tag-gotcha]]. DEFAULT true остаётся на
+	// уровне схемы (миграция 086) — для строк, заведённых мимо этой модели.
+	Available bool `gorm:"not null" json:"available"`
+	// DeletedAt — tombstone мастера (миграция 086), тем же приёмом что
+	// nomenclature.deleted_at. Удаление блюда сети с центра доезжает до
+	// филиалов и мягко удаляет их локальную копию — applyNetworkMenu.
+	DeletedAt *time.Time `gorm:"column:deleted_at" json:"deleted_at,omitempty"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 func (NetworkMenuItem) TableName() string { return "network_menu_items" }

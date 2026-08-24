@@ -4763,6 +4763,8 @@ components:
         unit: { type: string }
         emoji: { type: string }
         attributes: { $ref: "#/components/schemas/NetworkMenuAttrs" }
+        available: { type: boolean }
+        deleted_at: { type: string, format: date-time, nullable: true }
         tech_cards:
           type: object
           nullable: true
@@ -4790,6 +4792,13 @@ components:
             Вариации мастера. Отсутствует — не трогать; null — очистить
             (блюдо снова плоское); объект — заменить. Id атрибутов/значений/
             шкал через сеть не ездят — только имена, лейблы и цены комбинаций.
+        available:
+          type: boolean
+          description: |
+            Стартовая доступность (миграция 086) — используется ТОЛЬКО при
+            создании: применяется один раз при первой материализации на
+            филиале, дальше не синкается (доступность — локальное решение
+            узла). Опущено — сервер берёт true. На PATCH игнорируется.
     NetworkMenuAttrs:
       type: object
       description: |

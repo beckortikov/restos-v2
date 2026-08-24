@@ -484,7 +484,19 @@ func (s *MenuService) patchPurchased(ctx context.Context, mi *models.MenuItem, i
 // у order_items стоит FK с RESTRICT (см. PRD 06).
 // Продукт с атрибутами архивируется вместе со своими вариантами.
 func (s *MenuService) SoftDeleteItem(ctx context.Context, id string) error {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		// Смотрим MasterID ДО удаления — сама операция его не трогает, но
+		// проще прочитать один раз, чем повторно резолвить scope ниже.
+		// Только у ВЕРХНЕГО продукта (не варианта — у вариантов MasterID
+		// никогда не проставляется, только у продукта-родителя).
+		var target models.MenuItem
+		hasTarget := tx.Where("restaurant_id = ? AND id = ?", rid, id).First(&target).Error == nil
+
 		// Каждый вызов — СВЕЖИЙ scope (см. repo.ForTenant): GORM в chain-режиме
 		// переиспользует Statement, повторное использование ОДНОГО scoped для
 		// Pluck+Updates склеивает условия и роняет запрос
@@ -521,7 +533,32 @@ func (s *MenuService) SoftDeleteItem(ctx context.Context, id string) error {
 		if err != nil {
 			return err
 		}
-		return recordMenuItemsSync(scopedSync, ids)
+		if err := recordMenuItemsSync(scopedSync, ids); err != nil {
+			return err
+		}
+
+		// Блюдо сети (ADR-004): удаление на ЦЕНТРЕ обязано снести мастера, а не
+		// только локальную копию центра — иначе (реальный случай, найден
+		// владельцем сразу после первого импорта) блюдо остаётся жить на всех
+		// филиалах навсегда, там просто некому было сказать «его больше нет».
+		// Удаление на ФИЛИАЛЕ, наоборот, остаётся ЛОКАЛЬНЫМ решением узла (он
+		// просто не продаёт блюдо сети у себя) — мастер и остальные филиалы не
+		// затрагиваются. Тот же tombstone-приём, что и у nomenclature.
+		if hasTarget && target.MasterID != nil && *target.MasterID != "" {
+			var rest models.Restaurant
+			if err := tx.Where("id = ?", rid).First(&rest).Error; err != nil {
+				return err
+			}
+			if rest.Kind != nil && *rest.Kind == "central_warehouse" && rest.AccountID != nil {
+				now := time.Now().UTC()
+				if err := tx.Model(&models.NetworkMenuItem{}).
+					Where("id = ? AND account_id = ? AND deleted_at IS NULL", *target.MasterID, *rest.AccountID).
+					Updates(map[string]any{"deleted_at": now, "updated_at": now}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 }
 

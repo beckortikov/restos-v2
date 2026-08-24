@@ -14394,6 +14394,9 @@ export interface components {
             unit?: string;
             emoji?: string;
             attributes?: components["schemas"]["NetworkMenuAttrs"];
+            available?: boolean;
+            /** Format: date-time */
+            deleted_at?: string | null;
             /**
              * @description Снапшот техкарт продукта и вариантов (миграция 085). Управляется
              *     ТОЛЬКО сервером: пересобирается при правке строк техкарты
@@ -14418,6 +14421,13 @@ export interface components {
              *     шкал через сеть не ездят — только имена, лейблы и цены комбинаций.
              */
             attributes?: components["schemas"]["NetworkMenuAttrs"] | null;
+            /**
+             * @description Стартовая доступность (миграция 086) — используется ТОЛЬКО при
+             *     создании: применяется один раз при первой материализации на
+             *     филиале, дальше не синкается (доступность — локальное решение
+             *     узла). Опущено — сервер берёт true. На PATCH игнорируется.
+             */
+            available?: boolean;
         };
         /**
          * @description Снапшот вариаций мастер-блюда (миграция 084). Филиал материализует их

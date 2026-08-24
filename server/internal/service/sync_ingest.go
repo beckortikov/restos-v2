@@ -308,8 +308,14 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 
 // applyNetworkMenu — распространение мастер-блюда сети в меню филиала (ADR-004).
 // Наследуемые поля (name/category/station/unit) берём из мастера; локальные
-// (price/is_available/emoji) НЕ трогаем. Нет локального блюда с этим master_id →
-// создаём (цена = base_price, доступно). Есть → обновляем только наследуемое.
+// (price/is_available/emoji) НЕ трогаем — ИСКЛЮЧЕНИЕ ровно одно: available
+// мастера задаёт СТАРТОВОЕ значение при первом создании копии (дальше её
+// переключает сам филиал, мастер больше не вмешивается). Нет локального
+// блюда с этим master_id → создаём. Есть → обновляем только наследуемое.
+//
+// deleted_at мастера (владелец удалил блюдо сети с центра) обрабатывается
+// ДО создания/обновления — тот же tombstone-приём, что у nomenclature: сносим
+// локальную копию, если она есть, и не создаём новую, если её ещё не было.
 func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchID string) error {
 	var m models.NetworkMenuItem
 	if err := json.Unmarshal(e.Payload, &m); err != nil {
@@ -318,13 +324,38 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 	if m.ID == "" {
 		return apperrors.Wrap("VALIDATION", "network_menu_items payload missing id", nil)
 	}
+	if m.DeletedAt != nil {
+		return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+			tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+			var local models.MenuItem
+			err := tx.Where("restaurant_id = ? AND master_id = ?", branchID, m.ID).First(&local).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil // никогда не материализовалось на этом филиале — нечего сносить
+			}
+			if err != nil {
+				return err
+			}
+			// Продукт + его варианты — тот же охват, что у обычного SoftDeleteItem.
+			var ids []string
+			if err := tx.Model(&models.MenuItem{}).
+				Where("id = ? OR parent_id = ?", local.ID, local.ID).
+				Pluck("id", &ids).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&models.MenuItem{}).Where("id = ? OR parent_id = ?", local.ID, local.ID).
+				Updates(map[string]any{"is_deleted": true, "updated_at": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+			return recordMenuItemsSync(tx, ids)
+		})
+	}
 	var localProductID string
 	txErr := s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		var existing models.MenuItem
 		err := tx.Where("restaurant_id = ? AND master_id = ?", branchID, m.ID).First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			avail := true
+			avail := m.Available
 			item := &models.MenuItem{
 				ID: uuid.NewString(), MasterID: &m.ID, RestaurantID: &branchID,
 				Name: &m.Name, Category: m.Category, Price: m.BasePrice,

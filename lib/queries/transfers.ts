@@ -156,6 +156,12 @@ export interface NetworkMenuInput {
    * null — очистить (блюдо снова плоское).
    */
   attributes?: NetworkMenuAttrs | null
+  /**
+   * Стартовая доступность (миграция 086) — только для СОЗДАНИЯ: применяется
+   * ОДИН РАЗ на филиале при первой материализации, дальше не синкается
+   * (доступность — локальное решение узла). Опущено — сервер берёт true.
+   */
+  available?: boolean
 }
 
 export interface NetworkMenuAttrs {
@@ -213,6 +219,7 @@ function netMenuBody(i: NetworkMenuInput) {
     // undefined выбрасывается сериализацией (= не трогать), null уходит
     // явным null (= очистить) — семантика бэка, см. NetworkMenuInput.
     attributes: i.attributes,
+    available: i.available,
   }
 }
 export async function fetchNetworkMenu(): Promise<NetworkMenuItem[]> {

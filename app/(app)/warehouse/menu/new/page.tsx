@@ -261,6 +261,7 @@ export default function NewMenuItemPage() {
             station: form.station,
             unit: form.unit,
             emoji: form.emoji,
+            available: form.isAvailable,
           })
           await updateMenuItem(created.id, { masterId: master.id })
         } catch {

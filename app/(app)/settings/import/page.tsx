@@ -94,8 +94,16 @@ export default function ImportPage() {
   const [inNetwork, setInNetwork] = useState(false)
   const [toNetwork, setToNetwork] = useState(false)
   useEffect(() => {
+    // fetchBranches() НЕ падает для одиночного ресторана — ListBranches вне
+    // сети возвращает [self] как валидный ответ (см. server/internal/service/
+    // network.go). «В сети» — это 2+ узла ИЛИ явный central_warehouse
+    // (единственный central без ещё подключённых филиалов — тоже в сети).
     fetchBranches()
-      .then(() => { setInNetwork(true); setToNetwork(true) })
+      .then(branches => {
+        const network = branches.length > 1 || branches.some(b => b.kind === 'central_warehouse')
+        setInNetwork(network)
+        setToNetwork(network)
+      })
       .catch(() => setInNetwork(false))
   }, [])
 
@@ -353,7 +361,8 @@ export default function ImportPage() {
               : undefined
             const master = await createNetworkMenuItem({
               name: dish.name, category: dish.category, basePrice: hasVariants ? 0 : dish.price,
-              station: dish.station, ...(attrs ? { attributes: attrs } : {}),
+              station: dish.station, available: dish.isAvailable,
+              ...(attrs ? { attributes: attrs } : {}),
             })
             await updateMenuItem(id, { masterId: master.id })
             mastersCreated++
