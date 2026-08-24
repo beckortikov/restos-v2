@@ -1187,7 +1187,9 @@ func (s *TechCardsService) Create(ctx context.Context, in TechCardLineInput) (*m
 			return err
 		}
 		recomputeMenuItemCogs(tx, rid, *in.MenuItemID, now)
-		return nil
+		// Блюдо сети: техкарта уезжает в филиалы через снапшот мастера
+		// (миграция 085). На узле без строки мастера — no-op.
+		return rebuildMasterTechCards(tx, rid, *in.MenuItemID)
 	})
 	if err != nil {
 		return nil, err
@@ -1248,6 +1250,9 @@ func (s *TechCardsService) Patch(ctx context.Context, id string, in TechCardLine
 		}
 		if existing.MenuItemID != nil {
 			recomputeMenuItemCogs(tx, rid, *existing.MenuItemID, now)
+			if err := rebuildMasterTechCards(tx, rid, *existing.MenuItemID); err != nil {
+				return err
+			}
 		}
 		return nil
 	})
@@ -1288,6 +1293,9 @@ func (s *TechCardsService) Delete(ctx context.Context, id string) error {
 		}
 		if existing.MenuItemID != nil {
 			recomputeMenuItemCogs(tx, rid, *existing.MenuItemID, now)
+			if err := rebuildMasterTechCards(tx, rid, *existing.MenuItemID); err != nil {
+				return err
+			}
 		}
 		return nil
 	})

@@ -369,7 +369,10 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 	if txErr != nil {
 		return txErr
 	}
-	return s.applyNetworkMenuAttributes(ctx, branchID, localProductID, &m)
+	if err := s.applyNetworkMenuAttributes(ctx, branchID, localProductID, &m); err != nil {
+		return err
+	}
+	return s.applyNetworkMenuTechCards(ctx, branchID, localProductID, &m)
 }
 
 // applyNetworkMenuAttributes — вариации мастера на филиале (миграция 084).
@@ -1818,4 +1821,266 @@ func (s *SyncService) applySalaryAdvance(ctx context.Context, e SyncEntry, updat
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
 		return tx.Clauses(conflict).Create(&row).Error
 	})
+}
+
+// applyNetworkMenuTechCards — техкарты мастера на филиале (миграция 085).
+// Пустой снапшот = «мастер техкартами не управляет» (у всех старых мастеров
+// так): локальные техкарты филиала не трогаются. Непустой — авторитет центра:
+// строки продукта и вариантов заменяются на снапшотные целиком, включая
+// «пустая техкарта» (ключ с пустым списком).
+//
+// Ингредиенты разрешаются через ensureNomenclatureIngredient — тот же мост,
+// что у приёма перемещений: связанный товар переиспользуется, отсутствующий
+// создаётся с нулевым остатком. Полуфабрикаты — по (имя, размер); недостающие
+// создаются вместе с рецептом, СУЩЕСТВУЮЩИЕ НЕ ПЕРЕЗАПИСЫВАЮТСЯ (рецепт
+// заготовки — авторитет узла, который её реально готовит).
+//
+// От пересинка каждый тик защищает сравнение сигнатур (без цен — у каждого
+// узла своя себестоимость). Ключи, чей вариант на филиале не существует
+// (рассинхрон снапшота с attributes), выбрасываются из ОБЕИХ сторон сравнения
+// — иначе недостижимый ключ гонял бы применение бесконечно.
+func (s *SyncService) applyNetworkMenuTechCards(ctx context.Context, branchID, productID string, m *models.NetworkMenuItem) error {
+	if productID == "" || len(m.TechCards) == 0 || string(m.TechCards) == "null" {
+		return nil
+	}
+	var snap NetworkTechCards
+	if err := json.Unmarshal(m.TechCards, &snap); err != nil || len(snap.Cards) == 0 {
+		return nil // битый снапшот не должен ронять весь pull
+	}
+
+	db := s.r.Raw().WithContext(ctx)
+	labelKeys, err := variantLabelKeys(db, branchID, productID)
+	if err != nil {
+		return err
+	}
+	itemByKey := map[string]string{"": productID}
+	for itemID, key := range labelKeys {
+		itemByKey[key] = itemID
+	}
+
+	// Сравнение — только по разрешимым локально ключам.
+	managed := NetworkTechCards{Cards: map[string][]NetworkTechCardLine{}}
+	for key, lines := range snap.Cards {
+		if _, ok := itemByKey[key]; ok {
+			managed.Cards[key] = lines
+		}
+	}
+	if len(managed.Cards) == 0 {
+		return nil
+	}
+	local, err := localTechCardsSnapshot(db, branchID, itemByKey, managed.Cards)
+	if err != nil {
+		return err
+	}
+	if techCardsSignature(local) == techCardsSignature(&managed) {
+		return nil
+	}
+
+	now := time.Now().UTC()
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		touched := make([]string, 0, len(managed.Cards))
+		for key, lines := range managed.Cards {
+			itemID := itemByKey[key]
+			if err := tx.Where("menu_item_id = ?", itemID).Delete(&models.TechCardLine{}).Error; err != nil {
+				return err
+			}
+			for i := range lines {
+				l := lines[i]
+				qty, qerr := decimal.FromString(l.Qty)
+				if qerr != nil {
+					continue
+				}
+				row := models.TechCardLine{
+					ID: uuid.NewString(), MenuItemID: &itemID,
+					Qty: decimal.Normalize(qty), RestaurantID: &branchID, CreatedAt: now,
+				}
+				if l.Name != "" {
+					row.Name = &l.Name
+				}
+				if l.Unit != "" {
+					row.Unit = &l.Unit
+				}
+				switch {
+				case l.Nom != "":
+					price := decimal.Zero
+					if p, perr := decimal.FromString(l.Price); perr == nil {
+						price = p
+					}
+					nom, nm, un := l.Nom, l.Name, l.Unit
+					ing, ierr := ensureNomenclatureIngredient(tx, branchID, ensureIngredientInput{
+						NomenclatureID: &nom, Name: &nm, Unit: &un, PricePerUnit: price, Now: now,
+					})
+					if ierr != nil {
+						return ierr
+					}
+					row.IngredientID = &ing.ID
+				case l.Semi != nil:
+					semiID, serr := ensureSemiTypeFromSpec(tx, branchID, l.Semi, now)
+					if serr != nil {
+						return serr
+					}
+					if semiID == "" {
+						continue
+					}
+					row.SemiTypeID = &semiID
+					if row.Name == nil || *row.Name == "" {
+						row.Name = &l.Semi.Name
+					}
+				default:
+					continue
+				}
+				if err := tx.Create(&row).Error; err != nil {
+					return err
+				}
+			}
+			recomputeMenuItemCogs(tx, branchID, itemID, now)
+			touched = append(touched, itemID)
+		}
+		// Блюда с новой техкартой/себестоимостью — наверх, чтобы central видел
+		// актуальный cogs филиала в branch-view меню.
+		return recordMenuItemsSync(tx, touched)
+	})
+}
+
+// localTechCardsSnapshot — фактические техкарты филиала в форме снапшота
+// мастера (для сравнения сигнатур): ингредиенты → их nomenclature_id
+// (несвязанный руками заведённый товар даёт «локальный» маркер и сигнатуры
+// расходятся — строка будет заменена управляемой), полуфабрикаты → (имя,
+// размер).
+func localTechCardsSnapshot(db *gorm.DB, rid string, itemByKey map[string]string, managed map[string][]NetworkTechCardLine) (*NetworkTechCards, error) {
+	out := &NetworkTechCards{Cards: map[string][]NetworkTechCardLine{}}
+	for key := range managed {
+		itemID := itemByKey[key]
+		var lines []models.TechCardLine
+		if err := db.Where("restaurant_id = ? AND menu_item_id = ?", rid, itemID).Find(&lines).Error; err != nil {
+			return nil, err
+		}
+		conv := make([]NetworkTechCardLine, 0, len(lines))
+		for i := range lines {
+			l := lines[i]
+			nl := NetworkTechCardLine{Qty: decimal.Normalize(l.Qty).String(), Unit: derefOr(l.Unit, "")}
+			switch {
+			case l.IngredientID != nil && *l.IngredientID != "":
+				var ing models.Ingredient
+				if err := db.Select("nomenclature_id").Where("id = ?", *l.IngredientID).First(&ing).Error; err == nil &&
+					ing.NomenclatureID != nil && *ing.NomenclatureID != "" {
+					nl.Nom = *ing.NomenclatureID
+				} else {
+					nl.Nom = "local:" + *l.IngredientID
+				}
+			case l.SemiTypeID != nil && *l.SemiTypeID != "":
+				var st models.SemiFinishedType
+				if err := db.Where("id = ?", *l.SemiTypeID).First(&st).Error; err != nil {
+					continue
+				}
+				spec := &NetworkSemiSpec{Name: derefOr(st.Name, "")}
+				if st.SizeScaleValueID != nil && *st.SizeScaleValueID != "" {
+					var sv models.SizeScaleValue
+					if err := db.Where("id = ?", *st.SizeScaleValueID).First(&sv).Error; err == nil {
+						spec.Size = sv.Code
+						if sv.Title != nil && *sv.Title != "" {
+							spec.Size = *sv.Title
+						}
+					}
+				}
+				nl.Semi = spec
+			default:
+				continue
+			}
+			conv = append(conv, nl)
+		}
+		out.Cards[key] = conv
+	}
+	return out, nil
+}
+
+// ensureSemiTypeFromSpec — полуфабрикат филиала по описанию из снапшота:
+// поиск по (имя, размер) без регистра; найденный используется как есть
+// (рецепт НЕ перезаписывается), отсутствующий создаётся вместе с рецептом.
+func ensureSemiTypeFromSpec(tx *gorm.DB, rid string, spec *NetworkSemiSpec, now time.Time) (string, error) {
+	if strings.TrimSpace(spec.Name) == "" {
+		return "", nil
+	}
+	var candidates []models.SemiFinishedType
+	if err := tx.Where("restaurant_id = ? AND LOWER(name) = LOWER(?)", rid, strings.TrimSpace(spec.Name)).
+		Find(&candidates).Error; err != nil {
+		return "", err
+	}
+	wantSize := strings.ToLower(strings.TrimSpace(spec.Size))
+	for i := range candidates {
+		st := candidates[i]
+		size := ""
+		if st.SizeScaleValueID != nil && *st.SizeScaleValueID != "" {
+			var sv models.SizeScaleValue
+			if err := tx.Where("id = ?", *st.SizeScaleValueID).First(&sv).Error; err == nil {
+				size = sv.Code
+				if sv.Title != nil && *sv.Title != "" {
+					size = *sv.Title
+				}
+			}
+		}
+		if strings.ToLower(strings.TrimSpace(size)) == wantSize {
+			return st.ID, nil
+		}
+	}
+
+	name := strings.TrimSpace(spec.Name)
+	outputUnit := spec.OutputUnit
+	st := models.SemiFinishedType{
+		ID: uuid.NewString(), Name: &name, RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+	}
+	if outputUnit != "" {
+		st.OutputUnit = &outputUnit
+	}
+	if y, err := decimal.FromString(spec.Yield); err == nil && decimal.IsPositive(y) {
+		st.YieldPercent = y
+	}
+	if wantSize != "" {
+		// Значение локальной шкалы с этим лейблом (шкалу создала материализация
+		// вариаций; нет — тег размера просто не проставится, это не ошибка).
+		var sv models.SizeScaleValue
+		if err := tx.Where("restaurant_id = ? AND (LOWER(code) = ? OR LOWER(title) = ?)", rid, wantSize, wantSize).
+			First(&sv).Error; err == nil {
+			st.SizeScaleValueID = &sv.ID
+		}
+	}
+	if err := tx.Create(&st).Error; err != nil {
+		return "", err
+	}
+	for i := range spec.Recipe {
+		rl := spec.Recipe[i]
+		if rl.Nom == "" {
+			continue
+		}
+		qty, qerr := decimal.FromString(rl.QtyPerUnit)
+		if qerr != nil {
+			continue
+		}
+		price := decimal.Zero
+		if p, perr := decimal.FromString(rl.Price); perr == nil {
+			price = p
+		}
+		nom, nm, un := rl.Nom, rl.Name, rl.Unit
+		ing, ierr := ensureNomenclatureIngredient(tx, rid, ensureIngredientInput{
+			NomenclatureID: &nom, Name: &nm, Unit: &un, PricePerUnit: price, Now: now,
+		})
+		if ierr != nil {
+			return "", ierr
+		}
+		line := models.SemiRecipeLine{
+			ID: uuid.NewString(), SemiTypeID: &st.ID, IngredientID: &ing.ID,
+			QtyPerUnit: decimal.Normalize(qty), CreatedAt: now,
+		}
+		if rl.Name != "" {
+			line.Name = &rl.Name
+		}
+		if rl.Unit != "" {
+			line.Unit = &rl.Unit
+		}
+		if err := tx.Create(&line).Error; err != nil {
+			return "", err
+		}
+	}
+	return st.ID, nil
 }

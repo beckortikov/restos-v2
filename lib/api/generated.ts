@@ -14394,6 +14394,16 @@ export interface components {
             unit?: string;
             emoji?: string;
             attributes?: components["schemas"]["NetworkMenuAttrs"];
+            /**
+             * @description Снапшот техкарт продукта и вариантов (миграция 085). Управляется
+             *     ТОЛЬКО сервером: пересобирается при правке строк техкарты
+             *     привязанного блюда на центральном узле; через NetworkMenuInput не
+             *     принимается. Ингредиенты адресуются nomenclature_id, полуфабрикаты
+             *     — парой (имя, размер).
+             */
+            tech_cards?: {
+                [key: string]: unknown;
+            } | null;
         };
         NetworkMenuInput: {
             name: string;

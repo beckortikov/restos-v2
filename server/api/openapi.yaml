@@ -4763,6 +4763,16 @@ components:
         unit: { type: string }
         emoji: { type: string }
         attributes: { $ref: "#/components/schemas/NetworkMenuAttrs" }
+        tech_cards:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: |
+            Снапшот техкарт продукта и вариантов (миграция 085). Управляется
+            ТОЛЬКО сервером: пересобирается при правке строк техкарты
+            привязанного блюда на центральном узле; через NetworkMenuInput не
+            принимается. Ингредиенты адресуются nomenclature_id, полуфабрикаты
+            — парой (имя, размер).
     NetworkMenuInput:
       type: object
       required: [name]

@@ -84,8 +84,12 @@ type NetworkMenuItem struct {
 	// SyncAttributesInput без id (id атрибутов/значений/шкал локальны для
 	// каждого узла). NULL — обычное блюдо без вариаций.
 	Attributes datatypes.JSON `gorm:"type:jsonb" json:"attributes,omitempty"`
-	CreatedAt  time.Time      `json:"created_at"`
-	UpdatedAt  time.Time      `json:"updated_at"`
+	// TechCards — JSON-снапшот техкарт продукта и вариантов (миграция 085):
+	// ингредиенты адресуются nomenclature_id, полуфабрикаты — (имя, размер).
+	// NULL — мастер техкартами не управляет, филиал ведёт свои сам.
+	TechCards datatypes.JSON `gorm:"column:tech_cards;type:jsonb" json:"tech_cards,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
 }
 
 func (NetworkMenuItem) TableName() string { return "network_menu_items" }
