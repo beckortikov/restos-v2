@@ -3839,6 +3839,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/analytics/tables": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Оборачиваемость столов по всей сети — тот же формат, что у
+         *     /analytics/tables, но БЕЗ live-статуса (см. NetworkTableAnalyticsRow)
+         *     и каждая строка помечена филиалом (столы не схлопываются по имени).
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkTablesAnalyticsReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/analytics/food-cost": {
         parameters: {
             query?: never;
@@ -16838,6 +16881,34 @@ export interface components {
             total_revenue?: components["schemas"]["Decimal"];
             total_orders?: number;
             rows?: components["schemas"]["TableAnalyticsRow"][];
+        };
+        /** @description Как TableAnalyticsRow, но с именем филиала и БЕЗ status — у стола нет сетевой идентичности («Стол 1» в каждом филиале — разные объекты), и это отчёт «за период» по всей сети, не реалтайм-карта зала одного филиала. */
+        NetworkTableAnalyticsRow: {
+            table_id?: string;
+            name?: string;
+            zone_name?: string;
+            /** Format: uuid */
+            restaurant_id?: string;
+            restaurant_name?: string;
+            capacity?: number;
+            orders?: number;
+            revenue?: components["schemas"]["Decimal"];
+            avg_check?: components["schemas"]["Decimal"];
+            avg_duration_min?: components["schemas"]["Decimal"];
+            guests_total?: number;
+            revenue_per_seat?: components["schemas"]["Decimal"];
+            occupancy_pct?: components["schemas"]["Decimal"];
+        };
+        NetworkTablesAnalyticsReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_revenue?: components["schemas"]["Decimal"];
+            total_orders?: number;
+            rows?: components["schemas"]["NetworkTableAnalyticsRow"][];
         };
         FoodCostRow: {
             /** Format: uuid */

@@ -396,6 +396,37 @@ export async function fetchTablesAnalytics(opts: { from?: Date | string; to?: Da
   return (await unwrap(api.GET('/api/v1/analytics/tables', { params: { query: query as any } }))) as TablesAnalyticsReport
 }
 
+// Столы по сети — БЕЗ live-статуса (отчёт «за период», не реалтайм-карта
+// зала одного филиала) и НЕ схлопывается по имени — «Стол 1» на двух
+// точках это разные объекты, каждая строка помечена филиалом.
+export interface NetworkTableAnalyticsRow {
+  table_id: string
+  name: string
+  zone_name: string
+  restaurant_id: string
+  restaurant_name: string
+  orders: number
+  revenue: DecStr
+  avg_check: DecStr
+  avg_duration_min: DecStr
+  guests_total: number
+  capacity: number
+  revenue_per_seat: DecStr
+  occupancy_pct: DecStr
+}
+
+export interface NetworkTablesAnalyticsReport {
+  period: AnalyticsPeriod
+  total_revenue: DecStr
+  total_orders: number
+  rows: NetworkTableAnalyticsRow[]
+}
+
+export async function fetchNetworkTablesAnalytics(opts: { from?: Date | string; to?: Date | string } = {}): Promise<NetworkTablesAnalyticsReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/tables', { params: { query } }))) as NetworkTablesAnalyticsReport
+}
+
 export async function fetchFoodCost(opts: { from?: Date | string; to?: Date | string } = {}): Promise<FoodCostReport> {
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/analytics/food-cost', { params: { query: query as any } }))) as FoodCostReport

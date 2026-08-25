@@ -2,8 +2,13 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchTablesAnalytics, fetchPeakHours, type TablesAnalyticsReport, type TableLiveStatus, type PeakHoursReport } from '@/lib/queries/analytics'
+import {
+  fetchTablesAnalytics, fetchNetworkTablesAnalytics,
+  fetchPeakHours, fetchNetworkPeakHours,
+  type TablesAnalyticsReport, type NetworkTablesAnalyticsReport, type TableLiveStatus, type PeakHoursReport,
+} from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import {
   MapPin,
   Clock,
@@ -57,10 +62,11 @@ interface TableStat {
   avgCheck: number
   avgDurationMin: number
   guestsTotal: number
-  status: TableLiveStatus
+  status?: TableLiveStatus
   capacity: number
   revenuePerSeat: number
   occupancyPct: number
+  restaurantName?: string
 }
 
 const STATUS_LABEL: Record<TableLiveStatus, string> = {
@@ -85,8 +91,10 @@ const STATUS_COLOR: Record<TableLiveStatus, string> = {
 }
 
 export default function TablesAnalyticsPage() {
-  const { canDo } = useAuth()
-  const [report, setReport] = useState<TablesAnalyticsReport | null>(null)
+  const { canDo, restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
+  const [report, setReport] = useState<TablesAnalyticsReport | NetworkTablesAnalyticsReport | null>(null)
   const [peak, setPeak] = useState<PeakHoursReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('month')
@@ -96,13 +104,15 @@ export default function TablesAnalyticsPage() {
   useEffect(() => {
     setLoading(true)
     const { from, to } = periodToRange(period)
-    fetchTablesAnalytics({ from, to })
+    const tablesFetcher = isCentral ? fetchNetworkTablesAnalytics : fetchTablesAnalytics
+    tablesFetcher({ from, to })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
     // Почасовая загрузка за период — для графика «Загрузка по часам дня».
-    fetchPeakHours({ from, to }).then(setPeak).catch(() => setPeak(null))
-  }, [period])
+    const peakFetcher = isCentral ? fetchNetworkPeakHours : fetchPeakHours
+    peakFetcher({ from, to }).then(setPeak).catch(() => setPeak(null))
+  }, [period, isCentral])
 
   // Загрузка по часам дня: суммируем заказы по часу (0..23) из peak-hours-ячеек.
   const hourlyData = useMemo(() => {
@@ -121,21 +131,33 @@ export default function TablesAnalyticsPage() {
 
   const allStats: TableStat[] = useMemo(() => {
     if (!report) return []
-    return report.rows.map(r => ({
-      id: r.table_id,
-      name: r.name,
-      zoneName: r.zone_name || '—',
-      orderCount: r.orders,
-      revenue: Number(r.revenue),
-      avgCheck: Number(r.avg_check),
-      avgDurationMin: Number(r.avg_duration_min),
-      guestsTotal: r.guests_total,
-      status: (r.status || 'free') as TableLiveStatus,
-      capacity: r.capacity || 0,
-      revenuePerSeat: Number(r.revenue_per_seat),
-      occupancyPct: Number(r.occupancy_pct),
-    }))
-  }, [report])
+    return report.rows.map(r => {
+      const restaurantName = (r as { restaurant_name?: string }).restaurant_name
+      // Зона — не сетевая сущность («Зал» есть в каждом филиале), поэтому в
+      // сети имя зоны дизамбигуируется филиалом: иначе группировка/фильтр по
+      // зоне молча схлопнёт разные точки в одну карточку.
+      const zoneName = isCentral && restaurantName
+        ? `${r.zone_name || '—'} · ${restaurantName}`
+        : (r.zone_name || '—')
+      return {
+        id: r.table_id,
+        name: r.name,
+        zoneName,
+        orderCount: r.orders,
+        revenue: Number(r.revenue),
+        avgCheck: Number(r.avg_check),
+        avgDurationMin: Number(r.avg_duration_min),
+        guestsTotal: r.guests_total,
+        // Live-статус — не сетевая метрика (см. NetworkTableAnalyticsRow),
+        // на central его просто нет в ответе.
+        status: isCentral ? undefined : (((r as { status?: TableLiveStatus }).status || 'free') as TableLiveStatus),
+        capacity: r.capacity || 0,
+        revenuePerSeat: Number(r.revenue_per_seat),
+        occupancyPct: Number(r.occupancy_pct),
+        restaurantName,
+      }
+    })
+  }, [report, isCentral])
 
   const zones = useMemo(() => {
     const set = new Set<string>()
@@ -165,16 +187,19 @@ export default function TablesAnalyticsPage() {
     orders: tableStats.reduce((s, t) => s + t.orderCount, 0),
     guests: tableStats.reduce((s, t) => s + t.guestsTotal, 0),
     avgTurnover: tableStats.length > 0 ? tableStats.reduce((s, t) => s + t.orderCount, 0) / tableStats.length / days : 0,
-    occupiedNow: tableStats.filter(t => t.status !== 'free').length,
+    occupiedNow: tableStats.filter(t => t.status != null && t.status !== 'free').length,
   }), [tableStats, days])
 
+  // Live-статус — не сетевая метрика (см. TableStat.status), диаграмма не
+  // строится на central.
   const statusPie = useMemo(() => {
+    if (isCentral) return []
     const counts: Record<TableLiveStatus, number> = { free: 0, occupied: 0, reserved: 0, bill_requested: 0 }
-    for (const t of tableStats) counts[t.status] = (counts[t.status] || 0) + 1
+    for (const t of tableStats) if (t.status) counts[t.status] = (counts[t.status] || 0) + 1
     return (['free', 'occupied', 'reserved', 'bill_requested'] as TableLiveStatus[])
       .map(s => ({ name: STATUS_LABEL[s], value: counts[s], key: s }))
       .filter(d => d.value > 0)
-  }, [tableStats])
+  }, [tableStats, isCentral])
 
   const zoneStats = useMemo(() =>
     zones.map(zoneName => {
@@ -198,7 +223,9 @@ export default function TablesAnalyticsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Аналитика по столам</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Загрузка, оборачиваемость и выручка</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {isCentral ? 'Загрузка, оборачиваемость и выручка по всей сети' : 'Загрузка, оборачиваемость и выручка'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -233,7 +260,7 @@ export default function TablesAnalyticsPage() {
       </div>
 
       {/* KPI */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className={`grid grid-cols-2 gap-3 ${isCentral ? 'md:grid-cols-4' : 'md:grid-cols-5'}`}>
         <div className="bg-card rounded-xl border border-border p-4">
           <div className="flex items-center gap-2 mb-2"><MapPin className="size-4 text-muted-foreground" /><span className="text-[11px] text-muted-foreground uppercase tracking-wide">Столов</span></div>
           <p className="text-2xl font-bold">{tableStats.length}</p>
@@ -252,11 +279,15 @@ export default function TablesAnalyticsPage() {
           <p className="text-2xl font-bold">{totals.avgTurnover.toFixed(1)}</p>
           <p className="text-[11px] text-muted-foreground mt-0.5">заказов / стол / день</p>
         </div>
-        <div className="bg-card rounded-xl border border-border p-4">
-          <div className="flex items-center gap-2 mb-2"><Circle className="size-4 text-red-500" /><span className="text-[11px] text-muted-foreground uppercase tracking-wide">Занято сейчас</span></div>
-          <p className="text-2xl font-bold">{totals.occupiedNow}</p>
-          <p className="text-[11px] text-muted-foreground mt-0.5">из {tableStats.length}</p>
-        </div>
+        {/* Занято сейчас — live-снимок одной точки, на central не показываем
+            (см. TableStat.status). */}
+        {!isCentral && (
+          <div className="bg-card rounded-xl border border-border p-4">
+            <div className="flex items-center gap-2 mb-2"><Circle className="size-4 text-red-500" /><span className="text-[11px] text-muted-foreground uppercase tracking-wide">Занято сейчас</span></div>
+            <p className="text-2xl font-bold">{totals.occupiedNow}</p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">из {tableStats.length}</p>
+          </div>
+        )}
       </div>
 
       {/* Загрузка по часам дня (как в v1) + компактный live-статус справа */}
@@ -363,7 +394,7 @@ export default function TablesAnalyticsPage() {
           <table className="w-full text-sm min-w-[1100px]">
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                {['#', 'Стол', 'Зона', 'Статус', 'Мест', 'Заказов', 'Гостей', 'Выручка', '₸/место', 'Загрузка', 'Ср. чек', 'Ср. время'].map(h => (
+                {['#', 'Стол', 'Зона', isCentral ? 'Филиал' : 'Статус', 'Мест', 'Заказов', 'Гостей', 'Выручка', '₸/место', 'Загрузка', 'Ср. чек', 'Ср. время'].map(h => (
                   <th key={h} className="px-3 py-3 text-left text-[11px] font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -379,9 +410,13 @@ export default function TablesAnalyticsPage() {
                   <td className="px-3 py-3 font-semibold text-foreground">{t.name}</td>
                   <td className="px-3 py-3 text-xs text-muted-foreground">{t.zoneName}</td>
                   <td className="px-3 py-3">
-                    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${STATUS_BADGE[t.status]}`}>
-                      {STATUS_LABEL[t.status]}
-                    </span>
+                    {isCentral ? (
+                      <span className="text-xs text-muted-foreground">{t.restaurantName ?? '—'}</span>
+                    ) : t.status ? (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium border ${STATUS_BADGE[t.status]}`}>
+                        {STATUS_LABEL[t.status]}
+                      </span>
+                    ) : null}
                   </td>
                   <td className="px-3 py-3 text-foreground">{t.capacity || '—'}</td>
                   <td className="px-3 py-3 text-foreground">{t.orderCount}</td>

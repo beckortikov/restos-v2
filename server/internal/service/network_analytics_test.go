@@ -142,6 +142,20 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		Amount: decimal.MustFromString("15"), RestaurantID: &b2, CreatedAt: now,
 	})
 
+	// Столы — «Стол 1» ОДИНАКОВОЕ имя на двух филиалах (совпадение имени не
+	// должно схлопывать строки, см. NetworkTableRow).
+	zoneB1, zoneB2 := uuid.NewString(), uuid.NewString()
+	zoneName1, zoneName2 := "Зал", "Веранда"
+	gdb.Create(&models.Zone{ID: zoneB1, Name: zoneName1, RestaurantID: &b1})
+	gdb.Create(&models.Zone{ID: zoneB2, Name: zoneName2, RestaurantID: &b2})
+	tableB1, tableB2 := uuid.NewString(), uuid.NewString()
+	tableName := "Стол 1"
+	capacity := 4
+	gdb.Create(&models.Table{ID: tableB1, Name: &tableName, Capacity: &capacity, ZoneID: &zoneB1, RestaurantID: &b1})
+	gdb.Create(&models.Table{ID: tableB2, Name: &tableName, Capacity: &capacity, ZoneID: &zoneB2, RestaurantID: &b2})
+	gdb.Exec("UPDATE orders SET table_id = ? WHERE id = ?", tableB1, o1)
+	gdb.Exec("UPDATE orders SET table_id = ? WHERE id = ?", tableB2, o2)
+
 	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
 	from := now.Add(-1 * time.Hour)
@@ -418,6 +432,40 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		}
 		if !out.AvgGrossMarginPct.IsPositive() {
 			t.Errorf("AvgGrossMarginPct = %s, want positive", out.AvgGrossMarginPct.String())
+		}
+	})
+
+	t.Run("TablesNetwork", func(t *testing.T) {
+		out, err := svc.TablesNetwork(ctx, f)
+		if err != nil {
+			t.Fatalf("TablesNetwork: %v", err)
+		}
+		if len(out.Rows) != 2 {
+			t.Fatalf("rows: %+v — «Стол 1» с двух филиалов — разные объекты, схлопываться не должны", out.Rows)
+		}
+		byBranch := map[string]service.NetworkTableRow{}
+		for _, r := range out.Rows {
+			byBranch[r.RestaurantName] = r
+		}
+		b1Row, ok := byBranch["Филиал-1"]
+		if !ok {
+			t.Fatalf("нет строки стола для Филиал-1: %+v", out.Rows)
+		}
+		if b1Row.Orders != 1 || !b1Row.Revenue.Equal(decimal.MustFromString("46")) {
+			t.Errorf("Филиал-1: %+v", b1Row)
+		}
+		if b1Row.ZoneName != "Зал" {
+			t.Errorf("Филиал-1 ZoneName = %q, want «Зал»", b1Row.ZoneName)
+		}
+		b2Row, ok := byBranch["Филиал-2"]
+		if !ok {
+			t.Fatalf("нет строки стола для Филиал-2: %+v", out.Rows)
+		}
+		if b2Row.Orders != 1 || !b2Row.Revenue.Equal(decimal.MustFromString("46")) {
+			t.Errorf("Филиал-2: %+v", b2Row)
+		}
+		if out.TotalOrders != 2 || !out.TotalRevenue.Equal(decimal.MustFromString("92")) {
+			t.Errorf("totals: orders=%d revenue=%s", out.TotalOrders, out.TotalRevenue.String())
 		}
 	})
 }

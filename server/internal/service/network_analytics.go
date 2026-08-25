@@ -1292,6 +1292,202 @@ func (s *NetworkService) ForecastNetwork(ctx context.Context, f PeriodFilter) (*
 	return out, nil
 }
 
+// ─── Столы ──────────────────────────────────────────────────────────────
+
+// NetworkTableRow — как TableRow, но с именем филиала и БЕЗ Status: у стола
+// нет сетевой идентичности («Стол 1» есть в каждом филиале — это разные
+// объекты), поэтому строки не схлопываются, каждая помечена филиалом. Live
+// статус (свободен/занят/ждёт счёт) намеренно не включён — это отчёт «за
+// период» по всей сети, а не реалтайм-карта зала одного филиала; у центра
+// нет единого «сейчас» по N независимым точкам одновременно (см. ту же
+// оговорку у Дашборда/isBranchView).
+type NetworkTableRow struct {
+	TableID        string          `json:"table_id"`
+	Name           string          `json:"name"`
+	ZoneName       string          `json:"zone_name"`
+	RestaurantID   string          `json:"restaurant_id"`
+	RestaurantName string          `json:"restaurant_name"`
+	Capacity       int             `json:"capacity"`
+	Orders         int             `json:"orders"`
+	Revenue        decimal.Decimal `json:"revenue"`
+	AvgCheck       decimal.Decimal `json:"avg_check"`
+	AvgDurationMin decimal.Decimal `json:"avg_duration_min"`
+	GuestsTotal    int             `json:"guests_total"`
+	RevenuePerSeat decimal.Decimal `json:"revenue_per_seat"`
+	OccupancyPct   decimal.Decimal `json:"occupancy_pct"`
+}
+
+type NetworkTablesReport struct {
+	Period struct {
+		From *time.Time `json:"from,omitempty"`
+		To   *time.Time `json:"to,omitempty"`
+	} `json:"period"`
+	TotalRevenue decimal.Decimal   `json:"total_revenue"`
+	TotalOrders  int               `json:"total_orders"`
+	Rows         []NetworkTableRow `json:"rows"`
+}
+
+// TablesNetwork — та же (стол × оборачиваемость) агрегация, что и локальный
+// отчёт, по всей сети (см. NetworkTableRow про отсутствие Status).
+func (s *NetworkService) TablesNetwork(ctx context.Context, f PeriodFilter) (*NetworkTablesReport, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	nameByID := make(map[string]string, len(branches))
+	for _, b := range branches {
+		nameByID[b.ID] = b.Name
+	}
+
+	out := &NetworkTablesReport{Rows: []NetworkTableRow{}}
+	out.Period.From = f.From
+	out.Period.To = f.To
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	type row struct {
+		RestaurantID string
+		TableID      *string         `gorm:"column:table_id"`
+		Name         *string         `gorm:"column:name"`
+		ZoneName     *string         `gorm:"column:zone_name"`
+		Capacity     *int            `gorm:"column:capacity"`
+		Orders       int             `gorm:"column:orders"`
+		Revenue      decimal.Decimal `gorm:"column:revenue"`
+		AvgDurSec    decimal.Decimal `gorm:"column:avg_dur_sec"`
+		Guests       int             `gorm:"column:guests_total"`
+	}
+	q := s.r.Raw().WithContext(ctx).Table("orders AS o").
+		Select(`o.restaurant_id AS restaurant_id,
+		        o.table_id AS table_id,
+		        t.name AS name,
+		        z.name AS zone_name,
+		        t.capacity AS capacity,
+		        COUNT(*) AS orders,
+		        COALESCE(SUM(o.total_with_service), 0) AS revenue,
+		        COALESCE(AVG(EXTRACT(EPOCH FROM (o.closed_at - o.created_at))), 0) AS avg_dur_sec,
+		        COALESCE(SUM(o.guests_count), 0) AS guests_total`).
+		Joins("LEFT JOIN tables t ON t.id::text = o.table_id AND t.restaurant_id = o.restaurant_id").
+		Joins("LEFT JOIN zones z ON z.id::text = t.zone_id AND z.restaurant_id = o.restaurant_id").
+		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
+	if f.From != nil {
+		q = q.Where("o.closed_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("o.closed_at < ?", *f.To)
+	}
+	var rows []row
+	if err := q.Group("o.restaurant_id, o.table_id, t.name, z.name, t.capacity").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	// Столы без закрытых заказов в периоде — тоже включаем (полнота списка).
+	type freeTblRow struct {
+		RestaurantID string  `gorm:"column:restaurant_id"`
+		TableID      string  `gorm:"column:table_id"`
+		Name         *string `gorm:"column:name"`
+		ZoneName     *string `gorm:"column:zone_name"`
+		Capacity     *int    `gorm:"column:capacity"`
+	}
+	var allTbls []freeTblRow
+	_ = s.r.Raw().WithContext(ctx).Table("tables AS t").
+		Select("t.restaurant_id AS restaurant_id, t.id AS table_id, t.name, z.name AS zone_name, t.capacity").
+		Joins("LEFT JOIN zones z ON z.id::text = t.zone_id AND z.restaurant_id = t.restaurant_id").
+		Where("t.restaurant_id IN ?", ids).
+		Scan(&allTbls).Error
+	seen := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		if r.TableID != nil {
+			seen[r.RestaurantID+":"+*r.TableID] = true
+		}
+	}
+
+	// periodDays — как в локальном отчёте (Н19), но разброс closed_at по всей
+	// сети, не одной точки.
+	periodDays := computePeriodDays(f.From, f.To)
+	if f.From == nil || f.To == nil {
+		var span struct {
+			MinAt *time.Time `gorm:"column:min_at"`
+			MaxAt *time.Time `gorm:"column:max_at"`
+		}
+		if err := s.r.Raw().WithContext(ctx).Table("orders").
+			Select("MIN(closed_at) AS min_at, MAX(closed_at) AS max_at").
+			Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
+			Scan(&span).Error; err == nil && span.MinAt != nil && span.MaxAt != nil {
+			if d := span.MaxAt.Sub(*span.MinAt).Hours() / 24; d >= 1 {
+				periodDays = int(d + 0.999)
+			}
+		}
+	}
+
+	totalRev := decimal.Zero
+	totalOrd := 0
+	sixty := decimal.FromInt(60)
+	hundred := decimal.FromInt(100)
+	emit := func(r row) {
+		id := ""
+		if r.TableID != nil {
+			id = *r.TableID
+		}
+		name := "—"
+		if r.Name != nil && *r.Name != "" {
+			name = *r.Name
+		}
+		zone := ""
+		if r.ZoneName != nil {
+			zone = *r.ZoneName
+		}
+		cap := 0
+		if r.Capacity != nil {
+			cap = *r.Capacity
+		}
+		avg := decimal.Zero
+		if r.Orders > 0 {
+			avg = decimal.DivRound(r.Revenue, decimal.FromInt(int64(r.Orders)))
+		}
+		dur := decimal.DivRound(r.AvgDurSec, sixty)
+		var revPerSeat decimal.Decimal
+		if cap > 0 {
+			revPerSeat = decimal.DivRound(r.Revenue, decimal.FromInt(int64(cap)))
+		}
+		var occ decimal.Decimal
+		if cap > 0 && periodDays > 0 {
+			den := decimal.FromInt(int64(cap) * int64(periodDays))
+			occ = decimal.DivRound(decimal.Mul(decimal.FromInt(int64(r.Orders)), hundred), den)
+		}
+		out.Rows = append(out.Rows, NetworkTableRow{
+			TableID: id, Name: name, ZoneName: zone,
+			RestaurantID: r.RestaurantID, RestaurantName: nameByID[r.RestaurantID],
+			Capacity: cap, Orders: r.Orders,
+			Revenue: decimal.Normalize(r.Revenue), AvgCheck: decimal.Normalize(avg),
+			AvgDurationMin: decimal.Normalize(dur), GuestsTotal: r.Guests,
+			RevenuePerSeat: decimal.Normalize(revPerSeat), OccupancyPct: decimal.Normalize(occ),
+		})
+		totalRev = decimal.Add(totalRev, r.Revenue)
+		totalOrd += r.Orders
+	}
+	for _, r := range rows {
+		emit(r)
+	}
+	for _, t := range allTbls {
+		if seen[t.RestaurantID+":"+t.TableID] {
+			continue
+		}
+		emit(row{RestaurantID: t.RestaurantID, TableID: &t.TableID, Name: t.Name, ZoneName: t.ZoneName, Capacity: t.Capacity})
+	}
+	sort.Slice(out.Rows, func(i, j int) bool {
+		return out.Rows[i].Revenue.GreaterThan(out.Rows[j].Revenue)
+	})
+	out.TotalRevenue = decimal.Normalize(totalRev)
+	out.TotalOrders = totalOrd
+	return out, nil
+}
+
 // networkBranchIDs — общий вход для методов этого файла: список id узлов
 // сети вызывающего. Пустой слайс (не ошибка), если сеть пуста — вызывающий
 // сам решает, что за this значит (обычно просто пустой отчёт).
