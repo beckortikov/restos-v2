@@ -2450,7 +2450,7 @@ func (s *SalaryService) GiveAdvance(ctx context.Context, in AdvanceInput) (*mode
 			UserID:       *in.UserID,
 			Amount:       amount,
 			Period:       *in.Period,
-			AccountID:    *in.AccountID,
+			AccountID:    in.AccountID,
 			Note:         in.Note,
 			SourceOpID:   &op.ID,
 			CreatedBy:    &createdBy,
@@ -2510,6 +2510,12 @@ func (s *SalaryService) CancelAdvance(ctx context.Context, id string) (*models.S
 		if row.CancelledAt != nil {
 			return apperrors.Wrap("VALIDATION", "аванс уже отменён", nil)
 		}
+		// Аванс без счёта выдан ДРУГИМ узлом сети (центром, Ф-С5): деньги
+		// списаны там, возвращать их здесь некуда. Отмена — на центральном
+		// узле (отмена расхода за филиал), оттуда она доедет и сюда.
+		if row.AccountID == nil || *row.AccountID == "" {
+			return apperrors.Wrap("VALIDATION", "аванс выдан центральным узлом — отменяйте его там (Финансы → Расходы за филиалы)", nil)
+		}
 		var u models.User
 		if err := tx.Where("restaurant_id = ? AND id = ?", rid, row.UserID).First(&u).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -2540,7 +2546,7 @@ func (s *SalaryService) CancelAdvance(ctx context.Context, id string) (*models.S
 		desc := fmt.Sprintf("Отмена аванса (%s)", row.Period)
 		srcRef := row.UserID
 		ridStr := rid
-		accountID := row.AccountID
+		accountID := *row.AccountID
 		reverseOp := models.FinancialOperation{
 			ID:           uuid.NewString(),
 			Type:         &inType,

@@ -113,8 +113,9 @@ type SalaryAdvance struct {
 	Amount       decimal.Decimal `gorm:"type:numeric(14,4)" json:"amount"`
 	Period       string          `json:"period"`
 	// AccountID — счёт, с которого выдан аванс. Нужен для отмены: куда
-	// вернуть деньги.
-	AccountID string  `gorm:"column:account_id;type:uuid" json:"account_id"`
+	// вернуть деньги. NULL — аванс выдан ДРУГИМ узлом сети (центром, Ф-С5):
+	// деньги списаны там, локальная отмена запрещена гвардом.
+	AccountID *string `gorm:"column:account_id;type:uuid" json:"account_id"`
 	Note      *string `json:"note"`
 	// SourceOpID — id financial_operations самой выплаты (для трассировки
 	// «эта проводка — вот эта строка истории»).

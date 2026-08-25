@@ -44,7 +44,7 @@ func TestAudit_SalaryDoublePay(t *testing.T) {
 	// остаток текущего»). users.advance тут больше ни на что не влияет.
 	if err := gdb.Create(&models.SalaryAdvance{
 		ID: uuid.NewString(), UserID: uid, Amount: decimal.MustFromString("300"),
-		Period: "2026-07", AccountID: accountID, RestaurantID: &f.rid,
+		Period: "2026-07", AccountID: &accountID, RestaurantID: &f.rid,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

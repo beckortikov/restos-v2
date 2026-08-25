@@ -250,7 +250,7 @@ func TestRecordSalaryAdvanceSync(t *testing.T) {
 	rowID := uuid.NewString()
 	row := models.SalaryAdvance{
 		ID: rowID, RestaurantID: &restID, UserID: userID,
-		Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: accID,
+		Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: &accID,
 	}
 	if err := gdb.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&row).Error; err != nil {

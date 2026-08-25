@@ -1737,7 +1737,7 @@ func TestSyncIngest_SalaryAdvance(t *testing.T) {
 	rowID := uuid.NewString()
 	row := models.SalaryAdvance{
 		ID: rowID, RestaurantID: &branchID, UserID: userID,
-		Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: accID,
+		Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: &accID,
 	}
 	body, _ := json.Marshal(row)
 

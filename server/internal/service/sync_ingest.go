@@ -1492,7 +1492,53 @@ func applyMirrorSideEffect(tx *gorm.DB, op *models.FinancialOperation) error {
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
+
+	// source_ref — сотрудник, категория «Аванс» (Ф-С5): кап периода вычитает
+	// авансы из salary_advances (advDedForPeriod), а не из финопер — без
+	// строки аванс, выданный центром, не уменьшал бы «к выплате» и открывал
+	// бы двойную выплату. У зеркальной строки нет счёта (деньги списаны на
+	// центре) — по NULL её и отличает гвард локальной отмены. Обычная
+	// зарплата (категория «Зарплата») строки не требует: её кап видит по
+	// самой зеркальной проводке (тег «Зарплата:период» в описании).
+	if op.Category != nil && *op.Category == CategoryAdvance {
+		var u models.User
+		err = tx.Where("id = ? AND restaurant_id = ?", ref, rid).First(&u).Error
+		if err == nil {
+			return applyMirrorAdvance(tx, op, &u, now)
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+	}
 	return nil
+}
+
+// applyMirrorAdvance — строка salary_advances + счётчик users.advance для
+// аванса, выданного центром. Period — из учётной даты проводки (её ставит
+// PayBranchSalary из периода начисления), не из парсинга описания.
+func applyMirrorAdvance(tx *gorm.DB, op *models.FinancialOperation, u *models.User, now time.Time) error {
+	period := ""
+	if op.Date != nil && len(*op.Date) >= 7 {
+		period = (*op.Date)[:7]
+	}
+	row := models.SalaryAdvance{
+		ID: uuid.NewString(), RestaurantID: op.RestaurantID, UserID: u.ID,
+		Amount: op.Amount, Period: period, Note: op.Description,
+		SourceOpID: &op.ID, CreatedAt: now,
+	}
+	if err := tx.Create(&row).Error; err != nil {
+		return err
+	}
+	newAdvance := decimal.Normalize(decimal.Add(u.Advance, op.Amount))
+	if err := tx.Model(&models.User{}).Where("id = ?", u.ID).
+		Updates(map[string]any{"advance": newAdvance, "updated_at": now}).Error; err != nil {
+		return err
+	}
+	u.Advance = newAdvance
+	if err := recordUserSync(tx, u, "update"); err != nil {
+		return err
+	}
+	return recordSalaryAdvanceSync(tx, &row)
 }
 
 // reverseMirrorSideEffect — откат последствий отменённого расхода. Зеркало
@@ -1519,6 +1565,42 @@ func reverseMirrorSideEffect(tx *gorm.DB, op *models.FinancialOperation) error {
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
+	}
+
+	// Откат аванса центра: пометить строку отменённой (по source_op_id =
+	// id зеркала — надёжнее суммы/периода) и вернуть счётчик users.advance.
+	// cancelled_at IS NULL в WHERE — ровно-однократность при повторной
+	// доставке отмены, как везде в этом файле.
+	if op.Category != nil && *op.Category == CategoryAdvance {
+		var row models.SalaryAdvance
+		err = tx.Where("restaurant_id = ? AND source_op_id = ? AND cancelled_at IS NULL", rid, op.ID).
+			First(&row).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.SalaryAdvance{}).Where("id = ?", row.ID).
+			Update("cancelled_at", now).Error; err != nil {
+			return err
+		}
+		var u models.User
+		if err := tx.Where("id = ? AND restaurant_id = ?", row.UserID, rid).First(&u).Error; err == nil {
+			newAdvance := decimal.Normalize(decimal.Sub(u.Advance, row.Amount))
+			if decimal.IsNegative(newAdvance) {
+				newAdvance = decimal.Zero
+			}
+			if err := tx.Model(&models.User{}).Where("id = ?", u.ID).
+				Updates(map[string]any{"advance": newAdvance, "updated_at": now}).Error; err != nil {
+				return err
+			}
+			u.Advance = newAdvance
+			if err := recordUserSync(tx, &u, "update"); err != nil {
+				return err
+			}
+		}
+		return recordSalaryAdvanceSync(tx, &row)
 	}
 	return nil
 }

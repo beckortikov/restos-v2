@@ -369,7 +369,7 @@ func TestBackfillPayroll(t *testing.T) {
 	if err := gdb.Create(&ded).Error; err != nil {
 		t.Fatalf("create salary_deduction: %v", err)
 	}
-	adv := models.SalaryAdvance{ID: uuid.NewString(), RestaurantID: &restID, UserID: userID, Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: accID}
+	adv := models.SalaryAdvance{ID: uuid.NewString(), RestaurantID: &restID, UserID: userID, Amount: decimal.MustFromString("500"), Period: "2026-08", AccountID: &accID}
 	if err := gdb.Create(&adv).Error; err != nil {
 		t.Fatalf("create salary_advance: %v", err)
 	}

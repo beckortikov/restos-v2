@@ -141,6 +141,9 @@ export default function PayrollPage() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
   })
   const [branchPaying, setBranchPaying] = useState(false)
+  // Ф-С5: аванс филиальному тем же путём (kind='advance') — у филиала
+  // появится строка аванса и уменьшит остаток «к выплате» за период.
+  const [branchPayKind, setBranchPayKind] = useState<'salary' | 'advance'>('salary')
   // Отметка отработанных дней (дневная оплата) — из «⋯»-меню строки.
   const [workedDaysEmp, setWorkedDaysEmp] = useState<User | null>(null)
   // Отметка явки за другого сотрудника (054).
@@ -440,8 +443,9 @@ export default function PayrollPage() {
         amount: branchPayAmount,
         accountId: branchPayAccountId,
         period: branchPayPeriod,
+        kind: branchPayKind,
       })
-      toast.success(`Выплачено: ${branchPayFor.name}`)
+      toast.success(branchPayKind === 'advance' ? `Аванс выдан: ${branchPayFor.name}` : `Выплачено: ${branchPayFor.name}`)
       setBranchPayFor(null)
       await reload()
     } catch (e) {
@@ -1016,6 +1020,7 @@ export default function PayrollPage() {
                                 onClick={(e) => {
                                   e.stopPropagation()
                                   setBranchPayFor(emp)
+                                  setBranchPayKind('salary')
                                   setBranchPayAmount(Math.max(0, toPay > 0.005 ? Math.round(toPay * 100) / 100 : (emp.payType !== 'daily' ? (emp.salary ?? 0) : 0)))
                                   setBranchPayAccountId('')
                                   const d = new Date(serviceTo)
@@ -1627,6 +1632,18 @@ export default function PayrollPage() {
                 <span className="font-medium text-foreground">{branchPayFor.name}</span> · {branchPayFor.branchName}
                 {branchPayFor.payType !== 'daily' && (branchPayFor.salary ?? 0) > 0 && <> · оклад {formatCurrency(branchPayFor.salary ?? 0)}</>}
               </p>
+              <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg">
+                {([['salary', 'Зарплата'], ['advance', 'Аванс']] as const).map(([k, label]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => { setBranchPayKind(k); if (k === 'advance') setBranchPayAmount(0) }}
+                    className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${branchPayKind === k ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium text-muted-foreground">Период (месяц начисления)</label>
                 <input
@@ -1660,8 +1677,9 @@ export default function PayrollPage() {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                Деньги спишутся с вашего счёта, а в отчётах филиала выплата отразится как его
-                расход на зарплату — и его касса больше не предложит выплатить это второй раз.
+                {branchPayKind === 'advance'
+                  ? 'Деньги спишутся с вашего счёта; у филиала появится аванс за этот период и уменьшит его остаток «к выплате» — двойной выдачи не будет.'
+                  : 'Деньги спишутся с вашего счёта, а в отчётах филиала выплата отразится как его расход на зарплату — и его касса больше не предложит выплатить это второй раз.'}
               </p>
             </div>
           )}
@@ -1679,7 +1697,7 @@ export default function PayrollPage() {
               disabled={branchPaying || !branchPayAccountId || branchPayAmount <= 0}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:opacity-90 disabled:opacity-50"
             >
-              <Wallet className="size-4" /> Выплатить
+              <Wallet className="size-4" /> {branchPayKind === 'advance' ? 'Выдать аванс' : 'Выплатить'}
             </button>
           </DialogFooter>
         </DialogContent>
