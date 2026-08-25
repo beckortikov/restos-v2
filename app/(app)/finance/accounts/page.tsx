@@ -10,8 +10,8 @@ import { formatCurrency } from '@/lib/helpers'
 import { type FinancialAccount, type FinancialOperation, finopCategoryLabel, isOperationEditable } from '@/lib/types'
 import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
 import { selectableAccounts, setFinancialAccountEnabled } from '@/lib/queries/finance'
-import { fetchNetworkAccounts, createMoneyTransfer, type NetworkAccountRow } from '@/lib/queries/transfers'
-import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil, ChevronDown, Store, Send } from 'lucide-react'
+import { fetchNetworkAccounts, createMoneyTransfer, requestMoneyTransfer, type NetworkAccountRow } from '@/lib/queries/transfers'
+import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil, ChevronDown, Store, Send, ArrowDownToLine } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -35,6 +35,14 @@ export default function AccountsPage() {
   const [editingOperation, setEditingOperation] = useState<FinancialOperation | null>(null)
   const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
+  // Ф-Ц: «Списать» — обратное направление «Перевести» (центр забирает со
+  // счёта филиала, а не отправляет туда). Отдельный диалог, а не режим
+  // существующего: там источник — МОИ счета, здесь источник фиксирован
+  // карточкой (чужой счёт, выбирать нечего), а получатель — всегда я сам.
+  const [pullDialogFor, setPullDialogFor] = useState<NetworkAccountRow | null>(null)
+  const [pullAmount, setPullAmount] = useState(0)
+  const [pullNote, setPullNote] = useState('')
+  const [pulling, setPulling] = useState(false)
   // Ф-С2: central видит кассы филиалов (реплики «central видит всё») и может
   // перевести деньги прямо на конкретный счёт филиала из этого же диалога.
   const isCentral = restaurant?.kind === 'central_warehouse'
@@ -266,6 +274,34 @@ export default function AccountsPage() {
     setTransferDialogOpen(false)
   }
 
+  // Ф-Ц: заявка на списание со счёта филиала. Ничего не списывается прямо
+  // сейчас — applyRequestedTransfer сделает это САМ на филиале при получении
+  // (центр не может списать чужой счёт напрямую), поэтому баланс филиала на
+  // этой карточке обновится не сразу, а на следующей синхронизации.
+  async function handlePull() {
+    if (!pullDialogFor || pullAmount <= 0) return
+    setPulling(true)
+    try {
+      await requestMoneyTransfer({
+        branchId: pullDialogFor.branchId,
+        fromAccountId: pullDialogFor.id,
+        amount: pullAmount,
+        note: pullNote || undefined,
+      })
+      toast.success(
+        `Запрос на списание ${pullAmount.toLocaleString()} с «${pullDialogFor.branchName}: ${pullDialogFor.name ?? ''}» отправлен — ` +
+        `спишется само, когда филиал получит его при синхронизации.`,
+      )
+      setPullDialogFor(null)
+      setPullAmount(0)
+      setPullNote('')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка при запросе списания'))
+    } finally {
+      setPulling(false)
+    }
+  }
+
   const filteredByDate = useMemo(() => filterByDateRange(operations, o => o.date, period, customFrom, customTo), [operations, period, customFrom, customTo])
 
   // «Остаток по дням»: считаем приход/расход/остаток по каждому дню периода
@@ -423,13 +459,22 @@ export default function AccountsPage() {
                     <Store className="size-3" /> {acc.branchName}
                   </span>
                   {canDo('finance.manage') && (
-                    <button
-                      onClick={() => { setTransferTo(acc.id); setTransferFrom(''); setTransferAmount(0); setTransferDialogOpen(true) }}
-                      title={`Перевести на этот счёт филиала «${acc.branchName}»`}
-                      className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted transition-colors"
-                    >
-                      <Send className="size-3" /> Перевести
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => { setPullDialogFor(acc); setPullAmount(0); setPullNote('') }}
+                        title={`Списать со счёта филиала «${acc.branchName}» — спишется само, без участия филиала`}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted transition-colors"
+                      >
+                        <ArrowDownToLine className="size-3" /> Списать
+                      </button>
+                      <button
+                        onClick={() => { setTransferTo(acc.id); setTransferFrom(''); setTransferAmount(0); setTransferDialogOpen(true) }}
+                        title={`Перевести на этот счёт филиала «${acc.branchName}»`}
+                        className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted transition-colors"
+                      >
+                        <Send className="size-3" /> Перевести
+                      </button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -843,6 +888,67 @@ export default function AccountsPage() {
               className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
             >
               Перевести
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Ф-Ц: списание со счёта филиала по запросу центра — без участия
+          филиала (у него может не быть своего управляющего). Источник счёта
+          не выбираем — он уже зафиксирован карточкой, откуда открыт диалог. */}
+      <Dialog open={!!pullDialogFor} onOpenChange={(open) => { if (!open) setPullDialogFor(null) }}>
+        <DialogContent className="sm:max-w-md rounded-xl">
+          <DialogHeader>
+            <DialogTitle>Списать со счёта филиала</DialogTitle>
+          </DialogHeader>
+          {pullDialogFor && (
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{pullDialogFor.branchName}: {pullDialogFor.name ?? ''}</span>
+                {' '}— {formatCurrency(pullDialogFor.balance)} на счету сейчас.
+              </p>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Сумма</label>
+                <DecimalInput
+                  min={0}
+                  value={pullAmount}
+                  onChange={setPullAmount}
+                  placeholder="0"
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">Комментарий</label>
+                <input
+                  type="text"
+                  value={pullNote}
+                  onChange={(e) => setPullNote(e.target.value)}
+                  placeholder="необязательно"
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Деньги спишутся не сейчас, а сами, когда касса филиала получит этот
+                запрос при синхронизации — подтверждать там некому и не нужно. Здесь,
+                на счету, обновится с задержкой в одну-две минуты.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <button
+              type="button"
+              onClick={() => setPullDialogFor(null)}
+              className="px-4 py-2 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted transition-colors"
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={handlePull}
+              disabled={pulling || pullAmount <= 0}
+              className="px-4 py-2 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            >
+              {pulling ? 'Отправка...' : 'Списать'}
             </button>
           </DialogFooter>
         </DialogContent>

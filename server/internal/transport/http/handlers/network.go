@@ -304,6 +304,23 @@ func (h *NetworkHandler) PayBranchExpense(w http.ResponseWriter, r *http.Request
 	respond.JSON(w, http.StatusCreated, op)
 }
 
+// RequestMoneyTransfer — POST /api/v1/network/money-transfers/request. Центр
+// заводит запрос на списание со счёта филиала (Ф-Ц) — реальное движение денег
+// произойдёт на самом филиале при получении, см. NetworkService.RequestMoneyTransfer.
+func (h *NetworkHandler) RequestMoneyTransfer(w http.ResponseWriter, r *http.Request) {
+	var in service.RequestMoneyTransferInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	t, err := h.svc.RequestMoneyTransfer(r.Context(), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, t)
+}
+
 // BranchExpenses — GET /api/v1/network/branches/{id}/expenses. Что центр уже
 // оплатил за этот филиал (ADR-003, Фаза Р).
 func (h *NetworkHandler) BranchExpenses(w http.ResponseWriter, r *http.Request) {

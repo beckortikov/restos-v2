@@ -23,13 +23,17 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 // отправитель списывает со своего счёта, получатель выбирает СВОЙ счёт и
 // зачисляет. Между этими двумя моментами деньги «в пути» — не на одном счёте.
 
+// requested (Ф-Ц) — центр запросил списание, филиал ещё не применил (сам
+// применит при следующей синхронизации, без клика человека там).
 const STATUS_LABEL: Record<MoneyTransfer['status'], string> = {
+  requested: 'Ждёт синхронизации',
   sent: 'В пути',
   received: 'Получено',
   cancelled: 'Отменено',
 }
 
 const STATUS_BADGE: Record<MoneyTransfer['status'], string> = {
+  requested: 'bg-muted text-muted-foreground',
   sent: 'bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400',
   received: 'bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400',
   cancelled: 'bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-400',

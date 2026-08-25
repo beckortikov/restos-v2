@@ -42,6 +42,15 @@ func NewMoneyTransferService(r *repo.Repo) *MoneyTransferService {
 	return &MoneyTransferService{r: r}
 }
 
+// moneyTransferStatusRequested — «центр запросил списание со счёта филиала,
+// сам филиал ещё не в курсе» (Ф-Ц). Промежуточный статус ДО requested→sent:
+// в отличие от обычного sent (деньги уже списаны у отправителя), здесь
+// списания ещё не было — оно произойдёт САМО, когда документ дойдёт до
+// филиала down-sync'ом (см. applyRequestedTransfer в sync_ingest.go). Нужен
+// ровно филиалам без своего управляющего: без этого статуса некому было бы
+// нажать «отправить» на той стороне.
+const moneyTransferStatusRequested = "requested"
+
 // CategoryNetworkTransfer — категория обеих финопер перевода. Одна на оба
 // направления (не «в филиал»/«из филиала»): направление уже однозначно задано
 // type=in/out, а единая категория оставляет её грепаемой одной строкой и не

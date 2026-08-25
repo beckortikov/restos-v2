@@ -1152,6 +1152,32 @@ paths:
                 payable_id: { type: string, format: uuid }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperation" } } } } }
 
+  /api/v1/network/money-transfers/request:
+    post:
+      tags: [stock]
+      summary: |
+        Центр заводит запрос на списание со счёта филиала (Ф-Ц) — для сетей,
+        где у филиала может не быть своего управляющего. Ничего не списывает
+        и не зачисляет здесь: создаётся money_transfer в статусе requested,
+        реальное списание произойдёт САМО на филиале при получении документа
+        (см. схему MoneyTransfer, поле status). Центр затем принимает его
+        обычным POST /money/transfers/{id}/receive, когда статус станет sent.
+        Право finance.manage, только владелец центрального узла.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id, from_account_id, amount]
+              properties:
+                branch_id: { type: string, format: uuid }
+                from_account_id: { type: string, format: uuid, description: Счёт ФИЛИАЛА, который будет списан. }
+                amount: { $ref: "#/components/schemas/Decimal" }
+                note: { type: string }
+      responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/MoneyTransfer" } } } } }
+
   /api/v1/network/expenses/{id}/cancel:
     post:
       tags: [stock]
@@ -5130,6 +5156,10 @@ components:
         StockTransfer: списание у отправителя (sent) → зачисление у получателя
         (received). Обе стороны пишут financial_operations с activity=financial,
         поэтому в ОПиУ перевод не попадает ни у кого.
+        requested (Ф-Ц) — промежуточный статус ДО sent: центр запросил
+        списание со счёта филиала, сам филиал ещё не в курсе. Списания ещё
+        не было — оно произойдёт само на филиале при получении документа
+        (без участия человека там), после чего статус станет sent как обычно.
       properties:
         id: { type: string, format: uuid }
         account_id: { type: string, format: uuid }
@@ -5137,7 +5167,7 @@ components:
         to_restaurant_id: { type: string, format: uuid }
         transfer_number: { type: integer }
         amount: { $ref: "#/components/schemas/Decimal" }
-        status: { type: string, enum: [sent, received, cancelled] }
+        status: { type: string, enum: [requested, sent, received, cancelled] }
         note: { type: string, nullable: true }
         from_account_id: { type: string, format: uuid }
         from_account_name: { type: string, nullable: true, description: Денормализовано — у получателя своя БД и счетов отправителя он не знает. }

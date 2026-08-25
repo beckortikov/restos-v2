@@ -16,6 +16,7 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
+	"github.com/restos/restos-v4/server/internal/synclog"
 )
 
 // ── Зарплата филиала из кассы центра (ADR-003, Фаза Р) ──────────────────────
@@ -436,6 +437,125 @@ func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpen
 			return err
 		}
 		created = op
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+// ── Списание со счёта филиала по запросу центра (Ф-Ц) ──────────────────────
+//
+// Владелец сети 2026-08-25: у филиала может не быть своего управляющего —
+// всё управляется из центра, а забрать деньги с кассы филиала до сих пор было
+// нечем (обычный «Перевести» — только вниз, а «Переводы в сети» требуют,
+// чтобы КТО-ТО на филиале нажал «Отправить»). Центр физически не может
+// списать чужой счёт напрямую: у него лежит РЕПЛИКА financial_accounts
+// филиала (питается его же push-up синком), прямая правка была бы фантомной
+// — филиал её не увидит, а на следующем своём чек-ине перезапишет обратно
+// (и хуже: центр успел бы зачислить себе настоящие деньги из ниоткуда).
+//
+// Поэтому центр не списывает сам, а создаёт ЗАПРОС — money_transfer в статусе
+// requested, без всякого движения по счетам. Документ едет вниз филиалу тем
+// же PullFor, что и остальное (см. sync_ingest.go), и на филиале САМ СЕБЯ
+// применяет при получении (applyRequestedTransfer) — без единого клика
+// человека: авторизация уже произошла здесь, на центре, у владельца сети.
+// Как только applyRequestedTransfer спишет счёт, статус requested→sent
+// синкается обратно, и центр принимает его Receive() — точно тем же путём,
+// что и обычный перевод, отправленный вручную филиалом.
+
+// RequestMoneyTransferInput — body POST /api/v1/network/branches/{id}/request-transfer.
+type RequestMoneyTransferInput struct {
+	BranchID      string  `json:"branch_id"`
+	FromAccountID string  `json:"from_account_id"`
+	Amount        string  `json:"amount"`
+	Note          *string `json:"note,omitempty"`
+}
+
+// RequestMoneyTransfer заводит запрос на списание со счёта филиала. Ничего не
+// списывает и не зачисляет — только документ; реальное движение денег
+// произойдёт на филиале, см. applyRequestedTransfer.
+func (s *NetworkService) RequestMoneyTransfer(ctx context.Context, in RequestMoneyTransferInput) (*models.MoneyTransfer, error) {
+	me, account, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
+		return nil, err
+	}
+	if in.BranchID == "" || in.FromAccountID == "" {
+		return nil, apperrors.Wrap("VALIDATION", "branch_id и from_account_id обязательны", nil)
+	}
+	if in.BranchID == me {
+		return nil, apperrors.Wrap("VALIDATION", "нельзя запросить перевод у самого себя", nil)
+	}
+	amount, err := decimal.FromString(in.Amount)
+	if err != nil || !decimal.IsPositive(amount) {
+		return nil, apperrors.Wrap("VALIDATION", "amount must be positive", err)
+	}
+	amount = decimal.Normalize(amount)
+
+	var branch models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Where("id = ?", in.BranchID).First(&branch).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.Wrap("VALIDATION", "филиал не найден", nil)
+		}
+		return nil, err
+	}
+	if branch.AccountID == nil || *branch.AccountID != account {
+		return nil, apperrors.Wrap("VALIDATION", "филиал не входит в эту сеть", nil)
+	}
+	// Счёт обязан реально принадлежать филиалу — иначе applyRequestedTransfer
+	// на его стороне просто не найдёт что списывать (гвард дублируется там же,
+	// на пришедшем payload, эта проверка — только чтобы не заводить заведомо
+	// нерабочий запрос).
+	var acc models.FinancialAccount
+	if err := s.r.Raw().WithContext(ctx).
+		Where("id = ? AND restaurant_id = ?", in.FromAccountID, in.BranchID).
+		First(&acc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.Wrap("VALIDATION", "счёт не найден у этого филиала", nil)
+		}
+		return nil, err
+	}
+
+	actor, _ := audit.ActorFromContext(ctx)
+	now := time.Now().UTC()
+	transferID := uuid.NewString()
+	branchID := in.BranchID
+	var created *models.MoneyTransfer
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		var cnt int64
+		tx.Model(&models.MoneyTransfer{}).Where("account_id = ?", account).Count(&cnt)
+		num := int(cnt) + 1
+
+		t := &models.MoneyTransfer{
+			ID:               transferID,
+			AccountID:        &account,
+			FromRestaurantID: &branchID,
+			ToRestaurantID:   &me,
+			TransferNumber:   &num,
+			Amount:           amount,
+			Status:           moneyTransferStatusRequested,
+			Note:             in.Note,
+			FromAccountID:    &acc.ID,
+			FromAccountName:  acc.Name,
+			CreatedBy:        &actor.UserID,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		if err := tx.Create(t).Error; err != nil {
+			return err
+		}
+		if err := synclog.Record(tx, synclog.Entry{
+			Entity: "money_transfers", RowID: transferID, Op: "insert",
+			RestaurantID: &me, AccountID: &account, Payload: t,
+		}); err != nil {
+			return err
+		}
+		created = t
 		return nil
 	})
 	if err != nil {

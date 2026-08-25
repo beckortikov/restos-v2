@@ -3145,6 +3145,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/money-transfers/request": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Центр заводит запрос на списание со счёта филиала (Ф-Ц) — для сетей,
+         *     где у филиала может не быть своего управляющего. Ничего не списывает
+         *     и не зачисляет здесь: создаётся money_transfer в статусе requested,
+         *     реальное списание произойдёт САМО на филиале при получении документа
+         *     (см. схему MoneyTransfer, поле status). Центр затем принимает его
+         *     обычным POST /money/transfers/{id}/receive, когда статус станет sent.
+         *     Право finance.manage, только владелец центрального узла.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        branch_id: string;
+                        /**
+                         * Format: uuid
+                         * @description Счёт ФИЛИАЛА
+                         */
+                        from_account_id: string;
+                        amount: components["schemas"]["Decimal"];
+                        note?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MoneyTransfer"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/expenses/{id}/cancel": {
         parameters: {
             query?: never;
@@ -14862,6 +14923,10 @@ export interface components {
          *     StockTransfer: списание у отправителя (sent) → зачисление у получателя
          *     (received). Обе стороны пишут financial_operations с activity=financial,
          *     поэтому в ОПиУ перевод не попадает ни у кого.
+         *     requested (Ф-Ц) — промежуточный статус ДО sent: центр запросил
+         *     списание со счёта филиала, сам филиал ещё не в курсе. Списания ещё
+         *     не было — оно произойдёт само на филиале при получении документа
+         *     (без участия человека там), после чего статус станет sent как обычно.
          */
         MoneyTransfer: {
             /** Format: uuid */
@@ -14875,7 +14940,7 @@ export interface components {
             transfer_number?: number;
             amount?: components["schemas"]["Decimal"];
             /** @enum {string} */
-            status?: "sent" | "received" | "cancelled";
+            status?: "requested" | "sent" | "received" | "cancelled";
             note?: string | null;
             /** Format: uuid */
             from_account_id?: string;

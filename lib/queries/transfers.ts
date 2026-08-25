@@ -754,7 +754,8 @@ export interface MoneyTransfer {
   toRestaurantId?: string | null
   transferNumber?: number | null
   amount: number
-  status: 'sent' | 'received' | 'cancelled'
+  /** requested (Ф-Ц) — центр запросил списание, филиал ещё не применил (см. RequestMoneyTransfer). */
+  status: 'requested' | 'sent' | 'received' | 'cancelled'
   note?: string | null
   fromAccountId?: string | null
   /** Имя счёта отправителя — денормализовано: у получателя своя БД. */
@@ -811,6 +812,30 @@ export async function createMoneyTransfer(input: {
       amount: String(input.amount),
       note: input.note,
       suggested_to_account_id: input.suggestedToAccountId,
+    },
+  }))
+  return mapMoneyTransfer(r)
+}
+
+/**
+ * Ф-Ц: центр запрашивает списание со счёта ФИЛИАЛА (для сетей, где у филиала
+ * может не быть своего управляющего). Ничего не списывает и не зачисляет
+ * здесь — заводит money_transfer в статусе requested; реальное списание
+ * происходит само на филиале при получении, статус станет sent, и центр
+ * принимает его как обычный перевод через receiveMoneyTransfer.
+ */
+export async function requestMoneyTransfer(input: {
+  branchId: string
+  fromAccountId: string
+  amount: number
+  note?: string
+}): Promise<MoneyTransfer> {
+  const r: any = await unwrap(api.POST('/api/v1/network/money-transfers/request', {
+    body: {
+      branch_id: input.branchId,
+      from_account_id: input.fromAccountId,
+      amount: String(input.amount),
+      note: input.note,
     },
   }))
   return mapMoneyTransfer(r)

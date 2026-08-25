@@ -18,6 +18,7 @@ import (
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
+	"github.com/restos/restos-v4/server/internal/synclog"
 )
 
 // SyncService — приём дельт на ЦЕНТРАЛЬНОМ узле (Фаза 2 multi-branch, ADR-003).
@@ -157,7 +158,7 @@ func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool,
 			}
 			res.Applied++
 		case "money_transfers":
-			if err := s.applyMoneyTransfer(ctx, e, updateAll); err != nil {
+			if err := s.applyMoneyTransfer(ctx, e, updateAll, branchID); err != nil {
 				return nil, err
 			}
 			res.Applied++
@@ -777,7 +778,13 @@ func (s *SyncService) applyTransfer(ctx context.Context, e SyncEntry, updateAll 
 // документа: балансы счетов НЕ трогаются ни на одной стороне — списание уже
 // сделал отправитель у себя (Create), зачисление сделает получатель, когда
 // нажмёт «принять» (Receive). Иначе деньги удвоились бы на каждом pull.
-func (s *SyncService) applyMoneyTransfer(ctx context.Context, e SyncEntry, updateAll bool) error {
+//
+// Исключение — Ф-Ц: если пришедший документ в статусе requested и адресован
+// ИМЕННО этому филиалу (branchID) как отправителю, applyRequestedTransfer
+// сама выполняет реальное списание — центр физически не мог провести его сам
+// (см. головной комментарий RequestMoneyTransfer), а человека на филиале
+// может не быть.
+func (s *SyncService) applyMoneyTransfer(ctx context.Context, e SyncEntry, updateAll bool, branchID string) error {
 	var t models.MoneyTransfer
 	if err := json.Unmarshal(e.Payload, &t); err != nil {
 		return apperrors.Wrap("VALIDATION", "invalid money_transfers payload", err)
@@ -788,13 +795,89 @@ func (s *SyncService) applyMoneyTransfer(ctx context.Context, e SyncEntry, updat
 	conflict := onConflict(updateAll)
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
-		if err := tx.Clauses(conflict).Create(&t).Error; err != nil {
+		res := tx.Clauses(conflict).Create(&t)
+		if res.Error != nil {
+			return res.Error
+		}
+		if updateAll {
+			return nil
+		}
+		if err := applyStatusEcho(tx, "money_transfers", t.ID, t.Status, t.ReceivedAt, t.ReceivedBy); err != nil {
 			return err
 		}
-		if !updateAll {
-			return applyStatusEcho(tx, "money_transfers", t.ID, t.Status, t.ReceivedAt, t.ReceivedBy)
+		// RowsAffected>0 — гвард ровно-однократности: DoNothing делает
+		// повторную доставку того же requested-документа безопасным no-op
+		// (документ уже лежит локально, второй INSERT не пройдёт, значит и
+		// списание не повторится).
+		if res.RowsAffected > 0 && t.Status == moneyTransferStatusRequested &&
+			branchID != "" && t.FromRestaurantID != nil && *t.FromRestaurantID == branchID {
+			return applyRequestedTransfer(tr, ctx, &t)
 		}
 		return nil
+	})
+}
+
+// applyRequestedTransfer — реальное списание со счёта филиала по запросу
+// центра (Ф-Ц, requested→sent). В отличие от остального в этом файле — БЕЗ
+// SkipHooks: это подлинно новая локальная мутация (баланс, финопер), её
+// обязаны подхватить обычные generic-хуки (trackedInsert/trackedSave) и
+// уехать наверх точно как если бы её провёл человек тут же руками. Статус
+// самого money_transfers синкается явным Record — как и в Receive(), генерик-
+// хука на эту таблицу нет.
+func applyRequestedTransfer(tr *repo.Repo, ctx context.Context, t *models.MoneyTransfer) error {
+	if t.FromAccountID == nil || t.FromRestaurantID == nil || t.ToRestaurantID == nil {
+		return apperrors.Wrap("VALIDATION", "requested transfer: missing account/restaurant fields", nil)
+	}
+	tx := tr.Raw().WithContext(ctx)
+
+	var acc models.FinancialAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("restaurant_id = ? AND id = ?", *t.FromRestaurantID, *t.FromAccountID).
+		First(&acc).Error; err != nil {
+		return err
+	}
+	if decimal.IsNegative(decimal.Sub(acc.Balance, t.Amount)) {
+		// Ошибка откатывает ВСЮ транзакцию (документ requested тоже не
+		// вставится) — на следующем pull центр пришлёт его заново, запрос
+		// самоисцелится, как только на счету появятся деньги.
+		return apperrors.Wrap("CONFLICT", "insufficient funds for requested transfer", nil)
+	}
+	now := time.Now().UTC()
+	if err := tx.Model(&acc).Updates(map[string]any{
+		"balance":    decimal.Normalize(decimal.Sub(acc.Balance, t.Amount)),
+		"updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+
+	toName := ""
+	var toRest models.Restaurant
+	if err := tx.Select("name").Where("id = ?", *t.ToRestaurantID).First(&toRest).Error; err == nil {
+		toName = toRest.Name
+	}
+
+	outType, category, activity, isAuto := "out", CategoryNetworkTransfer, "financial", false
+	date := now.Format("2006-01-02")
+	ridStr := *t.FromRestaurantID
+	op := &models.FinancialOperation{
+		ID: uuid.NewString(), Type: &outType, Amount: t.Amount, Category: &category,
+		AccountID: &acc.ID, AccountName: acc.Name, Activity: &activity, Date: &date,
+		Description: t.Note, Counterparty: &toName, IsAuto: &isAuto,
+		RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := tx.Create(op).Error; err != nil {
+		return err
+	}
+
+	t.Status = "sent"
+	t.SentAt = &now
+	t.UpdatedAt = now
+	if err := tx.Save(t).Error; err != nil {
+		return err
+	}
+	return synclog.Record(tx, synclog.Entry{
+		Entity: "money_transfers", RowID: t.ID, Op: "update",
+		RestaurantID: &ridStr, AccountID: t.AccountID, Payload: t,
 	})
 }
 
@@ -1208,11 +1291,14 @@ func (s *SyncService) PullFor(ctx context.Context, restaurantID string, mirrorSi
 		})
 	}
 
-	// Денежные переводы (Фаза Д) — та же пара выборок, тот же смысл.
+	// Денежные переводы (Фаза Д) — та же пара выборок, тот же смысл. Третье
+	// условие — Ф-Ц: запрос центра на списание, адресованный ЭТОМУ филиалу
+	// как отправителю (status=requested) — применяется сам, см.
+	// applyRequestedTransfer.
 	var money []models.MoneyTransfer
 	if err := s.r.Raw().WithContext(ctx).
-		Where("(to_restaurant_id = ? AND status = ?) OR (from_restaurant_id = ? AND status = ?)",
-			restaurantID, "sent", restaurantID, "received").
+		Where("(to_restaurant_id = ? AND status = ?) OR (from_restaurant_id = ? AND status = ?) OR (from_restaurant_id = ? AND status = ?)",
+			restaurantID, "sent", restaurantID, "received", restaurantID, moneyTransferStatusRequested).
 		Order("created_at ASC").
 		Find(&money).Error; err != nil {
 		return nil, err
