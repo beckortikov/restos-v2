@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"math"
 	"sort"
 	"time"
 
@@ -1123,6 +1124,170 @@ func (s *NetworkService) networkDailyAgg(ctx context.Context, ids []string, from
 			out[r.Day] = a
 		}
 		a.expenses = r.Total
+	}
+	return out, nil
+}
+
+// ─── Прогноз ────────────────────────────────────────────────────────────
+
+// ForecastNetwork — тот же комбинированный прогноз (revenue/cogs/margin +
+// точка безубыточности + линрег на след. месяц), что и локальный /forecast,
+// но суммой по всей сети: central сам не торгует, поэтому регрессия строится
+// на СУММЕ выручки филиалов по месяцам, а не отдельно на каждый — тот же
+// принцип, что у сетевого Дашборда/ОПиУ (сеть представляется одним числом,
+// не N параллельных прогнозов).
+func (s *NetworkService) ForecastNetwork(ctx context.Context, f PeriodFilter) (*ForecastReport, error) {
+	ids, err := s.networkBranchIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &ForecastReport{MonthlyRevenue: []ForecastMonth{}}
+	out.Period.From = f.From
+	out.Period.To = f.To
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	type rRow struct {
+		Month   string          `gorm:"column:month"`
+		Revenue decimal.Decimal `gorm:"column:revenue"`
+	}
+	q := s.r.Raw().WithContext(ctx).Table("orders").
+		Select(`to_char(closed_at, 'YYYY-MM') AS month,
+		        COALESCE(SUM(total_with_service), 0) AS revenue`).
+		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
+	if f.From != nil {
+		q = q.Where("closed_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("closed_at < ?", *f.To)
+	}
+	var rRows []rRow
+	if err := q.Group("month").Order("month ASC").Scan(&rRows).Error; err != nil {
+		return nil, err
+	}
+	revByMonth := make(map[string]decimal.Decimal, len(rRows))
+	monthsOrder := make([]string, 0, len(rRows))
+	for _, r := range rRows {
+		revByMonth[r.Month] = r.Revenue
+		monthsOrder = append(monthsOrder, r.Month)
+	}
+
+	type cRow struct {
+		Month string          `gorm:"column:month"`
+		COGS  decimal.Decimal `gorm:"column:cogs"`
+	}
+	q2 := s.r.Raw().WithContext(ctx).Table("orders AS o").
+		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
+		Joins("JOIN order_items oi ON oi.order_id = o.id").
+		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", ids, []string{"closed", "refunded"})
+	if f.From != nil {
+		q2 = q2.Where("o.closed_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q2 = q2.Where("o.closed_at < ?", *f.To)
+	}
+	var cRows []cRow
+	_ = q2.Group("month").Scan(&cRows).Error
+	cogsByMonth := make(map[string]decimal.Decimal, len(cRows))
+	for _, r := range cRows {
+		cogsByMonth[r.Month] = r.COGS
+	}
+
+	totalRev := decimal.Zero
+	totalCOGS := decimal.Zero
+	for _, m := range monthsOrder {
+		rev := revByMonth[m]
+		cogs := cogsByMonth[m]
+		gross := decimal.Sub(rev, cogs)
+		out.MonthlyRevenue = append(out.MonthlyRevenue, ForecastMonth{
+			Month:       m,
+			Revenue:     decimal.Normalize(rev),
+			COGS:        decimal.Normalize(cogs),
+			GrossProfit: decimal.Normalize(gross),
+		})
+		totalRev = decimal.Add(totalRev, rev)
+		totalCOGS = decimal.Add(totalCOGS, cogs)
+	}
+	out.HistoricalMonths = len(monthsOrder)
+
+	hundred := decimal.FromInt(100)
+	if totalRev.IsPositive() {
+		gross := decimal.Sub(totalRev, totalCOGS)
+		out.AvgGrossMarginPct = decimal.Normalize(decimal.DivRound(decimal.Mul(gross, hundred), totalRev))
+	}
+
+	// Fixed costs: avg по месяцам, СУММА по сети, тот же opex-фильтр и те же
+	// исключения (forecastExcludedExpense/forecastStockPurchase/
+	// opexExcludedCategories — package-level, определены в analytics_extras.go).
+	type opexRow struct {
+		Month  string          `gorm:"column:month"`
+		Amount decimal.Decimal `gorm:"column:amount"`
+	}
+	q3 := s.r.Raw().WithContext(ctx).Table("financial_operations").
+		Select(`to_char(created_at, 'YYYY-MM') AS month,
+		        COALESCE(SUM(amount), 0) AS amount`).
+		Where("restaurant_id IN ? AND type = ? AND COALESCE(activity, 'operational') = 'operational'", ids, "out")
+	if f.From != nil {
+		q3 = q3.Where("created_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q3 = q3.Where("created_at < ?", *f.To)
+	}
+	excl := make([]string, 0, len(forecastExcludedExpense)+len(forecastStockPurchase)+len(opexExcludedCategories))
+	for k := range forecastExcludedExpense {
+		excl = append(excl, k)
+	}
+	for k := range forecastStockPurchase {
+		excl = append(excl, k)
+	}
+	excl = append(excl, opexExcludedCategories...)
+	q3 = q3.Where("COALESCE(category, '') NOT IN ?", excl)
+	var opexRows []opexRow
+	_ = q3.Group("month").Scan(&opexRows).Error
+	if len(opexRows) > 0 {
+		sum := decimal.Zero
+		for _, r := range opexRows {
+			sum = decimal.Add(sum, r.Amount)
+		}
+		out.FixedCostsMonthly = decimal.Normalize(
+			decimal.DivRound(sum, decimal.FromInt(int64(len(opexRows)))),
+		)
+	}
+
+	if out.FixedCostsMonthly.IsPositive() && out.AvgGrossMarginPct.IsPositive() {
+		out.BreakevenRevenue = decimal.Normalize(
+			decimal.DivRound(decimal.Mul(out.FixedCostsMonthly, hundred), out.AvgGrossMarginPct),
+		)
+	}
+
+	// Линейная регрессия по последним 3 точкам сети — та же формула, что в
+	// локальном отчёте (formatFloat/nextMonthLabel — те же package-level хелперы).
+	if len(out.MonthlyRevenue) >= 2 {
+		last := out.MonthlyRevenue
+		if len(last) > 3 {
+			last = last[len(last)-3:]
+		}
+		n := float64(len(last))
+		var sumX, sumY, sumXY, sumX2 float64
+		for i, m := range last {
+			x := float64(i)
+			y, _ := m.Revenue.Float64()
+			sumX += x
+			sumY += y
+			sumXY += x * y
+			sumX2 += x * x
+		}
+		den := n*sumX2 - sumX*sumX
+		if den == 0 {
+			den = 1
+		}
+		slope := (n*sumXY - sumX*sumY) / den
+		intercept := (sumY - slope*sumX) / n
+		next := math.Max(0, intercept+slope*n)
+		out.ForecastNextMonth = decimal.MustFromString(formatFloat(next))
+		out.ForecastNextMonthLabel = nextMonthLabel(last[len(last)-1].Month)
 	}
 	return out, nil
 }

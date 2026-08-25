@@ -3796,6 +3796,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/analytics/forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Прогноз выручки + break-even + linreg next month по всей сети —
+         *     регрессия строится на СУММЕ выручки филиалов по месяцам (central сам
+         *     не торгует), а не отдельно на каждый филиал.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ForecastReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/analytics/food-cost": {
         parameters: {
             query?: never;

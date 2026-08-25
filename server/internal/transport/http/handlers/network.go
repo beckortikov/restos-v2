@@ -245,6 +245,20 @@ func (h *NetworkHandler) Waiters(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+func (h *NetworkHandler) Forecast(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.ForecastNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *NetworkHandler) Trends(w http.ResponseWriter, r *http.Request) {
 	f, err := parsePeriod(r)
 	if err != nil {

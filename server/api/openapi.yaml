@@ -1421,6 +1421,16 @@ paths:
         - { in: query, name: granularity, schema: { type: string, enum: [day, week, month], default: day } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TrendsReport" } } } } }
 
+  /api/v1/network/analytics/forecast:
+    get:
+      tags: [stock]
+      summary: |
+        Прогноз выручки + break-even + linreg next month по всей сети —
+        регрессия строится на СУММЕ выручки филиалов по месяцам (central сам
+        не торгует), а не отдельно на каждый филиал.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ForecastReport" } } } } }
+
   /api/v1/network/analytics/food-cost:
     get:
       tags: [stock]

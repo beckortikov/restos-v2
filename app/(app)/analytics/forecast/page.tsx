@@ -4,15 +4,18 @@ import { lazy, Suspense, useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
 import { useAuth } from '@/lib/auth-store'
 import { toast } from 'sonner'
-import { fetchForecast, type ForecastReport } from '@/lib/queries/analytics'
+import { fetchForecast, fetchNetworkForecast, type ForecastReport } from '@/lib/queries/analytics'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { useBranchView } from '@/hooks/use-branch-view'
 
 const RevenueForecastChart = lazy(() => import('@/components/charts/revenue-forecast-chart'))
 const PlanVsFactChart = lazy(() => import('@/components/charts/plan-vs-fact-chart'))
 const BreakevenChart = lazy(() => import('@/components/charts/breakeven-chart'))
 
 export default function ForecastPage() {
-  const { canDo } = useAuth()
+  const { canDo, restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [report, setReport] = useState<ForecastReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>('all')
@@ -22,11 +25,12 @@ export default function ForecastPage() {
   useEffect(() => {
     setLoading(true)
     const { from, to } = getDateRange(period, customFrom, customTo)
-    fetchForecast({ from: from ?? undefined, to: to ?? undefined })
+    const fetcher = isCentral ? fetchNetworkForecast : fetchForecast
+    fetcher({ from: from ?? undefined, to: to ?? undefined })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки прогноза'))
       .finally(() => setLoading(false))
-  }, [period, customFrom, customTo])
+  }, [period, customFrom, customTo, isCentral])
 
   const monthly = useMemo(() => {
     if (!report) return [] as { month: string; revenue: number; cogs: number; gross_profit: number }[]
@@ -108,7 +112,9 @@ export default function ForecastPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Прогноз и безубыточность</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Проекции и анализ точки безубыточности</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {isCentral ? 'Проекции и анализ точки безубыточности по всей сети' : 'Проекции и анализ точки безубыточности'}
+          </p>
         </div>
         <DatePeriodFilter
           period={period}

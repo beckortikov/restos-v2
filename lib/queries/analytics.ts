@@ -529,6 +529,12 @@ export async function fetchForecast(opts: { from?: Date | string; to?: Date | st
   return (await unwrap(api.GET('/api/v1/analytics/forecast' as any, { params: { query: query as any } }))) as ForecastReport
 }
 
+// Прогноз по сети — регрессия на сумме выручки филиалов по месяцам, тот же формат ответа.
+export async function fetchNetworkForecast(opts: { from?: Date | string; to?: Date | string } = {}): Promise<ForecastReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/forecast', { params: { query } }))) as ForecastReport
+}
+
 // --- ABC inventory ---
 
 export interface ABCInventoryRow {

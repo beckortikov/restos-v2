@@ -393,4 +393,31 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 			t.Fatalf("buckets: %+v, want 1 (все заказы/расходы сегодня)", out.Buckets)
 		}
 	})
+
+	t.Run("ForecastNetwork", func(t *testing.T) {
+		out, err := svc.ForecastNetwork(ctx, f)
+		if err != nil {
+			t.Fatalf("ForecastNetwork: %v", err)
+		}
+		if out.HistoricalMonths != 1 {
+			t.Fatalf("HistoricalMonths = %d, want 1 (фикстур — один месяц)", out.HistoricalMonths)
+		}
+		if len(out.MonthlyRevenue) != 1 {
+			t.Fatalf("MonthlyRevenue: %+v, want 1 месяц — сумма выручки ОБОИХ филиалов", out.MonthlyRevenue)
+		}
+		m := out.MonthlyRevenue[0]
+		if !m.Revenue.Equal(decimal.MustFromString("92")) {
+			t.Errorf("Revenue = %s, want 92", m.Revenue.String())
+		}
+		if !m.COGS.Equal(decimal.MustFromString("40")) {
+			t.Errorf("COGS = %s, want 40", m.COGS.String())
+		}
+		// FixedCostsMonthly — тот же opex 10+15=25 (Trends fixture), один месяц.
+		if !out.FixedCostsMonthly.Equal(decimal.MustFromString("25")) {
+			t.Errorf("FixedCostsMonthly = %s, want 25", out.FixedCostsMonthly.String())
+		}
+		if !out.AvgGrossMarginPct.IsPositive() {
+			t.Errorf("AvgGrossMarginPct = %s, want positive", out.AvgGrossMarginPct.String())
+		}
+	})
 }
