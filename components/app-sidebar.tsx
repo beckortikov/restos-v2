@@ -60,6 +60,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import { useState, createContext, useContext, useEffect } from 'react'
 import { DesktopUpdateButton } from '@/components/desktop-update-button'
 import { BugReportDialog } from '@/components/bug-report-dialog'
@@ -236,6 +237,14 @@ interface NavItem {
   group?: string[]
 }
 
+// Ф-Ц2: чем «Операции» заменяются у central без branch-view — см. комментарий
+// у showLocalOps ниже. Смены — единственный локальный раздел с осмысленным
+// сетевым аналогом (карта зала/кухня/конвейер читают живой статус кассы,
+// который сеть не реплицирует, см. central-console-plan).
+const NETWORK_OPS_CHILDREN: NavItem[] = [
+  { label: 'Смены сети', href: '/network/shifts', icon: Clock },
+]
+
 const NAV: NavItem[] = [
   { label: 'Дашборд', href: '/dashboard', icon: LayoutDashboard },
   {
@@ -289,7 +298,6 @@ const NAV: NavItem[] = [
       },
       { label: 'Сводка по сети', href: '/network/summary', icon: Network },
       { label: 'Расходы за филиалы', href: '/network/expenses', icon: Wallet },
-      { label: 'Смены сети', href: '/network/shifts', icon: Clock },
     ],
   },
   {
@@ -433,6 +441,7 @@ function SidebarContent({
   onToggleCollapsed?: () => void
 }) {
   const { user, restaurant, logout, hasAccess } = useAuth()
+  const isBranchView = useBranchView()
   const [logoutOpen, setLogoutOpen] = useState(false)
 
   // Filter nav items by user's access
@@ -447,14 +456,20 @@ function SidebarContent({
     return item
   }
 
-  // Ф-С4: central — офис без продаж, кассовые разделы там только путают.
-  // Прячем ГРУППУ «Операции» целиком (роуты остаются доступны по прямой
-  // ссылке — ничего не ломается, если операция всё же понадобится).
-  // Одиночные рестораны и филиалы не затронуты: kind='central_warehouse'
-  // ставится только созданию сети.
-  const hideOps = restaurant?.kind === 'central_warehouse'
+  // Ф-С4/Ф-Ц2: central — офис без продаж, локальные кассовые разделы там
+  // только путают, но НЕ когда владелец сети явно переключился «смотреть как
+  // филиал» (BranchSelector, useBranchView) — тогда он ХОЧЕТ именно живые
+  // экраны конкретной точки (карта зала, кухня, смены), а не сетевую сводку.
+  // Без override «Операции» заменяются на «Смены сети» — единственное, что
+  // из этой группы осмысленно смотреть по всей сети сразу.
+  const isCentral = restaurant?.kind === 'central_warehouse'
+  const showLocalOps = !isCentral || isBranchView
   const filteredNav = NAV.map((item) => {
-    if (hideOps && item.label === 'Операции') return null
+    if (item.label === 'Операции') {
+      const children = (showLocalOps ? item.children! : NETWORK_OPS_CHILDREN)
+        .map(resolveItem).filter(Boolean) as NavItem[]
+      return children.length ? { ...item, children } : null
+    }
     if (item.children) {
       const children = item.children.map(resolveItem).filter(Boolean) as NavItem[]
       if (children.length === 0) return null
