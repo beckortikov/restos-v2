@@ -833,6 +833,10 @@ paths:
                   expenses: { $ref: "#/components/schemas/Decimal" }
                   total_cash: { $ref: "#/components/schemas/Decimal" }
                   open_shifts: { type: integer }
+                  supplier_debt: { $ref: "#/components/schemas/Decimal" }
+                  supplier_debt_count: { type: integer }
+                  due_payments: { $ref: "#/components/schemas/Decimal" }
+                  due_payments_count: { type: integer }
                   branches:
                     type: array
                     items:
@@ -845,6 +849,34 @@ paths:
                         orders_count: { type: integer }
                         cash_balance: { $ref: "#/components/schemas/Decimal" }
                         open_shift: { type: boolean }
+
+  /api/v1/network/monthly-revenue:
+    get:
+      tags: [stock]
+      summary: |
+        «Динамика выручки» по всей сети (Ф-С1, продолжение): revenue/orders/
+        expenses/profit по месяцам, последние N (?months=, default 6, max 60).
+        Для графика на главном дашборде central.
+      parameters:
+        - { in: query, name: months, schema: { type: integer } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        month: { type: string, example: "2026-08" }
+                        revenue: { $ref: "#/components/schemas/Decimal" }
+                        orders_count: { type: integer }
+                        expenses: { $ref: "#/components/schemas/Decimal" }
+                        profit: { $ref: "#/components/schemas/Decimal" }
 
   /api/v1/network/summary:
     get:

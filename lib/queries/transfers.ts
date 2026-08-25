@@ -440,6 +440,10 @@ export interface NetworkDashboard {
   totalCash: number
   openShifts: number
   branches: NetworkDashboardBranch[]
+  supplierDebt: number
+  supplierDebtCount: number
+  duePayments: number
+  duePaymentsCount: number
 }
 
 export async function fetchNetworkDashboard(opts?: { from?: string; to?: string }): Promise<NetworkDashboard> {
@@ -463,7 +467,31 @@ export async function fetchNetworkDashboard(opts?: { from?: string; to?: string 
           openShift: !!b.open_shift,
         }))
       : [],
+    supplierDebt: Number(r?.supplier_debt ?? 0),
+    supplierDebtCount: Number(r?.supplier_debt_count ?? 0),
+    duePayments: Number(r?.due_payments ?? 0),
+    duePaymentsCount: Number(r?.due_payments_count ?? 0),
   }
+}
+
+export interface NetworkMonthlyRevenueRow {
+  month: string
+  revenue: number
+  ordersCount: number
+  expenses: number
+  profit: number
+}
+
+export async function fetchNetworkMonthlyRevenue(months = 6): Promise<NetworkMonthlyRevenueRow[]> {
+  const r: any = await unwrap(api.GET('/api/v1/network/monthly-revenue', { params: { query: { months } } }))
+  const rows: any[] = Array.isArray(r?.data) ? r.data : []
+  return rows.map(row => ({
+    month: row.month,
+    revenue: Number(row.revenue ?? 0),
+    ordersCount: Number(row.orders_count ?? 0),
+    expenses: Number(row.expenses ?? 0),
+    profit: Number(row.profit ?? 0),
+  }))
 }
 
 export async function fetchNetworkStaff(): Promise<NetworkStaff> {

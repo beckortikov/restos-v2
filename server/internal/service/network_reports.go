@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"strconv"
+	"time"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -522,6 +523,16 @@ type NetworkDashboard struct {
 	TotalCash  decimal.Decimal          `json:"total_cash"`
 	OpenShifts int                      `json:"open_shifts"`
 	Branches   []NetworkDashboardBranch `json:"branches"`
+	// «Требует внимания» — та же природа, что у локального дашборда
+	// (overdueSuppliers/duePayments), но по ВСЕЙ сети: остаток долга по
+	// накладным (stock_receipts.debt_amount — тот же источник, что
+	// BranchPayables, не suppliers.current_debt, чтобы не разойтись с
+	// экраном «Расходы за филиалы») и регулярные платежи со сроком в
+	// ближайшие 7 дней (включая просроченные) — НЕЗАВИСИМО от периода f.
+	SupplierDebt      decimal.Decimal `json:"supplier_debt"`
+	SupplierDebtCount int             `json:"supplier_debt_count"`
+	DuePayments       decimal.Decimal `json:"due_payments"`
+	DuePaymentsCount  int             `json:"due_payments_count"`
 }
 
 // Dashboard — сводка «на сегодня» (или произвольный период f) по всей сети.
@@ -642,6 +653,144 @@ func (s *NetworkService) Dashboard(ctx context.Context, f PeriodFilter) (*Networ
 	out.TotalCash = decimal.Normalize(out.TotalCash)
 	if out.OrdersCount > 0 {
 		out.AvgCheck = decimal.DivRound(out.Revenue, decimal.MustFromString(strconv.Itoa(out.OrdersCount)))
+	}
+
+	// 5. Долг поставщикам — по всей сети, независимо от периода f (это остаток,
+	// не поток). Источник — stock_receipts, тот же что BranchPayables.
+	type debtRow struct {
+		Total decimal.Decimal `gorm:"column:total"`
+		Cnt   int             `gorm:"column:cnt"`
+	}
+	var debt debtRow
+	if err := s.r.Raw().WithContext(ctx).Table("stock_receipts").
+		Select("COALESCE(SUM(debt_amount), 0) AS total, COUNT(*) AS cnt").
+		Where("restaurant_id IN ? AND debt_amount > 0", ids).
+		Scan(&debt).Error; err != nil {
+		return nil, err
+	}
+	out.SupplierDebt = decimal.Normalize(debt.Total)
+	out.SupplierDebtCount = debt.Cnt
+
+	// 6. Регулярные платежи к оплате — активные, срок ≤ 7 дней (включая
+	// просроченные). Остаток — remaining_amount, если задан (частичная
+	// оплата), иначе вся amount.
+	type dueRow struct {
+		Amount          decimal.Decimal  `gorm:"column:amount"`
+		RemainingAmount *decimal.Decimal `gorm:"column:remaining_amount"`
+	}
+	var dueRows []dueRow
+	if err := s.r.Raw().WithContext(ctx).Table("recurring_payments").
+		Select("amount, remaining_amount").
+		Where("restaurant_id IN ? AND active = ? AND next_due IS NOT NULL AND next_due <> '' AND next_due <= ?",
+			ids, true, time.Now().UTC().AddDate(0, 0, 7).Format("2006-01-02")).
+		Scan(&dueRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range dueRows {
+		amt := r.Amount
+		if r.RemainingAmount != nil {
+			amt = *r.RemainingAmount
+		}
+		out.DuePayments = decimal.Add(out.DuePayments, amt)
+		out.DuePaymentsCount++
+	}
+	out.DuePayments = decimal.Normalize(out.DuePayments)
+
+	return out, nil
+}
+
+// ─── Динамика выручки сети (Ф-С1, продолжение) ──────────────────────────────
+//
+// «Общая динамика» — сетевой аналог FinanceReportsService.MonthlyRevenue
+// (finance.go): та же схема (revenue из orders, expenses из financial_operations
+// с applyOpexFilter, profit = revenue-expenses), но restaurant_id IN ids
+// вместо ForTenant(ctx) — central видит тренд по ВСЕЙ сети одним запросом,
+// без обращения к узлам.
+
+type NetworkMonthlyRevenueRow struct {
+	Month       string          `json:"month"`
+	Revenue     decimal.Decimal `json:"revenue"`
+	OrdersCount int             `json:"orders_count"`
+	Expenses    decimal.Decimal `json:"expenses"`
+	Profit      decimal.Decimal `json:"profit"`
+}
+
+// MonthlyRevenue — последние N месяцев (по умолчанию/максимум — как в
+// одно-тенантном отчёте) для графика «Динамика выручки» сети.
+func (s *NetworkService) MonthlyRevenue(ctx context.Context, months int) ([]NetworkMonthlyRevenueRow, error) {
+	if months <= 0 {
+		months = 12
+	}
+	if months > 60 {
+		months = 60
+	}
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	if len(ids) == 0 {
+		return []NetworkMonthlyRevenueRow{}, nil
+	}
+
+	now := time.Now().UTC()
+	startMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -(months - 1), 0)
+
+	type row struct {
+		Month string          `gorm:"column:month"`
+		Total decimal.Decimal `gorm:"column:total"`
+		Cnt   int             `gorm:"column:cnt"`
+	}
+	var rows []row
+	if err := s.r.Raw().WithContext(ctx).Table("orders").
+		Select("to_char(closed_at, 'YYYY-MM') AS month, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
+		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL AND closed_at >= ?",
+			ids, []string{"closed", "refunded"}, startMonth).
+		Group("month").
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	byMonth := map[string]row{}
+	for _, r := range rows {
+		byMonth[r.Month] = r
+	}
+
+	type expRow struct {
+		Month string          `gorm:"column:month"`
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	var expRows []expRow
+	if err := applyOpexFilter(s.r.Raw().WithContext(ctx).Table("financial_operations").
+		Select("left("+foBizDay+", 7) AS month, COALESCE(SUM(amount), 0) AS total").
+		Where("restaurant_id IN ?", ids)).
+		Where(foBizDay+" >= ?", startMonth.Format("2006-01-02")).
+		Group("month").
+		Scan(&expRows).Error; err != nil {
+		return nil, err
+	}
+	byMonthExp := map[string]decimal.Decimal{}
+	for _, r := range expRows {
+		byMonthExp[r.Month] = r.Total
+	}
+
+	out := make([]NetworkMonthlyRevenueRow, 0, months)
+	for i := 0; i < months; i++ {
+		t := startMonth.AddDate(0, i, 0)
+		key := t.Format("2006-01")
+		r, ok := byMonth[key]
+		total, cnt := decimal.Zero, 0
+		if ok {
+			total, cnt = decimal.Normalize(r.Total), r.Cnt
+		}
+		exp := decimal.Normalize(byMonthExp[key])
+		out = append(out, NetworkMonthlyRevenueRow{
+			Month: key, Revenue: total, OrdersCount: cnt, Expenses: exp,
+			Profit: decimal.Normalize(decimal.Sub(total, exp)),
+		})
 	}
 	return out, nil
 }

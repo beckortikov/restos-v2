@@ -36,6 +36,7 @@ func TestNetworkDashboard(t *testing.T) {
 	})
 	for _, tbl := range []string{
 		"orders", "cash_shifts", "financial_operations", "financial_accounts",
+		"stock_receipts", "recurring_payments", "suppliers",
 		"restaurants", "company_accounts", "sync_log",
 	} {
 		gdb.Exec("DELETE FROM " + tbl)
@@ -103,6 +104,25 @@ func TestNetworkDashboard(t *testing.T) {
 	gdb.Create(&models.CashShift{ID: uuid.NewString(), RestaurantID: &b1, Status: &open, OpenedAt: now})
 	gdb.Create(&models.CashShift{ID: uuid.NewString(), RestaurantID: &b2, Status: &closedSh, OpenedAt: now})
 
+	// Долг поставщику (b1) + регулярный платёж со сроком через 3 дня (b2) —
+	// «Требует внимания» независимо от периода дашборда.
+	gdb.Create(&models.StockReceipt{
+		ID: uuid.NewString(), RestaurantID: &b1,
+		TotalAmount: decimal.MustFromString("500"), DebtAmount: decimal.MustFromString("500"),
+	})
+	dueDate := now.AddDate(0, 0, 3).Format("2006-01-02")
+	rentName := "Аренда"
+	gdb.Create(&models.RecurringPayment{
+		ID: uuid.NewString(), RestaurantID: &b2, Name: &rentName,
+		Amount: decimal.MustFromString("1000"), Active: true, NextDue: &dueDate,
+	})
+	// Активный, но за горизонтом 7 дней — не должен попасть в «к оплате».
+	farDate := now.AddDate(0, 0, 20).Format("2006-01-02")
+	gdb.Create(&models.RecurringPayment{
+		ID: uuid.NewString(), RestaurantID: &b2, Name: &rentName,
+		Amount: decimal.MustFromString("2000"), Active: true, NextDue: &farDate,
+	})
+
 	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
 	from := now.Add(-1 * time.Hour)
@@ -135,6 +155,12 @@ func TestNetworkDashboard(t *testing.T) {
 	}
 	if !byName["Филиал-1"].Revenue.Equal(decimal.MustFromString("300")) {
 		t.Errorf("выручка Ф1 = %s, want 300", byName["Филиал-1"].Revenue.String())
+	}
+	if !out.SupplierDebt.Equal(decimal.MustFromString("500")) || out.SupplierDebtCount != 1 {
+		t.Errorf("долг поставщикам = %s (%d), want 500 (1)", out.SupplierDebt.String(), out.SupplierDebtCount)
+	}
+	if !out.DuePayments.Equal(decimal.MustFromString("1000")) || out.DuePaymentsCount != 1 {
+		t.Errorf("к оплате = %s (%d), want 1000 (1) — платёж за горизонтом 7 дней не должен попасть", out.DuePayments.String(), out.DuePaymentsCount)
 	}
 	// Период: from в будущем → всё по нулям, но кассы остаются (это остатки,
 	// не поток за период).

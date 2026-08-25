@@ -2579,6 +2579,10 @@ export interface paths {
                             expenses?: components["schemas"]["Decimal"];
                             total_cash?: components["schemas"]["Decimal"];
                             open_shifts?: number;
+                            supplier_debt?: components["schemas"]["Decimal"];
+                            supplier_debt_count?: number;
+                            due_payments?: components["schemas"]["Decimal"];
+                            due_payments_count?: number;
                             branches?: {
                                 /** Format: uuid */
                                 id?: string;
@@ -2588,6 +2592,57 @@ export interface paths {
                                 orders_count?: number;
                                 cash_balance?: components["schemas"]["Decimal"];
                                 open_shift?: boolean;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/monthly-revenue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * «Динамика выручки» по всей сети (Ф-С1, продолжение): revenue/orders/
+         *     expenses/profit по месяцам, последние N (?months=, default 6, max 60).
+         *     Для графика на главном дашборде central.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    months?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            data?: {
+                                /** @example 2026-08 */
+                                month?: string;
+                                revenue?: components["schemas"]["Decimal"];
+                                orders_count?: number;
+                                expenses?: components["schemas"]["Decimal"];
+                                profit?: components["schemas"]["Decimal"];
                             }[];
                         };
                     };

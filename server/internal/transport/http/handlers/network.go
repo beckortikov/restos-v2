@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -105,6 +106,23 @@ func (h *NetworkHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, out)
+}
+
+// MonthlyRevenue — GET /api/v1/network/monthly-revenue?months=N. Тренд
+// «Динамика выручки» по всей сети для главного дашборда central.
+func (h *NetworkHandler) MonthlyRevenue(w http.ResponseWriter, r *http.Request) {
+	months := 6
+	if v := r.URL.Query().Get("months"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			months = n
+		}
+	}
+	out, err := h.svc.MonthlyRevenue(r.Context(), months)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList(out, ""))
 }
 
 // Staff — GET /api/v1/network/staff. Весь персонал сети с указанием филиала.
