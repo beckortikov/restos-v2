@@ -10,7 +10,8 @@ import { formatCurrency } from '@/lib/helpers'
 import { type FinancialAccount, type FinancialOperation, finopCategoryLabel, isOperationEditable } from '@/lib/types'
 import { fetchFinancialAccounts, fetchFinancialOperations, transferBetweenAccounts, createFinancialAccount, createFinancialOperation, updateFinancialOperation, updateFinancialAccount, fetchAccountBalanceHistory, type AccountBalanceHistory } from '@/lib/queries'
 import { selectableAccounts, setFinancialAccountEnabled } from '@/lib/queries/finance'
-import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil, ChevronDown } from 'lucide-react'
+import { fetchNetworkAccounts, createMoneyTransfer, type NetworkAccountRow } from '@/lib/queries/transfers'
+import { ArrowDownCircle, ArrowUpCircle, ArrowLeftRight, Plus, Banknote, CreditCard, Pencil, ChevronDown, Store, Send } from 'lucide-react'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -24,7 +25,7 @@ import {
 } from '@/components/ui/dialog'
 
 export default function AccountsPage() {
-  const { canDo, user } = useAuth()
+  const { canDo, user, restaurant, restaurantId } = useAuth()
   const isOwner = user?.role === 'owner'
   const [selectedAccount, setSelectedAccount] = useState<string>('all')
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
@@ -34,6 +35,10 @@ export default function AccountsPage() {
   const [editingOperation, setEditingOperation] = useState<FinancialOperation | null>(null)
   const [addAccountDialogOpen, setAddAccountDialogOpen] = useState(false)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
+  // Ф-С2: central видит кассы филиалов (реплики «central видит всё») и может
+  // перевести деньги прямо на конкретный счёт филиала из этого же диалога.
+  const isCentral = restaurant?.kind === 'central_warehouse'
+  const [branchAccounts, setBranchAccounts] = useState<NetworkAccountRow[]>([])
   const [newAccountName, setNewAccountName] = useState('')
   // Default = 'cash' (наличные/касса) — большинство ресторанов добавляют сначала
   // основную кассу. Раньше default был 'bank' → юзеры создавали счёт «Касса» с
@@ -71,7 +76,14 @@ export default function AccountsPage() {
     const [accs, ops] = await Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
     setAccounts(accs)
     setOperations(ops)
-  }, [])
+    if (isCentral) {
+      // Кассы филиалов — из реплик; свои счета отфильтрованы (они выше,
+      // живые). Ошибка сети не должна ломать основную страницу.
+      fetchNetworkAccounts()
+        .then(n => setBranchAccounts(n.accounts.filter(a => a.branchId !== restaurantId && a.isEnabled)))
+        .catch(() => setBranchAccounts([]))
+    }
+  }, [isCentral, restaurantId])
 
   // Обновление истории остатков по дням — карточки показывают closingBalance из
   // неё (не acc.balance), поэтому после расхода/прихода/перевода её тоже надо
@@ -220,16 +232,33 @@ export default function AccountsPage() {
   async function handleTransfer() {
     if (!transferFrom || !transferTo || transferAmount <= 0 || transferFrom === transferTo) return
     const fromAcc = accounts.find((a) => a.id === transferFrom)
-    const toAcc = accounts.find((a) => a.id === transferTo)
+    const branchAcc = branchAccounts.find((a) => a.id === transferTo)
     try {
-      await transferBetweenAccounts(transferFrom, transferTo, transferAmount, fromAcc?.name ?? '', toAcc?.name ?? '')
+      if (branchAcc) {
+        // Счёт филиала: это сетевой перевод (Ф-Д) — деньги списываются сразу,
+        // а зачисляет их филиал сам, подтверждая приём (двухфазность защищает
+        // от гонок между независимыми БД). Выбранный счёт уезжает подсказкой.
+        await createMoneyTransfer({
+          toRestaurantId: branchAcc.branchId,
+          fromAccountId: transferFrom,
+          amount: transferAmount,
+          suggestedToAccountId: branchAcc.id,
+        })
+        toast.success(
+          `Перевод в «${branchAcc.branchName}» отправлен. Деньги спишутся сразу, ` +
+          `а на счёт «${branchAcc.name ?? ''}» попадут, когда филиал подтвердит приём.`,
+        )
+      } else {
+        const toAcc = accounts.find((a) => a.id === transferTo)
+        await transferBetweenAccounts(transferFrom, transferTo, transferAmount, fromAcc?.name ?? '', toAcc?.name ?? '')
+        toast.success(`Перевод ${transferAmount.toLocaleString()} выполнен`)
+      }
       const [updatedAccounts, updatedOps] = await Promise.all([fetchFinancialAccounts(), fetchFinancialOperations()])
       setAccounts(updatedAccounts)
       setOperations(updatedOps)
       await reloadBalanceHistory()
-      toast.success(`Перевод ${transferAmount.toLocaleString()} выполнен`)
-    } catch {
-      toast.error('Ошибка при переводе')
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка при переводе'))
     }
     setTransferFrom('')
     setTransferTo('')
@@ -369,6 +398,45 @@ export default function AccountsPage() {
           )
         })}
       </div>
+
+      {/* Ф-С2: кассы филиалов — central видит все счета сети (реплики) и
+          переводит деньги на конкретный счёт филиала прямо отсюда. Балансы
+          приходят синком и могут отставать на минуту-другую. */}
+      {isCentral && branchAccounts.length > 0 && (
+        <div className="space-y-2">
+          <div className="flex items-baseline justify-between">
+            <h2 className="text-sm font-semibold text-foreground">Счета филиалов</h2>
+            <span className="text-[11px] text-muted-foreground">по данным синхронизации</span>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
+            {branchAccounts.map(acc => (
+              <div key={acc.id} className="rounded-xl border border-dashed border-border bg-card p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  {acc.type === 'cash'
+                    ? <Banknote className="size-4 text-amber-600" />
+                    : <CreditCard className="size-4 text-blue-600" />}
+                  <span className="text-xs text-muted-foreground font-medium uppercase tracking-wide truncate">{acc.name}</span>
+                </div>
+                <p className="text-2xl font-bold text-foreground">{formatCurrency(acc.balance)}</p>
+                <div className="flex items-center justify-between mt-1.5">
+                  <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+                    <Store className="size-3" /> {acc.branchName}
+                  </span>
+                  {canDo('finance.manage') && (
+                    <button
+                      onClick={() => { setTransferTo(acc.id); setTransferFrom(''); setTransferAmount(0); setTransferDialogOpen(true) }}
+                      title={`Перевести на этот счёт филиала «${acc.branchName}»`}
+                      className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted transition-colors"
+                    >
+                      <Send className="size-3" /> Перевести
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Остаток по дням — «в какой день сколько денег было на счетах».
           Считается на бэке обратным ходом от текущего баланса: колонка
@@ -717,12 +785,37 @@ export default function AccountsPage() {
                 className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
               >
                 <option value="">Выберите счёт</option>
-                {selectableAccounts(accounts).map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name} — {formatCurrency(a.balance)}
-                  </option>
-                ))}
+                {branchAccounts.length > 0 ? (
+                  <optgroup label="Мои счета">
+                    {selectableAccounts(accounts).map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name} — {formatCurrency(a.balance)}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : (
+                  selectableAccounts(accounts).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} — {formatCurrency(a.balance)}
+                    </option>
+                  ))
+                )}
+                {branchAccounts.length > 0 && (
+                  <optgroup label="Счета филиалов (сетевой перевод)">
+                    {branchAccounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.branchName}: {a.name} — {formatCurrency(a.balance)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
+              {branchAccounts.some(a => a.id === transferTo) && (
+                <p className="text-xs text-muted-foreground">
+                  Это счёт филиала: деньги спишутся сразу, а зачислятся, когда филиал
+                  подтвердит приём перевода (выбранный счёт будет у него предвыбран).
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-foreground">Сумма</label>

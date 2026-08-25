@@ -105,6 +105,31 @@ func TestMoneyTransfer_Flow(t *testing.T) {
 	}); err == nil {
 		t.Error("нулевая сумма должна быть отклонена")
 	}
+	// Ф-С2: предложенный счёт-назначение обязан принадлежать получателю —
+	// чужой (в т.ч. счёт самого отправителя) отклоняется.
+	if _, err := svc.Create(ctxOutlet, service.CreateMoneyTransferInput{
+		ToRestaurantID: centralID, FromAccountID: outletAccID, Amount: "100",
+		SuggestedToAccountID: &outletAccID,
+	}); err == nil {
+		t.Error("предложенный счёт, не принадлежащий получателю, должен быть отклонён")
+	}
+	// Валидный suggested сохраняется на документе (и уедет вниз обычной
+	// доставкой — PullFor маршалит модель целиком).
+	withSuggested, err := svc.Create(ctxOutlet, service.CreateMoneyTransferInput{
+		ToRestaurantID: centralID, FromAccountID: outletAccID, Amount: "0.01",
+		SuggestedToAccountID: &centralAccID,
+	})
+	if err == nil {
+		if withSuggested.SuggestedToAccountID == nil || *withSuggested.SuggestedToAccountID != centralAccID {
+			t.Errorf("suggested_to_account_id не сохранился: %+v", withSuggested.SuggestedToAccountID)
+		}
+		// Прибираем: дальше тест считает баланс кассы филиала от 1000.
+		gdb.Exec("DELETE FROM money_transfers WHERE id = ?", withSuggested.ID)
+		gdb.Exec("DELETE FROM financial_operations WHERE amount = 0.01")
+		gdb.Exec("UPDATE financial_accounts SET balance = 1000 WHERE id = ?", outletAccID)
+	} else {
+		t.Errorf("валидный suggested отклонён: %v", err)
+	}
 	if _, err := svc.Create(ctxOutlet, service.CreateMoneyTransferInput{
 		ToRestaurantID: centralID, FromAccountID: outletAccID, Amount: "5000",
 	}); err == nil {

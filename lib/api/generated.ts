@@ -14613,6 +14613,11 @@ export interface components {
              * @description Счёт зачисления; пуст до приёма (выбирает получатель).
              */
             to_account_id?: string | null;
+            /**
+             * Format: uuid
+             * @description Счёт-назначение
+             */
+            suggested_to_account_id?: string | null;
             /** Format: date-time */
             sent_at?: string;
             /** Format: date-time */
@@ -14639,6 +14644,11 @@ export interface components {
             from_account_id: string;
             amount: components["schemas"]["Decimal"];
             note?: string;
+            /**
+             * Format: uuid
+             * @description Счёт-назначение у получателя (подсказка
+             */
+            suggested_to_account_id?: string;
         };
         ReceiveMoneyTransferInput: {
             /**

@@ -4949,6 +4949,7 @@ components:
         from_account_id: { type: string, format: uuid }
         from_account_name: { type: string, nullable: true, description: Денормализовано — у получателя своя БД и счетов отправителя он не знает. }
         to_account_id: { type: string, format: uuid, nullable: true, description: Счёт зачисления; пуст до приёма (выбирает получатель). }
+        suggested_to_account_id: { type: string, format: uuid, nullable: true, description: Счёт-назначение, предложенный отправителем (Ф-С2) — подсказка форме приёма, не обязательство. }
         sent_at: { type: string, format: date-time }
         received_at: { type: string, format: date-time, nullable: true }
         created_by: { type: string, format: uuid, nullable: true }
@@ -4964,6 +4965,7 @@ components:
         from_account_id: { type: string, format: uuid, description: Счёт списания у отправителя. }
         amount: { $ref: "#/components/schemas/Decimal" }
         note: { type: string }
+        suggested_to_account_id: { type: string, format: uuid, description: Счёт-назначение у получателя (подсказка, Ф-С2) — проверяется на принадлежность получателю. }
 
     ReceiveMoneyTransferInput:
       type: object

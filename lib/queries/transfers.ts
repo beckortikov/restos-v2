@@ -691,6 +691,8 @@ export interface MoneyTransfer {
   /** Имя счёта отправителя — денормализовано: у получателя своя БД. */
   fromAccountName?: string | null
   toAccountId?: string | null
+  /** Счёт-назначение, предложенный отправителем (подсказка форме приёма, Ф-С2). */
+  suggestedToAccountId?: string | null
   sentAt?: string | null
   receivedAt?: string | null
   createdAt?: string | null
@@ -710,6 +712,7 @@ function mapMoneyTransfer(r: any): MoneyTransfer {
     fromAccountId: r.from_account_id,
     fromAccountName: r.from_account_name,
     toAccountId: r.to_account_id,
+    suggestedToAccountId: r.suggested_to_account_id,
     sentAt: r.sent_at,
     receivedAt: r.received_at,
     createdAt: r.created_at,
@@ -729,6 +732,8 @@ export async function createMoneyTransfer(input: {
   fromAccountId: string
   amount: number
   note?: string
+  /** Счёт-назначение у получателя (подсказка его форме приёма, Ф-С2). */
+  suggestedToAccountId?: string
 }): Promise<MoneyTransfer> {
   const r: any = await unwrap(api.POST('/api/v1/money/transfers', {
     body: {
@@ -736,6 +741,7 @@ export async function createMoneyTransfer(input: {
       from_account_id: input.fromAccountId,
       amount: String(input.amount),
       note: input.note,
+      suggested_to_account_id: input.suggestedToAccountId,
     },
   }))
   return mapMoneyTransfer(r)

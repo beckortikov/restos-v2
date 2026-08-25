@@ -55,6 +55,12 @@ type CreateMoneyTransferInput struct {
 	FromAccountID  string  `json:"from_account_id"`
 	Amount         string  `json:"amount"`
 	Note           *string `json:"note,omitempty"`
+	// SuggestedToAccountID — счёт-назначение у ПОЛУЧАТЕЛЯ, предложенный
+	// отправителем (Ф-С2: центр видит кассы филиалов по репликам и переводит
+	// «на конкретный счёт»). Только подсказка: двухфазный приём остаётся,
+	// получатель волен выбрать другой счёт. Проверяется на принадлежность
+	// получателю — чужой счёт в подсказке был бы мусором в его форме приёма.
+	SuggestedToAccountID *string `json:"suggested_to_account_id,omitempty"`
 }
 
 // Create списывает деньги со счёта отправителя и создаёт документ в статусе
@@ -107,6 +113,19 @@ func (s *MoneyTransferService) Create(ctx context.Context, in CreateMoneyTransfe
 	}
 	if toRest.AccountID == nil || *toRest.AccountID != accountID {
 		return nil, apperrors.Wrap("VALIDATION", "to_restaurant belongs to a different network", nil)
+	}
+	if in.SuggestedToAccountID != nil && *in.SuggestedToAccountID != "" {
+		var cnt int64
+		if err := s.r.Raw().WithContext(ctx).Model(&models.FinancialAccount{}).
+			Where("id = ? AND restaurant_id = ?", *in.SuggestedToAccountID, in.ToRestaurantID).
+			Count(&cnt).Error; err != nil {
+			return nil, err
+		}
+		if cnt == 0 {
+			return nil, apperrors.Wrap("VALIDATION", "предложенный счёт не принадлежит получателю", nil)
+		}
+	} else {
+		in.SuggestedToAccountID = nil // пустая строка = не предложен
 	}
 
 	now := time.Now().UTC()
@@ -171,20 +190,21 @@ func (s *MoneyTransferService) Create(ctx context.Context, in CreateMoneyTransfe
 		}
 
 		t := &models.MoneyTransfer{
-			ID:               transferID,
-			AccountID:        &accountID,
-			FromRestaurantID: &from,
-			ToRestaurantID:   &in.ToRestaurantID,
-			TransferNumber:   &num,
-			Amount:           amount,
-			Status:           "sent",
-			Note:             in.Note,
-			FromAccountID:    &acc.ID,
-			FromAccountName:  acc.Name,
-			SentAt:           &now,
-			CreatedBy:        &actor.UserID,
-			CreatedAt:        now,
-			UpdatedAt:        now,
+			ID:                   transferID,
+			AccountID:            &accountID,
+			FromRestaurantID:     &from,
+			ToRestaurantID:       &in.ToRestaurantID,
+			TransferNumber:       &num,
+			Amount:               amount,
+			Status:               "sent",
+			Note:                 in.Note,
+			FromAccountID:        &acc.ID,
+			FromAccountName:      acc.Name,
+			SuggestedToAccountID: in.SuggestedToAccountID,
+			SentAt:               &now,
+			CreatedBy:            &actor.UserID,
+			CreatedAt:            now,
+			UpdatedAt:            now,
 		}
 		if err := tx.Create(t).Error; err != nil {
 			return err

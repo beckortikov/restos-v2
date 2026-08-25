@@ -109,7 +109,12 @@ export default function NetworkTransfersPage() {
 
   const openReceive = (t: MoneyTransfer) => {
     setReceiveFor(t)
-    setToAccountId(payable[0]?.id ?? '')
+    // Отправитель мог предложить счёт-назначение (Ф-С2) — предвыбираем его,
+    // если он наш и включён; выбор всё равно за принимающим.
+    const suggested = t.suggestedToAccountId && payable.some(a => a.id === t.suggestedToAccountId)
+      ? t.suggestedToAccountId
+      : payable[0]?.id ?? ''
+    setToAccountId(suggested)
   }
 
   const onReceive = async () => {

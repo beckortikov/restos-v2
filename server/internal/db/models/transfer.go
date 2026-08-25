@@ -72,12 +72,16 @@ type MoneyTransfer struct {
 	FromAccountID    *string         `gorm:"column:from_account_id;type:uuid" json:"from_account_id"`
 	FromAccountName  *string         `gorm:"column:from_account_name" json:"from_account_name"`
 	ToAccountID      *string         `gorm:"column:to_account_id;type:uuid" json:"to_account_id"`
-	SentAt           *time.Time      `gorm:"column:sent_at" json:"sent_at"`
-	ReceivedAt       *time.Time      `gorm:"column:received_at" json:"received_at"`
-	CreatedBy        *string         `gorm:"column:created_by" json:"created_by"`
-	ReceivedBy       *string         `gorm:"column:received_by" json:"received_by"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	// SuggestedToAccountID — счёт-назначение, предложенный отправителем
+	// (миграция 087, Ф-С2). Получатель при приёме видит его предвыбранным,
+	// но волен выбрать другой; фактический счёт зачисления — ToAccountID.
+	SuggestedToAccountID *string    `gorm:"column:suggested_to_account_id;type:uuid" json:"suggested_to_account_id,omitempty"`
+	SentAt               *time.Time `gorm:"column:sent_at" json:"sent_at"`
+	ReceivedAt           *time.Time `gorm:"column:received_at" json:"received_at"`
+	CreatedBy            *string    `gorm:"column:created_by" json:"created_by"`
+	ReceivedBy           *string    `gorm:"column:received_by" json:"received_by"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 func (MoneyTransfer) TableName() string { return "money_transfers" }
