@@ -2713,13 +2713,35 @@ func (s *SalaryService) CancelSalary(ctx context.Context, opID string) (*models.
 }
 
 // ListAdvances — история авансов одного сотрудника, новые сверху.
-func (s *SalaryService) ListAdvances(ctx context.Context, userID string) ([]models.SalaryAdvance, error) {
-	scoped, err := s.r.ForTenant(ctx)
+// SalaryAdvanceRow — models.SalaryAdvance + резолвленные имена счёта/плательщика.
+//
+// AccountID пуст, когда аванс выдан ДРУГИМ узлом сети (центром, Ф-С5) — у
+// такой строки нет своего счёта (см. models.SalaryAdvance.AccountID). Без
+// PaidByName лента выглядела бы как «аванс из ниоткуда»: AccountName тоже
+// пуст, а откуда взялись деньги — не видно вообще. Резолвим через
+// source_op_id → financial_operations.paid_by_restaurant_id (см. sync_ingest.go
+// «Зеркала расходов») → restaurants.name.
+type SalaryAdvanceRow struct {
+	models.SalaryAdvance
+	AccountName string `json:"account_name,omitempty"`
+	PaidByName  string `json:"paid_by_name,omitempty"`
+}
+
+func (s *SalaryService) ListAdvances(ctx context.Context, userID string) ([]SalaryAdvanceRow, error) {
+	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	var rows []models.SalaryAdvance
-	if err := scoped.Where("user_id = ?", userID).Order("created_at DESC").Find(&rows).Error; err != nil {
+	raw := s.r.DB().Session(&gormSessionNewDB).WithContext(ctx)
+	var rows []SalaryAdvanceRow
+	if err := raw.Table("salary_advances AS sa").
+		Select(`sa.*, COALESCE(acc.name,'') AS account_name, COALESCE(pr.name,'') AS paid_by_name`).
+		Joins("LEFT JOIN financial_accounts acc ON acc.id = sa.account_id").
+		Joins("LEFT JOIN financial_operations fo ON fo.id = sa.source_op_id").
+		Joins("LEFT JOIN restaurants pr ON pr.id = fo.paid_by_restaurant_id").
+		Where("sa.restaurant_id = ? AND sa.user_id = ?", rid, userID).
+		Order("sa.created_at DESC").
+		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	return rows, nil

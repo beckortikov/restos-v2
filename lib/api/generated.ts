@@ -16426,6 +16426,8 @@ export interface components {
             amount?: components["schemas"]["Decimal"];
             account_id?: string;
             account_name?: string;
+            /** @description Имя узла сети, фактически заплатившего (Ф-Р/Ф-С5), когда account_name пуст — зеркало филиала своего счёта не имеет */
+            paid_by_name?: string;
             description?: string;
             /** @description Выплата выше расчётного остатка, проведённая осознанно (ЗП-4). */
             is_override?: boolean;
@@ -16500,6 +16502,10 @@ export interface components {
             /** Format: date-time */
             cancelled_at?: string | null;
             cancelled_by?: string | null;
+            /** @description Резолвленное имя счёта (пусто, если аванс выдан другим узлом сети) */
+            account_name?: string;
+            /** @description Имя узла сети, фактически заплатившего (Ф-С5), когда своего счёта нет */
+            paid_by_name?: string;
         };
         SalaryAdvanceInput: {
             /** Format: uuid */

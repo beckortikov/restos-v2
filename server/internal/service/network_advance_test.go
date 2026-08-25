@@ -68,8 +68,10 @@ func TestNetworkBranchAdvance(t *testing.T) {
 
 	svc := service.NewNetworkService(repo.New(gdb), "")
 	syncSvc := service.NewSyncService(repo.New(gdb))
+	salarySvc := service.NewSalaryService(repo.New(gdb))
 	owner := audit.Actor{UserID: uuid.NewString(), Role: "owner"}
 	ctxCentral := audit.WithActor(tenant.WithRestaurant(context.Background(), centralID), owner)
+	ctxBranch := audit.WithActor(tenant.WithRestaurant(context.Background(), branchID), owner)
 	period := "2026-07"
 	advKind := "advance"
 
@@ -113,6 +115,24 @@ func TestNetworkBranchAdvance(t *testing.T) {
 		t.Errorf("users.advance = %s, want 1000", emp.Advance.String())
 	}
 
+	// ─── ListAdvances у филиала резолвит «кто заплатил» без своего счёта ───
+	// Без paid_by_name лента показывала бы аванс без всякого источника денег
+	// (accountId и accountName оба пустые) — ровно жалоба владельца, что для
+	// аванса «не показывает с какого счёта» (тут: с какого узла).
+	branchAdvances, err := salarySvc.ListAdvances(ctxBranch, empID)
+	if err != nil {
+		t.Fatalf("ListAdvances: %v", err)
+	}
+	if len(branchAdvances) != 1 {
+		t.Fatalf("ListAdvances вернул %d строк, want 1", len(branchAdvances))
+	}
+	if branchAdvances[0].AccountName != "" {
+		t.Errorf("AccountName = %q, want пусто (у зеркала нет счёта)", branchAdvances[0].AccountName)
+	}
+	if branchAdvances[0].PaidByName != "Центр" {
+		t.Errorf("PaidByName = %q, want %q", branchAdvances[0].PaidByName, "Центр")
+	}
+
 	// ─── Повторная доставка не дублирует ──────────────────────────────────
 	for i := 0; i < 3; i++ {
 		deliver()
@@ -140,8 +160,6 @@ func TestNetworkBranchAdvance(t *testing.T) {
 	}
 
 	// ─── Локальная отмена запрещена (счёта нет) ───────────────────────────
-	salarySvc := service.NewSalaryService(repo.New(gdb))
-	ctxBranch := audit.WithActor(tenant.WithRestaurant(context.Background(), branchID), owner)
 	if _, err := salarySvc.CancelAdvance(ctxBranch, row.ID); err == nil {
 		t.Error("локальная отмена аванса центра должна быть запрещена")
 	}

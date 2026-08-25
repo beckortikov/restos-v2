@@ -6563,6 +6563,7 @@ components:
         amount: { $ref: "#/components/schemas/Decimal" }
         account_id: { type: string }
         account_name: { type: string }
+        paid_by_name: { type: string, description: "Имя узла сети, фактически заплатившего (Ф-Р/Ф-С5), когда account_name пуст — зеркало филиала своего счёта не имеет" }
         description: { type: string }
         is_override:
           type: boolean
@@ -6629,6 +6630,8 @@ components:
         created_at: { type: string, format: date-time }
         cancelled_at: { type: string, format: date-time, nullable: true }
         cancelled_by: { type: string, nullable: true }
+        account_name: { type: string, description: "Резолвленное имя счёта (пусто, если аванс выдан другим узлом сети)" }
+        paid_by_name: { type: string, description: "Имя узла сети, фактически заплатившего (Ф-С5), когда своего счёта нет" }
     SalaryAdvanceInput:
       type: object
       required: [user_id, amount, account_id, period]

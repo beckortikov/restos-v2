@@ -1284,7 +1284,9 @@ export default function PayrollPage() {
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-2 text-muted-foreground">{p.accountName || '—'}</td>
+                        <td className="px-4 py-2 text-muted-foreground">
+                          {p.accountName || (p.paidByName ? `оплачено «${p.paidByName}»` : '—')}
+                        </td>
                         <td className="px-4 py-2 text-right tabular-nums font-semibold">{formatCurrency(p.amount)}</td>
                       </tr>
                     ))}

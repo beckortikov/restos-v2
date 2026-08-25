@@ -399,7 +399,11 @@ export default function EmployeeDetailPage() {
                               Ручная
                             </span>
                           )}
-                          {item.data.accountName && <span className="text-[11px] text-muted-foreground">со счёта «{item.data.accountName}»</span>}
+                          {item.data.accountName ? (
+                            <span className="text-[11px] text-muted-foreground">со счёта «{item.data.accountName}»</span>
+                          ) : item.data.paidByName ? (
+                            <span className="text-[11px] text-muted-foreground">оплачено «{item.data.paidByName}»</span>
+                          ) : null}
                         </div>
                         {item.data.description && <p className="text-xs text-muted-foreground mt-1 truncate">{item.data.description}</p>}
                       </>
@@ -414,6 +418,11 @@ export default function EmployeeDetailPage() {
                               Отменён
                             </span>
                           )}
+                          {item.data.accountName ? (
+                            <span className="text-[11px] text-muted-foreground">со счёта «{item.data.accountName}»</span>
+                          ) : item.data.paidByName ? (
+                            <span className="text-[11px] text-muted-foreground">оплачено «{item.data.paidByName}»</span>
+                          ) : null}
                         </div>
                         {item.data.note && <p className="text-xs text-muted-foreground mt-1">{item.data.note}</p>}
                       </>

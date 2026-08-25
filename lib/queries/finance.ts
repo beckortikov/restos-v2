@@ -423,6 +423,10 @@ export interface SalaryAdvanceRow {
   amount: number
   period: string
   accountId: string
+  /** Пусто, если аванс выдан другим узлом сети (центром, Ф-С5) — своего счёта нет. */
+  accountName?: string
+  /** Имя узла сети, фактически заплатившего, когда accountName пуст. */
+  paidByName?: string
   note?: string
   /** id проводки financial_operations самой выдачи — нужен, чтобы не
    * задвоить эту же сумму, если она также показана в SalaryReport.payouts. */
@@ -440,6 +444,8 @@ function mapSalaryAdvance(r: any): SalaryAdvanceRow {
     amount: Number(r.amount ?? 0),
     period: r.period ?? '',
     accountId: r.account_id ?? '',
+    accountName: r.account_name || undefined,
+    paidByName: r.paid_by_name || undefined,
     note: r.note || undefined,
     sourceOpId: r.source_op_id || undefined,
     createdBy: r.created_by || undefined,
@@ -636,6 +642,8 @@ export interface SalaryPayoutRow {
   amount: number
   accountId?: string
   accountName?: string
+  /** Имя узла сети, фактически заплатившего, когда accountName пуст (зеркало филиала). */
+  paidByName?: string
   description?: string
   /** Выплата выше расчётного остатка, проведённая осознанно (ЗП-4). */
   isOverride?: boolean
@@ -701,6 +709,7 @@ export async function fetchSalaryReport(from: string, to: string): Promise<Salar
       amount: Number(p.amount ?? 0),
       accountId: p.account_id || undefined,
       accountName: p.account_name || undefined,
+      paidByName: p.paid_by_name || undefined,
       description: p.description || undefined,
       isOverride: Boolean(p.is_override),
       cancelled: Boolean(p.cancelled),

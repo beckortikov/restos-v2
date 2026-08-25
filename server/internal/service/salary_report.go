@@ -56,7 +56,12 @@ type SalaryPayoutRow struct {
 	Amount      decimal.Decimal `json:"amount"`
 	AccountID   string          `json:"account_id,omitempty"`
 	AccountName string          `json:"account_name,omitempty"`
-	Description string          `json:"description,omitempty"`
+	// PaidByName — имя узла сети, который фактически заплатил (Ф-Р/Ф-С5):
+	// у зеркала филиала AccountName пуст (своего счёта не было, см.
+	// sync_ingest.go «Зеркала расходов»), а это поле резолвит paid_by_restaurant_id
+	// в человекочитаемое имя, чтобы лента не выглядела как «выплата в никуда».
+	PaidByName  string `json:"paid_by_name,omitempty"`
+	Description string `json:"description,omitempty"`
 	// IsOverride — выплата выше расчётного остатка, проведённая осознанно
 	// (ЗП-4) — отличает "свободную" выплату от обычного расчёта по формуле.
 	IsOverride bool `json:"is_override"`
@@ -112,6 +117,7 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 		SourceRef    string          `gorm:"column:source_ref"`
 		AccountID    string          `gorm:"column:account_id"`
 		AccountName  string          `gorm:"column:account_name"`
+		PaidByName   string          `gorm:"column:paid_by_name"`
 		Description  string          `gorm:"column:description"`
 		IsOverride   bool            `gorm:"column:is_override"`
 		Cancelled    bool            `gorm:"column:cancelled"`
@@ -131,10 +137,12 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 		        COALESCE(fo.category,'') AS category, COALESCE(fo.counterparty,'') AS counterparty,
 		        COALESCE(fo.source_ref,'') AS source_ref,
 		        COALESCE(fo.account_id,'') AS account_id, COALESCE(fo.account_name,'') AS account_name,
+		        COALESCE(pr.name,'') AS paid_by_name,
 		        COALESCE(fo.description,'') AS description, COALESCE(fo.is_override,false) AS is_override, (fo.cancelled_at IS NOT NULL) AS cancelled,
 		        COALESCE(u.name,'') AS user_name, COALESCE(u.position,'') AS position,
 		        COALESCE(u.role,'') AS role, COALESCE(u.salary,0) AS salary`).
 		Joins("LEFT JOIN users u ON u.id::text = fo.source_ref").
+		Joins("LEFT JOIN restaurants pr ON pr.id = fo.paid_by_restaurant_id").
 		Where("fo.restaurant_id = ?", rid).
 		Where("fo.category IN ?", []string{CategorySalary, CategoryAdvance, "Сервис"}).
 		// Компенсирующие проводки отмен (type='in') — не выплаты: исключаем,
@@ -174,6 +182,7 @@ func (s *SalaryService) SalaryReport(ctx context.Context, from, to string) (*Sal
 			Amount:      decimal.Normalize(op.Amount),
 			AccountID:   op.AccountID,
 			AccountName: op.AccountName,
+			PaidByName:  op.PaidByName,
 			Description: op.Description,
 			IsOverride:  op.IsOverride,
 			Cancelled:   op.Cancelled,
