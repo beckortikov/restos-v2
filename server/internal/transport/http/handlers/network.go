@@ -231,6 +231,34 @@ func (h *NetworkHandler) SalesReport(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+func (h *NetworkHandler) Waiters(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.WaitersNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *NetworkHandler) Weekday(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.WeekdayNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // Staff — GET /api/v1/network/staff. Весь персонал сети с указанием филиала.
 func (h *NetworkHandler) Staff(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Staff(r.Context())

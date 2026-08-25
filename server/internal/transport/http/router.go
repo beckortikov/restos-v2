@@ -340,6 +340,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/network/analytics/abc-menu", networkH.ABCMenu)
 			g.Get("/network/analytics/abc-inventory", networkH.ABCInventory)
 			g.Get("/network/analytics/sales-report", networkH.SalesReport)
+			g.Get("/network/analytics/waiters", networkH.Waiters)
+			g.Get("/network/analytics/weekday", networkH.Weekday)
 			g.Get("/network/branches/{id}/payables", networkH.BranchPayables)
 			g.Get("/network/branches/{id}/expenses", networkH.BranchExpenses)
 			g.Get("/network/invites", networkH.ListInvites)

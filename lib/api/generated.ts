@@ -3666,6 +3666,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/analytics/waiters": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Статистика по официантам по всей сети. Официант — не сетевая
+         *     сущность (свой users.id на каждом филиале), поэтому строки НЕ
+         *     схлопываются по имени — каждая помечена филиалом.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkWaitersReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/analytics/weekday": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Аналитика по дням недели по всей сети — тот же формат, что у
+         *     /analytics/weekday. Категория (A2) схлопывается по имени, как в
+         *     ABC-меню.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["WeekdayReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nomenclature": {
         parameters: {
             query?: never;
@@ -16505,6 +16591,21 @@ export interface components {
             total_revenue?: components["schemas"]["Decimal"];
             total_orders?: number;
             rows?: components["schemas"]["WaiterAnalyticsRow"][];
+        };
+        NetworkWaitersReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_revenue?: components["schemas"]["Decimal"];
+            total_orders?: number;
+            rows?: (components["schemas"]["WaiterAnalyticsRow"] & {
+                /** Format: uuid */
+                restaurant_id?: string;
+                restaurant_name?: string;
+            })[];
         };
         TableAnalyticsRow: {
             table_id?: string;

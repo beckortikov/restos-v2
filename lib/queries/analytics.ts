@@ -183,9 +183,7 @@ export interface WeekdayReport {
   by_category: WeekdayCategoryRow[]
 }
 
-export async function fetchWeekday(opts: { from?: Date | string; to?: Date | string } = {}): Promise<WeekdayReport> {
-  const query = buildQuery(opts)
-  const r: any = await unwrap(api.GET('/api/v1/analytics/weekday', { params: { query: query as any } }))
+function normalizeWeekday(r: any): WeekdayReport {
   const n = (v: any) => Number(v ?? 0)
   return {
     by_weekday: (r?.by_weekday ?? []).map((x: any) => ({
@@ -199,6 +197,20 @@ export async function fetchWeekday(opts: { from?: Date | string; to?: Date | str
       weekday: n(x.weekday), category: String(x.category ?? '—'), qty: n(x.qty), revenue: n(x.revenue), profit: n(x.profit),
     })),
   }
+}
+
+export async function fetchWeekday(opts: { from?: Date | string; to?: Date | string } = {}): Promise<WeekdayReport> {
+  const query = buildQuery(opts)
+  const r: any = await unwrap(api.GET('/api/v1/analytics/weekday', { params: { query: query as any } }))
+  return normalizeWeekday(r)
+}
+
+// Дни недели по сети — сумма по всей сети (weekday — общий, не филиальный
+// разрез), категория (A2) схлопнута по имени. Тот же формат ответа.
+export async function fetchNetworkWeekday(opts: { from?: Date | string; to?: Date | string } = {}): Promise<WeekdayReport> {
+  const query = buildQuery(opts)
+  const r: any = await unwrap(api.GET('/api/v1/network/analytics/weekday', { params: { query } }))
+  return normalizeWeekday(r)
 }
 
 // ─── Инсайты (кросс-аналитика) ──────────────────────────────────────────────
@@ -337,6 +349,26 @@ export interface NetworkABCInventoryReport {
 export async function fetchNetworkABCInventory(opts: { from?: Date | string; to?: Date | string } = {}): Promise<NetworkABCInventoryReport> {
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/network/analytics/abc-inventory', { params: { query } }))) as NetworkABCInventoryReport
+}
+
+// Официанты по сети НЕ схлопываются по имени (см. серверный комментарий) —
+// свой users.id на каждом филиале, «Иван» на двух точках почти наверняка
+// разные люди.
+export interface NetworkWaiterRow extends WaiterRow {
+  restaurant_id: string
+  restaurant_name: string
+}
+
+export interface NetworkWaitersReport {
+  period: AnalyticsPeriod
+  total_revenue: DecStr
+  total_orders: number
+  rows: NetworkWaiterRow[]
+}
+
+export async function fetchNetworkWaitersAnalytics(opts: { from?: Date | string; to?: Date | string } = {}): Promise<NetworkWaitersReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/waiters', { params: { query } }))) as NetworkWaitersReport
 }
 
 export async function fetchWaitersAnalytics(opts: { from?: Date | string; to?: Date | string } = {}): Promise<WaitersReport> {

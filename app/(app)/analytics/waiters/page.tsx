@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchWaitersAnalytics, type WaitersReport } from '@/lib/queries/analytics'
+import { fetchWaitersAnalytics, fetchNetworkWaitersAnalytics, type WaitersReport, type NetworkWaitersReport } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import {
   TrendingUp,
   ShoppingBag,
@@ -52,11 +53,14 @@ interface WaiterStat {
   avgServiceMin: number
   bestDay: string
   bestDayRevenue: number
+  restaurantName?: string
 }
 
 export default function WaitersAnalyticsPage() {
-  const { canDo } = useAuth()
-  const [report, setReport] = useState<WaitersReport | null>(null)
+  const { canDo, restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
+  const [report, setReport] = useState<WaitersReport | NetworkWaitersReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('month')
   const [sortBy, setSortBy] = useState<SortBy>('revenue')
@@ -64,11 +68,12 @@ export default function WaitersAnalyticsPage() {
   useEffect(() => {
     setLoading(true)
     const { from, to } = periodToRange(period)
-    fetchWaitersAnalytics({ from, to })
+    const fetcher = isCentral ? fetchNetworkWaitersAnalytics : fetchWaitersAnalytics
+    fetcher({ from, to })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
-  }, [period])
+  }, [period, isCentral])
 
   const stats: WaiterStat[] = useMemo(() => {
     if (!report) return []
@@ -84,6 +89,7 @@ export default function WaitersAnalyticsPage() {
       avgServiceMin: Number(r.avg_service_min),
       bestDay: r.best_day || '',
       bestDayRevenue: Number(r.best_day_revenue),
+      restaurantName: (r as { restaurant_name?: string }).restaurant_name,
     }))
   }, [report])
 
@@ -131,7 +137,9 @@ export default function WaitersAnalyticsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Аналитика официантов</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Выручка, заказы и эффективность по каждому официанту</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {isCentral ? 'Выручка, заказы и эффективность по каждому официанту — по всей сети' : 'Выручка, заказы и эффективность по каждому официанту'}
+          </p>
         </div>
         {/* Period filter */}
         <div className="flex items-center gap-2">
@@ -216,7 +224,7 @@ export default function WaitersAnalyticsPage() {
                   <div>
                     <p className="font-bold text-foreground text-lg">{w.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {w.orderCount} заказ. · {w.itemsServed} позиц.
+                      {isCentral && w.restaurantName ? `${w.restaurantName} · ` : ''}{w.orderCount} заказ. · {w.itemsServed} позиц.
                     </p>
                   </div>
                 </div>
@@ -278,10 +286,13 @@ export default function WaitersAnalyticsPage() {
       {/* Full table */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[800px]">
+          <table className={`w-full text-sm ${isCentral ? 'min-w-[900px]' : 'min-w-[800px]'}`}>
             <thead>
               <tr className="border-b border-border bg-muted/40">
-                {['#', 'Официант', 'Заказов', 'Позиций', 'Выручка', 'Обслуж.', 'Чаевые', 'Ср. чек', 'Ср. время', 'Лучший день'].map(h => (
+                {(isCentral
+                  ? ['#', 'Официант', 'Филиал', 'Заказов', 'Позиций', 'Выручка', 'Обслуж.', 'Чаевые', 'Ср. чек', 'Ср. время', 'Лучший день']
+                  : ['#', 'Официант', 'Заказов', 'Позиций', 'Выручка', 'Обслуж.', 'Чаевые', 'Ср. чек', 'Ср. время', 'Лучший день']
+                ).map(h => (
                   <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">{h}</th>
                 ))}
               </tr>
@@ -300,6 +311,9 @@ export default function WaitersAnalyticsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 font-semibold text-foreground">{w.name}</td>
+                  {isCentral && (
+                    <td className="px-4 py-3 text-xs text-muted-foreground">{w.restaurantName ?? '—'}</td>
+                  )}
                   <td className="px-4 py-3 text-foreground">{w.orderCount}</td>
                   <td className="px-4 py-3 text-muted-foreground">{w.itemsServed}</td>
                   <td className="px-4 py-3 font-semibold text-foreground">{formatCurrency(w.revenue)}</td>
@@ -318,7 +332,7 @@ export default function WaitersAnalyticsPage() {
                 </tr>
               ))}
               {sorted.length === 0 && (
-                <tr><td colSpan={10} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
+                <tr><td colSpan={isCentral ? 11 : 10} className="px-4 py-8 text-center text-muted-foreground">Нет данных за выбранный период</td></tr>
               )}
             </tbody>
           </table>

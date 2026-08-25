@@ -1388,6 +1388,26 @@ paths:
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalesReportResult" } } } } }
 
+  /api/v1/network/analytics/waiters:
+    get:
+      tags: [stock]
+      summary: |
+        Статистика по официантам по всей сети. Официант — не сетевая
+        сущность (свой users.id на каждом филиале), поэтому строки НЕ
+        схлопываются по имени — каждая помечена филиалом.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkWaitersReport" } } } } }
+
+  /api/v1/network/analytics/weekday:
+    get:
+      tags: [stock]
+      summary: |
+        Аналитика по дням недели по всей сети — тот же формат, что у
+        /analytics/weekday. Категория (A2) схлопывается по имени, как в
+        ABC-меню.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WeekdayReport" } } } } }
+
   /api/v1/nomenclature:
     get:
       tags: [stock]
@@ -6443,6 +6463,21 @@ components:
         total_revenue: { $ref: "#/components/schemas/Decimal" }
         total_orders:  { type: integer }
         rows: { type: array, items: { $ref: "#/components/schemas/WaiterAnalyticsRow" } }
+    NetworkWaitersReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_revenue: { $ref: "#/components/schemas/Decimal" }
+        total_orders:  { type: integer }
+        rows:
+          type: array
+          items:
+            allOf:
+              - { $ref: "#/components/schemas/WaiterAnalyticsRow" }
+              - type: object
+                properties:
+                  restaurant_id: { type: string, format: uuid }
+                  restaurant_name: { type: string }
 
     TableAnalyticsRow:
       type: object

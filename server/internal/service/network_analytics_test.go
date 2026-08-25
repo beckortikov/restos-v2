@@ -109,6 +109,25 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		Qty: decimal.MustFromString("-1"), CreatedAt: now,
 	})
 
+	// Официанты: «Иван» — РАЗНЫЕ люди на разных филиалах (совпадение имени
+	// не должно схлопывать строки, см. NetworkWaiterRow).
+	waiterName, waiterRole := "Иван", "waiter"
+	waiterB1, waiterB2 := uuid.NewString(), uuid.NewString()
+	gdb.Create(&models.User{ID: waiterB1, Name: &waiterName, Role: &waiterRole, RestaurantID: &b1, HourlyRate: decimal.MustFromString("20000")})
+	gdb.Create(&models.User{ID: waiterB2, Name: &waiterName, Role: &waiterRole, RestaurantID: &b2, HourlyRate: decimal.MustFromString("25000")})
+	gdb.Exec("UPDATE orders SET waiter_id = ? WHERE id = ?", waiterB1, o1)
+	gdb.Exec("UPDATE orders SET waiter_id = ? WHERE id = ?", waiterB2, o2)
+
+	// Табель — для A3 (ФОТ по дням недели) сетевого отчёта.
+	gdb.Create(&models.TimeEntry{
+		ID: uuid.NewString(), UserID: &waiterB1, RestaurantID: &b1,
+		ClockIn: &now, TotalHours: decimal.MustFromString("5"), CreatedAt: now,
+	})
+	gdb.Create(&models.TimeEntry{
+		ID: uuid.NewString(), UserID: &waiterB2, RestaurantID: &b2,
+		ClockIn: &now, TotalHours: decimal.MustFromString("3"), CreatedAt: now,
+	})
+
 	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
 	from := now.Add(-1 * time.Hour)
@@ -193,6 +212,74 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		}
 		if len(out.ByDate) != 1 || out.ByDate[0].Orders != 2 {
 			t.Errorf("ByDate: %+v, want 1 день с 2 заказами", out.ByDate)
+		}
+	})
+
+	t.Run("WaitersNetwork", func(t *testing.T) {
+		out, err := svc.WaitersNetwork(ctx, f)
+		if err != nil {
+			t.Fatalf("WaitersNetwork: %v", err)
+		}
+		if len(out.Rows) != 2 {
+			t.Fatalf("rows: %+v — «Иван» с двух филиалов — разные люди, схлопываться не должны", out.Rows)
+		}
+		byBranch := map[string]service.NetworkWaiterRow{}
+		for _, r := range out.Rows {
+			byBranch[r.RestaurantName] = r
+		}
+		b1Row, ok := byBranch["Филиал-1"]
+		if !ok {
+			t.Fatalf("нет строки официанта для Филиал-1: %+v", out.Rows)
+		}
+		if b1Row.Name != waiterName || b1Row.Orders != 1 || !b1Row.Revenue.Equal(decimal.MustFromString("46")) {
+			t.Errorf("Филиал-1: %+v", b1Row)
+		}
+		b2Row, ok := byBranch["Филиал-2"]
+		if !ok {
+			t.Fatalf("нет строки официанта для Филиал-2: %+v", out.Rows)
+		}
+		if b2Row.Name != waiterName || b2Row.Orders != 1 || !b2Row.Revenue.Equal(decimal.MustFromString("46")) {
+			t.Errorf("Филиал-2: %+v", b2Row)
+		}
+		if out.TotalOrders != 2 || !out.TotalRevenue.Equal(decimal.MustFromString("92")) {
+			t.Errorf("totals: orders=%d revenue=%s", out.TotalOrders, out.TotalRevenue.String())
+		}
+	})
+
+	t.Run("WeekdayNetwork", func(t *testing.T) {
+		out, err := svc.WeekdayNetwork(ctx, f)
+		if err != nil {
+			t.Fatalf("WeekdayNetwork: %v", err)
+		}
+		// weekday берём из того же `now`, что и фикстур — крошечное окно
+		// флаки на границе полуночи по TZ Postgres-сессии, тот же риск, что
+		// у PeakHours (там не проявляется — сравниваются только totals).
+		wd := int(now.Weekday())
+		var row *service.WeekdayRow
+		for i := range out.ByWeekday {
+			if out.ByWeekday[i].Weekday == wd {
+				row = &out.ByWeekday[i]
+			}
+		}
+		if row == nil {
+			t.Fatalf("нет строки для weekday=%d: %+v", wd, out.ByWeekday)
+		}
+		if row.Orders != 2 {
+			t.Errorf("Orders = %d, want 2", row.Orders)
+		}
+		if !row.Revenue.Equal(decimal.MustFromString("92")) {
+			t.Errorf("Revenue = %s, want 92", row.Revenue.String())
+		}
+		if !row.COGS.Equal(decimal.MustFromString("40")) {
+			t.Errorf("COGS = %s, want 40 (20+20)", row.COGS.String())
+		}
+		wantLabor := decimal.MustFromString("175000") // 5×20000 + 3×25000
+		if !row.Labor.Equal(wantLabor) {
+			t.Errorf("Labor = %s, want %s", row.Labor.String(), wantLabor.String())
+		}
+		wantGross := decimal.MustFromString("52") // 92-40
+		if !row.GrossProfit.Equal(wantGross) {
+			t.Errorf("GrossProfit = %s, want %s", row.GrossProfit.String(), wantGross.String())
 		}
 	})
 }

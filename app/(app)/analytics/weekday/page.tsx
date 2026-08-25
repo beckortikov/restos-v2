@@ -5,8 +5,10 @@ import { toast } from 'sonner'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ReferenceLine } from 'recharts'
 
 import { formatCurrency } from '@/lib/helpers'
-import { fetchWeekday, type WeekdayReport } from '@/lib/queries/analytics'
+import { fetchWeekday, fetchNetworkWeekday, type WeekdayReport } from '@/lib/queries/analytics'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
+import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 
 // Postgres DOW: 0=вс … 6=сб. Отображаем с понедельника.
 const ORDER = [1, 2, 3, 4, 5, 6, 0]
@@ -23,6 +25,9 @@ function profitClass(v: number, max: number): string {
 }
 
 export default function WeekdayPage() {
+  const { restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [report, setReport] = useState<WeekdayReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>('month')
@@ -32,11 +37,12 @@ export default function WeekdayPage() {
   useEffect(() => {
     setLoading(true)
     const { from, to } = getDateRange(period, customFrom, customTo)
-    fetchWeekday({ from: from ?? undefined, to: to ?? undefined })
+    const fetcher = isCentral ? fetchNetworkWeekday : fetchWeekday
+    fetcher({ from: from ?? undefined, to: to ?? undefined })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки аналитики по дням недели'))
       .finally(() => setLoading(false))
-  }, [period, customFrom, customTo])
+  }, [period, customFrom, customTo, isCentral])
 
   // A3 bars (Пн-first).
   const byWd = useMemo(() => {
@@ -77,7 +83,11 @@ export default function WeekdayPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Дни недели</h1>
-          <p className="text-sm text-muted-foreground">Прибыль по дням, день×час и категории — чтобы планировать смены, заготовки и промо</p>
+          <p className="text-sm text-muted-foreground">
+            {isCentral
+              ? 'Прибыль по дням, день×час и категории по всей сети — чтобы планировать смены, заготовки и промо'
+              : 'Прибыль по дням, день×час и категории — чтобы планировать смены, заготовки и промо'}
+          </p>
         </div>
         <DatePeriodFilter period={period} onPeriodChange={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFromChange={setCustomFrom} onCustomToChange={setCustomTo} />
       </div>
