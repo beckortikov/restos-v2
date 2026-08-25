@@ -1,6 +1,7 @@
 'use client'
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
+import { NetworkReportStrip } from '@/components/finance/network-report-strip'
 
 import { useState, useEffect, useMemo } from 'react'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
@@ -158,9 +159,19 @@ export default function PnlPage() {
   const netProfit = report.net_profit
   const netMargin = revenue > 0 ? (netProfit / revenue) * 100 : 0
 
+  // Диапазон для сетевой полосы (Ф-С3) — тот же период, что у отчёта.
+  const stripRange = (() => {
+    const { from, to } = getDateRange(period, customFrom, customTo)
+    const ymd = (d: Date | null) => d
+      ? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      : undefined
+    return { from: ymd(from), to: ymd(to) }
+  })()
+
   return (
     <div className="p-4 md:p-6 space-y-4 md:space-y-5">
       <FinanceTabs />
+      <NetworkReportStrip kind="pnl" from={stripRange.from} to={stripRange.to} />
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Отчёт о прибылях и убытках (ОПиУ)</h1>

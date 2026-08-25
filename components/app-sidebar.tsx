@@ -446,7 +446,14 @@ function SidebarContent({
     return item
   }
 
+  // Ф-С4: central — офис без продаж, кассовые разделы там только путают.
+  // Прячем ГРУППУ «Операции» целиком (роуты остаются доступны по прямой
+  // ссылке — ничего не ломается, если операция всё же понадобится).
+  // Одиночные рестораны и филиалы не затронуты: kind='central_warehouse'
+  // ставится только созданию сети.
+  const hideOps = restaurant?.kind === 'central_warehouse'
   const filteredNav = NAV.map((item) => {
+    if (hideOps && item.label === 'Операции') return null
     if (item.children) {
       const children = item.children.map(resolveItem).filter(Boolean) as NavItem[]
       if (children.length === 0) return null
