@@ -807,6 +807,45 @@ paths:
         content: { application/json: { schema: { $ref: "#/components/schemas/NetworkMenuInput" } } }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkMenuItem" } } } } }
 
+  /api/v1/network/dashboard:
+    get:
+      tags: [stock]
+      summary: |
+        Сводный дашборд сети для главного экрана central (Ф-С1): выручка,
+        заказы, средний чек, расходы (по правилам сетевого ДДС — без зеркал и
+        внутрисетевых переводов), сумма всех включённых касс, открытые смены;
+        разбивка по филиалам. Всё из реплик «central видит всё» — узлы не
+        опрашиваются.
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  revenue: { $ref: "#/components/schemas/Decimal" }
+                  orders_count: { type: integer }
+                  avg_check: { $ref: "#/components/schemas/Decimal" }
+                  expenses: { $ref: "#/components/schemas/Decimal" }
+                  total_cash: { $ref: "#/components/schemas/Decimal" }
+                  open_shifts: { type: integer }
+                  branches:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        kind: { type: string, nullable: true }
+                        revenue: { $ref: "#/components/schemas/Decimal" }
+                        orders_count: { type: integer }
+                        cash_balance: { $ref: "#/components/schemas/Decimal" }
+                        open_shift: { type: boolean }
+
   /api/v1/network/summary:
     get:
       tags: [stock]

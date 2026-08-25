@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -489,6 +490,158 @@ func (s *NetworkService) Staff(ctx context.Context) (*NetworkStaff, error) {
 		out.Branches = append(out.Branches, NetworkStaffBranch{
 			ID: b.ID, Name: b.Name, Kind: b.Kind, Count: countByID[b.ID],
 		})
+	}
+	return out, nil
+}
+
+// ─── Сводный дашборд сети (Ф-С1) ────────────────────────────────────────────
+//
+// Central — офис: продаж на нём нет, локальный дашборд показывал нули и
+// операционные виджеты кассы. Владелец сети хочет видеть на главном экране
+// свод по ВСЕМ филиалам разом. Все данные уже реплицированы («central видит
+// всё», Ф1-Ф8) — считаем из своей БД одним запросом, без обращений к узлам.
+
+type NetworkDashboardBranch struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Kind        *string         `json:"kind"`
+	Revenue     decimal.Decimal `json:"revenue"`
+	OrdersCount int             `json:"orders_count"`
+	CashBalance decimal.Decimal `json:"cash_balance"`
+	OpenShift   bool            `json:"open_shift"`
+}
+
+type NetworkDashboard struct {
+	Revenue     decimal.Decimal `json:"revenue"`
+	OrdersCount int             `json:"orders_count"`
+	AvgCheck    decimal.Decimal `json:"avg_check"`
+	// Expenses — отток денег сети за период по правилам ДДС: без зеркал
+	// (paid_by_restaurant_id — деньги ушли у плательщика, не здесь), без
+	// финансовой активности (внутрисетевые переводы — не расход сети).
+	Expenses   decimal.Decimal          `json:"expenses"`
+	TotalCash  decimal.Decimal          `json:"total_cash"`
+	OpenShifts int                      `json:"open_shifts"`
+	Branches   []NetworkDashboardBranch `json:"branches"`
+}
+
+// Dashboard — сводка «на сегодня» (или произвольный период f) по всей сети.
+func (s *NetworkService) Dashboard(ctx context.Context, f PeriodFilter) (*NetworkDashboard, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	out := &NetworkDashboard{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	type agg struct {
+		revenue decimal.Decimal
+		orders  int
+		cash    decimal.Decimal
+		open    bool
+	}
+	byID := make(map[string]*agg, len(ids))
+	for _, id := range ids {
+		byID[id] = &agg{}
+	}
+
+	// 1. Выручка и число заказов — из закрытых заказов (как сетевой ОПиУ):
+	// это факт продажи, не зависящий от того, как разложилась оплата по
+	// financial_operations.
+	type revRow struct {
+		RestaurantID string          `gorm:"column:restaurant_id"`
+		Total        decimal.Decimal `gorm:"column:total"`
+		Cnt          int             `gorm:"column:cnt"`
+	}
+	q := s.r.Raw().WithContext(ctx).Table("orders").
+		Select("restaurant_id, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
+		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
+	if f.From != nil {
+		q = q.Where("closed_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("closed_at < ?", *f.To)
+	}
+	var revRows []revRow
+	if err := q.Group("restaurant_id").Scan(&revRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range revRows {
+		if a, ok := byID[r.RestaurantID]; ok {
+			a.revenue = decimal.Normalize(r.Total)
+			a.orders = r.Cnt
+		}
+	}
+
+	// 2. Расходы за период — те же правила, что сетевой ДДС (applyCashflowFilter
+	// исключает зеркала Ф-Р; activity='financial' — переводы между узлами,
+	// движение денег внутри сети, а не её расход).
+	var expenses decimal.Decimal
+	if err := applyFOPeriod(applyCashflowFilter(s.r.Raw().WithContext(ctx).Table("financial_operations").
+		Select("COALESCE(SUM(amount), 0)").
+		Where("restaurant_id IN ? AND type = ?", ids, "out").
+		Where("COALESCE(activity, '') <> ?", "financial")), f).
+		Scan(&expenses).Error; err != nil {
+		return nil, err
+	}
+	out.Expenses = decimal.Normalize(expenses)
+
+	// 3. Кассы: только включённые счета — отключённый счёт хранит историю,
+	// но деньгами сети не является (см. account-disable-not-delete).
+	type cashRow struct {
+		RestaurantID string          `gorm:"column:restaurant_id"`
+		Total        decimal.Decimal `gorm:"column:total"`
+	}
+	var cashRows []cashRow
+	if err := s.r.Raw().WithContext(ctx).Table("financial_accounts").
+		Select("restaurant_id, COALESCE(SUM(balance), 0) AS total").
+		Where("restaurant_id IN ? AND is_enabled = ?", ids, true).
+		Group("restaurant_id").Scan(&cashRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range cashRows {
+		if a, ok := byID[r.RestaurantID]; ok {
+			a.cash = decimal.Normalize(r.Total)
+		}
+	}
+
+	// 4. Открытые смены — «филиал сейчас работает».
+	var openRows []string
+	if err := s.r.Raw().WithContext(ctx).Table("cash_shifts").
+		Select("DISTINCT restaurant_id").
+		Where("restaurant_id IN ? AND status = ?", ids, "open").
+		Scan(&openRows).Error; err != nil {
+		return nil, err
+	}
+	for _, id := range openRows {
+		if a, ok := byID[id]; ok {
+			a.open = true
+		}
+	}
+
+	for _, b := range branches {
+		a := byID[b.ID]
+		out.Branches = append(out.Branches, NetworkDashboardBranch{
+			ID: b.ID, Name: b.Name, Kind: b.Kind,
+			Revenue: a.revenue, OrdersCount: a.orders, CashBalance: a.cash, OpenShift: a.open,
+		})
+		out.Revenue = decimal.Add(out.Revenue, a.revenue)
+		out.OrdersCount += a.orders
+		out.TotalCash = decimal.Add(out.TotalCash, a.cash)
+		if a.open {
+			out.OpenShifts++
+		}
+	}
+	out.Revenue = decimal.Normalize(out.Revenue)
+	out.TotalCash = decimal.Normalize(out.TotalCash)
+	if out.OrdersCount > 0 {
+		out.AvgCheck = decimal.DivRound(out.Revenue, decimal.MustFromString(strconv.Itoa(out.OrdersCount)))
 	}
 	return out, nil
 }

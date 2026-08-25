@@ -422,6 +422,50 @@ export interface NetworkStaff {
   staff: NetworkStaffMember[]
 }
 
+// ─── Сводный дашборд сети (Ф-С1) ──────────────────────────────────────────────
+export interface NetworkDashboardBranch {
+  id: string
+  name: string
+  kind?: 'outlet' | 'central_warehouse' | null
+  revenue: number
+  ordersCount: number
+  cashBalance: number
+  openShift: boolean
+}
+export interface NetworkDashboard {
+  revenue: number
+  ordersCount: number
+  avgCheck: number
+  expenses: number
+  totalCash: number
+  openShifts: number
+  branches: NetworkDashboardBranch[]
+}
+
+export async function fetchNetworkDashboard(opts?: { from?: string; to?: string }): Promise<NetworkDashboard> {
+  const query: Record<string, string> = {}
+  if (opts?.from) query.from = opts.from
+  if (opts?.to) query.to = opts.to
+  const r: any = await unwrap(api.GET('/api/v1/network/dashboard', { params: { query } }))
+  return {
+    revenue: Number(r?.revenue ?? 0),
+    ordersCount: Number(r?.orders_count ?? 0),
+    avgCheck: Number(r?.avg_check ?? 0),
+    expenses: Number(r?.expenses ?? 0),
+    totalCash: Number(r?.total_cash ?? 0),
+    openShifts: Number(r?.open_shifts ?? 0),
+    branches: Array.isArray(r?.branches)
+      ? r.branches.map((b: any) => ({
+          id: b.id, name: b.name, kind: b.kind,
+          revenue: Number(b.revenue ?? 0),
+          ordersCount: Number(b.orders_count ?? 0),
+          cashBalance: Number(b.cash_balance ?? 0),
+          openShift: !!b.open_shift,
+        }))
+      : [],
+  }
+}
+
 export async function fetchNetworkStaff(): Promise<NetworkStaff> {
   const r: any = await unwrap(api.GET('/api/v1/network/staff'))
   return {

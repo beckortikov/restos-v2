@@ -91,6 +91,22 @@ func (h *NetworkHandler) Accounts(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// Dashboard — GET /api/v1/network/dashboard?from=&to=. Сводка «на сегодня»
+// по всей сети для главного экрана central (Ф-С1).
+func (h *NetworkHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.Dashboard(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // Staff — GET /api/v1/network/staff. Весь персонал сети с указанием филиала.
 func (h *NetworkHandler) Staff(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Staff(r.Context())

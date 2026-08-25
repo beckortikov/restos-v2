@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from 'recharts'
 import { useAuth } from '@/lib/auth-store'
+import { NetworkDashboardView } from './network-view'
 import { useBranchView } from '@/hooks/use-branch-view'
 import {
   ORDER_STATUS_LABELS,
@@ -189,7 +190,22 @@ function OrderPipeline({ orders }: { orders: Order[] }) {
 }
 
 // ─── Dashboard Page ───────────────────────────────────────────────────────────
+//
+// Гейт (Ф-С1): владелец сети на central видит сводный дашборд по всем
+// филиалам — central офисный, продаж на нём нет, и локальные нули с картой
+// зала там бессмысленны. Переключение «смотреть как филиал» (BranchSelector,
+// X-Branch-Id) возвращает обычный локальный дашборд выбранного филиала.
+// Раздельные КОМПОНЕНТЫ (не ранний return внутри одного) — порядок хуков.
 export default function DashboardPage() {
+  const { restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  if (restaurant?.kind === 'central_warehouse' && !isBranchView) {
+    return <NetworkDashboardView />
+  }
+  return <LocalDashboard />
+}
+
+function LocalDashboard() {
   const { user } = useAuth()
   // ADR-003 Ф7: карта зала и конвейер заказов читают ЖИВОЙ статус
   // стола/заказа, который сеть намеренно не реплицирует (только

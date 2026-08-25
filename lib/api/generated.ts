@@ -2540,6 +2540,68 @@ export interface paths {
         };
         trace?: never;
     };
+    "/api/v1/network/dashboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Сводный дашборд сети для главного экрана central (Ф-С1): выручка,
+         *     заказы, средний чек, расходы (по правилам сетевого ДДС — без зеркал и
+         *     внутрисетевых переводов), сумма всех включённых касс, открытые смены;
+         *     разбивка по филиалам. Всё из реплик «central видит всё» — узлы не
+         *     опрашиваются.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            revenue?: components["schemas"]["Decimal"];
+                            orders_count?: number;
+                            avg_check?: components["schemas"]["Decimal"];
+                            expenses?: components["schemas"]["Decimal"];
+                            total_cash?: components["schemas"]["Decimal"];
+                            open_shifts?: number;
+                            branches?: {
+                                /** Format: uuid */
+                                id?: string;
+                                name?: string;
+                                kind?: string | null;
+                                revenue?: components["schemas"]["Decimal"];
+                                orders_count?: number;
+                                cash_balance?: components["schemas"]["Decimal"];
+                                open_shift?: boolean;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/summary": {
         parameters: {
             query?: never;
