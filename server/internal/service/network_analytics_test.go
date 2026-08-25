@@ -130,6 +130,18 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		ClockIn: &now, TotalHours: decimal.MustFromString("3"), CreatedAt: now,
 	})
 
+	// Операционный расход — для «Динамики» сетевого отчёта (тот же
+	// opex-фильтр, что в ОПиУ/ДДС).
+	opType, opCat, opActivity := "out", "other", "operational"
+	gdb.Create(&models.FinancialOperation{
+		ID: uuid.NewString(), Type: &opType, Category: &opCat, Activity: &opActivity,
+		Amount: decimal.MustFromString("10"), RestaurantID: &b1, CreatedAt: now,
+	})
+	gdb.Create(&models.FinancialOperation{
+		ID: uuid.NewString(), Type: &opType, Category: &opCat, Activity: &opActivity,
+		Amount: decimal.MustFromString("15"), RestaurantID: &b2, CreatedAt: now,
+	})
+
 	svc := service.NewNetworkService(repo.New(gdb), "")
 	ctx := tenant.WithRestaurant(context.Background(), centralID)
 	from := now.Add(-1 * time.Hour)
@@ -360,6 +372,25 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		}
 		if !out.TotalValue.Equal(decimal.MustFromString("1180")) {
 			t.Errorf("TotalValue = %s, want 1180", out.TotalValue.String())
+		}
+	})
+
+	t.Run("TrendsNetwork", func(t *testing.T) {
+		out, err := svc.TrendsNetwork(ctx, f, "day")
+		if err != nil {
+			t.Fatalf("TrendsNetwork: %v", err)
+		}
+		if !out.Totals.Revenue.Equal(decimal.MustFromString("92")) {
+			t.Errorf("Totals.Revenue = %s, want 92", out.Totals.Revenue.String())
+		}
+		if out.Totals.OrdersCount != 2 {
+			t.Errorf("Totals.OrdersCount = %d, want 2", out.Totals.OrdersCount)
+		}
+		if !out.Totals.Expenses.Equal(decimal.MustFromString("25")) { // 10+15
+			t.Errorf("Totals.Expenses = %s, want 25", out.Totals.Expenses.String())
+		}
+		if len(out.Buckets) != 1 {
+			t.Fatalf("buckets: %+v, want 1 (все заказы/расходы сегодня)", out.Buckets)
 		}
 	})
 }

@@ -287,12 +287,7 @@ export interface TrendsReport {
   previous: TrendTotals
 }
 
-export async function fetchTrends(
-  opts: { from?: Date | string; to?: Date | string; granularity?: TrendGranularity } = {},
-): Promise<TrendsReport> {
-  const query: Record<string, string> = buildQuery(opts)
-  if (opts.granularity) query.granularity = opts.granularity
-  const r: any = await unwrap(api.GET('/api/v1/analytics/trends', { params: { query: query as any } }))
+function normalizeTrends(r: any): TrendsReport {
   const num = (v: any) => Number(v ?? 0)
   const totals = (t: any): TrendTotals => ({
     revenue: num(t?.revenue), orders_count: num(t?.orders_count),
@@ -307,6 +302,26 @@ export async function fetchTrends(
     })),
     totals: totals(r?.totals), previous: totals(r?.previous),
   }
+}
+
+export async function fetchTrends(
+  opts: { from?: Date | string; to?: Date | string; granularity?: TrendGranularity } = {},
+): Promise<TrendsReport> {
+  const query: Record<string, string> = buildQuery(opts)
+  if (opts.granularity) query.granularity = opts.granularity
+  const r: any = await unwrap(api.GET('/api/v1/analytics/trends', { params: { query: query as any } }))
+  return normalizeTrends(r)
+}
+
+// Динамика по сети — сумма по всем филиалам, тот же формат ответа. Расход —
+// тот же opex-фильтр, что в сетевом ОПиУ.
+export async function fetchNetworkTrends(
+  opts: { from?: Date | string; to?: Date | string; granularity?: TrendGranularity } = {},
+): Promise<TrendsReport> {
+  const query: Record<string, string> = buildQuery(opts)
+  if (opts.granularity) query.granularity = opts.granularity
+  const r: any = await unwrap(api.GET('/api/v1/network/analytics/trends', { params: { query } }))
+  return normalizeTrends(r)
 }
 
 export async function fetchPeakHours(opts: { from?: Date | string; to?: Date | string } = {}): Promise<PeakHoursReport> {

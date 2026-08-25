@@ -1021,6 +1021,112 @@ func (s *NetworkService) IngredientStockValueNetwork(ctx context.Context, limit 
 	return out, nil
 }
 
+// ─── Динамика ───────────────────────────────────────────────────────────
+
+// TrendsNetwork — тот же временной ряд (revenue/orders/avg_check/expenses по
+// бакетам), что и TrendsService.Trends, но по всей сети. НЕ переиспользует
+// ReportsService.PnLData/FinanceReportsService.OpexByDay напрямую (они жёстко
+// завязаны на ForTenant), а строит те же два запроса заново с
+// restaurant_id IN ids — переиспользуя те же пакетные хелперы
+// (applyOpexFilter/applyFOPeriod/foBizDay/bucketize/avgCheck), чтобы
+// определение opex не разъехалось с локальным отчётом.
+func (s *NetworkService) TrendsNetwork(ctx context.Context, f PeriodFilter, granularity string) (*TrendsJSON, error) {
+	ids, err := s.networkBranchIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	gran := normalizeGranularity(granularity)
+	from, to := resolveRange(f)
+	if len(ids) == 0 {
+		return &TrendsJSON{From: from, To: to, Granularity: gran, Buckets: []TrendBucket{}}, nil
+	}
+
+	daily, err := s.networkDailyAgg(ctx, ids, from, to)
+	if err != nil {
+		return nil, err
+	}
+	buckets := bucketize(from, to, gran, daily)
+
+	totals := TrendTotals{Revenue: decimal.Zero, Expenses: decimal.Zero}
+	for _, b := range buckets {
+		totals.Revenue = decimal.Add(totals.Revenue, b.Revenue)
+		totals.OrdersCount += b.OrdersCount
+		totals.Expenses = decimal.Add(totals.Expenses, b.Expenses)
+	}
+	totals.Revenue = decimal.Normalize(totals.Revenue)
+	totals.Expenses = decimal.Normalize(totals.Expenses)
+	totals.AvgCheck = avgCheck(totals.Revenue, totals.OrdersCount)
+
+	// Предыдущий равный период [from-len, from): только тоталы для Δ%.
+	length := to.Sub(from)
+	prevFrom, prevTo := from.Add(-length), from
+	prevDaily, err := s.networkDailyAgg(ctx, ids, prevFrom, prevTo)
+	if err != nil {
+		return nil, err
+	}
+	prev := TrendTotals{Revenue: decimal.Zero, Expenses: decimal.Zero}
+	for _, a := range prevDaily {
+		prev.Revenue = decimal.Add(prev.Revenue, a.revenue)
+		prev.OrdersCount += a.orders
+		prev.Expenses = decimal.Add(prev.Expenses, a.expenses)
+	}
+	prev.Revenue = decimal.Normalize(prev.Revenue)
+	prev.Expenses = decimal.Normalize(prev.Expenses)
+	prev.AvgCheck = avgCheck(prev.Revenue, prev.OrdersCount)
+
+	return &TrendsJSON{
+		From: from, To: to, Granularity: gran,
+		Buckets: buckets, Totals: totals, Previous: prev,
+	}, nil
+}
+
+// networkDailyAgg — сетевой аналог TrendsService.dailyAgg: revenue+orders из
+// orders, expenses из financial_operations (тот же opex-фильтр, что в
+// локальном ОПиУ/ДДС — включая исключение зеркальных «оплачено за филиал»
+// операций через target_restaurant_id IS NULL внутри applyOpexFilter).
+func (s *NetworkService) networkDailyAgg(ctx context.Context, ids []string, from, to time.Time) (map[string]*dayAgg, error) {
+	type revRow struct {
+		Day   string          `gorm:"column:day"`
+		Total decimal.Decimal `gorm:"column:total"`
+		Cnt   int             `gorm:"column:cnt"`
+	}
+	q := s.r.Raw().WithContext(ctx).Table("orders").
+		Select("to_char(closed_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
+		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
+		Where("closed_at >= ? AND closed_at < ?", from, to).
+		Group("day")
+	var revRows []revRow
+	if err := q.Scan(&revRows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]*dayAgg, len(revRows))
+	for _, r := range revRows {
+		out[r.Day] = &dayAgg{revenue: r.Total, orders: r.Cnt, expenses: decimal.Zero}
+	}
+
+	type expRow struct {
+		Day   string          `gorm:"column:day"`
+		Total decimal.Decimal `gorm:"column:total"`
+	}
+	fopF := PeriodFilter{From: &from, To: &to}
+	qe := applyFOPeriod(applyOpexFilter(s.r.Raw().WithContext(ctx).Table("financial_operations").
+		Where("restaurant_id IN ?", ids).
+		Select(foBizDay+" AS day, COALESCE(SUM(amount), 0) AS total")), fopF)
+	var expRows []expRow
+	if err := qe.Group("day").Scan(&expRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range expRows {
+		a := out[r.Day]
+		if a == nil {
+			a = &dayAgg{revenue: decimal.Zero, expenses: decimal.Zero}
+			out[r.Day] = a
+		}
+		a.expenses = r.Total
+	}
+	return out, nil
+}
+
 // networkBranchIDs — общий вход для методов этого файла: список id узлов
 // сети вызывающего. Пустой слайс (не ошибка), если сеть пуста — вызывающий
 // сам решает, что за this значит (обычно просто пустой отчёт).

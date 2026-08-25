@@ -1408,6 +1408,19 @@ paths:
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WeekdayReport" } } } } }
 
+  /api/v1/network/analytics/trends:
+    get:
+      tags: [stock]
+      summary: |
+        Динамика выручки/заказов/среднего чека/расходов по всей сети — тот
+        же формат, что у /analytics/trends. Расход — тот же opex-фильтр,
+        что в сетевом ОПиУ (исключает зеркала «оплачено за филиал»).
+      parameters:
+        - { $ref: "#/components/parameters/From" }
+        - { $ref: "#/components/parameters/To" }
+        - { in: query, name: granularity, schema: { type: string, enum: [day, week, month], default: day } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/TrendsReport" } } } } }
+
   /api/v1/network/analytics/food-cost:
     get:
       tags: [stock]

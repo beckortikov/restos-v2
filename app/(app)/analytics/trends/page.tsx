@@ -8,8 +8,10 @@ import {
 import { ArrowDownRight, ArrowUpRight, Download, Minus } from 'lucide-react'
 
 import { formatCurrency } from '@/lib/helpers'
-import { fetchTrends, type TrendsReport, type TrendBucket, type TrendGranularity } from '@/lib/queries/analytics'
+import { fetchTrends, fetchNetworkTrends, type TrendsReport, type TrendBucket, type TrendGranularity } from '@/lib/queries/analytics'
 import { exportToExcel } from '@/lib/export-excel'
+import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -182,6 +184,9 @@ function MetricTab({ report, metric }: { report: TrendsReport; metric: MetricKey
 // ─── Страница ─────────────────────────────────────────────────────────────────
 
 export default function TrendsPage() {
+  const { restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [range, setRange] = useState<RangeKey>('30d')
   const [gran, setGran] = useState<TrendGranularity>('day')
   const [report, setReport] = useState<TrendsReport | null>(null)
@@ -191,12 +196,13 @@ export default function TrendsPage() {
     let alive = true
     setLoading(true)
     const days = RANGES.find(r => r.key === range)!.days
-    fetchTrends({ ...rangeToDates(days), granularity: gran })
+    const fetcher = isCentral ? fetchNetworkTrends : fetchTrends
+    fetcher({ ...rangeToDates(days), granularity: gran })
       .then(r => { if (alive) setReport(r) })
       .catch((e) => { if (alive) toast.error('Не удалось загрузить динамику: ' + (e?.message ?? e)) })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [range, gran])
+  }, [range, gran, isCentral])
 
   function handleExport() {
     if (!report) return
@@ -219,7 +225,9 @@ export default function TrendsPage() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">Динамика</h1>
-          <p className="text-sm text-muted-foreground">Выручка, заказы, средний чек и расходы во времени</p>
+          <p className="text-sm text-muted-foreground">
+            {isCentral ? 'Выручка, заказы, средний чек и расходы во времени — по всей сети' : 'Выручка, заказы, средний чек и расходы во времени'}
+          </p>
         </div>
         <Button variant="outline" size="sm" onClick={handleExport} disabled={!report}>
           <Download className="mr-2 h-4 w-4" /> Excel
