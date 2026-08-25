@@ -3752,6 +3752,125 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/analytics/food-cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Food-cost по блюдам по всей сети — тот же формат, что у /analytics/food-cost, схлопнуто по имени блюда. */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FoodCostReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/analytics/food-cost/monthly": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Food-cost тренд по месяцам по всей сети (сумма). */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FoodCostMonthlyReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/analytics/ingredient-stock-value": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Top-N ингредиентов по сумме на складе по всей сети (единый рейтинг),
+         *     НЕ схлопывается по имени — как в ABC-Склад.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkIngredientStockReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nomenclature": {
         parameters: {
             query?: never;
@@ -16734,6 +16853,14 @@ export interface components {
         IngredientStockReport: {
             total_value?: components["schemas"]["Decimal"];
             items?: components["schemas"]["IngredientStockRow"][];
+        };
+        NetworkIngredientStockReport: {
+            total_value?: components["schemas"]["Decimal"];
+            items?: (components["schemas"]["IngredientStockRow"] & {
+                /** Format: uuid */
+                restaurant_id?: string;
+                restaurant_name?: string;
+            })[];
         };
         ForecastMonth: {
             /** @description YYYY-MM */

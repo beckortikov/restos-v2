@@ -5,7 +5,13 @@ import { formatCurrency } from '@/lib/helpers'
 import { useAuth } from '@/lib/auth-store'
 import { Download } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
-import { fetchFoodCost, fetchIngredientStockValue, fetchFoodCostMonthly, type FoodCostReport, type IngredientStockReport, type FoodCostMonthlyReport } from '@/lib/queries/analytics'
+import {
+  fetchFoodCost, fetchNetworkFoodCost,
+  fetchIngredientStockValue, fetchNetworkIngredientStockValue,
+  fetchFoodCostMonthly, fetchNetworkFoodCostMonthly,
+  type FoodCostReport, type IngredientStockReport, type NetworkIngredientStockReport, type FoodCostMonthlyReport,
+} from '@/lib/queries/analytics'
+import { useBranchView } from '@/hooks/use-branch-view'
 import { toast } from 'sonner'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, LineChart, Line, Legend } from 'recharts'
 
@@ -34,30 +40,35 @@ interface DishRow {
 }
 
 export default function FoodCostPage() {
-  const { canDo } = useAuth()
+  const { canDo, restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [report, setReport] = useState<FoodCostReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('all')
-  const [stockReport, setStockReport] = useState<IngredientStockReport | null>(null)
+  const [stockReport, setStockReport] = useState<IngredientStockReport | NetworkIngredientStockReport | null>(null)
   const [monthlyReport, setMonthlyReport] = useState<FoodCostMonthlyReport | null>(null)
 
   useEffect(() => {
     setLoading(true)
     const { from, to } = periodToRange(period)
-    fetchFoodCost({ from, to })
+    const fcFetcher = isCentral ? fetchNetworkFoodCost : fetchFoodCost
+    fcFetcher({ from, to })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
-    fetchFoodCostMonthly({ from, to })
+    const monthlyFetcher = isCentral ? fetchNetworkFoodCostMonthly : fetchFoodCostMonthly
+    monthlyFetcher({ from, to })
       .then(setMonthlyReport)
       .catch(() => { /* trend chart is optional */ })
-  }, [period])
+  }, [period, isCentral])
 
   useEffect(() => {
-    fetchIngredientStockValue({ limit: 10 })
+    const stockFetcher = isCentral ? fetchNetworkIngredientStockValue : fetchIngredientStockValue
+    stockFetcher({ limit: 10 })
       .then(setStockReport)
       .catch(() => { /* stock chart is optional */ })
-  }, [])
+  }, [isCentral])
 
   const rows: DishRow[] = useMemo(() => {
     if (!report) return []
@@ -137,7 +148,9 @@ export default function FoodCostPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Анализ себестоимости</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Food cost и расходы на ингредиенты</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {isCentral ? 'Food cost и расходы на ингредиенты по всей сети' : 'Food cost и расходы на ингредиенты'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -213,7 +226,7 @@ export default function FoodCostPage() {
             <ResponsiveContainer>
               <BarChart
                 data={stockReport.items.map(it => ({
-                  name: it.name,
+                  name: isCentral && 'restaurant_name' in it ? `${it.name} · ${it.restaurant_name}` : it.name,
                   value: Number(it.value),
                   share: Number(it.share),
                 }))}

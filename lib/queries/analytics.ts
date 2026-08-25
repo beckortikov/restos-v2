@@ -386,6 +386,12 @@ export async function fetchFoodCost(opts: { from?: Date | string; to?: Date | st
   return (await unwrap(api.GET('/api/v1/analytics/food-cost', { params: { query: query as any } }))) as FoodCostReport
 }
 
+// Себестоимость по сети — схлопнуто по имени блюда, тот же формат ответа.
+export async function fetchNetworkFoodCost(opts: { from?: Date | string; to?: Date | string } = {}): Promise<FoodCostReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/food-cost', { params: { query } }))) as FoodCostReport
+}
+
 // --- Sales report (Н21): серверный агрегат вместо клиентского расчёта ---
 export interface SalesReportRow {
   date: string
@@ -438,6 +444,24 @@ export async function fetchIngredientStockValue(opts: { limit?: number } = {}): 
   return (await unwrap(api.GET('/api/v1/analytics/ingredient-stock-value' as any, { params: { query: query as any } }))) as IngredientStockReport
 }
 
+// Топ ингредиентов по стоимости остатка по сети — НЕ схлопывается по имени
+// (см. серверный комментарий у ABC-Склад): каждая строка помечена филиалом.
+export interface NetworkIngredientStockRow extends IngredientStockRow {
+  restaurant_id: string
+  restaurant_name: string
+}
+
+export interface NetworkIngredientStockReport {
+  total_value: DecStr
+  items: NetworkIngredientStockRow[]
+}
+
+export async function fetchNetworkIngredientStockValue(opts: { limit?: number } = {}): Promise<NetworkIngredientStockReport> {
+  const query: Record<string, string> = {}
+  if (opts.limit != null) query.limit = String(opts.limit)
+  return (await unwrap(api.GET('/api/v1/network/analytics/ingredient-stock-value', { params: { query } }))) as NetworkIngredientStockReport
+}
+
 // --- Food-cost monthly trend ---
 
 export interface FoodCostMonth {
@@ -457,6 +481,12 @@ export interface FoodCostMonthlyReport {
 export async function fetchFoodCostMonthly(opts: { from?: Date | string; to?: Date | string } = {}): Promise<FoodCostMonthlyReport> {
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/analytics/food-cost/monthly' as any, { params: { query: query as any } }))) as FoodCostMonthlyReport
+}
+
+// Тренд food-cost по месяцам по сети (сумма), тот же формат ответа.
+export async function fetchNetworkFoodCostMonthly(opts: { from?: Date | string; to?: Date | string } = {}): Promise<FoodCostMonthlyReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/food-cost/monthly', { params: { query } }))) as FoodCostMonthlyReport
 }
 
 // --- Forecast & break-even ---

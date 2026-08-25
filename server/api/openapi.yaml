@@ -1408,6 +1408,30 @@ paths:
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WeekdayReport" } } } } }
 
+  /api/v1/network/analytics/food-cost:
+    get:
+      tags: [stock]
+      summary: Food-cost по блюдам по всей сети — тот же формат, что у /analytics/food-cost, схлопнуто по имени блюда.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FoodCostReport" } } } } }
+
+  /api/v1/network/analytics/food-cost/monthly:
+    get:
+      tags: [stock]
+      summary: Food-cost тренд по месяцам по всей сети (сумма).
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FoodCostMonthlyReport" } } } } }
+
+  /api/v1/network/analytics/ingredient-stock-value:
+    get:
+      tags: [stock]
+      summary: |
+        Top-N ингредиентов по сумме на складе по всей сети (единый рейтинг),
+        НЕ схлопывается по имени — как в ABC-Склад.
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, default: 10, minimum: 1, maximum: 200 } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkIngredientStockReport" } } } } }
+
   /api/v1/nomenclature:
     get:
       tags: [stock]
@@ -6603,6 +6627,19 @@ components:
       properties:
         total_value: { $ref: "#/components/schemas/Decimal" }
         items: { type: array, items: { $ref: "#/components/schemas/IngredientStockRow" } }
+    NetworkIngredientStockReport:
+      type: object
+      properties:
+        total_value: { $ref: "#/components/schemas/Decimal" }
+        items:
+          type: array
+          items:
+            allOf:
+              - { $ref: "#/components/schemas/IngredientStockRow" }
+              - type: object
+                properties:
+                  restaurant_id: { type: string, format: uuid }
+                  restaurant_name: { type: string }
 
     ForecastMonth:
       type: object

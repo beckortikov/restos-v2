@@ -756,6 +756,271 @@ func (s *NetworkService) WeekdayNetwork(ctx context.Context, f PeriodFilter) (*W
 	return out, nil
 }
 
+// ─── Себестоимость ──────────────────────────────────────────────────────
+
+// FoodCostNetwork — та же (блюдо × cogs/margin) агрегация, что и локальный
+// отчёт, схлопнутая по имени блюда по всей сети (см. головной комментарий).
+func (s *NetworkService) FoodCostNetwork(ctx context.Context, f PeriodFilter) (*FoodCostReport, error) {
+	ids, err := s.networkBranchIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &FoodCostReport{Rows: []FoodCostRow{}}
+	out.Period.From = f.From
+	out.Period.To = f.To
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	type row struct {
+		MenuItemID string          `gorm:"column:menu_item_id"`
+		Name       string          `gorm:"column:name"`
+		Qty        decimal.Decimal `gorm:"column:qty"`
+		Revenue    decimal.Decimal `gorm:"column:revenue"`
+		COGS       decimal.Decimal `gorm:"column:cogs"`
+	}
+	q := s.r.Raw().WithContext(ctx).Table("order_items AS oi").
+		Select(`COALESCE(MAX(mi.name), MAX(oi.name), '—') AS menu_item_id,
+		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END), 0) AS qty,
+		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)), 0) AS revenue,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs  * oi.qty / oi.unit_size ELSE oi.cogs  * oi.qty END), 0) AS cogs`).
+		Joins("JOIN orders o ON o.id = oi.order_id").
+		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id AND mi.restaurant_id = o.restaurant_id").
+		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
+		Where("oi.cancelled_at IS NULL").
+		Where("oi.menu_item_id IS NOT NULL")
+	if f.From != nil {
+		q = q.Where("o.closed_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("o.closed_at < ?", *f.To)
+	}
+	var rows []row
+	if err := q.Group("COALESCE(mi.name, oi.name)").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	hundred := decimal.FromInt(100)
+	totalRev := decimal.Zero
+	totalCOGS := decimal.Zero
+	for _, r := range rows {
+		gross := decimal.Sub(r.Revenue, r.COGS)
+		fcPct := decimal.Zero
+		marginPct := decimal.Zero
+		if r.Revenue.IsPositive() {
+			fcPct = decimal.DivRound(decimal.Mul(r.COGS, hundred), r.Revenue)
+			marginPct = decimal.DivRound(decimal.Mul(gross, hundred), r.Revenue)
+		}
+		out.Rows = append(out.Rows, FoodCostRow{
+			MenuItemID:    r.MenuItemID,
+			Name:          r.Name,
+			Qty:           decimal.Normalize(r.Qty),
+			Revenue:       decimal.Normalize(r.Revenue),
+			COGS:          decimal.Normalize(r.COGS),
+			FoodCostPct:   decimal.Normalize(fcPct),
+			GrossProfit:   decimal.Normalize(gross),
+			MarginPercent: decimal.Normalize(marginPct),
+		})
+		totalRev = decimal.Add(totalRev, r.Revenue)
+		totalCOGS = decimal.Add(totalCOGS, r.COGS)
+	}
+	sort.Slice(out.Rows, func(i, j int) bool {
+		return out.Rows[i].FoodCostPct.GreaterThan(out.Rows[j].FoodCostPct)
+	})
+	out.TotalRevenue = decimal.Normalize(totalRev)
+	out.TotalCOGS = decimal.Normalize(totalCOGS)
+	if totalRev.IsPositive() {
+		out.FoodCostPct = decimal.Normalize(decimal.DivRound(decimal.Mul(totalCOGS, hundred), totalRev))
+		gross := decimal.Sub(totalRev, totalCOGS)
+		out.MarginPercent = decimal.Normalize(decimal.DivRound(decimal.Mul(gross, hundred), totalRev))
+	}
+	return out, nil
+}
+
+// FoodCostMonthlyNetwork — тренд food_cost_pct по месяцам, сумма по сети.
+func (s *NetworkService) FoodCostMonthlyNetwork(ctx context.Context, f PeriodFilter) (*FoodCostMonthlyReport, error) {
+	ids, err := s.networkBranchIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := &FoodCostMonthlyReport{Months: []FoodCostMonth{}}
+	out.Period.From = f.From
+	out.Period.To = f.To
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	type revRow struct {
+		Month   string          `gorm:"column:month"`
+		Revenue decimal.Decimal `gorm:"column:revenue"`
+		Orders  int             `gorm:"column:orders"`
+	}
+	q := s.r.Raw().WithContext(ctx).Table("orders").
+		Select(`to_char(closed_at, 'YYYY-MM') AS month,
+		        COALESCE(SUM(total_with_service), 0) AS revenue,
+		        COUNT(*) AS orders`).
+		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
+	if f.From != nil {
+		q = q.Where("closed_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("closed_at < ?", *f.To)
+	}
+	var rRows []revRow
+	if err := q.Group("month").Order("month ASC").Scan(&rRows).Error; err != nil {
+		return nil, err
+	}
+
+	type cogsRow struct {
+		Month string          `gorm:"column:month"`
+		COGS  decimal.Decimal `gorm:"column:cogs"`
+	}
+	q2 := s.r.Raw().WithContext(ctx).Table("orders AS o").
+		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
+		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
+		Joins("JOIN order_items oi ON oi.order_id = o.id").
+		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", ids, []string{"closed", "refunded"})
+	if f.From != nil {
+		q2 = q2.Where("o.closed_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q2 = q2.Where("o.closed_at < ?", *f.To)
+	}
+	var cRows []cogsRow
+	_ = q2.Group("month").Scan(&cRows).Error
+	cogsByMonth := make(map[string]decimal.Decimal, len(cRows))
+	for _, r := range cRows {
+		cogsByMonth[r.Month] = r.COGS
+	}
+
+	hundred := decimal.FromInt(100)
+	for _, r := range rRows {
+		c := cogsByMonth[r.Month]
+		fc := decimal.Zero
+		marg := decimal.Zero
+		if r.Revenue.IsPositive() {
+			fc = decimal.DivRound(decimal.Mul(c, hundred), r.Revenue)
+			gross := decimal.Sub(r.Revenue, c)
+			marg = decimal.DivRound(decimal.Mul(gross, hundred), r.Revenue)
+		}
+		out.Months = append(out.Months, FoodCostMonth{
+			Month:         r.Month,
+			Revenue:       decimal.Normalize(r.Revenue),
+			COGS:          decimal.Normalize(c),
+			FoodCostPct:   decimal.Normalize(fc),
+			MarginPercent: decimal.Normalize(marg),
+			Orders:        r.Orders,
+		})
+	}
+	return out, nil
+}
+
+// ─── Остаток на складе (топ по стоимости) ──────────────────────────────────
+
+// NetworkIngredientStockRow — как IngredientStockRow, но с именем филиала:
+// та же логика, что у ABC-Склад — ингредиенты не схлопываются по имени.
+type NetworkIngredientStockRow struct {
+	IngredientStockRow
+	RestaurantID   string `json:"restaurant_id"`
+	RestaurantName string `json:"restaurant_name"`
+}
+
+type NetworkIngredientStockReport struct {
+	TotalValue decimal.Decimal             `json:"total_value"`
+	Items      []NetworkIngredientStockRow `json:"items"`
+}
+
+// IngredientStockValueNetwork — top-N позиций по стоимости остатка по всей
+// сети (единый рейтинг, не по N на филиал), НЕ схлопывается по имени.
+func (s *NetworkService) IngredientStockValueNetwork(ctx context.Context, limit int) (*NetworkIngredientStockReport, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	nameByID := make(map[string]string, len(branches))
+	for _, b := range branches {
+		nameByID[b.ID] = b.Name
+	}
+	out := &NetworkIngredientStockReport{Items: []NetworkIngredientStockRow{}}
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	type row struct {
+		ID           string          `gorm:"column:id"`
+		RestaurantID string          `gorm:"column:restaurant_id"`
+		Name         *string         `gorm:"column:name"`
+		Category     *string         `gorm:"column:category"`
+		Qty          decimal.Decimal `gorm:"column:qty"`
+		Unit         *string         `gorm:"column:unit"`
+		PricePerUnit decimal.Decimal `gorm:"column:price_per_unit"`
+	}
+	var rows []row
+	if err := s.r.Raw().WithContext(ctx).Table("ingredients").
+		Select("id, restaurant_id, name, category, qty, unit, price_per_unit").
+		Where("restaurant_id IN ?", ids).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	enriched := make([]NetworkIngredientStockRow, 0, len(rows))
+	total := decimal.Zero
+	for _, r := range rows {
+		val := decimal.Mul(r.Qty, r.PricePerUnit)
+		if !val.IsPositive() {
+			continue
+		}
+		name := "—"
+		if r.Name != nil && *r.Name != "" {
+			name = *r.Name
+		}
+		cat := ""
+		if r.Category != nil {
+			cat = *r.Category
+		}
+		unit := ""
+		if r.Unit != nil {
+			unit = *r.Unit
+		}
+		enriched = append(enriched, NetworkIngredientStockRow{
+			IngredientStockRow: IngredientStockRow{
+				IngredientID: r.ID, Name: name, Category: cat,
+				Qty: decimal.Normalize(r.Qty), Unit: unit,
+				PricePerUnit: decimal.Normalize(r.PricePerUnit),
+				Value:        decimal.Normalize(val),
+			},
+			RestaurantID:   r.RestaurantID,
+			RestaurantName: nameByID[r.RestaurantID],
+		})
+		total = decimal.Add(total, val)
+	}
+	sort.Slice(enriched, func(i, j int) bool {
+		return enriched[i].Value.GreaterThan(enriched[j].Value)
+	})
+	if len(enriched) > limit {
+		enriched = enriched[:limit]
+	}
+	hundred := decimal.FromInt(100)
+	for i := range enriched {
+		if total.IsPositive() {
+			enriched[i].Share = decimal.Normalize(
+				decimal.DivRound(decimal.Mul(enriched[i].Value, hundred), total),
+			)
+		}
+	}
+	out.Items = enriched
+	out.TotalValue = decimal.Normalize(total)
+	return out, nil
+}
+
 // networkBranchIDs — общий вход для методов этого файла: список id узлов
 // сети вызывающего. Пустой слайс (не ошибка), если сеть пуста — вызывающий
 // сам решает, что за this значит (обычно просто пустой отчёт).

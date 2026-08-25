@@ -245,6 +245,49 @@ func (h *NetworkHandler) Waiters(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+func (h *NetworkHandler) FoodCost(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.FoodCostNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *NetworkHandler) FoodCostMonthly(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.FoodCostMonthlyNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *NetworkHandler) IngredientStockValue(w http.ResponseWriter, r *http.Request) {
+	limit := 10
+	if v := queryString(r, "limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+	out, err := h.svc.IngredientStockValueNetwork(r.Context(), limit)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *NetworkHandler) Weekday(w http.ResponseWriter, r *http.Request) {
 	f, err := parsePeriod(r)
 	if err != nil {

@@ -17,14 +17,16 @@ import (
 	"github.com/restos/restos-v4/server/internal/service"
 )
 
-// TestNetworkAnalyticsBatch1 — Пиковые часы / ABC-Меню / ABC-Склад / Продажи
-// по всей сети (владелец 2026-08-25: «весь раздел аналитики... сейчас ничего
-// нет»). Тот же двух-филиальный фикстур, что и TestNetworkDashboardDetail:
-// «Пепперони» продают ОБА филиала под РАЗНЫМИ menu_item_id (своя копия у
-// каждого) — главное, что проверяется, это схлопывание блюд по ИМЕНИ, а
-// НЕ по id. «Сыр» на складе — наоборот, у ингредиентов нет сетевой
-// идентичности, каждая строка ABC-Склад обязана остаться СВОЕЙ, с именем
-// филиала, а не слиться с одноимённым товаром на другой точке.
+// TestNetworkAnalyticsBatch1 — Пиковые часы / ABC-Меню / ABC-Склад / Продажи /
+// Официанты / Дни недели / Себестоимость по всей сети (владелец 2026-08-25:
+// «весь раздел аналитики... сейчас ничего нет»). Тот же двух-филиальный
+// фикстур, что и TestNetworkDashboardDetail: «Пепперони» продают ОБА филиала
+// под РАЗНЫМИ menu_item_id (своя копия у каждого) — главное, что проверяется,
+// это схлопывание блюд по ИМЕНИ, а НЕ по id. «Сыр» на складе — наоборот, у
+// ингредиентов нет сетевой идентичности, каждая строка ABC-Склад/Остаток
+// обязана остаться СВОЕЙ, с именем филиала, а не слиться с одноимённым
+// товаром на другой точке. Официант — та же логика, что склад (свой
+// users.id на филиале).
 func TestNetworkAnalyticsBatch1(t *testing.T) {
 	gdb, err := db.Open(transferTestDSN())
 	if err != nil {
@@ -280,6 +282,84 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		wantGross := decimal.MustFromString("52") // 92-40
 		if !row.GrossProfit.Equal(wantGross) {
 			t.Errorf("GrossProfit = %s, want %s", row.GrossProfit.String(), wantGross.String())
+		}
+	})
+
+	t.Run("FoodCostNetwork", func(t *testing.T) {
+		out, err := svc.FoodCostNetwork(ctx, f)
+		if err != nil {
+			t.Fatalf("FoodCostNetwork: %v", err)
+		}
+		if len(out.Rows) != 1 || out.Rows[0].Name != pepperoniName {
+			t.Fatalf("rows: %+v — «Пепперони» с двух филиалов должны схлопнуться по имени", out.Rows)
+		}
+		if !out.Rows[0].Revenue.Equal(decimal.MustFromString("92")) {
+			t.Errorf("Revenue = %s, want 92", out.Rows[0].Revenue.String())
+		}
+		if !out.Rows[0].COGS.Equal(decimal.MustFromString("40")) {
+			t.Errorf("COGS = %s, want 40", out.Rows[0].COGS.String())
+		}
+		if !out.TotalRevenue.Equal(decimal.MustFromString("92")) || !out.TotalCOGS.Equal(decimal.MustFromString("40")) {
+			t.Errorf("totals: revenue=%s cogs=%s", out.TotalRevenue.String(), out.TotalCOGS.String())
+		}
+	})
+
+	t.Run("FoodCostMonthlyNetwork", func(t *testing.T) {
+		out, err := svc.FoodCostMonthlyNetwork(ctx, f)
+		if err != nil {
+			t.Fatalf("FoodCostMonthlyNetwork: %v", err)
+		}
+		wantMonth := now.Format("2006-01")
+		var m *service.FoodCostMonth
+		for i := range out.Months {
+			if out.Months[i].Month == wantMonth {
+				m = &out.Months[i]
+			}
+		}
+		if m == nil {
+			t.Fatalf("нет месяца %s: %+v", wantMonth, out.Months)
+		}
+		if m.Orders != 2 {
+			t.Errorf("Orders = %d, want 2", m.Orders)
+		}
+		if !m.Revenue.Equal(decimal.MustFromString("92")) {
+			t.Errorf("Revenue = %s, want 92", m.Revenue.String())
+		}
+		if !m.COGS.Equal(decimal.MustFromString("40")) {
+			t.Errorf("COGS = %s, want 40", m.COGS.String())
+		}
+	})
+
+	t.Run("IngredientStockValueNetwork", func(t *testing.T) {
+		out, err := svc.IngredientStockValueNetwork(ctx, 10)
+		if err != nil {
+			t.Fatalf("IngredientStockValueNetwork: %v", err)
+		}
+		if len(out.Items) != 2 {
+			t.Fatalf("items = %d, want 2 (сыр НЕ должен схлопнуться между филиалами)", len(out.Items))
+		}
+		byBranch := map[string]service.NetworkIngredientStockRow{}
+		for _, it := range out.Items {
+			byBranch[it.RestaurantName] = it
+		}
+		// qty на момент чтения — уже ПОСЛЕ денормализации хуком AfterCreate
+		// StockMovement (10-3=7, 5-1=4), не сырое значение при вставке.
+		b1Row, ok := byBranch["Филиал-1"]
+		if !ok {
+			t.Fatalf("нет строки «Сыр» для Филиал-1: %+v", out.Items)
+		}
+		if !b1Row.Value.Equal(decimal.MustFromString("700")) { // 7 × 100
+			t.Errorf("Филиал-1 Value = %s, want 700", b1Row.Value.String())
+		}
+		b2Row, ok := byBranch["Филиал-2"]
+		if !ok {
+			t.Fatalf("нет строки «Сыр» для Филиал-2: %+v", out.Items)
+		}
+		if !b2Row.Value.Equal(decimal.MustFromString("480")) { // 4 × 120
+			t.Errorf("Филиал-2 Value = %s, want 480", b2Row.Value.String())
+		}
+		if !out.TotalValue.Equal(decimal.MustFromString("1180")) {
+			t.Errorf("TotalValue = %s, want 1180", out.TotalValue.String())
 		}
 	})
 }
