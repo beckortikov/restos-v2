@@ -3,8 +3,9 @@
 import { lazy, useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
 import type { ABCClass } from '@/lib/types'
-import { fetchABCMenu, type ABCMenuReport, type EngineeringClass } from '@/lib/queries/analytics'
+import { fetchABCMenu, fetchNetworkABCMenu, type ABCMenuReport, type EngineeringClass } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import { Download, Search, X } from 'lucide-react'
 import { exportToExcel } from '@/lib/export-excel'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
@@ -88,7 +89,9 @@ const COLUMNS: { header: string; sortKey?: SortKey }[] = [
 ]
 
 export default function AbcMenuPage() {
-  const { canDo } = useAuth()
+  const { canDo, restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [report, setReport] = useState<ABCMenuReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>('month')
@@ -107,11 +110,12 @@ export default function AbcMenuPage() {
   useEffect(() => {
     setLoading(true)
     const { from, to } = getDateRange(period, customFrom, customTo)
-    fetchABCMenu({ from: from ?? undefined, to: to ?? undefined })
+    const fetcher = isCentral ? fetchNetworkABCMenu : fetchABCMenu
+    fetcher({ from: from ?? undefined, to: to ?? undefined })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки ABC-анализа'))
       .finally(() => setLoading(false))
-  }, [period, customFrom, customTo])
+  }, [period, customFrom, customTo, isCentral])
 
   const items: UIItem[] = useMemo(() => {
     if (!report) return []
@@ -226,7 +230,9 @@ export default function AbcMenuPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">ABC-анализ меню</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Какие блюда дают 80% выручки</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {isCentral ? 'Какие блюда дают 80% выручки по всей сети' : 'Какие блюда дают 80% выручки'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button

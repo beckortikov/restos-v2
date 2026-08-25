@@ -302,6 +302,43 @@ export async function fetchPeakHours(opts: { from?: Date | string; to?: Date | s
   return (await unwrap(api.GET('/api/v1/analytics/peak-hours', { params: { query: query as any } }))) as PeakHoursReport
 }
 
+// ─── Сетевые версии (central: сводная по всем филиалам) ───────────────────
+// Тот же формат ответа, что у локальных отчётов выше (см. заголовок
+// server/internal/service/network_analytics.go) — просто другой источник.
+
+export async function fetchNetworkPeakHours(opts: { from?: Date | string; to?: Date | string } = {}): Promise<PeakHoursReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/peak-hours', { params: { query } }))) as PeakHoursReport
+}
+
+export async function fetchNetworkABCMenu(opts: { from?: Date | string; to?: Date | string } = {}): Promise<ABCMenuReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/abc-menu', { params: { query } }))) as ABCMenuReport
+}
+
+export async function fetchNetworkSalesReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<SalesReportResult> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/sales-report', { params: { query } }))) as SalesReportResult
+}
+
+// ABC-Склад по сети НЕ схлопывается по имени (см. серверный комментарий) —
+// каждая строка остаётся привязана к своему филиалу.
+export interface NetworkABCInventoryRow extends ABCInventoryRow {
+  restaurant_id: string
+  restaurant_name: string
+}
+
+export interface NetworkABCInventoryReport {
+  period: AnalyticsPeriod
+  total_consumption_value: DecStr
+  items: NetworkABCInventoryRow[]
+}
+
+export async function fetchNetworkABCInventory(opts: { from?: Date | string; to?: Date | string } = {}): Promise<NetworkABCInventoryReport> {
+  const query = buildQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/abc-inventory', { params: { query } }))) as NetworkABCInventoryReport
+}
+
 export async function fetchWaitersAnalytics(opts: { from?: Date | string; to?: Date | string } = {}): Promise<WaitersReport> {
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/analytics/waiters', { params: { query: query as any } }))) as WaitersReport

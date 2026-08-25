@@ -1353,6 +1353,41 @@ paths:
                       guests_count: { type: integer }
                       closed_at: { type: string, format: date-time, nullable: true }
 
+  /api/v1/network/analytics/peak-hours:
+    get:
+      tags: [stock]
+      summary: Гистограмма weekday × hour по всей сети — тот же формат, что у /analytics/peak-hours.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/PeakHoursReport" } } } } }
+
+  /api/v1/network/analytics/abc-menu:
+    get:
+      tags: [stock]
+      summary: |
+        ABC-анализ блюд по выручке по всей сети — тот же формат, что у
+        /analytics/abc-menu, но группировка ПО ИМЕНИ, не menu_item_id: у
+        сетевого блюда своя строка menu_items на каждом филиале.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/ABCMenuReport" } } } } }
+
+  /api/v1/network/analytics/abc-inventory:
+    get:
+      tags: [stock]
+      summary: |
+        ABC ингредиентов по всей сети. В отличие от блюд — БЕЗ схлопывания по
+        имени: у складских позиций нет общего сетевого id, «Мука» на двух
+        точках — разные закупки с разной ценой, каждая строка помечена
+        именем филиала.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkABCInventoryReport" } } } } }
+
+  /api/v1/network/analytics/sales-report:
+    get:
+      tags: [stock]
+      summary: Отчёт продаж (дата×час×блюдо) по всей сети — тот же формат, что у /analytics/sales-report, группировка по имени блюда.
+      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalesReportResult" } } } } }
+
   /api/v1/nomenclature:
     get:
       tags: [stock]
@@ -6576,6 +6611,20 @@ components:
         period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
         total_consumption_value: { $ref: "#/components/schemas/Decimal" }
         items: { type: array, items: { $ref: "#/components/schemas/ABCInventoryRow" } }
+    NetworkABCInventoryReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string, format: date-time }, to: { type: string, format: date-time } } }
+        total_consumption_value: { $ref: "#/components/schemas/Decimal" }
+        items:
+          type: array
+          items:
+            allOf:
+              - { $ref: "#/components/schemas/ABCInventoryRow" }
+              - type: object
+                properties:
+                  restaurant_id: { type: string, format: uuid }
+                  restaurant_name: { type: string }
 
     SalaryPayInput:
       type: object

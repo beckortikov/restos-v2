@@ -4,9 +4,14 @@ import { lazy, Suspense, useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
 import { toast } from 'sonner'
 import type { ABCClass } from '@/lib/types'
-import { fetchABCInventory, type ABCInventoryReport, type ABCInventoryRow } from '@/lib/queries/analytics'
+import {
+  fetchABCInventory, fetchNetworkABCInventory,
+  type ABCInventoryReport, type ABCInventoryRow, type NetworkABCInventoryReport,
+} from '@/lib/queries/analytics'
 import { DatePeriodFilter, getDateRange, type PeriodKey } from '@/components/date-period-filter'
 import { InsightsRecommendations } from '@/components/insights-recommendations'
+import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 
 const AbcInventoryChart = lazy(() => import('@/components/charts/abc-inventory-chart'))
 
@@ -31,10 +36,14 @@ interface UIRow {
   daysOfStock: number
   value: number
   abc: ABCClass
+  restaurantName?: string
 }
 
 export default function AbcInventoryPage() {
-  const [report, setReport] = useState<ABCInventoryReport | null>(null)
+  const { restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
+  const [report, setReport] = useState<ABCInventoryReport | NetworkABCInventoryReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<PeriodKey>('month')
   const [customFrom, setCustomFrom] = useState('')
@@ -43,11 +52,12 @@ export default function AbcInventoryPage() {
   useEffect(() => {
     setLoading(true)
     const { from, to } = getDateRange(period, customFrom, customTo)
-    fetchABCInventory({ from: from ?? undefined, to: to ?? undefined })
+    const fetcher = isCentral ? fetchNetworkABCInventory : fetchABCInventory
+    fetcher({ from: from ?? undefined, to: to ?? undefined })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки ABC-анализа склада'))
       .finally(() => setLoading(false))
-  }, [period, customFrom, customTo])
+  }, [period, customFrom, customTo, isCentral])
 
   const items: UIRow[] = useMemo(() => {
     if (!report) return []
@@ -62,6 +72,7 @@ export default function AbcInventoryPage() {
       daysOfStock: it.days_of_stock,
       value: Number(it.stock_value),
       abc: it.class as ABCClass,
+      restaurantName: (it as { restaurant_name?: string }).restaurant_name,
     }))
   }, [report])
 
@@ -95,7 +106,9 @@ export default function AbcInventoryPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">ABC-анализ склада</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Категоризация ингредиентов по оборачиваемости</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {isCentral ? 'Категоризация ингредиентов по оборачиваемости — по всей сети' : 'Категоризация ингредиентов по оборачиваемости'}
+          </p>
         </div>
         <DatePeriodFilter
           period={period}
@@ -147,10 +160,13 @@ export default function AbcInventoryPage() {
           {/* Table */}
           <div className="bg-card rounded-xl border border-border overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm min-w-[900px]">
+              <table className={`w-full text-sm ${isCentral ? 'min-w-[1000px]' : 'min-w-[900px]'}`}>
                 <thead>
                   <tr className="border-b border-border bg-muted/40">
-                    {['Класс', 'Ингредиент', 'Категория', 'Остаток', 'Расход', 'Оборачиваемость', 'Дни запаса', 'Стоимость', 'Рекомендация'].map(h => (
+                    {(isCentral
+                      ? ['Класс', 'Ингредиент', 'Филиал', 'Категория', 'Остаток', 'Расход', 'Оборачиваемость', 'Дни запаса', 'Стоимость', 'Рекомендация']
+                      : ['Класс', 'Ингредиент', 'Категория', 'Остаток', 'Расход', 'Оборачиваемость', 'Дни запаса', 'Стоимость', 'Рекомендация']
+                    ).map(h => (
                       <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                         {h}
                       </th>
@@ -166,6 +182,9 @@ export default function AbcInventoryPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 font-medium text-foreground">{item.raw.name}</td>
+                      {isCentral && (
+                        <td className="px-4 py-3 text-xs text-muted-foreground">{item.restaurantName ?? '—'}</td>
+                      )}
                       <td className="px-4 py-3">
                         {item.raw.category && (
                           <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{item.raw.category}</span>

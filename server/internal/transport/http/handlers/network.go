@@ -170,6 +170,67 @@ func (h *NetworkHandler) ShiftZReport(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// ─── Аналитика сети ─────────────────────────────────────────────────────
+// Владелец 2026-08-25: «весь раздел аналитики тоже должен в центре
+// показывать всю сводную по филиалам». Та же логика periodFilter-based
+// маршрутизации, что у остальных /network/* отчётов.
+
+func (h *NetworkHandler) PeakHours(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.PeakHours(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *NetworkHandler) ABCMenu(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.ABCMenuNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *NetworkHandler) ABCInventory(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.ABCInventoryNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+func (h *NetworkHandler) SalesReport(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.SalesReportNetwork(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // Staff — GET /api/v1/network/staff. Весь персонал сети с указанием филиала.
 func (h *NetworkHandler) Staff(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Staff(r.Context())

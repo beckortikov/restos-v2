@@ -6,9 +6,11 @@ import * as XLSX from 'xlsx'
 import { TrendingUp, ShoppingBag, Package, Receipt, ShoppingCart, Download, ChevronDown } from 'lucide-react'
 
 import { formatCurrency } from '@/lib/helpers'
-import { fetchSalesReport, type SalesReportResult } from '@/lib/queries/analytics'
+import { fetchSalesReport, fetchNetworkSalesReport, type SalesReportResult } from '@/lib/queries/analytics'
 import { DateRangePicker } from '@/components/ui/date-range-picker'
 import { getPresetRange } from '@/components/finance/date-range-presets'
+import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 
 const today = () => new Date().toISOString().slice(0, 10)
 
@@ -52,6 +54,9 @@ interface Row {
 }
 
 export default function SalesReportPage() {
+  const { restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [report, setReport] = useState<SalesReportResult | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -67,11 +72,12 @@ export default function SalesReportPage() {
   // Перезапрос при смене периода — серверная фильтрация по датам.
   useEffect(() => {
     setLoading(true)
-    fetchSalesReport({ from: dateFrom, to: dateTo })
+    const fetcher = isCentral ? fetchNetworkSalesReport : fetchSalesReport
+    fetcher({ from: dateFrom, to: dateTo })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки отчёта продаж'))
       .finally(() => setLoading(false))
-  }, [dateFrom, dateTo])
+  }, [dateFrom, dateTo, isCentral])
 
   // Плоский список проданных позиций (сервер уже отфильтровал/просуммировал:
   // скидка учтена, voids/отменённые исключены, категория/покупной резолвнуты).
@@ -221,7 +227,11 @@ export default function SalesReportPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold">Продажи</h1>
-          <p className="text-sm text-muted-foreground">Что и когда продавалось — блюда, категории и покупные товары по дням и часам</p>
+          <p className="text-sm text-muted-foreground">
+            {isCentral
+              ? 'Что и когда продавалось по всей сети — блюда, категории и покупные товары по дням и часам'
+              : 'Что и когда продавалось — блюда, категории и покупные товары по дням и часам'}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <DateRangePicker from={dateFrom} to={dateTo} maxDate={today()} onChange={r => { setDateFrom(r.from); setDateTo(r.to) }} />

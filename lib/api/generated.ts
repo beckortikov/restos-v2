@@ -3501,6 +3501,171 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/analytics/peak-hours": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Гистограмма weekday × hour по всей сети — тот же формат, что у /analytics/peak-hours. */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["PeakHoursReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/analytics/abc-menu": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * ABC-анализ блюд по выручке по всей сети — тот же формат, что у
+         *     /analytics/abc-menu, но группировка ПО ИМЕНИ, не menu_item_id: у
+         *     сетевого блюда своя строка menu_items на каждом филиале.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ABCMenuReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/analytics/abc-inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * ABC ингредиентов по всей сети. В отличие от блюд — БЕЗ схлопывания по
+         *     имени: у складских позиций нет общего сетевого id, «Мука» на двух
+         *     точках — разные закупки с разной ценой, каждая строка помечена
+         *     именем филиала.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkABCInventoryReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/analytics/sales-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Отчёт продаж (дата×час×блюдо) по всей сети — тот же формат, что у /analytics/sales-report, группировка по имени блюда. */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["SalesReportResult"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nomenclature": {
         parameters: {
             query?: never;
@@ -16518,6 +16683,20 @@ export interface components {
             };
             total_consumption_value?: components["schemas"]["Decimal"];
             items?: components["schemas"]["ABCInventoryRow"][];
+        };
+        NetworkABCInventoryReport: {
+            period?: {
+                /** Format: date-time */
+                from?: string;
+                /** Format: date-time */
+                to?: string;
+            };
+            total_consumption_value?: components["schemas"]["Decimal"];
+            items?: (components["schemas"]["ABCInventoryRow"] & {
+                /** Format: uuid */
+                restaurant_id?: string;
+                restaurant_name?: string;
+            })[];
         };
         SalaryPayInput: {
             /** Format: uuid */

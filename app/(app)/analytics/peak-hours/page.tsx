@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { formatCurrency } from '@/lib/helpers'
-import { fetchPeakHours, type PeakHoursReport } from '@/lib/queries/analytics'
+import { fetchPeakHours, fetchNetworkPeakHours, type PeakHoursReport } from '@/lib/queries/analytics'
 import { useAuth } from '@/lib/auth-store'
+import { useBranchView } from '@/hooks/use-branch-view'
 import { toast } from 'sonner'
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
@@ -68,7 +69,9 @@ function getHeatColor(value: number, max: number): string {
 }
 
 export default function PeakHoursPage() {
-  const { canDo } = useAuth()
+  const { canDo, restaurant } = useAuth()
+  const isBranchView = useBranchView()
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [report, setReport] = useState<PeakHoursReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [period, setPeriod] = useState<Period>('all')
@@ -76,11 +79,12 @@ export default function PeakHoursPage() {
   useEffect(() => {
     setLoading(true)
     const { from, to } = periodToRange(period)
-    fetchPeakHours({ from, to })
+    const fetcher = isCentral ? fetchNetworkPeakHours : fetchPeakHours
+    fetcher({ from, to })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки данных'))
       .finally(() => setLoading(false))
-  }, [period])
+  }, [period, isCentral])
 
   // Build dense grid weekday × hour from sparse server cells.
   // weekday: 0=Sun..6=Sat (Postgres EXTRACT(DOW) === JS Date.getDay())
@@ -210,7 +214,9 @@ export default function PeakHoursPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-xl font-bold text-foreground">Пиковые часы</h1>
-          <p className="text-muted-foreground text-sm mt-0.5">Анализ загрузки ресторана по времени</p>
+          <p className="text-muted-foreground text-sm mt-0.5">
+            {isCentral ? 'Анализ загрузки по всей сети' : 'Анализ загрузки ресторана по времени'}
+          </p>
         </div>
         <div className="flex gap-1 bg-muted rounded-lg p-1">
           {([['week', 'Неделя'], ['month', 'Месяц'], ['all', 'Все время']] as const).map(([key, label]) => (

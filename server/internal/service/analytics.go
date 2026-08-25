@@ -109,7 +109,16 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 	if err := q.Group("oi.menu_item_id").Scan(&rows).Error; err != nil {
 		return nil, err
 	}
+	classifyABCMenu(rows, out)
+	return out, nil
+}
 
+// classifyABCMenu — ABC/menu-engineering классификация поверх уже
+// агрегированных строк (per menu_item_id локально, per имя блюда — сетевой
+// вариант в network_analytics.go: у одного сетевого блюда своя строка
+// menu_items на каждом филиале, общего id нет). Вынесена из ABCMenu, чтобы
+// не дублировать медианы/Парето-математику между локальным и сетевым отчётом.
+func classifyABCMenu(rows []abcAggRow, out *ABCMenuReport) {
 	// Сортировка по выручке desc.
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].Revenue.GreaterThan(rows[j].Revenue)
@@ -136,8 +145,9 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 	cum := decimal.Zero
 	out.Items = make([]ABCMenuRow, 0, len(rows))
 	for _, r := range rows {
-		var share, cumShare decimal.Decimal
+		var share, cumShare, cumBefore decimal.Decimal
 		if totalRev.IsPositive() {
+			cumBefore = cum
 			share = decimal.DivRound(decimal.Mul(r.Revenue, hundred), totalRev)
 			cum = decimal.Add(cum, share)
 			cumShare = cum
@@ -147,15 +157,18 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 		if r.Revenue.IsPositive() {
 			margin = decimal.DivRound(decimal.Mul(gross, hundred), r.Revenue)
 		}
+		// Класс — по накопленной доле ДО этой позиции: позиция, которая
+		// СВОИМ вкладом переходит порог, всё ещё принадлежит классу порога
+		// (иначе единственная позиция со 100% выручки попадает в C, а не A).
 		class := "C"
 		if totalRev.IsPositive() {
-			c := cumShare
+			c := cumBefore
 			eighty := decimal.FromInt(80)
 			ninetyFive := decimal.FromInt(95)
 			switch {
-			case c.LessThanOrEqual(eighty):
+			case c.LessThan(eighty):
 				class = "A"
-			case c.LessThanOrEqual(ninetyFive):
+			case c.LessThan(ninetyFive):
 				class = "B"
 			default:
 				class = "C"
@@ -191,7 +204,6 @@ func (s *AnalyticsService) ABCMenu(ctx context.Context, f PeriodFilter) (*ABCMen
 			EngineeringClass: eng,
 		})
 	}
-	return out, nil
 }
 
 // abcAggRow — внутренний named-тип для медиан и сортировки в ABC.
