@@ -142,6 +142,34 @@ func (h *NetworkHandler) MonthlyRevenue(w http.ResponseWriter, r *http.Request) 
 	respond.JSON(w, http.StatusOK, makeList(out, ""))
 }
 
+// Shifts — GET /api/v1/network/shifts?from=&to=&branch_id=&status=. Сводный
+// список смен по всей сети — «Операции» на central скрыты целиком (Ф-С4), это
+// единственный способ увидеть смены филиалов из центра.
+func (h *NetworkHandler) Shifts(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.Shifts(r.Context(), f, r.URL.Query().Get("branch_id"), r.URL.Query().Get("status"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
+// ShiftZReport — GET /api/v1/network/shifts/{id}/zreport. Полный Z-отчёт
+// одной смены сети (тот же формат, что у /shifts/{id}/zreport).
+func (h *NetworkHandler) ShiftZReport(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.ShiftZReport(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // Staff — GET /api/v1/network/staff. Весь персонал сети с указанием филиала.
 func (h *NetworkHandler) Staff(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Staff(r.Context())

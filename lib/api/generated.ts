@@ -3296,6 +3296,150 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/shifts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Сводный список смен по всей сети (или одному филиалу через branch_id),
+         *     новые сверху, максимум 300 строк — «Операции» на central скрыты
+         *     целиком (Ф-С4), это единственный способ увидеть смены филиалов из
+         *     центра. from/to фильтруют по opened_at.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                    branch_id?: string;
+                    status?: "open" | "closed";
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            shifts?: {
+                                /** Format: uuid */
+                                id?: string;
+                                /** Format: uuid */
+                                restaurant_id?: string;
+                                restaurant_name?: string;
+                                /** @enum {string} */
+                                status?: "open" | "closed";
+                                /** Format: date-time */
+                                opened_at?: string;
+                                /** Format: date-time */
+                                closed_at?: string | null;
+                                opened_by_name?: string;
+                                closed_by_name?: string;
+                                account_name?: string;
+                                opening_balance?: components["schemas"]["Decimal"];
+                                closing_balance?: components["schemas"]["Decimal"];
+                                expected_cash?: components["schemas"]["Decimal"];
+                                discrepancy?: components["schemas"]["Decimal"];
+                                cash_revenue?: components["schemas"]["Decimal"];
+                                card_revenue?: components["schemas"]["Decimal"];
+                                orders_count?: number;
+                            }[];
+                            totals?: {
+                                open_count?: number;
+                                closed_count?: number;
+                                revenue?: components["schemas"]["Decimal"];
+                                orders_count?: number;
+                                discrepancy_count?: number;
+                            };
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/network/shifts/{id}/zreport": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Z-отчёт одной смены сети — тот же формат, что у /shifts/{id}/zreport, посчитан с подстановкой tenant филиала этой смены. */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            shift?: Record<string, never>;
+                            revenue_by_method?: Record<string, never>[];
+                            sales_by_waiter?: Record<string, never>[];
+                            sales_by_category?: Record<string, never>[];
+                            sales_by_item?: Record<string, never>[];
+                            sales_by_order_type?: Record<string, never>[];
+                            guests_count?: number;
+                            operations?: components["schemas"]["CashShiftOperation"][];
+                            discrepancy?: string;
+                            cash_in?: string;
+                            withdrawals?: string;
+                            expenses_total?: string;
+                            expenses_total_all?: string;
+                            expenses_by_category?: {
+                                category?: string;
+                                count?: number;
+                                amount?: string;
+                            }[];
+                            refunds_total?: string;
+                            refunds_count?: number;
+                            previous?: {
+                                revenue?: string;
+                                orders_count?: number;
+                                avg_check?: string;
+                                guests_count?: number;
+                                /** Format: date-time */
+                                closed_at?: string | null;
+                            } | null;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/nomenclature": {
         parameters: {
             query?: never;

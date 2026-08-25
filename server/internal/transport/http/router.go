@@ -334,6 +334,8 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/network/warehouse", networkH.Warehouse)
 			g.Get("/network/accounts", networkH.Accounts)
 			g.Get("/network/staff", networkH.Staff)
+			g.Get("/network/shifts", networkH.Shifts)
+			g.Get("/network/shifts/{id}/zreport", networkH.ShiftZReport)
 			g.Get("/network/branches/{id}/payables", networkH.BranchPayables)
 			g.Get("/network/branches/{id}/expenses", networkH.BranchExpenses)
 			g.Get("/network/invites", networkH.ListInvites)

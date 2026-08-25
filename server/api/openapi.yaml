@@ -1230,6 +1230,103 @@ paths:
                             branch_name: { type: string }
                             branch_kind: { type: string, nullable: true }
 
+  /api/v1/network/shifts:
+    get:
+      tags: [stock]
+      summary: |
+        Сводный список смен по всей сети (или одному филиалу через branch_id),
+        новые сверху, максимум 300 строк — «Операции» на central скрыты
+        целиком (Ф-С4), это единственный способ увидеть смены филиалов из
+        центра. from/to фильтруют по opened_at.
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+        - { in: query, name: branch_id, schema: { type: string, format: uuid } }
+        - { in: query, name: status, schema: { type: string, enum: [open, closed] } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shifts:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        restaurant_id: { type: string, format: uuid }
+                        restaurant_name: { type: string }
+                        status: { type: string, enum: [open, closed] }
+                        opened_at: { type: string, format: date-time }
+                        closed_at: { type: string, format: date-time, nullable: true }
+                        opened_by_name: { type: string }
+                        closed_by_name: { type: string }
+                        account_name: { type: string }
+                        opening_balance: { $ref: "#/components/schemas/Decimal" }
+                        closing_balance: { $ref: "#/components/schemas/Decimal" }
+                        expected_cash: { $ref: "#/components/schemas/Decimal" }
+                        discrepancy: { $ref: "#/components/schemas/Decimal" }
+                        cash_revenue: { $ref: "#/components/schemas/Decimal" }
+                        card_revenue: { $ref: "#/components/schemas/Decimal" }
+                        orders_count: { type: integer }
+                  totals:
+                    type: object
+                    properties:
+                      open_count: { type: integer }
+                      closed_count: { type: integer }
+                      revenue: { $ref: "#/components/schemas/Decimal" }
+                      orders_count: { type: integer }
+                      discrepancy_count: { type: integer }
+
+  /api/v1/network/shifts/{id}/zreport:
+    get:
+      tags: [stock]
+      summary: Z-отчёт одной смены сети — тот же формат, что у /shifts/{id}/zreport, посчитан с подстановкой tenant филиала этой смены.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  shift: { type: object }
+                  revenue_by_method: { type: array, items: { type: object } }
+                  sales_by_waiter: { type: array, items: { type: object } }
+                  sales_by_category: { type: array, items: { type: object } }
+                  sales_by_item: { type: array, items: { type: object } }
+                  sales_by_order_type: { type: array, items: { type: object } }
+                  guests_count: { type: integer }
+                  operations: { type: array, items: { $ref: "#/components/schemas/CashShiftOperation" } }
+                  discrepancy: { type: string }
+                  cash_in: { type: string }
+                  withdrawals: { type: string }
+                  expenses_total: { type: string }
+                  expenses_total_all: { type: string }
+                  expenses_by_category:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        category: { type: string }
+                        count: { type: integer }
+                        amount: { type: string }
+                  refunds_total: { type: string }
+                  refunds_count: { type: integer }
+                  previous:
+                    type: object
+                    nullable: true
+                    properties:
+                      revenue: { type: string }
+                      orders_count: { type: integer }
+                      avg_check: { type: string }
+                      guests_count: { type: integer }
+                      closed_at: { type: string, format: date-time, nullable: true }
+
   /api/v1/nomenclature:
     get:
       tags: [stock]

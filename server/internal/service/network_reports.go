@@ -9,6 +9,8 @@ import (
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
+	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
+	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 )
 
 // Сетевые консолидированные отчёты (ADR-003 «Central видит всё», Ф8) —
@@ -1020,4 +1022,199 @@ func (s *NetworkService) DashboardDetail(ctx context.Context, f PeriodFilter) (*
 	}
 
 	return out, nil
+}
+
+// ─── Смены сети ──────────────────────────────────────────────────────────
+//
+// «Операции» на central скрыты целиком (Ф-С4) — карта зала/конвейер заказов
+// читают живой статус, который сеть не реплицирует (тот же принцип, что у
+// «Точки сети» на дашборде). Но cash_shifts РЕПЛИЦИРОВАНА — её уже читает
+// Dashboard для open_shifts (см. выше) — сводный список смен по сети возможен
+// без новых зависимостей. Разбор ОДНОЙ смены (Z-отчёт) — не новый запрос, а
+// ShiftsService.ZReport с подменённым tenant на филиал этой смены, тот же
+// приём, что у PayBranchSalary → salaryCapForPeriod(branchCtx, ...).
+
+// NetworkShiftRow — одна смена одного филиала, для сводного списка.
+type NetworkShiftRow struct {
+	ID             string           `json:"id"`
+	RestaurantID   string           `json:"restaurant_id"`
+	RestaurantName string           `json:"restaurant_name"`
+	Status         string           `json:"status"`
+	OpenedAt       time.Time        `json:"opened_at"`
+	ClosedAt       *time.Time       `json:"closed_at,omitempty"`
+	OpenedByName   string           `json:"opened_by_name"`
+	ClosedByName   string           `json:"closed_by_name,omitempty"`
+	AccountName    string           `json:"account_name"`
+	OpeningBalance decimal.Decimal  `json:"opening_balance"`
+	ClosingBalance *decimal.Decimal `json:"closing_balance,omitempty"`
+	ExpectedCash   *decimal.Decimal `json:"expected_cash,omitempty"`
+	// Discrepancy — closing_balance − expected_cash, только у закрытых смен
+	// (недостача/излишек). Не хранится в БД, считается здесь же, как и в
+	// одно-тенантном ZReport.
+	Discrepancy *decimal.Decimal `json:"discrepancy,omitempty"`
+	CashRevenue decimal.Decimal  `json:"cash_revenue"`
+	CardRevenue decimal.Decimal  `json:"card_revenue"`
+	OrdersCount int              `json:"orders_count"`
+}
+
+type NetworkShiftsTotals struct {
+	OpenCount        int             `json:"open_count"`
+	ClosedCount      int             `json:"closed_count"`
+	Revenue          decimal.Decimal `json:"revenue"`
+	OrdersCount      int             `json:"orders_count"`
+	DiscrepancyCount int             `json:"discrepancy_count"`
+}
+
+type NetworkShiftsResult struct {
+	Shifts []NetworkShiftRow   `json:"shifts"`
+	Totals NetworkShiftsTotals `json:"totals"`
+}
+
+// networkShiftsLimit — «сводно», не бесконечная история: чтобы копнуть
+// глубже, сузить период/филиал. Владелец просил обзор, не архив.
+const networkShiftsLimit = 300
+
+// Shifts — GET /network/shifts?from=&to=&branch_id=&status=. Сводный список
+// смен по всей сети (или одному филиалу, если указан branch_id), новые сверху.
+func (s *NetworkService) Shifts(ctx context.Context, f PeriodFilter, branchID, status string) (*NetworkShiftsResult, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	out := &NetworkShiftsResult{Shifts: []NetworkShiftRow{}}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	if branchID != "" {
+		if !containsID(ids, branchID) {
+			return nil, apperrors.Wrap("VALIDATION", "branch_id не входит в эту сеть", nil)
+		}
+		ids = []string{branchID}
+	}
+
+	type row struct {
+		ID             string           `gorm:"column:id"`
+		RestaurantID   string           `gorm:"column:restaurant_id"`
+		RestaurantName string           `gorm:"column:restaurant_name"`
+		Status         string           `gorm:"column:status"`
+		OpenedAt       time.Time        `gorm:"column:opened_at"`
+		ClosedAt       *time.Time       `gorm:"column:closed_at"`
+		OpenedByName   string           `gorm:"column:opened_by_name"`
+		ClosedByName   string           `gorm:"column:closed_by_name"`
+		AccountName    string           `gorm:"column:account_name"`
+		OpeningBalance decimal.Decimal  `gorm:"column:opening_balance"`
+		ClosingBalance decimal.Decimal  `gorm:"column:closing_balance"`
+		ExpectedCash   *decimal.Decimal `gorm:"column:expected_cash"`
+		CashRevenue    decimal.Decimal  `gorm:"column:cash_revenue"`
+		CardRevenue    decimal.Decimal  `gorm:"column:card_revenue"`
+		OrdersCount    int              `gorm:"column:orders_count"`
+	}
+
+	q := s.r.Raw().WithContext(ctx).Table("cash_shifts AS cs").
+		Select(`cs.id, cs.restaurant_id, COALESCE(r.name,'') AS restaurant_name,
+		        COALESCE(cs.status,'') AS status, cs.opened_at, cs.closed_at,
+		        COALESCE(ou.name,'') AS opened_by_name, COALESCE(cu.name,'') AS closed_by_name,
+		        COALESCE(acc.name,'') AS account_name,
+		        COALESCE(cs.opening_balance,0) AS opening_balance, COALESCE(cs.closing_balance,0) AS closing_balance,
+		        cs.expected_cash, COALESCE(cs.cash_revenue,0) AS cash_revenue,
+		        COALESCE(cs.card_revenue,0) AS card_revenue, COALESCE(cs.orders_count,0) AS orders_count`).
+		Joins("LEFT JOIN restaurants r ON r.id::text = cs.restaurant_id").
+		Joins("LEFT JOIN users ou ON ou.id::text = cs.opened_by").
+		Joins("LEFT JOIN users cu ON cu.id::text = cs.closed_by").
+		Joins("LEFT JOIN financial_accounts acc ON acc.id::text = cs.account_id").
+		Where("cs.restaurant_id IN ?", ids)
+	if status == "open" || status == "closed" {
+		q = q.Where("cs.status = ?", status)
+	}
+	if f.From != nil {
+		q = q.Where("cs.opened_at >= ?", *f.From)
+	}
+	if f.To != nil {
+		q = q.Where("cs.opened_at < ?", *f.To)
+	}
+
+	var rows []row
+	if err := q.Order("cs.opened_at DESC").Limit(networkShiftsLimit).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	for _, r := range rows {
+		nr := NetworkShiftRow{
+			ID: r.ID, RestaurantID: r.RestaurantID, RestaurantName: r.RestaurantName,
+			Status: r.Status, OpenedAt: r.OpenedAt, ClosedAt: r.ClosedAt,
+			OpenedByName: r.OpenedByName, ClosedByName: r.ClosedByName, AccountName: r.AccountName,
+			OpeningBalance: decimal.Normalize(r.OpeningBalance),
+			CashRevenue:    decimal.Normalize(r.CashRevenue),
+			CardRevenue:    decimal.Normalize(r.CardRevenue),
+			OrdersCount:    r.OrdersCount,
+		}
+		if r.Status == "closed" {
+			cb := decimal.Normalize(r.ClosingBalance)
+			nr.ClosingBalance = &cb
+			out.Totals.ClosedCount++
+			if r.ExpectedCash != nil {
+				ec := decimal.Normalize(*r.ExpectedCash)
+				nr.ExpectedCash = &ec
+				disc := decimal.Sub(cb, ec)
+				nr.Discrepancy = &disc
+				if !disc.IsZero() {
+					out.Totals.DiscrepancyCount++
+				}
+			}
+		} else {
+			out.Totals.OpenCount++
+		}
+		out.Totals.Revenue = decimal.Add(out.Totals.Revenue, decimal.Add(r.CashRevenue, r.CardRevenue))
+		out.Totals.OrdersCount += r.OrdersCount
+		out.Shifts = append(out.Shifts, nr)
+	}
+	out.Totals.Revenue = decimal.Normalize(out.Totals.Revenue)
+	return out, nil
+}
+
+// ShiftZReport — GET /network/shifts/{id}/zreport. Полный разбор ОДНОЙ смены
+// сети: тот же ShiftsService.ZReport, что и в одно-тенантном /shifts/{id}/zreport,
+// просто с подменённым tenant на филиал этой смены — сама смена и все её
+// операции/заказы уже лежат в БД central (реплика), точно так же, как
+// PayBranchSalary читает кап филиала через tenant.WithRestaurant(ctx, branchID).
+func (s *NetworkService) ShiftZReport(ctx context.Context, shiftID string) (*ZReport, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+
+	type shiftRid struct {
+		RestaurantID string `gorm:"column:restaurant_id"`
+	}
+	var sr shiftRid
+	if err := s.r.Raw().WithContext(ctx).Table("cash_shifts").
+		Select("restaurant_id").Where("id = ?", shiftID).
+		Scan(&sr).Error; err != nil {
+		return nil, err
+	}
+	if sr.RestaurantID == "" || !containsID(ids, sr.RestaurantID) {
+		return nil, apperrors.ErrNotFound
+	}
+
+	branchCtx := tenant.WithRestaurant(ctx, sr.RestaurantID)
+	return NewShiftsService(s.r).ZReport(branchCtx, shiftID)
+}
+
+func containsID(ids []string, id string) bool {
+	for _, x := range ids {
+		if x == id {
+			return true
+		}
+	}
+	return false
 }

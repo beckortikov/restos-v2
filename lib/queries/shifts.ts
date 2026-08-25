@@ -181,6 +181,13 @@ export interface ShiftZReport {
 
 export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> {
   const r: any = await unwrap(api.GET('/api/v1/shifts/{id}/zreport', { params: { path: { id: shiftId } } }))
+  return mapZReport(r)
+}
+
+// mapZReport — общий маппер для /shifts/{id}/zreport И /network/shifts/{id}/zreport:
+// формат ответа идентичен (NetworkService.ShiftZReport делегирует в тот же
+// ShiftsService.ZReport, просто с подменённым tenant филиала).
+function mapZReport(r: any): ShiftZReport {
   const shift = r?.shift ?? {}
   return {
     cashRevenue: Number(shift.cash_revenue ?? 0),
@@ -242,6 +249,86 @@ export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> 
         }
       : null,
   }
+}
+
+// ─── Смены сети (владелец: «Операции» скрыты на central, единственный ────
+// способ увидеть смены филиалов из центра) ─────────────────────────────────
+
+export interface NetworkShiftRow {
+  id: string
+  restaurantId: string
+  restaurantName: string
+  status: 'open' | 'closed'
+  openedAt: string
+  closedAt?: string
+  openedByName: string
+  closedByName?: string
+  accountName: string
+  openingBalance: number
+  closingBalance?: number
+  expectedCash?: number
+  /** closing_balance − expected_cash, только у закрытых смен. */
+  discrepancy?: number
+  cashRevenue: number
+  cardRevenue: number
+  ordersCount: number
+}
+
+export interface NetworkShiftsTotals {
+  openCount: number
+  closedCount: number
+  revenue: number
+  ordersCount: number
+  discrepancyCount: number
+}
+
+export interface NetworkShiftsResult {
+  shifts: NetworkShiftRow[]
+  totals: NetworkShiftsTotals
+}
+
+export async function fetchNetworkShifts(opts?: {
+  from?: string; to?: string; branchId?: string; status?: 'open' | 'closed'
+}): Promise<NetworkShiftsResult> {
+  const query: Record<string, string> = {}
+  if (opts?.from) query.from = opts.from
+  if (opts?.to) query.to = opts.to
+  if (opts?.branchId) query.branch_id = opts.branchId
+  if (opts?.status) query.status = opts.status
+  const r: any = await unwrap(api.GET('/api/v1/network/shifts', { params: { query } }))
+  return {
+    shifts: (r?.shifts ?? []).map((s: any) => ({
+      id: String(s.id ?? ''),
+      restaurantId: String(s.restaurant_id ?? ''),
+      restaurantName: String(s.restaurant_name ?? '—'),
+      status: (s.status ?? 'open') as 'open' | 'closed',
+      openedAt: String(s.opened_at ?? ''),
+      closedAt: s.closed_at || undefined,
+      openedByName: String(s.opened_by_name ?? '—'),
+      closedByName: s.closed_by_name || undefined,
+      accountName: String(s.account_name ?? ''),
+      openingBalance: Number(s.opening_balance ?? 0),
+      closingBalance: s.closing_balance != null ? Number(s.closing_balance) : undefined,
+      expectedCash: s.expected_cash != null ? Number(s.expected_cash) : undefined,
+      discrepancy: s.discrepancy != null ? Number(s.discrepancy) : undefined,
+      cashRevenue: Number(s.cash_revenue ?? 0),
+      cardRevenue: Number(s.card_revenue ?? 0),
+      ordersCount: Number(s.orders_count ?? 0),
+    })),
+    totals: {
+      openCount: Number(r?.totals?.open_count ?? 0),
+      closedCount: Number(r?.totals?.closed_count ?? 0),
+      revenue: Number(r?.totals?.revenue ?? 0),
+      ordersCount: Number(r?.totals?.orders_count ?? 0),
+      discrepancyCount: Number(r?.totals?.discrepancy_count ?? 0),
+    },
+  }
+}
+
+/** Z-отчёт ОДНОЙ смены сети — тот же формат, что у fetchShiftZReport. */
+export async function fetchNetworkShiftZReport(shiftId: string): Promise<ShiftZReport> {
+  const r: any = await unwrap(api.GET('/api/v1/network/shifts/{id}/zreport', { params: { path: { id: shiftId } } }))
+  return mapZReport(r)
 }
 
 // ─── Print Z/X-report (sends ESC/POS to default receipt printer) ──────────
