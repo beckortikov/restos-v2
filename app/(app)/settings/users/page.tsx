@@ -681,7 +681,12 @@ export default function UserPermissionsPage() {
               <button onClick={() => setEditingEmp(null)} className="flex-1 px-4 py-2.5 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted">
                 Отмена
               </button>
-              <button onClick={handleSaveEdit} disabled={savingEdit || !editForm.name.trim() || !editForm.username.trim()}
+              {/* username НЕ обязателен: логин везде по PIN (LoginByPIN), поле
+                  чисто косметическое (@username в списке). Владелец,
+                  созданный через setup-central.sh (Bootstrap), не получает
+                  username вообще — требование непустого поля здесь навсегда
+                  блокировало Сохранить, в том числе смену PIN. */}
+              <button onClick={handleSaveEdit} disabled={savingEdit || !editForm.name.trim()}
                 className="flex-1 px-4 py-2.5 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50">
                 {savingEdit ? 'Сохранение...' : 'Сохранить'}
               </button>

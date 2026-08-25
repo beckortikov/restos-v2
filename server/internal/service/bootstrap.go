@@ -91,9 +91,16 @@ func (s *BootstrapService) Run(ctx context.Context, in BootstrapInput) (*Bootstr
 		ownerRole := "owner"
 		ownerName := in.OwnerName
 		ownerPIN := in.OwnerPIN
+		// username — чисто косметическое поле (@username в списке
+		// сотрудников), логин везде по PIN (LoginByPIN), не по username. Но
+		// settings/users требует его непустым для Сохранить — без значения
+		// здесь владелец не мог отредактировать вообще ничего в своей
+		// карточке, включая смену PIN (найдено вживую 2026-08-25).
+		ownerUsername := "owner"
 		owner := &models.User{
 			ID:           uuid.NewString(),
 			Name:         &ownerName,
+			Username:     &ownerUsername,
 			Role:         &ownerRole,
 			PIN:          &ownerPIN,
 			RestaurantID: &rest.ID,
