@@ -2606,6 +2606,80 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/dashboard-detail": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Item-level детали дашборда сети (Ф-С1): топ-5 блюд, способы оплаты,
+         *     топ-6 категорий, до 20 позиций с низким остатком (с именем филиала),
+         *     заказы по типам, выручка по часам (10-22, сумма по всем дням периода).
+         *     Группировка блюд/категорий — по ИМЕНИ, не menu_item_id: у одного и
+         *     того же сетевого блюда на каждом филиале свой локальный id.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: string;
+                    to?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            top_dishes?: {
+                                name?: string;
+                                qty?: components["schemas"]["Decimal"];
+                                revenue?: components["schemas"]["Decimal"];
+                            }[];
+                            /** @description Ключи cash/card/transfer → сумма (Decimal-строка). */
+                            payment_breakdown?: {
+                                [key: string]: string;
+                            };
+                            category_sales?: {
+                                name?: string;
+                                revenue?: components["schemas"]["Decimal"];
+                            }[];
+                            low_stock?: {
+                                branch_name?: string;
+                                name?: string;
+                                qty?: components["schemas"]["Decimal"];
+                                min_qty?: components["schemas"]["Decimal"];
+                                unit?: string;
+                            }[];
+                            orders_by_type?: {
+                                type?: string;
+                                count?: number;
+                            }[];
+                            hourly_revenue?: {
+                                hour?: number;
+                                revenue?: components["schemas"]["Decimal"];
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/monthly-revenue": {
         parameters: {
             query?: never;

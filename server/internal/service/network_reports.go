@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"time"
 
+	"gorm.io/gorm"
+
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
@@ -792,5 +794,230 @@ func (s *NetworkService) MonthlyRevenue(ctx context.Context, months int) ([]Netw
 			Profit: decimal.Normalize(decimal.Sub(total, exp)),
 		})
 	}
+	return out, nil
+}
+
+// ─── Детали дашборда сети (Ф-С1, продолжение) ───────────────────────────────
+//
+// Тяжёлая, item-level часть — топ блюда/категории/способы оплаты/по часам
+// требуют JOIN с order_items по всей сети, поэтому отдельный эндпоинт от
+// лёгкого Dashboard() (KPI+алерты+филиалы): страница может отрисовать быстрое
+// первым, тяжёлое — вторым запросом параллельно.
+//
+// Ключевое отличие от одно-тенантных виджетов дашборда: группировка ПО ИМЕНИ
+// (name), не по menu_item_id — у одного и того же сетевого блюда на каждом
+// филиале СВОЙ локальный menu_item_id (материализация мастера, ADR-004), id
+// не совпадают между узлами, а имя — совпадает.
+
+type NetworkTopDish struct {
+	Name    string          `json:"name"`
+	Qty     decimal.Decimal `json:"qty"`
+	Revenue decimal.Decimal `json:"revenue"`
+}
+
+type NetworkCategorySale struct {
+	Name    string          `json:"name"`
+	Revenue decimal.Decimal `json:"revenue"`
+}
+
+type NetworkLowStockItem struct {
+	BranchName string          `json:"branch_name"`
+	Name       string          `json:"name"`
+	Qty        decimal.Decimal `json:"qty"`
+	MinQty     decimal.Decimal `json:"min_qty"`
+	Unit       string          `json:"unit"`
+}
+
+type NetworkOrderTypeCount struct {
+	Type  string `json:"type"`
+	Count int    `json:"count"`
+}
+
+type NetworkHourlyRevenue struct {
+	Hour    int             `json:"hour"`
+	Revenue decimal.Decimal `json:"revenue"`
+}
+
+type NetworkDashboardDetail struct {
+	TopDishes        []NetworkTopDish        `json:"top_dishes"`
+	PaymentBreakdown map[string]string       `json:"payment_breakdown"` // cash/card/transfer → Decimal-строка
+	CategorySales    []NetworkCategorySale   `json:"category_sales"`
+	LowStock         []NetworkLowStockItem   `json:"low_stock"`
+	OrdersByType     []NetworkOrderTypeCount `json:"orders_by_type"`
+	HourlyRevenue    []NetworkHourlyRevenue  `json:"hourly_revenue"`
+}
+
+// lineRevenueSQL — та же формула, что client-side calcLineTotal (helpers.ts):
+// весовая позиция — price × qty/unit_size, штучная — price × qty. Дублируем
+// в SQL по тому же принципу, что и COGS в PnL (см. выше в этом файле) —
+// разошлись бы, если считать по-разному на сервере и на клиенте.
+const lineRevenueSQL = "CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END"
+const lineQtySQL = "CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END"
+
+func (s *NetworkService) DashboardDetail(ctx context.Context, f PeriodFilter) (*NetworkDashboardDetail, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	out := &NetworkDashboardDetail{
+		PaymentBreakdown: map[string]string{"cash": "0", "card": "0", "transfer": "0"},
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	nameByID := make(map[string]string, len(branches))
+	for _, b := range branches {
+		nameByID[b.ID] = b.Name
+	}
+
+	closedOrders := func(alias string) *gorm.DB {
+		q := s.r.Raw().WithContext(ctx).Table("orders "+alias).
+			Where(alias+".restaurant_id IN ? AND "+alias+".status IN ? AND "+alias+".closed_at IS NOT NULL",
+				ids, []string{"closed", "refunded"})
+		if f.From != nil {
+			q = q.Where(alias+".closed_at >= ?", *f.From)
+		}
+		if f.To != nil {
+			q = q.Where(alias+".closed_at < ?", *f.To)
+		}
+		return q
+	}
+
+	// 1. Топ блюда — 5 позиций по выручке.
+	type dishRow struct {
+		Name    string          `gorm:"column:name"`
+		Qty     decimal.Decimal `gorm:"column:qty"`
+		Revenue decimal.Decimal `gorm:"column:revenue"`
+	}
+	var dishRows []dishRow
+	if err := closedOrders("o").
+		Select("COALESCE(oi.name, '—') AS name, COALESCE(SUM(" + lineQtySQL + "), 0) AS qty, COALESCE(SUM(" + lineRevenueSQL + "), 0) AS revenue").
+		Joins("JOIN order_items oi ON oi.order_id = o.id AND oi.cancelled_at IS NULL").
+		Group("oi.name").
+		Order("revenue DESC").
+		Limit(5).
+		Scan(&dishRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range dishRows {
+		out.TopDishes = append(out.TopDishes, NetworkTopDish{
+			Name: r.Name, Qty: decimal.Normalize(r.Qty), Revenue: decimal.Normalize(r.Revenue),
+		})
+	}
+
+	// 2. Способы оплаты — по способу оплаты ЗАКАЗА (сплит-платежи по
+	// смешанной оплате не разложены в БД отдельной таблицей — тот же уровень
+	// точности, что и у одно-тенантного дашборда: o.payments там тоже почти
+	// всегда пуст, реально работает paymentMethod-ветка).
+	type payRow struct {
+		Method string          `gorm:"column:payment_method"`
+		Total  decimal.Decimal `gorm:"column:total"`
+	}
+	var payRows []payRow
+	if err := closedOrders("o").
+		Select("COALESCE(o.payment_method, 'cash') AS payment_method, COALESCE(SUM(o.total_with_service), 0) AS total").
+		Group("o.payment_method").
+		Scan(&payRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range payRows {
+		if _, ok := out.PaymentBreakdown[r.Method]; ok {
+			out.PaymentBreakdown[r.Method] = decimal.Normalize(r.Total).String()
+		}
+	}
+
+	// 3. Категории — по menu_items.category (реплицирован, привязан через
+	// menu_item_id; своя строка на каждом узле — id не совпадают, но JOIN
+	// делается В ПРЕДЕЛАХ одного restaurant_id неявно: order_items.order_id
+	// принадлежит заказу узла, у которого мы и ищем его menu_items).
+	type catRow struct {
+		Name    string          `gorm:"column:cat_name"`
+		Revenue decimal.Decimal `gorm:"column:revenue"`
+	}
+	var catRows []catRow
+	if err := closedOrders("o").
+		Select("COALESCE(mi.category, 'Без категории') AS cat_name, COALESCE(SUM(" + lineRevenueSQL + "), 0) AS revenue").
+		Joins("JOIN order_items oi ON oi.order_id = o.id AND oi.cancelled_at IS NULL").
+		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id AND mi.restaurant_id = o.restaurant_id").
+		Group("cat_name").
+		Order("revenue DESC").
+		Limit(6).
+		Scan(&catRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range catRows {
+		out.CategorySales = append(out.CategorySales, NetworkCategorySale{Name: r.Name, Revenue: decimal.Normalize(r.Revenue)})
+	}
+
+	// 4. Низкий остаток — до 20 позиций по всей сети, с именем филиала.
+	type stockRow struct {
+		RestaurantID string          `gorm:"column:restaurant_id"`
+		Name         string          `gorm:"column:name"`
+		Qty          decimal.Decimal `gorm:"column:qty"`
+		MinQty       decimal.Decimal `gorm:"column:min_qty"`
+		Unit         string          `gorm:"column:unit"`
+	}
+	var stockRows []stockRow
+	if err := s.r.Raw().WithContext(ctx).Table("ingredients").
+		Select("restaurant_id, COALESCE(name, '—') AS name, qty, min_qty, COALESCE(unit, '') AS unit").
+		Where("restaurant_id IN ? AND qty < min_qty", ids).
+		Order("(min_qty - qty) DESC").
+		Limit(20).
+		Scan(&stockRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range stockRows {
+		out.LowStock = append(out.LowStock, NetworkLowStockItem{
+			BranchName: nameByID[r.RestaurantID], Name: r.Name,
+			Qty: decimal.Normalize(r.Qty), MinQty: decimal.Normalize(r.MinQty), Unit: r.Unit,
+		})
+	}
+
+	// 5. Заказы по типам.
+	type typeRow struct {
+		Type string `gorm:"column:type"`
+		Cnt  int    `gorm:"column:cnt"`
+	}
+	var typeRows []typeRow
+	if err := closedOrders("o").
+		Select("o.type AS type, COUNT(*) AS cnt").
+		Group("o.type").
+		Scan(&typeRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range typeRows {
+		if r.Type == "" {
+			continue
+		}
+		out.OrdersByType = append(out.OrdersByType, NetworkOrderTypeCount{Type: r.Type, Count: r.Cnt})
+	}
+
+	// 6. Выручка по часам — по часу СОЗДАНИЯ заказа (created_at), как в
+	// одно-тенантном дашборде; при многодневном периоде часы суммируются по
+	// всем дням (это ответ на «когда обычно пик», не «выручка сегодня по часам»).
+	type hourRow struct {
+		Hour    int             `gorm:"column:hour"`
+		Revenue decimal.Decimal `gorm:"column:revenue"`
+	}
+	var hourRows []hourRow
+	if err := closedOrders("o").
+		Select("EXTRACT(HOUR FROM o.created_at)::int AS hour, COALESCE(SUM(o.total_with_service), 0) AS revenue").
+		Group("hour").
+		Scan(&hourRows).Error; err != nil {
+		return nil, err
+	}
+	byHour := map[int]decimal.Decimal{}
+	for _, r := range hourRows {
+		byHour[r.Hour] = decimal.Normalize(r.Revenue)
+	}
+	for h := 10; h <= 22; h++ {
+		out.HourlyRevenue = append(out.HourlyRevenue, NetworkHourlyRevenue{Hour: h, Revenue: byHour[h]})
+	}
+
 	return out, nil
 }

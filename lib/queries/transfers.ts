@@ -474,6 +474,47 @@ export async function fetchNetworkDashboard(opts?: { from?: string; to?: string 
   }
 }
 
+export interface NetworkDashboardDetail {
+  topDishes: { name: string; qty: number; revenue: number }[]
+  paymentBreakdown: { cash: number; card: number; transfer: number }
+  categorySales: { name: string; revenue: number }[]
+  lowStock: { branchName: string; name: string; qty: number; minQty: number; unit: string }[]
+  ordersByType: { type: string; count: number }[]
+  hourlyRevenue: { hour: number; revenue: number }[]
+}
+
+export async function fetchNetworkDashboardDetail(opts?: { from?: string; to?: string }): Promise<NetworkDashboardDetail> {
+  const query: Record<string, string> = {}
+  if (opts?.from) query.from = opts.from
+  if (opts?.to) query.to = opts.to
+  const r: any = await unwrap(api.GET('/api/v1/network/dashboard-detail', { params: { query } }))
+  return {
+    topDishes: Array.isArray(r?.top_dishes)
+      ? r.top_dishes.map((d: any) => ({ name: d.name, qty: Number(d.qty ?? 0), revenue: Number(d.revenue ?? 0) }))
+      : [],
+    paymentBreakdown: {
+      cash: Number(r?.payment_breakdown?.cash ?? 0),
+      card: Number(r?.payment_breakdown?.card ?? 0),
+      transfer: Number(r?.payment_breakdown?.transfer ?? 0),
+    },
+    categorySales: Array.isArray(r?.category_sales)
+      ? r.category_sales.map((c: any) => ({ name: c.name, revenue: Number(c.revenue ?? 0) }))
+      : [],
+    lowStock: Array.isArray(r?.low_stock)
+      ? r.low_stock.map((i: any) => ({
+          branchName: i.branch_name, name: i.name,
+          qty: Number(i.qty ?? 0), minQty: Number(i.min_qty ?? 0), unit: i.unit ?? '',
+        }))
+      : [],
+    ordersByType: Array.isArray(r?.orders_by_type)
+      ? r.orders_by_type.map((t: any) => ({ type: t.type, count: Number(t.count ?? 0) }))
+      : [],
+    hourlyRevenue: Array.isArray(r?.hourly_revenue)
+      ? r.hourly_revenue.map((h: any) => ({ hour: Number(h.hour ?? 0), revenue: Number(h.revenue ?? 0) }))
+      : [],
+  }
+}
+
 export interface NetworkMonthlyRevenueRow {
   month: string
   revenue: number

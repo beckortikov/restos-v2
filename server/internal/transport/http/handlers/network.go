@@ -108,6 +108,23 @@ func (h *NetworkHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// DashboardDetail — GET /api/v1/network/dashboard-detail?from=&to=. Тяжёлая
+// item-level часть дашборда central (топ блюда/категории/оплата/склад/типы/
+// часы) — отдельно от Dashboard, см. головной комментарий DashboardDetail.
+func (h *NetworkHandler) DashboardDetail(w http.ResponseWriter, r *http.Request) {
+	f, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	out, err := h.svc.DashboardDetail(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 // MonthlyRevenue — GET /api/v1/network/monthly-revenue?months=N. Тренд
 // «Динамика выручки» по всей сети для главного дашборда central.
 func (h *NetworkHandler) MonthlyRevenue(w http.ResponseWriter, r *http.Request) {

@@ -850,6 +850,70 @@ paths:
                         cash_balance: { $ref: "#/components/schemas/Decimal" }
                         open_shift: { type: boolean }
 
+  /api/v1/network/dashboard-detail:
+    get:
+      tags: [stock]
+      summary: |
+        Item-level детали дашборда сети (Ф-С1): топ-5 блюд, способы оплаты,
+        топ-6 категорий, до 20 позиций с низким остатком (с именем филиала),
+        заказы по типам, выручка по часам (10-22, сумма по всем дням периода).
+        Группировка блюд/категорий — по ИМЕНИ, не menu_item_id: у одного и
+        того же сетевого блюда на каждом филиале свой локальный id.
+      parameters:
+        - { in: query, name: from, schema: { type: string, format: date-time } }
+        - { in: query, name: to, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  top_dishes:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        qty: { $ref: "#/components/schemas/Decimal" }
+                        revenue: { $ref: "#/components/schemas/Decimal" }
+                  payment_breakdown:
+                    type: object
+                    additionalProperties: { type: string }
+                    description: "Ключи cash/card/transfer → сумма (Decimal-строка)."
+                  category_sales:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        name: { type: string }
+                        revenue: { $ref: "#/components/schemas/Decimal" }
+                  low_stock:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        branch_name: { type: string }
+                        name: { type: string }
+                        qty: { $ref: "#/components/schemas/Decimal" }
+                        min_qty: { $ref: "#/components/schemas/Decimal" }
+                        unit: { type: string }
+                  orders_by_type:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        type: { type: string }
+                        count: { type: integer }
+                  hourly_revenue:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        hour: { type: integer }
+                        revenue: { $ref: "#/components/schemas/Decimal" }
+
   /api/v1/network/monthly-revenue:
     get:
       tags: [stock]

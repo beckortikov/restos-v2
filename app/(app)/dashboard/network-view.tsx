@@ -4,10 +4,11 @@ import { useState, useEffect, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  BarChart, Bar, PieChart, Pie, Cell,
 } from 'recharts'
 import {
-  fetchNetworkDashboard, fetchNetworkMonthlyRevenue,
-  type NetworkDashboard, type NetworkMonthlyRevenueRow,
+  fetchNetworkDashboard, fetchNetworkMonthlyRevenue, fetchNetworkDashboardDetail, fetchNetworkAccounts,
+  type NetworkDashboard, type NetworkMonthlyRevenueRow, type NetworkDashboardDetail, type NetworkAccountRow,
 } from '@/lib/queries/transfers'
 import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
@@ -15,8 +16,11 @@ import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
 import { KpiCard, AlertItem } from '@/components/dashboard/kpi-card'
 import {
   Network, Store, Warehouse, TrendingUp, Wallet, Banknote, BarChart3, ArrowRight,
-  CircleDot, Truck, CalendarClock, Users, ChefHat,
+  CircleDot, Truck, CalendarClock, Users, ChefHat, CreditCard, Package,
 } from 'lucide-react'
+
+const ORDER_TYPE_LABELS: Record<string, string> = { hall: 'Зал', delivery: 'Доставка', takeaway: 'С собой' }
+const PIE_COLORS = ['#e87c4f', '#4f9ee8', '#5cb85c', '#f0ad4e', '#d9534f', '#9b59b6']
 
 // Сетевой дашборд central (Ф-С1). Central — офис: продаж на нём нет, поэтому
 // «Карта зала»/«Конвейер заказов» локального дашборда (живой статус стола/
@@ -50,6 +54,8 @@ function monthLabel(key: string): string {
 
 export function NetworkDashboardView() {
   const [data, setData] = useState<NetworkDashboard | null>(null)
+  const [detail, setDetail] = useState<NetworkDashboardDetail | null>(null)
+  const [accounts, setAccounts] = useState<NetworkAccountRow[]>([])
   const [trend, setTrend] = useState<NetworkMonthlyRevenueRow[]>([])
   const [range, setRange] = useState<Range>('today')
   const [loading, setLoading] = useState(true)
@@ -67,11 +73,16 @@ export function NetworkDashboardView() {
         else setError(humanizeError(e))
       })
       .finally(() => { if (alive) setLoading(false) })
+    // Тяжёлая item-level часть — отдельным запросом, не блокирует KPI/алерты
+    // выше (см. головной комментарий DashboardDetail на бэке).
+    fetchNetworkDashboardDetail({ from }).then(d => { if (alive) setDetail(d) }).catch(() => {})
     return () => { alive = false }
   }, [range])
 
   useEffect(() => {
     fetchNetworkMonthlyRevenue(6).then(setTrend).catch(() => setTrend([]))
+    // Счета сети — остаток «сейчас», от периода не зависит, грузим один раз.
+    fetchNetworkAccounts().then(r => setAccounts(r.accounts)).catch(() => setAccounts([]))
   }, [])
 
   // Автообновление раз в минуту — дашборд висит на экране в офисе.
@@ -79,6 +90,7 @@ export function NetworkDashboardView() {
     const t = setInterval(() => {
       const from = range === 'today' ? isoDaysAgo(0) : range === '7d' ? isoDaysAgo(6) : isoDaysAgo(29)
       fetchNetworkDashboard({ from }).then(setData).catch(() => {})
+      fetchNetworkDashboardDetail({ from }).then(setDetail).catch(() => {})
     }, 60000)
     return () => clearInterval(t)
   }, [range])
@@ -87,6 +99,27 @@ export function NetworkDashboardView() {
     () => trend.map(r => ({ month: monthLabel(r.month), Выручка: r.revenue, Прибыль: r.profit })),
     [trend],
   )
+
+  const hourlyChart = useMemo(
+    () => (detail?.hourlyRevenue ?? []).map(h => ({ hour: `${h.hour}:00`, revenue: h.revenue })),
+    [detail],
+  )
+  const dishesDonut = useMemo(() => {
+    const top = (detail?.topDishes ?? []).map(d => ({ name: d.name, value: d.revenue }))
+    const topTotal = top.reduce((s, d) => s + d.value, 0)
+    const grandTotal = data?.revenue ?? 0
+    const rest = grandTotal - topTotal
+    if (rest > 0.005) top.push({ name: 'Прочее', value: rest })
+    return top
+  }, [detail, data])
+  const typesPie = useMemo(
+    () => (detail?.ordersByType ?? []).map(t => ({ name: ORDER_TYPE_LABELS[t.type] ?? t.type, value: t.count })),
+    [detail],
+  )
+  const paymentTotal = detail
+    ? detail.paymentBreakdown.cash + detail.paymentBreakdown.card + detail.paymentBreakdown.transfer
+    : 0
+  const totalCashFromAccounts = useMemo(() => accounts.reduce((s, a) => s + a.balance, 0), [accounts])
 
   if (loading) {
     return (
@@ -253,6 +286,57 @@ export function NetworkDashboardView() {
         )}
       </div>
 
+      {/* Выручка по часам / Топ блюда (донат) / Заказы по типам — по всей сети */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-card rounded-xl border border-border p-4">
+          <h2 className="text-sm font-semibold text-foreground mb-3">Выручка по часам</h2>
+          {hourlyChart.every(h => h.revenue === 0) ? (
+            <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">Нет продаж</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={hourlyChart}>
+                <XAxis dataKey="hour" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} width={40} />
+                <Tooltip formatter={(v: number) => formatCurrency(v)} />
+                <Bar dataKey="revenue" fill="#e87c4f" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-4">
+          <h2 className="text-sm font-semibold text-foreground mb-3">Топ блюда сети</h2>
+          {dishesDonut.length === 0 ? (
+            <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">Нет продаж</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie data={dishesDonut} dataKey="value" nameKey="name" innerRadius={40} outerRadius={70} paddingAngle={2}>
+                  {dishesDonut.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                </Pie>
+                <Tooltip formatter={(v: number) => formatCurrency(v)} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-4">
+          <h2 className="text-sm font-semibold text-foreground mb-3">Заказы по типам</h2>
+          {typesPie.length === 0 ? (
+            <div className="h-[200px] flex items-center justify-center text-xs text-muted-foreground">Нет заказов</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie data={typesPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label={({ name, value }) => `${name}: ${value}`}>
+                  {typesPie.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      </div>
+
       {/* Точки сети — замена «Карты зала»/«Конвейера заказов»: те читают
           живой статус стола/заказа, который сеть намеренно не реплицирует. */}
       <div className="bg-card rounded-xl border border-border overflow-hidden">
@@ -309,6 +393,164 @@ export function NetworkDashboardView() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Способы оплаты / Счета / Топ блюда / Категории / Низкий остаток — по всей сети */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        <div className="bg-card rounded-xl border border-border p-4">
+          <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+            <CreditCard className="size-4 text-primary" />
+            Способы оплаты сети
+          </h2>
+          <div className="space-y-2">
+            {([
+              { key: 'cash', label: 'Наличные', icon: Banknote, color: 'text-emerald-600 bg-emerald-500/10' },
+              { key: 'card', label: 'Карта', icon: CreditCard, color: 'text-blue-600 bg-blue-500/10' },
+              { key: 'transfer', label: 'Перевод', icon: ArrowRight, color: 'text-violet-600 bg-violet-500/10' },
+            ] as const).map(({ key, label, icon: Icon, color }) => {
+              const val = detail?.paymentBreakdown[key] ?? 0
+              const pct = paymentTotal > 0 ? Math.round(val / paymentTotal * 100) : 0
+              return (
+                <div key={key} className="flex items-center gap-2.5">
+                  <div className={`size-7 rounded-md flex items-center justify-center shrink-0 ${color}`}>
+                    <Icon className="size-3.5" />
+                  </div>
+                  <span className="text-xs font-medium text-muted-foreground flex-1 min-w-0 truncate">{label}</span>
+                  <div className="text-right shrink-0">
+                    <p className="text-sm font-bold text-foreground tabular-nums leading-none">{formatCurrency(val)}</p>
+                    <p className="text-[10px] text-muted-foreground tabular-nums mt-0.5">{pct}%</p>
+                  </div>
+                </div>
+              )
+            })}
+            <div className="border-t border-border pt-2 mt-1 flex items-center justify-between">
+              <span className="text-xs font-semibold text-foreground">Итого</span>
+              <span className="text-sm font-bold text-foreground tabular-nums">{formatCurrency(paymentTotal)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <Wallet className="size-4 text-muted-foreground" />
+              Счета сети
+            </h2>
+            <Link to="/finance/accounts" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+              Все <ArrowRight className="size-3" />
+            </Link>
+          </div>
+          <div className="space-y-2.5 max-h-[260px] overflow-y-auto">
+            {accounts.map(acc => (
+              <div key={acc.id} className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className={`size-7 rounded-lg flex items-center justify-center text-[10px] font-bold shrink-0 ${acc.type === 'cash' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                    {acc.type === 'cash' ? '₸' : '🏦'}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm text-foreground truncate">{acc.name}</p>
+                    <p className="text-[10px] text-muted-foreground truncate">{acc.branchName}</p>
+                  </div>
+                </div>
+                <span className="text-sm font-semibold shrink-0">{formatCurrency(acc.balance)}</span>
+              </div>
+            ))}
+            {accounts.length === 0 && <p className="text-xs text-muted-foreground text-center py-4">Нет счетов</p>}
+          </div>
+          <div className="border-t border-border pt-2 mt-2.5 flex items-center justify-between">
+            <span className="text-[11px] text-muted-foreground font-medium">Итого</span>
+            <span className="text-base font-bold">{formatCurrency(totalCashFromAccounts)}</span>
+          </div>
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-foreground">🔥 Топ блюда сети</h2>
+          </div>
+          {(detail?.topDishes ?? []).length === 0 ? (
+            <p className="text-muted-foreground text-xs text-center py-4">Нет продаж</p>
+          ) : (
+            <div className="space-y-2">
+              {detail!.topDishes.map((d, i) => (
+                <div key={d.name} className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`size-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${i === 0 ? 'bg-amber-100 text-amber-700' : 'bg-muted text-muted-foreground'}`}>{i + 1}</span>
+                    <span className="text-sm truncate">{d.name}</span>
+                    <span className="text-[11px] text-muted-foreground shrink-0">x{d.qty}</span>
+                  </div>
+                  <span className="text-sm font-medium shrink-0">{formatCurrency(d.revenue)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-4">
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2 mb-3">
+            <BarChart3 className="size-4 text-muted-foreground" />
+            Категории сети
+          </h2>
+          {(detail?.categorySales ?? []).length === 0 ? (
+            <p className="text-muted-foreground text-xs text-center py-4">Нет продаж</p>
+          ) : (
+            <div className="space-y-2.5">
+              {(() => {
+                const catTotal = detail!.categorySales.reduce((s, c) => s + c.revenue, 0)
+                return detail!.categorySales.map(c => {
+                  const pct = catTotal > 0 ? Math.round(c.revenue / catTotal * 100) : 0
+                  return (
+                    <div key={c.name}>
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm truncate min-w-0">{c.name}</span>
+                        <span className="text-sm font-medium shrink-0 ml-2 tabular-nums">{formatCurrency(c.revenue)}</span>
+                      </div>
+                      <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+                      </div>
+                    </div>
+                  )
+                })
+              })()}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-card rounded-xl border border-border p-4 md:col-span-2 xl:col-span-1">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <Package className="size-4 text-muted-foreground" />
+              Склад сети: низкий остаток
+            </h2>
+            <Link to="/warehouse/inventory" className="text-[11px] text-primary hover:underline flex items-center gap-0.5">
+              Склад <ArrowRight className="size-3" />
+            </Link>
+          </div>
+          {(detail?.lowStock ?? []).length === 0 ? (
+            <div className="flex items-center gap-2 text-xs text-emerald-600 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2.5">
+              <CircleDot className="size-3.5" />
+              Все в норме
+            </div>
+          ) : (
+            <div className="space-y-2 max-h-[260px] overflow-y-auto">
+              {detail!.lowStock.map((ing, i) => {
+                const pct = ing.minQty > 0 ? Math.min((ing.qty / ing.minQty) * 100, 100) : 100
+                return (
+                  <div key={`${ing.branchName}:${ing.name}:${i}`}>
+                    <div className="flex items-center justify-between mb-1 gap-2">
+                      <span className="text-xs font-medium truncate">{ing.name} <span className="text-muted-foreground font-normal">· {ing.branchName}</span></span>
+                      <span className="text-[11px] text-muted-foreground shrink-0">
+                        <span className="text-destructive font-medium">{ing.qty}</span>/{ing.minQty} {ing.unit}
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${pct < 50 ? 'bg-destructive' : 'bg-amber-400'}`} style={{ width: `${pct}%` }} />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Быстрые переходы */}
