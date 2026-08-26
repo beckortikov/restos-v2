@@ -6,7 +6,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X, Check } from 'lucide-react'
 import { type MenuItem, type BundleSlot, type BundleSelectionInput } from '@/lib/types'
 import { fetchBundleSlots } from '@/lib/queries'
-import { formatCurrency, isFixedBundleSlot } from '@/lib/helpers'
+import { formatCurrency, isFixedBundleSlot, slotHint } from '@/lib/helpers'
 
 /** Один выбранный компонент сета — только для локального отображения разбивки
  *  строки корзины ДО ответа бэка. После отправки заказа реальные компоненты
@@ -33,13 +33,6 @@ function useIsMobile() {
     return () => mq.removeEventListener('change', handler)
   }, [])
   return isMobile
-}
-
-function slotHint(slot: BundleSlot): string {
-  if (slot.minSelect <= 0 && slot.maxSelect <= 1) return 'по желанию'
-  if (slot.minSelect <= 0) return `можно выбрать до ${slot.maxSelect}`
-  if (slot.minSelect === slot.maxSelect) return slot.maxSelect === 1 ? 'обязательно' : `выберите ${slot.minSelect}`
-  return `выберите от ${slot.minSelect} до ${slot.maxSelect}`
 }
 
 interface BundlePickerSheetProps {
@@ -143,15 +136,18 @@ function BundleBody({
     return () => { cancelled = true }
   }, [product.id])
 
+  // maxSelect<=1 — радио: клик заменяет предыдущий выбор. maxSelect>1 —
+  // обычный мультивыбор ДО slot.maxSelect РАЗНЫХ вариантов (клик по уже
+  // выбранному снимает его). Один и тот же вариант дважды в одном заказе
+  // кассир не выбирает — «вторая порция» того же блюда (напр. 2 фри)
+  // настраивается ОДИН РАЗ при создании сета владельцем (кнопка-дубликат
+  // в bundle-slots-editor.tsx добавляет вариант в слот второй строкой),
+  // а не выбором на кассе.
   const toggleOption = (slot: BundleSlot, optionId: string) => {
     setSelected(prev => {
       const cur = prev[slot.id] ?? []
-      if (slot.maxSelect <= 1) {
-        return { ...prev, [slot.id]: [optionId] }
-      }
-      if (cur.includes(optionId)) {
-        return { ...prev, [slot.id]: cur.filter(id => id !== optionId) }
-      }
+      if (slot.maxSelect <= 1) return { ...prev, [slot.id]: [optionId] }
+      if (cur.includes(optionId)) return { ...prev, [slot.id]: cur.filter(id => id !== optionId) }
       if (cur.length >= slot.maxSelect) return prev
       return { ...prev, [slot.id]: [...cur, optionId] }
     })
@@ -218,6 +214,21 @@ function BundleBody({
           // решать, только сообщаем список. И чище визуально при многих
           // фиксированных пунктах, и не даёт случайно "снять" обязательный выбор.
           if (isFixedBundleSlot(slot)) {
+            // Группируем по optionMenuItemId для отображения — «2 фри»
+            // добавляются владельцем как ДВЕ отдельные bundle_slot_options
+            // (см. bundle-slots-editor.tsx, кнопка-дубликат на OptionRow),
+            // но на кассе гость должен увидеть «Фри ×2», а не «Фри, Фри».
+            const groups: { key: string; name: string; count: number; stopped: boolean }[] = []
+            for (const opt of slot.options) {
+              const existing = groups.find(g => g.key === opt.optionMenuItemId)
+              if (existing) { existing.count += 1; continue }
+              groups.push({
+                key: opt.optionMenuItemId,
+                name: opt.optionMenuItemName ?? menuItemsById.get(opt.optionMenuItemId)?.name ?? '?',
+                count: 1,
+                stopped: stoppedIds?.has(opt.optionMenuItemId) ?? false,
+              })
+            }
             return (
               <div key={slot.id}>
                 <div className="flex items-center justify-between mb-1.5">
@@ -225,22 +236,18 @@ function BundleBody({
                   <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">входит всегда</span>
                 </div>
                 <div className="flex flex-wrap gap-x-1.5 gap-y-1 text-sm text-foreground">
-                  {slot.options.map((opt, i) => {
-                    const stopped = stoppedIds?.has(opt.optionMenuItemId) ?? false
-                    const name = opt.optionMenuItemName ?? menuItemsById.get(opt.optionMenuItemId)?.name ?? '?'
-                    return (
-                      <span key={opt.id} className="inline-flex items-center gap-1">
-                        {name}{i < slot.options.length - 1 ? ',' : ''}
-                        {stopped && <span className="text-[9px] px-1 py-0.5 bg-destructive/10 text-destructive rounded-full font-bold shrink-0">СТОП</span>}
-                      </span>
-                    )
-                  })}
+                  {groups.map((g, i) => (
+                    <span key={g.key} className="inline-flex items-center gap-1">
+                      {g.name}{g.count > 1 ? ` ×${g.count}` : ''}{i < groups.length - 1 ? ',' : ''}
+                      {g.stopped && <span className="text-[9px] px-1 py-0.5 bg-destructive/10 text-destructive rounded-full font-bold shrink-0">СТОП</span>}
+                    </span>
+                  ))}
                 </div>
               </div>
             )
           }
           const curSelected = selected[slot.id] ?? []
-          const atMax = slot.maxSelect > 1 && curSelected.length >= slot.maxSelect
+          const atMax = curSelected.length >= slot.maxSelect
           return (
             <div key={slot.id}>
               <div className="flex items-center justify-between mb-1.5">
@@ -249,29 +256,31 @@ function BundleBody({
                   slot.minSelect > 0 ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
                 }`}>{slotHint(slot)}</span>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {slot.options.map(opt => {
-                  const on = curSelected.includes(opt.id)
-                  const stopped = stoppedIds?.has(opt.optionMenuItemId) ?? false
-                  const disabled = !on && atMax
-                  return (
-                    <button
-                      key={opt.id}
-                      onClick={() => toggleOption(slot, opt.id)}
-                      disabled={disabled}
-                      className={`min-h-12 px-4 py-2.5 rounded-xl text-sm font-semibold border-2 active:scale-95 transition-colors flex items-center gap-1.5 ${on
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : disabled
-                          ? 'bg-background text-muted-foreground/50 border-border cursor-not-allowed'
+              {/* Скролл ВНУТРИ слота, не всего пикера — при многих вариантах
+                  (напр. 8 вкусов напитка) остальные слоты и кнопка
+                  подтверждения остаются на виду, а не уезжают за экран. */}
+              <div className={slot.options.length > 5 ? 'max-h-48 overflow-y-auto pr-0.5' : ''}>
+                <div className="flex flex-wrap gap-2">
+                  {slot.options.map(opt => {
+                    const on = curSelected.includes(opt.id)
+                    const stopped = stoppedIds?.has(opt.optionMenuItemId) ?? false
+                    return (
+                      <button
+                        key={opt.id}
+                        onClick={() => toggleOption(slot, opt.id)}
+                        disabled={slot.maxSelect > 1 && !on && atMax}
+                        className={`min-h-12 px-4 py-2.5 rounded-xl text-sm font-semibold border-2 active:scale-95 transition-colors flex items-center gap-1.5 disabled:opacity-40 ${on
+                          ? 'bg-primary text-primary-foreground border-primary'
                           : 'bg-background text-foreground border-border hover:border-muted-foreground/40'}`}
-                    >
-                      {slot.maxSelect > 1 && on && <Check className="size-3.5 shrink-0" />}
-                      <span>{opt.optionMenuItemName ?? menuItemsById.get(opt.optionMenuItemId)?.name ?? '?'}</span>
-                      <span className="opacity-70 font-normal">{formatCurrency(opt.price)}</span>
-                      {stopped && <span className="text-[9px] px-1 py-0.5 bg-destructive/10 text-destructive rounded-full font-bold shrink-0">СТОП</span>}
-                    </button>
-                  )
-                })}
+                      >
+                        {slot.maxSelect > 1 && on && <Check className="size-3.5 shrink-0" />}
+                        <span>{opt.optionMenuItemName ?? menuItemsById.get(opt.optionMenuItemId)?.name ?? '?'}</span>
+                        <span className="opacity-70 font-normal">{formatCurrency(opt.price)}</span>
+                        {stopped && <span className="text-[9px] px-1 py-0.5 bg-destructive/10 text-destructive rounded-full font-bold shrink-0">СТОП</span>}
+                      </button>
+                    )
+                  })}
+                </div>
               </div>
             </div>
           )

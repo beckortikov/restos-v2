@@ -1,15 +1,52 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Plus, Trash2, Search, X, Layers, PackageCheck } from 'lucide-react'
+import { Plus, Trash2, Search, X, Layers, PackageCheck, Pencil } from 'lucide-react'
 import { toast } from 'sonner'
 import type { BundleSlot, BundleSlotOption, MenuItem } from '@/lib/types'
 import {
   fetchBundleSlots, createBundleSlot, updateBundleSlot, deleteBundleSlot,
   createBundleSlotOption, updateBundleSlotOption, deleteBundleSlotOption,
 } from '@/lib/queries'
-import { formatCurrency, isFixedBundleSlot } from '@/lib/helpers'
+import { formatCurrency, isFixedBundleSlot, slotHint } from '@/lib/helpers'
 import { DecimalInput } from '@/components/ui/decimal-input'
+
+// SlotMinMaxFields — общие поля «Обязателен / мин. / макс.» и для создания
+// нового слота, и для редактирования существующего (BundleSlotsEditor /
+// SlotCard) — одна форма, не две почти одинаковые копии.
+function SlotMinMaxFields({ required, onRequiredChange, min, onMinChange, max, onMaxChange }: {
+  required: boolean
+  onRequiredChange: (v: boolean) => void
+  min: number
+  onMinChange: (v: number) => void
+  max: number
+  onMaxChange: (v: number) => void
+}) {
+  return (
+    <div className="flex items-center gap-3 flex-wrap">
+      <label className="flex items-center gap-1.5 text-xs text-foreground">
+        <input type="checkbox" checked={required} onChange={e => onRequiredChange(e.target.checked)} className="size-3.5" />
+        Обязателен
+      </label>
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        Выбрать мин.
+        <input
+          type="number" min={0} value={min}
+          onChange={e => onMinChange(Math.max(0, parseInt(e.target.value, 10) || 0))}
+          className="w-14 px-2 py-1 text-sm bg-background border border-border rounded-md"
+        />
+      </label>
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        макс.
+        <input
+          type="number" min={1} value={max}
+          onChange={e => onMaxChange(Math.max(1, parseInt(e.target.value, 10) || 1))}
+          className="w-14 px-2 py-1 text-sm bg-background border border-border rounded-md"
+        />
+      </label>
+    </div>
+  )
+}
 
 // MenuItemPicker — поиск-и-выбор пункта меню (по образцу IngredientCombobox
 // из tech-card-lines-editor.tsx, но без create-inline — компонент сета должен
@@ -70,9 +107,10 @@ function MenuItemPicker({ items, exclude, onSelect }: {
   )
 }
 
-function OptionRow({ option, onPriceChange, onDelete }: {
+function OptionRow({ option, onPriceChange, onDuplicate, onDelete }: {
   option: BundleSlotOption
   onPriceChange: (price: number) => void
+  onDuplicate: () => void
   onDelete: () => void
 }) {
   const [price, setPrice] = useState(option.price)
@@ -96,6 +134,14 @@ function OptionRow({ option, onPriceChange, onDelete }: {
       {cheaper && <span className="text-[10px] text-emerald-600 font-semibold shrink-0">в сете дешевле</span>}
       <button
         type="button"
+        onClick={onDuplicate}
+        title="Добавить ещё одну порцию этого же блюда в слот (напр. 2 порции фри)"
+        className="shrink-0 p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground rounded-md transition-colors"
+      >
+        <Plus className="size-3.5" />
+      </button>
+      <button
+        type="button"
         onClick={onDelete}
         className="shrink-0 p-1.5 text-destructive hover:bg-destructive/10 rounded-md transition-colors"
       >
@@ -113,19 +159,47 @@ function SlotCard({ slot, menuItems, otherSlotOptionIds, onChanged }: {
 }) {
   const [adding, setAdding] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [editLabel, setEditLabel] = useState(slot.label)
+  const [editRequired, setEditRequired] = useState(slot.isRequired)
+  const [editMin, setEditMin] = useState(slot.minSelect)
+  const [editMax, setEditMax] = useState(slot.maxSelect)
+  const [savingEdit, setSavingEdit] = useState(false)
 
-  const handleAddOption = async (item: MenuItem) => {
+  // Была ли карточка «фикс-группой» ДО этого изменения состава — используется
+  // ниже, чтобы add/delete опции держали min=max=N в ногу с options.length
+  // (иначе после добавления 5-го пункта в группу «входит всегда» из 4-х
+  // isFixedBundleSlot перестанет её узнавать: 4=4≠5).
+  const wasFixed = isFixedBundleSlot(slot)
+
+  // Общее ядро добавления опции — используется и при выборе НОВОГО блюда из
+  // MenuItemPicker, и при «дублировании» уже существующей строки (кнопка [+]
+  // на OptionRow — вторая порция того же блюда, напр. 2 фри в одном слоте).
+  // MenuItemPicker исключает уже занятые в слоте блюда из поиска (см. exclude
+  // ниже), поэтому взять «то же самое ещё раз» можно только через дубликат.
+  const addOption = async (optionMenuItemId: string, price: number) => {
     setBusy(true)
     try {
-      await createBundleSlotOption({ slotId: slot.id, optionMenuItemId: item.id, price: item.price, isDefault: slot.options.length === 0 })
-      setAdding(false)
+      await createBundleSlotOption({ slotId: slot.id, optionMenuItemId, price, isDefault: wasFixed || slot.options.length === 0 })
+      if (wasFixed) {
+        const nextCount = slot.options.length + 1
+        await updateBundleSlot(slot.id, { minSelect: nextCount, maxSelect: nextCount })
+      }
       onChanged()
-    } catch (e) {
+      return true
+    } catch {
       toast.error('Не удалось добавить опцию')
+      return false
     } finally {
       setBusy(false)
     }
   }
+
+  const handleAddOption = async (item: MenuItem) => {
+    if (await addOption(item.id, item.price)) setAdding(false)
+  }
+
+  const handleDuplicateOption = (option: BundleSlotOption) => addOption(option.optionMenuItemId, option.price)
 
   const handlePriceChange = (optionId: string, price: number) => {
     updateBundleSlotOption(optionId, { price }).catch(() => toast.error('Не удалось сохранить цену'))
@@ -134,6 +208,16 @@ function SlotCard({ slot, menuItems, otherSlotOptionIds, onChanged }: {
   const handleDeleteOption = async (optionId: string) => {
     try {
       await deleteBundleSlotOption(optionId)
+      // Та же логика в обратную сторону — фикс-группа усыхает вместе с
+      // удалением опции. При nextCount=0 min/max не трогаем: пустой слот
+      // и так не пройдёт продажу, владелец либо добавит опцию, либо удалит
+      // слот целиком кнопкой ниже.
+      if (wasFixed) {
+        const nextCount = slot.options.length - 1
+        if (nextCount > 0) {
+          await updateBundleSlot(slot.id, { minSelect: nextCount, maxSelect: nextCount })
+        }
+      }
       onChanged()
     } catch {
       toast.error('Не удалось удалить опцию')
@@ -150,30 +234,105 @@ function SlotCard({ slot, menuItems, otherSlotOptionIds, onChanged }: {
     }
   }
 
+  const handleStartEdit = () => {
+    setEditLabel(slot.label)
+    setEditRequired(slot.isRequired)
+    setEditMin(slot.minSelect)
+    setEditMax(slot.maxSelect)
+    setEditing(true)
+  }
+
+  const handleSaveEdit = async () => {
+    if (!editLabel.trim()) {
+      toast.error('Укажите название слота')
+      return
+    }
+    if (editMin > editMax) {
+      toast.error('Минимум не может быть больше максимума')
+      return
+    }
+    setSavingEdit(true)
+    try {
+      await updateBundleSlot(slot.id, {
+        label: editLabel.trim(), isRequired: editRequired, minSelect: editMin, maxSelect: editMax,
+      })
+      setEditing(false)
+      onChanged()
+    } catch {
+      toast.error('Не удалось сохранить слот')
+    } finally {
+      setSavingEdit(false)
+    }
+  }
+
   return (
     <div className="border border-border rounded-xl p-3.5 space-y-2.5 bg-muted/10">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-bold text-foreground truncate">{slot.label}</span>
-          {isFixedBundleSlot(slot) ? (
-            <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-400 px-1.5 py-0.5 rounded shrink-0">
-              входит всегда
-            </span>
-          ) : (
-            <>
-              <span className="text-[10px] font-semibold text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
-                {slot.minSelect === slot.maxSelect ? `${slot.minSelect} из ${slot.options.length}` : `${slot.minSelect}–${slot.maxSelect} из ${slot.options.length}`}
-              </span>
-              {slot.isRequired && (
-                <span className="text-[10px] font-semibold text-amber-700 bg-amber-100 dark:bg-amber-950/40 dark:text-amber-400 px-1.5 py-0.5 rounded shrink-0">обязателен</span>
-              )}
-            </>
-          )}
+      {editing ? (
+        <div className="space-y-3">
+          <input
+            type="text"
+            value={editLabel}
+            onChange={e => setEditLabel(e.target.value)}
+            placeholder="Название слота (напр. «Бургер»)"
+            autoFocus
+            className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+          <SlotMinMaxFields
+            required={editRequired} onRequiredChange={setEditRequired}
+            min={editMin} onMinChange={setEditMin}
+            max={editMax} onMaxChange={setEditMax}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleSaveEdit}
+              disabled={savingEdit}
+              className="flex-1 py-1.5 text-xs font-semibold bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors disabled:opacity-50"
+            >
+              {savingEdit ? 'Сохранение…' : 'Сохранить'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              disabled={savingEdit}
+              className="py-1.5 px-3 text-xs font-semibold text-muted-foreground hover:bg-muted rounded-lg transition-colors"
+            >
+              Отмена
+            </button>
+          </div>
         </div>
-        <button type="button" onClick={handleDeleteSlot} className="shrink-0 p-1.5 text-destructive hover:bg-destructive/10 rounded-md transition-colors">
-          <Trash2 className="size-4" />
-        </button>
-      </div>
+      ) : (
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-bold text-foreground truncate">{slot.label}</span>
+            {isFixedBundleSlot(slot) ? (
+              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-400 px-1.5 py-0.5 rounded shrink-0">
+                входит всегда
+              </span>
+            ) : (
+              // Один бейдж, не два: slotHint уже словами описывает и
+              // обязательность (min>0 → «обязательно»/«выберите N»), и
+              // максимум — отдельный бейдж на isRequired дублировал бы то
+              // же самое, а на кассе это поле и так не проверяется
+              // (expandBundleSelections валидирует только min/max, не
+              // is_required), так что рассинхрон с ним был бы просто враньём.
+              <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded shrink-0 ${
+                slot.minSelect > 0 ? 'text-primary bg-primary/10' : 'text-muted-foreground bg-muted'
+              }`}>
+                {slotHint(slot)}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1 shrink-0">
+            <button type="button" onClick={handleStartEdit} title="Изменить слот" className="p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground rounded-md transition-colors">
+              <Pencil className="size-4" />
+            </button>
+            <button type="button" onClick={handleDeleteSlot} title="Удалить слот" className="p-1.5 text-destructive hover:bg-destructive/10 rounded-md transition-colors">
+              <Trash2 className="size-4" />
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="space-y-1.5">
         {slot.options.map(opt => (
@@ -181,6 +340,7 @@ function SlotCard({ slot, menuItems, otherSlotOptionIds, onChanged }: {
             key={opt.id}
             option={opt}
             onPriceChange={p => handlePriceChange(opt.id, p)}
+            onDuplicate={() => handleDuplicateOption(opt)}
             onDelete={() => handleDeleteOption(opt.id)}
           />
         ))}
@@ -244,6 +404,16 @@ function FixedGroupCreator({ bundleMenuItemId, menuItems, exclude, sortOrder, on
   }, [])
 
   const pickedIds = new Set(picked.map(m => m.id))
+  // Группировка ТОЛЬКО для отображения пилюль («Фри ×2») — сам массив picked
+  // остаётся плоским и может содержать один id несколько раз: под капотом
+  // это N будущих bundle_slot_options на одно и то же блюдо (2 порции фри),
+  // handleCreate ниже просто маппит picked как есть, без спец-случаев.
+  const pickedGroups: { item: MenuItem; count: number }[] = []
+  for (const item of picked) {
+    const g = pickedGroups.find(g => g.item.id === item.id)
+    if (g) g.count += 1
+    else pickedGroups.push({ item, count: 1 })
+  }
   const q = query.toLowerCase()
   const filtered = menuItems
     .filter(m => !exclude.has(m.id) && !pickedIds.has(m.id) && m.name.toLowerCase().includes(q))
@@ -290,12 +460,25 @@ function FixedGroupCreator({ bundleMenuItemId, menuItems, exclude, sortOrder, on
         autoFocus
         className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
       />
-      {picked.length > 0 && (
+      {pickedGroups.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {picked.map(item => (
+          {pickedGroups.map(({ item, count }) => (
             <span key={item.id} className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 rounded-full">
-              {item.name}
-              <button type="button" onClick={() => setPicked(p => p.filter(m => m.id !== item.id))} className="p-0.5 hover:bg-emerald-200 dark:hover:bg-emerald-900 rounded-full transition-colors">
+              {item.name}{count > 1 ? ` ×${count}` : ''}
+              <button
+                type="button"
+                onClick={() => setPicked(p => [...p, item])}
+                title="Добавить ещё одну порцию (напр. 2 фри)"
+                className="p-0.5 hover:bg-emerald-200 dark:hover:bg-emerald-900 rounded-full transition-colors"
+              >
+                <Plus className="size-3" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setPicked(p => { const idx = p.findIndex(m => m.id === item.id); const next = [...p]; next.splice(idx, 1); return next })}
+                title="Убрать одну порцию"
+                className="p-0.5 hover:bg-emerald-200 dark:hover:bg-emerald-900 rounded-full transition-colors"
+              >
                 <X className="size-3" />
               </button>
             </span>
@@ -470,28 +653,11 @@ export function BundleSlotsEditor({ bundleMenuItemId, menuItems }: BundleSlotsEd
             autoFocus
             className="w-full px-3 py-2 text-sm bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
-          <div className="flex items-center gap-3 flex-wrap">
-            <label className="flex items-center gap-1.5 text-xs text-foreground">
-              <input type="checkbox" checked={newRequired} onChange={e => setNewRequired(e.target.checked)} className="size-3.5" />
-              Обязателен
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              Выбрать мин.
-              <input
-                type="number" min={0} value={newMin}
-                onChange={e => setNewMin(Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-14 px-2 py-1 text-sm bg-background border border-border rounded-md"
-              />
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              макс.
-              <input
-                type="number" min={1} value={newMax}
-                onChange={e => setNewMax(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                className="w-14 px-2 py-1 text-sm bg-background border border-border rounded-md"
-              />
-            </label>
-          </div>
+          <SlotMinMaxFields
+            required={newRequired} onRequiredChange={setNewRequired}
+            min={newMin} onMinChange={setNewMin}
+            max={newMax} onMaxChange={setNewMax}
+          />
           <div className="flex items-center gap-2">
             <button
               type="button"

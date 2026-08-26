@@ -11,6 +11,17 @@ export function isFixedBundleSlot(slot: Pick<BundleSlot, 'minSelect' | 'maxSelec
   return slot.options.length > 0 && slot.minSelect === slot.maxSelect && slot.minSelect === slot.options.length
 }
 
+/** Человеко-читаемая формулировка «сколько выбирать» в слоте сета — общая
+ *  для кассы (оба пикера) и редактора владельца, чтобы то же самое
+ *  min/max читалось словами одинаково везде, а не цифрами в одном месте и
+ *  словами в другом. */
+export function slotHint(slot: Pick<BundleSlot, 'minSelect' | 'maxSelect'>): string {
+  if (slot.minSelect <= 0 && slot.maxSelect <= 1) return 'по желанию'
+  if (slot.minSelect <= 0) return `можно выбрать до ${slot.maxSelect}`
+  if (slot.minSelect === slot.maxSelect) return slot.maxSelect === 1 ? 'обязательно' : `выберите ${slot.minSelect}`
+  return `выберите от ${slot.minSelect} до ${slot.maxSelect}`
+}
+
 /** Активные позиции для отображения в чеке (тело гостевого/пре-чека).
  *
  *  Исключаем:
