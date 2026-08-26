@@ -1,5 +1,15 @@
 import { dAdd, dDiv, dMul, dRound } from './decimal'
-import type { Order, OrderItem, OrderVoid } from './types'
+import type { BundleSlot, Order, OrderItem, OrderVoid } from './types'
+
+/** Слот сета без реального выбора: минимум и максимум равны числу опций —
+ *  значит выбрать МЕНЬШЕ, чем «взять всё», физически невозможно. Один
+ *  вариант признака и для «слот из одного обязательного пункта» (1=1=1),
+ *  и для «фиксированная группа из нескольких пунктов» (N=N=N) — оба случая
+ *  редактор и оба кассовых пикера обязаны показывать одинаково: как готовый
+ *  список без интерактива, а не как кнопки выбора. */
+export function isFixedBundleSlot(slot: Pick<BundleSlot, 'minSelect' | 'maxSelect' | 'options'>): boolean {
+  return slot.options.length > 0 && slot.minSelect === slot.maxSelect && slot.minSelect === slot.options.length
+}
 
 /** Активные позиции для отображения в чеке (тело гостевого/пре-чека).
  *

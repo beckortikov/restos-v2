@@ -4,7 +4,7 @@ import * as React from 'react'
 import { Check } from 'lucide-react'
 import { type MenuItem, type BundleSlot, type BundleSelectionInput } from '@/lib/types'
 import { fetchBundleSlots } from '@/lib/queries'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, isFixedBundleSlot } from '@/lib/helpers'
 import { PosModal } from './pos-modal'
 import type { BundleCartComponent } from '@/components/dialogs/bundle-picker-sheet'
 
@@ -120,6 +120,36 @@ export function BundlePickerModal({ product, menuItems, stoppedIds, onClose, onC
           <p className="text-center" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)', padding: '1.5rem 0' }}>Сет не настроен — обратитесь к менеджеру</p>
         ) : (
           slots.map(slot => {
+            // Слот без реального выбора (min=max=число опций — «входит
+            // всегда», см. isFixedBundleSlot): не рендерим кнопками, только
+            // список — нечего выбирать, и не даёт случайно "снять" обязательное.
+            if (isFixedBundleSlot(slot)) {
+              return (
+                <div key={slot.id}>
+                  <div className="flex items-center justify-between" style={{ marginBottom: '0.5rem' }}>
+                    <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>{slot.label}</span>
+                    <span className="rounded-full font-medium" style={{
+                      background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)',
+                      padding: '0.15rem 0.6rem', fontSize: '0.7rem',
+                    }}>входит всегда</span>
+                  </div>
+                  <div className="flex flex-wrap" style={{ gap: '0.3rem 0.5rem', color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>
+                    {slot.options.map((opt, i) => {
+                      const stopped = stoppedIds?.has(opt.optionMenuItemId) ?? false
+                      const name = opt.optionMenuItemName ?? menuItemsById.get(opt.optionMenuItemId)?.name ?? '?'
+                      return (
+                        <span key={opt.id} className="flex items-center" style={{ gap: '0.3rem' }}>
+                          {name}{i < slot.options.length - 1 ? ',' : ''}
+                          {stopped && (
+                            <span className="rounded-full font-bold" style={{ background: 'var(--pv-occ-soft)', color: 'var(--pv-occ-text)', padding: '0.1rem 0.4rem', fontSize: '0.6rem' }}>СТОП</span>
+                          )}
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            }
             const curSelected = selected[slot.id] ?? []
             const atMax = slot.maxSelect > 1 && curSelected.length >= slot.maxSelect
             return (

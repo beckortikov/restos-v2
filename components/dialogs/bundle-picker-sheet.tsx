@@ -6,7 +6,7 @@ import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X, Check } from 'lucide-react'
 import { type MenuItem, type BundleSlot, type BundleSelectionInput } from '@/lib/types'
 import { fetchBundleSlots } from '@/lib/queries'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, isFixedBundleSlot } from '@/lib/helpers'
 
 /** Один выбранный компонент сета — только для локального отображения разбивки
  *  строки корзины ДО ответа бэка. После отправки заказа реальные компоненты
@@ -213,6 +213,32 @@ function BundleBody({
         <p className="text-sm text-muted-foreground text-center py-6">Сет не настроен — обратитесь к менеджеру</p>
       ) : (
         slots.map(slot => {
+          // Слот без реального выбора (min=max=число опций — «входит всегда»,
+          // см. isFixedBundleSlot): не рендерим кнопками — гостю/кассиру нечего
+          // решать, только сообщаем список. И чище визуально при многих
+          // фиксированных пунктах, и не даёт случайно "снять" обязательный выбор.
+          if (isFixedBundleSlot(slot)) {
+            return (
+              <div key={slot.id}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-medium text-foreground">{slot.label}</label>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-emerald-500/10 text-emerald-700 dark:text-emerald-400">входит всегда</span>
+                </div>
+                <div className="flex flex-wrap gap-x-1.5 gap-y-1 text-sm text-foreground">
+                  {slot.options.map((opt, i) => {
+                    const stopped = stoppedIds?.has(opt.optionMenuItemId) ?? false
+                    const name = opt.optionMenuItemName ?? menuItemsById.get(opt.optionMenuItemId)?.name ?? '?'
+                    return (
+                      <span key={opt.id} className="inline-flex items-center gap-1">
+                        {name}{i < slot.options.length - 1 ? ',' : ''}
+                        {stopped && <span className="text-[9px] px-1 py-0.5 bg-destructive/10 text-destructive rounded-full font-bold shrink-0">СТОП</span>}
+                      </span>
+                    )
+                  })}
+                </div>
+              </div>
+            )
+          }
           const curSelected = selected[slot.id] ?? []
           const atMax = slot.maxSelect > 1 && curSelected.length >= slot.maxSelect
           return (
