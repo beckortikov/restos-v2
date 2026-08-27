@@ -458,6 +458,7 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/finance/balance", finReportsH.Balance)
 			g.Get("/finance/monthly-revenue", finReportsH.MonthlyRevenue)
 			g.Get("/finance/recurring-payments", recurringPaymentsH.List)
+			g.Get("/finance/recurring-payments/{id}/history", recurringPaymentsH.History)
 
 			// Analytics aggregates — Phase 3.2, серверные отчёты для /analytics/*.
 			g.Get("/analytics/abc-menu", analyticsH.ABCMenu)

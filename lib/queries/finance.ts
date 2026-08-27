@@ -85,8 +85,13 @@ export async function fetchCustomCategories(): Promise<{ id: string; name: strin
   return rows.map(r => ({ id: r.id, name: r.name, type: r.type }))
 }
 
-export async function createCustomCategory(name: string, type: 'in' | 'out'): Promise<void> {
-  await unwrap(api.POST('/api/v1/finance/custom-categories', { body: { name, type } as any }))
+export async function createCustomCategory(name: string, type: 'in' | 'out'): Promise<{ id: string; name: string; type: string }> {
+  const data: any = await unwrap(api.POST('/api/v1/finance/custom-categories', { body: { name, type } as any }))
+  return { id: data.id, name: data.name, type: data.type }
+}
+
+export async function deleteCustomCategory(id: string): Promise<void> {
+  await unwrap(api.DELETE('/api/v1/finance/custom-categories/{id}', { params: { path: { id } } }))
 }
 
 export async function fetchFinancialOperations(): Promise<FinancialOperation[]> {
@@ -952,7 +957,7 @@ function mapFinancialAccount(r: any): FinancialAccount {
   } as FinancialAccount
 }
 
-function mapFinancialOperation(r: any): FinancialOperation {
+export function mapFinancialOperation(r: any): FinancialOperation {
   return {
     id: r.id,
     type: r.type,

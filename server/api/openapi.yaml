@@ -3618,10 +3618,14 @@ paths:
       tags: [finance]
       summary: Провести платёж по шаблону
       description: |
-        Списывает сумму со счёта и создаёт financial_operation out. Сумма/счёт по
-        умолчанию из шаблона, но переопределяются в теле (коммуналка меняется
-        помесячно). next_due двигается на следующий месяц, ставится last_paid_at.
-        Обычный операционный расход (в отличие от гашения долга поставщику).
+        Списывает сумму со счёта и создаёт financial_operation out (source_ref =
+        "recurring_payment:"+id — см. /history). Сумма/счёт по умолчанию — остаток
+        текущего цикла (вся amount шаблона, если ничего ещё не платили), но
+        переопределяются в теле (коммуналка меняется помесячно, долг гасят частями).
+        Покрывает остаток целиком → next_due двигается на следующий месяц,
+        remaining_amount сбрасывается. Не покрывает → цикл остаётся открытым:
+        remaining_amount уменьшается, next_due НЕ двигается. last_paid_at/
+        last_paid_amount — всегда, независимо от того, закрыт цикл или нет.
       parameters:
         - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -3631,6 +3635,17 @@ paths:
         "409":
           description: На счёте недостаточно денег.
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+  /api/v1/finance/recurring-payments/{id}/history:
+    get:
+      tags: [finance]
+      summary: История платежей по шаблону
+      description: |
+        Все financial_operations с source_ref = "recurring_payment:"+id, новые
+        сверху. Платежи, сделанные до появления source_ref (до v3.16.314),
+        связаны бэкфиллом (миграция 090) по тегу в description — best-effort,
+        не 100% гарантия для одноимённых шаблонов одного ресторана.
+      parameters: [ { in: path, name: id, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/FinancialOperationsList" } } } } }
 
   # ─── Analytics: серверные агрегаты ───────────────────────────────────────
   /api/v1/analytics/abc-menu:

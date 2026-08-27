@@ -1,6 +1,7 @@
 import { api, unwrap } from './_client'
-import type { RecurringPayment, FinancialActivity } from '../types'
+import type { RecurringPayment, FinancialActivity, FinancialOperation } from '../types'
 import { logAction } from './audit'
+import { mapFinancialOperation } from './finance'
 
 function mapRecurringPayment(r: any): RecurringPayment {
   return {
@@ -91,4 +92,14 @@ export async function payRecurringPayment(input: {
   }))
   logAction('recurring_payment.pay', 'recurring_payment', input.id, 'Платёж')
   return mapRecurringPayment(data)
+}
+
+// fetchRecurringPaymentHistory — все платежи, сделанные по шаблону, новые
+// сверху. Платежи до v3.16.314 (source_ref) связаны бэкфиллом на бэке.
+export async function fetchRecurringPaymentHistory(id: string): Promise<FinancialOperation[]> {
+  const res: any = await unwrap(api.GET('/api/v1/finance/recurring-payments/{id}/history', {
+    params: { path: { id } },
+  }))
+  const rows: any[] = res?.data ?? []
+  return rows.map(mapFinancialOperation)
 }

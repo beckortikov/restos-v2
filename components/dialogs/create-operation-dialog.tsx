@@ -8,15 +8,19 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Command, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem } from '@/components/ui/command'
 import {
   type FinancialActivity,
   type FinancialOperationType,
   type FinancialAccount,
   type FinancialOperation,
 } from '@/lib/types'
-import { fetchFinancialAccounts, fetchCustomCategories, createCustomCategory } from '@/lib/queries'
+import { fetchFinancialAccounts, fetchCustomCategories, createCustomCategory, deleteCustomCategory } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
 import { DecimalInput } from '@/components/ui/decimal-input'
+import { ChevronsUpDown, Check, Plus, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 const INCOME_CATEGORIES = [
   'Выручка от реализации',
@@ -87,7 +91,7 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
     affectsShift: false,
   })
   const [accounts, setAccounts] = useState<FinancialAccount[]>([])
-  const [dbCategories, setDbCategories] = useState<{ name: string; type: string }[]>([])
+  const [dbCategories, setDbCategories] = useState<{ id: string; name: string; type: string }[]>([])
   const [dataLoaded, setDataLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
 
@@ -123,24 +127,23 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
     }
   }, [open, initialOperation])
 
-  const categories = useMemo(() => {
-    const base = form.type === 'in' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
-    const custom = dbCategories.filter(c => c.type === form.type).map(c => c.name)
-    return [...base, ...custom.filter(c => !base.includes(c))]
-  }, [form.type, dbCategories])
+  const builtInCategories = form.type === 'in' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
+  const customCategoriesForType = useMemo(
+    () => dbCategories.filter(c => c.type === form.type && !builtInCategories.includes(c.name)),
+    [dbCategories, form.type, builtInCategories],
+  )
 
   async function handleSubmit() {
     setSaving(true)
     // Введённую вручную категорию (нет ни в базовом списке, ни в кастомных)
-    // сохраняем — попадёт в подсказки datalist в след. раз.
+    // сохраняем — попадёт в подсказки в след. раз.
     const typed = form.category.trim()
     if (typed) {
-      const base = form.type === 'in' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES
-      const known = base.includes(typed) || dbCategories.some(c => c.type === form.type && c.name === typed)
+      const known = builtInCategories.includes(typed) || dbCategories.some(c => c.type === form.type && c.name === typed)
       if (!known) {
         try {
-          await createCustomCategory(typed, form.type as 'in' | 'out')
-          setDbCategories(prev => [...prev, { name: typed, type: form.type }])
+          const created = await createCustomCategory(typed, form.type as 'in' | 'out')
+          setDbCategories(prev => [...prev, created])
         } catch {}
       }
     }
@@ -149,6 +152,18 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
       onOpenChange(false)
     } catch {
       setSaving(false)
+    }
+  }
+
+  async function handleDeleteCustomCategory(id: string, name: string) {
+    if (!confirm(`Удалить категорию «${name}»?\n\nУже созданные операции с этой категорией не изменятся — пропадёт только из списка выбора.`)) return
+    try {
+      await deleteCustomCategory(id)
+      setDbCategories(prev => prev.filter(c => c.id !== id))
+      if (form.category === name) setForm(p => ({ ...p, category: '' }))
+      toast.success('Категория удалена')
+    } catch {
+      toast.error('Не удалось удалить категорию')
     }
   }
 
@@ -200,22 +215,16 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
             />
           </div>
 
-          {/* Category — свободный ввод + подсказки из списка (можно ввести свою). */}
+          {/* Category — поиск по встроенным + своим категориям, можно вписать новую. */}
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-foreground">Категория</label>
-            <input
-              type="text"
-              list="op-category-list"
+            <CategoryCombobox
               value={form.category}
-              onChange={(e) => setForm((p) => ({ ...p, category: e.target.value }))}
-              placeholder="Введите или выберите категорию"
-              className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+              onChange={(v) => setForm((p) => ({ ...p, category: v }))}
+              builtIn={builtInCategories}
+              custom={customCategoriesForType}
+              onDeleteCustom={handleDeleteCustomCategory}
             />
-            <datalist id="op-category-list">
-              {categories.map((c) => (
-                <option key={c} value={c} />
-              ))}
-            </datalist>
             {/* Н9: кассовая закупка не приходует склад — для складского учёта нужна накладная. */}
             {form.type === 'out' && (form.category === 'Закупка продуктов' || form.category === 'Закупка хозтоваров') && (
               <p className="text-xs text-amber-600 dark:text-amber-400">
@@ -330,5 +339,80 @@ export function CreateOperationDialog({ open, onOpenChange, onSubmit, initialOpe
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// ─── CategoryCombobox ────────────────────────────────────────────────────────
+// Категория операции — поиск по встроенному набору + своим категориям
+// (сохранённым через createCustomCategory), с возможностью вписать новую
+// («нет свободной название категорий которую можно ввести владельцу» — она
+// была: нативный <input list=datalist>, просто не выглядела и не искалась
+// как настоящий выбор. Тот же паттерн, что PositionCombobox в
+// settings/users/page.tsx.) Свои категории — с крестиком удаления по ховеру,
+// встроенные — нет (это не то, чем владелец управляет).
+function CategoryCombobox({ value, onChange, builtIn, custom, onDeleteCustom }: {
+  value: string
+  onChange: (v: string) => void
+  builtIn: string[]
+  custom: { id: string; name: string }[]
+  onDeleteCustom: (id: string, name: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const all = useMemo(() => [...builtIn, ...custom.map((c) => c.name)], [builtIn, custom])
+  const filtered = q ? all.filter((s) => s.toLowerCase().includes(q)) : all
+  const hasExactMatch = all.some((s) => s.toLowerCase() === q)
+  const customById = useMemo(() => new Map(custom.map((c) => [c.name, c.id])), [custom])
+
+  return (
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); setQuery(o ? value : '') }}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg text-left flex items-center justify-between gap-2 hover:bg-muted/40 transition-colors focus:outline-none focus:ring-2 focus:ring-primary/30"
+        >
+          <span className={`truncate ${value ? 'text-foreground' : 'text-muted-foreground'}`}>{value || 'Введите или выберите категорию'}</span>
+          <ChevronsUpDown className="size-3.5 text-muted-foreground shrink-0" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="p-0 w-[var(--radix-popover-trigger-width)]">
+        <Command shouldFilter={false}>
+          <CommandInput value={query} onValueChange={setQuery} placeholder="Найти категорию..." />
+          <CommandList>
+            <CommandEmpty>Не найдено</CommandEmpty>
+            <CommandGroup>
+              {filtered.map((s) => {
+                const customId = customById.get(s)
+                return (
+                  <CommandItem key={s} value={s} onSelect={() => { onChange(s); setOpen(false) }} className="group">
+                    <Check className={`mr-2 size-4 shrink-0 ${value === s ? 'opacity-100' : 'opacity-0'}`} />
+                    <span className="flex-1 truncate">{s}</span>
+                    {customId && (
+                      <button
+                        type="button"
+                        title="Удалить категорию"
+                        onClick={(e) => { e.stopPropagation(); onDeleteCustom(customId, s) }}
+                        className="opacity-0 group-hover:opacity-100 p-1 -m-1 rounded shrink-0 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-opacity"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    )}
+                  </CommandItem>
+                )
+              })}
+            </CommandGroup>
+            {query.trim() && !hasExactMatch && (
+              <CommandGroup>
+                <CommandItem value={`__create__${query.trim()}`} onSelect={() => { onChange(query.trim()); setOpen(false) }}>
+                  <Plus className="mr-2 size-4" />
+                  Добавить «{query.trim()}»
+                </CommandItem>
+              </CommandGroup>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }

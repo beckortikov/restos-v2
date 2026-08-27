@@ -69,6 +69,16 @@ func (h *RecurringPaymentsHandler) Delete(w http.ResponseWriter, r *http.Request
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// History — GET /api/v1/finance/recurring-payments/{id}/history.
+func (h *RecurringPaymentsHandler) History(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.History(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, makeList[models.FinancialOperation](rows, ""))
+}
+
 // Pay — POST /api/v1/finance/recurring-payments/{id}/pay.
 func (h *RecurringPaymentsHandler) Pay(w http.ResponseWriter, r *http.Request) {
 	var in service.RecurringPaymentPayInput

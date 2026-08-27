@@ -11626,10 +11626,14 @@ export interface paths {
         put?: never;
         /**
          * Провести платёж по шаблону
-         * @description Списывает сумму со счёта и создаёт financial_operation out. Сумма/счёт по
-         *     умолчанию из шаблона, но переопределяются в теле (коммуналка меняется
-         *     помесячно). next_due двигается на следующий месяц, ставится last_paid_at.
-         *     Обычный операционный расход (в отличие от гашения долга поставщику).
+         * @description Списывает сумму со счёта и создаёт financial_operation out (source_ref =
+         *     "recurring_payment:"+id — см. /history). Сумма/счёт по умолчанию — остаток
+         *     текущего цикла (вся amount шаблона, если ничего ещё не платили), но
+         *     переопределяются в теле (коммуналка меняется помесячно, долг гасят частями).
+         *     Покрывает остаток целиком → next_due двигается на следующий месяц,
+         *     remaining_amount сбрасывается. Не покрывает → цикл остаётся открытым:
+         *     remaining_amount уменьшается, next_due НЕ двигается. last_paid_at/
+         *     last_paid_amount — всегда, независимо от того, закрыт цикл или нет.
          */
         post: {
             parameters: {
@@ -11669,6 +11673,50 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/finance/recurring-payments/{id}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * История платежей по шаблону
+         * @description Все financial_operations с source_ref = "recurring_payment:"+id, новые
+         *     сверху. Платежи, сделанные до появления source_ref (до v3.16.314),
+         *     связаны бэкфиллом (миграция 090) по тегу в description — best-effort,
+         *     не 100% гарантия для одноимённых шаблонов одного ресторана.
+         */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["FinancialOperationsList"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;

@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import { RecurringPaymentDialog } from '@/components/dialogs/recurring-payment-dialog'
 import { PayRecurringDialog } from '@/components/dialogs/pay-recurring-dialog'
+import { RecurringPaymentHistoryDialog } from '@/components/dialogs/recurring-payment-history-dialog'
 import { toast } from 'sonner'
 
 // daysUntil — сколько дней до YYYY-MM-DD (отрицательно = просрочено). Считаем в
@@ -51,6 +52,7 @@ export default function PaymentsPage() {
   const [editing, setEditing] = useState<RecurringPayment | null>(null)
   const [addOpen, setAddOpen] = useState(false)
   const [payFor, setPayFor] = useState<RecurringPayment | null>(null)
+  const [historyFor, setHistoryFor] = useState<RecurringPayment | null>(null)
 
   const load = () => fetchRecurringPayments().then(setPayments).catch(() => toast.error('Ошибка загрузки'))
   useEffect(() => { load().finally(() => setLoading(false)) }, [])
@@ -173,7 +175,9 @@ export default function PaymentsPage() {
             return (
               <div
                 key={p.id}
-                className={`bg-card rounded-xl border p-4 flex items-center gap-4 ${st.urgent ? 'border-amber-300/60' : 'border-border'} ${!p.active ? 'opacity-60' : ''}`}
+                onClick={() => setHistoryFor(p)}
+                title="Показать историю платежей"
+                className={`bg-card rounded-xl border p-4 flex items-center gap-4 cursor-pointer hover:border-primary/40 transition-colors ${st.urgent ? 'border-amber-300/60' : 'border-border'} ${!p.active ? 'opacity-60' : ''}`}
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
@@ -189,7 +193,7 @@ export default function PaymentsPage() {
                   </p>
                   {p.lastPaidAt && (
                     <p className="text-[11px] text-muted-foreground/80 mt-0.5">
-                      Последний платёж: {formatCurrency(p.lastPaidAmount ?? 0)} · {formatDateTime(p.lastPaidAt)}
+                      Последний платёж: {p.lastPaidAmount != null ? `${formatCurrency(p.lastPaidAmount)} · ` : ''}{formatDateTime(p.lastPaidAt)}
                     </p>
                   )}
                 </div>
@@ -200,7 +204,7 @@ export default function PaymentsPage() {
                   )}
                 </div>
                 {manage && (
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
                     {p.active && (
                       <button
                         onClick={() => setPayFor(p)}
@@ -230,6 +234,7 @@ export default function PaymentsPage() {
       <RecurringPaymentDialog payment={null} open={addOpen} onOpenChange={setAddOpen} onSuccess={load} />
       <RecurringPaymentDialog payment={editing} open={!!editing} onOpenChange={v => { if (!v) setEditing(null) }} onSuccess={load} />
       <PayRecurringDialog payment={payFor} open={!!payFor} onOpenChange={v => { if (!v) setPayFor(null) }} onSuccess={load} />
+      <RecurringPaymentHistoryDialog payment={historyFor} open={!!historyFor} onOpenChange={v => { if (!v) setHistoryFor(null) }} />
     </div>
   )
 }

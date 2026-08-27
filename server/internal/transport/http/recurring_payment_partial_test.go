@@ -105,3 +105,96 @@ func TestRecurringPayment_PartialPayment(t *testing.T) {
 		t.Errorf("description = %v, доплата закрыла цикл целиком — «частично» быть не должно", *fo2.Description)
 	}
 }
+
+// TestRecurringPayment_History — GET /{id}/history: владелец жаловался, что
+// после оплаты «непонятно, сколько уже платил» — платёж физически всегда
+// попадал в общую ленту счёта, но ничто не связывало его обратно с шаблоном.
+// Pay теперь проставляет source_ref = "recurring_payment:"+id — история
+// собирается по нему, новые сверху, и не путает платежи РАЗНЫХ шаблонов.
+func TestRecurringPayment_History(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, _, accountID := seedForWrite(t, f)
+	topUp(t, gdb, accountID) // баланс 10000
+	if err := gdb.Exec(`UPDATE users SET permissions = '{"actions":{"finance.manage":true}}' WHERE restaurant_id = ?`, f.rid).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	r, b := f.post(t, "/api/v1/finance/recurring-payments", tok, uuid.NewString(), map[string]any{
+		"name": "Аренда", "amount": "1000", "account_id": accountID, "category": "Аренда", "day_of_month": 5,
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create rent: %d %s", r.StatusCode, b)
+	}
+	var rent models.RecurringPayment
+	_ = json.Unmarshal(b, &rent)
+
+	// Второй, несвязанный шаблон — проверяем, что его платежи НЕ утекают
+	// в историю первого.
+	r, b = f.post(t, "/api/v1/finance/recurring-payments", tok, uuid.NewString(), map[string]any{
+		"name": "Коммуналка", "amount": "300", "account_id": accountID, "category": "Коммуналка", "day_of_month": 10,
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create utilities: %d %s", r.StatusCode, b)
+	}
+	var util models.RecurringPayment
+	_ = json.Unmarshal(b, &util)
+	r, b = f.post(t, "/api/v1/finance/recurring-payments/"+util.ID+"/pay", tok, uuid.NewString(), map[string]any{})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("pay utilities: %d %s", r.StatusCode, b)
+	}
+
+	// История «Аренды» пока пуста — ничего не платили.
+	r, b = f.get(t, "/api/v1/finance/recurring-payments/"+rent.ID+"/history", tok)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("history (empty): %d %s", r.StatusCode, b)
+	}
+	var empty struct {
+		Data []models.FinancialOperation `json:"data"`
+	}
+	if err := json.Unmarshal(b, &empty); err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.Data) != 0 {
+		t.Fatalf("history до первой оплаты = %d записей, want 0 (utilities не должна утекать)", len(empty.Data))
+	}
+
+	// Первая оплата «Аренды» (полная — закрывает цикл).
+	r, b = f.post(t, "/api/v1/finance/recurring-payments/"+rent.ID+"/pay", tok, uuid.NewString(), map[string]any{})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("pay rent #1: %d %s", r.StatusCode, b)
+	}
+	// Вторая оплата — override суммой (коммуналка/аренда меняется).
+	r, b = f.post(t, "/api/v1/finance/recurring-payments/"+rent.ID+"/pay", tok, uuid.NewString(), map[string]any{
+		"amount": "1200",
+	})
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("pay rent #2: %d %s", r.StatusCode, b)
+	}
+
+	r, b = f.get(t, "/api/v1/finance/recurring-payments/"+rent.ID+"/history", tok)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("history: %d %s", r.StatusCode, b)
+	}
+	var hist struct {
+		Data []models.FinancialOperation `json:"data"`
+	}
+	if err := json.Unmarshal(b, &hist); err != nil {
+		t.Fatal(err)
+	}
+	if len(hist.Data) != 2 {
+		t.Fatalf("history после 2 оплат = %d записей, want 2 (utilities не должна утекать)", len(hist.Data))
+	}
+	// Новые сверху: последняя оплата (1200) первой в списке.
+	if !hist.Data[0].Amount.Equal(decimal.MustFromString("1200")) {
+		t.Errorf("history[0].amount = %s, want 1200 (новые сверху)", hist.Data[0].Amount)
+	}
+	if !hist.Data[1].Amount.Equal(decimal.MustFromString("1000")) {
+		t.Errorf("history[1].amount = %s, want 1000", hist.Data[1].Amount)
+	}
+	for _, op := range hist.Data {
+		if op.SourceRef == nil || *op.SourceRef != "recurring_payment:"+rent.ID {
+			t.Errorf("source_ref = %v, want recurring_payment:%s", op.SourceRef, rent.ID)
+		}
+	}
+}

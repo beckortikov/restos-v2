@@ -310,11 +310,12 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 			desc += " (частично)"
 		}
 		ridStr := rid
+		srcRef := "recurring_payment:" + rp.ID
 		fo := &models.FinancialOperation{
 			ID: uuid.NewString(), Type: &opType, Amount: amount, Category: rp.Category,
 			AccountID: &accID, AccountName: acc.Name, Activity: &opActivity, Date: &opDate,
 			Description: &desc, Counterparty: rp.Counterparty, IsAuto: &isAuto,
-			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			SourceRef: &srcRef, RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(fo).Error; err != nil {
 			return err
@@ -363,6 +364,35 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 		return nil, err
 	}
 	return out, nil
+}
+
+// History — GET /finance/recurring-payments/{id}/history. Все платежи,
+// сделанные по этому шаблону (source_ref = "recurring_payment:"+id, см. Pay
+// и бэкфилл в 084), новые сверху. Владелец жаловался, что после частичной
+// оплаты «непонятно, сколько уже платил» — раньше эту связь нигде не
+// хранили, показать было нечего.
+func (s *RecurringPaymentsService) History(ctx context.Context, id string) ([]models.FinancialOperation, error) {
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var rp models.RecurringPayment
+	if err := scoped.Where("id = ?", id).First(&rp).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, apperrors.ErrNotFound
+		}
+		return nil, err
+	}
+	scoped2, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var rows []models.FinancialOperation
+	if err := scoped2.Where("source_ref = ?", "recurring_payment:"+id).
+		Order("date DESC, created_at DESC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 // ─── date helpers ───────────────────────────────────────────────────────────
