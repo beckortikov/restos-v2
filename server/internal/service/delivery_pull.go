@@ -69,8 +69,12 @@ func (p *DeliveryPuller) activeConfig(ctx context.Context) (centralURL, token, r
 // deliveryRelayOrderOut — зеркало ответа GET /api/v1/sync/delivery/pending
 // (см. handlers/delivery_relay.go / models.DeliveryRelayOrder).
 type deliveryRelayOrderOut struct {
-	ID              string                     `json:"id"`
-	OrderType       string                     `json:"order_type"`
+	ID        string `json:"id"`
+	OrderType string `json:"order_type"`
+	// Kind — create|amend (094). Пусто (старые relay-строки до 094) →
+	// create, как было раньше.
+	Kind            string                     `json:"kind"`
+	ParentRelayID   *string                    `json:"parent_relay_id"`
 	Items           []models.DeliveryRelayItem `json:"items"`
 	DeliveryPhone   *string                    `json:"delivery_phone"`
 	DeliveryAddress *string                    `json:"delivery_address"`
@@ -123,10 +127,14 @@ func (p *DeliveryPuller) PullOnce(ctx context.Context) (int, error) {
 
 // processOne материализует один relay-заказ (или переиспользует уже
 // материализованный — см. delivery_relay_received) и шлёт ack. Возвращает
-// true при успешной доставке (для метрики вызывающего PullOnce).
+// true при успешной доставке (для метрики вызывающего PullOnce). kind=amend
+// (094) уходит в отдельную ветку — processAmend; kind=create (или пусто —
+// старые relay-строки до 094) — исходное поведение, без изменений.
 func (p *DeliveryPuller) processOne(ctx context.Context, centralURL, token, restaurantID string, ro deliveryRelayOrderOut) bool {
 	// Уже материализован локально (напр. предыдущий ack не дошёл до central
-	// из-за обрыва сети) — не создаём заказ повторно, просто повторяем ack.
+	// из-за обрыва сети) — не создаём/не дозаказываем повторно, просто
+	// повторяем ack. Для amend это тот же localOrderID, что у родителя — см.
+	// запись в конце processAmend.
 	var already models.DeliveryRelayReceived
 	err := p.r.Raw().WithContext(ctx).Where("relay_order_id = ?", ro.ID).First(&already).Error
 	if err == nil {
@@ -138,6 +146,14 @@ func (p *DeliveryPuller) processOne(ctx context.Context, centralURL, token, rest
 		return false
 	}
 
+	if ro.Kind == "amend" {
+		return p.processAmend(ctx, centralURL, token, restaurantID, ro)
+	}
+	return p.processCreate(ctx, centralURL, token, restaurantID, ro)
+}
+
+// processCreate — материализует НОВЫЙ заказ (исходное поведение relay, 091).
+func (p *DeliveryPuller) processCreate(ctx context.Context, centralURL, token, restaurantID string, ro deliveryRelayOrderOut) bool {
 	items, resolveErr := p.resolveItems(ctx, restaurantID, ro.Items)
 	if resolveErr != nil {
 		msg := resolveErr.Error()
@@ -185,17 +201,67 @@ func (p *DeliveryPuller) processOne(ctx context.Context, centralURL, token, rest
 		log.Warn().Err(err).Str("order_id", order.ID).Msg("delivery relay: pre-bill print failed")
 	}
 
-	// Идемпотентность ДО ack — если ack не дойдёт, следующий тик найдёт эту
-	// запись и не создаст заказ повторно.
-	if err := p.r.Raw().WithContext(ctx).Exec(
-		`INSERT INTO delivery_relay_received (relay_order_id, local_order_id) VALUES (?, ?) ON CONFLICT (relay_order_id) DO NOTHING`,
-		ro.ID, order.ID,
-	).Error; err != nil {
-		log.Warn().Err(err).Str("relay_order_id", ro.ID).Msg("delivery relay: failed to record idempotency ledger")
-	}
-
+	p.recordReceived(ctx, ro.ID, order.ID)
 	p.ack(ctx, centralURL, token, ro.ID, AckDeliveryRelayInput{Status: "delivered", LocalOrderID: &order.ID})
 	return true
+}
+
+// processAmend — дозаказ (094) в заказ, уже материализованный родительской
+// create-строкой (ro.ParentRelayID). Резолвит local_order_id родителя через
+// ЕГО СОБСТВЕННУЮ запись в delivery_relay_received (не заводит новый заказ),
+// добавляет позиции обычным OrdersService.AddItems — тем же путём, которым
+// официант дозаказывает вживую: печатает кухонный тикет только на новые
+// позиции, сам решает merge с уже пробитыми строками. Если заказ УЖЕ закрыт
+// на кассе к моменту обработки — AddItems вернёт CONFLICT, дозаказ падает в
+// failed с понятной причиной, central это увидит в истории (#2), а не тихо
+// потеряет заказ: central не может знать заранее, успел ли кассир закрыть
+// заказ, спрашивать смысла нет — филиал сам решает по факту.
+func (p *DeliveryPuller) processAmend(ctx context.Context, centralURL, token, restaurantID string, ro deliveryRelayOrderOut) bool {
+	if ro.ParentRelayID == nil || *ro.ParentRelayID == "" {
+		msg := "дозаказ без ссылки на исходный заказ"
+		p.ack(ctx, centralURL, token, ro.ID, AckDeliveryRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+	var parentReceived models.DeliveryRelayReceived
+	if err := p.r.Raw().WithContext(ctx).Where("relay_order_id = ?", *ro.ParentRelayID).First(&parentReceived).Error; err != nil {
+		msg := "исходный заказ ещё не материализован на этой кассе"
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			log.Warn().Err(err).Str("relay_order_id", ro.ID).Msg("delivery relay amend: parent lookup failed")
+			msg = err.Error()
+		}
+		p.ack(ctx, centralURL, token, ro.ID, AckDeliveryRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+
+	items, resolveErr := p.resolveItems(ctx, restaurantID, ro.Items)
+	if resolveErr != nil {
+		msg := resolveErr.Error()
+		p.ack(ctx, centralURL, token, ro.ID, AckDeliveryRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+
+	octx := audit.WithActor(tenant.WithRestaurant(ctx, restaurantID), audit.Actor{UserName: "Central (доставка)"})
+	if _, _, err := p.ordersSvc.AddItems(octx, parentReceived.LocalOrderID, AddItemsInput{Items: items}); err != nil {
+		msg := err.Error()
+		p.ack(ctx, centralURL, token, ro.ID, AckDeliveryRelayInput{Status: "failed", Error: &msg})
+		return false
+	}
+
+	p.recordReceived(ctx, ro.ID, parentReceived.LocalOrderID)
+	p.ack(ctx, centralURL, token, ro.ID, AckDeliveryRelayInput{Status: "delivered", LocalOrderID: &parentReceived.LocalOrderID})
+	return true
+}
+
+// recordReceived — идемпотентность ДО ack (и для create, и для amend) —
+// если ack не дойдёт, следующий тик найдёт эту запись и не продублирует
+// заказ/дозаказ повторно.
+func (p *DeliveryPuller) recordReceived(ctx context.Context, relayID, localOrderID string) {
+	if err := p.r.Raw().WithContext(ctx).Exec(
+		`INSERT INTO delivery_relay_received (relay_order_id, local_order_id) VALUES (?, ?) ON CONFLICT (relay_order_id) DO NOTHING`,
+		relayID, localOrderID,
+	).Error; err != nil {
+		log.Warn().Err(err).Str("relay_order_id", relayID).Msg("delivery relay: failed to record idempotency ledger")
+	}
 }
 
 // resolveItems — network_menu_item_id (мастер-меню сети) → локальный

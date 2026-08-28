@@ -1643,6 +1643,8 @@ paths:
                       properties:
                         id: { type: string, format: uuid }
                         order_type: { type: string, enum: [hall, takeaway, delivery] }
+                        kind: { type: string, enum: [create, amend], description: "amend (094) — дозаказ в уже материализованный заказ, см. parent_relay_id." }
+                        parent_relay_id: { type: string, format: uuid, nullable: true, description: "Только у kind=amend — id исходной create-строки." }
                         items:
                           type: array
                           items:
@@ -2042,6 +2044,84 @@ paths:
         "400":
           description: "Позиция(и) не найдены в мастер-меню сети, или филиал не найден в этой сети."
           content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/delivery-relay/{id}/amend:
+    post:
+      tags: [orders]
+      summary: >-
+        Дозаказ (094) в уже отправленный заказ. {id} — id ИСХОДНОЙ create-
+        строки delivery-relay, должна быть в status=delivered (филиал уже
+        подтвердил материализацию — дозаказывать в ещё не созданный заказ
+        нельзя). Филиал добавляет позиции обычным AddItems — тем же путём,
+        которым официант дозаказывает вживую (печатает кухонный тикет только
+        на новые позиции). Если к моменту обработки заказ уже закрыт на
+        кассе — падает в failed с понятной причиной (central не может знать
+        заранее, успели ли закрыть).
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [network_menu_item_id, qty]
+                    properties:
+                      network_menu_item_id: { type: string, format: uuid }
+                      qty: { type: string }
+                      variant_labels: { type: array, items: { type: string } }
+      responses:
+        "201":
+          description: Created — строка delivery_relay_orders, kind=amend, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Позиции не найдены в меню сети, исходный заказ не найден/не delivered, или {id} сам является дозаказом."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/delivery-relay/history:
+    get:
+      tags: [orders]
+      summary: >-
+        История диспетчеризации central→филиал (091/094) — свои создания и
+        дозаказы, свежие сверху, плюс РЕАЛЬНЫЙ статус материализованного
+        заказа (не путать со статусом транспорта: delivered значит только
+        «филиал подтвердил создание», не «заказ оплачен»). Источник статуса —
+        реплицированная на central копия orders, та же задержка, что у
+        остальной сетевой отчётности (не живьём).
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        target_restaurant_id: { type: string, format: uuid }
+                        target_restaurant_name: { type: string }
+                        order_type: { type: string, enum: [hall, takeaway, delivery] }
+                        kind: { type: string, enum: [create, amend] }
+                        parent_relay_id: { type: string, format: uuid, nullable: true }
+                        status: { type: string, enum: [pending, delivered, failed], description: "Статус ТРАНСПОРТА, не заказа." }
+                        error: { type: string, nullable: true }
+                        local_order_id: { type: string, format: uuid, nullable: true }
+                        order_status: { type: string, nullable: true, description: "Реальный статус заказа (new/open/.../closed/cancelled) — пусто, пока не долетело синком или заказ ещё не завершён." }
+                        order_total: { type: string, nullable: true }
+                        created_at: { type: string, format: date-time }
 
   /api/v1/orders:
     get:

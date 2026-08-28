@@ -22,6 +22,16 @@ type DeliveryRelayOrder struct {
 	// диспетчерит не только доставку — материализованный на филиале заказ
 	// должен попасть в ту же секцию кассы, что и обычный заказ этого типа.
 	OrderType string `gorm:"column:order_type;default:delivery" json:"order_type"`
+	// Kind — create|amend (094, CHECK в миграции). amend — «дозаказ» в уже
+	// материализованный заказ (родительская create-строка в status=delivered):
+	// филиал не создаёт новый Order, а добавляет позиции в существующий через
+	// тот же OrdersService.AddItems, которым официант дозаказывает вживую.
+	Kind string `gorm:"column:kind;default:create" json:"kind"`
+	// ParentRelayID — только у kind=amend: id исходной create-строки. Филиал
+	// находит её местный заказ через DeliveryRelayReceived (relay_order_id =
+	// ParentRelayID → local_order_id) — не через LocalOrderID ЭТОЙ строки,
+	// у amend-строки своего заказа нет, она дополняет чужой.
+	ParentRelayID *string `gorm:"column:parent_relay_id;type:uuid" json:"parent_relay_id,omitempty"`
 	// Items — []DeliveryRelayItem, network_menu_item_id (не локальный
 	// menu_items.id — у central и филиала разные локальные id одного блюда).
 	Items           datatypes.JSON `gorm:"type:jsonb" json:"items"`

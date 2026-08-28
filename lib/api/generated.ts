@@ -4374,6 +4374,16 @@ export interface paths {
                                 id?: string;
                                 /** @enum {string} */
                                 order_type?: "hall" | "takeaway" | "delivery";
+                                /**
+                                 * @description amend (094) — дозаказ в уже материализованный заказ, см. parent_relay_id.
+                                 * @enum {string}
+                                 */
+                                kind?: "create" | "amend";
+                                /**
+                                 * Format: uuid
+                                 * @description Только у kind=amend — id исходной create-строки.
+                                 */
+                                parent_relay_id?: string | null;
                                 items?: {
                                     /**
                                      * Format: uuid
@@ -5412,6 +5422,132 @@ export interface paths {
                 };
             };
         };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/delivery-relay/{id}/amend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Дозаказ (094) в уже отправленный заказ. {id} — id ИСХОДНОЙ create- строки delivery-relay, должна быть в status=delivered (филиал уже подтвердил материализацию — дозаказывать в ещё не созданный заказ нельзя). Филиал добавляет позиции обычным AddItems — тем же путём, которым официант дозаказывает вживую (печатает кухонный тикет только на новые позиции). Если к моменту обработки заказ уже закрыт на кассе — падает в failed с понятной причиной (central не может знать заранее, успели ли закрыть). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        items: {
+                            /** Format: uuid */
+                            network_menu_item_id: string;
+                            qty: string;
+                            variant_labels?: string[];
+                        }[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка delivery_relay_orders, kind=amend, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Позиции не найдены в меню сети, исходный заказ не найден/не delivered, или {id} сам является дозаказом. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/delivery-relay/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История диспетчеризации central→филиал (091/094) — свои создания и дозаказы, свежие сверху, плюс РЕАЛЬНЫЙ статус материализованного заказа (не путать со статусом транспорта: delivered значит только «филиал подтвердил создание», не «заказ оплачен»). Источник статуса — реплицированная на central копия orders, та же задержка, что у остальной сетевой отчётности (не живьём). */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            orders?: {
+                                /** Format: uuid */
+                                id?: string;
+                                /** Format: uuid */
+                                target_restaurant_id?: string;
+                                target_restaurant_name?: string;
+                                /** @enum {string} */
+                                order_type?: "hall" | "takeaway" | "delivery";
+                                /** @enum {string} */
+                                kind?: "create" | "amend";
+                                /** Format: uuid */
+                                parent_relay_id?: string | null;
+                                /**
+                                 * @description Статус ТРАНСПОРТА, не заказа.
+                                 * @enum {string}
+                                 */
+                                status?: "pending" | "delivered" | "failed";
+                                error?: string | null;
+                                /** Format: uuid */
+                                local_order_id?: string | null;
+                                /** @description Реальный статус заказа (new/open/.../closed/cancelled) — пусто, пока не долетело синком или заказ ещё не завершён. */
+                                order_status?: string | null;
+                                order_total?: string | null;
+                                /** Format: date-time */
+                                created_at?: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;

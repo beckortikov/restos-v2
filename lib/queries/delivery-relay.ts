@@ -43,3 +43,56 @@ export async function createDeliveryRelay(input: CreateDeliveryRelayInput): Prom
   }))
   return { id: (r as { id: string }).id }
 }
+
+// Дозаказ (094) в уже отправленный и подтверждённый (delivered) заказ —
+// central не создаёт новый заказ, а добавляет позиции в существующий (тот же
+// путь, что и «дозаказ» официанта вживую: AddItems, кухонный тикет только на
+// новые позиции). parentRelayId — id ИСХОДНОЙ create-строки.
+export async function createDeliveryRelayAmend(parentRelayId: string, items: DeliveryRelayItemInput[]): Promise<{ id: string }> {
+  const r = await unwrap(api.POST('/api/v1/delivery-relay/{id}/amend', {
+    params: { path: { id: parentRelayId } },
+    body: {
+      items: items.map(i => ({ network_menu_item_id: i.networkMenuItemId, qty: i.qty, variant_labels: i.variantLabels })),
+    },
+  }))
+  return { id: (r as { id: string }).id }
+}
+
+export interface DeliveryRelayHistoryItem {
+  id: string
+  targetRestaurantId: string
+  targetRestaurantName: string
+  orderType: OrderType
+  kind: 'create' | 'amend'
+  parentRelayId: string | null
+  /** Статус ТРАНСПОРТА (pending/delivered/failed) — НЕ статус самого заказа,
+   *  см. orderStatus. */
+  status: 'pending' | 'delivered' | 'failed'
+  error: string | null
+  localOrderId: string | null
+  /** Реальный статус заказа (new/open/.../closed/cancelled) — приезжает той
+   *  же сетевой репликацией, что и остальная отчётность (не живьём), пусто
+   *  пока не долетело синком или заказ ещё не завершён на филиале. */
+  orderStatus: string | null
+  orderTotal: string | null
+  createdAt: string
+}
+
+export async function fetchDeliveryRelayHistory(limit = 50): Promise<DeliveryRelayHistoryItem[]> {
+  const env: any = await unwrap(api.GET('/api/v1/delivery-relay/history', { params: { query: { limit } } }))
+  const rows = Array.isArray(env?.orders) ? (env.orders as Record<string, unknown>[]) : []
+  return rows.map(r => ({
+    id: r.id as string,
+    targetRestaurantId: r.target_restaurant_id as string,
+    targetRestaurantName: (r.target_restaurant_name as string) ?? '',
+    orderType: (r.order_type as OrderType) ?? 'delivery',
+    kind: (r.kind as 'create' | 'amend') ?? 'create',
+    parentRelayId: (r.parent_relay_id as string | null) ?? null,
+    status: r.status as 'pending' | 'delivered' | 'failed',
+    error: (r.error as string | null) ?? null,
+    localOrderId: (r.local_order_id as string | null) ?? null,
+    orderStatus: (r.order_status as string | null) ?? null,
+    orderTotal: (r.order_total as string | null) ?? null,
+    createdAt: r.created_at as string,
+  }))
+}

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 
@@ -35,6 +36,35 @@ func (h *DeliveryRelayHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusCreated, row)
+}
+
+// Amend — POST /api/v1/delivery-relay/{id}/amend. Central дозаказывает в уже
+// материализованный (delivered) заказ филиала (094).
+func (h *DeliveryRelayHandler) Amend(w http.ResponseWriter, r *http.Request) {
+	var in service.CreateAmendInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	row, err := h.svc.CreateAmend(r.Context(), chi.URLParam(r, "id"), in)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, row)
+}
+
+// History — GET /api/v1/delivery-relay/history?limit=N. Central-сторона:
+// история диспетчеризации (создания + дозаказы) с реальным статусом
+// материализованного заказа, где он уже долетел синком (094).
+func (h *DeliveryRelayHandler) History(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	rows, err := h.svc.ListHistory(r.Context(), limit)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, map[string]any{"orders": rows})
 }
 
 // Pending — GET /api/v1/sync/delivery/pending?restaurant_id=X. Филиал тянет

@@ -307,6 +307,10 @@ func NewRouter(deps Deps) http.Handler {
 
 			g.Post("/auth/logout", authH.Logout)
 
+			// История диспетчеризации central→филиал (091/094) — свои
+			// создания/дозаказы + реальный статус материализованного заказа.
+			g.Get("/delivery-relay/history", deliveryRelayH.History)
+
 			g.Get("/menu/items", menuH.ListItems)
 			g.Get("/menu/items/{id}/attributes", menuH.GetAttributes)
 			g.Get("/menu/categories", menuH.ListCategories)
@@ -553,6 +557,8 @@ func NewRouter(deps Deps) http.Handler {
 			// Delivery relay (091) — central пробивает заказ доставки ЗА
 			// филиал; сам заказ материализуется там DeliveryPuller'ом.
 			g.Post("/delivery-relay", deliveryRelayH.Create)
+			// Дозаказ (094) в уже материализованный (delivered) заказ.
+			g.Post("/delivery-relay/{id}/amend", deliveryRelayH.Amend)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)

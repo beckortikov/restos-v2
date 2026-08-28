@@ -5,7 +5,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   LayoutGrid, Search, ShoppingBag, Plus, Minus, Trash2, CreditCard,
   UtensilsCrossed, Banknote, X, Send, MapPin, Users, Star, Printer, MoreHorizontal, Check, ClipboardList, Pencil, Undo2, Bike,
-  ChevronUp, ChevronDown,
+  ChevronUp, ChevronDown, PackagePlus,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/lib/auth-store'
@@ -17,7 +17,7 @@ import { randomId } from '@/lib/random-id'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder, fetchMenuPopularity, ordersFromBoundary } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
 import { fetchBranches, type Branch } from '@/lib/queries/transfers'
-import { createDeliveryRelay } from '@/lib/queries/delivery-relay'
+import { createDeliveryRelay, createDeliveryRelayAmend, fetchDeliveryRelayHistory, type DeliveryRelayHistoryItem } from '@/lib/queries/delivery-relay'
 import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -143,6 +143,25 @@ export default function PosV2Order() {
   const [dispatchAddress, setDispatchAddress] = useState('')
   const [dispatchComment, setDispatchComment] = useState('')
   const [dispatchSubmitting, setDispatchSubmitting] = useState(false)
+  // dispatchAmendTarget — режим «дозаказ» (094): не новый заказ, а добавка
+  // позиций к уже отправленному И подтверждённому филиалом (relayId — id
+  // исходной create-строки). Филиал/тип уже фиксированы родителем — шапка
+  // ниже (JSX) их не переспрашивает, показывает как факт.
+  const [dispatchAmendTarget, setDispatchAmendTarget] = useState<{ relayId: string; branchName: string; orderType: OrderType } | null>(null)
+  const [dispatchHistoryOpen, setDispatchHistoryOpen] = useState(false)
+  const [dispatchHistoryLoading, setDispatchHistoryLoading] = useState(false)
+  const [dispatchHistory, setDispatchHistory] = useState<DeliveryRelayHistoryItem[]>([])
+  async function openDispatchHistory() {
+    setDispatchHistoryOpen(true); setDispatchHistoryLoading(true)
+    try { setDispatchHistory(await fetchDeliveryRelayHistory()) }
+    catch (e) { toast.error(`Не удалось загрузить историю: ${humanizeError(e)}`) }
+    finally { setDispatchHistoryLoading(false) }
+  }
+  function startAmend(row: DeliveryRelayHistoryItem) {
+    setDispatchAmendTarget({ relayId: row.id, branchName: row.targetRestaurantName, orderType: row.orderType })
+    setCart([])
+    setDispatchHistoryOpen(false)
+  }
   useEffect(() => {
     if (!isCentral) return
     fetchBranches().then(list => setDispatchBranches(list.filter(b => b.kind === 'outlet'))).catch(() => {})
@@ -594,7 +613,8 @@ export default function PosV2Order() {
   }
 
   async function submitDispatch() {
-    if (dispatchSubmitting || cart.length === 0 || !dispatchBranchId) return
+    if (dispatchSubmitting || cart.length === 0) return
+    if (!dispatchAmendTarget && !dispatchBranchId) return
     const items: { networkMenuItemId: string; qty: string; variantLabels?: string[] }[] = []
     for (const oi of cartToItems(cart)) {
       if (oi.bundleSelection) {
@@ -621,20 +641,26 @@ export default function PosV2Order() {
     }
     setDispatchSubmitting(true)
     try {
-      await createDeliveryRelay({
-        targetRestaurantId: dispatchBranchId,
-        orderType: dispatchOrderType,
-        items,
-        deliveryPhone: dispatchPhone.trim() || undefined,
-        // Адрес имеет смысл только для доставки — при зал/самовынос поле
-        // скрыто в UI, но state может хранить значение с прошлого
-        // переключения типа.
-        deliveryAddress: dispatchOrderType === 'delivery' ? (dispatchAddress.trim() || undefined) : undefined,
-        comment: dispatchComment.trim() || undefined,
-      })
-      toast.success('Заказ отправлен на филиал')
+      if (dispatchAmendTarget) {
+        await createDeliveryRelayAmend(dispatchAmendTarget.relayId, items)
+        toast.success('Дозаказ отправлен на филиал')
+      } else {
+        await createDeliveryRelay({
+          targetRestaurantId: dispatchBranchId,
+          orderType: dispatchOrderType,
+          items,
+          deliveryPhone: dispatchPhone.trim() || undefined,
+          // Адрес имеет смысл только для доставки — при зал/самовынос поле
+          // скрыто в UI, но state может хранить значение с прошлого
+          // переключения типа.
+          deliveryAddress: dispatchOrderType === 'delivery' ? (dispatchAddress.trim() || undefined) : undefined,
+          comment: dispatchComment.trim() || undefined,
+        })
+        toast.success('Заказ отправлен на филиал')
+      }
       setCart([])
       setDispatchPhone(''); setDispatchAddress(''); setDispatchComment('')
+      setDispatchAmendTarget(null)
     } catch (e) {
       toast.error(`Не удалось отправить: ${humanizeError(e)}`)
     } finally {
@@ -1061,15 +1087,31 @@ export default function PosV2Order() {
             <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
             <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Поиск блюда" aria-label="Поиск блюда" className="flex-1 min-w-0 bg-transparent outline-none" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }} />
           </div>
-          {/* Заказы прямо из ПОС (как раздел «Заказы» в старом POS): активные +
-              закрытые, просмотр и печать чека закрытого заказа. */}
-          <button onClick={openOrders} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }} title="Заказы: активные и закрытые, печать чека">
+          {/* На central своих локальных заказов нет (весь смысл экрана —
+              диспетчеризация) — кнопка «Заказы» здесь бессмысленна, отдана
+              под историю отправленного (создания + дозаказы, реальный
+              статус на филиале). У обычного ресторана — как раньше: активные
+              + закрытые, просмотр и печать чека. */}
+          <button onClick={isCentral ? openDispatchHistory : openOrders} className="flex items-center gap-2 rounded-xl border shrink-0 active:scale-95 transition-transform" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1.1vw,1.1rem)' }} title={isCentral ? 'История отправленного на филиалы' : 'Заказы: активные и закрытые, печать чека'}>
             <ClipboardList style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-brand)' }} />
-            <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Заказы</span>
+            <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{isCentral ? 'Отправлено' : 'Заказы'}</span>
           </button>
         </div>
 
-        {dispatchMode && (
+        {dispatchMode && dispatchAmendTarget && (
+          <div className="flex flex-wrap items-center shrink-0" style={{ gap: '0.5rem', padding: 'clamp(0.5rem,0.8vw,0.75rem) var(--pv-gap) 0 0' }}>
+            {/* Филиал/тип уже зафиксированы исходным заказом — не переспрашиваем,
+                показываем как факт. Крестик — выйти из режима дозаказа без отправки. */}
+            <div className="flex items-center gap-1.5 rounded-xl font-semibold" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.8rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
+              <PackagePlus style={{ width: '1em', height: '1em' }} />
+              Дозаказ · {dispatchAmendTarget.branchName} · {ORDER_TYPE_LABELS[dispatchAmendTarget.orderType]}
+            </div>
+            <button onClick={() => setDispatchAmendTarget(null)} className="rounded-xl font-semibold" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)' }}>
+              Отменить
+            </button>
+          </div>
+        )}
+        {dispatchMode && !dispatchAmendTarget && (
           <div className="flex flex-wrap items-center shrink-0" style={{ gap: '0.5rem', padding: 'clamp(0.5rem,0.8vw,0.75rem) var(--pv-gap) 0 0' }}>
             {dispatchBranches.length === 0 ? (
               <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Нет филиалов в сети</span>
@@ -1206,7 +1248,7 @@ export default function PosV2Order() {
               <span className="font-bold truncate" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'clamp(1rem,1.35vw,1.25rem)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}{selectedTable && activeGroup && tableOrders.length > 1 ? ` · Гр. ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}</span>
             </button>
           ) : (
-            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>{dispatchMode ? 'Заказ на филиал' : 'Заказ'}</span>
+            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>{dispatchAmendTarget ? 'Дозаказ' : dispatchMode ? 'Заказ на филиал' : 'Заказ'}</span>
           )}
           <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
         </div>
@@ -1337,8 +1379,8 @@ export default function PosV2Order() {
           </div>
           {dispatchMode ? (
             cart.length > 0 ? (
-              <button disabled={dispatchSubmitting || !dispatchBranchId} onClick={submitDispatch} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
-                <Send style={{ width: '1.3em', height: '1.3em' }} />{dispatchSubmitting ? 'Отправка…' : !dispatchBranchId ? 'Выберите филиал' : `Отправить на филиал · ${formatCurrency(subtotal)}`}
+              <button disabled={dispatchSubmitting || (!dispatchAmendTarget && !dispatchBranchId)} onClick={submitDispatch} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                <Send style={{ width: '1.3em', height: '1.3em' }} />{dispatchSubmitting ? 'Отправка…' : dispatchAmendTarget ? `Дозаказать · ${formatCurrency(subtotal)}` : !dispatchBranchId ? 'Выберите филиал' : `Отправить на филиал · ${formatCurrency(subtotal)}`}
               </button>
             ) : (
               <button disabled className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold disabled:opacity-40" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-3)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
@@ -1673,6 +1715,74 @@ export default function PosV2Order() {
                 </>
               )
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* История диспетчеризации central→филиал (091/094): создания +
+          дозаказы, свежие сверху, с реальным статусом заказа на филиале —
+          не путать с DeliveryRelayOrder.status (pending/delivered/failed —
+          статус ТРАНСПОРТА: «delivered» значит только «филиал подтвердил
+          создание», не «заказ оплачен»). order_status — той же задержкой,
+          что вся сетевая отчётность (не живьём, central не достучится до
+          кассы филиала напрямую). */}
+      {dispatchHistoryOpen && (
+        <div className="fixed inset-0 z-50" onClick={() => setDispatchHistoryOpen(false)}>
+          <div className="absolute inset-0" style={{ background: 'rgba(26,26,26,0.4)' }} />
+          <div role="dialog" aria-modal="true" aria-label="Отправлено на филиалы" className="absolute inset-y-0 right-0 flex flex-col pv-drawer-right" style={{ width: 'clamp(20rem,34vw,32rem)', background: 'var(--pv-card)', boxShadow: '0 0 60px rgba(0,0,0,0.35)' }} onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b shrink-0" style={{ padding: 'clamp(0.9rem,1.4vw,1.3rem)', borderColor: 'var(--pv-border)' }}>
+              <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.35rem)', color: 'var(--pv-text)' }}>Отправлено на филиалы</span>
+              <button onClick={() => setDispatchHistoryOpen(false)} className="rounded-lg" style={{ padding: '0.4rem' }} aria-label="Закрыть"><X style={{ color: 'var(--pv-text-2)' }} /></button>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto pv-noscroll" style={{ padding: 'clamp(0.6rem,1vw,0.9rem)' }}>
+              {dispatchHistoryLoading && dispatchHistory.length === 0 ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Загрузка…</div>
+              ) : dispatchHistory.length === 0 ? (
+                <div className="text-center" style={{ color: 'var(--pv-text-3)', padding: '2rem' }}>Пока ничего не отправлено</div>
+              ) : (
+                <div className="flex flex-col" style={{ gap: '0.4rem' }}>
+                  {dispatchHistory.map(row => {
+                    // Транспорт: pending/delivered/failed. failed — central
+                    // либо не смог дождаться материализации, либо (для
+                    // amend) заказ уже закрыт на кассе к моменту обработки.
+                    const tb = row.status === 'failed' ? { bg: 'var(--pv-occ-soft)', c: 'var(--pv-occ-text)', l: 'Не доставлено' }
+                      : row.status === 'pending' ? { bg: 'var(--pv-bill-soft)', c: 'var(--pv-bill-text)', l: 'В пути' }
+                      : { bg: 'var(--pv-free-soft)', c: 'var(--pv-free-text)', l: 'Доставлено' }
+                    const closedLike = row.orderStatus === 'closed' || row.orderStatus === 'cancelled'
+                    const canAmend = row.kind === 'create' && row.status === 'delivered' && !closedLike
+                    const orderLabel = row.orderStatus === 'closed' ? 'Оплачен'
+                      : row.orderStatus === 'cancelled' ? 'Отменён'
+                      : row.orderStatus ? 'Ещё открыт'
+                      : row.status === 'delivered' ? 'Ожидание синка' : '—'
+                    return (
+                      <div key={row.id} className="rounded-xl border" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.95vw,0.85rem)' }}>
+                        <div className="flex items-baseline justify-between gap-2" style={{ marginBottom: '0.25rem' }}>
+                          <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>
+                            {row.kind === 'amend' && <PackagePlus style={{ width: '0.9em', height: '0.9em', display: 'inline', marginRight: '0.3em', verticalAlign: '-0.1em' }} />}
+                            {row.targetRestaurantName || 'Филиал'} · {ORDER_TYPE_LABELS[row.orderType]}{row.kind === 'amend' ? ' · дозаказ' : ''}
+                          </span>
+                          <span className="rounded-full font-semibold shrink-0" style={{ background: tb.bg, color: tb.c, padding: '0.1rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{tb.l}</span>
+                        </div>
+                        <div className="flex items-baseline justify-between gap-2">
+                          <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
+                            {orderLabel} · {new Date(row.createdAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          {row.orderTotal && <span className="font-bold tabular-nums whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>{formatCurrency(Number(row.orderTotal))}</span>}
+                        </div>
+                        {row.status === 'failed' && row.error && (
+                          <div style={{ color: 'var(--pv-occ-text)', fontSize: 'calc(var(--pv-ctl) - 0.2rem)', marginTop: '0.25rem' }}>{row.error}</div>
+                        )}
+                        {canAmend && (
+                          <button onClick={() => startAmend(row)} className="flex items-center gap-1.5 rounded-lg font-semibold" style={{ marginTop: '0.5rem', color: 'var(--pv-brand)', background: 'var(--pv-brand-soft)', padding: '0.35rem 0.75rem', fontSize: 'calc(var(--pv-ctl) - 0.05rem)' }}>
+                            <PackagePlus style={{ width: '1em', height: '1em' }} />Дозаказать
+                          </button>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
