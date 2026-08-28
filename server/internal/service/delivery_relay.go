@@ -78,12 +78,20 @@ func (s *DeliveryRelayService) Create(ctx context.Context, in CreateDeliveryRela
 	if orderType != "hall" && orderType != "takeaway" && orderType != "delivery" {
 		return nil, apperrors.Wrap("VALIDATION", "order_type must be hall, takeaway or delivery", nil)
 	}
+	// Дедуп: несколько ВАРИАНТОВ одного товара (Мини+Стандарт одного
+	// «Гамбургера») шлют один и тот же network_menu_item_id родителя дважды —
+	// без дедупа len(masters) (SQL IN схлопывает дубли в одну строку) не
+	// совпадёт с len(ids) и валидный заказ отклонится как «не найден в сети».
+	seenID := make(map[string]bool, len(in.Items))
 	ids := make([]string, 0, len(in.Items))
 	for _, it := range in.Items {
 		if it.NetworkMenuItemID == "" || it.Qty == "" {
 			return nil, apperrors.Wrap("VALIDATION", "у каждой позиции нужны network_menu_item_id и qty", nil)
 		}
-		ids = append(ids, it.NetworkMenuItemID)
+		if !seenID[it.NetworkMenuItemID] {
+			seenID[it.NetworkMenuItemID] = true
+			ids = append(ids, it.NetworkMenuItemID)
+		}
 	}
 
 	var rest models.Restaurant
