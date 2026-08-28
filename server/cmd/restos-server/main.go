@@ -305,6 +305,27 @@ func main() {
 	})
 	go puller.Run(ctx, interval)
 
+	// Delivery relay puller (091) — central пробивает заказ доставки ЗА
+	// филиал, этот процесс его материализует через ordersSvc.Create +
+	// PrintPreBill. Отдельный от Pusher/Puller выше: короткий интервал
+	// (default 5с — заказ должен начать готовиться сразу, не ждать общего
+	// 30-секундного цикла sync_log), читает ТУ ЖЕ sync_settings. Свой
+	// OrdersService (не из httpx.NewRouter — тот инкапсулирован внутри) с
+	// тем же hub/pub, чтобы материализованный заказ публиковал события SSE
+	// как любой другой (KDS/кухонные дисплеи должны увидеть его штатно).
+	deliveryInterval := time.Duration(cfg.DeliveryRelayIntervalSec) * time.Second
+	if deliveryInterval <= 0 {
+		deliveryInterval = 5 * time.Second
+	}
+	deliveryOrdersSvc := service.NewOrdersService(repo.New(gdb)).
+		WithPublisher(pub).
+		WithStationResolver(printer.NewDBRouter(gdb, nil))
+	deliveryPuller := service.NewDeliveryPuller(deliveryOrdersSvc, repo.New(gdb), service.PullerFallback{
+		CentralURL: cfg.SyncCentralURL, Token: cfg.SyncToken,
+		RestaurantID: cfg.SyncRestaurantID, Enabled: cfg.SyncEnabled,
+	})
+	go deliveryPuller.Run(ctx, deliveryInterval)
+
 	// Автозабфилл истории при старте (Ф6, ADR-003 «Central видит всё») — для
 	// узла, который УЖЕ был настроен на sync до этого запуска (переменные
 	// окружения/сохранённый sync_settings), но ещё ни разу не отправлял

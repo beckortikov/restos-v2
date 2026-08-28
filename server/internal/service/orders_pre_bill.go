@@ -136,6 +136,17 @@ func (s *OrdersService) PrintPreBill(ctx context.Context, orderID string) (*Prin
 		if rest.Address != nil {
 			in.RestaurantAddr = *rest.Address
 		}
+		// Контакты доставки (052) — на закрытом чеке уже печатаются; пре-чек
+		// заказа, ещё не оплаченного, тоже должен их показать, если уже
+		// известны (напр. relay-заказ с central — см. DeliveryPuller, адрес
+		// пришёл сразу при создании, ждать оплаты незачем: курьеру нужно
+		// выезжать сейчас).
+		if order.DeliveryPhone != nil {
+			in.DeliveryPhone = *order.DeliveryPhone
+		}
+		if order.DeliveryAddress != nil {
+			in.DeliveryAddress = *order.DeliveryAddress
+		}
 		for _, g := range groupPrintItems(items) {
 			in.Items = append(in.Items, escpos.ReceiptItem{
 				Name:            g.Name,

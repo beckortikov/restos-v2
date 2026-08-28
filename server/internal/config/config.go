@@ -60,6 +60,10 @@ type Config struct {
 	// SyncRestaurantID — id этого филиала: за чьими входящими перемещениями
 	// тянуть с центрального узла (down-sync). Пусто → down-sync выключен.
 	SyncRestaurantID string
+	// DeliveryRelayIntervalSec — период DeliveryPuller (091), сек (default 5).
+	// Отдельный от SyncIntervalSec и НАМНОГО короче: заказ доставки должен
+	// начать готовиться сразу, не ждать общего цикла синхронизации.
+	DeliveryRelayIntervalSec int
 }
 
 // DesktopBackupsDir — папка на рабочем столе для копий бэкапов. Пусто если
@@ -108,6 +112,8 @@ func LoadFromFlags() (*Config, error) {
 		"Sync push/pull interval in seconds")
 	flag.StringVar(&c.SyncRestaurantID, "sync-restaurant-id", envOr("RESTOS_SYNC_RESTAURANT_ID", ""),
 		"This branch restaurant id for down-sync (pull incoming transfers). Empty = down-sync off")
+	flag.IntVar(&c.DeliveryRelayIntervalSec, "delivery-relay-interval-sec", int(envOrUint("RESTOS_DELIVERY_RELAY_INTERVAL_SEC", 5)),
+		"Delivery relay (central-authored orders) pull interval in seconds")
 
 	var pgPort uint
 	// v3.8.0: было 54329 (как у v1), сдвинуто на 54330 чтобы embedded-PG

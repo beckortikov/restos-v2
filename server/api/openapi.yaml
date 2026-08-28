@@ -1617,6 +1617,68 @@ paths:
                   skipped: { type: integer, description: Сущность неизвестна этой версии central — forward-compat, не ошибка. }
                   rejected: { type: integer, description: Строки за чужой ресторан (Фаза Г); присутствует, только если такие были. }
 
+  /api/v1/sync/delivery/pending:
+    get:
+      tags: [stock]
+      summary: >-
+        Delivery relay (091) — филиал тянет свои pending-заказы доставки,
+        пробитые central за него. Отдельно от /sync/pull: тот раз в
+        interval_sec и не видит живых заказов вообще (ADR-003); доставка
+        нужна быстрым отдельным poll'ом (DeliveryPuller), короче общего
+        цикла — заказ должен начать готовиться сразу.
+      parameters:
+        - { in: query, name: restaurant_id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        items:
+                          type: array
+                          items:
+                            type: object
+                            properties:
+                              network_menu_item_id: { type: string, format: uuid, description: "id из network_menu_items (мастер-меню сети), не локальный menu_items.id" }
+                              qty: { type: string }
+                        delivery_phone: { type: string, nullable: true }
+                        delivery_address: { type: string, nullable: true }
+                        comment: { type: string, nullable: true }
+                        created_at: { type: string, format: date-time }
+
+  /api/v1/sync/delivery/{id}/ack:
+    post:
+      tags: [stock]
+      summary: >-
+        Delivery relay (091) — филиал подтверждает результат материализации.
+        Идемпотентно: повторный ack с тем же результатом — не ошибка. status
+        сужается target_restaurant_id, если звонящий опознан по личному
+        sync-токену (как /sync/ingest); легаси общий секрет не сужает.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [delivered, failed] }
+                local_order_id: { type: string, format: uuid, description: "Материализованный заказ на филиале — при status=delivered." }
+                error: { type: string, description: "Причина отказа — при status=failed (напр. товар не резолвится в menu_items.master_id)." }
+      responses:
+        "200": { description: OK }
+        "404": { description: Строка не найдена (или не принадлежит опознанному по личному токену филиалу) }
+
   /api/v1/sync/backfill:
     post:
       tags: [stock]
@@ -1936,6 +1998,46 @@ paths:
                   waiter_name: { type: string }
         "400": { $ref: "#/components/responses/Error" }
         "404": { $ref: "#/components/responses/Error" }
+
+  /api/v1/delivery-relay:
+    post:
+      tags: [orders]
+      summary: >-
+        Delivery relay (091) — central пробивает заказ доставки ЗА филиал.
+        Только сам central своей сети (kind=central_warehouse), позиции —
+        по network_menu_item_id (мастер-меню сети, валидируются сразу).
+        Заказ материализуется на филиале асинхронно (DeliveryPuller, обычно
+        в пределах нескольких секунд) через orders.Service.Create — деньги/
+        сток/смена считаются филиалу как за любой другой заказ; пре-чек
+        печатается на его чековом принтере автоматически.
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_restaurant_id, items]
+              properties:
+                target_restaurant_id: { type: string, format: uuid, description: "Филиал-получатель — тот же account_id, что у central." }
+                items:
+                  type: array
+                  items:
+                    type: object
+                    required: [network_menu_item_id, qty]
+                    properties:
+                      network_menu_item_id: { type: string, format: uuid }
+                      qty: { type: string }
+                delivery_phone: { type: string }
+                delivery_address: { type: string }
+                comment: { type: string }
+      responses:
+        "201":
+          description: Created — строка delivery_relay_orders, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Позиция(и) не найдены в мастер-меню сети, или филиал не найден в этой сети."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
 
   /api/v1/orders:
     get:

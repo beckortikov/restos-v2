@@ -4343,6 +4343,119 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sync/delivery/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Delivery relay (091) — филиал тянет свои pending-заказы доставки, пробитые central за него. Отдельно от /sync/pull: тот раз в interval_sec и не видит живых заказов вообще (ADR-003); доставка нужна быстрым отдельным poll'ом (DeliveryPuller), короче общего цикла — заказ должен начать готовиться сразу. */
+        get: {
+            parameters: {
+                query: {
+                    restaurant_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            orders?: {
+                                /** Format: uuid */
+                                id?: string;
+                                items?: {
+                                    /**
+                                     * Format: uuid
+                                     * @description id из network_menu_items (мастер-меню сети), не локальный menu_items.id
+                                     */
+                                    network_menu_item_id?: string;
+                                    qty?: string;
+                                }[];
+                                delivery_phone?: string | null;
+                                delivery_address?: string | null;
+                                comment?: string | null;
+                                /** Format: date-time */
+                                created_at?: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sync/delivery/{id}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delivery relay (091) — филиал подтверждает результат материализации. Идемпотентно: повторный ack с тем же результатом — не ошибка. status сужается target_restaurant_id, если звонящий опознан по личному sync-токену (как /sync/ingest); легаси общий секрет не сужает. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "delivered" | "failed";
+                        /**
+                         * Format: uuid
+                         * @description Материализованный заказ на филиале — при status=delivered.
+                         */
+                        local_order_id?: string;
+                        /** @description Причина отказа — при status=failed (напр. товар не резолвится в menu_items.master_id). */
+                        error?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Строка не найдена (или не принадлежит опознанному по личному токену филиалу) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sync/backfill": {
         parameters: {
             query?: never;
@@ -5219,6 +5332,72 @@ export interface paths {
                 };
                 400: components["responses"]["Error"];
                 404: components["responses"]["Error"];
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/delivery-relay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Delivery relay (091) — central пробивает заказ доставки ЗА филиал. Только сам central своей сети (kind=central_warehouse), позиции — по network_menu_item_id (мастер-меню сети, валидируются сразу). Заказ материализуется на филиале асинхронно (DeliveryPuller, обычно в пределах нескольких секунд) через orders.Service.Create — деньги/ сток/смена считаются филиалу как за любой другой заказ; пре-чек печатается на его чековом принтере автоматически. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Филиал-получатель — тот же account_id, что у central.
+                         */
+                        target_restaurant_id: string;
+                        items: {
+                            /** Format: uuid */
+                            network_menu_item_id: string;
+                            qty: string;
+                        }[];
+                        delivery_phone?: string;
+                        delivery_address?: string;
+                        comment?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка delivery_relay_orders, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Позиция(и) не найдены в мастер-меню сети, или филиал не найден в этой сети. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
             };
         };
         delete?: never;

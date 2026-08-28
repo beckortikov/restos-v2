@@ -16,6 +16,8 @@ import { useDataSync } from '@/hooks/use-data-sync'
 import { randomId } from '@/lib/random-id'
 import { createOrder, closeOrderWithPayment, openTableForOrder, fetchActiveShift, fetchFinancialAccounts, addItemsToOrder, fetchOrders, patchOrder, printPreBill, fetchOrderSplits, paySplit, cancelSplits, fetchStopList, cancelOrderItem, cancelOrderItemPartial, reprintOrderReceipt, refundOrder, reopenOrder, fetchMenuPopularity, ordersFromBoundary } from '@/lib/queries'
 import { selectableAccounts } from '@/lib/queries/finance'
+import { fetchBranches, type Branch } from '@/lib/queries/transfers'
+import { createDeliveryRelay } from '@/lib/queries/delivery-relay'
 import { formatCurrency, formatCurrencyCompact, calcLineTotal, calcOrderDisplayTotal, getTimeSince, endOfDay } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { dMul, dDiv } from '@/lib/decimal'
@@ -119,6 +121,39 @@ export default function PosV2Order() {
   // Можно ли создать заказ без оплаты. В фастфуде нельзя, но доставка —
   // исключение: заказ принимают по телефону, деньги привозит курьер.
   const allowNoPay = canCreateWithoutPayment(restaurant, orderType)
+
+  // ── Доставка на филиал (091, только central_warehouse) ─────────
+  // Отдельный режим поверх ТОГО ЖЕ грида/поиска/пикеров вариантов и сетов —
+  // не отдельный экран (владелец: «поиск трудно использовать, там размеры
+  // по тапу выходят, зачем переделывать дизайн»). Меняет только шапку
+  // (вместо стола/типа — выбор филиала) и футер (вместо оплаты — отправка).
+  // Корзина ЛОКАЛЬНАЯ (central свой menu_items), но релей несёт
+  // network_menu_item_id — резолвим через menuItems[].masterId (ADR-004),
+  // тот же механизм, что материализация меню на филиалах, только в обратную
+  // сторону.
+  const isCentral = restaurant?.kind === 'central_warehouse'
+  const [dispatchMode, setDispatchMode] = useState(false)
+  const [dispatchBranches, setDispatchBranches] = useState<Branch[]>([])
+  const [dispatchBranchId, setDispatchBranchId] = useState('')
+  const [dispatchPhone, setDispatchPhone] = useState('')
+  const [dispatchAddress, setDispatchAddress] = useState('')
+  const [dispatchComment, setDispatchComment] = useState('')
+  const [dispatchSubmitting, setDispatchSubmitting] = useState(false)
+  useEffect(() => {
+    if (!isCentral) return
+    fetchBranches().then(list => setDispatchBranches(list.filter(b => b.kind === 'outlet'))).catch(() => {})
+  }, [isCentral])
+  // Включение сбрасывает стол/группу — иначе оставшееся с «Зала» состояние
+  // просвечивает в шапке/вкладках корзины (они гейтятся numberMode, который
+  // dispatchMode намеренно не трогает). Корзину НЕ чистим — блюда уже
+  // набраны, это не отмена работы кассира.
+  function toggleDispatchMode() {
+    setDispatchMode(v => {
+      const next = !v
+      if (next) { setSelectedTableId(''); setActiveGroupId(null); setTableOrders([]) }
+      return next
+    })
+  }
   const [menuGrid] = useMenuGrid()
   // Высота области сетки блюд — чтобы в матричном режиме (N×M) подогнать высоту
   // рядов под экран (карточки квадратнее, а не «широкие и низкие»).
@@ -524,6 +559,45 @@ export default function PosV2Order() {
     setBundleProduct(null)
   }
 
+  // Доставка на филиал — резолв позиций корзины в network_menu_item_id
+  // (мастер-меню сети) через menuItems[].masterId, чтобы филиал мог найти
+  // СВОЙ локальный аналог (та же связь, только смотрим в другую сторону).
+  const masterIdByMenuItemId = useMemo(() => new Map(menuItems.map(m => [m.id, m.masterId ?? null])), [menuItems])
+
+  async function submitDispatch() {
+    if (dispatchSubmitting || cart.length === 0 || !dispatchBranchId) return
+    const items: { networkMenuItemId: string; qty: string }[] = []
+    for (const oi of cartToItems(cart)) {
+      if (oi.bundleSelection) {
+        toast.error('Сеты нельзя отправить на филиал — уберите их из корзины')
+        return
+      }
+      const masterId = masterIdByMenuItemId.get(oi.menuItemId)
+      if (!masterId) {
+        toast.error(`«${oi.name}» нет в меню сети — уберите или замените позицию`)
+        return
+      }
+      items.push({ networkMenuItemId: masterId, qty: String(oi.qty) })
+    }
+    setDispatchSubmitting(true)
+    try {
+      await createDeliveryRelay({
+        targetRestaurantId: dispatchBranchId,
+        items,
+        deliveryPhone: dispatchPhone.trim() || undefined,
+        deliveryAddress: dispatchAddress.trim() || undefined,
+        comment: dispatchComment.trim() || undefined,
+      })
+      toast.success('Заказ отправлен на филиал')
+      setCart([])
+      setDispatchPhone(''); setDispatchAddress(''); setDispatchComment('')
+    } catch (e) {
+      toast.error(`Не удалось отправить: ${humanizeError(e)}`)
+    } finally {
+      setDispatchSubmitting(false)
+    }
+  }
+
   function openVariantPicker(m: MenuItem) {
     const sel: Record<string, string> = {}
     for (const a of m.attributes ?? []) {
@@ -604,7 +678,7 @@ export default function PosV2Order() {
   // Превью обслуживания в сайдбаре (зал): база (новый заказ = подытог корзины,
   // иначе итог группы) + сервис-% ресторана. Бэк начисляет то же при закрытии.
   const footBase = cart.length > 0 ? subtotal : (activeGroup?.total ?? 0)
-  const svcPct = orderType === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
+  const svcPct = dispatchMode ? 0 : orderType === 'hall' ? (restaurant?.servicePercent ?? 0) : 0
   const footSvc = svcPct > 0 ? dMul(footBase, dDiv(svcPct, 100)) : 0
   const footTotal = footBase + footSvc
   const wUnit = weightItem?.unit === 'kg' ? 'кг' : 'г'
@@ -932,6 +1006,11 @@ export default function PosV2Order() {
                 </button>
               )
             })}
+            {isCentral && (
+              <button onClick={toggleDispatchMode} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: dispatchMode ? 'var(--pv-brand)' : 'transparent', color: dispatchMode ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                <Bike style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />Филиал
+              </button>
+            )}
           </div>
           <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1vw,1rem)' }}>
             <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
@@ -944,6 +1023,23 @@ export default function PosV2Order() {
             <span className="font-semibold whitespace-nowrap" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Заказы</span>
           </button>
         </div>
+
+        {dispatchMode && (
+          <div className="flex flex-wrap items-center shrink-0" style={{ gap: '0.5rem', padding: 'clamp(0.5rem,0.8vw,0.75rem) var(--pv-gap) 0 0' }}>
+            {dispatchBranches.length === 0 ? (
+              <span style={{ color: 'var(--pv-text-3)', fontSize: 'var(--pv-ctl)' }}>Нет филиалов в сети</span>
+            ) : dispatchBranches.map(b => {
+              const on = dispatchBranchId === b.id
+              return (
+                <button key={b.id} onClick={() => setDispatchBranchId(b.id)} className="rounded-xl font-semibold whitespace-nowrap" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.8rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)', background: on ? 'var(--pv-brand)' : 'var(--pv-card)', color: on ? '#fff' : 'var(--pv-text)', border: `1px solid ${on ? 'var(--pv-brand)' : 'var(--pv-border)'}` }}>
+                  {b.name}
+                </button>
+              )
+            })}
+            <input value={dispatchPhone} onChange={e => setDispatchPhone(e.target.value)} placeholder="Телефон клиента" className="rounded-xl" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text)', minWidth: '10rem' }} />
+            <input value={dispatchAddress} onChange={e => setDispatchAddress(e.target.value)} placeholder="Адрес доставки" className="rounded-xl flex-1 min-w-0" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text)' }} />
+          </div>
+        )}
 
         {/* Категории видны ВСЕГДА (раньше прятались при любом тексте в поиске —
             даже одна буква убирала все категории). Тап по категории очищает поиск. */}
@@ -1044,7 +1140,7 @@ export default function PosV2Order() {
       <aside className="shrink-0 flex flex-col border-l" style={{ width: 'clamp(20rem, 26vw, 30rem)', background: 'var(--pv-card)', borderColor: 'var(--pv-border)' }}>
         {/* Header */}
         <div className="flex items-center justify-between gap-2 shrink-0 border-b" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          {!numberMode ? (
+          {!numberMode && !dispatchMode ? (
             // Выбор стола прямо в сайдбаре заказа (тап открывает пикер столов),
             // слева от счётчика позиций. В зале стол выбирают здесь, а не в топбаре.
             <button onClick={() => setTablesOpen(true)} className="flex items-center gap-1.5 rounded-xl border min-w-0 active:scale-95 transition-transform" style={{ background: selectedTable ? 'var(--pv-brand-soft)' : 'var(--pv-card)', borderColor: selectedTable ? 'var(--pv-brand)' : 'var(--pv-border)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.95rem)' }} aria-label="Выберите стол">
@@ -1052,7 +1148,7 @@ export default function PosV2Order() {
               <span className="font-bold truncate" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'clamp(1rem,1.35vw,1.25rem)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}{selectedTable && activeGroup && tableOrders.length > 1 ? ` · Гр. ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}</span>
             </button>
           ) : (
-            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>Заказ</span>
+            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>{dispatchMode ? 'Доставка на филиал' : 'Заказ'}</span>
           )}
           <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
         </div>
@@ -1161,7 +1257,7 @@ export default function PosV2Order() {
 
         {/* Footer */}
         <div className="shrink-0 border-t" style={{ padding: 'clamp(0.9rem,1.4vw,1.4rem)', borderColor: 'var(--pv-border)' }}>
-          {!numberMode && (activeGroup || cart.length > 0 || !selectedTableId) && (
+          {!dispatchMode && !numberMode && (activeGroup || cart.length > 0 || !selectedTableId) && (
             <div className="flex items-center justify-between" style={{ marginBottom: 'clamp(0.5rem,0.9vw,0.85rem)' }}>
               <span className="flex items-center gap-1.5 font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><Users style={{ width: '1.1rem', height: '1.1rem' }} />Гостей</span>
               <div className="flex items-center gap-2">
@@ -1181,7 +1277,17 @@ export default function PosV2Order() {
             <span className="font-medium" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}>Итого</span>
             <span className="font-bold" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.3rem,2vw,1.9rem)' }}>{formatCurrency(footTotal)}</span>
           </div>
-          {numberMode ? (
+          {dispatchMode ? (
+            cart.length > 0 ? (
+              <button disabled={dispatchSubmitting || !dispatchBranchId} onClick={submitDispatch} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
+                <Send style={{ width: '1.3em', height: '1.3em' }} />{dispatchSubmitting ? 'Отправка…' : !dispatchBranchId ? 'Выберите филиал' : `Отправить на филиал · ${formatCurrency(subtotal)}`}
+              </button>
+            ) : (
+              <button disabled className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold disabled:opacity-40" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-3)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)' }}>
+                Добавьте блюда
+              </button>
+            )
+          ) : numberMode ? (
             activeGroup ? (
               cart.length > 0 ? (
                 <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>

@@ -166,6 +166,7 @@ func NewRouter(deps Deps) http.Handler {
 	batchSvc := service.NewBatchCookingService(rep)
 	auditReadsSvc := service.NewAuditReadsService(rep)
 	maintenanceSvc := service.NewMaintenanceService(rep)
+	deliveryRelaySvc := service.NewDeliveryRelayService(rep)
 
 	authH := handlers.NewAuth(authSvc, deps.DB)
 	menuH := handlers.NewMenu(menuSvc)
@@ -175,6 +176,7 @@ func NewRouter(deps Deps) http.Handler {
 	moneyTransfersH := handlers.NewMoneyTransfers(service.NewMoneyTransferService(rep))
 	networkH := handlers.NewNetwork(service.NewNetworkService(rep, deps.SyncToken))
 	syncH := handlers.NewSync(service.NewSyncService(rep))
+	deliveryRelayH := handlers.NewDeliveryRelay(deliveryRelaySvc)
 	syncSettingsH := handlers.NewSyncSettings(service.NewSyncSettingsService(rep))
 	warehouseH := handlers.NewWarehouse(warehouseSvc)
 	shiftsH := handlers.NewShifts(shiftsSvc)
@@ -531,6 +533,11 @@ func NewRouter(deps Deps) http.Handler {
 			g.Use(middleware.SyncAuth(deps.DB, deps.SyncToken))
 			g.Post("/sync/ingest", syncH.Ingest)
 			g.Get("/sync/pull", syncH.Pull)
+			// Delivery relay (091) — узкий быстрый канал central→филиал,
+			// отдельный от sync_log выше (тот только терминальные заказы раз
+			// в interval_sec). DeliveryPuller (свой, короткий интервал).
+			g.Get("/sync/delivery/pending", deliveryRelayH.Pending)
+			g.Post("/sync/delivery/{id}/ack", deliveryRelayH.Ack)
 		})
 
 		api.Group(func(g chi.Router) {
@@ -543,6 +550,9 @@ func NewRouter(deps Deps) http.Handler {
 
 			g.Post("/kds/items/{id}/status", kdsH.SetStatus)
 			g.Post("/kds/items/{id}/call-waiter", kdsH.CallWaiter)
+			// Delivery relay (091) — central пробивает заказ доставки ЗА
+			// филиал; сам заказ материализуется там DeliveryPuller'ом.
+			g.Post("/delivery-relay", deliveryRelayH.Create)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)
