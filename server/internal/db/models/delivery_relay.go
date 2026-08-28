@@ -18,6 +18,10 @@ type DeliveryRelayOrder struct {
 	AccountID          string `gorm:"column:account_id;type:uuid" json:"account_id"`
 	RestaurantID       string `gorm:"column:restaurant_id;type:uuid" json:"restaurant_id"`
 	TargetRestaurantID string `gorm:"column:target_restaurant_id;type:uuid;index" json:"target_restaurant_id"`
+	// OrderType — hall|takeaway|delivery (092, CHECK в миграции). Central
+	// диспетчерит не только доставку — материализованный на филиале заказ
+	// должен попасть в ту же секцию кассы, что и обычный заказ этого типа.
+	OrderType string `gorm:"column:order_type;default:delivery" json:"order_type"`
 	// Items — []DeliveryRelayItem, network_menu_item_id (не локальный
 	// menu_items.id — у central и филиала разные локальные id одного блюда).
 	Items           datatypes.JSON `gorm:"type:jsonb" json:"items"`
@@ -39,6 +43,14 @@ func (DeliveryRelayOrder) TableName() string { return "delivery_relay_orders" }
 type DeliveryRelayItem struct {
 	NetworkMenuItemID string `json:"network_menu_item_id"`
 	Qty               string `json:"qty"`
+	// VariantLabels — комбинация значений атрибутов («Стандарт», ["1 л",
+	// "Виноград"]), если позиция — вариант товара с атрибутами (092). Сеть НЕ
+	// хранит id вариантов (084, network_menu_items.attributes — снэпшот без
+	// id: "id атрибутов/значений/шкал локальны для каждого узла") — то есть
+	// сами лейблы, в порядке атрибутов продукта, единственный портируемый
+	// идентификатор комбинации между central и филиалом. Пусто → позиция
+	// сама по себе, без атрибутов (как раньше).
+	VariantLabels []string `json:"variant_labels,omitempty"`
 }
 
 // DeliveryRelayReceived — идемпотентность НА ФИЛИАЛЕ (см. миграцию 091):

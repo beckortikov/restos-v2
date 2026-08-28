@@ -1642,6 +1642,7 @@ paths:
                       type: object
                       properties:
                         id: { type: string, format: uuid }
+                        order_type: { type: string, enum: [hall, takeaway, delivery] }
                         items:
                           type: array
                           items:
@@ -1649,6 +1650,7 @@ paths:
                             properties:
                               network_menu_item_id: { type: string, format: uuid, description: "id из network_menu_items (мастер-меню сети), не локальный menu_items.id" }
                               qty: { type: string }
+                              variant_labels: { type: array, items: { type: string }, description: "Комбинация атрибутов («Стандарт»), если позиция — вариант товара с атрибутами. Сеть не хранит id вариантов — лейблы, в порядке атрибутов продукта." }
                         delivery_phone: { type: string, nullable: true }
                         delivery_address: { type: string, nullable: true }
                         comment: { type: string, nullable: true }
@@ -2020,6 +2022,7 @@ paths:
               required: [target_restaurant_id, items]
               properties:
                 target_restaurant_id: { type: string, format: uuid, description: "Филиал-получатель — тот же account_id, что у central." }
+                order_type: { type: string, enum: [hall, takeaway, delivery], default: delivery, description: "В какую секцию кассы филиала попадёт заказ. Пусто = delivery." }
                 items:
                   type: array
                   items:
@@ -2028,6 +2031,7 @@ paths:
                     properties:
                       network_menu_item_id: { type: string, format: uuid }
                       qty: { type: string }
+                      variant_labels: { type: array, items: { type: string }, description: "Комбинация атрибутов («Стандарт»), если позиция — вариант товара с атрибутами. Должна совпадать с одной из combos[].labels мастер-товара." }
                 delivery_phone: { type: string }
                 delivery_address: { type: string }
                 comment: { type: string }

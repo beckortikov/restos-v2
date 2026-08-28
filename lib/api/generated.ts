@@ -4372,6 +4372,8 @@ export interface paths {
                             orders?: {
                                 /** Format: uuid */
                                 id?: string;
+                                /** @enum {string} */
+                                order_type?: "hall" | "takeaway" | "delivery";
                                 items?: {
                                     /**
                                      * Format: uuid
@@ -4379,6 +4381,8 @@ export interface paths {
                                      */
                                     network_menu_item_id?: string;
                                     qty?: string;
+                                    /** @description Комбинация атрибутов («Стандарт»), если позиция — вариант товара с атрибутами. Сеть не хранит id вариантов — лейблы, в порядке атрибутов продукта. */
+                                    variant_labels?: string[];
                                 }[];
                                 delivery_phone?: string | null;
                                 delivery_address?: string | null;
@@ -5368,10 +5372,18 @@ export interface paths {
                          * @description Филиал-получатель — тот же account_id, что у central.
                          */
                         target_restaurant_id: string;
+                        /**
+                         * @description В какую секцию кассы филиала попадёт заказ. Пусто = delivery.
+                         * @default delivery
+                         * @enum {string}
+                         */
+                        order_type?: "hall" | "takeaway" | "delivery";
                         items: {
                             /** Format: uuid */
                             network_menu_item_id: string;
                             qty: string;
+                            /** @description Комбинация атрибутов («Стандарт»), если позиция — вариант товара с атрибутами. Должна совпадать с одной из combos[].labels мастер-товара. */
+                            variant_labels?: string[];
                         }[];
                         delivery_phone?: string;
                         delivery_address?: string;

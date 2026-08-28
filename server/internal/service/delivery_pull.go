@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -68,6 +70,7 @@ func (p *DeliveryPuller) activeConfig(ctx context.Context) (centralURL, token, r
 // (см. handlers/delivery_relay.go / models.DeliveryRelayOrder).
 type deliveryRelayOrderOut struct {
 	ID              string                     `json:"id"`
+	OrderType       string                     `json:"order_type"`
 	Items           []models.DeliveryRelayItem `json:"items"`
 	DeliveryPhone   *string                    `json:"delivery_phone"`
 	DeliveryAddress *string                    `json:"delivery_address"`
@@ -142,9 +145,17 @@ func (p *DeliveryPuller) processOne(ctx context.Context, centralURL, token, rest
 		return false
 	}
 
+	// order_type — hall|takeaway|delivery, диспетчер central выбирает сам
+	// (092): заказ должен попасть в ту же секцию кассы филиала, что и
+	// обычный заказ такого типа, не всегда «Доставка». Пусто (старые
+	// relay-строки до 092) → delivery, как было раньше.
+	orderType := ro.OrderType
+	if orderType == "" {
+		orderType = "delivery"
+	}
 	octx := audit.WithActor(tenant.WithRestaurant(ctx, restaurantID), audit.Actor{UserName: "Central (доставка)"})
 	order, _, err := p.ordersSvc.Create(octx, CreateOrderInput{
-		Type:    "delivery",
+		Type:    orderType,
 		Comment: ro.Comment,
 		Items:   items,
 	})
@@ -217,9 +228,115 @@ func (p *DeliveryPuller) resolveItems(ctx context.Context, restaurantID string, 
 		if !ok {
 			return nil, fmt.Errorf("товар не найден на филиале (network_menu_item_id=%s)", it.NetworkMenuItemID)
 		}
-		out = append(out, CreateOrderItem{MenuItemID: m.ID, Qty: it.Qty})
+		itemID := m.ID
+		if len(it.VariantLabels) > 0 {
+			variantID, err := p.resolveVariant(ctx, restaurantID, m.ID, it.VariantLabels)
+			if err != nil {
+				return nil, fmt.Errorf("«%s»: %w", strOrEmpty(m.Name), err)
+			}
+			itemID = variantID
+		} else {
+			hasVariants, err := p.hasVariants(ctx, restaurantID, m.ID)
+			if err != nil {
+				return nil, err
+			}
+			if hasVariants {
+				return nil, fmt.Errorf("«%s»: не указан вариант", strOrEmpty(m.Name))
+			}
+		}
+		out = append(out, CreateOrderItem{MenuItemID: itemID, Qty: it.Qty})
 	}
 	return out, nil
+}
+
+// hasVariants — есть ли у локального продукта сгенерированные варианты
+// (parent_id → него). Если да, сам продукт не продаётся напрямую — POS
+// всегда уводит в пикер вариантов (app/pos2/order/page.tsx: variantsByParent),
+// значит relay-строка без VariantLabels для такого товара — баг отправителя,
+// а не «товар без вариаций».
+func (p *DeliveryPuller) hasVariants(ctx context.Context, restaurantID, parentID string) (bool, error) {
+	var count int64
+	if err := p.r.Raw().WithContext(ctx).Model(&models.MenuItem{}).
+		Where("restaurant_id = ? AND parent_id = ? AND is_deleted = false", restaurantID, parentID).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// resolveVariant — находит дочерний вариант локального продукта по лейблам
+// комбинации, в canonical-порядке атрибутов продукта (по MenuAttribute.
+// SortOrder) — тот же порядок, что central использует для VariantLabels
+// (см. app/pos2/order/page.tsx submitDispatch). Сеть не хранит id вариантов
+// (084) — сами лейблы это единственный портируемый идентификатор комбинации
+// между central и филиалом, id атрибутов/значений на обоих узлах разные.
+func (p *DeliveryPuller) resolveVariant(ctx context.Context, restaurantID, parentID string, labels []string) (string, error) {
+	var attrs []models.MenuAttribute
+	if err := p.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ? AND menu_item_id = ?", restaurantID, parentID).
+		Order("sort_order ASC").Find(&attrs).Error; err != nil {
+		return "", err
+	}
+	attrOrder := make(map[string]int, len(attrs))
+	attrIDs := make([]string, len(attrs))
+	for i, a := range attrs {
+		attrOrder[a.ID] = i
+		attrIDs[i] = a.ID
+	}
+	var values []models.MenuAttributeValue
+	if len(attrIDs) > 0 {
+		if err := p.r.Raw().WithContext(ctx).Where("attribute_id IN ?", attrIDs).Find(&values).Error; err != nil {
+			return "", err
+		}
+	}
+	type valueMeta struct {
+		order int
+		label string
+	}
+	metaByValueID := make(map[string]valueMeta, len(values))
+	for _, v := range values {
+		metaByValueID[v.ID] = valueMeta{order: attrOrder[v.AttributeID], label: v.Label}
+	}
+
+	var variants []models.MenuItem
+	if err := p.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ? AND parent_id = ? AND is_deleted = false", restaurantID, parentID).
+		Find(&variants).Error; err != nil {
+		return "", err
+	}
+	variantIDs := make([]string, len(variants))
+	for i, v := range variants {
+		variantIDs[i] = v.ID
+	}
+	var links []models.MenuItemVariantValue
+	if len(variantIDs) > 0 {
+		if err := p.r.Raw().WithContext(ctx).Where("menu_item_id IN ?", variantIDs).Find(&links).Error; err != nil {
+			return "", err
+		}
+	}
+	valueIDsByVariant := make(map[string][]string, len(variants))
+	for _, l := range links {
+		valueIDsByVariant[l.MenuItemID] = append(valueIDsByVariant[l.MenuItemID], l.ValueID)
+	}
+
+	target := comboLabelKey(labels)
+	for _, v := range variants {
+		metas := make([]valueMeta, 0, len(valueIDsByVariant[v.ID]))
+		for _, id := range valueIDsByVariant[v.ID] {
+			if meta, ok := metaByValueID[id]; ok {
+				metas = append(metas, meta)
+			}
+		}
+		sort.Slice(metas, func(i, j int) bool { return metas[i].order < metas[j].order })
+		combo := make([]string, len(metas))
+		for i, m := range metas {
+			combo[i] = m.label
+		}
+		if comboLabelKey(combo) == target {
+			return v.ID, nil
+		}
+	}
+	return "", fmt.Errorf("вариант «%s» не найден", strings.Join(labels, " "))
 }
 
 func (p *DeliveryPuller) ack(ctx context.Context, centralURL, token, relayID string, in AckDeliveryRelayInput) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"gorm.io/datatypes"
@@ -35,15 +36,22 @@ func NewDeliveryRelayService(r *repo.Repo) *DeliveryRelayService {
 type DeliveryRelayItemInput struct {
 	NetworkMenuItemID string `json:"network_menu_item_id"`
 	Qty               string `json:"qty"`
+	// VariantLabels — см. models.DeliveryRelayItem.VariantLabels.
+	VariantLabels []string `json:"variant_labels,omitempty"`
 }
 
 // CreateDeliveryRelayInput — body POST /api/v1/delivery-relay.
 type CreateDeliveryRelayInput struct {
-	TargetRestaurantID string                   `json:"target_restaurant_id"`
-	Items              []DeliveryRelayItemInput `json:"items"`
-	DeliveryPhone      *string                  `json:"delivery_phone,omitempty"`
-	DeliveryAddress    *string                  `json:"delivery_address,omitempty"`
-	Comment            *string                  `json:"comment,omitempty"`
+	TargetRestaurantID string `json:"target_restaurant_id"`
+	// OrderType — hall|takeaway|delivery. Пусто → delivery (обратная
+	// совместимость со старыми клиентами, до 092 relay был только про
+	// доставку). Определяет, в какую секцию кассы филиала попадёт заказ —
+	// не только «Доставка».
+	OrderType       string                   `json:"order_type,omitempty"`
+	Items           []DeliveryRelayItemInput `json:"items"`
+	DeliveryPhone   *string                  `json:"delivery_phone,omitempty"`
+	DeliveryAddress *string                  `json:"delivery_address,omitempty"`
+	Comment         *string                  `json:"comment,omitempty"`
 }
 
 // Create — POST /api/v1/delivery-relay, central-сторона (обычная user-сессия
@@ -62,6 +70,13 @@ func (s *DeliveryRelayService) Create(ctx context.Context, in CreateDeliveryRela
 	}
 	if len(in.Items) == 0 {
 		return nil, apperrors.Wrap("VALIDATION", "заказ должен содержать хотя бы одну позицию", nil)
+	}
+	orderType := in.OrderType
+	if orderType == "" {
+		orderType = "delivery"
+	}
+	if orderType != "hall" && orderType != "takeaway" && orderType != "delivery" {
+		return nil, apperrors.Wrap("VALIDATION", "order_type must be hall, takeaway or delivery", nil)
 	}
 	ids := make([]string, 0, len(in.Items))
 	for _, it := range in.Items {
@@ -94,20 +109,47 @@ func (s *DeliveryRelayService) Create(ctx context.Context, in CreateDeliveryRela
 	}
 
 	// Валидируем позиции ПРОТИВ мастер-меню сети сразу — иначе опечатка в id
-	// всплывёт только на филиале минуты спустя как молчаливый failed.
-	var count int64
-	if err := s.r.Raw().WithContext(ctx).Model(&models.NetworkMenuItem{}).
+	// всплывёт только на филиале минуты спустя как молчаливый failed. Заодно
+	// тянем Attributes — тем же запросом сверяем VariantLabels против
+	// combos[] мастера (092), а не только сам id товара.
+	var masters []models.NetworkMenuItem
+	if err := s.r.Raw().WithContext(ctx).
 		Where("id IN ? AND account_id = ? AND deleted_at IS NULL", ids, account).
-		Count(&count).Error; err != nil {
+		Find(&masters).Error; err != nil {
 		return nil, err
 	}
-	if int(count) != len(ids) {
+	if len(masters) != len(ids) {
 		return nil, apperrors.Wrap("VALIDATION", "одна или несколько позиций не найдены в меню сети", nil)
+	}
+	mastersByID := make(map[string]models.NetworkMenuItem, len(masters))
+	for _, m := range masters {
+		mastersByID[m.ID] = m
+	}
+	for _, it := range in.Items {
+		if len(it.VariantLabels) == 0 {
+			continue
+		}
+		m := mastersByID[it.NetworkMenuItemID]
+		attrs, _, err := parseNetworkMenuAttrs(json.RawMessage(m.Attributes))
+		if err != nil || attrs == nil {
+			return nil, apperrors.Wrap("VALIDATION", "у «"+m.Name+"» нет вариаций в меню сети", nil)
+		}
+		target := comboLabelKey(it.VariantLabels)
+		found := false
+		for _, c := range attrs.Combos {
+			if comboLabelKey(c.Labels) == target {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, apperrors.Wrap("VALIDATION", "вариант «"+strings.Join(it.VariantLabels, ", ")+"» не найден у «"+m.Name+"» в меню сети", nil)
+		}
 	}
 
 	items := make([]models.DeliveryRelayItem, 0, len(in.Items))
 	for _, it := range in.Items {
-		items = append(items, models.DeliveryRelayItem{NetworkMenuItemID: it.NetworkMenuItemID, Qty: it.Qty})
+		items = append(items, models.DeliveryRelayItem{NetworkMenuItemID: it.NetworkMenuItemID, Qty: it.Qty, VariantLabels: it.VariantLabels})
 	}
 	itemsJSON, err := json.Marshal(items)
 	if err != nil {
@@ -118,6 +160,7 @@ func (s *DeliveryRelayService) Create(ctx context.Context, in CreateDeliveryRela
 		AccountID:          account,
 		RestaurantID:       rid,
 		TargetRestaurantID: in.TargetRestaurantID,
+		OrderType:          orderType,
 		Items:              datatypes.JSON(itemsJSON),
 		DeliveryPhone:      in.DeliveryPhone,
 		DeliveryAddress:    in.DeliveryAddress,

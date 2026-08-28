@@ -135,6 +135,10 @@ export default function PosV2Order() {
   const [dispatchMode, setDispatchMode] = useState(false)
   const [dispatchBranches, setDispatchBranches] = useState<Branch[]>([])
   const [dispatchBranchId, setDispatchBranchId] = useState('')
+  // dispatchOrderType — секция кассы ФИЛИАЛА, куда попадёт заказ (092):
+  // central — это диспетчер сети, не только доставки, звонок может быть
+  // заказом на зал/самовынос в конкретной точке.
+  const [dispatchOrderType, setDispatchOrderType] = useState<OrderType>('delivery')
   const [dispatchPhone, setDispatchPhone] = useState('')
   const [dispatchAddress, setDispatchAddress] = useState('')
   const [dispatchComment, setDispatchComment] = useState('')
@@ -143,17 +147,18 @@ export default function PosV2Order() {
     if (!isCentral) return
     fetchBranches().then(list => setDispatchBranches(list.filter(b => b.kind === 'outlet'))).catch(() => {})
   }, [isCentral])
-  // Включение сбрасывает стол/группу — иначе оставшееся с «Зала» состояние
-  // просвечивает в шапке/вкладках корзины (они гейтятся numberMode, который
-  // dispatchMode намеренно не трогает). Корзину НЕ чистим — блюда уже
-  // набраны, это не отмена работы кассира.
-  function toggleDispatchMode() {
-    setDispatchMode(v => {
-      const next = !v
-      if (next) { setSelectedTableId(''); setActiveGroupId(null); setTableOrders([]) }
-      return next
-    })
-  }
+  // На central «Филиал» — единственный режим, не переключатель: своих
+  // заказов у central нет, весь смысл экрана — диспетчеризация в сеть
+  // (владелец, 2026-08-28: «таб в центральном только филиал надо оставить»).
+  // Сброс стола/группы — иначе оставшееся с «Зала» состояние просвечивает в
+  // шапке/вкладках корзины (гейтятся numberMode, который dispatchMode
+  // намеренно не трогает).
+  useEffect(() => {
+    if (!isCentral) return
+    setDispatchMode(true)
+    setSelectedTableId(''); setActiveGroupId(null); setTableOrders([])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCentral])
   const [menuGrid] = useMenuGrid()
   // Высота области сетки блюд — чтобы в матричном режиме (N×M) подогнать высоту
   // рядов под экран (карточки квадратнее, а не «широкие и низкие»).
@@ -563,29 +568,68 @@ export default function PosV2Order() {
   // (мастер-меню сети) через menuItems[].masterId, чтобы филиал мог найти
   // СВОЙ локальный аналог (та же связь, только смотрим в другую сторону).
   const masterIdByMenuItemId = useMemo(() => new Map(menuItems.map(m => [m.id, m.masterId ?? null])), [menuItems])
+  const menuItemsById = useMemo(() => new Map(menuItems.map(m => [m.id, m])), [menuItems])
+
+  // Вариант («Гамбургер Стандарт») сам по себе не привязан к мастеру сети —
+  // master_id живёт только на продукте-родителе, никогда на варианте (owner,
+  // 2026-08-28: «Гамбургер есть в меню... пос2 пишет ошибку что нет» —
+  // masterIdByMenuItemId.get(variantId) закономерно null). Сеть тоже не
+  // хранит id вариантов (084, network_menu_items.attributes — снэпшот по
+  // лейблам) — портируемый идентификатор комбинации это сами лейблы, в
+  // порядке attributes[] родителя (тот порядок, в котором вводились цены
+  // комбинаций). Филиал реконструирует тот же canonical-порядок из СВОИХ
+  // локальных атрибутов и матчит по лейблам (delivery_pull.go resolveVariant).
+  function resolveVariantLabels(item: MenuItem, parent: MenuItem): string[] | null {
+    if (!item.variantValueIds?.length) return []
+    const order = new Map<string, number>()
+    const label = new Map<string, string>()
+    parent.attributes?.forEach((attr, ai) => {
+      attr.values.forEach(v => { order.set(v.id, ai); label.set(v.id, v.label) })
+    })
+    const resolved = item.variantValueIds
+      .filter(id => label.has(id))
+      .sort((a, b) => order.get(a)! - order.get(b)!)
+      .map(id => label.get(id)!)
+    return resolved.length === item.variantValueIds.length ? resolved : null
+  }
 
   async function submitDispatch() {
     if (dispatchSubmitting || cart.length === 0 || !dispatchBranchId) return
-    const items: { networkMenuItemId: string; qty: string }[] = []
+    const items: { networkMenuItemId: string; qty: string; variantLabels?: string[] }[] = []
     for (const oi of cartToItems(cart)) {
       if (oi.bundleSelection) {
         toast.error('Сеты нельзя отправить на филиал — уберите их из корзины')
         return
       }
-      const masterId = masterIdByMenuItemId.get(oi.menuItemId)
-      if (!masterId) {
+      const item = menuItemsById.get(oi.menuItemId)
+      const parent = item?.parentId ? menuItemsById.get(item.parentId) : item
+      const masterId = parent ? masterIdByMenuItemId.get(parent.id) : undefined
+      if (!parent || !masterId) {
         toast.error(`«${oi.name}» нет в меню сети — уберите или замените позицию`)
         return
       }
-      items.push({ networkMenuItemId: masterId, qty: String(oi.qty) })
+      let variantLabels: string[] | undefined
+      if (item?.parentId) {
+        const labels = resolveVariantLabels(item, parent)
+        if (!labels || labels.length === 0) {
+          toast.error(`«${oi.name}»: не удалось определить вариант — уберите или замените позицию`)
+          return
+        }
+        variantLabels = labels
+      }
+      items.push({ networkMenuItemId: masterId, qty: String(oi.qty), variantLabels })
     }
     setDispatchSubmitting(true)
     try {
       await createDeliveryRelay({
         targetRestaurantId: dispatchBranchId,
+        orderType: dispatchOrderType,
         items,
         deliveryPhone: dispatchPhone.trim() || undefined,
-        deliveryAddress: dispatchAddress.trim() || undefined,
+        // Адрес имеет смысл только для доставки — при зал/самовынос поле
+        // скрыто в UI, но state может хранить значение с прошлого
+        // переключения типа.
+        deliveryAddress: dispatchOrderType === 'delivery' ? (dispatchAddress.trim() || undefined) : undefined,
         comment: dispatchComment.trim() || undefined,
       })
       toast.success('Заказ отправлен на филиал')
@@ -997,7 +1041,13 @@ export default function PosV2Order() {
             <span className="font-semibold" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>Меню</span>
           </button>
           <div className="flex items-center rounded-2xl border shrink-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: '4px', gap: '4px' }}>
-            {orderTypes.map(val => {
+            {isCentral ? (
+              // На central своих заказов нет — единственный смысл экрана
+              // это диспетчеризация в сеть, переключать не на что.
+              <div className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: 'var(--pv-brand)', color: '#fff', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
+                <Bike style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />Филиал
+              </div>
+            ) : orderTypes.map(val => {
               const on = orderType === val
               const Icon = ORDER_TYPE_ICONS[val]
               return (
@@ -1006,11 +1056,6 @@ export default function PosV2Order() {
                 </button>
               )
             })}
-            {isCentral && (
-              <button onClick={toggleDispatchMode} className="flex items-center gap-1.5 rounded-xl font-semibold whitespace-nowrap" style={{ background: dispatchMode ? 'var(--pv-brand)' : 'transparent', color: dispatchMode ? '#fff' : 'var(--pv-text-2)', padding: 'clamp(0.5rem,0.8vw,0.75rem) clamp(0.7rem,1.2vw,1.3rem)', fontSize: 'var(--pv-ctl)' }}>
-                <Bike style={{ width: 'clamp(0.9rem,1.2vw,1.15rem)', height: 'clamp(0.9rem,1.2vw,1.15rem)' }} />Филиал
-              </button>
-            )}
           </div>
           <div className="flex items-center gap-2 rounded-xl border flex-1 min-w-0" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.9vw,0.85rem) clamp(0.8rem,1vw,1rem)' }}>
             <Search style={{ width: 'clamp(1.1rem,1.4vw,1.4rem)', height: 'clamp(1.1rem,1.4vw,1.4rem)', color: 'var(--pv-text-3)' }} className="shrink-0" />
@@ -1036,8 +1081,21 @@ export default function PosV2Order() {
                 </button>
               )
             })}
+            {/* Секция кассы ФИЛИАЛА, куда попадёт заказ — не всегда доставка,
+                central диспетчерит звонки в зал/самовынос тоже (092).
+                Выпадающий список, не переключатель кнопок (владелец,
+                2026-08-28: «не список зал/собой/доставка а импут
+                раскрывающийся надо») — тот же паттерн, что выбор счёта в
+                shift/page.tsx. */}
+            <select value={dispatchOrderType} onChange={e => setDispatchOrderType(e.target.value as OrderType)} className="rounded-xl border font-semibold outline-none" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', color: 'var(--pv-text)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)' }}>
+              {(['hall', 'takeaway', 'delivery'] as OrderType[]).map(val => (
+                <option key={val} value={val}>{ORDER_TYPE_LABELS[val]}</option>
+              ))}
+            </select>
             <input value={dispatchPhone} onChange={e => setDispatchPhone(e.target.value)} placeholder="Телефон клиента" className="rounded-xl" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text)', minWidth: '10rem' }} />
-            <input value={dispatchAddress} onChange={e => setDispatchAddress(e.target.value)} placeholder="Адрес доставки" className="rounded-xl flex-1 min-w-0" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text)' }} />
+            {dispatchOrderType === 'delivery' && (
+              <input value={dispatchAddress} onChange={e => setDispatchAddress(e.target.value)} placeholder="Адрес доставки" className="rounded-xl flex-1 min-w-0" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text)' }} />
+            )}
           </div>
         )}
 
@@ -1148,7 +1206,7 @@ export default function PosV2Order() {
               <span className="font-bold truncate" style={{ color: selectedTable ? 'var(--pv-brand)' : 'var(--pv-text-2)', fontSize: 'clamp(1rem,1.35vw,1.25rem)' }}>{selectedTable ? `Стол ${selectedTable.number}` : 'Выберите стол'}{selectedTable && activeGroup && tableOrders.length > 1 ? ` · Гр. ${tableOrders.findIndex(o => o.id === activeGroupId) + 1}` : ''}</span>
             </button>
           ) : (
-            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>{dispatchMode ? 'Доставка на филиал' : 'Заказ'}</span>
+            <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'clamp(1.05rem,1.5vw,1.4rem)' }}>{dispatchMode ? 'Заказ на филиал' : 'Заказ'}</span>
           )}
           <span className="rounded-full font-semibold shrink-0" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: '0.25rem 0.7rem', fontSize: 'var(--pv-ctl)' }}>{cart.length > 0 ? `${count} поз.` : activeGroup ? `${(activeGroup.items ?? []).filter(i => !i.cancelledAt).length} поз.` : '0 поз.'}</span>
         </div>
