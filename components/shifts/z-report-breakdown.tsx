@@ -1,6 +1,6 @@
 'use client'
 
-import { ShoppingBag, Users, CreditCard, Tag, MapPin, Banknote } from 'lucide-react'
+import { ShoppingBag, Users, CreditCard, Tag, MapPin, Banknote, Send } from 'lucide-react'
 import { formatCurrency } from '@/lib/helpers'
 import { type ShiftZReport } from '@/lib/queries'
 
@@ -184,6 +184,35 @@ export function ZReportBreakdown({ z, loading }: { z: ShiftZReport | null; loadi
             </div>
           )}
         </div>
+
+        {/* Диспетчеризация — только у central (095): своих локальных заказов
+            у central нет, все секции выше для него пусты — сколько реально
+            отправлено филиалам за эту смену видно только тут. */}
+        {z.dispatchSummary && (
+          <div className="bg-background rounded-lg p-3 border border-border">
+            <h4 className="text-xs font-semibold text-foreground mb-2 flex items-center gap-1.5"><Send className="size-3.5 text-muted-foreground" />Диспетчеризация</h4>
+            <div className="space-y-1 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Отправлено</span>
+                <span className="font-medium text-foreground tabular-nums">{z.dispatchSummary.sent}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-muted-foreground">Доставлено филиалу</span>
+                <span className="font-medium text-foreground tabular-nums">{z.dispatchSummary.delivered}</span>
+              </div>
+              {z.dispatchSummary.failed > 0 && (
+                <div className="flex items-center justify-between">
+                  <span className="text-muted-foreground">Не доставлено</span>
+                  <span className="font-medium tabular-nums text-destructive">{z.dispatchSummary.failed}</span>
+                </div>
+              )}
+              <div className="border-t border-border pt-1.5 mt-1.5 flex items-center justify-between">
+                <span className="text-muted-foreground">Оплачено на филиале <span className="text-[11px]">({z.dispatchSummary.closed})</span></span>
+                <span className="font-semibold tabular-nums">{formatCurrency(z.dispatchSummary.revenue)}</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

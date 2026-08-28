@@ -6,6 +6,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 )
 
@@ -587,6 +588,136 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 		totalRev = decimal.Add(totalRev, r.Revenue)
 		totalOrd += r.Orders
 	}
+
+	// Диспетчер central (095) — central сам не торгует локально (комментарий
+	// в шапке файла), поэтому запрос выше для него всегда пуст, но он
+	// реально приносит сети выручку через delivery-relay. Отдельная
+	// агрегация по created_by_user_id (kind=create ТОЛЬКО — amend не заводит
+	// новый заказ, его выручка уже внутри Revenue родителя, второй раз
+	// считать нельзя), джойним к orders реального филиала за фактически
+	// оплаченные (closed/refunded) — central пишет только транспорт, деньги/
+	// сток остаются филиалу, здесь просто атрибуция человеку, кто отправил.
+	var central *models.Restaurant
+	for i := range branches {
+		if branches[i].Kind != nil && *branches[i].Kind == "central_warehouse" {
+			central = &branches[i]
+			break
+		}
+	}
+	if central != nil {
+		type dispatchRow struct {
+			UserID  *string         `gorm:"column:user_id"`
+			Name    *string         `gorm:"column:name"`
+			Orders  int             `gorm:"column:orders"`
+			Revenue decimal.Decimal `gorm:"column:revenue"`
+		}
+		dq := s.r.Raw().WithContext(ctx).Table("delivery_relay_orders AS dro").
+			Select(`dro.created_by_user_id AS user_id, dro.created_by_name AS name,
+			        COUNT(*) AS orders, COALESCE(SUM(o.total_with_service), 0) AS revenue`).
+			Joins("JOIN orders o ON o.id = dro.local_order_id").
+			Where("dro.restaurant_id = ? AND dro.kind = ? AND dro.status = ? AND o.status IN ?",
+				central.ID, "create", "delivered", []string{"closed", "refunded"})
+		if f.From != nil {
+			dq = dq.Where("o.closed_at >= ?", *f.From)
+		}
+		if f.To != nil {
+			dq = dq.Where("o.closed_at < ?", *f.To)
+		}
+		var dRows []dispatchRow
+		_ = dq.Group("dro.created_by_user_id, dro.created_by_name").Scan(&dRows).Error
+
+		type dispatchDayRow struct {
+			UserID  *string         `gorm:"column:user_id"`
+			Day     string          `gorm:"column:day"`
+			Revenue decimal.Decimal `gorm:"column:revenue"`
+		}
+		dbq := s.r.Raw().WithContext(ctx).Table("delivery_relay_orders AS dro").
+			Select(`dro.created_by_user_id AS user_id, to_char(o.closed_at, 'YYYY-MM-DD') AS day,
+			        COALESCE(SUM(o.total_with_service), 0) AS revenue`).
+			Joins("JOIN orders o ON o.id = dro.local_order_id").
+			Where("dro.restaurant_id = ? AND dro.kind = ? AND dro.status = ? AND o.status IN ?",
+				central.ID, "create", "delivered", []string{"closed", "refunded"})
+		if f.From != nil {
+			dbq = dbq.Where("o.closed_at >= ?", *f.From)
+		}
+		if f.To != nil {
+			dbq = dbq.Where("o.closed_at < ?", *f.To)
+		}
+		var dbRows []dispatchDayRow
+		_ = dbq.Group("dro.created_by_user_id, day").Scan(&dbRows).Error
+
+		type dispatchItemsRow struct {
+			UserID *string         `gorm:"column:user_id"`
+			Qty    decimal.Decimal `gorm:"column:qty"`
+		}
+		diq := s.r.Raw().WithContext(ctx).Table("delivery_relay_orders AS dro").
+			Select("dro.created_by_user_id AS user_id, COALESCE(SUM(oi.qty), 0) AS qty").
+			Joins("JOIN orders o ON o.id = dro.local_order_id").
+			Joins("JOIN order_items oi ON oi.order_id = o.id AND oi.cancelled_at IS NULL").
+			Where("dro.restaurant_id = ? AND dro.kind = ? AND dro.status = ? AND o.status IN ?",
+				central.ID, "create", "delivered", []string{"closed", "refunded"})
+		if f.From != nil {
+			diq = diq.Where("o.closed_at >= ?", *f.From)
+		}
+		if f.To != nil {
+			diq = diq.Where("o.closed_at < ?", *f.To)
+		}
+		var diRows []dispatchItemsRow
+		_ = diq.Group("dro.created_by_user_id").Scan(&diRows).Error
+		dispatchItemsByUser := make(map[string]decimal.Decimal, 4)
+		for _, r := range diRows {
+			uid := ""
+			if r.UserID != nil {
+				uid = *r.UserID
+			}
+			dispatchItemsByUser[uid] = r.Qty
+		}
+
+		dispatchBestByUser := make(map[string]bestEntry, 4)
+		for _, r := range dbRows {
+			uid := ""
+			if r.UserID != nil {
+				uid = *r.UserID
+			}
+			cur, ok := dispatchBestByUser[uid]
+			if !ok || r.Revenue.GreaterThan(cur.Revenue) {
+				dispatchBestByUser[uid] = bestEntry{Day: r.Day, Revenue: r.Revenue}
+			}
+		}
+
+		for _, r := range dRows {
+			uid := ""
+			if r.UserID != nil {
+				uid = *r.UserID
+			}
+			name := "Диспетчер"
+			if r.Name != nil && *r.Name != "" {
+				name = *r.Name
+			}
+			avg := decimal.Zero
+			if r.Orders > 0 {
+				avg = decimal.DivRound(r.Revenue, decimal.FromInt(int64(r.Orders)))
+			}
+			best := dispatchBestByUser[uid]
+			out.Rows = append(out.Rows, NetworkWaiterRow{
+				WaiterRow: WaiterRow{
+					WaiterID:       uid,
+					Name:           name,
+					Orders:         r.Orders,
+					Revenue:        decimal.Normalize(r.Revenue),
+					ItemsSold:      decimal.Normalize(dispatchItemsByUser[uid]),
+					AvgCheck:       decimal.Normalize(avg),
+					BestDay:        best.Day,
+					BestDayRevenue: decimal.Normalize(best.Revenue),
+				},
+				RestaurantID:   central.ID,
+				RestaurantName: central.Name,
+			})
+			totalRev = decimal.Add(totalRev, r.Revenue)
+			totalOrd += r.Orders
+		}
+	}
+
 	sort.Slice(out.Rows, func(i, j int) bool {
 		return out.Rows[i].Revenue.GreaterThan(out.Rows[j].Revenue)
 	})

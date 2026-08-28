@@ -45,6 +45,18 @@ type DeliveryRelayOrder struct {
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 	DeliveredAt  *time.Time `gorm:"column:delivered_at" json:"delivered_at,omitempty"`
+	// ShiftID — открытая смена central в момент отправки (ShiftsService.
+	// Active), NULL если смена не была открыта (095). Нужна, чтобы «Смены
+	// сети» центрального узла считала статистику диспетчеризации ПО СМЕНЕ,
+	// а не показывала нули (central своих локальных orders не создаёт).
+	ShiftID *string `gorm:"column:shift_id;type:uuid" json:"shift_id,omitempty"`
+	// CreatedByUserID/Name — реальный central-пользователь (audit.Actor),
+	// НЕ строка-заглушка "Central (доставка)" в audit_log заказа на филиале
+	// (там её нельзя заменить на central user_id — разные тенанты, такого
+	// пользователя в users филиала не существует). Нужны для атрибуции
+	// выручки диспетчеру в сетевой аналитике официантов (095).
+	CreatedByUserID *string `gorm:"column:created_by_user_id;type:uuid" json:"created_by_user_id,omitempty"`
+	CreatedByName   *string `gorm:"column:created_by_name" json:"created_by_name,omitempty"`
 }
 
 func (DeliveryRelayOrder) TableName() string { return "delivery_relay_orders" }

@@ -177,6 +177,11 @@ export interface ShiftZReport {
   refundsTotal: number
   refundsCount: number
   previous?: ShiftZReportPrevious | null
+  /** Только у central (095): сама секция для обычного ресторана всегда
+   *  отсутствует (delivery_relay_orders за смену — 0 строк). Central сам не
+   *  торгует локально, поэтому все sales-секции выше для него нули — сколько
+   *  он реально отправил филиалам за эту смену видно только тут. */
+  dispatchSummary?: { sent: number; delivered: number; failed: number; closed: number; revenue: number } | null
 }
 
 export async function fetchShiftZReport(shiftId: string): Promise<ShiftZReport> {
@@ -246,6 +251,15 @@ function mapZReport(r: any): ShiftZReport {
           avgCheck: Number(r.previous.avg_check ?? 0),
           guestsCount: Number(r.previous.guests_count ?? 0),
           closedAt: r.previous.closed_at ?? null,
+        }
+      : null,
+    dispatchSummary: r?.dispatch_summary
+      ? {
+          sent: Number(r.dispatch_summary.sent ?? 0),
+          delivered: Number(r.dispatch_summary.delivered ?? 0),
+          failed: Number(r.dispatch_summary.failed ?? 0),
+          closed: Number(r.dispatch_summary.closed ?? 0),
+          revenue: Number(r.dispatch_summary.revenue ?? 0),
         }
       : null,
   }

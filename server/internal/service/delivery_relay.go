@@ -10,6 +10,7 @@ import (
 	"gorm.io/datatypes"
 	"gorm.io/gorm"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
@@ -184,6 +185,7 @@ func (s *DeliveryRelayService) Create(ctx context.Context, in CreateDeliveryRela
 		return nil, err
 	}
 
+	shiftID, userID, userName := s.dispatchAttribution(ctx)
 	row := &models.DeliveryRelayOrder{
 		AccountID:          account,
 		RestaurantID:       rid,
@@ -195,11 +197,34 @@ func (s *DeliveryRelayService) Create(ctx context.Context, in CreateDeliveryRela
 		DeliveryAddress:    in.DeliveryAddress,
 		Comment:            in.Comment,
 		Status:             "pending",
+		ShiftID:            shiftID,
+		CreatedByUserID:    userID,
+		CreatedByName:      userName,
 	}
 	if err := s.r.Raw().WithContext(ctx).Create(row).Error; err != nil {
 		return nil, err
 	}
 	return row, nil
+}
+
+// dispatchAttribution — открытая смена central (если есть) + реальный
+// пользователь-отправитель (095), для «Смены сети» и сетевой аналитики
+// официантов. Best-effort: отсутствие открытой смены не блокирует
+// отправку — просто эта строка не попадёт ни в один Z-отчёт.
+func (s *DeliveryRelayService) dispatchAttribution(ctx context.Context) (shiftID, userID, userName *string) {
+	if shift, err := NewShiftsService(s.r).Active(ctx); err == nil && shift != nil {
+		id := shift.ID
+		shiftID = &id
+	}
+	if actor, ok := audit.ActorFromContext(ctx); ok {
+		if actor.UserID != "" {
+			userID = &actor.UserID
+		}
+		if actor.UserName != "" {
+			userName = &actor.UserName
+		}
+	}
+	return shiftID, userID, userName
 }
 
 // CreateAmendInput — body POST /api/v1/delivery-relay/{id}/amend.
@@ -248,6 +273,7 @@ func (s *DeliveryRelayService) CreateAmend(ctx context.Context, parentID string,
 		return nil, err
 	}
 
+	shiftID, userID, userName := s.dispatchAttribution(ctx)
 	row := &models.DeliveryRelayOrder{
 		AccountID:          account,
 		RestaurantID:       rid,
@@ -257,6 +283,9 @@ func (s *DeliveryRelayService) CreateAmend(ctx context.Context, parentID string,
 		ParentRelayID:      &parentID,
 		Items:              itemsJSON,
 		Status:             "pending",
+		ShiftID:            shiftID,
+		CreatedByUserID:    userID,
+		CreatedByName:      userName,
 	}
 	if err := s.r.Raw().WithContext(ctx).Create(row).Error; err != nil {
 		return nil, err

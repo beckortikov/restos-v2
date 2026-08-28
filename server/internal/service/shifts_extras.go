@@ -488,6 +488,19 @@ type ZReportExpenseByCategory struct {
 	Amount   decimal.Decimal `json:"amount"`
 }
 
+// ZReportDispatchSummary — только для central-смены (095): диспетчер не
+// пробивает своих локальных заказов (все секции выше для central — нули),
+// сколько он реально отправил филиалам за эту смену видно только здесь.
+// Sent считает СОЗДАНИЯ (kind=create) — дозаказы (amend) не заводят новый
+// заказ, их выручка уже входит в Closed/Revenue родителя.
+type ZReportDispatchSummary struct {
+	Sent      int             `json:"sent"`
+	Delivered int             `json:"delivered"`
+	Failed    int             `json:"failed"`
+	Closed    int             `json:"closed"`
+	Revenue   decimal.Decimal `json:"revenue"`
+}
+
 // ZReport — body GET /api/v1/shifts/{id}/zreport.
 type ZReport struct {
 	Shift            ZReportShift                `json:"shift"`
@@ -525,6 +538,10 @@ type ZReport struct {
 	// Previous — выжимка предыдущей закрытой смены (для delta-chip на UI).
 	// nil, если это первая смена ресторана.
 	Previous *PreviousSummary `json:"previous,omitempty"`
+	// DispatchSummary — статистика диспетчеризации (095), только у смен
+	// central (у обычного ресторана delivery_relay_orders за эту смену
+	// всегда 0 строк — central туда никогда не пишет от имени филиала).
+	DispatchSummary *ZReportDispatchSummary `json:"dispatch_summary,omitempty"`
 }
 
 // ZReport — GET /api/v1/shifts/{id}/zreport.
@@ -949,6 +966,47 @@ func (s *ShiftsService) ZReport(ctx context.Context, shiftID string) (*ZReport, 
 		Where("restaurant_id = ? AND shift_id = ? AND status = ?", rid, shiftID, "closed").
 		Scan(&guests).Error; err == nil {
 		out.GuestsCount = guests.N
+	}
+
+	// ─── Dispatch summary (095, central) ────────────────────────────────
+	// Best-effort, как секции выше: у обычного ресторана delivery_relay_orders
+	// за эту смену всегда 0 строк, тогда просто не показываем секцию.
+	{
+		type dispatchRow struct {
+			Status string `gorm:"column:status"`
+			N      int    `gorm:"column:n"`
+		}
+		var dRows []dispatchRow
+		if err := s.r.Raw().WithContext(ctx).Table("delivery_relay_orders").
+			Select("status, COUNT(*) AS n").
+			Where("restaurant_id = ? AND shift_id = ? AND kind = ?", rid, shiftID, "create").
+			Group("status").
+			Scan(&dRows).Error; err == nil && len(dRows) > 0 {
+			ds := &ZReportDispatchSummary{}
+			for _, r := range dRows {
+				ds.Sent += r.N
+				switch r.Status {
+				case "delivered":
+					ds.Delivered = r.N
+				case "failed":
+					ds.Failed = r.N
+				}
+			}
+			var closed struct {
+				N       int             `gorm:"column:n"`
+				Revenue decimal.Decimal `gorm:"column:revenue"`
+			}
+			if err := s.r.Raw().WithContext(ctx).Table("delivery_relay_orders AS dro").
+				Select("COUNT(*) AS n, COALESCE(SUM(o.total_with_service), 0) AS revenue").
+				Joins("JOIN orders o ON o.id = dro.local_order_id").
+				Where("dro.restaurant_id = ? AND dro.shift_id = ? AND dro.kind = ? AND dro.status = ? AND o.status IN ?",
+					rid, shiftID, "create", "delivered", []string{"closed", "refunded"}).
+				Scan(&closed).Error; err == nil {
+				ds.Closed = closed.N
+				ds.Revenue = decimal.Normalize(closed.Revenue)
+			}
+			out.DispatchSummary = ds
+		}
 	}
 
 	// ─── Previous shift summary (delta-chip) ───────────────────────────
