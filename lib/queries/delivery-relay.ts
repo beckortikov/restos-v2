@@ -58,6 +58,11 @@ export async function createDeliveryRelayAmend(parentRelayId: string, items: Del
   return { id: (r as { id: string }).id }
 }
 
+export interface DeliveryRelayHistoryLine {
+  name: string
+  qty: string
+}
+
 export interface DeliveryRelayHistoryItem {
   id: string
   targetRestaurantId: string
@@ -70,6 +75,15 @@ export interface DeliveryRelayHistoryItem {
   status: 'pending' | 'delivered' | 'failed'
   error: string | null
   localOrderId: string | null
+  /** Состав ЭТОЙ relay-строки (создания или дозаказа), человеко-читаемые
+   *  имена — как оператор узнаёт, какой это заказ (когда на филиал за смену
+   *  ушло несколько, а телефон/адрес не всегда заполнены). */
+  itemLines: DeliveryRelayHistoryLine[]
+  /** Тот же номер, что видит кассир на филиале и на чеке. */
+  orderNumber: number | null
+  deliveryPhone: string | null
+  deliveryAddress: string | null
+  comment: string | null
   /** Реальный статус заказа (new/open/.../closed/cancelled) — приезжает той
    *  же сетевой репликацией, что и остальная отчётность (не живьём), пусто
    *  пока не долетело синком или заказ ещё не завершён на филиале. */
@@ -91,6 +105,11 @@ export async function fetchDeliveryRelayHistory(limit = 50): Promise<DeliveryRel
     status: r.status as 'pending' | 'delivered' | 'failed',
     error: (r.error as string | null) ?? null,
     localOrderId: (r.local_order_id as string | null) ?? null,
+    itemLines: Array.isArray(r.item_lines) ? (r.item_lines as Record<string, unknown>[]).map(l => ({ name: l.name as string, qty: l.qty as string })) : [],
+    orderNumber: (r.order_number as number | null) ?? null,
+    deliveryPhone: (r.delivery_phone as string | null) ?? null,
+    deliveryAddress: (r.delivery_address as string | null) ?? null,
+    comment: (r.comment as string | null) ?? null,
     orderStatus: (r.order_status as string | null) ?? null,
     orderTotal: (r.order_total as string | null) ?? null,
     createdAt: r.created_at as string,

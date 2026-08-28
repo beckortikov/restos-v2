@@ -5535,6 +5535,16 @@ export interface paths {
                                 error?: string | null;
                                 /** Format: uuid */
                                 local_order_id?: string | null;
+                                /** @description Состав ЭТОЙ relay-строки, человеко-читаемые имена — как оператор узнаёт, какой это заказ. */
+                                item_lines?: {
+                                    name?: string;
+                                    qty?: string;
+                                }[];
+                                /** @description Тот же номер, что видит кассир на филиале и на чеке. */
+                                order_number?: number | null;
+                                delivery_phone?: string | null;
+                                delivery_address?: string | null;
+                                comment?: string | null;
                                 /** @description Реальный статус заказа (new/open/.../closed/cancelled) — пусто, пока не долетело синком или заказ ещё не завершён. */
                                 order_status?: string | null;
                                 order_total?: string | null;

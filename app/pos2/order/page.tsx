@@ -147,7 +147,7 @@ export default function PosV2Order() {
   // позиций к уже отправленному И подтверждённому филиалом (relayId — id
   // исходной create-строки). Филиал/тип уже фиксированы родителем — шапка
   // ниже (JSX) их не переспрашивает, показывает как факт.
-  const [dispatchAmendTarget, setDispatchAmendTarget] = useState<{ relayId: string; branchName: string; orderType: OrderType } | null>(null)
+  const [dispatchAmendTarget, setDispatchAmendTarget] = useState<{ relayId: string; branchName: string; orderType: OrderType; orderNumber: number | null; existingItems: string | null } | null>(null)
   const [dispatchHistoryOpen, setDispatchHistoryOpen] = useState(false)
   const [dispatchHistoryLoading, setDispatchHistoryLoading] = useState(false)
   const [dispatchHistory, setDispatchHistory] = useState<DeliveryRelayHistoryItem[]>([])
@@ -158,7 +158,11 @@ export default function PosV2Order() {
     finally { setDispatchHistoryLoading(false) }
   }
   function startAmend(row: DeliveryRelayHistoryItem) {
-    setDispatchAmendTarget({ relayId: row.id, branchName: row.targetRestaurantName, orderType: row.orderType })
+    // orderNumber/existingItems остаются на виду в шапке ПОСЛЕ закрытия
+    // списка — иначе подтверждение «это тот самый заказ» пропадает, как
+    // только оператор уходит строить корзину дозаказа.
+    const existingItems = row.itemLines.length > 0 ? row.itemLines.map(l => `${l.name} ×${l.qty}`).join(', ') : null
+    setDispatchAmendTarget({ relayId: row.id, branchName: row.targetRestaurantName, orderType: row.orderType, orderNumber: row.orderNumber, existingItems })
     setCart([])
     setDispatchHistoryOpen(false)
   }
@@ -1099,16 +1103,23 @@ export default function PosV2Order() {
         </div>
 
         {dispatchMode && dispatchAmendTarget && (
-          <div className="flex flex-wrap items-center shrink-0" style={{ gap: '0.5rem', padding: 'clamp(0.5rem,0.8vw,0.75rem) var(--pv-gap) 0 0' }}>
-            {/* Филиал/тип уже зафиксированы исходным заказом — не переспрашиваем,
-                показываем как факт. Крестик — выйти из режима дозаказа без отправки. */}
-            <div className="flex items-center gap-1.5 rounded-xl font-semibold" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.8rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
-              <PackagePlus style={{ width: '1em', height: '1em' }} />
-              Дозаказ · {dispatchAmendTarget.branchName} · {ORDER_TYPE_LABELS[dispatchAmendTarget.orderType]}
+          <div className="flex flex-col shrink-0" style={{ gap: '0.35rem', padding: 'clamp(0.5rem,0.8vw,0.75rem) var(--pv-gap) 0 0' }}>
+            <div className="flex flex-wrap items-center" style={{ gap: '0.5rem' }}>
+              {/* Филиал/тип уже зафиксированы исходным заказом — не переспрашиваем,
+                  показываем как факт. Номер — тот же, что на филиале и на
+                  чеке, чтобы не перепутать с другим заказом на тот же филиал.
+                  Крестик — выйти из режима дозаказа без отправки. */}
+              <div className="flex items-center gap-1.5 rounded-xl font-semibold" style={{ background: 'var(--pv-brand-soft)', color: 'var(--pv-brand)', padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.8rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}>
+                <PackagePlus style={{ width: '1em', height: '1em' }} />
+                Дозаказ{dispatchAmendTarget.orderNumber != null ? ` · №${dispatchAmendTarget.orderNumber}` : ''} · {dispatchAmendTarget.branchName} · {ORDER_TYPE_LABELS[dispatchAmendTarget.orderType]}
+              </div>
+              <button onClick={() => setDispatchAmendTarget(null)} className="rounded-xl font-semibold" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)' }}>
+                Отменить
+              </button>
             </div>
-            <button onClick={() => setDispatchAmendTarget(null)} className="rounded-xl font-semibold" style={{ padding: 'clamp(0.45rem,0.7vw,0.65rem) clamp(0.7rem,1vw,0.9rem)', fontSize: 'var(--pv-ctl)', background: 'var(--pv-card)', border: '1px solid var(--pv-border)', color: 'var(--pv-text-2)' }}>
-              Отменить
-            </button>
+            {dispatchAmendTarget.existingItems && (
+              <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>Уже в заказе: {dispatchAmendTarget.existingItems}</div>
+            )}
           </div>
         )}
         {dispatchMode && !dispatchAmendTarget && (
@@ -1754,15 +1765,31 @@ export default function PosV2Order() {
                       : row.orderStatus === 'cancelled' ? 'Отменён'
                       : row.orderStatus ? 'Ещё открыт'
                       : row.status === 'delivered' ? 'Ожидание синка' : '—'
+                    // Как оператор узнаёт «какой это заказ»: номер (тот же,
+                    // что на филиале и на чеке) + состав + телефон — за
+                    // смену на один филиал может уйти несколько заказов,
+                    // ветка/тип одни и те же не различают их.
+                    const itemsSummary = row.itemLines.length > 0
+                      ? row.itemLines.map(l => `${l.name} ×${l.qty}`).join(', ')
+                      : null
                     return (
                       <div key={row.id} className="rounded-xl border" style={{ background: 'var(--pv-card)', borderColor: 'var(--pv-border)', padding: 'clamp(0.6rem,0.95vw,0.85rem)' }}>
                         <div className="flex items-baseline justify-between gap-2" style={{ marginBottom: '0.25rem' }}>
                           <span className="font-bold truncate" style={{ color: 'var(--pv-text)', fontSize: 'var(--pv-ctl)' }}>
                             {row.kind === 'amend' && <PackagePlus style={{ width: '0.9em', height: '0.9em', display: 'inline', marginRight: '0.3em', verticalAlign: '-0.1em' }} />}
+                            {row.orderNumber != null && `№${row.orderNumber} · `}
                             {row.targetRestaurantName || 'Филиал'} · {ORDER_TYPE_LABELS[row.orderType]}{row.kind === 'amend' ? ' · дозаказ' : ''}
                           </span>
                           <span className="rounded-full font-semibold shrink-0" style={{ background: tb.bg, color: tb.c, padding: '0.1rem 0.55rem', fontSize: 'calc(var(--pv-ctl) - 0.2rem)' }}>{tb.l}</span>
                         </div>
+                        {itemsSummary && (
+                          <div className="truncate" style={{ color: 'var(--pv-text-2)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)', marginBottom: '0.2rem' }}>{itemsSummary}</div>
+                        )}
+                        {(row.deliveryPhone || row.deliveryAddress) && (
+                          <div className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.15rem)', marginBottom: '0.2rem' }}>
+                            {[row.deliveryPhone, row.deliveryAddress].filter(Boolean).join(' · ')}
+                          </div>
+                        )}
                         <div className="flex items-baseline justify-between gap-2">
                           <span className="truncate" style={{ color: 'var(--pv-text-3)', fontSize: 'calc(var(--pv-ctl) - 0.1rem)' }}>
                             {orderLabel} · {new Date(row.createdAt).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })}

@@ -2119,6 +2119,18 @@ paths:
                         status: { type: string, enum: [pending, delivered, failed], description: "Статус ТРАНСПОРТА, не заказа." }
                         error: { type: string, nullable: true }
                         local_order_id: { type: string, format: uuid, nullable: true }
+                        item_lines:
+                          type: array
+                          description: "Состав ЭТОЙ relay-строки, человеко-читаемые имена — как оператор узнаёт, какой это заказ."
+                          items:
+                            type: object
+                            properties:
+                              name: { type: string }
+                              qty: { type: string }
+                        order_number: { type: integer, nullable: true, description: "Тот же номер, что видит кассир на филиале и на чеке." }
+                        delivery_phone: { type: string, nullable: true }
+                        delivery_address: { type: string, nullable: true }
+                        comment: { type: string, nullable: true }
                         order_status: { type: string, nullable: true, description: "Реальный статус заказа (new/open/.../closed/cancelled) — пусто, пока не долетело синком или заказ ещё не завершён." }
                         order_total: { type: string, nullable: true }
                         created_at: { type: string, format: date-time }

@@ -264,10 +264,27 @@ func (s *DeliveryRelayService) CreateAmend(ctx context.Context, parentID string,
 	return row, nil
 }
 
+// DeliveryRelayHistoryLine — позиция для отображения в истории (человеко-
+// читаемое имя вместо голого network_menu_item_id — оператор должен узнать
+// заказ по составу, не по uuid).
+type DeliveryRelayHistoryLine struct {
+	Name string `json:"name"`
+	Qty  string `json:"qty"`
+}
+
 // DeliveryRelayHistoryItem — одна строка истории диспетчеризации (central).
 type DeliveryRelayHistoryItem struct {
 	models.DeliveryRelayOrder
 	TargetRestaurantName string `json:"target_restaurant_name"`
+	// ItemLines — состав ЭТОЙ relay-строки (создания или дозаказа) с
+	// человеко-читаемыми именами — единственный надёжный способ для
+	// оператора узнать «какой это заказ», когда на один филиал за смену
+	// уходит несколько (телефон/адрес не всегда сохраняются, а название
+	// блюда клиент обычно помнит и называет сам).
+	ItemLines []DeliveryRelayHistoryLine `json:"item_lines"`
+	// OrderNumber — человеко-читаемый номер заказа (order_number), тот же,
+	// что видит кассир на филиале и на чеке — надёжнее и короче, чем uuid.
+	OrderNumber *int `json:"order_number,omitempty"`
 	// OrderStatus/OrderTotal — РЕАЛЬНЫЙ статус материализованного заказа
 	// (new|open|cooking|ready|served|bill_requested|closed|cancelled), не
 	// путать с DeliveryRelayOrder.Status (pending|delivered|failed — это
@@ -312,7 +329,10 @@ func (s *DeliveryRelayService) ListHistory(ctx context.Context, limit int) ([]De
 
 	branchIDs := make([]string, 0, len(rows))
 	orderIDs := make([]string, 0, len(rows))
+	masterIDs := make([]string, 0, len(rows))
 	seenBranch := map[string]bool{}
+	seenMaster := map[string]bool{}
+	parsedItems := make(map[string][]models.DeliveryRelayItem, len(rows))
 	for _, r := range rows {
 		if !seenBranch[r.TargetRestaurantID] {
 			seenBranch[r.TargetRestaurantID] = true
@@ -320,6 +340,17 @@ func (s *DeliveryRelayService) ListHistory(ctx context.Context, limit int) ([]De
 		}
 		if r.LocalOrderID != nil {
 			orderIDs = append(orderIDs, *r.LocalOrderID)
+		}
+		var items []models.DeliveryRelayItem
+		// Битый/пустой snapshot одной строки не должен ронять всю историю —
+		// просто останется без состава (ItemLines пуст).
+		_ = json.Unmarshal(r.Items, &items)
+		parsedItems[r.ID] = items
+		for _, it := range items {
+			if !seenMaster[it.NetworkMenuItemID] {
+				seenMaster[it.NetworkMenuItemID] = true
+				masterIDs = append(masterIDs, it.NetworkMenuItemID)
+			}
 		}
 	}
 
@@ -332,8 +363,23 @@ func (s *DeliveryRelayService) ListHistory(ctx context.Context, limit int) ([]De
 		nameByID[b.ID] = b.Name
 	}
 
+	// Имена позиций — по network_menu_item_id, тем же мастер-меню сети,
+	// которым Create/CreateAmend валидировали заказ. Оператор должен узнать
+	// заказ по составу (телефон/адрес не всегда заполнены), не по uuid.
+	masterNameByID := make(map[string]string, len(masterIDs))
+	if len(masterIDs) > 0 {
+		var masters []models.NetworkMenuItem
+		if err := s.r.Raw().WithContext(ctx).Where("id IN ?", masterIDs).Find(&masters).Error; err != nil {
+			return nil, err
+		}
+		for _, m := range masters {
+			masterNameByID[m.ID] = m.Name
+		}
+	}
+
 	statusByOrderID := make(map[string]string, len(orderIDs))
 	totalByOrderID := make(map[string]string, len(orderIDs))
+	numberByOrderID := make(map[string]int, len(orderIDs))
 	if len(orderIDs) > 0 {
 		var orders []models.Order
 		if err := s.r.Raw().WithContext(ctx).
@@ -346,17 +392,32 @@ func (s *DeliveryRelayService) ListHistory(ctx context.Context, limit int) ([]De
 				statusByOrderID[o.ID] = *o.Status
 			}
 			totalByOrderID[o.ID] = o.TotalWithService.String()
+			numberByOrderID[o.ID] = o.OrderNumber
 		}
 	}
 
 	for _, r := range rows {
 		item := DeliveryRelayHistoryItem{DeliveryRelayOrder: r, TargetRestaurantName: nameByID[r.TargetRestaurantID]}
+		item.ItemLines = make([]DeliveryRelayHistoryLine, 0, len(parsedItems[r.ID]))
+		for _, it := range parsedItems[r.ID] {
+			name := masterNameByID[it.NetworkMenuItemID]
+			if name == "" {
+				name = "?"
+			}
+			if len(it.VariantLabels) > 0 {
+				name += " (" + strings.Join(it.VariantLabels, ", ") + ")"
+			}
+			item.ItemLines = append(item.ItemLines, DeliveryRelayHistoryLine{Name: name, Qty: it.Qty})
+		}
 		if r.LocalOrderID != nil {
 			if st, ok := statusByOrderID[*r.LocalOrderID]; ok {
 				item.OrderStatus = &st
 			}
 			if tot, ok := totalByOrderID[*r.LocalOrderID]; ok {
 				item.OrderTotal = &tot
+			}
+			if n, ok := numberByOrderID[*r.LocalOrderID]; ok {
+				item.OrderNumber = &n
 			}
 		}
 		out = append(out, item)
