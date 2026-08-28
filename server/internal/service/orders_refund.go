@@ -311,18 +311,20 @@ func (s *OrdersService) ReprintReceipt(ctx context.Context, orderID string) (*Pr
 		}
 
 		in := escpos.ReceiptInput{
-			RestaurantName: rest.Name,
-			FastFood:       isFastFood(rest),
-			OrderNumber:    order.OrderNumber,
-			OpenedAt:       order.CreatedAt,
-			ClosedAt:       closedAt,
-			PaymentMethod:  pm,
-			Subtotal:       order.Total,
-			DiscountAmount: order.DiscountAmount,
-			ServiceAmount:  order.ServiceAmount,
-			TipAmount:      order.TipAmount,
-			Total:          order.TotalWithService,
-			IsReprint:      true,
+			RestaurantName:  rest.Name,
+			FastFood:        isFastFood(rest),
+			OrderNumber:     order.OrderNumber,
+			OpenedAt:        order.CreatedAt,
+			ClosedAt:        closedAt,
+			PaymentMethod:   pm,
+			Subtotal:        order.Total,
+			DiscountAmount:  order.DiscountAmount,
+			ServiceAmount:   order.ServiceAmount,
+			TipAmount:       order.TipAmount,
+			Total:           order.TotalWithService,
+			IsReprint:       true,
+			DeliveryPhone:   strOrEmpty(order.DeliveryPhone),
+			DeliveryAddress: strOrEmpty(order.DeliveryAddress),
 		}
 		if rest.Address != nil {
 			in.RestaurantAddr = *rest.Address
