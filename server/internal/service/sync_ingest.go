@@ -394,7 +394,31 @@ func (s *SyncService) applyNetworkMenu(ctx context.Context, e SyncEntry, branchI
 				}).Error; err != nil {
 				return err
 			}
-			return recordMenuItemsSync(tx, []string{existing.ID})
+			// Варианты (parent_id = existing.ID) наследуют category/station/unit
+			// от родителя, но ТОЛЬКО при генерации (menu_variants.go createVariant,
+			// вызывается один раз при первом СОЗДАНИИ варианта) — сюда, на
+			// повторный apply при уже существующих вариантах, они не заходят.
+			// Без каскада здесь вариант навсегда застревает на цехе/категории на
+			// момент своего создания, даже когда родитель (и, значит, мастер сети)
+			// меняется позже — найдено вживую: central сменил «Шаурма»/«Гиро» с
+			// hot_kitchen на cold_kitchen, родитель на филиалах обновился, а
+			// варианты (Маленький/Средний/Большой) — нет, тикеты продолжали
+			// печататься на горячем цехе. Имя НЕ каскадим — у вариантов своя
+			// схема имени («База + лейблы»), её ведёт recomputeVariants.
+			var variantIDs []string
+			if err := tx.Model(&models.MenuItem{}).Where("parent_id = ?", existing.ID).
+				Pluck("id", &variantIDs).Error; err != nil {
+				return err
+			}
+			if len(variantIDs) > 0 {
+				if err := tx.Model(&models.MenuItem{}).Where("parent_id = ?", existing.ID).
+					Updates(map[string]any{
+						"category": m.Category, "station": m.Station, "unit": m.Unit,
+					}).Error; err != nil {
+					return err
+				}
+			}
+			return recordMenuItemsSync(tx, append([]string{existing.ID}, variantIDs...))
 		}
 		return nil
 	})

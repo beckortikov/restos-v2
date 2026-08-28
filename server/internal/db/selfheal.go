@@ -186,6 +186,21 @@ var backfillSelfHealStmts = []string{
 	 FROM warehouses w
 	 WHERE w.restaurant_id = i.restaurant_id AND w.kind = 'products'
 	   AND i.warehouse_id IS NULL`,
+	// Вариант (Размер/Вкус) наследует category/station/unit от родителя ТОЛЬКО
+	// при генерации (menu_variants.go createVariant, один раз при создании) —
+	// код, правящий эти поля на родителе (PatchItem, applyNetworkMenu), их не
+	// каскадил, вариант навсегда застревал на цехе на момент создания. Найдено
+	// вживую: central сменил «Шаурма»/«Гиро» на Холодный цех, кухонные тикеты
+	// на размерные варианты продолжали печататься на горячем цехе — код-фикс
+	// (menu_write.go PatchItem + sync_ingest.go applyNetworkMenu) остановил
+	// НОВЫЙ дрейф, но не чинит уже накопленный. IS DISTINCT FROM — сам себе
+	// guard: повторный boot ничего не находит и не трогает.
+	`UPDATE menu_items v SET station = p.station, category = p.category, unit = p.unit, updated_at = now()
+	 FROM menu_items p
+	 WHERE v.parent_id = p.id AND v.is_deleted = false AND p.is_deleted = false
+	   AND (v.station IS DISTINCT FROM p.station
+	        OR v.category IS DISTINCT FROM p.category
+	        OR v.unit IS DISTINCT FROM p.unit)`,
 }
 
 // EnsureCriticalSchema принудительно до-гарантирует критичную (drift-опасную)

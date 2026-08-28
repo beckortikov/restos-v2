@@ -341,6 +341,46 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 			return nil, err
 		}
 	}
+	// Категория/цех/ед.изм. вариант наследует от родителя ТОЛЬКО при генерации
+	// (menu_variants.go createVariant, один раз при создании) — правка родителя
+	// здесь их не каскадила: вариант навсегда застревал на цехе на момент
+	// создания, даже если владелец переносит родителя в другой цех позже.
+	// Найдено вживую: central сменил «Шаурма»/«Гиро» на Холодный цех, тикеты
+	// на варианты (Маленький/Средний/Большой) продолжали печататься на
+	// горячем. Тот же разрыв чинится симметрично для central→филиал пути в
+	// applyNetworkMenu (sync_ingest.go).
+	var variantIDs []string
+	if mi.ParentID == nil {
+		variantUpdates := map[string]any{}
+		if in.Category != nil {
+			variantUpdates["category"] = *in.Category
+		}
+		if in.Station != nil {
+			variantUpdates["station"] = *in.Station
+		}
+		if in.Unit != nil {
+			variantUpdates["unit"] = *in.Unit
+		}
+		if len(variantUpdates) > 0 {
+			variantUpdates["updated_at"] = time.Now().UTC()
+			// Каждый вызов — СВЕЖИЙ ForTenant(): переиспользование ОДНОГО
+			// scoped для Pluck+Updates склеивает условия и роняет запрос
+			// ("table name menu_items specified more than once"), см.
+			// SoftDeleteItem выше и [[gorm-scoped-double-model-call-bug]].
+			scopedPluck, _ := s.r.ForTenant(ctx)
+			if err := scopedPluck.Model(&models.MenuItem{}).Where("parent_id = ?", id).
+				Pluck("id", &variantIDs).Error; err != nil {
+				return nil, err
+			}
+			if len(variantIDs) > 0 {
+				scopedVariants, _ := s.r.ForTenant(ctx)
+				if err := scopedVariants.Model(&models.MenuItem{}).Where("parent_id = ?", id).
+					Updates(variantUpdates).Error; err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
 	// Перечитываем (через свежий scope) чтобы получить актуальные default-fields.
 	scoped3, _ := s.r.ForTenant(ctx)
 	var updated models.MenuItem
@@ -352,7 +392,7 @@ func (s *MenuService) PatchItem(ctx context.Context, id string, in MenuItemInput
 	// сама открывает СВОЮ транзакцию и должна увидеть уже ЗАКОММИЧЕННОЕ новое
 	// имя (иначе варианты переименовались бы по старому имени) — эта функция
 	// изначально многошаговая, не атомарная как единое целое.
-	if err := recordMenuItemsSync(scoped3, []string{id}); err != nil {
+	if err := recordMenuItemsSync(scoped3, append([]string{id}, variantIDs...)); err != nil {
 		return nil, err
 	}
 	return &updated, nil
