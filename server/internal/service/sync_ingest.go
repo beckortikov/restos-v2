@@ -819,11 +819,37 @@ func (s *SyncService) applyMoneyTransfer(ctx context.Context, e SyncEntry, updat
 	conflict := onConflict(updateAll)
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		tx := tr.Raw().WithContext(ctx).Session(&gorm.Session{SkipHooks: true})
+		if updateAll {
+			// received — необратимый терминал (central уже принял этот
+			// перевод, вручную Receive() либо сам через applyAutoReceiveTransfer
+			// ниже). Филиал не знает о приёме и продолжает слать тот же sent,
+			// пока не увидит свой synced_at — ретрай ЭТОЙ же дельты не должен
+			// откатывать статус обратно (иначе конфликт ниже — UpdateAll, не
+			// DoNothing — САМ не идемпотентен) и задваивать зачисление.
+			// Поймано интеграционным тестом TestNetworkPullTransferAutoReceive:
+			// без этой короткой развязки ДО Create, наивный UpdateAll успевал
+			// перезаписать статус обратно в sent между двумя ретраями, и
+			// следующий ретрай видел «before=sent» и зачислял повторно.
+			var before models.MoneyTransfer
+			if tx.Where("id = ?", t.ID).First(&before).Error == nil && before.Status == "received" {
+				return nil
+			}
+		}
+
 		res := tx.Clauses(conflict).Create(&t)
 		if res.Error != nil {
 			return res.Error
 		}
 		if updateAll {
+			// Авто-зачисление (владелец, 2026-08-28: «мы заранее знаем куда
+			// перевести деньги... отдельно списать не надо будет потом») —
+			// central сам себе и запросчик, и получатель: если для ЭТОГО
+			// запроса заранее выбран СВОЙ счёт (SuggestedToAccountID, задан в
+			// RequestMoneyTransfer) и документ только что долетел обратно
+			// статусом sent — принимаем сами, без ручного «Принять».
+			if t.Status == "sent" && t.SuggestedToAccountID != nil && *t.SuggestedToAccountID != "" {
+				return applyAutoReceiveTransfer(tr, ctx, &t)
+			}
 			return nil
 		}
 		if err := applyStatusEcho(tx, "money_transfers", t.ID, t.Status, t.ReceivedAt, t.ReceivedBy); err != nil {
@@ -895,6 +921,82 @@ func applyRequestedTransfer(tr *repo.Repo, ctx context.Context, t *models.MoneyT
 
 	t.Status = "sent"
 	t.SentAt = &now
+	t.UpdatedAt = now
+	if err := tx.Save(t).Error; err != nil {
+		return err
+	}
+	return synclog.Record(tx, synclog.Entry{
+		Entity: "money_transfers", RowID: t.ID, Op: "update",
+		RestaurantID: &ridStr, AccountID: t.AccountID, Payload: t,
+	})
+}
+
+// applyAutoReceiveTransfer — авто-зачисление на central (095/product ask
+// 2026-08-28), симметрично applyRequestedTransfer (та — авто-списание на
+// филиале). Срабатывает, когда central сам запросил списание (Ф-Ц,
+// RequestMoneyTransfer) С ЗАРАНЕЕ выбранным СВОИМ счётом-назначением
+// (SuggestedToAccountID) — раз central сам себе и запросчик, и получатель,
+// спрашивать «на какой счёт принять» у него уже нечего, это решено заранее.
+// Обычный ручной Receive() (чужой перевод, отправитель — другая сторона)
+// этой веткой не затрагивается вообще: она включается только транзитом
+// через applyMoneyTransfer/updateAll и только когда SuggestedToAccountID
+// задан. t.ToRestaurantID — «я» на этой стороне: central не резолвит себя
+// через tenant.MustRestaurantID(ctx) (ingest этого узла не завязан на
+// пользовательскую сессию central), а берёт свою же identity прямо из
+// документа — она там ровно одна на всю сеть, central всегда один на узел.
+func applyAutoReceiveTransfer(tr *repo.Repo, ctx context.Context, t *models.MoneyTransfer) error {
+	if t.ToRestaurantID == nil || t.SuggestedToAccountID == nil || *t.SuggestedToAccountID == "" {
+		return nil
+	}
+	tx := tr.Raw().WithContext(ctx)
+
+	var acc models.FinancialAccount
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("restaurant_id = ? AND id = ?", *t.ToRestaurantID, *t.SuggestedToAccountID).
+		First(&acc).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Счёт с момента запроса отключили/удалили — не роняем синк всего
+			// батча, просто оставляем документ в sent: обычное ручное
+			// «Принять» в «Переводах в сети» всё ещё доступно как fallback.
+			return nil
+		}
+		return err
+	}
+	if !acc.IsEnabled {
+		return nil // тот же инвариант, что ручной Receive() — на отключённый счёт не зачисляем
+	}
+
+	now := time.Now().UTC()
+	if err := tx.Model(&acc).Updates(map[string]any{
+		"balance":    decimal.Normalize(decimal.Add(acc.Balance, t.Amount)),
+		"updated_at": now,
+	}).Error; err != nil {
+		return err
+	}
+
+	fromName := ""
+	if t.FromRestaurantID != nil {
+		var fr models.Restaurant
+		if err := tx.Select("name").Where("id = ?", *t.FromRestaurantID).First(&fr).Error; err == nil {
+			fromName = fr.Name
+		}
+	}
+	inType, category, activity, isAuto := "in", CategoryNetworkTransfer, "financial", true
+	date := now.Format("2006-01-02")
+	ridStr := *t.ToRestaurantID
+	op := &models.FinancialOperation{
+		ID: uuid.NewString(), Type: &inType, Amount: t.Amount, Category: &category,
+		AccountID: &acc.ID, AccountName: acc.Name, Activity: &activity, Date: &date,
+		Description: t.Note, Counterparty: &fromName, IsAuto: &isAuto,
+		RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := tx.Create(op).Error; err != nil {
+		return err
+	}
+
+	t.Status = "received"
+	t.ToAccountID = &acc.ID
+	t.ReceivedAt = &now
 	t.UpdatedAt = now
 	if err := tx.Save(t).Error; err != nil {
 		return err

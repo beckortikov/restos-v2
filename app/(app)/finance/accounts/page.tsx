@@ -42,6 +42,9 @@ export default function AccountsPage() {
   const [pullDialogFor, setPullDialogFor] = useState<NetworkAccountRow | null>(null)
   const [pullAmount, setPullAmount] = useState(0)
   const [pullNote, setPullNote] = useState('')
+  // Заранее известный СВОЙ счёт-назначение — если выбран, приём при возврате
+  // документа (status sent) происходит автоматически, без ручного «Принять».
+  const [pullToAccountId, setPullToAccountId] = useState('')
   const [pulling, setPulling] = useState(false)
   // Ф-С2: central видит кассы филиалов (реплики «central видит всё») и может
   // перевести деньги прямо на конкретный счёт филиала из этого же диалога.
@@ -287,14 +290,18 @@ export default function AccountsPage() {
         fromAccountId: pullDialogFor.id,
         amount: pullAmount,
         note: pullNote || undefined,
+        toAccountId: pullToAccountId || undefined,
       })
       toast.success(
         `Запрос на списание ${pullAmount.toLocaleString()} с «${pullDialogFor.branchName}: ${pullDialogFor.name ?? ''}» отправлен — ` +
-        `спишется само, когда филиал получит его при синхронизации.`,
+        (pullToAccountId
+          ? `спишется само и зачислится на выбранный счёт, когда филиал получит его при синхронизации.`
+          : `спишется само, когда филиал получит его при синхронизации.`),
       )
       setPullDialogFor(null)
       setPullAmount(0)
       setPullNote('')
+      setPullToAccountId('')
     } catch (e) {
       toast.error(humanizeError(e, 'Ошибка при запросе списания'))
     } finally {
@@ -461,7 +468,7 @@ export default function AccountsPage() {
                   {canDo('finance.manage') && (
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => { setPullDialogFor(acc); setPullAmount(0); setPullNote('') }}
+                        onClick={() => { setPullDialogFor(acc); setPullAmount(0); setPullNote(''); setPullToAccountId('') }}
                         title={`Списать со счёта филиала «${acc.branchName}» — спишется само, без участия филиала`}
                         className="inline-flex items-center gap-1 rounded-lg border border-border px-2 py-1 text-[11px] font-medium hover:bg-muted transition-colors"
                       >
@@ -918,6 +925,21 @@ export default function AccountsPage() {
                 />
               </div>
               <div className="space-y-1.5">
+                <label className="text-sm font-medium text-foreground">На свой счёт (необязательно)</label>
+                <select
+                  value={pullToAccountId}
+                  onChange={(e) => setPullToAccountId(e.target.value)}
+                  className="w-full px-3 py-2 text-sm bg-card border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                >
+                  <option value="">Не выбирать — принять вручную потом</option>
+                  {selectableAccounts(accounts).map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} — {formatCurrency(a.balance)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
                 <label className="text-sm font-medium text-foreground">Комментарий</label>
                 <input
                   type="text"
@@ -931,6 +953,9 @@ export default function AccountsPage() {
                 Деньги спишутся не сейчас, а сами, когда касса филиала получит этот
                 запрос при синхронизации — подтверждать там некому и не нужно. Здесь,
                 на счету, обновится с задержкой в одну-две минуты.
+                {pullToAccountId
+                  ? ' Счёт-назначение уже выбран — зачисление тоже произойдёт само, отдельно принимать не нужно.'
+                  : ' Приём на свой счёт останется вручную в «Переводах в сети», если не выбрать счёт выше.'}
               </p>
             </div>
           )}

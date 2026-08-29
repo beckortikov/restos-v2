@@ -3159,8 +3159,11 @@ export interface paths {
          *     где у филиала может не быть своего управляющего. Ничего не списывает
          *     и не зачисляет здесь: создаётся money_transfer в статусе requested,
          *     реальное списание произойдёт САМО на филиале при получении документа
-         *     (см. схему MoneyTransfer, поле status). Центр затем принимает его
-         *     обычным POST /money/transfers/{id}/receive, когда статус станет sent.
+         *     (см. схему MoneyTransfer, поле status). Если передан to_account_id —
+         *     свой (central) счёт-назначение уже известен заранее, и приём тоже
+         *     происходит АВТОМАТИЧЕСКИ, как только списание долетает обратно
+         *     статусом sent — отдельный POST /money/transfers/{id}/receive не
+         *     нужен. Без to_account_id — как раньше, обычное ручное «Принять».
          *     Право finance.manage, только владелец центрального узла.
          */
         post: {
@@ -3185,6 +3188,11 @@ export interface paths {
                         from_account_id: string;
                         amount: components["schemas"]["Decimal"];
                         note?: string;
+                        /**
+                         * Format: uuid
+                         * @description Свой счёт central-назначения — если задан
+                         */
+                        to_account_id?: string;
                     };
                 };
             };

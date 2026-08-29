@@ -471,6 +471,16 @@ type RequestMoneyTransferInput struct {
 	FromAccountID string  `json:"from_account_id"`
 	Amount        string  `json:"amount"`
 	Note          *string `json:"note,omitempty"`
+	// ToAccountID — СВОЙ (central) счёт-назначение, если известен заранее
+	// (владелец, 2026-08-28: «мы заранее знаем куда перевести деньги...
+	// отдельно списать не надо будет потом»). В отличие от Create()'овского
+	// SuggestedToAccountID (для ДРУГОЙ стороны, только подсказка, приём всё
+	// равно ручной) — здесь central сам себе и запросчик, и получатель,
+	// поэтому счёт применяется АВТОМАТИЧЕСКИ, без отдельного «Принять»: см.
+	// applyAutoReceiveTransfer в sync_ingest.go, срабатывает когда запрошенное
+	// списание долетает обратно статусом sent. Пусто → как раньше, обычное
+	// ручное «Принять» в «Переводах в сети».
+	ToAccountID *string `json:"to_account_id,omitempty"`
 }
 
 // RequestMoneyTransfer заводит запрос на списание со счёта филиала. Ничего не
@@ -520,6 +530,27 @@ func (s *NetworkService) RequestMoneyTransfer(ctx context.Context, in RequestMon
 		return nil, err
 	}
 
+	// ToAccountID — СВОЙ счёт central, обязан реально принадлежать ЕМУ (me),
+	// не филиалу: иначе applyAutoReceiveTransfer на возврате sent найдёт чужой
+	// счёт и либо не сработает (др. restaurant_id), либо, того хуже, спутает
+	// узлы, если бы id случайно совпал (uuid — не совпадёт, но проверка дешёвая).
+	if in.ToAccountID != nil && *in.ToAccountID != "" {
+		var toAcc models.FinancialAccount
+		if err := s.r.Raw().WithContext(ctx).
+			Where("id = ? AND restaurant_id = ?", *in.ToAccountID, me).
+			First(&toAcc).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, apperrors.Wrap("VALIDATION", "счёт-назначение не найден у central", nil)
+			}
+			return nil, err
+		}
+		if !toAcc.IsEnabled {
+			return nil, apperrors.Wrap("VALIDATION", "счёт-назначение отключён", nil)
+		}
+	} else {
+		in.ToAccountID = nil
+	}
+
 	actor, _ := audit.ActorFromContext(ctx)
 	now := time.Now().UTC()
 	transferID := uuid.NewString()
@@ -532,19 +563,20 @@ func (s *NetworkService) RequestMoneyTransfer(ctx context.Context, in RequestMon
 		num := int(cnt) + 1
 
 		t := &models.MoneyTransfer{
-			ID:               transferID,
-			AccountID:        &account,
-			FromRestaurantID: &branchID,
-			ToRestaurantID:   &me,
-			TransferNumber:   &num,
-			Amount:           amount,
-			Status:           moneyTransferStatusRequested,
-			Note:             in.Note,
-			FromAccountID:    &acc.ID,
-			FromAccountName:  acc.Name,
-			CreatedBy:        &actor.UserID,
-			CreatedAt:        now,
-			UpdatedAt:        now,
+			ID:                   transferID,
+			AccountID:            &account,
+			FromRestaurantID:     &branchID,
+			ToRestaurantID:       &me,
+			TransferNumber:       &num,
+			Amount:               amount,
+			Status:               moneyTransferStatusRequested,
+			Note:                 in.Note,
+			FromAccountID:        &acc.ID,
+			FromAccountName:      acc.Name,
+			SuggestedToAccountID: in.ToAccountID,
+			CreatedBy:            &actor.UserID,
+			CreatedAt:            now,
+			UpdatedAt:            now,
 		}
 		if err := tx.Create(t).Error; err != nil {
 			return err
