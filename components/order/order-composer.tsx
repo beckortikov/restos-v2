@@ -394,6 +394,11 @@ export function OrderComposer(props: OrderComposerProps) {
   // Multi-tab state ---------------------------------------------------------
   const [openTabs, setOpenTabs] = useState<TabInfo[]>([])
   const [selectedExistingOrderId, setSelectedExistingOrderId] = useState<string | null>(initialExistingOrderId ?? null)
+  // Зал-заказ без стола (напр. диспетчеризация с central — своей вкладки для
+  // этого случая нет, показываем как «с собой») — эффект ниже фильтрует
+  // такаут/доставку строго по o.type===orderType и обычным списком его не
+  // найдёт. Подмешиваем явно закреплённый по клику из списка заказов.
+  const [pinnedOrder, setPinnedOrder] = useState<Order | null>(null)
 
   // Inline order actions: открываем существующий OrderActionsDialog поверх
   // POS, чтобы кассир мог закрыть/оплатить заказ не уходя со страницы.
@@ -444,6 +449,7 @@ export function OrderComposer(props: OrderComposerProps) {
 
     // Hall mode — открытые tabs стола.
     if (orderType === 'hall') {
+      setPinnedOrder(null)
       if (!selectedTableId) {
         setOpenTabs([]); setSelectedExistingOrderId(null); setPendingTabLabel('')
         return
@@ -498,6 +504,12 @@ export function OrderComposer(props: OrderComposerProps) {
         const matches = list
           .filter(o => o.type === orderType && o.status !== 'done' && o.status !== 'cancelled')
           .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()) // свежие сверху
+        // Закреплённый зал-заказ без стола реального типа orderType не имеет
+        // — фильтр выше его не находит; подставляем явно, если ещё открыт.
+        if (pinnedOrder && pinnedOrder.status !== 'done' && pinnedOrder.status !== 'cancelled' &&
+          !matches.some(o => o.id === pinnedOrder.id)) {
+          matches.unshift(pinnedOrder)
+        }
         const tabs: TabInfo[] = matches.map(o => ({ id: o.id, tabLabel: o.tabLabel, total: o.total, status: o.status, items: o.items, order: o }))
         setOpenTabs(tabs)
         // Если ранее выбранный заказ закрылся/исчез — снять выбор.
@@ -508,10 +520,11 @@ export function OrderComposer(props: OrderComposerProps) {
       return () => { cancelled = true }
     }
 
+    setPinnedOrder(null)
     setOpenTabs([])
     setSelectedExistingOrderId(null)
     return () => { cancelled = true }
-  }, [orderType, selectedTableId, tables, isAddMode, forceNewOrder, initialExistingOrderId])
+  }, [orderType, selectedTableId, tables, isAddMode, forceNewOrder, initialExistingOrderId, pinnedOrder])
 
   const existingOrderId = isAddMode
     ? (props as Extract<OrderComposerProps, { mode: 'add' }>).orderId
@@ -2528,6 +2541,14 @@ export function OrderComposer(props: OrderComposerProps) {
                           } else if (o.type === 'takeaway' || o.type === 'delivery') {
                             setOrderType(o.type)
                             setSelectedTableId('')
+                            setSelectedExistingOrderId(o.id)
+                          } else {
+                            // Зал-заказ без стола (напр. central-диспетчеризация) —
+                            // своей вкладки нет: показываем как «с собой», закрепляя
+                            // явно (см. pinnedOrder), иначе такаут-фильтр его не найдёт.
+                            setOrderType('takeaway')
+                            setSelectedTableId('')
+                            setPinnedOrder(o)
                             setSelectedExistingOrderId(o.id)
                           }
                           setShowTablePicker(false)

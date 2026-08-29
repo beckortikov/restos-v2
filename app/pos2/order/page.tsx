@@ -981,6 +981,14 @@ export default function PosV2Order() {
     if (nextType !== orderType) skipTypeResetRef.current = true
     setOrderType(nextType)
     if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+    else if (o.type !== nextType) {
+      // Реальный тип заказа (напр. диспетчеризация с central — 'hall' без
+      // стола) не совпадает со вкладкой, под которой его тут показываем:
+      // loadQueue отфильтровал бы по НАСТОЯЩЕМУ o.type на бэке и не нашёл бы
+      // его вовсе (сайдбар оставался бы пустым при активном activeGroupId).
+      // Подставляем сам заказ напрямую — так же, как ?order=-диплинк выше.
+      setTableOrders([o]); setActiveGroupId(o.id)
+    }
     else { loadQueue(nextType, o.id) }
   }
   async function doReprintReceipt() {
@@ -1025,6 +1033,11 @@ export default function PosV2Order() {
       if (nextType !== orderType) skipTypeResetRef.current = true
       setOrderType(nextType)
       if (nextType === 'hall' && o.tableId) { setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id]) }
+      else if (o.type !== nextType) {
+        // См. tapOrder — тот же случай (напр. hall-заказ без стола от
+        // central): loadQueue не найдёт его при фильтрации по o.type.
+        setTableOrders([o]); setActiveGroupId(o.id)
+      }
       else { loadQueue(nextType, o.id) }
     } catch (e) { toast.error(`Не удалось: ${humanizeError(e)}`) }
   }
