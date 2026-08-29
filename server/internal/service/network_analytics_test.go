@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/db/models"
@@ -466,6 +467,62 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 		}
 		if out.TotalOrders != 2 || !out.TotalRevenue.Equal(decimal.MustFromString("92")) {
 			t.Errorf("totals: orders=%d revenue=%s", out.TotalOrders, out.TotalRevenue.String())
+		}
+	})
+
+	// Диспетчеризация с central (095), в САМОМ КОНЦЕ — после всех подтестов
+	// выше, которые полагаются на неизменную выручку сети (92) при добавлении
+	// нового заказа фикстура эти суммы сдвинула бы. Заказ на Филиал-1
+	// материализован БЕЗ waiter_id (см. DeliveryPuller.processCreate — actor
+	// "Central (доставка)" без UserID), а created_by_user_id/name в
+	// delivery_relay_orders называют РЕАЛЬНОГО central-пользователя. До фикса
+	// (2026-08-29, жалоба владельца на дубли в аналитике официантов) такой
+	// заказ считался ДВАЖДЫ: строкой «—» на Филиал-1 (основной waiter-
+	// агрегат) И строкой диспетчера на central (отдельный delivery_relay_
+	// orders-агрегат) — задваивая TotalRevenue/TotalOrders сети.
+	t.Run("WaitersNetwork_DispatchNoDoubleCount", func(t *testing.T) {
+		dispatcherID := uuid.NewString()
+		dispatcherName := "Диспетчер Central"
+		o3 := mkOrder(b1)
+		gdb.Exec("UPDATE orders SET total = ?, total_with_service = ? WHERE id = ?", "30", "30", o3)
+		gdb.Create(&models.DeliveryRelayOrder{
+			ID: uuid.NewString(), AccountID: accountID, RestaurantID: centralID, TargetRestaurantID: b1,
+			Kind: "create", Status: "delivered", LocalOrderID: &o3, Items: datatypes.JSON("[]"),
+			CreatedByUserID: &dispatcherID, CreatedByName: &dispatcherName,
+		})
+
+		out, err := svc.WaitersNetwork(ctx, f)
+		if err != nil {
+			t.Fatalf("WaitersNetwork: %v", err)
+		}
+		var dispatcherRow, emptyB1Row *service.NetworkWaiterRow
+		for i := range out.Rows {
+			r := &out.Rows[i]
+			if r.Name == dispatcherName {
+				dispatcherRow = r
+			}
+			if r.RestaurantName == "Филиал-1" && r.WaiterID == "" {
+				emptyB1Row = r
+			}
+		}
+		if dispatcherRow == nil {
+			t.Fatalf("нет строки диспетчера %q: %+v", dispatcherName, out.Rows)
+		}
+		if dispatcherRow.Orders != 1 || !dispatcherRow.Revenue.Equal(decimal.MustFromString("30")) {
+			t.Errorf("строка диспетчера: %+v, want orders=1 revenue=30", dispatcherRow)
+		}
+		if dispatcherRow.RestaurantName != "Центр" {
+			t.Errorf("строка диспетчера RestaurantName = %q, want «Центр» (central, не филиал-получатель)", dispatcherRow.RestaurantName)
+		}
+		if emptyB1Row != nil {
+			t.Errorf("диспетчеризованный заказ задвоен строкой «—» на Филиал-1: %+v", emptyB1Row)
+		}
+		wantTotalRev := decimal.MustFromString("122") // 92 (существующие) + 30 (диспетчер), НЕ 152
+		if !out.TotalRevenue.Equal(wantTotalRev) {
+			t.Errorf("TotalRevenue = %s, want %s (диспетчеризованный заказ не должен считаться дважды)", out.TotalRevenue.String(), wantTotalRev.String())
+		}
+		if out.TotalOrders != 3 {
+			t.Errorf("TotalOrders = %d, want 3 (2 существующих + 1 диспетчеризованный, не 4)", out.TotalOrders)
 		}
 	})
 }

@@ -53,6 +53,21 @@ export async function fetchSyncQueueStats(): Promise<SyncQueueStats> {
   }
 }
 
+// backfillSync — «Отправить историю на central» (ADR-003 Ф6): ставит в
+// очередь ТЕКУЩЕЕ состояние каждой реплицируемой таблицы этого филиала,
+// обычный пушер доставит на следующих циклах. Нужна для данных, заведённых
+// ДО включения синхронизации (или мимо неё — напр. массовый импорт
+// сотрудников, найдено 2026-08-29: central не видел официанта с 88 заказами,
+// пока не отправили историю вручную). Идемпотентна, owner-only на бэке.
+export interface SyncBackfillResult {
+  entities: Record<string, number>
+}
+
+export async function backfillSync(): Promise<SyncBackfillResult> {
+  const r: any = await unwrap(api.POST('/api/v1/sync/backfill', {}))
+  return { entities: r?.entities ?? {} }
+}
+
 // joinNetwork — обменивает код приглашения (ADR-003, продолжение) на central
 // на настоящий sync-токен+account_id и сохраняет всё атомарно на бэке;
 // UI после успеха просто перечитывает fetchSyncSettings().

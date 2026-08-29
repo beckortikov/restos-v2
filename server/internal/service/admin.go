@@ -424,19 +424,32 @@ func (s *UsersService) ValidatePIN(ctx context.Context, restaurantID, pin string
 // Hard delete опасен: order.waiter_id ссылается через FK без cascade
 // в legacy схеме. Эта семантика согласована с frontend.
 func (s *UsersService) Delete(ctx context.Context, id string) error {
-	scoped, err := s.r.ForTenant(ctx)
-	if err != nil {
-		return err
-	}
-	res := scoped.Model(&models.User{}).Where("id = ?", id).
-		Updates(map[string]any{"role": "deleted", "updated_at": time.Now().UTC()})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected == 0 {
-		return apperrors.ErrNotFound
-	}
-	return nil
+	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		scoped, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		res := scoped.Model(&models.User{}).Where("id = ?", id).
+			Updates(map[string]any{"role": "deleted", "updated_at": time.Now().UTC()})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return apperrors.ErrNotFound
+		}
+		// Свежая строка для payload синка — без этого central никогда не
+		// узнаёт, что сотрудник уволен, и продолжает показывать его активным
+		// (см. recordUserSync: PIN/Password вычищаются json:"-" автоматически).
+		scoped2, err := tr.ForTenant(ctx)
+		if err != nil {
+			return err
+		}
+		var fresh models.User
+		if err := scoped2.Where("id = ?", id).First(&fresh).Error; err != nil {
+			return err
+		}
+		return recordUserSync(scoped2, &fresh, "update")
+	})
 }
 
 // ─── Customers ─────────────────────────────────────────────────────────────

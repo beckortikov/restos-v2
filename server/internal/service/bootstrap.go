@@ -110,6 +110,12 @@ func (s *BootstrapService) Run(ctx context.Context, in BootstrapInput) (*Bootstr
 		if err := tx.Create(owner).Error; err != nil {
 			return err
 		}
+		// Без этого central никогда не узнаёт про владельца, заведённого
+		// bootstrap'ом ПРЯМО НА ФИЛИАЛЕ (а не приглашением с central) — та же
+		// дыра, что у Delete/ImportUsers (см. их комментарии, найдено 2026-08-29).
+		if err := recordUserSync(tx, owner, "insert"); err != nil {
+			return err
+		}
 
 		// Не возвращаем PIN наружу.
 		owner.PIN = nil

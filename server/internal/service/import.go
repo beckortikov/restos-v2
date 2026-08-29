@@ -461,6 +461,20 @@ func (s *ImportService) ImportUsers(ctx context.Context, r io.Reader) (*ImportRe
 					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
 					continue
 				}
+				// Свежая строка для payload синка — без этого central никогда
+				// не узнаёт про сотрудника, импортированного массово (не через
+				// UsersService.Patch, у которого recordUserSync уже есть) —
+				// см. network_analytics.go WaitersNetwork: реальный официант
+				// с 88 заказами показывался пустым именем, найдено 2026-08-29.
+				var fresh models.User
+				if err := tx.Where("id = ?", existing.ID).First(&fresh).Error; err != nil {
+					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
+					continue
+				}
+				if err := recordUserSync(tx, &fresh, "update"); err != nil {
+					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
+					continue
+				}
 				res.Updated++
 			} else {
 				u := &models.User{
@@ -492,6 +506,10 @@ func (s *ImportService) ImportUsers(ctx context.Context, r io.Reader) (*ImportRe
 					}
 				}
 				if err := tx.Create(u).Error; err != nil {
+					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
+					continue
+				}
+				if err := recordUserSync(tx, u, "insert"); err != nil {
 					res.Errors = append(res.Errors, ImportError{Row: rowNum, Message: err.Error()})
 					continue
 				}

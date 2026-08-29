@@ -3,14 +3,26 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-store'
 import {
-  fetchSyncSettings, saveSyncSettings, joinNetwork, fetchSyncQueueStats,
+  fetchSyncSettings, saveSyncSettings, joinNetwork, fetchSyncQueueStats, backfillSync,
   type SyncSettings, type SyncQueueStats,
 } from '@/lib/queries/sync-settings'
-import { RefreshCw, Save, Info, Ticket, CloudUpload, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { RefreshCw, Save, Info, Ticket, CloudUpload, CheckCircle2, AlertTriangle, History } from 'lucide-react'
 import { toast } from 'sonner'
 
+// Русские подписи для сущностей backfill'а — только те, что реально хоть
+// раз были ненулевыми на практике; остальное сворачивается в «и другие».
+const BACKFILL_LABELS: Record<string, string> = {
+  users: 'сотрудников',
+  orders: 'заказов',
+  menu_items: 'позиций меню',
+  ingredients: 'ингредиентов',
+  financial_operations: 'финансовых операций',
+}
+
 export default function SyncSettingsPage() {
-  const { restaurantId } = useAuth()
+  const { restaurantId, user } = useAuth()
+  const isOwner = user?.role === 'owner'
+  const [backfilling, setBackfilling] = useState(false)
   const [s, setS] = useState<SyncSettings>({ enabled: false, centralUrl: '', token: '', restaurantId: '', intervalSec: 30 })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -48,6 +60,32 @@ export default function SyncSettingsPage() {
       toast.error(e?.message ?? 'Не удалось сохранить')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // «Отправить историю» — для данных, заведённых до включения синка или
+  // мимо него (напр. массовый импорт сотрудников): обычный пушер шлёт только
+  // изменения ВПЕРЁД, а этот заказ/сотрудник/etc уже существовал. Кнопка
+  // ставит текущее состояние всех таблиц в очередь заново — идемпотентно,
+  // central просто upsert'нет то, что уже видел.
+  const onBackfill = async () => {
+    setBackfilling(true)
+    try {
+      const { entities } = await backfillSync()
+      const total = Object.values(entities).reduce((a, b) => a + b, 0)
+      if (total === 0) {
+        toast.success('Отправлять нечего — central уже видел всю историю этого филиала.')
+      } else {
+        const parts = Object.entries(entities)
+          .filter(([k, n]) => n > 0 && BACKFILL_LABELS[k])
+          .map(([k, n]) => `${n} ${BACKFILL_LABELS[k]}`)
+        const detail = parts.length ? ` (в т.ч. ${parts.join(', ')})` : ''
+        toast.success(`Отправлено ${total} записей на central${detail} — досчитается на ближайших циклах синхронизации.`)
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? 'Не удалось отправить историю')
+    } finally {
+      setBackfilling(false)
     }
   }
 
@@ -125,6 +163,27 @@ export default function SyncSettingsPage() {
       </label>
 
       {s.enabled && queue && <QueueStatus q={queue} />}
+
+      {s.enabled && isOwner && (
+        <div className="space-y-2 rounded-xl border border-border p-3">
+          <div className="flex items-center gap-1.5">
+            <History className="size-4 text-muted-foreground" />
+            <div className="text-sm font-medium text-foreground">Отправить историю на central</div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Обычная синхронизация шлёт только новые изменения. Если данные заведены до включения
+            синхронизации — или сотрудник добавлен массовым импортом, а не вручную — central мог их
+            не увидеть. Эта кнопка досылает текущее состояние заново; повторный клик безопасен.
+          </p>
+          <button
+            onClick={onBackfill}
+            disabled={backfilling}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border px-4 py-2 text-sm font-medium text-foreground hover:bg-muted disabled:opacity-50"
+          >
+            <History className="size-4" /> {backfilling ? 'Отправка...' : 'Отправить историю'}
+          </button>
+        </div>
+      )}
 
       <p className="text-xs text-muted-foreground -mt-2">Поля ниже — ручной способ (например, для подключения через туннель без публичного адреса).</p>
 

@@ -449,11 +449,41 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 	for _, b := range branches {
 		nameByID[b.ID] = b.Name
 	}
+	var central *models.Restaurant
+	for i := range branches {
+		if branches[i].Kind != nil && *branches[i].Kind == "central_warehouse" {
+			central = &branches[i]
+			break
+		}
+	}
 
 	out := &NetworkWaitersReport{Rows: []NetworkWaiterRow{}}
 	out.Period.From, out.Period.To = f.From, f.To
 	if len(ids) == 0 {
 		return out, nil
+	}
+
+	// Диспетчеризованные с central заказы (waiter_id=NULL на филиале, см.
+	// applyOrder + DeliveryPuller.processCreate) учитываются НИЖЕ отдельно —
+	// строкой «Диспетчер», атрибутированной человеку на central, а не месту.
+	// Без этого исключения они попадали бы ЕЩЁ РАЗ сюда же под «—» филиала:
+	// одна и та же выручка/заказы — дважды в списке и в TotalRevenue/TotalOrders
+	// (нашли по жалобе владельца на дубли в аналитике официантов, 2026-08-29).
+	dispatchExclude, dispatchExcludeBare := "TRUE", "TRUE"
+	dispatchArgs := []any{}
+	if central != nil {
+		dispatchExclude = `o.id NOT IN (
+			SELECT dro.local_order_id FROM delivery_relay_orders dro
+			WHERE dro.restaurant_id = ? AND dro.kind = 'create' AND dro.status = 'delivered'
+			AND dro.local_order_id IS NOT NULL
+		)`
+		// qb ниже — Table("orders") без алиаса o, колонки без префикса.
+		dispatchExcludeBare = `id NOT IN (
+			SELECT dro.local_order_id FROM delivery_relay_orders dro
+			WHERE dro.restaurant_id = ? AND dro.kind = 'create' AND dro.status = 'delivered'
+			AND dro.local_order_id IS NOT NULL
+		)`
+		dispatchArgs = append(dispatchArgs, central.ID)
 	}
 
 	type row struct {
@@ -476,7 +506,8 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 		        COALESCE(SUM(o.tip_amount), 0) AS tip_amount,
 		        COALESCE(AVG(EXTRACT(EPOCH FROM (o.closed_at - o.created_at))), 0) AS avg_dur_sec`).
 		Joins("LEFT JOIN users u ON u.id::text = o.waiter_id AND u.restaurant_id = o.restaurant_id").
-		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
+		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
+		Where(dispatchExclude, dispatchArgs...)
 	if f.From != nil {
 		q = q.Where("o.closed_at >= ?", *f.From)
 	}
@@ -497,7 +528,8 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 		Select("o.restaurant_id AS restaurant_id, o.waiter_id AS waiter_id, COALESCE(SUM(oi.qty), 0) AS qty").
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
 		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
-		Where("oi.cancelled_at IS NULL")
+		Where("oi.cancelled_at IS NULL").
+		Where(dispatchExclude, dispatchArgs...)
 	if f.From != nil {
 		qi = qi.Where("o.closed_at >= ?", *f.From)
 	}
@@ -524,7 +556,8 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 	qb := s.r.Raw().WithContext(ctx).Table("orders").
 		Select(`restaurant_id, waiter_id, to_char(closed_at, 'YYYY-MM-DD') AS day,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
-		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
+		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
+		Where(dispatchExcludeBare, dispatchArgs...)
 	if f.From != nil {
 		qb = qb.Where("closed_at >= ?", *f.From)
 	}
@@ -590,20 +623,14 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 	}
 
 	// Диспетчер central (095) — central сам не торгует локально (комментарий
-	// в шапке файла), поэтому запрос выше для него всегда пуст, но он
-	// реально приносит сети выручку через delivery-relay. Отдельная
-	// агрегация по created_by_user_id (kind=create ТОЛЬКО — amend не заводит
-	// новый заказ, его выручка уже внутри Revenue родителя, второй раз
-	// считать нельзя), джойним к orders реального филиала за фактически
-	// оплаченные (closed/refunded) — central пишет только транспорт, деньги/
-	// сток остаются филиалу, здесь просто атрибуция человеку, кто отправил.
-	var central *models.Restaurant
-	for i := range branches {
-		if branches[i].Kind != nil && *branches[i].Kind == "central_warehouse" {
-			central = &branches[i]
-			break
-		}
-	}
+	// в шапке файла), а его диспетчеризованные заказы явно исключены выше
+	// (dispatchExclude) из подсчёта по официантам филиала — реальную выручку
+	// сети через delivery-relay считаем здесь, отдельной агрегацией по
+	// created_by_user_id (kind=create ТОЛЬКО — amend не заводит новый заказ,
+	// его выручка уже внутри Revenue родителя, второй раз считать нельзя),
+	// джойним к orders реального филиала за фактически оплаченные (closed/
+	// refunded) — central пишет только транспорт, деньги/сток остаются
+	// филиалу, здесь просто атрибуция человеку, кто отправил.
 	if central != nil {
 		type dispatchRow struct {
 			UserID  *string         `gorm:"column:user_id"`
