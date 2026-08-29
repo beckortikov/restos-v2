@@ -43,6 +43,12 @@ function appendSheet(wb: XLSX.WorkBook, name: string, rows: Record<string, unkno
 
 type Kind = 'all' | 'kitchen' | 'purchased'
 type Dim = 'dish' | 'category'
+// Владелец 2026-08-29: «доставка — что было продано, детальный отчёт» —
+// переключатель типов заказа прямо в «Отчёте продаж», не отдельная страница.
+type OrderTypeFilter = 'all' | 'hall' | 'takeaway' | 'delivery'
+const ORDER_TYPE_OPTIONS: [OrderTypeFilter, string][] = [
+  ['all', 'Все'], ['hall', 'Зал'], ['takeaway', 'С собой'], ['delivery', 'Доставка'],
+]
 
 interface Row {
   key: string
@@ -65,6 +71,7 @@ export default function SalesReportPage() {
   const [dateTo, setDateTo] = useState(initial.to)
   const [dim, setDim] = useState<Dim>('dish')
   const [kind, setKind] = useState<Kind>('all')
+  const [orderType, setOrderType] = useState<OrderTypeFilter>('all')
   const [expandedDate, setExpandedDate] = useState<string | null>(null)
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null)
 
@@ -73,11 +80,11 @@ export default function SalesReportPage() {
   useEffect(() => {
     setLoading(true)
     const fetcher = isCentral ? fetchNetworkSalesReport : fetchSalesReport
-    fetcher({ from: dateFrom, to: dateTo })
+    fetcher({ from: dateFrom, to: dateTo, orderType })
       .then(setReport)
       .catch(() => toast.error('Ошибка загрузки отчёта продаж'))
       .finally(() => setLoading(false))
-  }, [dateFrom, dateTo, isCentral])
+  }, [dateFrom, dateTo, isCentral, orderType])
 
   // Плоский список проданных позиций (сервер уже отфильтровал/просуммировал:
   // скидка учтена, voids/отменённые исключены, категория/покупной резолвнуты).
@@ -264,6 +271,11 @@ export default function SalesReportPage() {
             <div className="flex gap-1 bg-muted/50 p-1 rounded-lg">
               {([['all', 'Все'], ['kitchen', 'Кухня'], ['purchased', 'Покупные']] as const).map(([k, l]) => (
                 <button key={k} onClick={() => setKind(k)} className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${kind === k ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{l}</button>
+              ))}
+            </div>
+            <div className="flex gap-1 bg-muted/50 p-1 rounded-lg">
+              {ORDER_TYPE_OPTIONS.map(([k, l]) => (
+                <button key={k} onClick={() => setOrderType(k)} className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${orderType === k ? 'bg-primary text-primary-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}>{l}</button>
               ))}
             </div>
           </div>

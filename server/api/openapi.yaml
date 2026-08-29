@@ -1389,7 +1389,10 @@ paths:
     get:
       tags: [stock]
       summary: Отчёт продаж (дата×час×блюдо) по всей сети — тот же формат, что у /analytics/sales-report, группировка по имени блюда.
-      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      parameters:
+        - { $ref: "#/components/parameters/From" }
+        - { $ref: "#/components/parameters/To" }
+        - { in: query, name: order_type, schema: { type: string, enum: [hall, takeaway, delivery] }, description: "Фильтр по типу заказа. Не задан = все типы." }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalesReportResult" } } } } }
 
   /api/v1/network/analytics/waiters:
@@ -3890,7 +3893,10 @@ paths:
     get:
       tags: [analytics]
       summary: Отчёт продаж (строки дата×час×блюдо, скидки учтены, closed+refunded)
-      parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
+      parameters:
+        - { $ref: "#/components/parameters/From" }
+        - { $ref: "#/components/parameters/To" }
+        - { in: query, name: order_type, schema: { type: string, enum: [hall, takeaway, delivery] }, description: "Фильтр по типу заказа. Не задан = все типы." }
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/SalesReportResult" } } } } }
   /api/v1/analytics/food-cost:
     get:

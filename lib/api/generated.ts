@@ -3648,6 +3648,8 @@ export interface paths {
                 query?: {
                     from?: components["parameters"]["From"];
                     to?: components["parameters"]["To"];
+                    /** @description Фильтр по типу заказа. Не задан = все типы. */
+                    order_type?: "hall" | "takeaway" | "delivery";
                 };
                 header?: never;
                 path?: never;
@@ -12315,6 +12317,8 @@ export interface paths {
                 query?: {
                     from?: components["parameters"]["From"];
                     to?: components["parameters"]["To"];
+                    /** @description Фильтр по типу заказа. Не задан = все типы. */
+                    order_type?: "hall" | "takeaway" | "delivery";
                 };
                 header?: never;
                 path?: never;

@@ -218,11 +218,12 @@ func (h *NetworkHandler) ABCInventory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NetworkHandler) SalesReport(w http.ResponseWriter, r *http.Request) {
-	f, err := parsePeriod(r)
+	period, err := parsePeriod(r)
 	if err != nil {
 		respond.BadRequest(w, err.Error())
 		return
 	}
+	f := service.SalesReportFilter{PeriodFilter: period, OrderType: queryString(r, "order_type")}
 	out, err := h.svc.SalesReportNetwork(r.Context(), f)
 	if err != nil {
 		respond.Error(w, err)

@@ -328,7 +328,7 @@ func (s *NetworkService) ABCInventoryNetwork(ctx context.Context, f PeriodFilter
 
 // SalesReportNetwork — та же (дата, час, блюдо) агрегация, что и локальный
 // отчёт, но по имени блюда и по всей сети (см. головной комментарий файла).
-func (s *NetworkService) SalesReportNetwork(ctx context.Context, f PeriodFilter) (*SalesReportResult, error) {
+func (s *NetworkService) SalesReportNetwork(ctx context.Context, f SalesReportFilter) (*SalesReportResult, error) {
 	ids, err := s.networkBranchIDs(ctx)
 	if err != nil {
 		return nil, err
@@ -337,6 +337,7 @@ func (s *NetworkService) SalesReportNetwork(ctx context.Context, f PeriodFilter)
 	if len(ids) == 0 {
 		return out, nil
 	}
+	byType := f.OrderType != "" && f.OrderType != "all"
 
 	q := s.r.Raw().WithContext(ctx).Table("order_items AS oi").
 		Select(`to_char(o.closed_at, 'YYYY-MM-DD') AS date,
@@ -356,6 +357,9 @@ func (s *NetworkService) SalesReportNetwork(ctx context.Context, f PeriodFilter)
 	if f.To != nil {
 		q = q.Where("o.closed_at < ?", *f.To)
 	}
+	if byType {
+		q = q.Where("o.type = ?", f.OrderType)
+	}
 	if err := q.Group("date, hour, COALESCE(mi.name, oi.name)").Order("date ASC, hour ASC").Scan(&out.Rows).Error; err != nil {
 		return nil, err
 	}
@@ -373,6 +377,9 @@ func (s *NetworkService) SalesReportNetwork(ctx context.Context, f PeriodFilter)
 	}
 	if f.To != nil {
 		qc = qc.Where("closed_at < ?", *f.To)
+	}
+	if byType {
+		qc = qc.Where(`"type" = ?`, f.OrderType)
 	}
 	var cnt int64
 	if err := qc.Count(&cnt).Error; err != nil {
@@ -392,6 +399,9 @@ func (s *NetworkService) SalesReportNetwork(ctx context.Context, f PeriodFilter)
 	}
 	if f.To != nil {
 		qd = qd.Where("o.closed_at < ?", *f.To)
+	}
+	if byType {
+		qd = qd.Where("o.type = ?", f.OrderType)
 	}
 	if err := qd.Group("date").Order("date ASC").Scan(&out.ByDate).Error; err != nil {
 		return nil, err

@@ -223,7 +223,7 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 	})
 
 	t.Run("SalesReportNetwork", func(t *testing.T) {
-		out, err := svc.SalesReportNetwork(ctx, f)
+		out, err := svc.SalesReportNetwork(ctx, service.SalesReportFilter{PeriodFilter: f})
 		if err != nil {
 			t.Fatalf("SalesReportNetwork: %v", err)
 		}

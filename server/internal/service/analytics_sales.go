@@ -54,12 +54,23 @@ type SalesReportResult struct {
 	Totals SalesReportTotals `json:"totals"`
 }
 
-func (s *AnalyticsService) SalesReport(ctx context.Context, f PeriodFilter) (*SalesReportResult, error) {
+// SalesReportFilter — период + необязательный фильтр по типу заказа
+// (владелец 2026-08-29: «доставке — что было продано, детальный отчёт» —
+// переключатель типов прямо в «Отчёте продаж», не отдельная страница).
+// Отдельно от PeriodFilter (используется 30+ отчётами), чтобы не тащить
+// order_type туда, где он не нужен.
+type SalesReportFilter struct {
+	PeriodFilter
+	OrderType string // "" или "all" = без фильтра; иначе hall|takeaway|delivery
+}
+
+func (s *AnalyticsService) SalesReport(ctx context.Context, f SalesReportFilter) (*SalesReportResult, error) {
 	scoped, err := s.r.ForTenantQualified(ctx, "o")
 	if err != nil {
 		return nil, err
 	}
 	out := &SalesReportResult{Rows: []SalesReportRow{}, ByDate: []SalesReportDay{}}
+	byType := f.OrderType != "" && f.OrderType != "all"
 
 	q := scoped.Table("order_items AS oi").
 		Select(`to_char(o.closed_at, 'YYYY-MM-DD') AS date,
@@ -78,6 +89,9 @@ func (s *AnalyticsService) SalesReport(ctx context.Context, f PeriodFilter) (*Sa
 	}
 	if f.To != nil {
 		q = q.Where("o.closed_at < ?", *f.To)
+	}
+	if byType {
+		q = q.Where("o.type = ?", f.OrderType)
 	}
 	if err := q.Group("date, hour, oi.menu_item_id").Order("date ASC, hour ASC").Scan(&out.Rows).Error; err != nil {
 		return nil, err
@@ -100,6 +114,9 @@ func (s *AnalyticsService) SalesReport(ctx context.Context, f PeriodFilter) (*Sa
 	if f.To != nil {
 		qc = qc.Where("closed_at < ?", *f.To)
 	}
+	if byType {
+		qc = qc.Where(`"type" = ?`, f.OrderType)
+	}
 	var cnt int64
 	if err := qc.Count(&cnt).Error; err != nil {
 		return nil, err
@@ -120,6 +137,9 @@ func (s *AnalyticsService) SalesReport(ctx context.Context, f PeriodFilter) (*Sa
 	}
 	if f.To != nil {
 		qd = qd.Where("o.closed_at < ?", *f.To)
+	}
+	if byType {
+		qd = qd.Where("o.type = ?", f.OrderType)
 	}
 	if err := qd.Group("date").Order("date ASC").Scan(&out.ByDate).Error; err != nil {
 		return nil, err

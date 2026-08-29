@@ -121,11 +121,12 @@ func (h *AnalyticsHandler) FoodCost(w http.ResponseWriter, r *http.Request) {
 
 // SalesReport — GET /api/v1/analytics/sales-report (Н21).
 func (h *AnalyticsHandler) SalesReport(w http.ResponseWriter, r *http.Request) {
-	f, err := parsePeriod(r)
+	period, err := parsePeriod(r)
 	if err != nil {
 		respond.BadRequest(w, err.Error())
 		return
 	}
+	f := service.SalesReportFilter{PeriodFilter: period, OrderType: queryString(r, "order_type")}
 	out, err := h.svc.SalesReport(r.Context(), f)
 	if err != nil {
 		respond.Error(w, err)

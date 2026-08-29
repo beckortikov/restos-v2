@@ -343,8 +343,9 @@ export async function fetchNetworkABCMenu(opts: { from?: Date | string; to?: Dat
   return (await unwrap(api.GET('/api/v1/network/analytics/abc-menu', { params: { query } }))) as ABCMenuReport
 }
 
-export async function fetchNetworkSalesReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<SalesReportResult> {
-  const query = buildQuery(opts)
+export async function fetchNetworkSalesReport(opts: { from?: Date | string; to?: Date | string; orderType?: string } = {}): Promise<SalesReportResult> {
+  const query: Record<string, string> = buildQuery(opts)
+  if (opts.orderType && opts.orderType !== 'all') query.order_type = opts.orderType
   return (await unwrap(api.GET('/api/v1/network/analytics/sales-report', { params: { query } }))) as SalesReportResult
 }
 
@@ -461,8 +462,9 @@ export interface SalesReportResult {
   by_date: SalesReportDay[]
   totals: { revenue: DecStr; qty: DecStr; orders: number }
 }
-export async function fetchSalesReport(opts: { from?: Date | string; to?: Date | string } = {}): Promise<SalesReportResult> {
-  const query = buildQuery(opts)
+export async function fetchSalesReport(opts: { from?: Date | string; to?: Date | string; orderType?: string } = {}): Promise<SalesReportResult> {
+  const query: Record<string, string> = buildQuery(opts)
+  if (opts.orderType && opts.orderType !== 'all') query.order_type = opts.orderType
   return (await unwrap(api.GET('/api/v1/analytics/sales-report', { params: { query: query as any } }))) as SalesReportResult
 }
 
