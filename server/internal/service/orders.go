@@ -86,6 +86,11 @@ type OrderSlim struct {
 	ShiftID        *string         `json:"shift_id,omitempty"`
 	CreatedAt      time.Time       `json:"created_at"`
 	ClosedAt       *time.Time      `json:"closed_at,omitempty"`
+	// ReopenedAt — заказ переоткрыт после close (миграция 096). Payment-panel
+	// использует это + Payments ниже для баннера доплаты/возврата — без него в
+	// slim-списке (очередь pos2) заказ выглядел «никогда не переоткрывался»,
+	// даже если реально был.
+	ReopenedAt *time.Time `json:"reopened_at,omitempty"`
 	// RefundedTotal — сколько уже возвращено по заказу. Нужно фронту, чтобы
 	// корректно считать «остаток к возврату» и прятать кнопку у полностью
 	// возвращённых заказов (иначе показывался полный возврат повторно).
@@ -134,6 +139,7 @@ type orderSlimRow struct {
 	ShiftID          *string         `gorm:"column:shift_id"`
 	CreatedAt        time.Time       `gorm:"column:created_at"`
 	ClosedAt         *time.Time      `gorm:"column:closed_at"`
+	ReopenedAt       *time.Time      `gorm:"column:reopened_at"`
 	RefundedTotal    decimal.Decimal `gorm:"column:refunded_total"`
 	DeliveryPhone    *string         `gorm:"column:delivery_phone"`
 	DeliveryAddress  *string         `gorm:"column:delivery_address"`
@@ -144,7 +150,7 @@ type orderSlimRow struct {
 
 const slimSelect = `id, order_number, status, "type", table_id, waiter_id, guests_count,
 total, total_with_service, service_percent, service_amount, discount_amount, tip_amount,
-shift_id, created_at, closed_at, refunded_total, delivery_phone, delivery_address,
+shift_id, created_at, closed_at, reopened_at, refunded_total, delivery_phone, delivery_address,
 payment_method, payments, is_split`
 
 // List — постраничный slim-список. Использует индекс
@@ -221,6 +227,7 @@ func (s *OrdersService) List(ctx context.Context, f OrdersFilter) ([]OrderSlim, 
 			ShiftID:        r.ShiftID,
 			CreatedAt:      r.CreatedAt,
 			ClosedAt:       r.ClosedAt,
+			ReopenedAt:     r.ReopenedAt,
 			// Доставка попала в slimSelect и в OrderSlim в 3.16.109, но не в
 			// orderSlimRow и не сюда — колонки выбирались, а до клиента не
 			// доезжали, и касса переспрашивала адрес.

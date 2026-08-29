@@ -5683,6 +5683,7 @@ components:
         ready_at: { type: string, format: date-time }
         expected_ready_at: { type: string, format: date-time }
         closed_at: { type: string, format: date-time }
+        reopened_at: { type: string, format: date-time, nullable: true, description: "Заказ переоткрыт после close и ещё не закрыт повторно (миграция 096)." }
         cancelled_at: { type: string, format: date-time }
         kitchen_started_at: { type: string, format: date-time }
         is_split: { type: boolean }
@@ -5792,6 +5793,7 @@ components:
         service_percent: { $ref: "#/components/schemas/Decimal" }
         service_amount: { $ref: "#/components/schemas/Decimal" }
         created_at: { type: string, format: date-time }
+        reopened_at: { type: string, format: date-time, nullable: true, description: "См. Order.reopened_at (миграция 096)." }
         payment_method: { type: string, description: "cash|card|transfer|split" }
         is_split: { type: boolean }
         payments:

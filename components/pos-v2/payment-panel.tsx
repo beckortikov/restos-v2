@@ -83,6 +83,37 @@ export function PaymentPanel({ order, servicePercent, accounts: allAccounts, use
   const remaining = dSub(payable, paidSum)
   const canContinue = parts.length > 0 && Math.abs(remaining) <= 0.01
 
+  // Переоткрытый заказ (владелец 2026-08-29: замена товара в закрытом заказе) —
+  // счёт УЖЕ корректен без новой проводки: Reopen() сторнировал старую сумму
+  // целиком, Close() ниже проведёт новую целиком (см. orders_extras.go
+  // reverseCloseFinancials). Баннер — ТОЛЬКО подсказка кассиру, сколько
+  // физически доплатить/вернуть клиенту; сумма к оплате в closeOrderWithPayment
+  // не меняется (payable как обычно).
+  const reopenDiff = useMemo(() => {
+    if (!order.reopenedAt || !order.payments?.length) return null
+    const prevPaid = dSum(order.payments.map(p => p.amount))
+    const diff = dSub(payable, prevPaid)
+    if (Math.abs(diff) <= 0.01) return null
+    return { prevPaid, diff }
+  }, [order.reopenedAt, order.payments, payable])
+
+  const reopenBanner = reopenDiff && (
+    <div className="rounded-xl" style={{ background: reopenDiff.diff < 0 ? 'var(--pv-occ-soft)' : 'var(--pv-bill-soft)', border: '1px solid', borderColor: reopenDiff.diff < 0 ? 'var(--pv-occ-border)' : '#EAD49C', padding: '0.6rem 0.9rem', marginBottom: '0.9rem' }}>
+      <div className="flex items-center justify-between">
+        <span className="font-medium" style={{ fontSize: 'calc(var(--pv-ctl) - 0.1rem)', color: 'var(--pv-text-2)' }}>Ранее оплачено</span>
+        <span className="font-semibold" style={{ fontSize: 'calc(var(--pv-ctl) - 0.05rem)', color: 'var(--pv-text)' }}>{formatCurrency(reopenDiff.prevPaid)}</span>
+      </div>
+      <div className="flex items-center justify-between" style={{ marginTop: '0.15rem' }}>
+        <span className="font-bold" style={{ fontSize: 'var(--pv-ctl)', color: reopenDiff.diff < 0 ? 'var(--pv-occ-text)' : 'var(--pv-bill-text)' }}>
+          {reopenDiff.diff < 0 ? 'К возврату клиенту' : 'К доплате'}
+        </span>
+        <span className="font-bold" style={{ fontSize: 'clamp(1.05rem,1.5vw,1.3rem)', color: reopenDiff.diff < 0 ? 'var(--pv-occ-text)' : 'var(--pv-bill-text)' }}>
+          {formatCurrency(Math.abs(reopenDiff.diff))}
+        </span>
+      </div>
+    </div>
+  )
+
   function cogsOf(o: Order): number {
     return (o.items ?? []).reduce((s, i) => s + calcLineCogs(i.cogs || 0, i.qty, i.unit, i.unitSize), 0)
   }
@@ -212,6 +243,7 @@ export function PaymentPanel({ order, servicePercent, accounts: allAccounts, use
         <div className="flex flex-col" style={{ gap: '1rem' }}>
           <button onClick={() => setMode('pick')} className="flex items-center gap-1.5 font-semibold self-start" style={{ color: 'var(--pv-text-2)', fontSize: 'var(--pv-ctl)' }}><ArrowLeft style={{ width: '1.1rem', height: '1.1rem' }} />Назад</button>
 
+          {reopenBanner}
           {/* Итого / Внесено / Остаток */}
           <div className="grid grid-cols-3" style={{ gap: '0.6rem' }}>
             {([['Итого', payable], ['Внесено', paidSum]] as const).map(([l, v]) => (
@@ -311,6 +343,7 @@ export function PaymentPanel({ order, servicePercent, accounts: allAccounts, use
               </div>
             )}
           </div>
+          {reopenBanner}
           {/* Итог */}
           <div className="flex items-center justify-between rounded-xl" style={{ background: 'var(--pv-brand-soft)', padding: '0.6rem 1rem', marginBottom: '0.9rem' }}>
             <span className="font-bold" style={{ color: 'var(--pv-brand)', fontSize: 'var(--pv-ctl)' }}>К оплате</span>

@@ -452,6 +452,20 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
 
   const total = Math.max(0, Number(dSub(subtotalWithService, discountAmount > 0 ? discountAmount : 0)))
 
+  // Переоткрытый закрытый заказ (владелец 2026-08-29: замена товара) — счёт уже
+  // сторнирован/будет проведён Close() целиком заново (см. orders_extras.go
+  // reverseCloseFinancials), это только подсказка кассиру, сколько физически
+  // доплатить/вернуть. order.payments — снапшот ДО реклоуза (Reopen() его не
+  // трогает); НЕ путать с локальным `payments` state ниже (билдер смешанной
+  // оплаты этого сеанса реклоуза).
+  const reopenDiff = useMemo(() => {
+    if (!order.reopenedAt || !order.payments?.length) return null
+    const prevPaid = Number(dSum(order.payments.map(p => p.amount)))
+    const diff = Number(dSub(total, prevPaid))
+    if (Math.abs(diff) <= 0.01) return null
+    return { prevPaid, diff }
+  }, [order.reopenedAt, order.payments, total])
+
   // Handlers ---------------------------------------------------------------
   // «Закрыть и оплатить» в панели → НЕ закрывает заказ сразу, а открывает
   // drawer с финальным receipt-preview'ом. Закрытие/печать происходят из
@@ -1169,6 +1183,18 @@ export function OrderActionsPanel({ order, users, onClosed, onCancelled, onItems
           <span className="text-sm font-semibold text-foreground">К оплате</span>
           <span className="text-2xl font-bold text-primary tabular-nums leading-none">{formatCurrency(total)}</span>
         </div>
+
+        {reopenDiff && (
+          <div className={`flex items-center justify-between rounded-xl border p-3 ${reopenDiff.diff < 0 ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50'}`}>
+            <div className="text-xs text-muted-foreground">
+              Ранее оплачено: <span className="font-medium text-foreground">{formatCurrency(reopenDiff.prevPaid)}</span>
+            </div>
+            <div className={`text-sm font-bold ${reopenDiff.diff < 0 ? 'text-blue-700' : 'text-amber-700'}`}>
+              {reopenDiff.diff < 0 ? 'К возврату ' : 'К доплате '}
+              {formatCurrency(Math.abs(reopenDiff.diff))}
+            </div>
+          </div>
+        )}
 
         {/* Payment method */}
         <div className="grid grid-cols-2 gap-2">

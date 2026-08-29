@@ -411,6 +411,9 @@ export interface Order {
   readyAt?: string
   expectedReadyAt?: string
   closedAt?: string
+  // reopenedAt — заказ переоткрыт после close и ещё не закрыт повторно
+  // (миграция 096). Используется payment-panel для баннера доплаты/возврата.
+  reopenedAt?: string
   shiftId?: string
   isSplit?: boolean
   splitCount?: number

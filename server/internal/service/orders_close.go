@@ -292,6 +292,7 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 		closedStatus := "closed"
 		order.Status = &closedStatus
 		order.ClosedAt = &now
+		order.ReopenedAt = nil
 		order.UpdatedAt = now
 		shiftID := in.ShiftID
 		order.ShiftID = &shiftID
@@ -1116,6 +1117,230 @@ func cascadeSemiDeduct(
 		}
 	}
 	return nil
+}
+
+// returnStockForVoidedItem — возврат склада при void/cancel позиции ВНУТРИ
+// переоткрытого заказа (order.ReopenedAt != nil, см. миграцию 096). Владелец
+// 2026-08-29: «дать доступ редактирование закрытых заказов, если один товар
+// захотят заменить» — без возврата кассир, заменивший блюдо, тихо терял
+// ингредиент дважды (один раз при исходном close, второй — при повторном
+// close новой позиции).
+//
+// Пересчитываем по тех-карте ЗАНОВО (а не читаем, что именно было списано) —
+// TechCardLine.IngredientID/SemiTypeID уже однозначно различают ветку, тот же
+// источник, что и у forward-списания (deductStockForOrder). origItemID —
+// ID ИСХОДНОЙ order_item (до возможного partial-split в VoidItem/CancelItem):
+// именно под этим ID forward-списание писало itemRef="order:{orderID}:{id}".
+//
+// Идемпотентность: маркер-движения used description
+// "order:{orderID}:{origItemID}:voidreturn" — отдельный суффикс от forward
+// itemRef, чтобы не сбить идемпотентность deductStockForOrder при следующем
+// close. Если forward-списания по этой позиции вообще не было (позицию
+// добавили УЖЕ после reopen — она спишется как обычно на reclose) —
+// возвращать нечего, тихо выходим.
+//
+// Сознательное упрощение: полуфабрикаты возвращаются в semi_finished_stock
+// целиком, БЕЗ попытки восстановить точное разделение «сколько при исходной
+// продаже ушло из готового остатка vs каскадом в сырьё» (deductSemiForSale
+// не пишет отдельного маркера на эту пропорцию). В подавляющем большинстве
+// случаев заготовка была в наличии — упрощение бьёт только в редком edge-case
+// (заготовки не хватило на момент продажи), и тогда часть возврата не
+// долетает до сырья. Каскадные компоненты сетов (BundleGroupID) тоже вне
+// охвата этой функции — сеты возврат склада не получают.
+func (s *OrdersService) returnStockForVoidedItem(
+	tx *gorm.DB,
+	restaurantID, orderID, origItemID, menuItemID string,
+	unit *string, unitSize, qtyToVoid decimal.Decimal,
+	now time.Time,
+) error {
+	forwardRef := "order:" + orderID + ":" + origItemID
+	returnRef := forwardRef + ":voidreturn"
+
+	var forwardCount int64
+	if err := tx.Model(&models.StockMovement{}).
+		Where("restaurant_id = ? AND description = ?", restaurantID, forwardRef).
+		Count(&forwardCount).Error; err != nil {
+		return err
+	}
+	if forwardCount == 0 {
+		return nil
+	}
+	var returnCount int64
+	if err := tx.Model(&models.StockMovement{}).
+		Where("restaurant_id = ? AND description = ?", restaurantID, returnRef).
+		Count(&returnCount).Error; err != nil {
+		return err
+	}
+	if returnCount > 0 {
+		return nil
+	}
+
+	var menu models.MenuItem
+	if err := tx.Where("restaurant_id = ? AND id = ?", restaurantID, menuItemID).
+		First(&menu).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+
+	if menu.IsBatchCooking != nil && *menu.IsBatchCooking {
+		portions := decimal.Normalize(qtyToVoid).IntPart()
+		if portions <= 0 {
+			return nil
+		}
+		if err := tx.Model(&models.MenuItem{}).
+			Where("restaurant_id = ? AND id = ?", restaurantID, menuItemID).
+			Updates(map[string]any{
+				"prepared_qty": gorm.Expr("COALESCE(prepared_qty, 0) + ?", portions),
+				"updated_at":   now,
+			}).Error; err != nil {
+			return err
+		}
+		mType := "batch_return"
+		return tx.Create(&models.StockMovement{
+			ID: uuid.NewString(), Type: &mType, Description: &returnRef,
+			Qty: decimal.Zero, RestaurantID: &restaurantID, CreatedAt: now,
+		}).Error
+	}
+
+	var lines []models.TechCardLine
+	if err := tx.Where("restaurant_id = ? AND menu_item_id = ?", restaurantID, menuItemID).
+		Find(&lines).Error; err != nil {
+		return err
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	baseIngIDs := make([]string, 0, len(lines))
+	for _, l := range lines {
+		if l.IngredientID != nil && *l.IngredientID != "" {
+			baseIngIDs = append(baseIngIDs, *l.IngredientID)
+		}
+	}
+	convByID, err := loadIngStockConv(tx, baseIngIDs)
+	if err != nil {
+		return err
+	}
+
+	portions := effectivePortions(unit, qtyToVoid, unitSize)
+	for _, line := range lines {
+		lineQty := decimal.Mul(line.Qty, portions)
+		switch {
+		case line.IngredientID != nil:
+			if err := writeIngredientReturn(tx, restaurantID, *line.IngredientID, line.Name, convByID[*line.IngredientID], deref(line.Unit), lineQty, returnRef, now); err != nil {
+				return err
+			}
+		case line.SemiTypeID != nil:
+			if err := returnSemiForVoid(tx, restaurantID, *line.SemiTypeID, lineQty, deref(line.Unit), returnRef, now); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// writeIngredientReturn — зеркало writeIngredientDeduct (тот же waste/conv
+// расчёт), но Type="in" и БЕЗ .Neg() — приход на склад вместо списания.
+// Используется только из returnStockForVoidedItem.
+func writeIngredientReturn(
+	tx *gorm.DB,
+	restaurantID, ingredientID string,
+	name *string,
+	conv ingStockConv,
+	recipeUnit string,
+	qty decimal.Decimal,
+	sourceRef string,
+	now time.Time,
+) error {
+	if !conv.convertible(recipeUnit) {
+		return nil
+	}
+	if conv.wastePercent.IsPositive() {
+		divisor := decimal.Sub(decimal.FromInt(1), decimal.DivRound(conv.wastePercent, decimal.FromInt(100)))
+		if divisor.IsPositive() {
+			qty = decimal.DivRound(qty, divisor)
+		}
+	}
+	stockQty := conv.toStock(qty, recipeUnit)
+	restore := decimal.Normalize(stockQty)
+	desc := sourceRef
+	opType := "in"
+	ingID := ingredientID
+	unit := conv.unit
+	unitPtr := &unit
+	if unit == "" {
+		ru := recipeUnit
+		unitPtr = &ru
+	}
+	mv := &models.StockMovement{
+		ID:             uuid.NewString(),
+		Type:           &opType,
+		IngredientID:   &ingID,
+		IngredientName: name,
+		Description:    &desc,
+		Qty:            restore,
+		Unit:           unitPtr,
+		RestaurantID:   &restaurantID,
+		CreatedAt:      now,
+	}
+	return tx.Create(mv).Error
+}
+
+// returnSemiForVoid — зеркало ПЕРВОЙ ветки deductSemiForSale (расход готового
+// остатка semi_finished_stock). Если стока для этого полуфабриката никогда
+// не было (Prepare/Produce не запускались) — при исходной продаже 100% ушло
+// каскадом в сырьё, возвращать в semi_finished_stock нечего, тихо выходим
+// (см. общий комментарий-оговорку в returnStockForVoidedItem).
+func returnSemiForVoid(
+	tx *gorm.DB,
+	restaurantID, semiTypeID string,
+	lineQty decimal.Decimal,
+	lineUnit, sourceRef string,
+	now time.Time,
+) error {
+	var sft models.SemiFinishedType
+	if err := tx.Where("restaurant_id = ? AND id = ?", restaurantID, semiTypeID).
+		First(&sft).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	needed := units.Convert(lineQty, lineUnit, deref(sft.OutputUnit))
+	if !decimal.IsPositive(needed) {
+		return nil
+	}
+
+	var stock models.SemiFinishedStock
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("restaurant_id = ? AND semi_type_id = ?", restaurantID, semiTypeID).
+		First(&stock).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	stock.Qty = decimal.Normalize(decimal.Add(stock.Qty, needed))
+	stock.UpdatedAt = now
+	if err := tx.Save(&stock).Error; err != nil {
+		return err
+	}
+
+	mvType := "semi_in"
+	desc := sourceRef
+	u := deref(sft.OutputUnit)
+	mv := &models.StockMovement{
+		ID:             uuid.NewString(),
+		Type:           &mvType,
+		Description:    &desc,
+		IngredientName: sft.Name,
+		Qty:            decimal.Normalize(needed),
+		Unit:           &u,
+		RestaurantID:   &restaurantID,
+		CreatedAt:      now,
+	}
+	return tx.Create(mv).Error
 }
 
 // enqueueReceipt создаёт строку в print_jobs с готовым ESC/POS payload'ом

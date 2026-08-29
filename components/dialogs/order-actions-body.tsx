@@ -736,6 +736,8 @@ export function OrderActionsBody({
               setAddPaymentAccountId={setAddPaymentAccountId}
               addPaymentAmount={addPaymentAmount}
               setAddPaymentAmount={setAddPaymentAmount}
+              reopenedAt={order.reopenedAt}
+              previousPayments={order.payments}
               onPreCheck={handlePreCheck}
             />
           </div>

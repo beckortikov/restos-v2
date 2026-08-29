@@ -364,6 +364,7 @@ export function _mapV4Order(r: Record<string, any>, items?: Record<string, any>[
     readyAt: r.ready_at ?? undefined,
     expectedReadyAt: r.expected_ready_at ?? undefined,
     closedAt: r.closed_at ?? undefined,
+    reopenedAt: r.reopened_at ?? undefined,
     shiftId: r.shift_id ?? undefined,
     isSplit: r.is_split ?? false,
     splitCount: r.split_count ?? 0,

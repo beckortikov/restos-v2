@@ -13,43 +13,46 @@ import (
 // (мы дублируем legacy-схему). Валидация значений — в сервисном слое +
 // добавим CHECK-constraints в отдельной миграции после Phase 1.
 type Order struct {
-	ID                 string           `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
-	OrderNumber        int              `gorm:"column:order_number" json:"order_number"` // per-restaurant per-day, сервис проставляет атомарно в Create через order_counters
-	Status             *string          `gorm:"default:'new';index" json:"status"`
-	Type               *string          `gorm:"default:'hall'" json:"type"`
-	TableID            *string          `gorm:"column:table_id" json:"table_id"`
-	WaiterID           *string          `gorm:"column:waiter_id" json:"waiter_id"`
-	CashierID          *string          `gorm:"column:cashier_id" json:"cashier_id"`
-	CustomerID         *string          `gorm:"column:customer_id" json:"customer_id"`
-	PaymentMethod      *string          `gorm:"column:payment_method" json:"payment_method"`
-	Comment            *string          `json:"comment"`
-	Total              decimal.Decimal  `gorm:"type:numeric(14,4);default:0" json:"total"`
-	ServicePercent     decimal.Decimal  `gorm:"column:service_percent;type:numeric(14,4);default:0" json:"service_percent"`
-	ServiceAmount      decimal.Decimal  `gorm:"column:service_amount;type:numeric(14,4);default:0" json:"service_amount"`
-	TotalWithService   decimal.Decimal  `gorm:"column:total_with_service;type:numeric(14,4);default:0" json:"total_with_service"`
-	GuestsCount        *int             `gorm:"column:guests_count;default:1" json:"guests_count"`
-	TipAmount          decimal.Decimal  `gorm:"column:tip_amount;type:numeric(14,4);default:0" json:"tip_amount"`
-	Payments           datatypes.JSON   `gorm:"type:jsonb;default:'[]'" json:"payments"`
-	DiscountType       *string          `gorm:"column:discount_type" json:"discount_type"`
-	DiscountValue      decimal.Decimal  `gorm:"column:discount_value;type:numeric(14,4);default:0" json:"discount_value"`
-	DiscountAmount     decimal.Decimal  `gorm:"column:discount_amount;type:numeric(14,4);default:0" json:"discount_amount"`
-	DiscountReason     *string          `gorm:"column:discount_reason" json:"discount_reason"`
-	DiscountApprovedBy *string          `gorm:"column:discount_approved_by" json:"discount_approved_by"`
-	IsSplit            *bool            `gorm:"column:is_split;default:false" json:"is_split"`
-	SplitCount         *int             `gorm:"column:split_count;default:0" json:"split_count"`
-	ShiftID            *string          `gorm:"column:shift_id;index" json:"shift_id"`
-	RestaurantID       *string          `gorm:"column:restaurant_id;index" json:"restaurant_id"`
-	KitchenStartedAt   *time.Time       `gorm:"column:kitchen_started_at" json:"kitchen_started_at"`
-	ReadyAt            *time.Time       `gorm:"column:ready_at" json:"ready_at"`
-	ExpectedReadyAt    *time.Time       `gorm:"column:expected_ready_at" json:"expected_ready_at"`
-	ClosedAt           *time.Time       `gorm:"column:closed_at" json:"closed_at"`
-	CancelledAt        *time.Time       `gorm:"column:cancelled_at" json:"cancelled_at"`
-	CancelledBy        *string          `gorm:"column:cancelled_by" json:"cancelled_by"`
-	CancelReason       *string          `gorm:"column:cancel_reason" json:"cancel_reason"`
-	CancelledTotal     *decimal.Decimal `gorm:"column:cancelled_total;type:numeric(14,4)" json:"cancelled_total"`
-	RefundedTotal      decimal.Decimal  `gorm:"column:refunded_total;type:numeric(14,4);default:0" json:"refunded_total"`
-	RefundedAt         *time.Time       `gorm:"column:refunded_at" json:"refunded_at"`
-	RefundReason       *string          `gorm:"column:refund_reason" json:"refund_reason"`
+	ID                 string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	OrderNumber        int             `gorm:"column:order_number" json:"order_number"` // per-restaurant per-day, сервис проставляет атомарно в Create через order_counters
+	Status             *string         `gorm:"default:'new';index" json:"status"`
+	Type               *string         `gorm:"default:'hall'" json:"type"`
+	TableID            *string         `gorm:"column:table_id" json:"table_id"`
+	WaiterID           *string         `gorm:"column:waiter_id" json:"waiter_id"`
+	CashierID          *string         `gorm:"column:cashier_id" json:"cashier_id"`
+	CustomerID         *string         `gorm:"column:customer_id" json:"customer_id"`
+	PaymentMethod      *string         `gorm:"column:payment_method" json:"payment_method"`
+	Comment            *string         `json:"comment"`
+	Total              decimal.Decimal `gorm:"type:numeric(14,4);default:0" json:"total"`
+	ServicePercent     decimal.Decimal `gorm:"column:service_percent;type:numeric(14,4);default:0" json:"service_percent"`
+	ServiceAmount      decimal.Decimal `gorm:"column:service_amount;type:numeric(14,4);default:0" json:"service_amount"`
+	TotalWithService   decimal.Decimal `gorm:"column:total_with_service;type:numeric(14,4);default:0" json:"total_with_service"`
+	GuestsCount        *int            `gorm:"column:guests_count;default:1" json:"guests_count"`
+	TipAmount          decimal.Decimal `gorm:"column:tip_amount;type:numeric(14,4);default:0" json:"tip_amount"`
+	Payments           datatypes.JSON  `gorm:"type:jsonb;default:'[]'" json:"payments"`
+	DiscountType       *string         `gorm:"column:discount_type" json:"discount_type"`
+	DiscountValue      decimal.Decimal `gorm:"column:discount_value;type:numeric(14,4);default:0" json:"discount_value"`
+	DiscountAmount     decimal.Decimal `gorm:"column:discount_amount;type:numeric(14,4);default:0" json:"discount_amount"`
+	DiscountReason     *string         `gorm:"column:discount_reason" json:"discount_reason"`
+	DiscountApprovedBy *string         `gorm:"column:discount_approved_by" json:"discount_approved_by"`
+	IsSplit            *bool           `gorm:"column:is_split;default:false" json:"is_split"`
+	SplitCount         *int            `gorm:"column:split_count;default:0" json:"split_count"`
+	ShiftID            *string         `gorm:"column:shift_id;index" json:"shift_id"`
+	RestaurantID       *string         `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	KitchenStartedAt   *time.Time      `gorm:"column:kitchen_started_at" json:"kitchen_started_at"`
+	ReadyAt            *time.Time      `gorm:"column:ready_at" json:"ready_at"`
+	ExpectedReadyAt    *time.Time      `gorm:"column:expected_ready_at" json:"expected_ready_at"`
+	ClosedAt           *time.Time      `gorm:"column:closed_at" json:"closed_at"`
+	// ReopenedAt — заказ переоткрыт после close и ещё не закрыт повторно
+	// (см. миграцию 096). NULL вне этого окна.
+	ReopenedAt     *time.Time       `gorm:"column:reopened_at" json:"reopened_at"`
+	CancelledAt    *time.Time       `gorm:"column:cancelled_at" json:"cancelled_at"`
+	CancelledBy    *string          `gorm:"column:cancelled_by" json:"cancelled_by"`
+	CancelReason   *string          `gorm:"column:cancel_reason" json:"cancel_reason"`
+	CancelledTotal *decimal.Decimal `gorm:"column:cancelled_total;type:numeric(14,4)" json:"cancelled_total"`
+	RefundedTotal  decimal.Decimal  `gorm:"column:refunded_total;type:numeric(14,4);default:0" json:"refunded_total"`
+	RefundedAt     *time.Time       `gorm:"column:refunded_at" json:"refunded_at"`
+	RefundReason   *string          `gorm:"column:refund_reason" json:"refund_reason"`
 	// Контакты доставки (052) — заполняются на оплате заказа с type='delivery',
 	// печатаются на бегунке курьеру. Отдельно от customers: доставка часто
 	// разовая, карточку клиента ради одного адреса не заводим.

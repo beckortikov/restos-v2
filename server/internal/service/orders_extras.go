@@ -757,6 +757,11 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 		if item.CancelledAt != nil {
 			return apperrors.Wrap("CONFLICT", "item already cancelled", nil)
 		}
+		// Захватываем ДО возможного partial-split ниже (item может стать split-row).
+		origItemID := item.ID
+		origMenuItemID := item.MenuItemID
+		origUnit := item.Unit
+		origUnitSize := item.UnitSize
 		now := time.Now().UTC()
 		reason := ""
 		if in.Reason != nil {
@@ -857,6 +862,15 @@ func (s *OrdersService) CancelItem(ctx context.Context, orderID, itemID string, 
 			// per-unit оригинала (включающему модификаторы), runner'у тоже
 			// достаточно факта отмены X штук.
 			item = split
+		}
+
+		// Возврат склада — только если это cancel ВНУТРИ переоткрытого закрытого
+		// заказа (см. миграцию 096 + returnStockForVoidedItem). Живая pre-payment
+		// отмена стока не касается — как и раньше.
+		if order.ReopenedAt != nil && origMenuItemID != nil {
+			if err := s.returnStockForVoidedItem(tx, rid, orderID, origItemID, *origMenuItemID, origUnit, origUnitSize, qtyToCancel, now); err != nil {
+				return err
+			}
 		}
 
 		// Сет — каскад: остальные компоненты того же bundle_group_id отменяются
@@ -1258,6 +1272,7 @@ func (s *OrdersService) Reopen(ctx context.Context, orderID string, in ReopenOrd
 		served := "served"
 		order.Status = &served
 		order.ClosedAt = nil
+		order.ReopenedAt = &now
 		order.UpdatedAt = now
 		if err := tx.Save(&order).Error; err != nil {
 			return err

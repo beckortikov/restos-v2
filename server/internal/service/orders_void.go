@@ -231,6 +231,11 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 		if item.CancelledAt != nil {
 			return apperrors.Wrap("CONFLICT", "item already voided", nil)
 		}
+		// Захватываем ДО возможного partial-split ниже (item может стать split-row).
+		origItemID := item.ID
+		origMenuItemID := item.MenuItemID
+		origUnit := item.Unit
+		origUnitSize := item.UnitSize
 
 		now := time.Now().UTC()
 		reason := in.Reason
@@ -302,6 +307,15 @@ func (s *OrdersService) VoidItem(ctx context.Context, orderID, itemID string, in
 			}
 			// Дальнейшие шаги (order_voids, total, runner) работают со split-row.
 			item = split
+		}
+
+		// 2b. Возврат склада — только если это void ВНУТРИ переоткрытого закрытого
+		// заказа (см. миграцию 096 + returnStockForVoidedItem). Живой void ДО
+		// первой оплаты стока не касается — как и раньше.
+		if order.ReopenedAt != nil && origMenuItemID != nil {
+			if err := s.returnStockForVoidedItem(tx, rid, orderID, origItemID, *origMenuItemID, origUnit, origUnitSize, qtyToVoid, now); err != nil {
+				return err
+			}
 		}
 
 		// 3. Audit-friendly запись в order_voids (видна Manager-у).

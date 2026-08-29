@@ -8,7 +8,7 @@
  */
 
 import { useMemo } from 'react'
-import { dRound, dDiv, dMul } from '@/lib/decimal'
+import { dRound, dDiv, dMul, dSub, dSum } from '@/lib/decimal'
 import { formatCurrency } from '@/lib/helpers'
 import { useAuth } from '@/lib/auth-store'
 import { selectableAccounts } from '@/lib/queries/finance'
@@ -77,6 +77,12 @@ interface OrderPaymentPanelProps {
   addPaymentAmount: string
   setAddPaymentAmount: (v: string) => void
 
+  // Переоткрытый закрытый заказ (владелец 2026-08-29: замена товара) — счёт уже
+  // сторнирован/будет проведён Close() целиком заново, эти два поля — только
+  // для информационного баннера кассиру (сколько физически доплатить/вернуть).
+  reopenedAt?: string
+  previousPayments?: OrderPayment[]
+
   onPreCheck: () => void
 }
 
@@ -116,6 +122,8 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
     setAddPaymentAccountId,
     addPaymentAmount,
     setAddPaymentAmount,
+    reopenedAt,
+    previousPayments,
     onPreCheck,
   } = props
 
@@ -123,6 +131,14 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
   // проводку всё равно отклонит с 409. Дальше по файлу `accounts` — уже
   // отфильтрованный список, отдельных проверок в пикерах не нужно.
   const accounts = useMemo(() => selectableAccounts(allAccounts), [allAccounts])
+
+  const reopenDiff = useMemo(() => {
+    if (!reopenedAt || !previousPayments?.length) return null
+    const prevPaid = dSum(previousPayments.map(p => p.amount))
+    const diff = dSub(totalWithService, prevPaid)
+    if (Math.abs(diff) <= 0.01) return null
+    return { prevPaid, diff }
+  }, [reopenedAt, previousPayments, totalWithService])
 
   // Порог одобрения скидки — настройка ресторана (default 10). Скидку ВЫШЕ него
   // бэк не проведёт без approved_by менеджера/владельца (orders_close.go).
@@ -281,6 +297,18 @@ export function OrderPaymentPanel(props: OrderPaymentPanelProps) {
       {/* Mixed payment section */}
       <div className="space-y-3">
         <h4 className="text-sm font-semibold">Оплата</h4>
+
+        {reopenDiff && (
+          <div className={`flex items-center justify-between rounded-xl border p-3 ${reopenDiff.diff < 0 ? 'border-blue-200 bg-blue-50' : 'border-amber-200 bg-amber-50'}`}>
+            <div className="text-xs text-muted-foreground">
+              Ранее оплачено: <span className="font-medium text-foreground">{formatCurrency(reopenDiff.prevPaid)}</span>
+            </div>
+            <div className={`text-sm font-bold ${reopenDiff.diff < 0 ? 'text-blue-700' : 'text-amber-700'}`}>
+              {reopenDiff.diff < 0 ? 'К возврату ' : 'К доплате '}
+              {formatCurrency(Math.abs(reopenDiff.diff))}
+            </div>
+          </div>
+        )}
 
         {payments.length > 0 && (
           <div className="space-y-1.5">

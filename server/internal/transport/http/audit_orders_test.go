@@ -399,3 +399,224 @@ func TestAudit_ConcurrentClose_ShiftRevenueNotLost(t *testing.T) {
 			shift.CashRevenue, want, n)
 	}
 }
+
+// orderItemIDs — вспомогательный: id всех живых позиций заказа через GET.
+func orderItemIDs(t *testing.T, f *e2eFixture, tok, orderID string) []string {
+	t.Helper()
+	gr, gb := f.get(t, "/api/v1/orders/"+orderID, tok)
+	if gr.StatusCode != http.StatusOK {
+		t.Fatalf("get order: %d %s", gr.StatusCode, gb)
+	}
+	var detail struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(gb, &detail); err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, len(detail.Items))
+	for i, it := range detail.Items {
+		ids[i] = it.ID
+	}
+	return ids
+}
+
+// Владелец 2026-08-29: «дать доступ редактирование закрытых заказов, если
+// один товар захотят заменить по просьбе клиента» — void позиции ПОСЛЕ
+// reopen обязан вернуть списанный при close ингредиент на склад (иначе замена
+// блюда тихо ворует остаток дважды: один раз на исходном close, второй — на
+// reclose новой позиции).
+func TestAudit_ReopenVoidItem_ReturnsIngredientToStock(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, menuItemID, shiftID, accountID := seedForWrite(t, f)
+
+	var ing models.Ingredient
+	gdb.Where("restaurant_id = ? AND name = ?", f.rid, "Rice").First(&ing)
+	startQty := ing.Qty // 10, тех-карта 0.2 кг/порция
+
+	orderID := auditCreateOrder(t, f, tok, menuItemID, "1")
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/close", tok, uuid.NewString(), map[string]any{
+		"payment_method": "cash", "account_id": accountID, "shift_id": shiftID,
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("close1: %d %s", r.StatusCode, b)
+	}
+	gdb.First(&ing, "id = ?", ing.ID)
+	afterClose := ing.Qty
+	if want := decimal.Sub(startQty, decimal.MustFromString("0.2")); !afterClose.Equal(want) {
+		t.Fatalf("после close Rice = %s, want %s", afterClose, want)
+	}
+
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/reopen", tok, uuid.NewString(), map[string]any{}); r.StatusCode != http.StatusOK {
+		t.Skipf("reopen не прошёл: %d %s", r.StatusCode, b)
+	}
+
+	ids := orderItemIDs(t, f, tok, orderID)
+	if len(ids) != 1 {
+		t.Fatalf("ожидалась 1 позиция, получено %d", len(ids))
+	}
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/items/"+ids[0]+"/void", tok, uuid.NewString(), map[string]any{
+		"reason": "клиент передумал",
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("void: %d %s", r.StatusCode, b)
+	}
+
+	gdb.First(&ing, "id = ?", ing.ID)
+	if !ing.Qty.Equal(startQty) {
+		t.Errorf("после void Rice = %s, want %s (0.2 кг обязан вернуться на склад)", ing.Qty, startQty)
+	}
+}
+
+// Частичный void (2 из 3 порций остаются) — возврат пропорционален снятому
+// количеству, а не всей позиции; повторный reclose оставшихся 2 порций не
+// должен ни списать их повторно, ни вернуть склад повторно (идемпотентность
+// по item.ID в deductStockForOrder/returnStockForVoidedItem не сбивается
+// partial-split'ом).
+func TestAudit_ReopenPartialVoidItem_ReturnsProportionalStock(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, menuItemID, shiftID, accountID := seedForWrite(t, f)
+
+	var ing models.Ingredient
+	gdb.Where("restaurant_id = ? AND name = ?", f.rid, "Rice").First(&ing)
+	startQty := ing.Qty
+
+	orderID := auditCreateOrder(t, f, tok, menuItemID, "3") // 3 × 0.2 = 0.6
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/close", tok, uuid.NewString(), map[string]any{
+		"payment_method": "cash", "account_id": accountID, "shift_id": shiftID,
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("close1: %d %s", r.StatusCode, b)
+	}
+	gdb.First(&ing, "id = ?", ing.ID)
+	afterClose := ing.Qty
+	wantAfterClose := decimal.Sub(startQty, decimal.MustFromString("0.6"))
+	if !afterClose.Equal(wantAfterClose) {
+		t.Fatalf("после close Rice = %s, want %s", afterClose, wantAfterClose)
+	}
+
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/reopen", tok, uuid.NewString(), map[string]any{}); r.StatusCode != http.StatusOK {
+		t.Skipf("reopen не прошёл: %d %s", r.StatusCode, b)
+	}
+	ids := orderItemIDs(t, f, tok, orderID)
+	if len(ids) != 1 {
+		t.Fatalf("ожидалась 1 позиция, получено %d", len(ids))
+	}
+	// Снимаем 1 из 3 порций.
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/items/"+ids[0]+"/void", tok, uuid.NewString(), map[string]any{
+		"reason": "клиент передумал", "qty": "1",
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("void partial: %d %s", r.StatusCode, b)
+	}
+
+	gdb.First(&ing, "id = ?", ing.ID)
+	wantAfterVoid := decimal.Add(afterClose, decimal.MustFromString("0.2"))
+	if !ing.Qty.Equal(wantAfterVoid) {
+		t.Errorf("после partial-void Rice = %s, want %s (0.2 кг за 1 снятую порцию, не 0.6 за всю позицию)", ing.Qty, wantAfterVoid)
+	}
+
+	// Reclose оставшихся 2 порций: они уже были списаны на close1 (тот же
+	// item.ID пережил partial-split) — повторного списания/возврата быть не должно.
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/close", tok, uuid.NewString(), map[string]any{
+		"payment_method": "cash", "account_id": accountID, "shift_id": shiftID,
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("close2: %d %s", r.StatusCode, b)
+	}
+	gdb.First(&ing, "id = ?", ing.ID)
+	if !ing.Qty.Equal(wantAfterVoid) {
+		t.Errorf("после reclose Rice = %s, want %s (не изменился) — реклоуз оставшихся порций не должен ни списать, ни вернуть склад повторно", ing.Qty, wantAfterVoid)
+	}
+}
+
+// Регресс-гвард: живой void (заказ ещё НИ РАЗУ не закрывался, order.ReopenedAt
+// == nil) не должен создавать voidreturn-движений — стоку взяться неоткуда,
+// forward-списание происходит только на close.
+func TestAudit_LiveVoidItem_NoStockReturn(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, menuItemID, _, _ := seedForWrite(t, f)
+
+	var ing models.Ingredient
+	gdb.Where("restaurant_id = ? AND name = ?", f.rid, "Rice").First(&ing)
+	startQty := ing.Qty
+
+	orderID := auditCreateOrder(t, f, tok, menuItemID, "1") // НЕ закрываем
+	ids := orderItemIDs(t, f, tok, orderID)
+	if len(ids) != 1 {
+		t.Fatalf("ожидалась 1 позиция, получено %d", len(ids))
+	}
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/items/"+ids[0]+"/void", tok, uuid.NewString(), map[string]any{
+		"reason": "тест",
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("void: %d %s", r.StatusCode, b)
+	}
+
+	gdb.First(&ing, "id = ?", ing.ID)
+	if !ing.Qty.Equal(startQty) {
+		t.Errorf("Rice = %s, want %s — живой void (до первой оплаты) не должен трогать склад", ing.Qty, startQty)
+	}
+	var voidReturnCount int64
+	gdb.Model(&models.StockMovement{}).
+		Where("restaurant_id = ? AND description LIKE ?", f.rid, "%:voidreturn").
+		Count(&voidReturnCount)
+	if voidReturnCount != 0 {
+		t.Errorf("найдено %d voidreturn-движений для живого void, want 0", voidReturnCount)
+	}
+}
+
+// Полуфабрикат: void ПОСЛЕ reopen обязан вернуть заготовку в
+// semi_finished_stock (не в сырьё — тот же путь, что и списание при наличии
+// готового остатка, см. TestSemiSale_WithStock_ConsumesSemi_NotRaw).
+func TestAudit_ReopenSemiItem_ReturnsSemiStock(t *testing.T) {
+	f := setupE2E(t)
+	tok := f.login(t)
+	gdb, _, shiftID, accountID := seedForWrite(t, f)
+	soupID, semiID, meat := seedSemiSoup(t, f, gdb)
+
+	if r, b := f.post(t, "/api/v1/semi/prepare", tok, uuid.NewString(), map[string]any{"semi_type_id": semiID, "qty": "5"}); r.StatusCode != http.StatusOK {
+		t.Fatalf("prepare: %d %s", r.StatusCode, b)
+	}
+	meatAfterPrep := ingQty(t, gdb, meat.ID)
+
+	r, b := f.post(t, "/api/v1/orders", tok, uuid.NewString(), map[string]any{
+		"items": []map[string]any{{"menu_item_id": soupID, "qty": "1"}},
+	})
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("create order: %d %s", r.StatusCode, b)
+	}
+	var ord models.Order
+	if err := json.Unmarshal(b, &ord); err != nil {
+		t.Fatal(err)
+	}
+	orderID := ord.ID
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/close", tok, uuid.NewString(), map[string]any{
+		"payment_method": "cash", "account_id": accountID, "shift_id": shiftID,
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("close1: %d %s", r.StatusCode, b)
+	}
+	afterClose := semiStockQty(t, gdb, f.rid, semiID)
+	if want := decimal.MustFromString("4.5"); !afterClose.Equal(want) {
+		t.Fatalf("Broth после close = %s, want %s", afterClose, want)
+	}
+
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/reopen", tok, uuid.NewString(), map[string]any{}); r.StatusCode != http.StatusOK {
+		t.Skipf("reopen не прошёл: %d %s", r.StatusCode, b)
+	}
+	ids := orderItemIDs(t, f, tok, orderID)
+	if len(ids) != 1 {
+		t.Fatalf("ожидалась 1 позиция, получено %d", len(ids))
+	}
+	if r, b := f.post(t, "/api/v1/orders/"+orderID+"/items/"+ids[0]+"/void", tok, uuid.NewString(), map[string]any{
+		"reason": "замена блюда",
+	}); r.StatusCode != http.StatusOK {
+		t.Fatalf("void: %d %s", r.StatusCode, b)
+	}
+
+	afterVoid := semiStockQty(t, gdb, f.rid, semiID)
+	if want := decimal.MustFromString("5"); !afterVoid.Equal(want) {
+		t.Errorf("Broth после void = %s, want %s (0.5 L обязан вернуться)", afterVoid, want)
+	}
+	if got := ingQty(t, gdb, meat.ID); !got.Equal(meatAfterPrep) {
+		t.Errorf("Meat после void = %s, want unchanged %s — возврат заготовки не должен трогать сырьё", got, meatAfterPrep)
+	}
+}

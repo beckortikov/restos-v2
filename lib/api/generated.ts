@@ -16115,6 +16115,11 @@ export interface components {
             expected_ready_at?: string;
             /** Format: date-time */
             closed_at?: string;
+            /**
+             * Format: date-time
+             * @description Заказ переоткрыт после close и ещё не закрыт повторно (миграция 096).
+             */
+            reopened_at?: string | null;
             /** Format: date-time */
             cancelled_at?: string;
             /** Format: date-time */
@@ -16237,6 +16242,11 @@ export interface components {
             service_amount?: components["schemas"]["Decimal"];
             /** Format: date-time */
             created_at?: string;
+            /**
+             * Format: date-time
+             * @description См. Order.reopened_at (миграция 096).
+             */
+            reopened_at?: string | null;
             /** @description cash|card|transfer|split */
             payment_method?: string;
             is_split?: boolean;
