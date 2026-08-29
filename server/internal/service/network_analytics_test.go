@@ -525,4 +525,44 @@ func TestNetworkAnalyticsBatch1(t *testing.T) {
 			t.Errorf("TotalOrders = %d, want 3 (2 существующих + 1 диспетчеризованный, не 4)", out.TotalOrders)
 		}
 	})
+
+	// Отмены по сети (владелец 2026-08-29) — В КОНЦЕ, отдельная фикстура: отмена
+	// НА ОБОИХ филиалах разом проверяет и restaurant_id IN (?) с несколькими id
+	// внутри Raw()-SQL (не только через query-builder .Where()), и что имя
+	// филиала резолвится ПОШТУЧНО на каждую строку, а не схлопывается.
+	t.Run("CancellationsReportNetwork", func(t *testing.T) {
+		voidReason := "Гость передумал"
+		itemName := "Сетевой войд"
+		gdb.Create(&models.OrderVoid{
+			ID: uuid.NewString(), OrderID: &o1, ItemName: &itemName, ItemQty: intPtr(1),
+			ItemPrice: decimal.MustFromString("15"), Reason: &voidReason, RestaurantID: &b1, CreatedAt: now,
+		})
+		gdb.Create(&models.OrderVoid{
+			ID: uuid.NewString(), OrderID: &o2, ItemName: &itemName, ItemQty: intPtr(1),
+			ItemPrice: decimal.MustFromString("25"), Reason: &voidReason, RestaurantID: &b2, CreatedAt: now,
+		})
+
+		out, err := svc.CancellationsReportNetwork(ctx, service.CancellationFilter{PeriodFilter: f})
+		if err != nil {
+			t.Fatalf("CancellationsReportNetwork: %v", err)
+		}
+		if out.Total != 2 {
+			t.Fatalf("Total = %d, want 2 (по одному войду на каждом из ДВУХ филиалов — restaurant_id IN (b1,b2))", out.Total)
+		}
+		byBranch := map[string]service.NetworkCancellationRow{}
+		for _, r := range out.Rows {
+			byBranch[r.RestaurantName] = r
+		}
+		r1, ok := byBranch["Филиал-1"]
+		if !ok || !r1.Amount.Equal(decimal.MustFromString("15")) {
+			t.Errorf("Филиал-1: %+v, want amount=15", r1)
+		}
+		r2, ok := byBranch["Филиал-2"]
+		if !ok || !r2.Amount.Equal(decimal.MustFromString("25")) {
+			t.Errorf("Филиал-2: %+v, want amount=25", r2)
+		}
+		if !out.Summary.TotalAmount.Equal(decimal.MustFromString("40")) {
+			t.Errorf("Summary.TotalAmount = %s, want 40 (15+25 с обоих филиалов)", out.Summary.TotalAmount.String())
+		}
+	})
 }

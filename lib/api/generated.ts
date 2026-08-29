@@ -3719,6 +3719,52 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/analytics/cancellations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Детальный отчёт по отменам по всей сети — объединяет отмены отдельных
+         *     позиций (order_voids) и целиком отменённые заказы (orders.cancelled_at),
+         *     каждая строка помечена филиалом. Тот же формат, что у
+         *     /analytics/cancellations.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["NetworkCancellationsReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/analytics/weekday": {
         parameters: {
             query?: never;
@@ -12226,6 +12272,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/analytics/cancellations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Детальный отчёт по отменам — объединяет отмены отдельных позиций
+         *     (order_voids, пост-оплатное списание с approve) и целиком отменённые
+         *     заказы (orders.cancelled_at) без задвоения сумм. Сводка (топ причин/
+         *     сотрудников/блюд/по дням) + построчный список с offset-пагинацией.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    from?: components["parameters"]["From"];
+                    to?: components["parameters"]["To"];
+                    /** @description По умолчанию 50, максимум 500. */
+                    limit?: number;
+                    offset?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["CancellationsReport"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/analytics/kitchen-stage-report": {
         parameters: {
             query?: never;
@@ -17375,6 +17468,65 @@ export interface components {
                 qty?: components["schemas"]["Decimal"];
                 orders?: number;
             };
+        };
+        CancellationRow: {
+            /** @enum {string} */
+            kind?: "item_void" | "order_cancel";
+            /** Format: uuid */
+            order_id?: string;
+            order_number?: number;
+            order_type?: string | null;
+            table_name?: string | null;
+            item_name?: string | null;
+            item_qty?: number | null;
+            amount?: components["schemas"]["Decimal"];
+            reason?: string | null;
+            approved_by_name?: string | null;
+            created_by_name?: string | null;
+            /** Format: date-time */
+            created_at?: string;
+        };
+        NetworkCancellationRow: components["schemas"]["CancellationRow"] & {
+            /** Format: uuid */
+            restaurant_id?: string;
+            restaurant_name?: string;
+        };
+        CancellationBucket: {
+            name?: string;
+            amount?: components["schemas"]["Decimal"];
+            count?: number;
+        };
+        CancellationsSummary: {
+            total_amount?: components["schemas"]["Decimal"];
+            item_voids_amount?: components["schemas"]["Decimal"];
+            order_cancels_amount?: components["schemas"]["Decimal"];
+            total_count?: number;
+            by_reason?: components["schemas"]["CancellationBucket"][];
+            by_employee?: components["schemas"]["CancellationBucket"][];
+            by_dish?: components["schemas"]["CancellationBucket"][];
+            by_day?: components["schemas"]["CancellationBucket"][];
+        };
+        CancellationsReport: {
+            period?: {
+                from?: string;
+                to?: string;
+            };
+            summary?: components["schemas"]["CancellationsSummary"];
+            rows?: components["schemas"]["CancellationRow"][];
+            total?: number;
+            limit?: number;
+            offset?: number;
+        };
+        NetworkCancellationsReport: {
+            period?: {
+                from?: string;
+                to?: string;
+            };
+            summary?: components["schemas"]["CancellationsSummary"];
+            rows?: components["schemas"]["NetworkCancellationRow"][];
+            total?: number;
+            limit?: number;
+            offset?: number;
         };
         FoodCostMonth: {
             /** @description YYYY-MM */

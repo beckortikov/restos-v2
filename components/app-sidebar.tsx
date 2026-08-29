@@ -311,6 +311,7 @@ const NAV: NavItem[] = [
       { label: 'ABC — Склад', href: '/analytics/abc-inventory', icon: BarChart3 },
       { label: 'Аналитика столов', href: '/analytics/tables', icon: MapPin },
       { label: 'Аналитика официантов', href: '/analytics/waiters', icon: Users },
+      { label: 'Отмены', href: '/analytics/cancellations', icon: Undo2 },
       { label: 'Пиковые часы', href: '/analytics/peak-hours', icon: Clock },
       { label: 'Время блюда по станциям', href: '/analytics/kitchen-stages', icon: Timer },
       { label: 'Себестоимость', href: '/analytics/food-cost', icon: TrendingDown },

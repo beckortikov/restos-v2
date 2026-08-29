@@ -392,6 +392,85 @@ export async function fetchWaitersAnalytics(opts: { from?: Date | string; to?: D
   return (await unwrap(api.GET('/api/v1/analytics/waiters', { params: { query: query as any } }))) as WaitersReport
 }
 
+// ─── Детальный отчёт по отменам ─────────────────────────────────────────────
+// Владелец 2026-08-29: «в аналитике дать возможность просматривать отменам
+// детальный [отчёт]» — объединяет отмены позиций (order_voids) и целиком
+// отменённые заказы, без задвоения сумм (см. серверный комментарий).
+
+export interface CancellationRow {
+  kind: 'item_void' | 'order_cancel'
+  order_id: string
+  order_number: number
+  order_type: string | null
+  table_name: string | null
+  item_name: string | null
+  item_qty: number | null
+  amount: DecStr
+  reason: string | null
+  approved_by_name: string | null
+  created_by_name: string | null
+  created_at: string
+}
+
+export interface NetworkCancellationRow extends CancellationRow {
+  restaurant_id: string
+  restaurant_name: string
+}
+
+export interface CancellationBucket {
+  name: string
+  amount: DecStr
+  count: number
+}
+
+export interface CancellationsSummary {
+  total_amount: DecStr
+  item_voids_amount: DecStr
+  order_cancels_amount: DecStr
+  total_count: number
+  by_reason: CancellationBucket[]
+  by_employee: CancellationBucket[]
+  by_dish: CancellationBucket[]
+  by_day: CancellationBucket[]
+}
+
+export interface CancellationsReport {
+  period: AnalyticsPeriod
+  summary: CancellationsSummary
+  rows: CancellationRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface NetworkCancellationsReport {
+  period: AnalyticsPeriod
+  summary: CancellationsSummary
+  rows: NetworkCancellationRow[]
+  total: number
+  limit: number
+  offset: number
+}
+
+type CancellationsOpts = { from?: Date | string; to?: Date | string; limit?: number; offset?: number }
+
+function buildCancellationsQuery(opts: CancellationsOpts): Record<string, string> {
+  const query: Record<string, string> = buildQuery(opts)
+  if (opts.limit) query.limit = String(opts.limit)
+  if (opts.offset) query.offset = String(opts.offset)
+  return query
+}
+
+export async function fetchCancellationsAnalytics(opts: CancellationsOpts = {}): Promise<CancellationsReport> {
+  const query = buildCancellationsQuery(opts)
+  return (await unwrap(api.GET('/api/v1/analytics/cancellations', { params: { query: query as any } }))) as CancellationsReport
+}
+
+export async function fetchNetworkCancellationsAnalytics(opts: CancellationsOpts = {}): Promise<NetworkCancellationsReport> {
+  const query = buildCancellationsQuery(opts)
+  return (await unwrap(api.GET('/api/v1/network/analytics/cancellations', { params: { query: query as any } }))) as NetworkCancellationsReport
+}
+
 export async function fetchTablesAnalytics(opts: { from?: Date | string; to?: Date | string } = {}): Promise<TablesAnalyticsReport> {
   const query = buildQuery(opts)
   return (await unwrap(api.GET('/api/v1/analytics/tables', { params: { query: query as any } }))) as TablesAnalyticsReport

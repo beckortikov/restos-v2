@@ -1181,7 +1181,7 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   // Персонал сети показывает оклады/ставки всех филиалов — гейтим тем же
   // правом, что и зарплату, а не общим finance.view.
   'payroll.manage': ['/finance/payroll'],
-  'analytics.view': ['/analytics/abc-menu', '/analytics/abc-inventory', '/analytics/tables', '/analytics/waiters', '/analytics/peak-hours', '/analytics/food-cost', '/analytics/forecast'],
+  'analytics.view': ['/analytics/abc-menu', '/analytics/abc-inventory', '/analytics/tables', '/analytics/waiters', '/analytics/cancellations', '/analytics/peak-hours', '/analytics/food-cost', '/analytics/forecast'],
   'showcase.view': ['/operations/showcase'],
   'suppliers.manage': ['/warehouse/suppliers'],
   'customers.manage': ['/settings/customers'],

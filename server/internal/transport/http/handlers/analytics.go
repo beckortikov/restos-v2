@@ -135,6 +135,32 @@ func (h *AnalyticsHandler) SalesReport(w http.ResponseWriter, r *http.Request) {
 	respond.JSON(w, http.StatusOK, out)
 }
 
+// CancellationsReport — GET /api/v1/analytics/cancellations.
+func (h *AnalyticsHandler) CancellationsReport(w http.ResponseWriter, r *http.Request) {
+	period, err := parsePeriod(r)
+	if err != nil {
+		respond.BadRequest(w, err.Error())
+		return
+	}
+	f := service.CancellationFilter{PeriodFilter: period}
+	if v := queryString(r, "limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Limit = n
+		}
+	}
+	if v := queryString(r, "offset"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			f.Offset = n
+		}
+	}
+	out, err := h.svc.CancellationsReport(r.Context(), f)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, out)
+}
+
 func (h *AnalyticsHandler) IngredientStockValue(w http.ResponseWriter, r *http.Request) {
 	limit := 10
 	if v := queryString(r, "limit"); v != "" {

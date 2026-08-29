@@ -109,6 +109,7 @@ const AbcMenu = () => L(() => import('@/app/(app)/analytics/abc-menu/page'))
 const AbcInventory = () => L(() => import('@/app/(app)/analytics/abc-inventory/page'))
 const Tables = () => L(() => import('@/app/(app)/analytics/tables/page'))
 const Waiters = () => L(() => import('@/app/(app)/analytics/waiters/page'))
+const Cancellations = () => L(() => import('@/app/(app)/analytics/cancellations/page'))
 const FoodCost = () => L(() => import('@/app/(app)/analytics/food-cost/page'))
 const PeakHours = () => L(() => import('@/app/(app)/analytics/peak-hours/page'))
 const Forecast = () => L(() => import('@/app/(app)/analytics/forecast/page'))
@@ -225,6 +226,7 @@ export function AppRouter() {
         <Route path="/analytics/abc-inventory" element={<AbcInventory />} />
         <Route path="/analytics/tables" element={<Tables />} />
         <Route path="/analytics/waiters" element={<Waiters />} />
+        <Route path="/analytics/cancellations" element={<Cancellations />} />
         <Route path="/analytics/food-cost" element={<FoodCost />} />
         <Route path="/analytics/peak-hours" element={<PeakHours />} />
         <Route path="/analytics/forecast" element={<Forecast />} />

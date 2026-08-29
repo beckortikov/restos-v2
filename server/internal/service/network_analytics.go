@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -1669,4 +1670,184 @@ func (s *NetworkService) networkBranchIDs(ctx context.Context) ([]string, error)
 		return nil, err
 	}
 	return branchIDs(branches), nil
+}
+
+// ─── Отмены ─────────────────────────────────────────────────────────────
+
+// NetworkCancellationRow — CancellationRow + филиал (свой users.id/order_id
+// на каждом филиале, схлопывать по имени нельзя — та же логика, что у
+// NetworkWaiterRow).
+type NetworkCancellationRow struct {
+	CancellationRow
+	RestaurantID   string `gorm:"column:restaurant_id" json:"restaurant_id"`
+	RestaurantName string `gorm:"-" json:"restaurant_name"`
+}
+
+type NetworkCancellationsReport struct {
+	Period struct {
+		From *string `json:"from,omitempty"`
+		To   *string `json:"to,omitempty"`
+	} `json:"period"`
+	Summary CancellationsSummary     `json:"summary"`
+	Rows    []NetworkCancellationRow `json:"rows"`
+	Total   int64                    `json:"total"`
+	Limit   int                      `json:"limit"`
+	Offset  int                      `json:"offset"`
+}
+
+// networkCancellationsUnionSQL — тот же UNION ALL, что и локальный отчёт
+// (analytics_cancellations.go), но restaurant_id IN (?) вместо = ? и с
+// колонкой restaurant_id в SELECT — central видит все филиалы разом.
+func networkCancellationsUnionSQL(hasFrom, hasTo bool) string {
+	voidWhere := "ov.restaurant_id IN ?"
+	cancelWhere := "o.restaurant_id IN ? AND o.cancelled_at IS NOT NULL"
+	if hasFrom {
+		voidWhere += " AND ov.created_at >= ?"
+		cancelWhere += " AND o.cancelled_at >= ?"
+	}
+	if hasTo {
+		voidWhere += " AND ov.created_at < ?"
+		cancelWhere += " AND o.cancelled_at < ?"
+	}
+	return fmt.Sprintf(`
+		SELECT 'item_void' AS kind, ov.order_id AS order_id, o.order_number AS order_number,
+		       o.type AS order_type, t.name AS table_name, ov.item_name AS item_name,
+		       ov.item_qty AS item_qty, (ov.item_price * COALESCE(ov.item_qty, 1)) AS amount,
+		       ov.reason AS reason, ov.approved_by_name AS approved_by_name,
+		       ov.created_by_name AS created_by_name, ov.created_at AS created_at,
+		       ov.restaurant_id AS restaurant_id
+		FROM order_voids ov
+		JOIN orders o ON o.id = ov.order_id
+		LEFT JOIN tables t ON t.id::text = o.table_id
+		WHERE %s
+		UNION ALL
+		SELECT 'order_cancel' AS kind, o.id AS order_id, o.order_number AS order_number,
+		       o.type AS order_type, t.name AS table_name, NULL AS item_name,
+		       NULL AS item_qty, COALESCE(o.cancelled_total, o.total, 0) AS amount,
+		       o.cancel_reason AS reason, NULL AS approved_by_name,
+		       u.name AS created_by_name, o.cancelled_at AS created_at,
+		       o.restaurant_id AS restaurant_id
+		FROM orders o
+		LEFT JOIN tables t ON t.id::text = o.table_id
+		LEFT JOIN users u ON u.id::text = o.cancelled_by AND u.restaurant_id = o.restaurant_id
+		WHERE %s
+	`, voidWhere, cancelWhere)
+}
+
+// CancellationsReportNetwork — та же (детальные отмены) аналитика, что и
+// локальный отчёт, но по всей сети, каждая строка помечена филиалом.
+func (s *NetworkService) CancellationsReportNetwork(ctx context.Context, f CancellationFilter) (*NetworkCancellationsReport, error) {
+	account, err := s.accountForCtx(ctx)
+	if err != nil {
+		return nil, err
+	}
+	branches, err := s.branchesForAccount(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	ids := branchIDs(branches)
+	nameByID := make(map[string]string, len(branches))
+	for _, b := range branches {
+		nameByID[b.ID] = b.Name
+	}
+
+	out := &NetworkCancellationsReport{Rows: []NetworkCancellationRow{}}
+	if f.From != nil {
+		s := f.From.Format("2006-01-02")
+		out.Period.From = &s
+	}
+	if f.To != nil {
+		s := f.To.Format("2006-01-02")
+		out.Period.To = &s
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = cancellationsDefaultLimit
+	}
+	if limit > cancellationsMaxLimit {
+		limit = cancellationsMaxLimit
+	}
+	offset := f.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	args := []any{ids}
+	if f.From != nil {
+		args = append(args, *f.From)
+	}
+	if f.To != nil {
+		args = append(args, *f.To)
+	}
+	args = append(args, args...)
+	unionSQL := networkCancellationsUnionSQL(f.From != nil, f.To != nil)
+
+	if err := s.r.Raw().WithContext(ctx).
+		Raw(fmt.Sprintf("SELECT COUNT(*) FROM (%s) x", unionSQL), args...).
+		Scan(&out.Total).Error; err != nil {
+		return nil, err
+	}
+
+	pagedArgs := append(append([]any{}, args...), limit, offset)
+	if err := s.r.Raw().WithContext(ctx).
+		Raw(unionSQL+" ORDER BY created_at DESC LIMIT ? OFFSET ?", pagedArgs...).
+		Scan(&out.Rows).Error; err != nil {
+		return nil, err
+	}
+	for i := range out.Rows {
+		out.Rows[i].RestaurantName = nameByID[out.Rows[i].RestaurantID]
+	}
+
+	type kindTotal struct {
+		Kind   string          `gorm:"column:kind"`
+		Amount decimal.Decimal `gorm:"column:amount"`
+		Count  int             `gorm:"column:count"`
+	}
+	var kindTotals []kindTotal
+	if err := s.r.Raw().WithContext(ctx).
+		Raw(fmt.Sprintf("SELECT kind, COALESCE(SUM(amount),0) AS amount, COUNT(*) AS count FROM (%s) x GROUP BY kind", unionSQL), args...).
+		Scan(&kindTotals).Error; err != nil {
+		return nil, err
+	}
+	for _, kt := range kindTotals {
+		out.Summary.TotalAmount = decimal.Add(out.Summary.TotalAmount, kt.Amount)
+		out.Summary.TotalCount += kt.Count
+		if kt.Kind == "item_void" {
+			out.Summary.ItemVoidsAmount = kt.Amount
+		} else {
+			out.Summary.OrderCancelsAmount = kt.Amount
+		}
+	}
+	out.Summary.TotalAmount = decimal.Normalize(out.Summary.TotalAmount)
+	out.Summary.ItemVoidsAmount = decimal.Normalize(out.Summary.ItemVoidsAmount)
+	out.Summary.OrderCancelsAmount = decimal.Normalize(out.Summary.OrderCancelsAmount)
+
+	topN := func(groupExpr, where string) ([]CancellationBucket, error) {
+		var rows []CancellationBucket
+		sql := fmt.Sprintf(
+			"SELECT %s AS name, COALESCE(SUM(amount),0) AS amount, COUNT(*) AS count FROM (%s) x %s GROUP BY name ORDER BY amount DESC LIMIT 10",
+			groupExpr, unionSQL, where)
+		if err := s.r.Raw().WithContext(ctx).Raw(sql, args...).Scan(&rows).Error; err != nil {
+			return nil, err
+		}
+		return rows, nil
+	}
+	if out.Summary.ByReason, err = topN("COALESCE(reason, 'Без причины')", ""); err != nil {
+		return nil, err
+	}
+	if out.Summary.ByEmployee, err = topN("COALESCE(created_by_name, 'Неизвестно')", ""); err != nil {
+		return nil, err
+	}
+	if out.Summary.ByDish, err = topN("item_name", "WHERE item_name IS NOT NULL"); err != nil {
+		return nil, err
+	}
+	if out.Summary.ByDay, err = topN("to_char(created_at, 'YYYY-MM-DD')", ""); err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }

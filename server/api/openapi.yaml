@@ -1405,6 +1405,21 @@ paths:
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkWaitersReport" } } } } }
 
+  /api/v1/network/analytics/cancellations:
+    get:
+      tags: [stock]
+      summary: |
+        Детальный отчёт по отменам по всей сети — объединяет отмены отдельных
+        позиций (order_voids) и целиком отменённые заказы (orders.cancelled_at),
+        каждая строка помечена филиалом. Тот же формат, что у
+        /analytics/cancellations.
+      parameters:
+        - { $ref: "#/components/parameters/From" }
+        - { $ref: "#/components/parameters/To" }
+        - { in: query, name: limit, schema: { type: integer } }
+        - { in: query, name: offset, schema: { type: integer } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/NetworkCancellationsReport" } } } } }
+
   /api/v1/network/analytics/weekday:
     get:
       tags: [stock]
@@ -3877,6 +3892,20 @@ paths:
       summary: Статистика по официантам за период
       parameters: [ { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" } ]
       responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/WaitersReport" } } } } }
+  /api/v1/analytics/cancellations:
+    get:
+      tags: [analytics]
+      summary: |
+        Детальный отчёт по отменам — объединяет отмены отдельных позиций
+        (order_voids, пост-оплатное списание с approve) и целиком отменённые
+        заказы (orders.cancelled_at) без задвоения сумм. Сводка (топ причин/
+        сотрудников/блюд/по дням) + построчный список с offset-пагинацией.
+      parameters:
+        - { $ref: "#/components/parameters/From" }
+        - { $ref: "#/components/parameters/To" }
+        - { in: query, name: limit, schema: { type: integer }, description: "По умолчанию 50, максимум 500." }
+        - { in: query, name: offset, schema: { type: integer } }
+      responses: { "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/CancellationsReport" } } } } }
   /api/v1/analytics/kitchen-stage-report:
     get:
       tags: [analytics]
@@ -6880,6 +6909,64 @@ components:
             revenue: { $ref: "#/components/schemas/Decimal" }
             qty: { $ref: "#/components/schemas/Decimal" }
             orders: { type: integer }
+
+    CancellationRow:
+      type: object
+      properties:
+        kind: { type: string, enum: [item_void, order_cancel] }
+        order_id: { type: string, format: uuid }
+        order_number: { type: integer }
+        order_type: { type: string, nullable: true }
+        table_name: { type: string, nullable: true }
+        item_name: { type: string, nullable: true }
+        item_qty: { type: integer, nullable: true }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        reason: { type: string, nullable: true }
+        approved_by_name: { type: string, nullable: true }
+        created_by_name: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    NetworkCancellationRow:
+      allOf:
+        - $ref: "#/components/schemas/CancellationRow"
+        - type: object
+          properties:
+            restaurant_id: { type: string, format: uuid }
+            restaurant_name: { type: string }
+    CancellationBucket:
+      type: object
+      properties:
+        name: { type: string }
+        amount: { $ref: "#/components/schemas/Decimal" }
+        count: { type: integer }
+    CancellationsSummary:
+      type: object
+      properties:
+        total_amount: { $ref: "#/components/schemas/Decimal" }
+        item_voids_amount: { $ref: "#/components/schemas/Decimal" }
+        order_cancels_amount: { $ref: "#/components/schemas/Decimal" }
+        total_count: { type: integer }
+        by_reason: { type: array, items: { $ref: "#/components/schemas/CancellationBucket" } }
+        by_employee: { type: array, items: { $ref: "#/components/schemas/CancellationBucket" } }
+        by_dish: { type: array, items: { $ref: "#/components/schemas/CancellationBucket" } }
+        by_day: { type: array, items: { $ref: "#/components/schemas/CancellationBucket" } }
+    CancellationsReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string }, to: { type: string } } }
+        summary: { $ref: "#/components/schemas/CancellationsSummary" }
+        rows: { type: array, items: { $ref: "#/components/schemas/CancellationRow" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+    NetworkCancellationsReport:
+      type: object
+      properties:
+        period: { type: object, properties: { from: { type: string }, to: { type: string } } }
+        summary: { $ref: "#/components/schemas/CancellationsSummary" }
+        rows: { type: array, items: { $ref: "#/components/schemas/NetworkCancellationRow" } }
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
 
     FoodCostMonth:
       type: object
