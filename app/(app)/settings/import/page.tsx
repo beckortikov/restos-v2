@@ -393,6 +393,7 @@ export default function ImportPage() {
         await createIngredient({
           name: ing.name, category: ing.category, qty: 0, min_qty: ing.minQty,
           unit: ing.unit, price_per_unit: ing.pricePerUnit, waste_percent: ing.wastePercent,
+          is_food: ing.isFood,
         })
         created++
       } catch (err) { errors.push(`"${ing.name}": ${err instanceof Error ? err.message : 'ошибка'}`) }
@@ -973,6 +974,7 @@ export default function ImportPage() {
                       <th className="px-2 py-1.5 text-right text-muted-foreground">Цена</th>
                       <th className="px-2 py-1.5 text-right text-muted-foreground">Отходы %</th>
                       <th className="px-2 py-1.5 text-left text-muted-foreground">Категория</th>
+                      <th className="px-2 py-1.5 text-left text-muted-foreground">Тип</th>
                     </tr></thead>
                     <tbody>
                       {parsedIngredients.ingredients.map((ing, i) => (
@@ -982,6 +984,7 @@ export default function ImportPage() {
                           <td className="px-2 py-1.5 text-right">{ing.pricePerUnit}</td>
                           <td className="px-2 py-1.5 text-right">{ing.wastePercent > 0 ? `${ing.wastePercent}%` : '—'}</td>
                           <td className="px-2 py-1.5"><span className="bg-muted px-1.5 py-0.5 rounded text-[10px]">{ing.category}</span></td>
+                          <td className="px-2 py-1.5">{!ing.isFood && <span className="bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[10px]">Хозтовар</span>}</td>
                         </tr>
                       ))}
                     </tbody>

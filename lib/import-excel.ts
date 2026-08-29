@@ -63,6 +63,7 @@ export interface ParsedIngredient {
   wastePercent: number
   minQty: number
   category: string
+  isFood: boolean // false = хозтовар (колонка "Тип" = "Хозтовар")
 }
 
 export interface ParsedIngredientList { ingredients: ParsedIngredient[]; errors: string[] }
@@ -352,10 +353,13 @@ export async function parseIngredientsExcel(file: File): Promise<ParsedIngredien
     const wastePercent = Number(row[4]) || 0
     const minQty = Number(row[5]) || 0
     const category = String(row[6] || 'Прочее').trim()
+    // row[7] = "Используется в блюдах" — информационная, только на экспорт, не читаем.
+    const typeRaw = String(row[8] || '').trim().toLowerCase()
+    const isFood = typeRaw !== 'хозтовар' && typeRaw !== 'хоз товар' && typeRaw !== 'нет' && typeRaw !== 'no'
 
     if (pricePerUnit <= 0) errors.push(`"${name}": цена не указана`)
 
-    ingredients.push({ name, unit, pricePerUnit, wastePercent, minQty, category })
+    ingredients.push({ name, unit, pricePerUnit, wastePercent, minQty, category, isFood })
   }
 
   return { ingredients, errors }
