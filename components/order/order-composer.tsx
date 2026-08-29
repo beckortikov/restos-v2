@@ -400,6 +400,37 @@ export function OrderComposer(props: OrderComposerProps) {
   // найдёт. Подмешиваем явно закреплённый по клику из списка заказов.
   const [pinnedOrder, setPinnedOrder] = useState<Order | null>(null)
 
+  // «Дозаказ» из списка заказов (goToAddItems в order-actions-body.tsx)
+  // передаёт tableId, только если он есть у заказа — для такаута/доставки и
+  // для зального заказа БЕЗ стола (central-диспетчеризация) его нет. Страница
+  // (operations/pos/page.tsx) без tableId ставит initialOrderType=undefined →
+  // композер стартует в дефолтном 'hall' с пустым selectedTableId, что эффект
+  // ниже тут же трактует как «нет стола» и сбрасывает selectedExistingOrderId
+  // в null, не дав кассиру вообще увидеть свой заказ. Разрешаем сами — один
+  // fetch по id — и раскладываем ровно как onClick в списке заказов ниже.
+  useEffect(() => {
+    if (isAddMode || !initialExistingOrderId || newProps?.initialTableId) return
+    let cancelled = false
+    fetchOrders({ ids: [initialExistingOrderId] }).then(list => {
+      if (cancelled) return
+      const o = list[0]
+      if (!o) return
+      const isHall = o.type !== 'delivery' && o.type !== 'takeaway'
+      if (isHall && o.tableId) {
+        setOrderType('hall'); setSelectedTableId(o.tableId); setSelectedExistingOrderId(o.id)
+      } else if (o.type === 'takeaway' || o.type === 'delivery') {
+        setOrderType(o.type); setSelectedExistingOrderId(o.id)
+      } else {
+        // Зал-заказ без стола — своей вкладки нет: показываем как «с собой».
+        setOrderType('takeaway'); setPinnedOrder(o); setSelectedExistingOrderId(o.id)
+      }
+    }).catch(() => {})
+    return () => { cancelled = true }
+    // Один раз на монтирование — initialExistingOrderId/initialTableId это
+    // мгновенный снимок URL при первом рендере страницы, не живой state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   // Inline order actions: открываем существующий OrderActionsDialog поверх
   // POS, чтобы кассир мог закрыть/оплатить заказ не уходя со страницы.
   // Phase 1 интеграции «всё-в-одном POS» — диалог берёт на себя оплату,

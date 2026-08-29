@@ -1417,6 +1417,19 @@ export default function PosV2Order() {
                 <button disabled={busy} onClick={addToActiveGroup} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white disabled:opacity-40 active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}>
                   <Plus style={{ width: '1.3em', height: '1.3em' }} />{adding ? 'Добавляем…' : `Добавить в заказ #${activeGroup.orderNumber ?? ''}`}
                 </button>
+              ) : activeGroup.type === 'hall' ? (
+                // Зальный заказ БЕЗ стола (central-диспетчеризация и т.п.) —
+                // своей вкладки нет, живёт тут же в numberMode, но officiant
+                // должен суметь посадить гостей за реальный стол: даём «Ещё»
+                // → «Перенести на другой стол» (см. OrderExtras, работает и
+                // без текущего tableId — просто назначает новый).
+                <div className="flex flex-col" style={{ gap: '0.5rem' }}>
+                  <div className="flex items-center gap-2">
+                    <button disabled={busy} onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center shrink-0 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)' }}><Printer style={{ width: '1.3em', height: '1.3em' }} /></button>
+                    <button onClick={() => setExtrasOpen(true)} className="flex-1 flex items-center justify-center gap-1.5 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.7rem,1.1vw,1rem)', fontSize: 'var(--pv-ctl)' }}><MoreHorizontal style={{ width: '1.15em', height: '1.15em' }} />Ещё</button>
+                  </div>
+                  <button onClick={() => openPayment(activeGroup)} className="w-full flex items-center justify-center gap-2 rounded-2xl font-bold text-white active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-brand)', padding: 'clamp(0.85rem,1.3vw,1.15rem)', fontSize: 'clamp(1rem,1.4vw,1.2rem)', boxShadow: '0 6px 18px rgba(216,90,48,0.35)' }}><CreditCard style={{ width: '1.3em', height: '1.3em' }} />К оплате</button>
+                </div>
               ) : (
                 <div className="flex items-center gap-2">
                   <button disabled={busy} onClick={() => doPreBill(activeGroup.id)} className="flex items-center justify-center shrink-0 rounded-2xl font-semibold active:scale-[0.98] transition-transform" style={{ background: 'var(--pv-bg)', color: 'var(--pv-text-2)', padding: 'clamp(0.75rem,1.2vw,1.05rem) clamp(0.7rem,1vw,1rem)' }}><Printer style={{ width: '1.3em', height: '1.3em' }} /></button>
@@ -1620,7 +1633,33 @@ export default function PosV2Order() {
           servicePercent={restaurant?.servicePercent ?? 0}
           open={extrasOpen}
           onClose={() => setExtrasOpen(false)}
-          onChanged={() => { setExtrasOpen(false); reloadContext() }}
+          onChanged={() => {
+            setExtrasOpen(false)
+            // Перенос зального заказа БЕЗ стола (central-диспетчеризация и
+            // т.п., см. numberMode) — единственное действие в OrderExtras,
+            // которое СНИМАЕТ numberMode: у заказа появляется table_id.
+            // reloadContext() тут не поможет — он перечитает очередь по
+            // СТАРОМУ orderType='takeaway', а заказ теперь настоящий 'hall'
+            // и туда больше не попадёт (тот же фильтр по типу, что чинили
+            // в tapOrder). Перепроверяем актуальный tableId и переключаем
+            // контекст сами, если он появился.
+            if (numberMode && activeGroup?.type === 'hall') {
+              const gid = activeGroup.id
+              fetchOrders({ ids: [gid] }).then(list => {
+                const o = list[0]
+                if (o?.tableId) {
+                  // Без этого флага эффект смены orderType (строка ~405) решит,
+                  // что мы «вручную ушли с вкладки», бросит warning про этот же
+                  // заказ и тут же сотрёт выбранные ниже стол/группу — та же
+                  // защита, что уже используют tapOrder/doEditClosed.
+                  if (orderType !== 'hall') skipTypeResetRef.current = true
+                  setOrderType('hall'); setSelectedTableId(o.tableId); loadTableOrders(o.tableId, o.id, [o.id])
+                } else reloadContext()
+              }).catch(() => reloadContext())
+            } else {
+              reloadContext()
+            }
+          }}
           onCancelled={() => { setExtrasOpen(false); setActiveGroupId(null); reloadContext() }}
         />
       )}
