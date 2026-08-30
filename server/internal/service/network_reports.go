@@ -751,7 +751,7 @@ func (s *NetworkService) MonthlyRevenue(ctx context.Context, months int) ([]Netw
 	}
 	var rows []row
 	if err := s.r.Raw().WithContext(ctx).Table("orders").
-		Select("to_char(closed_at, 'YYYY-MM') AS month, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
+		Select("to_char(closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM') AS month, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL AND closed_at >= ?",
 			ids, []string{"closed", "refunded"}, startMonth).
 		Group("month").
@@ -1008,7 +1008,7 @@ func (s *NetworkService) DashboardDetail(ctx context.Context, f PeriodFilter) (*
 	}
 	var hourRows []hourRow
 	if err := closedOrders("o").
-		Select("EXTRACT(HOUR FROM o.created_at)::int AS hour, COALESCE(SUM(o.total_with_service), 0) AS revenue").
+		Select("EXTRACT(HOUR FROM o.created_at AT TIME ZONE 'Asia/Dushanbe')::int AS hour, COALESCE(SUM(o.total_with_service), 0) AS revenue").
 		Group("hour").
 		Scan(&hourRows).Error; err != nil {
 		return nil, err

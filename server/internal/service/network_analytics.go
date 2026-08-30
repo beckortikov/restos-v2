@@ -48,8 +48,8 @@ func (s *NetworkService) PeakHours(ctx context.Context, f PeriodFilter) (*PeakHo
 		Revenue decimal.Decimal `gorm:"column:revenue"`
 	}
 	q := s.r.Raw().WithContext(ctx).Table("orders").
-		Select(`EXTRACT(DOW  FROM closed_at)::int AS weekday,
-		        EXTRACT(HOUR FROM closed_at)::int AS hour,
+		Select(`EXTRACT(DOW  FROM closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS weekday,
+		        EXTRACT(HOUR FROM closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS hour,
 		        COUNT(*) AS orders,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
@@ -341,8 +341,8 @@ func (s *NetworkService) SalesReportNetwork(ctx context.Context, f SalesReportFi
 	byType := f.OrderType != "" && f.OrderType != "all"
 
 	q := s.r.Raw().WithContext(ctx).Table("order_items AS oi").
-		Select(`to_char(o.closed_at, 'YYYY-MM-DD') AS date,
-		        EXTRACT(HOUR FROM o.closed_at)::int AS hour,
+		Select(`to_char(o.closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM-DD') AS date,
+		        EXTRACT(HOUR FROM o.closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS hour,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS menu_item_id,
 		        COALESCE(MAX(mi.name), MAX(oi.name), '—') AS name,
 		        COALESCE(MAX(NULLIF(mi.category, '')), 'Без категории') AS category,
@@ -389,7 +389,7 @@ func (s *NetworkService) SalesReportNetwork(ctx context.Context, f SalesReportFi
 	out.Totals.Orders = int(cnt)
 
 	qd := s.r.Raw().WithContext(ctx).Table("orders AS o").
-		Select(`to_char(o.closed_at, 'YYYY-MM-DD') AS date,
+		Select(`to_char(o.closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM-DD') AS date,
 		        COUNT(DISTINCT o.id) AS orders,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.qty / oi.unit_size ELSE oi.qty END) FILTER (WHERE oi.id IS NOT NULL AND oi.cancelled_at IS NULL), 0) AS qty,
 		        COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)) FILTER (WHERE oi.id IS NOT NULL AND oi.cancelled_at IS NULL), 0) AS revenue`).
@@ -565,7 +565,7 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 		Revenue      decimal.Decimal `gorm:"column:revenue"`
 	}
 	qb := s.r.Raw().WithContext(ctx).Table("orders").
-		Select(`restaurant_id, waiter_id, to_char(closed_at, 'YYYY-MM-DD') AS day,
+		Select(`restaurant_id, waiter_id, to_char(closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM-DD') AS day,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
 		Where(dispatchExcludeBare, dispatchArgs...)
@@ -670,7 +670,7 @@ func (s *NetworkService) WaitersNetwork(ctx context.Context, f PeriodFilter) (*N
 			Revenue decimal.Decimal `gorm:"column:revenue"`
 		}
 		dbq := s.r.Raw().WithContext(ctx).Table("delivery_relay_orders AS dro").
-			Select(`dro.created_by_user_id AS user_id, to_char(o.closed_at, 'YYYY-MM-DD') AS day,
+			Select(`dro.created_by_user_id AS user_id, to_char(o.closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM-DD') AS day,
 			        COALESCE(SUM(o.total_with_service), 0) AS revenue`).
 			Joins("JOIN orders o ON o.id = dro.local_order_id").
 			Where("dro.restaurant_id = ? AND dro.kind = ? AND dro.status = ? AND o.status IN ?",
@@ -787,7 +787,7 @@ func (s *NetworkService) WeekdayNetwork(ctx context.Context, f PeriodFilter) (*W
 		Revenue decimal.Decimal `gorm:"column:revenue"`
 	}
 	qr := s.r.Raw().WithContext(ctx).Table("orders").
-		Select(`EXTRACT(DOW FROM closed_at)::int AS weekday, COUNT(*) AS orders, COALESCE(SUM(total_with_service),0) AS revenue`).
+		Select(`EXTRACT(DOW FROM closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS weekday, COUNT(*) AS orders, COALESCE(SUM(total_with_service),0) AS revenue`).
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
 	qr = applyClosedPeriod(qr, f)
 	var revRows []revRow
@@ -800,7 +800,7 @@ func (s *NetworkService) WeekdayNetwork(ctx context.Context, f PeriodFilter) (*W
 		COGS    decimal.Decimal `gorm:"column:cogs"`
 	}
 	qc := s.r.Raw().WithContext(ctx).Table("order_items AS oi").
-		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
+		Select(`EXTRACT(DOW FROM o.closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS weekday, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL")
@@ -815,7 +815,7 @@ func (s *NetworkService) WeekdayNetwork(ctx context.Context, f PeriodFilter) (*W
 		Labor   decimal.Decimal `gorm:"column:labor"`
 	}
 	ql := s.r.Raw().WithContext(ctx).Table("time_entries AS te").
-		Select(`EXTRACT(DOW FROM te.clock_in)::int AS weekday, COALESCE(SUM(te.total_hours * COALESCE(u.hourly_rate,0)),0) AS labor`).
+		Select(`EXTRACT(DOW FROM te.clock_in AT TIME ZONE 'Asia/Dushanbe')::int AS weekday, COALESCE(SUM(te.total_hours * COALESCE(u.hourly_rate,0)),0) AS labor`).
 		Joins("JOIN users u ON u.id = te.user_id AND u.restaurant_id = te.restaurant_id").
 		Where("te.restaurant_id IN ? AND te.clock_in IS NOT NULL", ids)
 	if f.From != nil {
@@ -860,7 +860,7 @@ func (s *NetworkService) WeekdayNetwork(ctx context.Context, f PeriodFilter) (*W
 		Revenue decimal.Decimal `gorm:"column:revenue"`
 	}
 	qh := s.r.Raw().WithContext(ctx).Table("orders").
-		Select(`EXTRACT(DOW FROM closed_at)::int AS weekday, EXTRACT(HOUR FROM closed_at)::int AS hour, COUNT(*) AS orders, COALESCE(SUM(total_with_service),0) AS revenue`).
+		Select(`EXTRACT(DOW FROM closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS weekday, EXTRACT(HOUR FROM closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS hour, COUNT(*) AS orders, COALESCE(SUM(total_with_service),0) AS revenue`).
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
 	qh = applyClosedPeriod(qh, f)
 	var hRows []hRow
@@ -873,7 +873,7 @@ func (s *NetworkService) WeekdayNetwork(ctx context.Context, f PeriodFilter) (*W
 		COGS    decimal.Decimal `gorm:"column:cogs"`
 	}
 	qhc := s.r.Raw().WithContext(ctx).Table("order_items AS oi").
-		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, EXTRACT(HOUR FROM o.closed_at)::int AS hour, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
+		Select(`EXTRACT(DOW FROM o.closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS weekday, EXTRACT(HOUR FROM o.closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS hour, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
 		Where("oi.cancelled_at IS NULL")
@@ -903,7 +903,7 @@ func (s *NetworkService) WeekdayNetwork(ctx context.Context, f PeriodFilter) (*W
 		COGS     decimal.Decimal `gorm:"column:cogs"`
 	}
 	qcat := s.r.Raw().WithContext(ctx).Table("order_items AS oi").
-		Select(`EXTRACT(DOW FROM o.closed_at)::int AS weekday, COALESCE(NULLIF(mi.category,''),'—') AS category,
+		Select(`EXTRACT(DOW FROM o.closed_at AT TIME ZONE 'Asia/Dushanbe')::int AS weekday, COALESCE(NULLIF(mi.category,''),'—') AS category,
 		        COALESCE(SUM(oi.qty),0) AS qty, COALESCE(SUM((CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.price * oi.qty / oi.unit_size ELSE oi.price * oi.qty END) * COALESCE((o.total - o.discount_amount) / NULLIF(o.total, 0), 1)),0) AS revenue, COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END),0) AS cogs`).
 		Joins("JOIN orders o ON o.id = oi.order_id").
 		Joins("LEFT JOIN menu_items mi ON mi.id = oi.menu_item_id AND mi.restaurant_id = o.restaurant_id").
@@ -1026,7 +1026,7 @@ func (s *NetworkService) FoodCostMonthlyNetwork(ctx context.Context, f PeriodFil
 		Orders  int             `gorm:"column:orders"`
 	}
 	q := s.r.Raw().WithContext(ctx).Table("orders").
-		Select(`to_char(closed_at, 'YYYY-MM') AS month,
+		Select(`to_char(closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM') AS month,
 		        COALESCE(SUM(total_with_service), 0) AS revenue,
 		        COUNT(*) AS orders`).
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
@@ -1046,7 +1046,7 @@ func (s *NetworkService) FoodCostMonthlyNetwork(ctx context.Context, f PeriodFil
 		COGS  decimal.Decimal `gorm:"column:cogs"`
 	}
 	q2 := s.r.Raw().WithContext(ctx).Table("orders AS o").
-		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
+		Select(`to_char(o.closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM') AS month,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
 		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", ids, []string{"closed", "refunded"})
@@ -1261,7 +1261,7 @@ func (s *NetworkService) networkDailyAgg(ctx context.Context, ids []string, from
 		Cnt   int             `gorm:"column:cnt"`
 	}
 	q := s.r.Raw().WithContext(ctx).Table("orders").
-		Select("to_char(closed_at, 'YYYY-MM-DD') AS day, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
+		Select("to_char(closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM-DD') AS day, COALESCE(SUM(total_with_service), 0) AS total, COUNT(*) AS cnt").
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"}).
 		Where("closed_at >= ? AND closed_at < ?", from, to).
 		Group("day")
@@ -1322,7 +1322,7 @@ func (s *NetworkService) ForecastNetwork(ctx context.Context, f PeriodFilter) (*
 		Revenue decimal.Decimal `gorm:"column:revenue"`
 	}
 	q := s.r.Raw().WithContext(ctx).Table("orders").
-		Select(`to_char(closed_at, 'YYYY-MM') AS month,
+		Select(`to_char(closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM') AS month,
 		        COALESCE(SUM(total_with_service), 0) AS revenue`).
 		Where("restaurant_id IN ? AND status IN ? AND closed_at IS NOT NULL", ids, []string{"closed", "refunded"})
 	if f.From != nil {
@@ -1347,7 +1347,7 @@ func (s *NetworkService) ForecastNetwork(ctx context.Context, f PeriodFilter) (*
 		COGS  decimal.Decimal `gorm:"column:cogs"`
 	}
 	q2 := s.r.Raw().WithContext(ctx).Table("orders AS o").
-		Select(`to_char(o.closed_at, 'YYYY-MM') AS month,
+		Select(`to_char(o.closed_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM') AS month,
 		        COALESCE(SUM(CASE WHEN oi.unit IN ('g','kg') AND oi.unit_size > 0 THEN oi.cogs * oi.qty / oi.unit_size ELSE oi.cogs * oi.qty END), 0) AS cogs`).
 		Joins("JOIN order_items oi ON oi.order_id = o.id").
 		Where("o.restaurant_id IN ? AND o.status IN ? AND o.closed_at IS NOT NULL AND oi.cancelled_at IS NULL", ids, []string{"closed", "refunded"})
@@ -1395,7 +1395,7 @@ func (s *NetworkService) ForecastNetwork(ctx context.Context, f PeriodFilter) (*
 		Amount decimal.Decimal `gorm:"column:amount"`
 	}
 	q3 := s.r.Raw().WithContext(ctx).Table("financial_operations").
-		Select(`to_char(created_at, 'YYYY-MM') AS month,
+		Select(`to_char(created_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM') AS month,
 		        COALESCE(SUM(amount), 0) AS amount`).
 		Where("restaurant_id IN ? AND type = ? AND COALESCE(activity, 'operational') = 'operational'", ids, "out")
 	if f.From != nil {
@@ -1845,7 +1845,7 @@ func (s *NetworkService) CancellationsReportNetwork(ctx context.Context, f Cance
 	if out.Summary.ByDish, err = topN("item_name", "WHERE item_name IS NOT NULL"); err != nil {
 		return nil, err
 	}
-	if out.Summary.ByDay, err = topN("to_char(created_at, 'YYYY-MM-DD')", ""); err != nil {
+	if out.Summary.ByDay, err = topN("to_char(created_at AT TIME ZONE 'Asia/Dushanbe', 'YYYY-MM-DD')", ""); err != nil {
 		return nil, err
 	}
 
