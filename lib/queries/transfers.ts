@@ -399,8 +399,12 @@ export interface NetworkStaffMember {
   id: string
   name: string
   role: string
+  username?: string | null
   position?: string | null
   phone?: string | null
+  birthDate?: string | null
+  station?: string | null
+  shiftNumber?: number | null
   payType: 'monthly' | 'daily'
   salary: number
   dailyRate: number
@@ -547,8 +551,12 @@ export async function fetchNetworkStaff(): Promise<NetworkStaff> {
           id: u.id,
           name: u.name ?? '',
           role: u.role ?? '',
+          username: u.username,
           position: u.position,
           phone: u.phone,
+          birthDate: u.birth_date,
+          station: u.station,
+          shiftNumber: u.shift_number,
           payType: u.pay_type === 'daily' ? 'daily' : 'monthly',
           salary: Number(u.salary ?? 0),
           dailyRate: Number(u.daily_rate ?? 0),

@@ -1,8 +1,9 @@
 'use client'
 
-import { useState, useEffect, memo, useCallback, useMemo } from 'react'
+import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, transliterateToUsername } from '@/lib/helpers'
 import {
   type User, type UserPermissions, type PermissionKey, type UserRole as UserRoleType,
   ROLE_LABELS, PERMISSION_GROUPS, PERMISSION_LABELS, ALL_PERMISSIONS,
@@ -13,7 +14,11 @@ import {
   ALL_STATIONS, STATION_LABELS, STATION_ICONS, type MenuStation,
 } from '@/lib/types'
 import { fetchUsersByRestaurant, updateUserPermissions, createUserForRestaurant, deleteUser, updateUser, generateUniquePin } from '@/lib/queries'
-import { Shield, Save, RotateCcw, Check, Minus, Plus, Trash2, Users, Search, Pencil, Grid3X3, List, X, KeyRound, ChevronsUpDown } from 'lucide-react'
+import { fetchBranches, fetchNetworkStaff, type Branch, type NetworkStaffMember } from '@/lib/queries/transfers'
+import { requestCreateEmployeeRelay, requestUpdateEmployeeIdentity, type EmployeeRelayRole } from '@/lib/queries/employee-relay'
+import { useBranchView } from '@/hooks/use-branch-view'
+import { V4Error } from '@/lib/api'
+import { Shield, Save, RotateCcw, Check, Minus, Plus, Trash2, Users, Search, Pencil, Grid3X3, List, X, KeyRound, ChevronsUpDown, Wallet, Network } from 'lucide-react'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -23,7 +28,12 @@ type PermMap = Record<string, Record<string, boolean>>
 type Tab = 'staff' | 'matrix'
 
 export default function UserPermissionsPage() {
-  const { user, canDo } = useAuth()
+  const { user, restaurant, canDo } = useAuth()
+  const navigate = useNavigate()
+  const isBranchView = useBranchView()
+  // central = может управлять персоналом ДРУГИХ филиалов сети через relay
+  // (097) — учётка физически появляется в БД филиала своим пулером, не сразу.
+  const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
   const [employees, setEmployees] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [permMatrix, setPermMatrix] = useState<PermMap>({})
@@ -31,6 +41,32 @@ export default function UserPermissionsPage() {
   const [dirty, setDirty] = useState<Set<string>>(new Set())
   const [tab, setTab] = useState<Tab>('staff')
   const [search, setSearch] = useState('')
+
+  // Персонал ДРУГИХ филиалов сети (только central) — просмотр + правка
+  // identity-полей через relay. Ставку/доп.смены меняют в Финансы → Зарплата
+  // (Фаза 4) — это разные права (payroll.manage), поэтому 403 тут не ошибка,
+  // а просто «этому пользователю сетевой раздел зарплаты не открыт».
+  const [branches, setBranches] = useState<Branch[]>([])
+  const [branchStaff, setBranchStaff] = useState<NetworkStaffMember[]>([])
+  const loadBranchStaff = useCallback(async () => {
+    if (!isCentral) return
+    try {
+      const [b, ns] = await Promise.all([fetchBranches(), fetchNetworkStaff()])
+      setBranches(b)
+      setBranchStaff(ns.staff.filter(m => m.branchId && m.branchId !== user?.restaurantId))
+    } catch (e) {
+      if (!(e instanceof V4Error && e.status === 403)) {
+        toast.error(humanizeError(e, 'Не удалось загрузить сотрудников филиалов'))
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isCentral, user?.restaurantId])
+  useEffect(() => { loadBranchStaff() }, [loadBranchStaff])
+
+  // Редактирование identity сотрудника ДРУГОГО филиала (через relay).
+  const [editingBranchEmp, setEditingBranchEmp] = useState<NetworkStaffMember | null>(null)
+  const [branchEditForm, setBranchEditForm] = useState({ name: '', username: '', role: 'waiter' as UserRoleType, position: '', birthDate: '', station: '', pin: '' })
+  const [savingBranchEdit, setSavingBranchEdit] = useState(false)
 
   // Add user form: показ inline, но state — внутри AddUserForm (мемо-компонент).
   // Раньше state жил здесь → каждое нажатие клавиши в input ре-рендерило ВЕСЬ
@@ -146,21 +182,43 @@ export default function UserPermissionsPage() {
   // Принимает form values из AddUserForm (локальный state там, не здесь).
   // Стабильная ссылка через useCallback — чтобы memo-обёртка реально работала.
   const handleAddUser = useCallback(async (form: AddUserFormValues) => {
-    if (!form.name.trim() || !form.username.trim() || !user?.restaurantId) return
+    if (!form.name.trim() || !user?.restaurantId) return
     setAddingUser(true)
     try {
-      await createUserForRestaurant({
-        name: form.name.trim(),
-        username: form.username.trim().toLowerCase(),
-        role: form.role,
-        restaurantId: user.restaurantId,
-        salary: form.salary,
-        password: form.password || '1234',
-        position: form.position.trim() || undefined,
-      })
-      toast.success(`${form.name.trim()} добавлен`)
+      if (form.branchId && form.branchId !== user.restaurantId) {
+        // Другой филиал сети — central не может писать в его БД напрямую,
+        // ставим команду в очередь (097): реально появится своим пулером.
+        const action = await requestCreateEmployeeRelay({
+          branchId: form.branchId,
+          name: form.name.trim(),
+          username: form.username.trim().toLowerCase() || undefined,
+          // AddUserForm предлагает только STAFF_ROLES_LIST — тот же набор,
+          // что EmployeeRelayRole (без owner/superadmin) — просто уже
+          // выражен через более широкий UserRoleType, общий для всей формы.
+          role: form.role as EmployeeRelayRole,
+          position: form.position.trim() || undefined,
+          pin: form.pin || undefined,
+        })
+        const assignedPin = typeof action.payload?.pin === 'string' ? action.payload.pin : undefined
+        toast.success(
+          `${form.name.trim()} отправлен на филиал — появится там в течение ~30 секунд.`
+          + (assignedPin ? ` PIN: ${assignedPin}` : ''),
+        )
+      } else {
+        await createUserForRestaurant({
+          name: form.name.trim(),
+          username: form.username.trim().toLowerCase(),
+          role: form.role,
+          restaurantId: user.restaurantId,
+          salary: form.salary,
+          pin: form.pin || undefined,
+          position: form.position.trim() || undefined,
+        })
+        toast.success(`${form.name.trim()} добавлен`)
+      }
       setShowAddUser(false)
       await loadEmployees()
+      await loadBranchStaff()
     } catch (e) {
       console.error('[createUser]', e)
       toast.error(humanizeError(e, 'Ошибка'))
@@ -168,7 +226,7 @@ export default function UserPermissionsPage() {
       setAddingUser(false)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user?.restaurantId])
+  }, [user?.restaurantId, loadBranchStaff])
 
   const handleCancelAdd = useCallback(() => setShowAddUser(false), [])
 
@@ -228,6 +286,43 @@ export default function UserPermissionsPage() {
     } finally { setSavingEdit(false) }
   }
 
+  // ─── Сотрудник ДРУГОГО филиала: правка identity через relay (097) ───────
+  const openEditBranchEmployee = (m: NetworkStaffMember) => {
+    setEditingBranchEmp(m)
+    setBranchEditForm({
+      name: m.name,
+      username: m.username || '',
+      role: (m.role as UserRoleType) || 'waiter',
+      position: m.position || '',
+      birthDate: m.birthDate || '',
+      station: m.station || '',
+      pin: '',
+    })
+  }
+
+  const handleSaveBranchEdit = async () => {
+    if (!editingBranchEmp) return
+    setSavingBranchEdit(true)
+    try {
+      await requestUpdateEmployeeIdentity(editingBranchEmp.id, {
+        name: branchEditForm.name.trim(),
+        username: branchEditForm.username.trim().toLowerCase(),
+        // Диалог предлагает те же STAFF_ROLES (без owner/superadmin), что и
+        // EmployeeRelayRole — см. комментарий у AddUserForm выше.
+        role: branchEditForm.role as EmployeeRelayRole,
+        position: branchEditForm.position.trim(),
+        birthDate: branchEditForm.birthDate || undefined,
+        station: branchEditForm.station || undefined,
+        ...(branchEditForm.pin.trim() ? { pin: branchEditForm.pin.trim() } : {}),
+      })
+      toast.success(`Изменения для ${branchEditForm.name} отправлены на филиал «${editingBranchEmp.branchName}» — применятся в течение ~30 секунд`)
+      setEditingBranchEmp(null)
+      await loadBranchStaff()
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка'))
+    } finally { setSavingBranchEdit(false) }
+  }
+
   // ─── Guards ─────────────────────────────────────────────────────────────
   if (!canDo('users.manage')) {
     return <div className="p-6 flex items-center justify-center h-64"><p className="text-muted-foreground">Нет доступа</p></div>
@@ -272,6 +367,8 @@ export default function UserPermissionsPage() {
           onSubmit={handleAddUser}
           onCancel={handleCancelAdd}
           existingPositions={knownPositions}
+          ownRestaurantId={user?.restaurantId || ''}
+          branches={isCentral ? branches : []}
         />
       )}
 
@@ -453,6 +550,54 @@ export default function UserPermissionsPage() {
           {filtered.length === 0 && search && (
             <div className="text-center py-8 text-sm text-muted-foreground">Ничего не найдено</div>
           )}
+        </div>
+      )}
+
+      {/* ═══ Сотрудники ДРУГИХ филиалов сети (только central) ═══
+          Отдельная секция, не влита в общий filtered-список: другая форма
+          данных (NetworkStaffMember, не User) и другой набор действий — без
+          матрицы прав, без удаления (relay их не поддерживает), ставка и
+          доп.смены — в Финансы → Зарплата (Фаза 4). */}
+      {tab === 'staff' && isCentral && branchStaff.length > 0 && (
+        <div className="space-y-2 pt-2">
+          <div className="flex items-center gap-2">
+            <Network className="size-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold text-foreground">Сотрудники филиалов</h2>
+            <span className="bg-muted px-1.5 py-0.5 rounded text-[10px] font-bold text-muted-foreground">{branchStaff.length}</span>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Изменения применяются на филиале не сразу — в течение ~30 секунд. Ставку и доп. смены меняйте в Финансы → Зарплата.
+          </p>
+          <div className="space-y-2">
+            {branchStaff.map(m => (
+              <div key={m.id} className="bg-card rounded-xl border border-border overflow-hidden">
+                <div className="flex items-center gap-4 p-4">
+                  <div className="size-10 rounded-xl bg-muted flex items-center justify-center shrink-0 text-sm font-bold text-muted-foreground">
+                    {m.name.charAt(0)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium text-foreground text-sm">{m.name}</span>
+                      <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded">{ROLE_LABELS[m.role as UserRoleType] || m.role}</span>
+                      {m.position && <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">{m.position}</span>}
+                      <span className="text-[10px] bg-blue-500/10 text-blue-600 dark:text-blue-400 px-1.5 py-0.5 rounded font-medium">{m.branchName}</span>
+                    </div>
+                    {m.username && <div className="flex items-center gap-3 mt-0.5 text-xs text-muted-foreground">@{m.username}</div>}
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button onClick={() => navigate(`/finance/payroll?highlight=${m.id}`)} title="Зарплата — в разделе Финансы"
+                      className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                      <Wallet className="size-4" />
+                    </button>
+                    <button onClick={() => openEditBranchEmployee(m)} title="Редактировать"
+                      className="p-2 rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors">
+                      <Pencil className="size-4" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -694,6 +839,87 @@ export default function UserPermissionsPage() {
           </div>
         </div>
       )}
+
+      {/* ═══ Edit Branch Employee Dialog (identity через relay, 097) ═══ */}
+      {editingBranchEmp && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setEditingBranchEmp(null)}>
+          <div className="bg-card rounded-2xl border border-border shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-border">
+              <div>
+                <h2 className="text-lg font-bold text-foreground">Редактировать сотрудника</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">Филиал «{editingBranchEmp.branchName}» · применится через ~30 секунд</p>
+              </div>
+              <button onClick={() => setEditingBranchEmp(null)} className="p-1 text-muted-foreground hover:text-foreground"><X className="size-5" /></button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">ФИО</label>
+                  <input value={branchEditForm.name} onChange={e => setBranchEditForm(p => ({ ...p, name: e.target.value }))}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Логин</label>
+                  <input value={branchEditForm.username} onChange={e => setBranchEditForm(p => ({ ...p, username: e.target.value }))}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Роль</label>
+                  <select value={branchEditForm.role} onChange={e => setBranchEditForm(p => ({ ...p, role: e.target.value as UserRoleType }))}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm">
+                    {STAFF_ROLES.map(r => <option key={r} value={r}>{ROLE_LABELS[r]}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Должность</label>
+                  <PositionCombobox value={branchEditForm.position} onChange={v => setBranchEditForm(p => ({ ...p, position: v }))}
+                    suggestions={knownPositions} placeholder="Официант" />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Дата рождения</label>
+                  <input type="date" value={branchEditForm.birthDate} onChange={e => setBranchEditForm(p => ({ ...p, birthDate: e.target.value }))}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block">Станция</label>
+                  <select value={branchEditForm.station} onChange={e => setBranchEditForm(p => ({ ...p, station: e.target.value }))}
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm">
+                    <option value="">— нет —</option>
+                    {ALL_STATIONS.map(s => <option key={s} value={s}>{STATION_ICONS[s]} {STATION_LABELS[s]}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-muted-foreground mb-1 block flex items-center gap-1">
+                    <KeyRound className="size-3" /> PIN-код
+                  </label>
+                  <input type="text" maxLength={4} value={branchEditForm.pin} onChange={e => setBranchEditForm(p => ({ ...p, pin: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
+                    placeholder="оставить пустым — без изменений"
+                    className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono tracking-widest" />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Оклад/ставку и доп. смены меняйте в{' '}
+                <button type="button" onClick={() => { setEditingBranchEmp(null); navigate(`/finance/payroll?highlight=${editingBranchEmp.id}`) }} className="text-primary hover:underline">
+                  Финансы → Зарплата
+                </button>.
+              </p>
+            </div>
+            <div className="flex gap-2 p-5 border-t border-border">
+              <button onClick={() => setEditingBranchEmp(null)} className="flex-1 px-4 py-2.5 text-sm font-medium text-foreground bg-card border border-border rounded-lg hover:bg-muted">
+                Отмена
+              </button>
+              <button onClick={handleSaveBranchEdit} disabled={savingBranchEdit || !branchEditForm.name.trim()}
+                className="flex-1 px-4 py-2.5 text-sm font-medium text-primary-foreground bg-primary rounded-lg hover:bg-primary/90 disabled:opacity-50">
+                {savingBranchEdit ? 'Отправка...' : 'Сохранить'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -706,10 +932,12 @@ export default function UserPermissionsPage() {
 type AddUserFormValues = {
   name: string
   username: string
-  password: string
   role: UserRoleType
   salary: number
   position: string
+  pin: string
+  /** Свой restaurantId — локальное добавление; другой id из branches — relay (097). */
+  branchId: string
 }
 
 type AddUserFormProps = {
@@ -717,6 +945,9 @@ type AddUserFormProps = {
   onSubmit: (values: AddUserFormValues) => void
   onCancel: () => void
   existingPositions: string[]
+  ownRestaurantId: string
+  /** Другие филиалы сети — пусто, если не central (select тогда не показываем). */
+  branches: Branch[]
 }
 
 const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook', 'storekeeper', 'accountant', 'kiosk', 'other']
@@ -727,38 +958,79 @@ const STAFF_ROLES_LIST: UserRoleType[] = ['manager', 'waiter', 'cashier', 'cook'
 // сочетание input + контекст-провайдер пересоздающий value. Uncontrolled
 // inputs полностью иммунны к re-render → пользовательский ввод никогда не
 // теряется. На submit читаем все поля одним FormData(form).
-// Исключение — «Должность»: комбобокс не нативный form-элемент, ему нужен
-// свой state (PositionCombobox). Ре-рендер от него локален для AddUserForm
-// и не задевает родителя — список сотрудников/матрица прав не фризятся.
-const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel, existingPositions }: AddUserFormProps) {
+// Исключение — «Должность»/«Филиал»/PIN: не нативные form-элементы или
+// нужен доступ к текущему значению до submit (транслитерация, генерация
+// PIN). Ре-рендер от них локален для AddUserForm и не задевает родителя —
+// список сотрудников/матрица прав не фризятся.
+//
+// Пароль — поля нет вообще: реальный вход в кассу только по PIN
+// (LoginByPIN), бэк дефолтит password='1234' и это никогда не используется.
+const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel, existingPositions, ownRestaurantId, branches }: AddUserFormProps) {
   const [position, setPosition] = useState('')
+  const [branchId, setBranchId] = useState(ownRestaurantId)
+  const [pin, setPin] = useState('')
+  const [generatingPin, setGeneratingPin] = useState(false)
+  const usernameRef = useRef<HTMLInputElement>(null)
+  const usernameTouched = useRef(false)
+  const isLocal = !branchId || branchId === ownRestaurantId
+
+  // Логин автоподставляется транслитерацией ФИО, пока пользователь не
+  // тронул поле сам — после первой ручной правки автоподстановка больше не
+  // перезаписывает то, что уже введено.
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (usernameRef.current && !usernameTouched.current) {
+      usernameRef.current.value = transliterateToUsername(e.target.value)
+    }
+  }
+
+  const handleGeneratePin = async () => {
+    // Только для своего ресторана — GeneratePIN намеренно не расширен на
+    // чужой tenant (Фаза 1); для другого филиала PIN подбирает central сам
+    // внутри RequestCreate (097), результат приходит после отправки формы.
+    if (!isLocal || !ownRestaurantId) return
+    setGeneratingPin(true)
+    try {
+      setPin(await generateUniquePin(ownRestaurantId))
+    } catch (e) {
+      toast.error(humanizeError(e, 'Ошибка'))
+    } finally {
+      setGeneratingPin(false)
+    }
+  }
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     const fd = new FormData(e.currentTarget)
     onSubmit({
       name: String(fd.get('name') || '').trim(),
       username: String(fd.get('username') || '').trim(),
-      password: String(fd.get('password') || '') || '1234',
       role: (String(fd.get('role') || 'waiter')) as UserRoleType,
       salary: Number(fd.get('salary') || 0),
       position,
+      pin,
+      branchId: isLocal ? ownRestaurantId : branchId,
     })
   }
   return (
     <form onSubmit={handleSubmit} className="bg-card rounded-xl border border-border p-5 space-y-3">
       <h3 className="text-sm font-semibold text-foreground">Новый сотрудник</h3>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
+        {branches.length > 0 && (
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Филиал</label>
+            <select value={branchId} onChange={e => setBranchId(e.target.value)} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm">
+              <option value={ownRestaurantId}>Свой (центральный)</option>
+              {branches.filter(b => b.id !== ownRestaurantId).map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </select>
+          </div>
+        )}
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Имя <span className="text-destructive">*</span></label>
-          <input name="name" required autoFocus defaultValue="" placeholder="Иванов Иван" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          <input name="name" required autoFocus defaultValue="" placeholder="Иванов Иван" onChange={handleNameChange} className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
         </div>
         <div>
-          <label className="text-xs text-muted-foreground block mb-1">Логин <span className="text-destructive">*</span></label>
-          <input name="username" required defaultValue="" placeholder="ivanov" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
-        </div>
-        <div>
-          <label className="text-xs text-muted-foreground block mb-1">Пароль</label>
-          <input name="password" defaultValue="1234" placeholder="1234" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          <label className="text-xs text-muted-foreground block mb-1">Логин</label>
+          <input name="username" ref={usernameRef} onChange={() => { usernameTouched.current = true }} defaultValue="" placeholder="ivanov" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
         </div>
         <div>
           <label className="text-xs text-muted-foreground block mb-1">Роль</label>
@@ -770,11 +1042,32 @@ const AddUserForm = memo(function AddUserForm({ submitting, onSubmit, onCancel, 
           <label className="text-xs text-muted-foreground block mb-1">Должность</label>
           <PositionCombobox value={position} onChange={setPosition} suggestions={existingPositions} placeholder="Официант" />
         </div>
+        {isLocal && (
+          <div>
+            <label className="text-xs text-muted-foreground block mb-1">Зарплата</label>
+            <input name="salary" type="number" min={0} defaultValue="" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          </div>
+        )}
         <div>
-          <label className="text-xs text-muted-foreground block mb-1">Зарплата</label>
-          <input name="salary" type="number" min={0} defaultValue="" className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm" />
+          <label className="text-xs text-muted-foreground block mb-1 flex items-center gap-1"><KeyRound className="size-3" />PIN</label>
+          <div className="flex gap-2">
+            <input value={pin} onChange={e => setPin(e.target.value.replace(/\D/g, '').slice(0, 4))} maxLength={4}
+              placeholder={isLocal ? '4 цифры' : 'подберёт филиал'}
+              className="flex-1 px-3 py-2 bg-background border border-border rounded-lg text-sm font-mono tracking-widest" />
+            {isLocal && (
+              <button type="button" onClick={handleGeneratePin} disabled={generatingPin}
+                className="px-3 py-2 text-xs font-medium text-primary border border-primary/30 bg-primary/5 rounded-lg hover:bg-primary/10 transition-colors whitespace-nowrap disabled:opacity-50">
+                {generatingPin ? '...' : 'Сгенерировать'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
+      {!isLocal && (
+        <p className="text-xs text-muted-foreground">
+          Сотрудник появится на филиале в течение ~30 секунд. Пароль не нужен — вход по PIN.
+        </p>
+      )}
       <div className="flex gap-2">
         <button type="submit" disabled={submitting}
           className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium disabled:opacity-50">

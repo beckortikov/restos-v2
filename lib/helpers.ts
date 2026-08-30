@@ -285,3 +285,26 @@ export function getTimeSince(iso: string | null | undefined, endIso?: string | n
   const rem = mins % 60
   return `${hours}ч ${rem}мин`
 }
+
+// Кириллица → латиница для авто-подстановки логина по ФИО (settings/users,
+// AddUserForm). Помимо русского алфавита — 5 таджикских букв вне него
+// (Ғ/Қ/Ӯ/Ҳ/Ҷ): деплой работает в Таджикистане (currency=TJS,
+// timezone=Asia/Dushanbe), обычная русская таблица их не покроет.
+const CYRILLIC_TO_LATIN: Record<string, string> = {
+  а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z',
+  и: 'i', й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r',
+  с: 's', т: 't', у: 'u', ф: 'f', х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch',
+  ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+  ғ: 'gh', қ: 'q', ӯ: 'u', ҳ: 'h', ҷ: 'j',
+}
+
+export function transliterateToUsername(name: string): string {
+  let out = ''
+  for (const ch of name.toLowerCase()) {
+    if (ch in CYRILLIC_TO_LATIN) out += CYRILLIC_TO_LATIN[ch]
+    else if (/[a-z0-9]/.test(ch)) out += ch
+    else if (/\s/.test(ch)) out += '_'
+    // остальное (пунктуация и т.п.) — пропускаем молча
+  }
+  return out.replace(/_+/g, '_').replace(/^_|_$/g, '')
+}
