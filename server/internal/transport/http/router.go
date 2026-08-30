@@ -167,6 +167,7 @@ func NewRouter(deps Deps) http.Handler {
 	auditReadsSvc := service.NewAuditReadsService(rep)
 	maintenanceSvc := service.NewMaintenanceService(rep)
 	deliveryRelaySvc := service.NewDeliveryRelayService(rep)
+	employeeRelaySvc := service.NewEmployeeRelayService(rep)
 
 	authH := handlers.NewAuth(authSvc, deps.DB)
 	menuH := handlers.NewMenu(menuSvc)
@@ -177,6 +178,7 @@ func NewRouter(deps Deps) http.Handler {
 	networkH := handlers.NewNetwork(service.NewNetworkService(rep, deps.SyncToken))
 	syncH := handlers.NewSync(service.NewSyncService(rep))
 	deliveryRelayH := handlers.NewDeliveryRelay(deliveryRelaySvc)
+	employeeRelayH := handlers.NewEmployeeRelay(employeeRelaySvc)
 	syncSettingsH := handlers.NewSyncSettings(service.NewSyncSettingsService(rep))
 	warehouseH := handlers.NewWarehouse(warehouseSvc)
 	shiftsH := handlers.NewShifts(shiftsSvc)
@@ -310,6 +312,8 @@ func NewRouter(deps Deps) http.Handler {
 			// История диспетчеризации central→филиал (091/094) — свои
 			// создания/дозаказы + реальный статус материализованного заказа.
 			g.Get("/delivery-relay/history", deliveryRelayH.History)
+			// История центрального управления персоналом филиалов (097).
+			g.Get("/employee-relay/history", employeeRelayH.History)
 
 			g.Get("/menu/items", menuH.ListItems)
 			g.Get("/menu/items/{id}/attributes", menuH.GetAttributes)
@@ -544,6 +548,10 @@ func NewRouter(deps Deps) http.Handler {
 			// в interval_sec). DeliveryPuller (свой, короткий интервал).
 			g.Get("/sync/delivery/pending", deliveryRelayH.Pending)
 			g.Post("/sync/delivery/{id}/ack", deliveryRelayH.Ack)
+			// Employee relay (097) — central управляет персоналом филиала,
+			// тот же принцип: узкая очередь, свой пулер (EmployeeRelayPuller).
+			g.Get("/sync/employees/pending", employeeRelayH.Pending)
+			g.Post("/sync/employees/{id}/ack", employeeRelayH.Ack)
 		})
 
 		api.Group(func(g chi.Router) {
@@ -561,6 +569,13 @@ func NewRouter(deps Deps) http.Handler {
 			g.Post("/delivery-relay", deliveryRelayH.Create)
 			// Дозаказ (094) в уже материализованный (delivered) заказ.
 			g.Post("/delivery-relay/{id}/amend", deliveryRelayH.Amend)
+			// Central управляет персоналом филиала (097) — сам сотрудник
+			// материализуется там EmployeeRelayPuller'ом.
+			g.Post("/employee-relay", employeeRelayH.Create)
+			g.Post("/employee-relay/{user_id}/identity", employeeRelayH.UpdateIdentity)
+			g.Post("/employee-relay/{user_id}/pay", employeeRelayH.UpdatePay)
+			g.Post("/employee-relay/{user_id}/worked-days", employeeRelayH.SetWorkedDays)
+			g.Post("/employee-relay/{user_id}/day-multiplier", employeeRelayH.ToggleDayMultiplier)
 			g.Post("/orders", ordersH.Create)
 			g.Post("/orders/{id}/items", ordersH.AddItems)
 			g.Post("/orders/{id}/close", ordersH.Close)

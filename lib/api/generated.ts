@@ -4526,6 +4526,117 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sync/employees/pending": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Employee relay (097) — филиал тянет свои pending-команды управления персоналом, поставленные central за него (создание/правка сотрудника, доп. смены). Отдельная узкая очередь, как и delivery relay — не общий /sync/pull (тот раз в interval_sec и не покрывает write-операции над users/salary). */
+        get: {
+            parameters: {
+                query: {
+                    restaurant_id: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            actions?: {
+                                /** Format: uuid */
+                                id?: string;
+                                /**
+                                 * Format: uuid
+                                 * @description NULL только для kind=create.
+                                 */
+                                target_user_id?: string | null;
+                                /** @enum {string} */
+                                kind?: "create" | "update_identity" | "update_pay" | "set_worked_days" | "toggle_day_multiplier";
+                                /** @description Форма зависит от kind: create/update_identity/update_pay — поля UserInput; set_worked_days — {from,to,dates}; toggle_day_multiplier — {date,from,to}. */
+                                payload?: Record<string, never>;
+                                /** Format: date-time */
+                                created_at?: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sync/employees/{id}/ack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (097) — филиал подтверждает результат материализации. Идемпотентно: повторный ack с тем же результатом — не ошибка. Сужается target_restaurant_id, если звонящий опознан по личному sync-токену (как /sync/ingest); легаси общий секрет не сужает. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        status: "delivered" | "failed";
+                        /**
+                         * Format: uuid
+                         * @description Материализованный/изменённый сотрудник на филиале — при status=delivered.
+                         */
+                        local_user_id?: string;
+                        /** @description Причина отказа — при status=failed (напр. логин/PIN уже заняты на филиале). */
+                        error?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Строка не найдена (или не принадлежит опознанному по личному токену филиалу) */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sync/backfill": {
         parameters: {
             query?: never;
@@ -5606,6 +5717,436 @@ export interface paths {
                                 order_total?: string | null;
                                 /** Format: date-time */
                                 created_at?: string;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employee-relay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (097) — central создаёт сотрудника ЗА филиал. Только сам central своей сети (kind=central_warehouse, owner), требует users.manage. Учётка материализуется на филиале асинхронно (EmployeeRelayPuller, обычно в пределах интервала ~30с) через UsersService.Create — реально появляется в БД филиала, иначе он не смог бы залогиниться на своей кассе. Пароль не указывается (PIN — единственный реальный вход); если pin не передан, central сам подбирает свободный (advisory — финальное слово всегда за филиалом). */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /**
+                         * Format: uuid
+                         * @description Филиал-получатель — тот же account_id, что у central.
+                         */
+                        branch_id: string;
+                        name: string;
+                        username?: string;
+                        /** @enum {string} */
+                        role: "cashier" | "cook" | "waiter" | "manager" | "owner";
+                        phone?: string;
+                        email?: string;
+                        position?: string;
+                        /** Format: date */
+                        birth_date?: string;
+                        station?: string;
+                        salary?: string;
+                        hourly_rate?: string;
+                        /** @enum {string} */
+                        pay_type?: "monthly" | "daily";
+                        daily_rate?: string;
+                        shift_number?: number;
+                        /** @description 4 цифры. Пусто — central подбирает сам. */
+                        pin?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка employee_relay_actions, kind=create, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Филиал не найден в этой сети, или это сам central (для своих сотрудников — обычное добавление в Настройках). */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                /** @description Не owner, или нет users.manage. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employee-relay/{user_id}/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (097) — central правит identity-поля (роль/PIN/логин/ должность/контакты) уже существующего сотрудника филиала. Требует users.manage. Тело — тот же UserInput, что и обычный PATCH /users/ {id}: непереданные поля не меняются. target_restaurant_id резолвится сервером из уже реплицированной на central строки users, не из клиента. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    user_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        name?: string;
+                        username?: string;
+                        pin?: string;
+                        /** @enum {string} */
+                        role?: "cashier" | "cook" | "waiter" | "manager" | "owner";
+                        phone?: string;
+                        email?: string;
+                        position?: string;
+                        /** Format: date */
+                        birth_date?: string;
+                        station?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка employee_relay_actions, kind=update_identity, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Сотрудник не найден, принадлежит другой сети, или это сотрудник central (обычное редактирование в Настройках). */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                /** @description Не owner, или нет users.manage. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employee-relay/{user_id}/pay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (097) — central правит оплату (тип/оклад/ставка) уже существующего сотрудника филиала. Требует payroll.manage. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    user_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        pay_type?: "monthly" | "daily";
+                        salary?: string;
+                        hourly_rate?: string;
+                        daily_rate?: string;
+                        advance?: string;
+                        deductions?: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка employee_relay_actions, kind=update_pay, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Сотрудник не найден, принадлежит другой сети, или это сотрудник central. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                /** @description Не owner, или нет payroll.manage. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employee-relay/{user_id}/worked-days": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (097) — central отмечает доп. смены сотруднику филиала на дневной оплате (зеркало SalaryService.SetWorkedDays). Требует payroll.manage. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    user_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: date */
+                        from: string;
+                        /** Format: date */
+                        to: string;
+                        dates: string[];
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка employee_relay_actions, kind=set_worked_days, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Сотрудник не найден, принадлежит другой сети, или это сотрудник central. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                /** @description Не owner, или нет payroll.manage. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employee-relay/{user_id}/day-multiplier": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Employee relay (097) — central отмечает «двойную смену» (×2) на конкретный день сотруднику филиала на гибридном окладе (зеркало SalaryService.ToggleDayMultiplier). Требует payroll.manage. */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    user_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: date */
+                        date: string;
+                        /** Format: date */
+                        from: string;
+                        /** Format: date */
+                        to: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка employee_relay_actions, kind=toggle_day_multiplier, status=pending. */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Сотрудник не найден, принадлежит другой сети, или это сотрудник central. */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+                /** @description Не owner, или нет payroll.manage. */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/employee-relay/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** История центрального управления персоналом филиалов (097) — свежие сверху, с реальным статусом транспорта (delivered значит только «филиал подтвердил применение», см. status/error). */
+        get: {
+            parameters: {
+                query?: {
+                    limit?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            actions?: {
+                                /** Format: uuid */
+                                id?: string;
+                                /** Format: uuid */
+                                target_restaurant_id?: string;
+                                target_restaurant_name?: string;
+                                /** Format: uuid */
+                                target_user_id?: string | null;
+                                /** @enum {string} */
+                                kind?: "create" | "update_identity" | "update_pay" | "set_worked_days" | "toggle_day_multiplier";
+                                /** @enum {string} */
+                                status?: "pending" | "delivered" | "failed";
+                                error?: string | null;
+                                /** Format: uuid */
+                                local_user_id?: string | null;
+                                created_by_name?: string | null;
+                                /** Format: date-time */
+                                created_at?: string;
+                                /** Format: date-time */
+                                delivered_at?: string | null;
                             }[];
                         };
                     };

@@ -326,6 +326,28 @@ func main() {
 	})
 	go deliveryPuller.Run(ctx, deliveryInterval)
 
+	// Employee relay puller (097) — central управляет персоналом филиала;
+	// этот процесс материализует команду через настоящие UsersService.
+	// Create/Patch/SalaryService.SetWorkedDays/ToggleDayMultiplier. Интервал
+	// длиннее delivery (default 30с — HR не курьерская срочность), читает ТУ
+	// ЖЕ sync_settings. Свои Users/SalaryService (не из httpx.NewRouter — тот
+	// инкапсулирован внутри), SSE им не нужен — ни один, ни другой его не
+	// публикуют и в router.go тоже конструируются без WithPublisher.
+	employeeInterval := time.Duration(cfg.EmployeeRelayIntervalSec) * time.Second
+	if employeeInterval <= 0 {
+		employeeInterval = 30 * time.Second
+	}
+	employeePuller := service.NewEmployeeRelayPuller(
+		service.NewUsersService(repo.New(gdb)),
+		service.NewSalaryService(repo.New(gdb)),
+		repo.New(gdb),
+		service.PullerFallback{
+			CentralURL: cfg.SyncCentralURL, Token: cfg.SyncToken,
+			RestaurantID: cfg.SyncRestaurantID, Enabled: cfg.SyncEnabled,
+		},
+	)
+	go employeePuller.Run(ctx, employeeInterval)
+
 	// Автозабфилл истории при старте (Ф6, ADR-003 «Central видит всё») — для
 	// узла, который УЖЕ был настроен на sync до этого запуска (переменные
 	// окружения/сохранённый sync_settings), но ещё ни разу не отправлял

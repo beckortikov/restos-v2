@@ -22,6 +22,9 @@ var skipTables = map[string]bool{
 
 	"delivery_relay_orders":   true, // служебная очередь central→филиал (091)
 	"delivery_relay_received": true, // идемпотентность филиала по ней же
+
+	"employee_relay_actions":  true, // служебная очередь central→филиал (097)
+	"employee_relay_received": true, // идемпотентность филиала по ней же
 }
 
 // Register цепляет хуки на gorm.DB. Вызывается ОДИН раз при инициализации БД

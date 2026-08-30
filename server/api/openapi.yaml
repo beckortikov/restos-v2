@@ -1705,6 +1705,61 @@ paths:
         "200": { description: OK }
         "404": { description: Строка не найдена (или не принадлежит опознанному по личному токену филиалу) }
 
+  /api/v1/sync/employees/pending:
+    get:
+      tags: [stock]
+      summary: >-
+        Employee relay (097) — филиал тянет свои pending-команды управления
+        персоналом, поставленные central за него (создание/правка сотрудника,
+        доп. смены). Отдельная узкая очередь, как и delivery relay — не общий
+        /sync/pull (тот раз в interval_sec и не покрывает write-операции над
+        users/salary).
+      parameters:
+        - { in: query, name: restaurant_id, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  actions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        target_user_id: { type: string, format: uuid, nullable: true, description: "NULL только для kind=create." }
+                        kind: { type: string, enum: [create, update_identity, update_pay, set_worked_days, toggle_day_multiplier] }
+                        payload: { type: object, description: "Форма зависит от kind: create/update_identity/update_pay — поля UserInput; set_worked_days — {from,to,dates}; toggle_day_multiplier — {date,from,to}." }
+                        created_at: { type: string, format: date-time }
+
+  /api/v1/sync/employees/{id}/ack:
+    post:
+      tags: [stock]
+      summary: >-
+        Employee relay (097) — филиал подтверждает результат материализации.
+        Идемпотентно: повторный ack с тем же результатом — не ошибка. Сужается
+        target_restaurant_id, если звонящий опознан по личному sync-токену
+        (как /sync/ingest); легаси общий секрет не сужает.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [delivered, failed] }
+                local_user_id: { type: string, format: uuid, description: "Материализованный/изменённый сотрудник на филиале — при status=delivered." }
+                error: { type: string, description: "Причина отказа — при status=failed (напр. логин/PIN уже заняты на филиале)." }
+      responses:
+        "200": { description: OK }
+        "404": { description: Строка не найдена (или не принадлежит опознанному по личному токену филиалу) }
+
   /api/v1/sync/backfill:
     post:
       tags: [stock]
@@ -2156,6 +2211,224 @@ paths:
                         order_status: { type: string, nullable: true, description: "Реальный статус заказа (new/open/.../closed/cancelled) — пусто, пока не долетело синком или заказ ещё не завершён." }
                         order_total: { type: string, nullable: true }
                         created_at: { type: string, format: date-time }
+
+  /api/v1/employee-relay:
+    post:
+      tags: [admin]
+      summary: >-
+        Employee relay (097) — central создаёт сотрудника ЗА филиал. Только
+        сам central своей сети (kind=central_warehouse, owner), требует
+        users.manage. Учётка материализуется на филиале асинхронно
+        (EmployeeRelayPuller, обычно в пределах интервала ~30с) через
+        UsersService.Create — реально появляется в БД филиала, иначе он не
+        смог бы залогиниться на своей кассе. Пароль не указывается (PIN —
+        единственный реальный вход); если pin не передан, central сам
+        подбирает свободный (advisory — финальное слово всегда за филиалом).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [branch_id, name, role]
+              properties:
+                branch_id: { type: string, format: uuid, description: "Филиал-получатель — тот же account_id, что у central." }
+                name: { type: string }
+                username: { type: string }
+                role: { type: string, enum: [cashier, cook, waiter, manager, owner] }
+                phone: { type: string }
+                email: { type: string }
+                position: { type: string }
+                birth_date: { type: string, format: date }
+                station: { type: string }
+                salary: { type: string }
+                hourly_rate: { type: string }
+                pay_type: { type: string, enum: [monthly, daily] }
+                daily_rate: { type: string }
+                shift_number: { type: integer }
+                pin: { type: string, description: "4 цифры. Пусто — central подбирает сам." }
+      responses:
+        "201":
+          description: Created — строка employee_relay_actions, kind=create, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Филиал не найден в этой сети, или это сам central (для своих сотрудников — обычное добавление в Настройках)."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Не owner, или нет users.manage.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/employee-relay/{user_id}/identity:
+    post:
+      tags: [admin]
+      summary: >-
+        Employee relay (097) — central правит identity-поля (роль/PIN/логин/
+        должность/контакты) уже существующего сотрудника филиала. Требует
+        users.manage. Тело — тот же UserInput, что и обычный PATCH /users/
+        {id}: непереданные поля не меняются. target_restaurant_id резолвится
+        сервером из уже реплицированной на central строки users, не из
+        клиента.
+      parameters:
+        - { in: path, name: user_id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                username: { type: string }
+                pin: { type: string }
+                role: { type: string, enum: [cashier, cook, waiter, manager, owner] }
+                phone: { type: string }
+                email: { type: string }
+                position: { type: string }
+                birth_date: { type: string, format: date }
+                station: { type: string }
+      responses:
+        "201":
+          description: Created — строка employee_relay_actions, kind=update_identity, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Сотрудник не найден, принадлежит другой сети, или это сотрудник central (обычное редактирование в Настройках)."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Не owner, или нет users.manage.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/employee-relay/{user_id}/pay:
+    post:
+      tags: [admin]
+      summary: >-
+        Employee relay (097) — central правит оплату (тип/оклад/ставка) уже
+        существующего сотрудника филиала. Требует payroll.manage.
+      parameters:
+        - { in: path, name: user_id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pay_type: { type: string, enum: [monthly, daily] }
+                salary: { type: string }
+                hourly_rate: { type: string }
+                daily_rate: { type: string }
+                advance: { type: string }
+                deductions: { type: string }
+      responses:
+        "201":
+          description: Created — строка employee_relay_actions, kind=update_pay, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Сотрудник не найден, принадлежит другой сети, или это сотрудник central."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Не owner, или нет payroll.manage.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/employee-relay/{user_id}/worked-days:
+    post:
+      tags: [admin]
+      summary: >-
+        Employee relay (097) — central отмечает доп. смены сотруднику филиала
+        на дневной оплате (зеркало SalaryService.SetWorkedDays). Требует
+        payroll.manage.
+      parameters:
+        - { in: path, name: user_id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to, dates]
+              properties:
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+                dates: { type: array, items: { type: string, format: date } }
+      responses:
+        "201":
+          description: Created — строка employee_relay_actions, kind=set_worked_days, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Сотрудник не найден, принадлежит другой сети, или это сотрудник central."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Не owner, или нет payroll.manage.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/employee-relay/{user_id}/day-multiplier:
+    post:
+      tags: [admin]
+      summary: >-
+        Employee relay (097) — central отмечает «двойную смену» (×2) на
+        конкретный день сотруднику филиала на гибридном окладе (зеркало
+        SalaryService.ToggleDayMultiplier). Требует payroll.manage.
+      parameters:
+        - { in: path, name: user_id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [date, from, to]
+              properties:
+                date: { type: string, format: date }
+                from: { type: string, format: date }
+                to: { type: string, format: date }
+      responses:
+        "201":
+          description: Created — строка employee_relay_actions, kind=toggle_day_multiplier, status=pending.
+          content: { application/json: { schema: { type: object } } }
+        "400":
+          description: "Сотрудник не найден, принадлежит другой сети, или это сотрудник central."
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+        "403":
+          description: Не owner, или нет payroll.manage.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
+
+  /api/v1/employee-relay/history:
+    get:
+      tags: [admin]
+      summary: >-
+        История центрального управления персоналом филиалов (097) — свежие
+        сверху, с реальным статусом транспорта (delivered значит только
+        «филиал подтвердил применение», см. status/error).
+      parameters:
+        - { in: query, name: limit, schema: { type: integer, default: 50, maximum: 200 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  actions:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        target_restaurant_id: { type: string, format: uuid }
+                        target_restaurant_name: { type: string }
+                        target_user_id: { type: string, format: uuid, nullable: true }
+                        kind: { type: string, enum: [create, update_identity, update_pay, set_worked_days, toggle_day_multiplier] }
+                        status: { type: string, enum: [pending, delivered, failed] }
+                        error: { type: string, nullable: true }
+                        local_user_id: { type: string, format: uuid, nullable: true }
+                        created_by_name: { type: string, nullable: true }
+                        created_at: { type: string, format: date-time }
+                        delivered_at: { type: string, format: date-time, nullable: true }
 
   /api/v1/orders:
     get:
