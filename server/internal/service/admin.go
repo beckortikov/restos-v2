@@ -121,6 +121,11 @@ func (s *UsersService) Get(ctx context.Context, id string) (*models.User, error)
 }
 
 func (s *UsersService) Create(ctx context.Context, in UserInput) (*models.User, error) {
+	// Раньше проверки не было вовсе — матрица прав была чисто клиентской, и
+	// официант мог завести себе учётку owner'а через прямой POST в обход UI.
+	if err := requirePermFor(ctx, s.r, "users.manage"); err != nil {
+		return nil, err
+	}
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return nil, err
@@ -130,6 +135,20 @@ func (s *UsersService) Create(ctx context.Context, in UserInput) (*models.User, 
 	}
 	if in.Role == nil || *in.Role == "" {
 		return nil, apperrors.Wrap("VALIDATION", "role is required", nil)
+	}
+	if in.Username != nil && *in.Username != "" {
+		if taken, err := usernameTaken(ctx, s.r, rid, *in.Username, ""); err != nil {
+			return nil, err
+		} else if taken {
+			return nil, apperrors.Wrap("CONFLICT", "логин уже занят на этом ресторане: "+*in.Username, nil)
+		}
+	}
+	if in.PIN != nil && *in.PIN != "" {
+		if taken, err := pinTaken(ctx, s.r, rid, *in.PIN, ""); err != nil {
+			return nil, err
+		} else if taken {
+			return nil, apperrors.Wrap("CONFLICT", "PIN уже занят на этом ресторане", nil)
+		}
 	}
 	now := time.Now().UTC()
 	u := &models.User{
@@ -208,6 +227,12 @@ func (s *UsersService) Create(ctx context.Context, in UserInput) (*models.User, 
 }
 
 func (s *UsersService) Patch(ctx context.Context, id string, in UserInput) (*models.User, error) {
+	// Patch обслуживает и identity-поля (роль/PIN/логин — users.manage), и
+	// pay-поля (ставка/оклад — payroll.manage) одним методом, UserInput их не
+	// разделяет — поэтому любое из двух прав достаточно, не оба сразу.
+	if !hasPermFor(ctx, s.r, "users.manage") && !hasPermFor(ctx, s.r, "payroll.manage") {
+		return nil, apperrors.Wrap("FORBIDDEN", "недостаточно прав для действия: users.manage", nil)
+	}
 	scoped, err := s.r.ForTenant(ctx)
 	if err != nil {
 		return nil, err
@@ -218,6 +243,24 @@ func (s *UsersService) Patch(ctx context.Context, id string, in UserInput) (*mod
 			return nil, apperrors.ErrNotFound
 		}
 		return nil, err
+	}
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if in.Username != nil && *in.Username != "" {
+		if taken, err := usernameTaken(ctx, s.r, rid, *in.Username, id); err != nil {
+			return nil, err
+		} else if taken {
+			return nil, apperrors.Wrap("CONFLICT", "логин уже занят на этом ресторане: "+*in.Username, nil)
+		}
+	}
+	if in.PIN != nil && *in.PIN != "" {
+		if taken, err := pinTaken(ctx, s.r, rid, *in.PIN, id); err != nil {
+			return nil, err
+		} else if taken {
+			return nil, apperrors.Wrap("CONFLICT", "PIN уже занят на этом ресторане", nil)
+		}
 	}
 	updates := map[string]any{"updated_at": time.Now().UTC()}
 	if in.Username != nil {
@@ -329,17 +372,26 @@ func (s *UsersService) Patch(ctx context.Context, id string, in UserInput) (*mod
 // Возвращает случайный 4-значный PIN, не занятый ни одним юзером в текущем
 // ресторане (или в указанном restaurant_id, если передан). Сам PIN никуда
 // не сохраняется — клиент должен передать его в Create/Patch отдельно.
+// restaurantID — исторический параметр из тела HTTP-запроса; НЕ используется
+// для расширения скоупа. ForTenant() уже фильтрует по restaurant_id вызывающего;
+// раньше сюда ДОБАВЛЯЛСЯ второй .Where("restaurant_id", restaurantID) — при
+// чужом значении это AND двух несовместимых condition, usedPINs всегда
+// оказывался пустым, и метод «находил свободным» PIN, который на самом деле
+// уже занят (а при совпадающем значении — просто бесполезный дубль). Чужой
+// restaurant_id из тела запроса — потенциальный кросс-тенантный PIN-пробинг,
+// поэтому не чиним расширением на него: метод всегда честно использует СВОЙ
+// tenant. Кросс-тенантная генерация (central подбирает PIN для сотрудника
+// филиала) — отдельный internal-хелпер в employee_relay.go, не через этот
+// публичный HTTP-путь.
 func (s *UsersService) GeneratePIN(ctx context.Context, restaurantID string) (string, error) {
-	scoped, err := s.r.ForTenant(ctx)
+	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
 		return "", err
 	}
-	q := scoped.Model(&models.User{}).Where("pin IS NOT NULL")
-	if restaurantID != "" {
-		q = q.Where("restaurant_id = ?", restaurantID)
-	}
 	var used []string
-	if err := q.Pluck("pin", &used).Error; err != nil {
+	if err := s.r.Raw().WithContext(ctx).Model(&models.User{}).
+		Where("restaurant_id = ? AND pin IS NOT NULL", rid).
+		Pluck("pin", &used).Error; err != nil {
 		return "", err
 	}
 	usedSet := make(map[string]struct{}, len(used))
@@ -372,6 +424,39 @@ func itoa4(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// usernameTaken/pinTaken — раньше UsersService.Create вставлял username/pin
+// без единой проверки уникальности (ни constraint в БД, ни запроса) — два
+// сотрудника с одинаковым логином/PIN на одном ресторане молча уживались,
+// и вход по PIN резолвился к тому, кого первым вернул First(). excludeID —
+// свой же id при Patch (не конфликтовать с собственным текущим значением).
+// Скоуп — restaurant_id + живая роль (role <> 'deleted'), чтобы уволенный и
+// заново нанятый мог переиспользовать логин/PIN предшественника.
+func usernameTaken(ctx context.Context, r *repo.Repo, restaurantID, username, excludeID string) (bool, error) {
+	q := r.Raw().WithContext(ctx).Model(&models.User{}).
+		Where("restaurant_id = ? AND username = ? AND (role IS NULL OR role <> 'deleted')", restaurantID, username)
+	if excludeID != "" {
+		q = q.Where("id <> ?", excludeID)
+	}
+	var n int64
+	if err := q.Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+func pinTaken(ctx context.Context, r *repo.Repo, restaurantID, pin, excludeID string) (bool, error) {
+	q := r.Raw().WithContext(ctx).Model(&models.User{}).
+		Where("restaurant_id = ? AND pin = ? AND (role IS NULL OR role <> 'deleted')", restaurantID, pin)
+	if excludeID != "" {
+		q = q.Where("id <> ?", excludeID)
+	}
+	var n int64
+	if err := q.Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 // ValidatePIN — POST /api/v1/users/validate-pin.
@@ -424,6 +509,9 @@ func (s *UsersService) ValidatePIN(ctx context.Context, restaurantID, pin string
 // Hard delete опасен: order.waiter_id ссылается через FK без cascade
 // в legacy схеме. Эта семантика согласована с frontend.
 func (s *UsersService) Delete(ctx context.Context, id string) error {
+	if err := requirePermFor(ctx, s.r, "users.manage"); err != nil {
+		return err
+	}
 	return s.r.Transaction(ctx, func(tr *repo.Repo) error {
 		scoped, err := tr.ForTenant(ctx)
 		if err != nil {

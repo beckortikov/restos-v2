@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -220,6 +221,9 @@ func TestPhase18_PatchOrder(t *testing.T) {
 func TestPhase18_UserPermissions(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
+	// Create/Patch теперь требуют users.manage — грант поверх фикстуры.
+	openTestDB(t).Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"users.manage":true}}`)))
 
 	// Create user with permissions.
 	rp, bp := f.post(t, "/api/v1/users", tok, uuid.NewString(), map[string]any{
@@ -248,6 +252,9 @@ func TestPhase18_UserPermissions(t *testing.T) {
 func TestPhase18_UserAdvanceDeductions(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
+	// Create теперь требует users.manage — грант поверх фикстуры.
+	openTestDB(t).Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"users.manage":true}}`)))
 
 	rp, bp := f.post(t, "/api/v1/users", tok, uuid.NewString(), map[string]any{
 		"name":         "Eve",

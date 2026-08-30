@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 
+	"github.com/restos/restos-v4/server/internal/audit"
 	"github.com/restos/restos-v4/server/internal/db"
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
@@ -72,7 +73,8 @@ func TestUsersDelete_RecordsSync(t *testing.T) {
 	gdb.Create(&models.User{ID: userID, Name: &waiterName, Role: &waiterRole, RestaurantID: &rid})
 
 	svc := service.NewUsersService(repo.New(gdb))
-	ctx := tenant.WithRestaurant(t.Context(), rid)
+	owner := audit.Actor{UserID: uuid.NewString(), Role: "owner"}
+	ctx := audit.WithActor(tenant.WithRestaurant(t.Context(), rid), owner)
 	if err := svc.Delete(ctx, userID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}

@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
+
+	"github.com/restos/restos-v4/server/internal/db/models"
 )
 
 type accrualRow struct {
@@ -42,6 +45,9 @@ func TestSalaryAccrual_DailyPay(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	seedForWrite(t, f)
+	// Create теперь требует users.manage — грант поверх фикстуры.
+	openTestDB(t).Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"users.manage":true}}`)))
 
 	// Заводим сотрудника на дневной оплате: 120 за день.
 	r, b := f.post(t, "/api/v1/users", tok, uuid.NewString(), map[string]any{
@@ -99,6 +105,9 @@ func TestSalaryAccrual_MonthlyUnchanged(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
 	seedForWrite(t, f)
+	// Create теперь требует users.manage — грант поверх фикстуры.
+	openTestDB(t).Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"users.manage":true}}`)))
 
 	r, b := f.post(t, "/api/v1/users", tok, uuid.NewString(), map[string]any{
 		"name": "Окладник Тестовый", "role": "cook", "pin": "4322", "salary": "3000",

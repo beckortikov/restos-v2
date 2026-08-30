@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/datatypes"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
 	"github.com/restos/restos-v4/server/internal/pkg/decimal"
@@ -19,6 +20,12 @@ import (
 func TestAdmin_UsersCRUD(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
+	// Create/Patch/Delete теперь требуют users.manage (раньше бэк это не
+	// проверял вовсе) — фикстура setupE2E даёт кассиру только orders.*/
+	// inventory.manage, здесь нужен отдельный грант.
+	gdb := openTestDB(t)
+	gdb.Model(&models.User{}).Where("restaurant_id = ?", f.rid).
+		Update("permissions", datatypes.JSON([]byte(`{"actions":{"users.manage":true}}`)))
 
 	// Create.
 	resp, body := f.post(t, "/api/v1/users", tok, uuid.NewString(), map[string]any{
