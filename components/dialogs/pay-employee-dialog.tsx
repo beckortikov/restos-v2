@@ -17,6 +17,7 @@ import { humanizeError } from '@/lib/errors'
 import { ROLE_LABELS, type User, type FinancialAccount } from '@/lib/types'
 import { updateUser, paySalaryFull, payServiceCharge } from '@/lib/queries'
 import { addSalaryDeduction, giveSalaryAdvance, fetchSalaryAccrual, type SalaryAccrualRow } from '@/lib/queries/finance'
+import { requestUpdateEmployeePay } from '@/lib/queries/employee-relay'
 
 const PERIOD_MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь']
 function currentPeriod(): string { return new Date().toISOString().slice(0, 7) }
@@ -85,13 +86,19 @@ export interface PayEmployeeDialogProps {
    * — иначе выплата не попадёт в отчёт по этой смене, а честный кап (ЗП-4)
    * посчитает остаток по periodFrom/periodTo вместо фактической смены. */
   shiftId?: string
+  /** Фаза 4: сотрудник ДРУГОГО филиала сети (central) — только для
+   *  action='edit_salary'. Правка идёт очередью (097), не сразу: central
+   *  не пишет в БД филиала напрямую. Остальные action (аванс/удержание/
+   *  выплата) для филиальных сотрудников не открываются — свой отдельный
+   *  поток (payBranchSalary, см. finance/payroll branchPayFor). */
+  relayTargetBranchId?: string
   onClose: () => void
   onSaved: () => void | Promise<void>
 }
 
 export function PayEmployeeDialog({
   employee, action, accounts, accrual, salaryPaidThisPeriod, serviceAccrued, servicePaidThisPeriod,
-  serviceFrom, serviceTo, shiftId, onClose, onSaved,
+  serviceFrom, serviceTo, shiftId, relayTargetBranchId, onClose, onSaved,
 }: PayEmployeeDialogProps) {
   const navigate = useNavigate()
   const [payAmount, setPayAmount] = useState(0)
@@ -187,12 +194,21 @@ export function PayEmployeeDialog({
         // осталось «оклад 3000 + ставка 120», по карточке непонятно, за что
         // платят). Оклад — daily_rate теперь НЕ обнуляется: это гибрид
         // «оклад + доп. смены» (extraShiftRate, 0 если не задано владельцем).
-        await updateUser(employee.id, formPayType === 'daily'
-          ? { pay_type: 'daily', daily_rate: payAmount, salary: 0 }
-          : { pay_type: 'monthly', salary: payAmount, daily_rate: extraShiftRate })
-        toast.success(formPayType === 'daily'
-          ? `${employee.name}: ${formatCurrency(payAmount)} за день`
-          : `Оклад ${employee.name}: ${formatCurrency(payAmount)}${extraShiftRate > 0 ? ` + доп.смена ${formatCurrency(extraShiftRate)}` : ''}`)
+        if (relayTargetBranchId) {
+          // Очередь (097) — филиал применит с задержкой ~30 сек: central не
+          // пишет в БД филиала напрямую (см. requestUpdateEmployeePay).
+          await requestUpdateEmployeePay(employee.id, formPayType === 'daily'
+            ? { payType: 'daily', dailyRate: String(payAmount), salary: '0' }
+            : { payType: 'monthly', salary: String(payAmount), dailyRate: String(extraShiftRate) })
+          toast.success(`Отправлено филиалу — оплата труда ${employee.name} применится в течение ~30 секунд`)
+        } else {
+          await updateUser(employee.id, formPayType === 'daily'
+            ? { pay_type: 'daily', daily_rate: payAmount, salary: 0 }
+            : { pay_type: 'monthly', salary: payAmount, daily_rate: extraShiftRate })
+          toast.success(formPayType === 'daily'
+            ? `${employee.name}: ${formatCurrency(payAmount)} за день`
+            : `Оклад ${employee.name}: ${formatCurrency(payAmount)}${extraShiftRate > 0 ? ` + доп.смена ${formatCurrency(extraShiftRate)}` : ''}`)
+        }
       } else if (action === 'advance') {
         if (payAmount <= 0) { setPaying(false); return }
         if (payMode === 'override' && !overrideReason.trim()) { toast.error('Укажите причину свободной выплаты'); setPaying(false); return }

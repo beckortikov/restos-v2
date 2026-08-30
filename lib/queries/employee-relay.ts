@@ -90,3 +90,52 @@ export async function requestUpdateEmployeeIdentity(userId: string, input: Parti
   logAction('employee_relay.update_identity', 'user', userId)
   return mapAction(row as Record<string, unknown> | undefined)
 }
+
+// requestUpdateEmployeePay — Фаза 4: оклад/ставку сотрудника филиала меняет
+// central, а не «сам филиал» (см. finance/payroll — кнопка ставки была
+// disabled={isBranch}). Значения — строками (decimal.Decimal на бэке).
+export async function requestUpdateEmployeePay(userId: string, input: Partial<{
+  payType: 'monthly' | 'daily'
+  salary: string
+  hourlyRate: string
+  dailyRate: string
+  advance: string
+  deductions: string
+}>): Promise<EmployeeRelayAction> {
+  const row = await unwrap(api.POST('/api/v1/employee-relay/{user_id}/pay', {
+    params: { path: { user_id: userId } },
+    body: {
+      pay_type: input.payType,
+      salary: input.salary,
+      hourly_rate: input.hourlyRate,
+      daily_rate: input.dailyRate,
+      advance: input.advance,
+      deductions: input.deductions,
+    },
+  }))
+  logAction('employee_relay.update_pay', 'user', userId)
+  return mapAction(row as Record<string, unknown> | undefined)
+}
+
+// requestSetWorkedDaysRelay / requestToggleDayMultiplierRelay — Фаза 4:
+// доп.смены сотрудника филиала из WorkedDaysDialog (relayTargetBranchId).
+// Тот же payload, что у локальных setWorkedDays/toggleDayMultiplier
+// (lib/queries/finance.ts), но идёт через очередь — филиал применит их
+// своим SalaryService, а не central напрямую (central не пишет в чужую БД).
+export async function requestSetWorkedDaysRelay(userId: string, from: string, to: string, dates: string[]): Promise<EmployeeRelayAction> {
+  const row = await unwrap(api.POST('/api/v1/employee-relay/{user_id}/worked-days', {
+    params: { path: { user_id: userId } },
+    body: { from, to, dates },
+  }))
+  logAction('employee_relay.set_worked_days', 'user', userId)
+  return mapAction(row as Record<string, unknown> | undefined)
+}
+
+export async function requestToggleDayMultiplierRelay(userId: string, date: string, from: string, to: string): Promise<EmployeeRelayAction> {
+  const row = await unwrap(api.POST('/api/v1/employee-relay/{user_id}/day-multiplier', {
+    params: { path: { user_id: userId } },
+    body: { date, from, to },
+  }))
+  logAction('employee_relay.toggle_day_multiplier', 'user', userId)
+  return mapAction(row as Record<string, unknown> | undefined)
+}

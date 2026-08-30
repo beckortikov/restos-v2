@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, memo, useCallback, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useAuth } from '@/lib/auth-store'
 import { formatCurrency, transliterateToUsername } from '@/lib/helpers'
 import {
@@ -30,10 +30,21 @@ type Tab = 'staff' | 'matrix'
 export default function UserPermissionsPage() {
   const { user, restaurant, canDo } = useAuth()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const isBranchView = useBranchView()
   // central = может управлять персоналом ДРУГИХ филиалов сети через relay
   // (097) — учётка физически появляется в БД филиала своим пулером, не сразу.
   const isCentral = restaurant?.kind === 'central_warehouse' && !isBranchView
+  // Точечная ссылка с finance/payroll (Фаза 4, ?highlight=<id>) — подсвечиваем
+  // и скроллим к сотруднику, откуда бы он ни пришёл (свой или филиальный).
+  // useEffect, а не lazy useState-инициализатор: страница может остаться
+  // смонтированной между переходами (тот же компонент, новый query) —
+  // инициализатор useState тогда просто не перечитался бы повторно.
+  const [highlightId, setHighlightId] = useState<string | null>(null)
+  useEffect(() => {
+    const h = searchParams.get('highlight')
+    if (h) setHighlightId(h)
+  }, [searchParams])
   const [employees, setEmployees] = useState<User[]>([])
   const [loading, setLoading] = useState(true)
   const [permMatrix, setPermMatrix] = useState<PermMap>({})
@@ -62,6 +73,19 @@ export default function UserPermissionsPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isCentral, user?.restaurantId])
   useEffect(() => { loadBranchStaff() }, [loadBranchStaff])
+
+  // Скролл + автогашение — ОДНИМ эффектом (см. тот же приём в finance/payroll):
+  // независимый таймер гашения мог сработать РАНЬШЕ, чем страница успевала
+  // отрисовать строку, и подсветка не появлялась вовсе. branchStaff — своим,
+  // независимым от loading запросом (loadBranchStaff): без него в зависимостях
+  // эффект успевал отработать до того, как филиальная секция вообще появится
+  // в DOM (getElementById → null навсегда, сам DOM-поиск не реактивен).
+  useEffect(() => {
+    if (!highlightId || loading) return
+    document.getElementById(`staff-row-${highlightId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    const t = setTimeout(() => setHighlightId(null), 6000)
+    return () => clearTimeout(t)
+  }, [highlightId, loading, branchStaff])
 
   // Редактирование identity сотрудника ДРУГОГО филиала (через relay).
   const [editingBranchEmp, setEditingBranchEmp] = useState<NetworkStaffMember | null>(null)
@@ -463,7 +487,8 @@ export default function UserPermissionsPage() {
             )
 
             return (
-              <div key={emp.id} className="bg-card rounded-xl border border-border overflow-hidden">
+              <div key={emp.id} id={`staff-row-${emp.id}`}
+                className={`bg-card rounded-xl border overflow-hidden ${highlightId === emp.id ? 'border-primary ring-1 ring-primary/40' : 'border-border'}`}>
                 {/* Main row */}
                 <div className="flex items-center gap-4 p-4">
                   <div className="size-10 rounded-xl bg-primary/10 flex items-center justify-center shrink-0 text-sm font-bold text-primary">
@@ -570,7 +595,8 @@ export default function UserPermissionsPage() {
           </p>
           <div className="space-y-2">
             {branchStaff.map(m => (
-              <div key={m.id} className="bg-card rounded-xl border border-border overflow-hidden">
+              <div key={m.id} id={`staff-row-${m.id}`}
+                className={`bg-card rounded-xl border overflow-hidden ${highlightId === m.id ? 'border-primary ring-1 ring-primary/40' : 'border-border'}`}>
                 <div className="flex items-center gap-4 p-4">
                   <div className="size-10 rounded-xl bg-muted flex items-center justify-center shrink-0 text-sm font-bold text-muted-foreground">
                     {m.name.charAt(0)}

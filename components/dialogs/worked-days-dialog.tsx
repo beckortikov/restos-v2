@@ -5,6 +5,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from '@/components/ui/dialog'
 import { fetchWorkedDays, setWorkedDays, toggleDayMultiplier } from '@/lib/queries'
+import { requestSetWorkedDaysRelay, requestToggleDayMultiplierRelay } from '@/lib/queries/employee-relay'
 import { formatCurrency } from '@/lib/helpers'
 import { toast } from 'sonner'
 import { humanizeError } from '@/lib/errors'
@@ -28,6 +29,7 @@ import { ru } from 'date-fns/locale'
 // же — только по ручным отметкам, без табеля.
 export function WorkedDaysDialog({
   open, onOpenChange, employeeId, employeeName, dailyRate, initialDate, onSaved, mode = 'daily',
+  relayTargetBranchId,
 }: {
   open: boolean
   onOpenChange: (v: boolean) => void
@@ -37,6 +39,10 @@ export function WorkedDaysDialog({
   initialDate?: string // YYYY-MM-DD — какой месяц открыть первым (обычно конец периода)
   onSaved?: (count: number) => void
   mode?: 'daily' | 'extra'
+  /** Фаза 4: сотрудник ДРУГОГО филиала сети (central). Чтение — тем же GET
+   *  через X-Branch-Id (см. fetchWorkedDays); запись — очередью (097), не
+   *  сразу — central не пишет в БД филиала напрямую. */
+  relayTargetBranchId?: string
 }) {
   const [month, setMonth] = useState<Date>(() =>
     startOfMonth(initialDate ? new Date(initialDate + 'T00:00:00') : new Date()),
@@ -62,7 +68,7 @@ export function WorkedDaysDialog({
   useEffect(() => {
     if (!open || !employeeId) return
     setLoading(true)
-    fetchWorkedDays(employeeId, monthStart, monthEnd)
+    fetchWorkedDays(employeeId, monthStart, monthEnd, relayTargetBranchId)
       .then((r) => {
         // extra: табель не источник доп.смен (см. комментарий над компонентом) —
         // shiftSet остаётся пустым, все дни в календаре toggleable.
@@ -72,7 +78,7 @@ export function WorkedDaysDialog({
       })
       .catch(() => toast.error('Не удалось загрузить дни'))
       .finally(() => setLoading(false))
-  }, [open, employeeId, monthStart, monthEnd, mode])
+  }, [open, employeeId, monthStart, monthEnd, mode, relayTargetBranchId])
 
   const totalDays = useMemo(() => {
     const u = new Set(shiftSet)
@@ -112,9 +118,24 @@ export function WorkedDaysDialog({
     if (togglingDate) return
     setTogglingDate(iso)
     try {
-      const res = await toggleDayMultiplier(employeeId, iso, monthStart, monthEnd)
-      setMultipliers(res.multipliers)
-      onSaved?.(res.count)
+      if (relayTargetBranchId) {
+        // Очередь (097) — филиал применит с задержкой ~30 сек, не сразу
+        // (central не пишет в БД филиала напрямую). Локально отражаем
+        // предполагаемый результат — единственный тап меняет ×1↔×2, а не
+        // ставит середину неопределённости до следующего fetchWorkedDays.
+        await requestToggleDayMultiplierRelay(employeeId, iso, monthStart, monthEnd)
+        setMultipliers((prev) => {
+          const next = { ...prev }
+          if ((next[iso] ?? 1) > 1) delete next[iso]
+          else next[iso] = 2
+          return next
+        })
+        toast.success('Отправлено филиалу — множитель применится в течение ~30 секунд')
+      } else {
+        const res = await toggleDayMultiplier(employeeId, iso, monthStart, monthEnd)
+        setMultipliers(res.multipliers)
+        onSaved?.(res.count)
+      }
     } catch (err) {
       toast.error(humanizeError(err, 'Не удалось изменить множитель'))
     } finally {
@@ -150,9 +171,14 @@ export function WorkedDaysDialog({
   async function save() {
     setSaving(true)
     try {
-      const res = await setWorkedDays(employeeId, monthStart, monthEnd, [...manualSet])
-      toast.success(`${format(month, 'LLLL', { locale: ru })}: ${mode === 'extra' ? 'доп.смен' : 'отмечено дней'} ${res.count}`)
-      onSaved?.(res.count)
+      if (relayTargetBranchId) {
+        await requestSetWorkedDaysRelay(employeeId, monthStart, monthEnd, [...manualSet])
+        toast.success(`Отправлено филиалу — применится в течение ~30 секунд (${manualSet.size})`)
+      } else {
+        const res = await setWorkedDays(employeeId, monthStart, monthEnd, [...manualSet])
+        toast.success(`${format(month, 'LLLL', { locale: ru })}: ${mode === 'extra' ? 'доп.смен' : 'отмечено дней'} ${res.count}`)
+        onSaved?.(res.count)
+      }
       onOpenChange(false)
     } catch (e) {
       toast.error(humanizeError(e, 'Ошибка сохранения'))

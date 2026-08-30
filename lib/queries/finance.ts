@@ -491,9 +491,14 @@ function mapWorkedDays(r: any): WorkedDaysResult {
   }
 }
 
-export async function fetchWorkedDays(userId: string, from: string, to: string): Promise<WorkedDaysResult> {
+// branchId (Фаза 4) — читать доп.смены сотрудника ДРУГОГО филиала с central
+// (X-Branch-Id, тот же приём, что fetchSalaryAccrual): owner+central+одна
+// сеть, бэк подменяет tenant НА ЭТОТ GET (middleware.BranchOverride, только
+// для GET — запись остаётся через relay, см. requestSetWorkedDaysRelay).
+export async function fetchWorkedDays(userId: string, from: string, to: string, branchId?: string): Promise<WorkedDaysResult> {
   const r: any = await unwrap(api.GET('/api/v1/finance/salary/worked-days', {
     params: { query: { user_id: userId, from, to } },
+    ...(branchId ? { headers: { 'X-Branch-Id': branchId } } : {}),
   }))
   return mapWorkedDays(r)
 }
