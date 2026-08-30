@@ -1317,6 +1317,10 @@ type SemiTypeInput struct {
 	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
 	// «Тесто-30» → значение «30» шкалы пиццы); см. models.SemiFinishedType.
 	SizeScaleValueID *string `json:"size_scale_value_id,omitempty"`
+	// BatchQty (098) — авторская подсказка формы («рецепт на партию N
+	// единиц»); см. models.SemiFinishedType.BatchQty — recipe.QtyPerUnit
+	// этим полем не затрагивается.
+	BatchQty *string `json:"batch_qty,omitempty"`
 }
 
 // SemiRecipeInput — строка рецепта полуфабриката.
@@ -1409,6 +1413,22 @@ func (s *SemiFinishedService) GetType(ctx context.Context, id string, includeRec
 	return &SemiTypeWithRecipe{SemiFinishedType: &t, Recipe: lines}, nil
 }
 
+// parseBatchQty — 098: batch_qty только > 0 (это делитель на фронте при
+// вводе рецептуры «на партию») — явный "0"/отрицательное ушло бы в БД
+// буквально таким же (GORM подставляет default-тег только на настоящий Go
+// zero-value, а не на explicit-переданный decimal-ноль) и превратило бы
+// деление на фронте в NaN.
+func parseBatchQty(raw string) (decimal.Decimal, error) {
+	d, err := decimal.FromString(raw)
+	if err != nil {
+		return decimal.Zero, apperrors.Wrap("VALIDATION", "bad batch_qty", err)
+	}
+	if !decimal.IsPositive(d) {
+		return decimal.Zero, apperrors.Wrap("VALIDATION", "batch_qty must be > 0", nil)
+	}
+	return d, nil
+}
+
 func (s *SemiFinishedService) CreateType(ctx context.Context, in SemiTypeInput) (*models.SemiFinishedType, error) {
 	rid, err := tenant.MustRestaurantID(ctx)
 	if err != nil {
@@ -1429,6 +1449,13 @@ func (s *SemiFinishedService) CreateType(ctx context.Context, in SemiTypeInput) 
 			return nil, apperrors.Wrap("VALIDATION", "bad yield_percent", err)
 		}
 		t.YieldPercent = d
+	}
+	if in.BatchQty != nil {
+		d, err := parseBatchQty(*in.BatchQty)
+		if err != nil {
+			return nil, err
+		}
+		t.BatchQty = d
 	}
 	// Recipe — опционально. Транзакция type+lines, чтобы не остался полу-созданный.
 	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
@@ -1498,6 +1525,13 @@ func (s *SemiFinishedService) PatchType(ctx context.Context, id string, in SemiT
 			return nil, apperrors.Wrap("VALIDATION", "bad yield_percent", err)
 		}
 		updates["yield_percent"] = d
+	}
+	if in.BatchQty != nil {
+		d, err := parseBatchQty(*in.BatchQty)
+		if err != nil {
+			return nil, err
+		}
+		updates["batch_qty"] = d
 	}
 	if in.SizeScaleValueID != nil {
 		if *in.SizeScaleValueID == "" {

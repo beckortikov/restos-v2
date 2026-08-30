@@ -259,6 +259,10 @@ export interface SemiFinishedType {
   name: string
   outputUnit: string
   yieldPercent: number // 70 = из 1кг сырья получается 0.7кг готового
+  // Авторская подсказка формы техкарты — рецепт написан «на партию batchQty
+  // единиц выхода», а не «на 1». recipe[].qtyPerUnit при этом всегда «на 1
+  // единицу» (см. lib/queries/semi.ts) — производство/списание её не видят.
+  batchQty: number
   recipe: SemiRecipeLine[]
   // Тег «это заготовка вот этого размера» (например «Тесто-30» → значение
   // «30» шкалы пиццы) — подсказывает нужную заготовку в редакторе тех. карты.

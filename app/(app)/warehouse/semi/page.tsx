@@ -125,6 +125,10 @@ export default function SemiPage() {
   const [newName, setNewName] = useState('')
   const [newUnit, setNewUnit] = useState('кг')
   const [newYield, setNewYield] = useState(100)
+  // Объём партии (098) — авторская подсказка: сколько сырья вводить «на всю
+  // партию» вместо «на 1 единицу выхода». newRecipe[].qtyPerUnit при этом
+  // остаётся канонической per-unit величиной — см. поля ввода ниже.
+  const [newBatchQty, setNewBatchQty] = useState(1)
   const [newRecipe, setNewRecipe] = useState<{ ingredientId: string; name: string; qtyPerUnit: number; unit: string }[]>([])
   const [saving, setSaving] = useState(false)
 
@@ -159,6 +163,7 @@ export default function SemiPage() {
     setNewName('')
     setNewUnit('кг')
     setNewYield(100)
+    setNewBatchQty(1)
     setNewRecipe([])
   }
   const closeForm = () => { setShowCreate(false); resetForm() }
@@ -168,6 +173,7 @@ export default function SemiPage() {
     setNewName(type.name)
     setNewUnit(type.outputUnit)
     setNewYield(type.yieldPercent)
+    setNewBatchQty(type.batchQty || 1)
     setNewRecipe(type.recipe.map(r => ({ ingredientId: r.ingredientId, name: r.name, qtyPerUnit: r.qtyPerUnit, unit: r.unit })))
     setProducing(null)
     setShowCreate(true)
@@ -177,13 +183,14 @@ export default function SemiPage() {
     if (!newName.trim()) { toast.error('Введите название'); return }
     if (newRecipe.length === 0) { toast.error('Добавьте хотя бы один ингредиент'); return }
     if (newRecipe.some(l => !l.ingredientId || l.qtyPerUnit <= 0)) { toast.error('Заполните все строки рецепта'); return }
+    if (newBatchQty <= 0) { toast.error('Объём партии должен быть больше нуля'); return }
     setSaving(true)
     try {
       if (editingId) {
-        await updateSemiType(editingId, { name: newName.trim(), outputUnit: newUnit, yieldPercent: newYield, recipe: newRecipe })
+        await updateSemiType(editingId, { name: newName.trim(), outputUnit: newUnit, yieldPercent: newYield, batchQty: newBatchQty, recipe: newRecipe })
         toast.success('Полуфабрикат обновлён')
       } else {
-        await createSemiType(newName.trim(), newUnit, newRecipe, newYield)
+        await createSemiType(newName.trim(), newUnit, newRecipe, newYield, undefined, newBatchQty)
         toast.success('Полуфабрикат создан')
       }
       closeForm()
@@ -354,7 +361,7 @@ export default function SemiPage() {
               <button onClick={closeForm} className="text-muted-foreground hover:text-foreground"><X className="size-4" /></button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
               <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1">Название</label>
                 <input
@@ -375,6 +382,18 @@ export default function SemiPage() {
                 </select>
               </div>
               <div>
+                <label className="text-xs font-medium text-muted-foreground block mb-1">Объём партии</label>
+                <DecimalInput
+                  min={0}
+                  value={newBatchQty}
+                  onChange={setNewBatchQty}
+                  className="w-full px-3 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                />
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  {newBatchQty === 1 ? 'Рецепт на 1 единицу выхода' : `Рецепт пишется на партию ${newBatchQty} ${newUnit}`}
+                </p>
+              </div>
+              <div>
                 <label className="text-xs font-medium text-muted-foreground block mb-1">Выход (%)</label>
                 <input
                   type="number"
@@ -393,7 +412,9 @@ export default function SemiPage() {
             {/* Recipe lines */}
             <div>
               <div className="flex items-center justify-between mb-2">
-                <label className="text-xs font-medium text-muted-foreground">Рецептура (на 1 {newUnit} выхода)</label>
+                <label className="text-xs font-medium text-muted-foreground">
+                  {newBatchQty === 1 ? `Рецептура (на 1 ${newUnit} выхода)` : `Рецептура (на партию ${newBatchQty} ${newUnit})`}
+                </label>
                 <button onClick={addRecipeLine} className="text-xs text-primary hover:underline flex items-center gap-1">
                   <Plus className="size-3" />Ингредиент
                 </button>
@@ -421,8 +442,8 @@ export default function SemiPage() {
                         <span className="text-[10px] text-muted-foreground">Кол-во</span>
                         <DecimalInput
                           min={0}
-                          value={line.qtyPerUnit}
-                          onChange={v => setNewRecipe(prev => prev.map((l, i) => i === idx ? { ...l, qtyPerUnit: v } : l))}
+                          value={dMul(line.qtyPerUnit, newBatchQty)}
+                          onChange={v => setNewRecipe(prev => prev.map((l, i) => i === idx ? { ...l, qtyPerUnit: newBatchQty > 0 ? dDiv(v, newBatchQty) : v } : l))}
                           className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                       </div>
@@ -438,7 +459,9 @@ export default function SemiPage() {
                       </div>
                       <div className="w-24 text-right pb-1.5">
                         <span className="text-[10px] text-muted-foreground block">Стоимость</span>
-                        <span className="text-xs font-medium text-foreground">{cost > 0 ? formatCurrency(cost) : '—'}</span>
+                        {/* Показываем на объём партии (как и «Кол-во» выше) — иначе
+                            рядом с «5 кг» была бы цена за нормализованные 0.5 кг. */}
+                        <span className="text-xs font-medium text-foreground">{cost > 0 ? formatCurrency(dMul(cost, newBatchQty)) : '—'}</span>
                       </div>
                       <button
                         onClick={() => setNewRecipe(prev => prev.filter((_, i) => i !== idx))}
@@ -544,7 +567,9 @@ export default function SemiPage() {
                 {/* Recipe */}
                 {expanded === type.id && (
                   <div className="px-6 pb-4 bg-muted/20">
-                    <p className="text-xs font-semibold text-muted-foreground mb-2 mt-2">Рецептура на 1 {type.outputUnit}:</p>
+                    <p className="text-xs font-semibold text-muted-foreground mb-2 mt-2">
+                      {type.batchQty === 1 ? `Рецептура на 1 ${type.outputUnit}:` : `Рецептура на партию ${type.batchQty} ${type.outputUnit}:`}
+                    </p>
                     <div className="space-y-1">
                       {type.recipe.map((line) => {
                         const cost = recipeLineCost(line.qtyPerUnit, line.unit, line.ingredientId)
@@ -552,8 +577,8 @@ export default function SemiPage() {
                           <div key={line.ingredientId} className="flex items-center justify-between text-sm max-w-md">
                             <span className="text-foreground">{line.name}</span>
                             <div className="flex items-center gap-4 text-muted-foreground">
-                              <span>{formatNum(line.qtyPerUnit)} {line.unit}</span>
-                              <span className="text-foreground font-medium w-24 text-right">{cost > 0 ? formatCurrency(cost) : '—'}</span>
+                              <span>{formatNum(dMul(line.qtyPerUnit, type.batchQty))} {line.unit}</span>
+                              <span className="text-foreground font-medium w-24 text-right">{cost > 0 ? formatCurrency(dMul(cost, type.batchQty)) : '—'}</span>
                             </div>
                           </div>
                         )

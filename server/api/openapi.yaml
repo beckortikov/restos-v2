@@ -6605,6 +6605,7 @@ components:
         name: { type: string }
         output_unit: { type: string }
         yield_percent: { $ref: "#/components/schemas/Decimal" }
+        batch_qty: { $ref: "#/components/schemas/Decimal", description: "Авторская подсказка формы техкарты — рецепт написан «на партию N единиц выхода», а не «на 1». Не влияет на производство/списание: qty_per_unit строк рецепта всегда «на 1 единицу»." }
         size_scale_value_id: { type: string, format: uuid, nullable: true, description: "Тег «это заготовка вот этого размера» (например «Тесто-30» → значение «30»)." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
@@ -6614,6 +6615,7 @@ components:
         name: { type: string }
         output_unit: { type: string }
         yield_percent: { $ref: "#/components/schemas/Decimal" }
+        batch_qty: { $ref: "#/components/schemas/Decimal", description: "> 0. По умолчанию 1 (текущее поведение)." }
         size_scale_value_id: { type: string, format: uuid }
     SemiTypesList: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/SemiFinishedType" } }, next_cursor: { type: string } } }
 

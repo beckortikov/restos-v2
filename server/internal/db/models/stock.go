@@ -214,6 +214,12 @@ type SemiFinishedType struct {
 	Name         *string         `json:"name"`
 	OutputUnit   *string         `gorm:"column:output_unit;default:'кг'" json:"output_unit"`
 	YieldPercent decimal.Decimal `gorm:"column:yield_percent;type:numeric(14,4);default:100" json:"yield_percent"`
+	// BatchQty (098) — чисто авторская подсказка для формы техкарты: сколько
+	// сырья повар пишет «на партию» вместо «на 1 единицу выхода» (фронт сам
+	// делит на BatchQty перед сохранением). RecipeLine.QtyPerUnit по-прежнему
+	// всегда «на 1 единицу выхода» — Prepare/Consume/cascadeSemiDeduct её не
+	// видят и не используют, семантика для них не меняется.
+	BatchQty decimal.Decimal `gorm:"column:batch_qty;type:numeric(14,4);default:1" json:"batch_qty"`
 	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
 	// «Тесто-30» → значение «30» шкалы пиццы), используется UI тех. карты
 	// для подсказки правильного полуфабриката под размер варианта.

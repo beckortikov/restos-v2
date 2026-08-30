@@ -17412,6 +17412,8 @@ export interface components {
             name?: string;
             output_unit?: string;
             yield_percent?: components["schemas"]["Decimal"];
+            /** @description Авторская подсказка формы техкарты — рецепт написан «на партию N единиц выхода», а не «на 1». Не влияет на производство/списание: qty_per_unit строк рецепта всегда «на 1 единицу». */
+            batch_qty?: components["schemas"]["Decimal"];
             /**
              * Format: uuid
              * @description Тег «это заготовка вот этого размера» (например «Тесто-30» → значение «30»).
@@ -17426,6 +17428,8 @@ export interface components {
             name?: string;
             output_unit?: string;
             yield_percent?: components["schemas"]["Decimal"];
+            /** @description > 0. По умолчанию 1 (текущее поведение). */
+            batch_qty?: components["schemas"]["Decimal"];
             /** Format: uuid */
             size_scale_value_id?: string;
         };
