@@ -335,7 +335,7 @@ func TestPhase14_SemiPrepareConsume(t *testing.T) {
 	// Recipe: 1 unit of semi consumes 0.5 kg of Rice.
 	if err := gdb.Create(&models.SemiRecipeLine{
 		ID: uuid.NewString(), SemiTypeID: &semiID, IngredientID: &ing.ID,
-		Name: ing.Name, QtyPerUnit: decimal.MustFromString("0.5"), Unit: ing.Unit,
+		Name: ing.Name, QtyPerBatch: decimal.MustFromString("0.5"), Unit: ing.Unit,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

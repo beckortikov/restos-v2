@@ -112,7 +112,7 @@ func TestNetworkMenuTechCardsPropagation(t *testing.T) {
 	gdb.Create(&models.SemiFinishedType{ID: doughID, Name: &dough, OutputUnit: &kg,
 		YieldPercent: decimal.MustFromString("100"), SizeScaleValueID: &valueMID, RestaurantID: &centralID})
 	gdb.Create(&models.SemiRecipeLine{ID: uuid.NewString(), SemiTypeID: &doughID, IngredientID: &flourID,
-		Name: &flour, QtyPerUnit: decimal.MustFromString("0.5"), Unit: &kg})
+		Name: &flour, QtyPerBatch: decimal.MustFromString("0.5"), Unit: &kg})
 
 	// ─── Правки техкарты на центре → снапшот пересобирается сам ─────────────
 	techSvc := service.NewTechCardsService(repo.New(gdb))

@@ -320,8 +320,12 @@ func buildSemiSpec(tx *gorm.DB, rid, accountID, semiTypeID string, now time.Time
 		if u == "" {
 			u = unit
 		}
+		// Провод остаётся «на 1 единицу выхода» (батч-независимый — у филиала
+		// может быть свой BatchQty для «того же» полуфабриката), вычисляем на
+		// лету из батч-относительного QtyPerBatch (099).
+		perUnit := decimal.DivRound(rl.QtyPerBatch, st.BatchQty)
 		spec.Recipe = append(spec.Recipe, NetworkSemiRecipeLine{
-			Nom: nomID, Name: name, QtyPerUnit: decimal.Normalize(rl.QtyPerUnit).String(), Unit: u, Price: price,
+			Nom: nomID, Name: name, QtyPerUnit: decimal.Normalize(perUnit).String(), Unit: u, Price: price,
 		})
 	}
 	return spec, nil

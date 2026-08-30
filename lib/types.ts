@@ -250,7 +250,7 @@ export interface SizeScale {
 export interface SemiRecipeLine {
   ingredientId: string
   name: string
-  qtyPerUnit: number
+  qtyPerBatch: number
   unit: string
 }
 
@@ -259,9 +259,10 @@ export interface SemiFinishedType {
   name: string
   outputUnit: string
   yieldPercent: number // 70 = из 1кг сырья получается 0.7кг готового
-  // Авторская подсказка формы техкарты — рецепт написан «на партию batchQty
-  // единиц выхода», а не «на 1». recipe[].qtyPerUnit при этом всегда «на 1
-  // единицу» (см. lib/queries/semi.ts) — производство/списание её не видят.
+  // Объём партии, в терминах которой написан рецепт — recipe[].qtyPerBatch
+  // хранится «на весь batchQty», как реально ввёл пользователь (не на 1
+  // единицу выхода). Пропорцию «на 1» вычисляет бэк (Prepare/cascadeSemiDeduct)
+  // в момент использования — фронт её не считает и не хранит.
   batchQty: number
   recipe: SemiRecipeLine[]
   // Тег «это заготовка вот этого размера» (например «Тесто-30» → значение

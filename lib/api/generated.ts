@@ -17412,7 +17412,7 @@ export interface components {
             name?: string;
             output_unit?: string;
             yield_percent?: components["schemas"]["Decimal"];
-            /** @description Авторская подсказка формы техкарты — рецепт написан «на партию N единиц выхода», а не «на 1». Не влияет на производство/списание: qty_per_unit строк рецепта всегда «на 1 единицу». */
+            /** @description Объём партии, в терминах которой написан рецепт — recipe[].qty_per_batch хранится «на весь batch_qty», как ввёл пользователь (не на 1 единицу). */
             batch_qty?: components["schemas"]["Decimal"];
             /**
              * Format: uuid

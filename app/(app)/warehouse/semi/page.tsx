@@ -125,11 +125,11 @@ export default function SemiPage() {
   const [newName, setNewName] = useState('')
   const [newUnit, setNewUnit] = useState('кг')
   const [newYield, setNewYield] = useState(100)
-  // Объём партии (098) — авторская подсказка: сколько сырья вводить «на всю
-  // партию» вместо «на 1 единицу выхода». newRecipe[].qtyPerUnit при этом
-  // остаётся канонической per-unit величиной — см. поля ввода ниже.
+  // Объём партии (098) — сколько сырья вводить «на всю партию».
+  // newRecipe[].qtyPerBatch (099) хранит РОВНО это число, как ввёл
+  // пользователь — без деления при сохранении.
   const [newBatchQty, setNewBatchQty] = useState(1)
-  const [newRecipe, setNewRecipe] = useState<{ ingredientId: string; name: string; qtyPerUnit: number; unit: string }[]>([])
+  const [newRecipe, setNewRecipe] = useState<{ ingredientId: string; name: string; qtyPerBatch: number; unit: string }[]>([])
   const [saving, setSaving] = useState(false)
 
   // Списание произведённого запаса
@@ -150,11 +150,11 @@ export default function SemiPage() {
   }, [])
 
   // Recipe line cost helper
-  const recipeLineCost = (qtyPerUnit: number, recipeUnit: string, ingredientId: string): number => {
+  const recipeLineCost = (qty: number, recipeUnit: string, ingredientId: string): number => {
     const ing = ingredients.find(i => i.id === ingredientId)
     if (!ing) return 0
     // convert recipe qty to ingredient's stock unit, then multiply by price
-    const inStockUnit = convertToStock(qtyPerUnit, ing.unit, recipeUnit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
+    const inStockUnit = convertToStock(qty, ing.unit, recipeUnit, ing.unitWeight ?? 0, ing.unitWeightUnit ?? '')
     return dMul(inStockUnit, ing.pricePerUnit)
   }
 
@@ -174,7 +174,7 @@ export default function SemiPage() {
     setNewUnit(type.outputUnit)
     setNewYield(type.yieldPercent)
     setNewBatchQty(type.batchQty || 1)
-    setNewRecipe(type.recipe.map(r => ({ ingredientId: r.ingredientId, name: r.name, qtyPerUnit: r.qtyPerUnit, unit: r.unit })))
+    setNewRecipe(type.recipe.map(r => ({ ingredientId: r.ingredientId, name: r.name, qtyPerBatch: r.qtyPerBatch, unit: r.unit })))
     setProducing(null)
     setShowCreate(true)
   }
@@ -182,7 +182,7 @@ export default function SemiPage() {
   const handleSave = async () => {
     if (!newName.trim()) { toast.error('Введите название'); return }
     if (newRecipe.length === 0) { toast.error('Добавьте хотя бы один ингредиент'); return }
-    if (newRecipe.some(l => !l.ingredientId || l.qtyPerUnit <= 0)) { toast.error('Заполните все строки рецепта'); return }
+    if (newRecipe.some(l => !l.ingredientId || l.qtyPerBatch <= 0)) { toast.error('Заполните все строки рецепта'); return }
     if (newBatchQty <= 0) { toast.error('Объём партии должен быть больше нуля'); return }
     setSaving(true)
     try {
@@ -238,7 +238,7 @@ export default function SemiPage() {
   }
 
   const addRecipeLine = () => {
-    setNewRecipe(prev => [...prev, { ingredientId: '', name: '', qtyPerUnit: 0, unit: 'г' }])
+    setNewRecipe(prev => [...prev, { ingredientId: '', name: '', qtyPerBatch: 0, unit: 'г' }])
   }
 
   const selectIngredient = (idx: number, id: string) => {
@@ -268,11 +268,14 @@ export default function SemiPage() {
     return [ing.unit]
   }
 
-  // Cost estimate for create form
+  // Cost estimate for create form. recipeLineCost(l.qtyPerBatch, ...) даёт
+  // стоимость ВСЕГО батча — сводка ниже сознательно «на 1 единицу выхода»,
+  // поэтому делим на newBatchQty.
   const totalRecipeCost = useMemo(() => {
-    return newRecipe.reduce((sum, l) => sum + recipeLineCost(l.qtyPerUnit, l.unit, l.ingredientId), 0)
+    const batchCost = newRecipe.reduce((sum, l) => sum + recipeLineCost(l.qtyPerBatch, l.unit, l.ingredientId), 0)
+    return newBatchQty > 0 ? dDiv(batchCost, newBatchQty) : batchCost
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [newRecipe, ingredients])
+  }, [newRecipe, ingredients, newBatchQty])
 
   const filteredTypes = useMemo(() => {
     const q = search.toLowerCase().trim()
@@ -425,7 +428,7 @@ export default function SemiPage() {
               <div className="space-y-2">
                 {newRecipe.map((line, idx) => {
                   const allowedUnits = getRecipeUnitsFor(line.ingredientId)
-                  const cost = recipeLineCost(line.qtyPerUnit, line.unit, line.ingredientId)
+                  const cost = recipeLineCost(line.qtyPerBatch, line.unit, line.ingredientId)
                   return (
                     <div key={idx} className="flex items-end gap-2 p-2 bg-muted/30 rounded-lg">
                       <div className="flex-1 min-w-0 space-y-1">
@@ -442,8 +445,8 @@ export default function SemiPage() {
                         <span className="text-[10px] text-muted-foreground">Кол-во</span>
                         <DecimalInput
                           min={0}
-                          value={dMul(line.qtyPerUnit, newBatchQty)}
-                          onChange={v => setNewRecipe(prev => prev.map((l, i) => i === idx ? { ...l, qtyPerUnit: newBatchQty > 0 ? dDiv(v, newBatchQty) : v } : l))}
+                          value={line.qtyPerBatch}
+                          onChange={v => setNewRecipe(prev => prev.map((l, i) => i === idx ? { ...l, qtyPerBatch: v } : l))}
                           className="w-full px-2 py-1.5 bg-background border border-border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
                         />
                       </div>
@@ -459,9 +462,7 @@ export default function SemiPage() {
                       </div>
                       <div className="w-24 text-right pb-1.5">
                         <span className="text-[10px] text-muted-foreground block">Стоимость</span>
-                        {/* Показываем на объём партии (как и «Кол-во» выше) — иначе
-                            рядом с «5 кг» была бы цена за нормализованные 0.5 кг. */}
-                        <span className="text-xs font-medium text-foreground">{cost > 0 ? formatCurrency(dMul(cost, newBatchQty)) : '—'}</span>
+                        <span className="text-xs font-medium text-foreground">{cost > 0 ? formatCurrency(cost) : '—'}</span>
                       </div>
                       <button
                         onClick={() => setNewRecipe(prev => prev.filter((_, i) => i !== idx))}
@@ -517,7 +518,8 @@ export default function SemiPage() {
 
         <div className="bg-card rounded-xl border border-border overflow-hidden divide-y divide-border">
           {filteredTypes.map((type) => {
-            const totalCost = type.recipe.reduce((sum, l) => sum + recipeLineCost(l.qtyPerUnit, l.unit, l.ingredientId), 0)
+            const batchCost = type.recipe.reduce((sum, l) => sum + recipeLineCost(l.qtyPerBatch, l.unit, l.ingredientId), 0)
+            const totalCost = type.batchQty > 0 ? dDiv(batchCost, type.batchQty) : batchCost
             return (
               <div key={type.id}>
                 <div
@@ -572,13 +574,13 @@ export default function SemiPage() {
                     </p>
                     <div className="space-y-1">
                       {type.recipe.map((line) => {
-                        const cost = recipeLineCost(line.qtyPerUnit, line.unit, line.ingredientId)
+                        const cost = recipeLineCost(line.qtyPerBatch, line.unit, line.ingredientId)
                         return (
                           <div key={line.ingredientId} className="flex items-center justify-between text-sm max-w-md">
                             <span className="text-foreground">{line.name}</span>
                             <div className="flex items-center gap-4 text-muted-foreground">
-                              <span>{formatNum(dMul(line.qtyPerUnit, type.batchQty))} {line.unit}</span>
-                              <span className="text-foreground font-medium w-24 text-right">{cost > 0 ? formatCurrency(dMul(cost, type.batchQty)) : '—'}</span>
+                              <span>{formatNum(line.qtyPerBatch)} {line.unit}</span>
+                              <span className="text-foreground font-medium w-24 text-right">{cost > 0 ? formatCurrency(cost) : '—'}</span>
                             </div>
                           </div>
                         )
@@ -627,7 +629,10 @@ export default function SemiPage() {
                         <p className="text-xs font-semibold text-muted-foreground mb-1.5">Будет списано со склада:</p>
                         <div className="space-y-0.5">
                           {type.recipe.map((line) => {
-                            const totalRecipeQty = dMul(line.qtyPerUnit, qty)
+                            // qtyPerBatch — «на весь batchQty», не на 1 единицу; повторяем
+                            // формулу бэкового Prepare (DivRound(QtyPerBatch, BatchQty) × qty).
+                            const perUnit = type.batchQty > 0 ? dDiv(line.qtyPerBatch, type.batchQty) : line.qtyPerBatch
+                            const totalRecipeQty = dMul(perUnit, qty)
                             // Показываем в единице склада (то, что реально спишется):
                             // метрика + per-unit фактор для штучных ингредиентов.
                             const ing = ingredients.find(i => i.id === line.ingredientId)

@@ -2395,7 +2395,7 @@ func ensureSemiTypeFromSpec(tx *gorm.DB, rid string, spec *NetworkSemiSpec, now 
 		}
 		line := models.SemiRecipeLine{
 			ID: uuid.NewString(), SemiTypeID: &st.ID, IngredientID: &ing.ID,
-			QtyPerUnit: decimal.Normalize(qty), CreatedAt: now,
+			QtyPerBatch: decimal.Normalize(qty), CreatedAt: now,
 		}
 		if rl.Name != "" {
 			line.Name = &rl.Name

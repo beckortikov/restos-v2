@@ -214,11 +214,13 @@ type SemiFinishedType struct {
 	Name         *string         `json:"name"`
 	OutputUnit   *string         `gorm:"column:output_unit;default:'кг'" json:"output_unit"`
 	YieldPercent decimal.Decimal `gorm:"column:yield_percent;type:numeric(14,4);default:100" json:"yield_percent"`
-	// BatchQty (098) — чисто авторская подсказка для формы техкарты: сколько
-	// сырья повар пишет «на партию» вместо «на 1 единицу выхода» (фронт сам
-	// делит на BatchQty перед сохранением). RecipeLine.QtyPerUnit по-прежнему
-	// всегда «на 1 единицу выхода» — Prepare/Consume/cascadeSemiDeduct её не
-	// видят и не используют, семантика для них не меняется.
+	// BatchQty (098) — сколько сырья повар пишет «на партию» вместо «на 1
+	// единицу выхода». RecipeLine.QtyPerBatch (099) хранит рецепт РОВНО в
+	// этих терминах — «на весь BatchQty», без деления при сохранении.
+	// Пропорцию «на 1 единицу» вычисляют сами потребители (Prepare,
+	// cascadeSemiDeduct, buildSemiSpec) в момент использования:
+	// DivRound(QtyPerBatch, BatchQty). При BatchQty=1 (умолчание, все типы до
+	// 098) это тождественно старому «QtyPerUnit».
 	BatchQty decimal.Decimal `gorm:"column:batch_qty;type:numeric(14,4);default:1" json:"batch_qty"`
 	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
 	// «Тесто-30» → значение «30» шкалы пиццы), используется UI тех. карты
@@ -231,13 +233,15 @@ type SemiFinishedType struct {
 
 func (SemiFinishedType) TableName() string { return "semi_finished_types" }
 
-// SemiRecipeLine — рецепт полуфабриката.
+// SemiRecipeLine — рецепт полуфабриката. QtyPerBatch (099) — количество на
+// ВЕСЬ SemiFinishedType.BatchQty (как реально ввёл человек), не на 1 единицу
+// выхода — см. комментарий на BatchQty.
 type SemiRecipeLine struct {
 	ID           string          `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
 	SemiTypeID   *string         `gorm:"column:semi_type_id;type:uuid" json:"semi_type_id"`
 	IngredientID *string         `gorm:"column:ingredient_id;type:uuid" json:"ingredient_id"`
 	Name         *string         `json:"name"`
-	QtyPerUnit   decimal.Decimal `gorm:"column:qty_per_unit;type:numeric(14,4);default:0" json:"qty_per_unit"`
+	QtyPerBatch  decimal.Decimal `gorm:"column:qty_per_batch;type:numeric(14,4);default:0" json:"qty_per_batch"`
 	Unit         *string         `json:"unit"`
 	CreatedAt    time.Time       `json:"created_at"`
 }

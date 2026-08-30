@@ -1317,17 +1317,17 @@ type SemiTypeInput struct {
 	// SizeScaleValueID — тег «это заготовка вот этого размера» (например
 	// «Тесто-30» → значение «30» шкалы пиццы); см. models.SemiFinishedType.
 	SizeScaleValueID *string `json:"size_scale_value_id,omitempty"`
-	// BatchQty (098) — авторская подсказка формы («рецепт на партию N
-	// единиц»); см. models.SemiFinishedType.BatchQty — recipe.QtyPerUnit
-	// этим полем не затрагивается.
+	// BatchQty (098) — объём партии, в терминах которой написан рецепт
+	// (recipe[].QtyPerBatch, 099); см. models.SemiFinishedType.BatchQty.
 	BatchQty *string `json:"batch_qty,omitempty"`
 }
 
-// SemiRecipeInput — строка рецепта полуфабриката.
+// SemiRecipeInput — строка рецепта полуфабриката. QtyPerBatch (099) — «на весь
+// объём партии» (SemiTypeInput.BatchQty), как реально ввёл человек.
 type SemiRecipeInput struct {
 	IngredientID *string `json:"ingredient_id,omitempty"`
 	Name         *string `json:"name,omitempty"`
-	QtyPerUnit   *string `json:"qty_per_unit,omitempty"`
+	QtyPerBatch  *string `json:"qty_per_batch,omitempty"`
 	Unit         *string `json:"unit,omitempty"`
 }
 
@@ -1490,12 +1490,12 @@ func buildSemiRecipeLine(semiTypeID string, in SemiRecipeInput, now time.Time) (
 		IngredientID: in.IngredientID, Name: in.Name, Unit: in.Unit,
 		CreatedAt: now,
 	}
-	if in.QtyPerUnit != nil {
-		d, err := decimal.FromString(*in.QtyPerUnit)
+	if in.QtyPerBatch != nil {
+		d, err := decimal.FromString(*in.QtyPerBatch)
 		if err != nil {
-			return nil, apperrors.Wrap("VALIDATION", "bad qty_per_unit", err)
+			return nil, apperrors.Wrap("VALIDATION", "bad qty_per_batch", err)
 		}
-		l.QtyPerUnit = d
+		l.QtyPerBatch = d
 	}
 	return l, nil
 }

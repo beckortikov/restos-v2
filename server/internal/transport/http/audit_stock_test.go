@@ -269,7 +269,7 @@ func TestAudit_SemiPrepare_AppliesYield(t *testing.T) {
 	rkg := "kg"
 	if err := gdb.Create(&models.SemiRecipeLine{
 		ID: uuid.NewString(), SemiTypeID: &st.ID, IngredientID: &raw.ID, Name: &stName,
-		QtyPerUnit: decimal.MustFromString("1"), Unit: &rkg,
+		QtyPerBatch: decimal.MustFromString("1"), Unit: &rkg,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

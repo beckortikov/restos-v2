@@ -1105,7 +1105,7 @@ func cascadeSemiDeduct(
 		return err
 	}
 	for _, l := range lines {
-		needed := decimal.Mul(l.QtyPerUnit, rawQty)
+		needed := decimal.Mul(decimal.DivRound(l.QtyPerBatch, sft.BatchQty), rawQty)
 		switch {
 		case l.IngredientID != nil:
 			if err := writeIngredientDeduct(tx, restaurantID, *l.IngredientID, l.Name, convByID[*l.IngredientID], deref(l.Unit), needed, sourceRef, now); err != nil {

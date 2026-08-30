@@ -52,7 +52,7 @@ func seedDoughType(t *testing.T, gdb *gorm.DB, rid, name, outputUnit string, flo
 	}
 	if err := gdb.Create(&models.SemiRecipeLine{
 		ID: uuid.NewString(), SemiTypeID: &id, IngredientID: &flour.ID,
-		Name: &flourName, QtyPerUnit: decimal.MustFromString(kgPerUnit), Unit: flour.Unit,
+		Name: &flourName, QtyPerBatch: decimal.MustFromString(kgPerUnit), Unit: flour.Unit,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

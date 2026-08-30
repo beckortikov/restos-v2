@@ -43,7 +43,7 @@ func seedSemiSoup(t *testing.T, f *e2eFixture, gdb *gorm.DB) (soupID, semiID str
 	}
 	if err := gdb.Create(&models.SemiRecipeLine{
 		ID: uuid.NewString(), SemiTypeID: &semiID, IngredientID: &meat.ID,
-		Name: &meatName, QtyPerUnit: decimal.MustFromString("2"), Unit: &meatUnit,
+		Name: &meatName, QtyPerBatch: decimal.MustFromString("2"), Unit: &meatUnit,
 	}).Error; err != nil {
 		t.Fatal(err)
 	}

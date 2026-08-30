@@ -125,7 +125,21 @@ func (s *SemiFinishedService) Prepare(ctx context.Context, in SemiPrepareInput) 
 					Msg("semi/prepare: строка рецепта не сводится к складской единице — пропущена")
 				continue
 			}
-			stockQty := conv.toStock(decimal.Mul(l.QtyPerUnit, recipeQty), recipeUnit)
+			perUnit := decimal.DivRound(l.QtyPerBatch, st.BatchQty)
+			recipeLineQty := decimal.Mul(perUnit, recipeQty)
+			// #18 (см. writeIngredientDeduct, orders_close.go): списываем БРУТТО —
+			// с учётом отходов при очистке (waste_percent). Раньше Prepare писал
+			// StockMovement напрямую, минуя writeIngredientDeduct, и waste_percent
+			// не применялся вообще — та же говядина списывалась по-разному в
+			// зависимости от того, произвели партию вручную или её списало
+			// каскадом при продаже (cascadeSemiDeduct идёт через writeIngredientDeduct).
+			if conv.wastePercent.IsPositive() {
+				divisor := decimal.Sub(decimal.FromInt(1), decimal.DivRound(conv.wastePercent, decimal.FromInt(100)))
+				if divisor.IsPositive() {
+					recipeLineQty = decimal.DivRound(recipeLineQty, divisor)
+				}
+			}
+			stockQty := conv.toStock(recipeLineQty, recipeUnit)
 			producedCost = decimal.Add(producedCost, decimal.Mul(stockQty, conv.pricePerUnit))
 			deduct := decimal.Normalize(stockQty).Neg()
 			unit := l.Unit

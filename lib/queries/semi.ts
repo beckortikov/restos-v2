@@ -15,11 +15,11 @@ export async function fetchSemiStock(): Promise<SemiFinishedStock[]> {
   return rows.map(mapSemiStock) as SemiFinishedStock[]
 }
 
-// batchQty (098) — авторская подсказка формы («рецепт написан на партию N
-// единиц выхода»); recipe[].qtyPerUnit остаётся «на 1 единицу» — это
-// значение уже нормализовано вызывающей стороной (warehouse/semi/page.tsx)
-// делением на batchQty, сюда приходит канонический per-unit qty.
-export async function createSemiType(name: string, outputUnit: string, recipe: { ingredientId: string; name: string; qtyPerUnit: number; unit: string }[], yieldPercent = 100, sizeScaleValueId?: string, batchQty = 1) {
+// batchQty (098) — объём партии, в терминах которой написан рецепт;
+// recipe[].qtyPerBatch (099) хранится РОВНО так, как ввёл пользователь — «на
+// весь batchQty», без деления. Пропорцию «на 1 единицу» считает бэк
+// (Prepare/cascadeSemiDeduct) в момент использования.
+export async function createSemiType(name: string, outputUnit: string, recipe: { ingredientId: string; name: string; qtyPerBatch: number; unit: string }[], yieldPercent = 100, sizeScaleValueId?: string, batchQty = 1) {
   const data: any = await unwrap(api.POST('/api/v1/semi/types', {
     body: {
       name,
@@ -30,7 +30,7 @@ export async function createSemiType(name: string, outputUnit: string, recipe: {
       recipe: recipe.map(l => ({
         ingredient_id: l.ingredientId,
         name: l.name,
-        qty_per_unit: String(l.qtyPerUnit),
+        qty_per_batch: String(l.qtyPerBatch),
         unit: l.unit,
       })),
     } as any,
@@ -43,7 +43,7 @@ export async function createSemiType(name: string, outputUnit: string, recipe: {
 // шкале + полный перезалив рецепта). sizeScaleValueId: '' — явная отвязка
 // (SET NULL). Бэк (PatchType) при переданном recipe удаляет старые строки
 // и создаёт новые.
-export async function updateSemiType(id: string, patch: { name?: string; outputUnit?: string; yieldPercent?: number; batchQty?: number; sizeScaleValueId?: string; recipe?: { ingredientId: string; name: string; qtyPerUnit: number; unit: string }[] }) {
+export async function updateSemiType(id: string, patch: { name?: string; outputUnit?: string; yieldPercent?: number; batchQty?: number; sizeScaleValueId?: string; recipe?: { ingredientId: string; name: string; qtyPerBatch: number; unit: string }[] }) {
   const body: { name?: string; output_unit?: string; yield_percent?: string; batch_qty?: string; size_scale_value_id?: string; recipe?: any[] } = {}
   if (patch.name !== undefined) body.name = patch.name
   if (patch.outputUnit !== undefined) body.output_unit = patch.outputUnit
@@ -54,7 +54,7 @@ export async function updateSemiType(id: string, patch: { name?: string; outputU
     body.recipe = patch.recipe.map(l => ({
       ingredient_id: l.ingredientId,
       name: l.name,
-      qty_per_unit: String(l.qtyPerUnit),
+      qty_per_batch: String(l.qtyPerBatch),
       unit: l.unit,
     }))
   }
@@ -82,7 +82,7 @@ function mapSemiRecipeLine(l: Record<string, unknown>) {
   return {
     ingredientId: (l.ingredient_id as string) ?? '',
     name: (l.name as string) ?? '',
-    qtyPerUnit: Number(l.qty_per_unit ?? 0),
+    qtyPerBatch: Number(l.qty_per_batch ?? 0),
     unit: (l.unit as string) ?? '',
   }
 }
