@@ -522,6 +522,17 @@ func (h *NetworkHandler) RequestMoneyTransfer(w http.ResponseWriter, r *http.Req
 	respond.JSON(w, http.StatusCreated, t)
 }
 
+// CancelRequestedTransfer — POST /api/v1/network/money-transfers/{id}/cancel.
+// Отмена ещё не применённого филиалом запроса на списание (status=requested).
+func (h *NetworkHandler) CancelRequestedTransfer(w http.ResponseWriter, r *http.Request) {
+	t, err := h.svc.CancelRequestedTransfer(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusOK, t)
+}
+
 // BranchExpenses — GET /api/v1/network/branches/{id}/expenses. Что центр уже
 // оплатил за этот филиал (ADR-003, Фаза Р).
 func (h *NetworkHandler) BranchExpenses(w http.ResponseWriter, r *http.Request) {

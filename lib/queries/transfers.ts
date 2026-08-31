@@ -863,3 +863,14 @@ export async function receiveMoneyTransfer(id: string, toAccountId: string): Pro
   }))
   return mapMoneyTransfer(r)
 }
+
+// cancelRequestedTransfer — отмена ЕЩЁ НЕ применённого филиалом запроса
+// центра на списание (status=requested), напр. случайно продублированного.
+// Деньги при requested ещё нигде не двигались — отменять уже применённую
+// (sent/received) заявку нельзя, бэк отклонит с понятной ошибкой.
+export async function cancelRequestedTransfer(id: string): Promise<MoneyTransfer> {
+  const r: any = await unwrap(api.POST('/api/v1/network/money-transfers/{id}/cancel', {
+    params: { path: { id } },
+  }))
+  return mapMoneyTransfer(r)
+}

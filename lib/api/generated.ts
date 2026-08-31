@@ -3214,6 +3214,55 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/network/money-transfers/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Отмена ещё НЕ применённого филиалом запроса на списание (status=
+         *     requested) — например, случайно продублированного. Деньги при
+         *     requested ещё нигде не двигались, отмена ничего не возвращает и не
+         *     компенсирует — просто помечает документ cancelled, он перестаёт
+         *     попадать в pull-выборку и филиал его больше не увидит. Если запрос
+         *     уже ушёл в sent/received — отменять поздно, явная ошибка.
+         *     Право finance.manage, только владелец центрального узла.
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path: {
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["MoneyTransfer"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/network/expenses/{id}/cancel": {
         parameters: {
             query?: never;

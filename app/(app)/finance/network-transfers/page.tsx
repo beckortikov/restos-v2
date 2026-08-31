@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 import { useAuth } from '@/lib/auth-store'
 import {
-  fetchMoneyTransfers, createMoneyTransfer, receiveMoneyTransfer, fetchBranches,
+  fetchMoneyTransfers, createMoneyTransfer, receiveMoneyTransfer, cancelRequestedTransfer, fetchBranches,
   type MoneyTransfer, type Branch,
 } from '@/lib/queries/transfers'
 import { fetchFinancialAccounts } from '@/lib/queries'
@@ -14,7 +14,7 @@ import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import { NotInNetwork, isNotInNetwork } from '@/components/network-empty'
 import { DecimalInput } from '@/components/ui/decimal-input'
-import { Banknote, Plus, ArrowDownLeft, ArrowUpRight, Check, Send } from 'lucide-react'
+import { Banknote, Plus, ArrowDownLeft, ArrowUpRight, Check, Send, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 
@@ -63,6 +63,11 @@ export default function NetworkTransfersPage() {
   const [receiveFor, setReceiveFor] = useState<MoneyTransfer | null>(null)
   const [toAccountId, setToAccountId] = useState('')
   const [receiving, setReceiving] = useState(false)
+
+  // Отмена ещё не применённого филиалом запроса (напр. случайный дубль).
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+
+  const [statusFilter, setStatusFilter] = useState<'all' | MoneyTransfer['status']>('all')
 
   const reload = async () => {
     const [t, b, a] = await Promise.all([fetchMoneyTransfers(), fetchBranches(), fetchFinancialAccounts()])
@@ -136,6 +141,31 @@ export default function NetworkTransfersPage() {
     }
   }
 
+  const onCancel = async (t: MoneyTransfer) => {
+    if (!window.confirm(`Отменить запрос на ${formatCurrency(t.amount)}? Заявка исчезнет и филиал её больше не увидит.`)) return
+    setCancellingId(t.id)
+    try {
+      await cancelRequestedTransfer(t.id)
+      toast.success('Запрос отменён')
+      await reload()
+    } catch (e: any) {
+      toast.error(humanizeError(e))
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  const statusCounts = useMemo(() => {
+    const c: Record<MoneyTransfer['status'], number> = { requested: 0, sent: 0, received: 0, cancelled: 0 }
+    for (const t of transfers) c[t.status]++
+    return c
+  }, [transfers])
+
+  const filteredTransfers = useMemo(() => {
+    if (statusFilter === 'all') return transfers
+    return transfers.filter(t => t.status === statusFilter)
+  }, [transfers, statusFilter])
+
   if (loading) {
     return (
       <div className="p-6 flex items-center justify-center h-64">
@@ -167,16 +197,48 @@ export default function NetworkTransfersPage() {
         <NotInNetwork what="переводы денег между филиалами" />
       ) : (
         <>
-          {transfers.length === 0 ? (
+          {transfers.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ['all', 'Все', transfers.length],
+                  ['requested', STATUS_LABEL.requested, statusCounts.requested],
+                  ['sent', STATUS_LABEL.sent, statusCounts.sent],
+                  ['received', STATUS_LABEL.received, statusCounts.received],
+                  ['cancelled', STATUS_LABEL.cancelled, statusCounts.cancelled],
+                ] as [typeof statusFilter, string, number][]
+              ).filter(([key, , count]) => key === 'all' || count > 0).map(([key, label, count]) => {
+                const active = statusFilter === key
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setStatusFilter(key)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                      active
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-card border-border text-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {label}
+                    <span className={`text-[10px] ${active ? 'opacity-80' : 'text-muted-foreground'}`}>{count}</span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {filteredTransfers.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border p-10 text-center text-muted-foreground">
               <Banknote className="mx-auto mb-2 size-8 opacity-40" />
-              Переводов пока нет
+              {transfers.length === 0 ? 'Переводов пока нет' : 'Ничего не найдено по этому фильтру'}
             </div>
           ) : (
             <div className="bg-card rounded-xl border border-border overflow-hidden divide-y divide-border">
-              {transfers.map(t => {
+              {filteredTransfers.map(t => {
                 const incoming = t.toRestaurantId === restaurantId
                 const canReceive = incoming && t.status === 'sent'
+                const canCancel = incoming && t.status === 'requested'
                 return (
                   <div key={t.id} className="flex items-center gap-3 px-4 py-3.5">
                     {incoming
@@ -207,6 +269,16 @@ export default function NetworkTransfersPage() {
                           className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
                         >
                           <Check className="size-3" /> Принять
+                        </button>
+                      )}
+                      {canCancel && (
+                        <button
+                          type="button"
+                          onClick={() => onCancel(t)}
+                          disabled={cancellingId === t.id}
+                          className="inline-flex items-center gap-1 rounded-lg bg-card border border-destructive/40 px-2 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/10 disabled:opacity-50"
+                        >
+                          <X className="size-3" /> Отменить
                         </button>
                       )}
                     </div>

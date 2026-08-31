@@ -596,6 +596,50 @@ func (s *NetworkService) RequestMoneyTransfer(ctx context.Context, in RequestMon
 	return created, nil
 }
 
+// CancelRequestedTransfer отменяет ещё НЕ применённый филиалом запрос на
+// списание (Ф-Ц, status=requested) — например, случайно продублированный
+// (тот же счёт и сумма отправлены дважды). Деньги при requested ещё нигде не
+// двигались: спишутся САМИ на филиале только когда документ дойдёт туда
+// down-sync'ом (applyRequestedTransfer) — до этого момента отмена ничего не
+// возвращает и не компенсирует, просто помечает документ cancelled. PullFor
+// отбирает money_transfers строго по status=requested (sync_ingest.go) —
+// отменённый документ перестаёт туда попадать и филиал его больше не увидит.
+// Если он уже успел уйти в sent/received (деньги реально тронулись) —
+// отменять поздно: явная ошибка вместо тихого искажения истории.
+func (s *NetworkService) CancelRequestedTransfer(ctx context.Context, transferID string) (*models.MoneyTransfer, error) {
+	me, _, err := s.requireCentralOwner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := requirePermFor(ctx, s.r, "finance.manage"); err != nil {
+		return nil, err
+	}
+
+	var t models.MoneyTransfer
+	err = s.r.Transaction(ctx, func(tr *repo.Repo) error {
+		tx := tr.Raw().WithContext(ctx)
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND to_restaurant_id = ?", transferID, me).First(&t).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return apperrors.ErrNotFound
+			}
+			return err
+		}
+		if t.Status != moneyTransferStatusRequested {
+			return apperrors.Wrap("CONFLICT", "заявка уже не «ждёт синхронизации» — деньги, вероятно, уже в движении, отменить нельзя", nil)
+		}
+		now := time.Now().UTC()
+		t.Status = "cancelled"
+		t.UpdatedAt = now
+		return tx.Model(&models.MoneyTransfer{}).Where("id = ?", transferID).
+			Updates(map[string]any{"status": "cancelled", "updated_at": now}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 // CancelBranchExpense — отмена расхода/выплаты, проведённой центром за филиал
 // (Фаза Р). Бухгалтер сидит в центре, ошибки и правки там — обычное дело, а
 // без распространения отмены данные молча расходятся: деньги вернулись бы на

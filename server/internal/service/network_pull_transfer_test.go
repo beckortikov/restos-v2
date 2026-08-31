@@ -377,3 +377,126 @@ func TestNetworkPullTransferAutoReceive(t *testing.T) {
 		t.Errorf("финопер зачисления central = %d, want 1 (повтор задублировал)", opCount)
 	}
 }
+
+// TestCancelRequestedTransfer — живой инцидент 2026-08-31 (Macburger/
+// Гулакандоз): случайно продублированный запрос («тот же счёт, та же сумма,
+// отправлен дважды») должен быть отменяем, пока филиал его ещё не применил.
+func TestCancelRequestedTransfer(t *testing.T) {
+	gdb, err := db.Open(transferTestDSN())
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	if err := db.MigrateUp(t.Context(), gdb); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	})
+	for _, tbl := range []string{
+		"sync_log", "money_transfers", "financial_operations", "financial_accounts",
+		"restaurants", "company_accounts",
+	} {
+		gdb.Exec("DELETE FROM " + tbl)
+	}
+
+	accountID := uuid.NewString()
+	gdb.Create(&models.CompanyAccount{ID: accountID, Name: "Сеть"})
+	centralID, branchID, otherID := uuid.NewString(), uuid.NewString(), uuid.NewString()
+	cw, ot := "central_warehouse", "outlet"
+	gdb.Create(&models.Restaurant{ID: centralID, Name: "Центр", AccountID: &accountID, Kind: &cw})
+	gdb.Create(&models.Restaurant{ID: branchID, Name: "Филиал", AccountID: &accountID, Kind: &ot})
+	gdb.Create(&models.Restaurant{ID: otherID, Name: "Другой центр той же формы", AccountID: &accountID, Kind: &cw})
+
+	kassa := "Касса филиала"
+	branchAccID := uuid.NewString()
+	gdb.Create(&models.FinancialAccount{
+		ID: branchAccID, Name: &kassa, Balance: decimal.MustFromString("1000"),
+		RestaurantID: &branchID, IsEnabled: true,
+	})
+
+	netSvc := service.NewNetworkService(repo.New(gdb), "")
+	syncSvc := service.NewSyncService(repo.New(gdb))
+	owner := audit.Actor{UserID: uuid.NewString(), Role: "owner"}
+	ctxCentral := audit.WithActor(tenant.WithRestaurant(context.Background(), centralID), owner)
+	ctxOther := audit.WithActor(tenant.WithRestaurant(context.Background(), otherID), owner)
+	ctxBranch := audit.WithActor(tenant.WithRestaurant(context.Background(), branchID), owner)
+
+	req, err := netSvc.RequestMoneyTransfer(ctxCentral, service.RequestMoneyTransferInput{
+		BranchID: branchID, FromAccountID: branchAccID, Amount: "250",
+	})
+	if err != nil {
+		t.Fatalf("RequestMoneyTransfer: %v", err)
+	}
+
+	// ─── Гварды ──────────────────────────────────────────────────────────
+	if _, err := netSvc.CancelRequestedTransfer(ctxOther, req.ID); err == nil {
+		t.Error("отмена чужого (другого central) запроса должна быть отклонена")
+	}
+	if _, err := netSvc.CancelRequestedTransfer(ctxBranch, req.ID); err == nil {
+		t.Error("отмена не с центрального узла должна быть отклонена")
+	}
+	if _, err := netSvc.CancelRequestedTransfer(ctxCentral, uuid.NewString()); err == nil {
+		t.Error("отмена несуществующего id должна быть отклонена (NOT_FOUND)")
+	}
+	var untouched models.MoneyTransfer
+	gdb.First(&untouched, "id = ?", req.ID)
+	if untouched.Status != "requested" {
+		t.Fatalf("гварды не должны были ничего изменить: status = %s, want requested", untouched.Status)
+	}
+
+	// ─── Отмена — реально работает ──────────────────────────────────────
+	cancelled, err := netSvc.CancelRequestedTransfer(ctxCentral, req.ID)
+	if err != nil {
+		t.Fatalf("CancelRequestedTransfer: %v", err)
+	}
+	if cancelled.Status != "cancelled" {
+		t.Errorf("status = %s, want cancelled", cancelled.Status)
+	}
+
+	// Счёт филиала не тронут — деньги при requested ещё нигде не двигались.
+	var branchAcc models.FinancialAccount
+	gdb.First(&branchAcc, "id = ?", branchAccID)
+	if !branchAcc.Balance.Equal(decimal.MustFromString("1000")) {
+		t.Errorf("баланс филиала после отмены = %s, want 1000 (не должен был измениться)", branchAcc.Balance.String())
+	}
+
+	// Отменённый документ больше не попадает в pull филиала — тот никогда
+	// не узнает об этой заявке и не попытается её применить.
+	pull, err := syncSvc.PullFor(context.Background(), branchID, nil)
+	if err != nil {
+		t.Fatalf("PullFor: %v", err)
+	}
+	for _, e := range pull.Entries {
+		if e.Entity == "money_transfers" && e.RowID == req.ID {
+			t.Errorf("отменённая заявка всё ещё попадает в PullFor для филиала")
+		}
+	}
+
+	// ─── Повторная отмена / отмена уже неактуального статуса — отклонены ──
+	if _, err := netSvc.CancelRequestedTransfer(ctxCentral, req.ID); err == nil {
+		t.Error("повторная отмена уже отменённой заявки должна быть отклонена (CONFLICT)")
+	}
+
+	// ─── Применённую (sent) заявку отменить нельзя — деньги уже в движении ─
+	req2, err := netSvc.RequestMoneyTransfer(ctxCentral, service.RequestMoneyTransferInput{
+		BranchID: branchID, FromAccountID: branchAccID, Amount: "100",
+	})
+	if err != nil {
+		t.Fatalf("RequestMoneyTransfer (req2): %v", err)
+	}
+	pull2, err := syncSvc.PullFor(context.Background(), branchID, nil)
+	if err != nil {
+		t.Fatalf("PullFor (req2): %v", err)
+	}
+	if err := gdb.Exec("DELETE FROM money_transfers WHERE id = ?", req2.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := syncSvc.ApplyPulled(context.Background(), *pull2, branchID); err != nil {
+		t.Fatalf("ApplyPulled (req2): %v", err)
+	}
+	if _, err := netSvc.CancelRequestedTransfer(ctxCentral, req2.ID); err == nil {
+		t.Error("отмена уже применённой (sent) заявки должна быть отклонена (CONFLICT) — деньги реально списаны")
+	}
+}

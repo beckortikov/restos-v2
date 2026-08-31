@@ -1182,6 +1182,23 @@ paths:
                 to_account_id: { type: string, format: uuid, description: Свой счёт central-назначения — если задан, приём произойдёт автоматически. }
       responses: { "201": { description: Created, content: { application/json: { schema: { $ref: "#/components/schemas/MoneyTransfer" } } } } }
 
+  /api/v1/network/money-transfers/{id}/cancel:
+    post:
+      tags: [stock]
+      summary: |
+        Отмена ещё НЕ применённого филиалом запроса на списание (status=
+        requested) — например, случайно продублированного. Деньги при
+        requested ещё нигде не двигались, отмена ничего не возвращает и не
+        компенсирует — просто помечает документ cancelled, он перестаёт
+        попадать в pull-выборку и филиал его больше не увидит. Если запрос
+        уже ушёл в sent/received — отменять поздно, явная ошибка.
+        Право finance.manage, только владелец центрального узла.
+      parameters:
+        - { in: path, name: id, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/MoneyTransfer" } } } }
+
   /api/v1/network/expenses/{id}/cancel:
     post:
       tags: [stock]
