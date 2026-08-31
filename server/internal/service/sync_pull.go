@@ -127,11 +127,18 @@ func (p *Puller) PullOnce(ctx context.Context) (int, error) {
 	}
 	// insert-if-absent: не перезатираем локальный статус (received).
 	// restaurantID — для merge сетевого меню в menu_items этого филиала.
+	//
+	// #26: одна отклонённая запись (напр. central-запрос на списание, которому
+	// не хватает денег на счёте) больше не блокирует остальные — apply() теперь
+	// возвращает res с частичным Applied ДАЖЕ когда err не nil. Считаем и
+	// сообщаем реально применённое, а не молчим нулём — иначе следующий тик
+	// решит, что вообще ничего не подтянулось, хотя часть уже проехала.
 	res, err := p.svc.ApplyPulled(ctx, in, restaurantID)
-	if err != nil {
-		return 0, err
+	applied := 0
+	if res != nil {
+		applied = res.Applied
 	}
-	return res.Applied, nil
+	return applied, err
 }
 
 // Run гоняет PullOnce по таймеру до отмены ctx. Запускается БЕЗУСЛОВНО (даже

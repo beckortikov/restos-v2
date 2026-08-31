@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -61,6 +62,11 @@ type IngestResult struct {
 	// Отдельно от Skipped: Skipped — «эту сущность мы не умеем, ничего
 	// страшного», Rejected — «пришло то, чего приходить не должно».
 	Rejected int `json:"rejected,omitempty"`
+	// Failed (#26) — строки, которые распознали, но applyXxx вернул ошибку
+	// (бизнес-правило вроде нехватки денег, невалидный payload и т.п.).
+	// В отличие от старого поведения, такая строка больше не останавливает
+	// остальной батч — см. apply(). Причины уходят в лог (Warn), не сюда.
+	Failed int `json:"failed,omitempty"`
 }
 
 // Ingest применяет батч UP-пушей на центральном узле — upsert по PK (центр
@@ -148,161 +154,102 @@ func entryBelongsTo(e SyncEntry, branchID string) bool {
 	return *p.RestaurantID == branchID
 }
 
+// apply прогоняет весь пришедший батч, ОДНА ошибка на строке не должна
+// останавливать соседние (#26): раньше первая же ошибка внутри switch делала
+// return nil, err — и на down-pull (ApplyPulled, у него нет push-стороннего
+// карантина ядовитых строк, см. synclog/pusher.go) это блокировало НАВСЕГДА
+// все записи ПОСЛЕ проблемной в том же ответе PullFor, даже если они не имеют
+// к ней отношения (напр. central-запрос на списание с филиала: не хватило
+// денег на счёте одного запроса — соседние запросы с других счетов зависали
+// следом, хотя сами по себе прошли бы). up-push (Ingest/applyIngest) это
+// не ломает — его отдельная страховка (Pusher.pushIndividually) и так
+// добирает то, что не проехало батчем, максимум за несколько попыток; здесь
+// каждая строка просто получает шанс сразу, без ожидания maxAttempts.
 func (s *SyncService) apply(ctx context.Context, in IngestInput, updateAll bool, branchID string) (*IngestResult, error) {
 	res := &IngestResult{}
+	var errs []error
 	for _, e := range in.Entries {
+		var err error
 		switch e.Entity {
 		case "stock_transfers":
-			if err := s.applyTransfer(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyTransfer(ctx, e, updateAll)
 		case "money_transfers":
-			if err := s.applyMoneyTransfer(ctx, e, updateAll, branchID); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyMoneyTransfer(ctx, e, updateAll, branchID)
 		case "financial_operations":
-			if err := s.applyFinancialOp(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyFinancialOp(ctx, e, updateAll)
 		case "orders":
-			if err := s.applyOrder(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyOrder(ctx, e, updateAll)
 		case "cash_shifts":
-			if err := s.applyShift(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyShift(ctx, e, updateAll)
 		case "cash_shift_operations":
-			if err := s.applyShiftOp(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyShiftOp(ctx, e, updateAll)
 		case "users":
-			if err := s.applyUser(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyUser(ctx, e, updateAll)
 		case "menu_items":
-			if err := s.applyMenuItem(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyMenuItem(ctx, e, updateAll)
 		case "tables":
-			if err := s.applyTable(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyTable(ctx, e, updateAll)
 		case "zones":
-			if err := s.applyZone(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyZone(ctx, e, updateAll)
 		case "ingredients":
-			if err := s.applyIngredient(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyIngredient(ctx, e, updateAll)
 		case "stock_movements":
-			if err := s.applyStockMovement(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyStockMovement(ctx, e, updateAll)
 		case "stock_receipts":
-			if err := s.applyStockReceipt(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyStockReceipt(ctx, e, updateAll)
 		case "stock_writeoffs":
-			if err := s.applyStockWriteoff(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyStockWriteoff(ctx, e, updateAll)
 		case "inventory_checks":
-			if err := s.applyInventoryCheck(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyInventoryCheck(ctx, e, updateAll)
 		case "stock_returns":
-			if err := s.applyStockReturn(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyStockReturn(ctx, e, updateAll)
 		case "suppliers":
-			if err := s.applySupplier(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applySupplier(ctx, e, updateAll)
 		case "supply_expenses":
-			if err := s.applySupplyExpense(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applySupplyExpense(ctx, e, updateAll)
 		case "financial_accounts":
-			if err := s.applyFinancialAccount(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyFinancialAccount(ctx, e, updateAll)
 		case "recurring_payments":
-			if err := s.applyRecurringPayment(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyRecurringPayment(ctx, e, updateAll)
 		case "time_entries":
-			if err := s.applyTimeEntry(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyTimeEntry(ctx, e, updateAll)
 		case "salary_worked_days":
-			if err := s.applySalaryWorkedDay(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applySalaryWorkedDay(ctx, e, updateAll)
 		case "salary_day_multipliers":
-			if err := s.applySalaryDayMultiplier(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applySalaryDayMultiplier(ctx, e, updateAll)
 		case "salary_deductions":
-			if err := s.applySalaryDeduction(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applySalaryDeduction(ctx, e, updateAll)
 		case "salary_advances":
-			if err := s.applySalaryAdvance(ctx, e, updateAll); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applySalaryAdvance(ctx, e, updateAll)
 		case "network_menu_items":
 			if branchID == "" {
 				res.Skipped++ // мастер-меню применяется только при down-pull на филиале
 				continue
 			}
-			if err := s.applyNetworkMenu(ctx, e, branchID); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyNetworkMenu(ctx, e, branchID)
 		case "nomenclature":
-			if err := s.applyNomenclature(ctx, e, branchID); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyNomenclature(ctx, e, branchID)
 		case "restaurants":
 			if branchID == "" {
 				res.Skipped++ // только down-pull на филиале — central сам заводит соседей через RedeemInvite, не через этот путь
 				continue
 			}
-			if err := s.applyRestaurantStub(ctx, e); err != nil {
-				return nil, err
-			}
-			res.Applied++
+			err = s.applyRestaurantStub(ctx, e)
 		default:
 			res.Skipped++ // неизвестная сущность — не роняем весь батч
+			continue
 		}
+		if err != nil {
+			res.Failed++
+			errs = append(errs, fmt.Errorf("%s/%s: %w", e.Entity, e.RowID, err))
+			log.Warn().Err(err).Str("entity", e.Entity).Str("row_id", e.RowID).
+				Msg("sync apply: строка отклонена, очередь продолжается")
+			continue
+		}
+		res.Applied++
+	}
+	if len(errs) > 0 {
+		return res, errors.Join(errs...)
 	}
 	return res, nil
 }
