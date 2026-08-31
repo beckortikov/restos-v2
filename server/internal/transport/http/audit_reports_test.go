@@ -391,8 +391,12 @@ func TestAudit_RefundedOrder_PnLvsTrends(t *testing.T) {
 	}
 }
 
-// БАГ #13: ОПиУ фильтрует по created_at, MonthlyRevenue — по полю date.
-// Расход, датированный задним числом, попадает в разные месяцы разных отчётов.
+// БАГ #13 (исторический — уже исправлен в PnL через applyFOPeriod/foBizDay,
+// см. finance.go): ОПиУ и MonthlyRevenue обязаны согласованно относить расход,
+// датированный задним числом, к одному и тому же месяцу (по полю date, а не
+// created_at). Тест проверяет именно это согласие — сам он ранее содержал
+// независимый баг (см. ниже), из-за которого падал вне зависимости от
+// корректности production-кода.
 func TestAudit_DateBasis_CreatedVsDate(t *testing.T) {
 	f := setupE2E(t)
 	tok := f.login(t)
@@ -404,7 +408,7 @@ func TestAudit_DateBasis_CreatedVsDate(t *testing.T) {
 	pastDate := past.Format("2006-01-02")
 	pastMonth := past.Format("2006-01")
 
-	// Ручной расход 500, датированный задним числом (created_at = сейчас).
+	// Ручной расход 500, датированный задним числом (date=pastDate, created_at=сейчас).
 	if r, b := f.post(t, "/api/v1/finance/operations", tok, uuid.NewString(), map[string]any{
 		"type": "out", "amount": "500", "account_id": accountID,
 		"category": "rent", "activity": "operational", "date": pastDate,
@@ -412,7 +416,7 @@ func TestAudit_DateBasis_CreatedVsDate(t *testing.T) {
 		t.Fatalf("manual out: %d %s", r.StatusCode, b)
 	}
 
-	// MonthlyRevenue кладёт его в pastMonth (по полю date).
+	// MonthlyRevenue кладёт его в pastMonth (группирует по полю date целиком по месяцу).
 	r, b := f.get(t, "/api/v1/finance/monthly-revenue", tok)
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("monthly: %d %s", r.StatusCode, b)
@@ -433,9 +437,17 @@ func TestAudit_DateBasis_CreatedVsDate(t *testing.T) {
 		}
 	}
 
-	// ОПиУ за pastMonth (по created_at = сейчас) его НЕ видит.
+	// ОПиУ за весь pastMonth — окно ДОЛЖНО покрывать месяц целиком. Раньше
+	// toP был жёстко захардкожен на "28" (чтобы не попасть на несуществующее
+	// 29/30/31 февраля) — это отрезало последние дни ЛЮБОГО месяца от окна и
+	// тест ложно падал, если pastDate (тот же день месяца, что и сегодня)
+	// приходился на 28-31 число: MonthlyRevenue расход видел (весь месяц), а
+	// обрезанное окно ОПиУ — нет. День 0 следующего месяца — стандартный
+	// приём Go для «последний день текущего месяца», корректно нормализует
+	// февраль (28/29) и декабрь (переход года) без ручных исключений.
 	fromP := time.Date(past.Year(), past.Month(), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
-	toP := time.Date(past.Year(), past.Month(), 28, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+	lastDayOfPastMonth := time.Date(past.Year(), past.Month()+1, 0, 0, 0, 0, 0, time.UTC)
+	toP := lastDayOfPastMonth.Format("2006-01-02")
 	_, pnlPastOpex := pnlBoth(t, f, tok, fromP, toP)
 
 	// Оба отчёта за pastMonth обязаны согласиться про этот расход.
