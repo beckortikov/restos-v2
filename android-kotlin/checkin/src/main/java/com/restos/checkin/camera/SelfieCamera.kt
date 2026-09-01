@@ -5,11 +5,14 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.util.Base64
+import android.util.Size
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -19,8 +22,9 @@ import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
-import kotlin.coroutines.resume
-import kotlin.coroutines.suspendCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** Результат съёмки: снимок и то, нашлось ли на нём лицо. */
 data class SelfieShot(
@@ -86,6 +90,21 @@ class SelfieCamera(
                     // Скорость важнее качества: кадр всё равно ужимается до
                     // 640px, а человек не должен ждать у планшета.
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                    // Просим у камеры МАЛЕНЬКИЙ кадр. Без этого планшет отдаёт
+                    // максимум своей матрицы (8–12 Мп), и один только Bitmap
+                    // такого кадра — десятки мегабайт: на дешёвом устройстве
+                    // это OutOfMemory прямо в потоке камеры, то есть падение
+                    // всего приложения, а не отказ снимка.
+                    .setResolutionSelector(
+                        ResolutionSelector.Builder()
+                            .setResolutionStrategy(
+                                ResolutionStrategy(
+                                    Size(960, 1280),
+                                    ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                                ),
+                            )
+                            .build(),
+                    )
                     .build()
                 val preview = Preview.Builder().build().also {
                     it.surfaceProvider = previewView.surfaceProvider
@@ -123,36 +142,72 @@ class SelfieCamera(
         val imageCapture = capture ?: return null
         // Явный тип: без него компилятор выводит Nothing? по первому
         // resume(null) в onError и ломается на resume(bitmap).
-        val bitmap = suspendCoroutine<Bitmap?> { cont ->
-            imageCapture.takePicture(
-                executor,
-                object : ImageCapture.OnImageCapturedCallback() {
-                    override fun onCaptureSuccess(image: ImageProxy) {
-                        val bmp = runCatching { image.toUprightBitmap() }.getOrNull()
-                        image.close()
-                        cont.resume(bmp)
-                    }
+        // Таймаут: при закрытом объективе камера может уйти в бесконечный
+        // перебор экспозиции и не вернуть кадр вовсе. Лучше отметить без
+        // снимка, чем оставить человека смотреть на «Отмечаем…».
+        val bitmap = withTimeoutOrNull(CAPTURE_TIMEOUT_MS) {
+            suspendCancellableCoroutine<Bitmap?> { cont ->
+                // Колбэки приходят в поток камеры. Любое исключение там — не
+                // пойманная ошибка в чужом потоке, то есть падение процесса,
+                // поэтому ловим ВСЁ, включая OutOfMemoryError, и резюмим один
+                // раз: повторный resume сам по себе бросает IllegalState.
+                val done = AtomicBoolean(false)
+                fun finish(value: Bitmap?) {
+                    if (done.compareAndSet(false, true) && cont.isActive) cont.resume(value) {}
+                }
+                runCatching {
+                    imageCapture.takePicture(
+                        executor,
+                        object : ImageCapture.OnImageCapturedCallback() {
+                            override fun onCaptureSuccess(image: ImageProxy) {
+                                val bmp = try {
+                                    image.toUprightBitmap()
+                                } catch (t: Throwable) {
+                                    null
+                                } finally {
+                                    runCatching { image.close() }
+                                }
+                                finish(bmp)
+                            }
 
-                    override fun onError(exception: ImageCaptureException) {
-                        cont.resume(null)
-                    }
-                },
-            )
+                            override fun onError(exception: ImageCaptureException) {
+                                finish(null)
+                            }
+                        },
+                    )
+                }.onFailure { finish(null) }
+            }
         } ?: return null
 
-        val faceFound = detectFace(bitmap)
-        return SelfieShot(photoBase64 = bitmap.toJpegBase64(), faceFound = faceFound)
+        val faceFound = try {
+            detectFace(bitmap)
+        } catch (t: Throwable) {
+            true // своя поломка не должна мешать человеку отметиться
+        }
+        val encoded = try {
+            bitmap.toJpegBase64()
+        } catch (t: Throwable) {
+            null
+        }
+        return SelfieShot(photoBase64 = encoded, faceFound = faceFound)
     }
 
     /** Есть ли в кадре лицо. Ошибка детектора трактуется как «есть»: своя
      *  поломка не должна мешать человеку отметиться. */
-    private suspend fun detectFace(bitmap: Bitmap): Boolean = suspendCoroutine { cont ->
-        runCatching {
-            detector.process(InputImage.fromBitmap(bitmap, 0))
-                .addOnSuccessListener { faces -> cont.resume(faces.isNotEmpty()) }
-                .addOnFailureListener { cont.resume(true) }
-        }.onFailure { cont.resume(true) }
-    }
+    private suspend fun detectFace(bitmap: Bitmap): Boolean =
+        withTimeoutOrNull(DETECT_TIMEOUT_MS) {
+            suspendCancellableCoroutine<Boolean> { cont ->
+                val done = AtomicBoolean(false)
+                fun finish(found: Boolean) {
+                    if (done.compareAndSet(false, true) && cont.isActive) cont.resume(found) {}
+                }
+                runCatching {
+                    detector.process(InputImage.fromBitmap(bitmap, 0))
+                        .addOnSuccessListener { faces -> finish(faces.isNotEmpty()) }
+                        .addOnFailureListener { finish(true) }
+                }.onFailure { finish(true) }
+            }
+        } ?: true
 }
 
 /**
@@ -167,7 +222,17 @@ class SelfieCamera(
 private fun ImageProxy.toUprightBitmap(): Bitmap? {
     val buffer = planes[0].buffer
     val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
-    val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+
+    // Декодируем СРАЗУ уменьшенным (inSampleSize), а не «полный кадр, потом
+    // ужмём»: полноразмерный Bitmap на планшете — десятки мегабайт, и OOM
+    // случается именно на этом шаге.
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > MAX_SIDE * 2) sample *= 2
+
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, opts) ?: return null
 
     val scale = MAX_SIDE.toFloat() / maxOf(raw.width, raw.height).toFloat()
     val scaled = if (scale >= 1f) raw else Bitmap.createScaledBitmap(
@@ -193,3 +258,9 @@ private fun Bitmap.toJpegBase64(): String {
 
 private const val MAX_SIDE = 640
 private const val JPEG_QUALITY = 60
+
+/** Сколько ждём кадр. При закрытом объективе камера может не вернуть его вовсе. */
+private const val CAPTURE_TIMEOUT_MS = 6_000L
+
+/** Детекция на 640px укладывается в десятки миллисекунд; секунда — это уже сбой. */
+private const val DETECT_TIMEOUT_MS = 2_500L
