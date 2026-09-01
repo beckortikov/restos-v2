@@ -476,6 +476,7 @@ func (s *FinancialAccountsService) Transfer(ctx context.Context, in AccountTrans
 			Counterparty: &toName,
 			IsAuto:       &isAuto,
 			RestaurantID: &ridStr,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -496,6 +497,7 @@ func (s *FinancialAccountsService) Transfer(ctx context.Context, in AccountTrans
 			Counterparty: &fromName,
 			IsAuto:       &isAuto,
 			RestaurantID: &ridStr,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -689,6 +691,7 @@ func (s *FinancialOperationsService) Create(ctx context.Context, in FinancialOpe
 			IsAuto:       &isAuto,
 			ShiftID:      in.ShiftID,
 			RestaurantID: &ridStr,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -2337,6 +2340,7 @@ func payoutTx(ctx context.Context, tr *repo.Repo, rid string, in payoutInput) (*
 		ShiftID:      in.ShiftID,
 		IsOverride:   in.IsOverride,
 		RestaurantID: &ridStr,
+		CreatedBy:    actorIDPtr(ctx),
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
@@ -2561,6 +2565,7 @@ func (s *SalaryService) CancelAdvance(ctx context.Context, id string) (*models.S
 			IsAuto:       &isAuto,
 			SourceRef:    &srcRef,
 			RestaurantID: &ridStr,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -2695,7 +2700,8 @@ func (s *SalaryService) CancelSalary(ctx context.Context, opID string) (*models.
 			ID: uuid.NewString(), Type: &inType, Amount: op.Amount, Category: &category,
 			AccountID: op.AccountID, AccountName: op.AccountName, Activity: &activity,
 			Date: op.Date, Description: &desc, Counterparty: op.Counterparty, IsAuto: &isAuto,
-			SourceRef: op.SourceRef, RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			SourceRef: op.SourceRef, RestaurantID: &ridStr, CreatedBy: actorIDPtr(ctx),
+			CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&reverseOp).Error; err != nil {
 			return err

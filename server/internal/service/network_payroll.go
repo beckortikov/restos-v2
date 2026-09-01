@@ -190,6 +190,7 @@ func (s *NetworkService) PayBranchSalary(ctx context.Context, in PayBranchSalary
 			Counterparty: &counterparty, IsAuto: &isAuto, SourceRef: &srcRef,
 			IsOverride: isOverride, RestaurantID: &meID,
 			TargetRestaurantID: &branchID,
+			CreatedBy:          actorIDPtr(ctx),
 			CreatedAt:          now, UpdatedAt: now,
 		}
 		if err := tx.Create(op).Error; err != nil {
@@ -431,7 +432,7 @@ func (s *NetworkService) PayBranchExpense(ctx context.Context, in PayBranchExpen
 			Activity: &activity, Date: &date, Description: desc,
 			Counterparty: &counterparty, IsAuto: &isAuto, SourceRef: sourceRef,
 			RestaurantID: &meID, TargetRestaurantID: &branchID,
-			CreatedAt: now, UpdatedAt: now,
+			CreatedBy: actorIDPtr(ctx), CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(op).Error; err != nil {
 			return err
@@ -718,7 +719,7 @@ func (s *NetworkService) CancelBranchExpense(ctx context.Context, opID string) (
 			Category: op.Category, AccountID: op.AccountID, AccountName: op.AccountName,
 			Activity: &activity, Date: op.Date, Description: &desc,
 			Counterparty: op.Counterparty, IsAuto: &isAuto, RestaurantID: &meID,
-			CreatedAt: now, UpdatedAt: now,
+			CreatedBy: actorIDPtr(ctx), CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(&reverse).Error; err != nil {
 			return err

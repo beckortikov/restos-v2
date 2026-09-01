@@ -978,6 +978,8 @@ export function mapFinancialOperation(r: any): FinancialOperation {
     sourceRef: r.source_ref ?? undefined,
     shiftId: r.shift_id ?? undefined,
     cancelledAt: r.cancelled_at ?? undefined,
+    cancelledBy: r.cancelled_by ?? undefined,
+    createdBy: r.created_by ?? undefined,
     createdAt: r.created_at ?? undefined,
   } as FinancialOperation
 }

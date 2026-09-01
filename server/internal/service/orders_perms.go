@@ -53,6 +53,19 @@ func requirePermFor(ctx context.Context, r *repo.Repo, action string) error {
 	return apperrors.Wrap("FORBIDDEN", "недостаточно прав для действия: "+action, nil)
 }
 
+// actorIDPtr — id человека из контекста, для колонок авторства
+// (financial_operations.created_by, миграция 100). nil, когда человека нет:
+// репликация с филиала (sync_ingest) и фоновые джобы по расписанию —
+// приписывать им «автора» было бы враньём, честнее NULL и «—» в UI.
+func actorIDPtr(ctx context.Context) *string {
+	actor, ok := audit.ActorFromContext(ctx)
+	if !ok || actor.UserID == "" {
+		return nil
+	}
+	id := actor.UserID
+	return &id
+}
+
 // requireOwner — только владелец (или кросс-тенантный superadmin). Для
 // деструктивных админ-операций, которые матрица прав не покрывает отдельным
 // action (сброс операций/меню). Роль перечитываем из БД, а не из токена: на

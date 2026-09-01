@@ -571,6 +571,7 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 						SourceRef:    &opSourceRef,
 						RestaurantID: &rid,
 						ShiftID:      &shiftID,
+						CreatedBy:    actorIDPtr(ctx),
 						CreatedAt:    now,
 						UpdatedAt:    now,
 					}
@@ -597,6 +598,7 @@ func (s *OrdersService) Close(ctx context.Context, orderID string, in CloseOrder
 					SourceRef:    &opSourceRef,
 					RestaurantID: &rid,
 					ShiftID:      &shiftID,
+					CreatedBy:    actorIDPtr(ctx),
 					CreatedAt:    now,
 					UpdatedAt:    now,
 				}

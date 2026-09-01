@@ -382,6 +382,7 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 					IsAuto:       &isAuto,
 					SourceRef:    &opSrc,
 					RestaurantID: &ridStr,
+					CreatedBy:    actorIDPtr(ctx),
 					CreatedAt:    now,
 					UpdatedAt:    now,
 				}
@@ -412,6 +413,7 @@ func (s *StockService) CreateReceipt(ctx context.Context, in ReceiptInput) (*mod
 					IsAuto:       &isAuto,
 					SourceRef:    &svcSrc,
 					RestaurantID: &ridStr,
+					CreatedBy:    actorIDPtr(ctx),
 					CreatedAt:    now,
 					UpdatedAt:    now,
 				}
@@ -981,7 +983,7 @@ func (s *StockService) UpdateReceipt(ctx context.Context, id string, in ReceiptU
 					ID: uuid.NewString(), Type: &outType, Amount: amount, Category: &category,
 					AccountID: &targetAccountID, AccountName: accName, Activity: &activity,
 					Date: &newDate, Description: &desc, IsAuto: &isAuto, SourceRef: &sourceRef,
-					RestaurantID: &rid, CreatedAt: now, UpdatedAt: now,
+					RestaurantID: &rid, CreatedBy: actorIDPtr(ctx), CreatedAt: now, UpdatedAt: now,
 				}
 				return tx.Create(op).Error
 			}

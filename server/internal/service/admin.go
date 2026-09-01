@@ -1047,7 +1047,7 @@ func (s *SuppliersService) PayDebt(ctx context.Context, id string, in SupplierPa
 			AccountID: &accID, AccountName: acc.Name, Activity: &opActivity, Date: &opDate,
 			Description: &desc, Counterparty: sup.Name, IsAuto: &isAuto,
 			SourceRef:    &supID,
-			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			RestaurantID: &ridStr, CreatedBy: actorIDPtr(ctx), CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(fo).Error; err != nil {
 			return err

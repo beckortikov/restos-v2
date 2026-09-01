@@ -544,6 +544,7 @@ func (s *StockService) CreateReturn(ctx context.Context, in ReturnInput) (*model
 				IsAuto:       &isAuto,
 				SourceRef:    &opSrc,
 				RestaurantID: &ridStr,
+				CreatedBy:    actorIDPtr(ctx),
 				CreatedAt:    now,
 				UpdatedAt:    now,
 			}).Error; err != nil {
@@ -812,6 +813,7 @@ func (s *StockService) CancelReturn(ctx context.Context, id string) (*models.Sto
 				IsAuto:       &isAuto,
 				SourceRef:    &opSrc,
 				RestaurantID: &ridStr,
+				CreatedBy:    actorIDPtr(ctx),
 				CreatedAt:    now,
 				UpdatedAt:    now,
 			}).Error; err != nil {

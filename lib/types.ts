@@ -569,6 +569,14 @@ export interface FinancialOperation {
   sourceRef?: string
   shiftId?: string
   cancelledAt?: string
+  /** Кто отменил выплату (users.id, миграция 071). */
+  cancelledBy?: string
+  /**
+   * Кто провёл операцию (users.id, миграция 100). undefined у строк без
+   * человека — репликация с филиала, фоновые джобы — и у исторических, для
+   * которых при бэкфилле не нашлось create-записи в audit_log. UI показывает «—».
+   */
+  createdBy?: string
   createdAt?: string // момент ввода — для внутридневной сортировки реестра ДДС
   // affectsShift — расход: false = не зеркалить в текущую открытую смену
   // (бухгалтерская проводка на счёте, которая не была физическим движением
@@ -1184,7 +1192,10 @@ const PERMISSION_NAV_MAP: Record<string, string[]> = {
   'menu.edit': ['/warehouse/menu', '/warehouse/semi'],
   'writeoffs.create': ['/warehouse/writeoffs'],
   'batch_cooking.manage': ['/operations/batch-cooking'],
-  'finance.view': ['/finance/overview', '/finance/cashflow', '/finance/pnl', '/finance/balance', '/finance/payments', '/network/summary'],
+  // '/finance/expenses' — читающий отчёт, как ДДС/ОПиУ рядом: без него роль с
+  // finance.view видела вкладки «ДДС/ОПиУ/Баланс», но не «Расходы по статьям»
+  // (FinanceTabs фильтрует по hasAccess) — дыра навигации, не ограничение.
+  'finance.view': ['/finance/overview', '/finance/cashflow', '/finance/pnl', '/finance/balance', '/finance/payments', '/finance/expenses', '/network/summary'],
   'finance.manage': ['/finance/overview', '/finance/cashflow', '/finance/accounts', '/finance/budget', '/finance/payments', '/finance/network-transfers', '/network/expenses'],
   // Персонал сети показывает оклады/ставки всех филиалов — гейтим тем же
   // правом, что и зарплату, а не общим finance.view.

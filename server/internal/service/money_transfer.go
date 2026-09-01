@@ -191,6 +191,7 @@ func (s *MoneyTransferService) Create(ctx context.Context, in CreateMoneyTransfe
 			Counterparty: &toName,
 			IsAuto:       &isAuto,
 			RestaurantID: &ridStr,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
@@ -326,6 +327,7 @@ func (s *MoneyTransferService) Receive(ctx context.Context, transferID string, i
 			Counterparty: &fromName,
 			IsAuto:       &isAuto,
 			RestaurantID: &ridStr,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}

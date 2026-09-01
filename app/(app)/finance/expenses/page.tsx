@@ -3,16 +3,17 @@
 import { FinanceTabs } from '@/components/finance/finance-tabs'
 
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { formatCurrency } from '@/lib/helpers'
+import { formatCurrency, formatDateTime } from '@/lib/helpers'
 import { type FinancialOperation, finopCategoryLabel, isOperationEditable } from '@/lib/types'
 import { fetchFinancialOperations, updateFinancialOperation } from '@/lib/queries'
+import { fetchUsers } from '@/lib/queries/users'
 import { useAuth } from '@/lib/auth-store'
 import { useDataSync } from '@/hooks/use-data-sync'
 import { exportToExcel } from '@/lib/export-excel'
 import { humanizeError } from '@/lib/errors'
 import { toast } from 'sonner'
 import { DateRangePresets, getPresetRange, type RangePreset } from '@/components/finance/date-range-presets'
-import { BarChart3, PieChart as PieIcon, Table as TableIcon, Download, TrendingDown, TrendingUp, Layers, ChevronRight, Pencil } from 'lucide-react'
+import { BarChart3, PieChart as PieIcon, Table as TableIcon, Download, TrendingDown, TrendingUp, Layers, ChevronRight, Pencil, Search, User as UserIcon } from 'lucide-react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { CreateOperationDialog } from '@/components/dialogs/create-operation-dialog'
 import {
@@ -83,14 +84,34 @@ export default function ExpensesByCategoryPage() {
   // операций этой статьи (кому/когда/сколько). Напр. «Оплата труда» → кому и
   // когда платили; «Поставщики» → какому поставщику сколько.
   const [drillCat, setDrillCat] = useState<string | null>(null)
+  // Поиск внутри провала (по контрагенту/описанию/автору) — статей с сотнями
+  // операций хватает, глазами там не найти.
+  const [drillSearch, setDrillSearch] = useState('')
   // Редактирование прямо из детализации статьи — та же кнопка «Изменить»,
   // что и на «Деньги» (owner-only, isOperationEditable — см. lib/types.ts).
   const [editingOperation, setEditingOperation] = useState<FinancialOperation | null>(null)
+  // id → имя для колонки «кто провёл» (financial_operations.created_by,
+  // миграция 100). Паттерн из warehouse/transfers/page.tsx.
+  const [userNames, setUserNames] = useState<Map<string, string>>(new Map())
 
   const load = useCallback(async () => {
     const data = await fetchFinancialOperations()
     setOps(data)
   }, [])
+
+  // Справочник сотрудников — отдельно от основной загрузки: у бухгалтера может
+  // не быть права на список пользователей, и это не повод ронять всю страницу
+  // (авторы просто покажутся как «—»).
+  useEffect(() => {
+    fetchUsers()
+      .then((us) => setUserNames(new Map(us.map((u) => [u.id, u.name]))))
+      .catch(() => setUserNames(new Map()))
+  }, [])
+
+  const userName = useCallback(
+    (id?: string | null) => (id ? userNames.get(id) ?? '—' : '—'),
+    [userNames],
+  )
 
   useEffect(() => { load().finally(() => setLoading(false)) }, [load])
   useDataSync(['financial_operations'], load)
@@ -139,18 +160,29 @@ export default function ExpensesByCategoryPage() {
     return 0
   }, [preset, customFrom])
 
+  // Деловой день операции: введённая пользователем дата, иначе день ввода —
+  // тот же фолбэк, что у бэка (foBizDay = COALESCE(date, created_at::date),
+  // finance.go). Раньше операция с пустой date молча выпадала из отчёта.
+  const bizDay = useCallback((o: FinancialOperation) => (o.date || o.createdAt || '').slice(0, 10), [])
+
+  const inRange = useCallback((o: FinancialOperation) => {
+    if (o.type !== 'out') return false
+    if (o.activity === 'financial') return false
+    const day = bizDay(o)
+    if (!day) return false
+    if (range.from && day < range.from) return false
+    if (range.to && day > range.to) return false
+    return true
+  }, [range, bizDay])
+
   // Расходы выбранного периода (type=out; переводы между счетами не расход).
-  const expenses = useMemo(() => {
-    return ops.filter((o) => {
-      if (o.type !== 'out') return false
-      if (o.activity === 'financial') return false
-      const day = (o.date ?? '').slice(0, 10)
-      if (!day) return false
-      if (range.from && day < range.from) return false
-      if (range.to && day > range.to) return false
-      return true
-    })
-  }, [ops, range])
+  //
+  // Отменённые (cancelled_at) в СУММЫ не идут: исходная проводка остаётся
+  // type='out', а возврат денег оформлен компенсирующим приходом type='in',
+  // который сюда и так не попадает — без этого фильтра каждая отмена
+  // завышала статью на свою сумму. В провал статьи они по-прежнему
+  // ПОКАЗЫВАЮТСЯ (зачёркнуто, с бейджем) — исчезнуть из истории они не должны.
+  const expenses = useMemo(() => ops.filter((o) => inRange(o) && !o.cancelledAt), [ops, inRange])
 
   const total = useMemo(() => expenses.reduce((s, o) => s + o.amount, 0), [expenses])
 
@@ -166,21 +198,58 @@ export default function ExpensesByCategoryPage() {
   }, [expenses])
 
   // Детализация выбранной статьи: операции + разбивка «кому сколько».
+  //
+  // Здесь берём ops, а не expenses: в провале ОТМЕНЁННЫЕ операции показываем
+  // (зачёркнутыми) — они часть истории статьи, просто не часть её суммы.
   const drillOps = useMemo(() => {
     if (!drillCat) return []
-    return expenses
-      .filter((o) => (finopCategoryLabel(o.category) || 'Без статьи') === drillCat)
-      .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
-  }, [expenses, drillCat])
+    return ops
+      .filter((o) => inRange(o) && (finopCategoryLabel(o.category) || 'Без статьи') === drillCat)
+      // Деловая дата ↓, внутри дня — по времени ввода ↓, тай-брейк по id:
+      // порядок детерминирован даже когда у пачки операций один день.
+      .sort((a, b) =>
+        bizDay(b).localeCompare(bizDay(a)) ||
+        (b.createdAt || '').localeCompare(a.createdAt || '') ||
+        b.id.localeCompare(a.id),
+      )
+  }, [ops, drillCat, inRange, bizDay])
+
+  // Видимые в списке (после поиска). Поиск идёт и по автору — «покажи всё, что
+  // провёл Хуршед» это ровно тот вопрос, ради которого затевалась колонка.
+  const drillVisible = useMemo(() => {
+    const q = drillSearch.trim().toLowerCase()
+    if (!q) return drillOps
+    return drillOps.filter((o) =>
+      [o.counterparty, o.description, o.accountName, userName(o.createdBy)]
+        .some((v) => (v || '').toLowerCase().includes(q)),
+    )
+  }, [drillOps, drillSearch, userName])
+
+  // Суммы и разбивки — по НЕотменённым: они должны сходиться с цифрой статьи
+  // в таблице/на графике.
+  const drillActive = useMemo(() => drillVisible.filter((o) => !o.cancelledAt), [drillVisible])
+
   const drillByPayee = useMemo(() => {
     const m = new Map<string, number>()
-    for (const o of drillOps) {
+    for (const o of drillActive) {
       const who = (o.counterparty || o.description || '—').trim() || '—'
       m.set(who, (m.get(who) ?? 0) + o.amount)
     }
     return [...m.entries()].sort((a, b) => b[1] - a[1])
-  }, [drillOps])
-  const drillTotal = useMemo(() => drillOps.reduce((s, o) => s + o.amount, 0), [drillOps])
+  }, [drillActive])
+  const drillTotal = useMemo(() => drillActive.reduce((s, o) => s + o.amount, 0), [drillActive])
+
+  // «По каким дням» внутри статьи — то, чего в провале не было совсем.
+  const drillByDay = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const o of drillActive) {
+      const d = bizDay(o)
+      if (d) m.set(d, (m.get(d) ?? 0) + o.amount)
+    }
+    return [...m.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([day, value]) => ({ day, label: bucketLabelOf(day, 'day'), value }))
+  }, [drillActive, bizDay])
 
   const topCategories = useMemo(() => {
     if (categories.length <= TOP_N) return categories
@@ -196,17 +265,17 @@ export default function ExpensesByCategoryPage() {
   const buckets = useMemo(() => {
     const set = new Set<string>()
     for (const o of expenses) {
-      const k = bucketKeyOf(o.date, gran)
+      const k = bucketKeyOf(bizDay(o), gran)
       if (k) set.add(k)
     }
     return [...set].sort()
-  }, [expenses, gran])
+  }, [expenses, gran, bizDay])
 
   // Матрица «ведро → статья → сумма» для гистограммы и таблицы.
   const matrix = useMemo(() => {
     const m = new Map<string, Map<string, number>>()
     for (const o of expenses) {
-      const k = bucketKeyOf(o.date, gran)
+      const k = bucketKeyOf(bizDay(o), gran)
       if (!k) continue
       const series = catToSeries(finopCategoryLabel(o.category) || 'Без статьи')
       const row = m.get(k) ?? new Map<string, number>()
@@ -214,7 +283,7 @@ export default function ExpensesByCategoryPage() {
       m.set(k, row)
     }
     return m
-  }, [expenses, gran, catToSeries])
+  }, [expenses, gran, catToSeries, bizDay])
 
   const barData = useMemo(() => buckets.map((k) => {
     const row: Record<string, string | number | null> = { bucket: bucketLabelOf(k, gran) }
@@ -264,6 +333,36 @@ export default function ExpensesByCategoryPage() {
     if (prev === 0) return null
     return ((cur - prev) / prev) * 100
   }, [bucketTotals])
+
+  // Экспорт операций ОДНОЙ статьи — со всеми полями провала, включая автора и
+  // время ввода (общий экспорт выше отдаёт только агрегат «статья × период»).
+  function handleExportDrill() {
+    const rows: Record<string, unknown>[] = drillVisible.map((o) => ({
+      date: bizDay(o),
+      createdAt: o.createdAt ? formatDateTime(o.createdAt) : '',
+      author: userName(o.createdBy),
+      counterparty: o.counterparty ?? '',
+      description: o.description ?? '',
+      account: o.accountName ?? '',
+      amount: o.amount,
+      status: o.cancelledAt ? 'Отменена' : o.isAuto ? 'Авто' : 'Проведена',
+    }))
+    exportToExcel(
+      rows,
+      [
+        { key: 'date', header: 'Дата' },
+        { key: 'createdAt', header: 'Внесено' },
+        { key: 'author', header: 'Кто провёл' },
+        { key: 'counterparty', header: 'Кому' },
+        { key: 'description', header: 'Описание' },
+        { key: 'account', header: 'Счёт' },
+        { key: 'amount', header: 'Сумма' },
+        { key: 'status', header: 'Статус' },
+      ],
+      `${drillCat}_${range.from}_${range.to}`,
+      'Операции',
+    )
+  }
 
   function handleExport() {
     const rows: Record<string, unknown>[] = byCategory.map(([cat, catTotal]) => {
@@ -641,19 +740,38 @@ export default function ExpensesByCategoryPage() {
         </div>
       )}
 
-      {/* Детализация статьи — кому / когда / сколько (провал внутрь категории) */}
-      <Dialog open={drillCat !== null} onOpenChange={(o) => { if (!o) setDrillCat(null) }}>
-        <DialogContent className="sm:max-w-lg max-h-[85vh] flex flex-col">
+      {/* Детализация статьи — кто / когда / по каким дням (провал в категорию) */}
+      <Dialog open={drillCat !== null} onOpenChange={(o) => { if (!o) { setDrillCat(null); setDrillSearch('') } }}>
+        <DialogContent className="sm:max-w-2xl max-h-[88vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between gap-3 pr-6">
               <span className="truncate">{drillCat}</span>
               <span className="text-sm font-bold text-foreground tabular-nums shrink-0">{formatCurrency(drillTotal)}</span>
             </DialogTitle>
           </DialogHeader>
+
           {drillOps.length === 0 ? (
             <p className="py-8 text-center text-sm text-muted-foreground">Операций нет</p>
           ) : (
             <div className="overflow-y-auto flex-1 min-h-0 space-y-4">
+              {/* По каким дням расходовалась статья */}
+              {drillByDay.length > 1 && (
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
+                    По дням · {drillByDay.length}
+                  </p>
+                  <ResponsiveContainer width="100%" height={140}>
+                    <BarChart data={drillByDay} margin={{ top: 4, right: 4, bottom: 0, left: 0 }} maxBarSize={40}>
+                      <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
+                      <XAxis dataKey="label" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+                      <YAxis tick={{ fontSize: 10 }} width={60} />
+                      <Tooltip formatter={(v: number) => [formatCurrency(v), 'Расход']} />
+                      <Bar dataKey="value" fill={CHART_COLORS[0]} isAnimationActive={false} radius={[3, 3, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
+
               {drillByPayee.length > 1 && (
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Кому · {drillByPayee.length}</p>
@@ -667,28 +785,92 @@ export default function ExpensesByCategoryPage() {
                   </div>
                 </div>
               )}
+
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Операции · {drillOps.length}</p>
-                <div className="divide-y divide-border/60">
-                  {drillOps.map((o) => {
-                    const editable = isOwner && isOperationEditable(o)
-                    return (
-                      <div
-                        key={o.id}
-                        onClick={editable ? () => setEditingOperation(o) : undefined}
-                        className={`flex items-center gap-3 py-2 ${editable ? 'cursor-pointer hover:bg-muted/30 -mx-1 px-1 rounded transition-colors' : ''}`}
-                      >
-                        <span className="text-xs text-muted-foreground tabular-nums w-20 shrink-0">{(o.date || '').slice(0, 10) || '—'}</span>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm text-foreground truncate">{o.counterparty || o.description || finopCategoryLabel(o.category) || '—'}</p>
-                          {o.accountName && <p className="text-[11px] text-muted-foreground truncate">со счёта «{o.accountName}»</p>}
-                        </div>
-                        <span className="text-sm font-semibold text-foreground tabular-nums shrink-0">{formatCurrency(o.amount)}</span>
-                        {editable && <Pencil className="size-3.5 text-muted-foreground shrink-0" />}
-                      </div>
-                    )
-                  })}
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Операции · {drillVisible.length}
+                    {drillVisible.length !== drillOps.length && <span className="normal-case font-normal"> из {drillOps.length}</span>}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleExportDrill}
+                    className="inline-flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <Download className="size-3" /> Excel
+                  </button>
                 </div>
+
+                {drillOps.length > 5 && (
+                  <div className="relative mb-2">
+                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={drillSearch}
+                      onChange={(e) => setDrillSearch(e.target.value)}
+                      placeholder="Поиск по кому / описанию / автору..."
+                      className="w-full pl-8 pr-3 py-1.5 text-xs bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary/30"
+                    />
+                  </div>
+                )}
+
+                {drillVisible.length === 0 ? (
+                  <p className="py-6 text-center text-sm text-muted-foreground">Ничего не найдено</p>
+                ) : (
+                  <div className="divide-y divide-border/60">
+                    {drillVisible.map((o) => {
+                      const editable = isOwner && isOperationEditable(o)
+                      const day = bizDay(o)
+                      // Дату ввода показываем отдельно, только когда она
+                      // расходится с деловой: расход, проведённый задним
+                      // числом, — это то, что владелец и хочет видеть.
+                      const enteredOnOtherDay = !!o.createdAt && o.createdAt.slice(0, 10) !== day
+                      const author = userName(o.createdBy)
+                      return (
+                        <div
+                          key={o.id}
+                          onClick={editable ? () => setEditingOperation(o) : undefined}
+                          className={`flex items-start gap-3 py-2 ${editable ? 'cursor-pointer hover:bg-muted/30 -mx-1 px-1 rounded transition-colors' : ''} ${o.cancelledAt ? 'opacity-60' : ''}`}
+                        >
+                          <div className="w-24 shrink-0">
+                            <p className="text-xs text-muted-foreground tabular-nums">{day || '—'}</p>
+                            {enteredOnOtherDay && o.createdAt && (
+                              <p className="text-[10px] text-muted-foreground/70 tabular-nums" title="Когда операция была внесена в систему">
+                                внесено {formatDateTime(o.createdAt)}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className={`text-sm text-foreground truncate ${o.cancelledAt ? 'line-through' : ''}`}>
+                              {o.counterparty || o.description || finopCategoryLabel(o.category) || '—'}
+                            </p>
+                            {o.counterparty && o.description && o.description !== o.counterparty && (
+                              <p className="text-[11px] text-muted-foreground truncate">{o.description}</p>
+                            )}
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5 text-[11px] text-muted-foreground">
+                              {author !== '—' && (
+                                <span className="inline-flex items-center gap-1">
+                                  <UserIcon className="size-3" />{author}
+                                </span>
+                              )}
+                              {o.accountName && <span className="truncate">со счёта «{o.accountName}»</span>}
+                              {o.isAuto && <span className="px-1 py-px rounded bg-muted text-muted-foreground">авто</span>}
+                              {o.cancelledAt && (
+                                <span className="px-1 py-px rounded bg-rose-100 dark:bg-rose-500/15 text-rose-700 dark:text-rose-400">
+                                  отменена{o.cancelledBy && userName(o.cancelledBy) !== '—' ? ` · ${userName(o.cancelledBy)}` : ''}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <span className={`text-sm font-semibold tabular-nums shrink-0 ${o.cancelledAt ? 'text-muted-foreground line-through' : 'text-foreground'}`}>
+                            {formatCurrency(o.amount)}
+                          </span>
+                          {editable && <Pencil className="size-3.5 text-muted-foreground shrink-0 mt-0.5" />}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             </div>
           )}

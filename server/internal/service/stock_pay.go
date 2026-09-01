@@ -168,7 +168,7 @@ func (s *StockService) PayReceipt(ctx context.Context, id string, in ReceiptPayI
 			// SourceRef = supplier.id — платёж привязан к поставщику по ID
 			// (переименование не теряет историю платежей на его карточке).
 			SourceRef:    receipt.SupplierID,
-			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			RestaurantID: &ridStr, CreatedBy: actorIDPtr(ctx), CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(fo).Error; err != nil {
 			return err

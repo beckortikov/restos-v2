@@ -238,6 +238,7 @@ func (s *OrdersService) PaySplit(ctx context.Context, splitID string, in PaySpli
 			SourceRef:    &opSourceRef,
 			RestaurantID: &rid,
 			ShiftID:      &shift.ID,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}

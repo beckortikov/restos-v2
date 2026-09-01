@@ -62,10 +62,15 @@ type FinancialOperation struct {
 	// ЕГО ОПиУ), второе — на зеркальной проводке филиала («за нас заплатил
 	// узел Y», без счёта и без движения баланса, исключается из ЕГО ДДС и из
 	// сетевого ДДС). Подробнее — в комментарии миграции.
-	TargetRestaurantID *string   `gorm:"column:target_restaurant_id;type:uuid" json:"target_restaurant_id,omitempty"`
-	PaidByRestaurantID *string   `gorm:"column:paid_by_restaurant_id;type:uuid" json:"paid_by_restaurant_id,omitempty"`
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	TargetRestaurantID *string `gorm:"column:target_restaurant_id;type:uuid" json:"target_restaurant_id,omitempty"`
+	PaidByRestaurantID *string `gorm:"column:paid_by_restaurant_id;type:uuid" json:"paid_by_restaurant_id,omitempty"`
+	// CreatedBy — кто провёл операцию (users.id актора, миграция 100). NULL у
+	// строк без человека в контексте: репликация с филиала и фоновые джобы
+	// (регулярные платежи по расписанию), а также у исторических операций, для
+	// которых не нашлось create-записи в audit_log при бэкфилле.
+	CreatedBy *string   `gorm:"column:created_by" json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (FinancialOperation) TableName() string { return "financial_operations" }

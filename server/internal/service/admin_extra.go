@@ -384,7 +384,7 @@ func (s *LiabilitiesService) Pay(ctx context.Context, id string, in LiabilityPay
 			ID: foID, Type: &opType, Amount: pay, Category: &opCat,
 			AccountID: &accID, AccountName: acc.Name, Activity: &opAct, Date: &opDate,
 			Description: &desc, Counterparty: lia.Creditor, IsAuto: &isAuto,
-			RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			RestaurantID: &ridStr, CreatedBy: actorIDPtr(ctx), CreatedAt: now, UpdatedAt: now,
 		}).Error; err != nil {
 			return err
 		}

@@ -17550,6 +17550,12 @@ export interface components {
             source_ref?: string;
             /** Format: uuid */
             shift_id?: string;
+            /** @description Кто провёл операцию (users.id, миграция 100). NULL у строк без человека в контексте — репликация с филиала, фоновые джобы — и у исторических, для которых не нашлось create-записи в audit_log. */
+            created_by?: string | null;
+            /** Format: date-time */
+            cancelled_at?: string | null;
+            /** @description Кто отменил выплату (users.id, миграция 071). */
+            cancelled_by?: string | null;
             /** Format: date-time */
             created_at?: string;
             /** Format: date-time */

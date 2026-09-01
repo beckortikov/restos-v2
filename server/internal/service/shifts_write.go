@@ -530,8 +530,12 @@ func (s *ShiftsService) AddOperation(ctx context.Context, shiftID string, in Shi
 				SourceRef:    &srcRef,
 				ShiftID:      &sid,
 				RestaurantID: &rid,
-				CreatedAt:    now,
-				UpdatedAt:    now,
+				// Автор зеркала — тот же кассир, что провёл расход по смене
+				// (creator сменной операции выше), а не абстрактный актор:
+				// это одна и та же операция в двух журналах.
+				CreatedBy: &creator,
+				CreatedAt: now,
+				UpdatedAt: now,
 			}
 			if err := tx.Create(fo).Error; err != nil {
 				return err

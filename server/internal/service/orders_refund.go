@@ -206,6 +206,7 @@ func (s *OrdersService) Refund(ctx context.Context, orderID string, in RefundOrd
 			SourceRef:    &opSourceRef,
 			RestaurantID: &rid,
 			ShiftID:      order.ShiftID,
+			CreatedBy:    actorIDPtr(ctx),
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}

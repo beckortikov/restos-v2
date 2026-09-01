@@ -315,7 +315,8 @@ func (s *RecurringPaymentsService) Pay(ctx context.Context, id string, in Recurr
 			ID: uuid.NewString(), Type: &opType, Amount: amount, Category: rp.Category,
 			AccountID: &accID, AccountName: acc.Name, Activity: &opActivity, Date: &opDate,
 			Description: &desc, Counterparty: rp.Counterparty, IsAuto: &isAuto,
-			SourceRef: &srcRef, RestaurantID: &ridStr, CreatedAt: now, UpdatedAt: now,
+			SourceRef: &srcRef, RestaurantID: &ridStr, CreatedBy: actorIDPtr(ctx),
+			CreatedAt: now, UpdatedAt: now,
 		}
 		if err := tx.Create(fo).Error; err != nil {
 			return err

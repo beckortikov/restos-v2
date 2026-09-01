@@ -6690,6 +6690,9 @@ components:
         is_auto: { type: boolean }
         source_ref: { type: string }
         shift_id: { type: string, format: uuid }
+        created_by: { type: string, nullable: true, description: "Кто провёл операцию (users.id, миграция 100). NULL у строк без человека в контексте — репликация с филиала, фоновые джобы — и у исторических, для которых не нашлось create-записи в audit_log." }
+        cancelled_at: { type: string, format: date-time, nullable: true }
+        cancelled_by: { type: string, nullable: true, description: "Кто отменил выплату (users.id, миграция 071)." }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
     FinancialOperationInput:
