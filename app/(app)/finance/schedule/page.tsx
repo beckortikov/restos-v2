@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CalendarDays, Camera, Check, ClipboardCheck, Clock, Coins, Loader2, RotateCcw, Users } from 'lucide-react'
+import { CalendarDays, Camera, Check, ChevronLeft, ChevronRight, ClipboardCheck, Clock, Coins, Loader2, Plus, RotateCcw, Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
@@ -139,38 +139,45 @@ export default function SchedulePage() {
   }, [plan])
 
   return (
-    <div className="space-y-4">
+    // Те же отступы и ритм, что на «Зарплате» (p-4 md:p-6 space-y-5): без них
+    // страница прилипала к краям и на фоне соседних вкладок выглядела
+    // «съехавшей». min-w-0 не даёт широкой таблице растянуть весь макет и
+    // выдавить сайдбар за экран.
+    <div className="p-4 md:p-6 space-y-5 min-w-0">
       <FinanceTabs />
 
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold flex items-center gap-2">
-            <CalendarDays className="w-5 h-5" /> График смен
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            План, с которым сравниваются отметки прихода. Без него «не пришёл» неотличим от выходного.
-          </p>
-          {isBranchView && (
-            <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-              Просмотр филиала: изменения уходят в очередь и применяются на его кассе в течение минуты.
-            </p>
-          )}
-        </div>
-        <div className="flex gap-1 bg-muted/50 p-1 rounded-xl">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        {/* Переключатель режимов — тот же сегмент-контрол, что вкладки
+            «Сотрудники / История / Ведомость» на зарплате. */}
+        <div className="flex gap-1 bg-muted/30 p-0.5 rounded-lg w-fit">
           <button
             onClick={() => setMode('grid')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-medium ${mode === 'grid' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'grid' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}
           >
+            <CalendarDays className="size-3.5 inline mr-1.5 -mt-0.5" />
             Неделя
           </button>
           <button
             onClick={() => setMode('rollcall')}
-            className={`px-3.5 py-2 rounded-lg text-xs font-medium ${mode === 'rollcall' ? 'bg-card shadow-sm' : 'text-muted-foreground'}`}
+            className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors ${mode === 'rollcall' ? 'bg-card shadow-sm text-foreground' : 'text-muted-foreground'}`}
           >
+            <ClipboardCheck className="size-3.5 inline mr-1.5 -mt-0.5" />
             Перекличка
           </button>
         </div>
+
+        <p className="text-sm text-muted-foreground">
+          {mode === 'grid'
+            ? 'План, с которым сравниваются отметки прихода'
+            : 'Кто вышел, кто опоздал, кого нет'}
+        </p>
       </div>
+
+      {isBranchView && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          Просмотр филиала: изменения уходят в очередь и применяются на его кассе в течение минуты.
+        </div>
+      )}
 
       {mode === 'grid' ? (
         <WeekGrid
@@ -232,15 +239,41 @@ function WeekGrid({
   onCell: (user: User, date: string) => void
   onTemplate: (user: User) => void
 }) {
+  // Итоги недели считаем один раз: «сколько всего смен закрыто» — первое, что
+  // проверяет владелец, и складывать это глазами по сетке неудобно.
+  const totals = useMemo(() => {
+    let shifts = 0
+    let offs = 0
+    let overrides = 0
+    planIndex.forEach((cell) => {
+      if (cell.isOff) offs++
+      else shifts++
+      if (cell.source === 'override') overrides++
+    })
+    return { shifts, offs, overrides }
+  }, [planIndex])
+
   return (
-    <div className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Button variant="outline" size="sm" onClick={() => onWeek(-1)}>←</Button>
-        <Button variant="outline" size="sm" onClick={onToday}>Текущая неделя</Button>
-        <Button variant="outline" size="sm" onClick={() => onWeek(1)}>→</Button>
-        <span className="text-sm text-muted-foreground ml-1">
-          {shortDate(weekStart)} — {shortDate(days[6])}
-        </span>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-1">
+          <Button variant="outline" size="icon" className="size-8" onClick={() => onWeek(-1)} aria-label="Предыдущая неделя">
+            <ChevronLeft className="size-4" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={onToday}>Текущая неделя</Button>
+          <Button variant="outline" size="icon" className="size-8" onClick={() => onWeek(1)} aria-label="Следующая неделя">
+            <ChevronRight className="size-4" />
+          </Button>
+        </div>
+        <span className="text-sm font-medium">{shortDate(weekStart)} — {shortDate(days[6])}</span>
+        <div className="flex-1" />
+        {!loading && employees.length > 0 && (
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span><b className="text-foreground">{totals.shifts}</b> смен</span>
+            {totals.offs > 0 && <span>{totals.offs} выходных</span>}
+            {totals.overrides > 0 && <span>{totals.overrides} правок</span>}
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -250,86 +283,122 @@ function WeekGrid({
       ) : employees.length === 0 ? (
         <EmptyHint text="Нет сотрудников — заведите их в разделе «Настройки → Пользователи»." />
       ) : (
-        // Таблица шире экрана на планшете — скроллим её саму, а не страницу.
-        <div className="overflow-x-auto border rounded-xl">
-          <table className="w-full text-sm min-w-[720px]">
-            <thead>
-              <tr className="bg-muted/40">
-                <th className="text-left font-medium px-3 py-2 w-56">Сотрудник</th>
-                {days.map((d, i) => (
-                  <th
-                    key={d}
-                    // Сегодняшний столбец подсвечен целиком, а не только
-                    // заголовком: глазу нужно опорное место, иначе в семи
-                    // одинаковых колонках теряешься.
-                    className={`px-2 py-2 font-medium text-center ${isToday(d) ? 'text-primary bg-primary/5' : ''}`}
-                  >
-                    <div>{WEEKDAYS[i]}</div>
-                    <div className={`text-xs ${isToday(d) ? 'text-primary/70' : 'text-muted-foreground'}`}>{shortDate(d)}</div>
+        // Таблица шире экрана на планшете — скроллим её саму, а не страницу:
+        // иначе уезжает весь макет вместе с меню.
+        <div className="border rounded-xl overflow-hidden bg-card">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[860px] border-separate border-spacing-0">
+              <thead>
+                <tr>
+                  <th className="text-left font-medium px-4 py-3 w-64 bg-muted/40 border-b sticky left-0 z-10">
+                    Сотрудник
                   </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {employees.map((u) => {
-                const shiftsCount = days.filter((d) => {
-                  const c = planIndex.get(`${u.id}|${d}`)
-                  return c && !c.isOff
-                }).length
-                return (
-                <tr key={u.id} className="border-t">
-                  <td className="px-3 py-2">
-                    {/* Число смен — у имени, а не у кнопки: «сколько он вообще
-                        работает» иначе приходится складывать глазами по семи
-                        ячейкам, а под кнопкой строка переносится. */}
-                    <div className="flex items-baseline gap-2 min-w-0">
-                      <span className="font-medium truncate">{u.name || u.username}</span>
-                      {shiftsCount > 0 && (
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">{plural(shiftsCount, 'смена', 'смены', 'смен')}</span>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => onTemplate(u)}
-                      className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 whitespace-nowrap"
+                  {days.map((d, i) => (
+                    <th
+                      key={d}
+                      className={`px-2 py-3 font-medium text-center border-b ${isToday(d) ? 'bg-primary/5' : 'bg-muted/40'}`}
                     >
-                      <Clock className="w-3 h-3" /> Шаблон недели
-                    </button>
-                  </td>
-                  {days.map((d) => {
-                    const cell = planIndex.get(`${u.id}|${d}`)
-                    return (
-                      <td key={d} className={`px-1.5 py-1.5 text-center ${isToday(d) ? 'bg-primary/5' : ''}`}>
-                        <button
-                          onClick={() => onCell(u, d)}
-                          className={`w-full rounded-lg px-2 py-2 text-xs transition-colors ${cellClass(cell)}`}
-                        >
-                          {!cell ? '—' : cell.isOff ? 'Выходной' : `${cell.startsAt}–${cell.endsAt}`}
-                        </button>
-                      </td>
-                    )
-                  })}
+                      <div className={isToday(d) ? 'text-primary' : ''}>{WEEKDAYS[i]}</div>
+                      <div className={`text-xs font-normal ${isToday(d) ? 'text-primary/70' : 'text-muted-foreground'}`}>
+                        {shortDate(d)}
+                      </div>
+                    </th>
+                  ))}
                 </tr>
-                )
-              })}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {employees.map((u) => {
+                  const shiftsCount = days.filter((d) => {
+                    const c = planIndex.get(`${u.id}|${d}`)
+                    return c && !c.isOff
+                  }).length
+                  return (
+                    <tr key={u.id} className="group/row">
+                      <td className="px-4 py-2.5 border-b bg-card sticky left-0 z-10">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="size-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold text-muted-foreground shrink-0">
+                            {initials(u.name || u.username)}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="font-medium truncate block">{u.name || u.username}</span>
+                            <button
+                              onClick={() => onTemplate(u)}
+                              className="text-xs text-muted-foreground hover:text-foreground inline-flex items-center gap-1 whitespace-nowrap"
+                            >
+                              <Clock className="w-3 h-3" />
+                              {shiftsCount > 0 ? plural(shiftsCount, 'смена', 'смены', 'смен') : 'нет смен'}
+                              <span className="opacity-60">· шаблон</span>
+                            </button>
+                          </span>
+                        </div>
+                      </td>
+                      {days.map((d) => {
+                        const cell = planIndex.get(`${u.id}|${d}`)
+                        return (
+                          <td key={d} className={`px-1.5 py-1.5 border-b text-center ${isToday(d) ? 'bg-primary/5' : ''}`}>
+                            <button
+                              onClick={() => onCell(u, d)}
+                              className={`w-full rounded-lg px-2 py-2.5 text-xs transition-all ${cellClass(cell)}`}
+                            >
+                              {!cell ? (
+                                // Пустой день — не «выходной», а «не назначено»:
+                                // плюс сразу говорит, что сюда можно нажать.
+                                <Plus className="size-3.5 mx-auto opacity-0 group-hover/row:opacity-40 transition-opacity" />
+                              ) : cell.isOff ? (
+                                'Выходной'
+                              ) : (
+                                <span className="font-medium tabular-nums">{cell.startsAt}–{cell.endsAt}</span>
+                              )}
+                            </button>
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="px-4 py-2.5 bg-muted/20 border-t text-xs text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-3 rounded bg-primary/10 border border-primary/40 inline-block" />
+              правка на дату
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-3 rounded bg-primary/5 border border-transparent inline-block" />
+              недельный шаблон
+            </span>
+            <span className="inline-flex items-center gap-1.5">
+              <span className="size-3 rounded bg-muted border border-dashed border-border inline-block" />
+              выходной
+            </span>
+            <span>Клик по ячейке — смена или отгул на этот день. Клик по «шаблон» — вся неделя сразу.</span>
+          </div>
         </div>
       )}
-
-      <p className="text-xs text-muted-foreground">
-        Ячейка с рамкой — правка на конкретную дату (подмена, отгул); без рамки — недельный шаблон.
-      </p>
     </div>
   )
 }
 
-/** Правка на дату видна рамкой: менеджер должен различать, где он вмешался. */
+/** «ЩЮ» из имени — аватар-заглушка, чтобы строки различались взглядом. */
+function initials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '—'
+  return (parts[0][0] + (parts[1]?.[0] ?? '')).toUpperCase()
+}
+
+/**
+ * Вид ячейки. Правка на конкретную дату видна рамкой — менеджер должен
+ * различать, где он вмешался руками, а где действует недельный шаблон:
+ * иначе непонятно, что изменится, если шаблон переписать.
+ */
 function cellClass(cell?: PlannedShift): string {
-  if (!cell) return 'text-muted-foreground hover:bg-muted/60'
-  if (cell.isOff) return 'bg-muted text-muted-foreground border border-dashed border-border'
+  if (!cell) return 'text-muted-foreground hover:bg-muted/60 border border-transparent'
+  if (cell.isOff) return 'bg-muted text-muted-foreground border border-dashed border-border hover:bg-muted/80'
   return cell.source === 'override'
-    ? 'bg-primary/10 text-primary border border-primary/40 font-medium'
-    : 'bg-primary/5 text-foreground hover:bg-primary/10'
+    ? 'bg-primary/10 text-primary border border-primary/40 hover:bg-primary/15'
+    : 'bg-primary/5 text-foreground border border-transparent hover:bg-primary/10'
 }
 
 function EmptyHint({ text }: { text: string }) {
@@ -440,7 +509,7 @@ function RollCallView({
           {report.rows.length === 0 ? (
             <EmptyHint text="На этот день нет ни плановых смен, ни отметок." />
           ) : (
-            <div className="border rounded-xl overflow-hidden">
+            <div className="border rounded-xl overflow-hidden bg-card">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm min-w-[720px]">
                   <thead>
@@ -583,9 +652,9 @@ function timeOf(iso: string): string {
 
 function Stat({ label, value, tone, icon }: { label: string; value: number; tone?: string; icon?: React.ReactNode }) {
   return (
-    <div className="border rounded-xl px-3 py-2.5">
+    <div className="border rounded-xl px-4 py-3 bg-card">
       <div className="text-xs text-muted-foreground flex items-center gap-1.5">{icon}{label}</div>
-      <div className={`text-2xl font-semibold ${tone ?? ''}`}>{value}</div>
+      <div className={`text-2xl font-semibold mt-0.5 ${tone ?? ''}`}>{value}</div>
     </div>
   )
 }
