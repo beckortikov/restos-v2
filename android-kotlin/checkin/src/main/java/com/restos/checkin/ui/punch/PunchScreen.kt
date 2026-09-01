@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,8 +51,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
+import com.google.accompanist.permissions.rememberPermissionState
+import com.restos.checkin.camera.SelfieCamera
 import com.restos.checkin.data.attendance.AttendanceLookupDto
 import com.restos.checkin.data.attendance.AttendancePunchDto
 import com.restos.checkin.data.attendance.OnShiftRowDto
@@ -70,6 +77,7 @@ import java.time.Instant
  * уход. Три состояния сменяют друг друга на одном экране — ввод,
  * подтверждение с именем, крупный итог, который гаснет сам.
  */
+@OptIn(ExperimentalPermissionsApi::class)
 @Composable
 fun PunchScreen(
     onLoggedOut: () -> Unit,
@@ -78,6 +86,36 @@ fun PunchScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val restaurantName by viewModel.restaurantName.collectAsStateWithLifecycle()
     var confirmLogout by remember { mutableStateOf(false) }
+
+    // Селфи-фиксация: камера держится открытой, пока открыт экран. Биндить её
+    // на каждую отметку значило бы ждать инициализацию ровно тогда, когда
+    // человек уже нажал кнопку.
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val cameraPermission = rememberPermissionState(android.Manifest.permission.CAMERA)
+    val camera = remember { SelfieCamera(context, lifecycleOwner) }
+    var cameraReady by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        // Разрешение спрашиваем один раз при открытии: у планшета один
+        // владелец-установщик, и диалог посреди очереди никому не нужен.
+        if (!cameraPermission.status.isGranted) cameraPermission.launchPermissionRequest()
+    }
+    LaunchedEffect(cameraPermission.status.isGranted) {
+        if (cameraPermission.status.isGranted) {
+            camera.start { ok -> cameraReady = ok }
+            viewModel.bindCamera { camera.capture() }
+        } else {
+            viewModel.unbindCamera()
+            cameraReady = false
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            viewModel.unbindCamera()
+            camera.stop()
+        }
+    }
 
     // Часы на терминале — не украшение: сотрудник сверяет по ним, во сколько
     // отметился, и замечает сбитое время планшета до того, как оно испортит
@@ -120,6 +158,7 @@ fun PunchScreen(
                 nowLabel = formatClock(now),
                 dateLabel = formatToday(now),
                 restaurantName = restaurantName,
+                cameraReady = cameraReady,
                 onDigit = viewModel::appendDigit,
                 onClear = viewModel::clear,
                 onBackspace = viewModel::backspace,
@@ -164,6 +203,7 @@ private fun PinPad(
     nowLabel: String,
     dateLabel: String,
     restaurantName: String?,
+    cameraReady: Boolean,
     onDigit: (Char) -> Unit,
     onClear: () -> Unit,
     onBackspace: () -> Unit,
@@ -183,6 +223,13 @@ private fun PinPad(
         ) {
             Column {
                 Text(restaurantName ?: "RestOS", style = MaterialTheme.typography.labelMedium, color = CheckinColors.TextSecondary)
+                // Состояние камеры видно сразу: если снимки не пишутся, об этом
+                // должен узнать управляющий, а не выясниться при разборе спора.
+                Text(
+                    if (cameraReady) "Фото при отметке включено" else "Фото недоступно — отметки без снимка",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (cameraReady) CheckinColors.Primary else CheckinColors.TextTertiary,
+                )
             }
             IconButton(onClick = onSettings) {
                 Icon(

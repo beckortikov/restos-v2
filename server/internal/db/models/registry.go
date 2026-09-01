@@ -33,6 +33,8 @@ func All() []any {
 		&TimeEntry{}, &IdempotencyKey{}, &PrintJob{},
 		// график смен (102) — план, против которого меряется факт из TimeEntry
 		&ShiftScheduleTemplate{}, &ShiftScheduleDay{},
+		// селфи при отметке (103)
+		&AttendancePhoto{},
 		// auth
 		&Session{},
 		// printers (Phase 4.5; 053 — мультистанционная печать)

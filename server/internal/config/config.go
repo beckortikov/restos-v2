@@ -161,6 +161,12 @@ func (c *Config) PGBinariesDir() string { return filepath.Join(c.DataDir, "pg-bi
 // BackupsDir — каталог для pg_dump-бэкапов.
 func (c *Config) BackupsDir() string { return filepath.Join(c.DataDir, "backups") }
 
+// AttendancePhotosDir — каталог селфи при отметках прихода/ухода (103).
+// Оригиналы снимков намеренно живут файлами рядом с БД, а не внутри неё:
+// ежедневный pg_dump с ротацией 7+4+12 иначе таскал бы эти мегабайты в
+// двух десятках копий. В БД остаётся только превью.
+func (c *Config) AttendancePhotosDir() string { return filepath.Join(c.DataDir, "attendance") }
+
 // WaiterAppPath — путь к загруженному APK официанта (раздаётся по QR в LAN).
 // Менеджер загружает новый APK через настройки кассы → файл живёт в userData,
 // переживает перезапуск и обновляется без пересборки приложения.

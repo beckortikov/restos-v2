@@ -1,4 +1,5 @@
 import { api, unwrap } from './_client'
+import { getBaseURL } from '../api'
 import { logAction } from './audit'
 
 // Плановый график смен (102) и перекличка «план против факта».
@@ -41,6 +42,10 @@ export interface RollCallRow {
   clockOut?: string
   lateMinutes: number
   source?: 'template' | 'override'
+  /** Отметка табеля — по ней тянется оригинал снимка. */
+  entryId?: string
+  /** Превью селфи прихода, base64 JPEG (103). Оригинал — fetchAttendancePhoto. */
+  photoThumb?: string
 }
 
 export interface RollCallReport {
@@ -158,6 +163,28 @@ export async function fetchRollCall(date: string): Promise<RollCallReport> {
       clockOut: r?.clock_out || undefined,
       lateMinutes: Number(r?.late_minutes ?? 0),
       source: r?.source || undefined,
+      entryId: r?.entry_id || undefined,
+      photoThumb: r?.photo_thumb || undefined,
     })),
   }
+}
+
+/**
+ * Оригинал селфи отметки как object URL для <img>.
+ *
+ * Не через openapi-клиент: тот разбирает ответ как JSON, а здесь бинарный
+ * JPEG. И не прямой ссылкой в src — эндпоинт под Bearer-токеном, который
+ * тег <img> не отправит.
+ *
+ * Вызывающий обязан отозвать URL через URL.revokeObjectURL, иначе снимки
+ * копятся в памяти вкладки.
+ */
+export async function fetchAttendancePhoto(entryId: string, kind: 'in' | 'out' = 'in'): Promise<string> {
+  const token = localStorage.getItem('restos-v4-token') || ''
+  const res = await fetch(
+    `${getBaseURL()}api/v1/attendance/photo/${encodeURIComponent(entryId)}?kind=${kind}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+  )
+  if (!res.ok) throw new Error(res.status === 404 ? 'Снимок не сохранён или уже удалён' : `HTTP ${res.status}`)
+  return URL.createObjectURL(await res.blob())
 }

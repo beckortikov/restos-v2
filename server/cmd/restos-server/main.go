@@ -222,12 +222,13 @@ func main() {
 				Commit:    commit,
 				BuildTime: buildTime,
 			},
-			LicensePublicKey: licPub,
-			Hub:              hub,
-			NTPChecker:       ntpChecker,
-			WaiterAPKPath:    cfg.WaiterAppPath(),
-			SyncToken:        cfg.SyncToken,
-			ZakupAPKPath:     cfg.ZakupAppPath(),
+			LicensePublicKey:    licPub,
+			Hub:                 hub,
+			NTPChecker:          ntpChecker,
+			WaiterAPKPath:       cfg.WaiterAppPath(),
+			SyncToken:           cfg.SyncToken,
+			ZakupAPKPath:        cfg.ZakupAppPath(),
+			AttendancePhotosDir: cfg.AttendancePhotosDir(),
 			BackupCfg: service.BackupServiceConfig{
 				BackupsDir:   cfg.BackupsDir(),
 				DesktopDir:   cfg.DesktopBackupsDir(),
@@ -280,6 +281,14 @@ func main() {
 	// трогает никогда. Стартует безусловно: журнал мог накопиться, пока
 	// ресторан был в сети, и продолжать расти после отключения синка.
 	go jobs.SyncLogRotateScheduler(ctx, gdb, jobs.SyncLogRotateConfig{})
+
+	// Ретенция селфи отметок (103): чистим оригиналы старше 90 дней, превью в
+	// БД остаются. Store поднимаем отдельно от роутера — джобе нужен только он.
+	go jobs.AttendancePhotoPurgeScheduler(
+		ctx,
+		service.NewAttendancePhotoStore(repo.New(gdb), cfg.AttendancePhotosDir()),
+		jobs.AttendancePhotoPurgeConfig{},
+	)
 
 	// Multi-branch sync pusher/puller (Фаза 2, ADR-003; безрестартовое
 	// подключение — ADR-003 продолжение). Стартуют БЕЗУСЛОВНО, даже если sync

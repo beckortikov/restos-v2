@@ -3826,6 +3826,17 @@ paths:
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
         "409": { $ref: "#/components/responses/Error" }
+  /api/v1/attendance/photo/{entry_id}:
+    get:
+      tags: [payroll]
+      summary: Оригинал селфи отметки
+      description: "Только со своего узла: файл лежит на диске филиала, в центре есть лишь превью в перекличке"
+      parameters:
+        - { in: path, name: entry_id, required: true, schema: { type: string, format: uuid } }
+        - { in: query, name: kind, schema: { type: string, enum: [in, out], default: in } }
+      responses:
+        "200": { description: JPEG, content: { image/jpeg: { schema: { type: string, format: binary } } } }
+        "404": { $ref: "#/components/responses/Error" }
   /api/v1/attendance/on-shift:
     get:
       tags: [payroll]
@@ -6678,6 +6689,8 @@ components:
         clock_out: { type: string, format: date-time }
         late_minutes: { type: integer }
         source: { type: string, enum: [template, override] }
+        entry_id: { type: string, format: uuid, description: "Отметка табеля — по ней тянется оригинал снимка" }
+        photo_thumb: { type: string, description: "Превью селфи прихода в base64 (103); оригинал — GET /attendance/photo/{entry_id}" }
     RollCallReport:
       type: object
       properties:
@@ -6703,6 +6716,9 @@ components:
           type: string
           enum: [in, out]
           description: "Сверяется с фактическим состоянием: между lookup и подтверждением сотрудник мог отметиться на другом терминале"
+        photo:
+          type: string
+          description: "Селфи в base64 (JPEG, ~640px, до 512 КБ). Необязательное: терминал без камеры отмечает людей без снимка"
     AttendanceLookup:
       type: object
       properties:
@@ -6722,6 +6738,9 @@ components:
         user_name: { type: string }
         at: { type: string, format: date-time }
         worked_minutes: { type: integer }
+        photo_saved:
+          type: boolean
+          description: "Прикрепился ли снимок. Отметка засчитывается и без него — не пускать человека на смену из-за фото было бы хуже"
         closed_stale_entry_id:
           type: string
           format: uuid

@@ -63,6 +63,21 @@ class PunchViewModel @Inject constructor(
 
     private var resetJob: Job? = null
 
+    /**
+     * Поставщик кадра. Ставится экраном (камера живёт в его жизненном цикле),
+     * поэтому это лямбда, а не зависимость Hilt: ViewModel переживает поворот
+     * и не должна держать привязанную к экрану камеру.
+     */
+    private var photoProvider: (suspend () -> String?)? = null
+
+    fun bindCamera(provider: suspend () -> String?) {
+        photoProvider = provider
+    }
+
+    fun unbindCamera() {
+        photoProvider = null
+    }
+
     init {
         refreshOnShift()
     }
@@ -111,7 +126,10 @@ class PunchViewModel @Inject constructor(
         val pin = _state.value.pin
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
-            runCatching { api.punch(PunchBody(pin = pin, action = step.who.nextAction)) }
+            // Снимок делаем ДО отметки, но его отсутствие её не отменяет:
+            // сломанная камера не повод не пустить человека на смену.
+            val photo = runCatching { photoProvider?.invoke() }.getOrNull()
+            runCatching { api.punch(PunchBody(pin = pin, action = step.who.nextAction, photo = photo)) }
                 .onSuccess { res ->
                     _state.update {
                         it.copy(loading = false, pin = "", step = PunchStep.Done(res))

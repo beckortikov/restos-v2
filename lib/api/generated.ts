@@ -11119,6 +11119,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/attendance/photo/{entry_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Оригинал селфи отметки
+         * @description Только со своего узла: файл лежит на диске филиала, в центре есть лишь превью в перекличке
+         */
+        get: {
+            parameters: {
+                query?: {
+                    kind?: "in" | "out";
+                };
+                header?: never;
+                path: {
+                    entry_id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description JPEG */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "image/jpeg": string;
+                    };
+                };
+                404: components["responses"]["Error"];
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/attendance/on-shift": {
         parameters: {
             query?: never;
@@ -17737,6 +17781,13 @@ export interface components {
             late_minutes?: number;
             /** @enum {string} */
             source?: "template" | "override";
+            /**
+             * Format: uuid
+             * @description Отметка табеля — по ней тянется оригинал снимка
+             */
+            entry_id?: string;
+            /** @description Превью селфи прихода в base64 (103); оригинал — GET /attendance/photo/{entry_id} */
+            photo_thumb?: string;
         };
         RollCallReport: {
             /** Format: date */
@@ -17760,6 +17811,8 @@ export interface components {
              * @enum {string}
              */
             action: "in" | "out";
+            /** @description Селфи в base64 (JPEG, ~640px, до 512 КБ). Необязательное: терминал без камеры отмечает людей без снимка */
+            photo?: string;
         };
         AttendanceLookup: {
             /** Format: uuid */
@@ -17784,6 +17837,8 @@ export interface components {
             /** Format: date-time */
             at?: string;
             worked_minutes?: number;
+            /** @description Прикрепился ли снимок. Отметка засчитывается и без него — не пускать человека на смену из-за фото было бы хуже */
+            photo_saved?: boolean;
             /**
              * Format: uuid
              * @description Брошенная смена, закрытая автоматически при этом приходе (уход не был отмечен) — терминал показывает предупреждение

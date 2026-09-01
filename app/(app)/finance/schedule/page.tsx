@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CalendarDays, ClipboardCheck, Clock, Loader2, RotateCcw, Users } from 'lucide-react'
+import { CalendarDays, Camera, ClipboardCheck, Clock, Loader2, RotateCcw, Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
@@ -10,9 +10,9 @@ import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { fetchUsers } from '@/lib/queries'
 import {
-  deleteScheduleDay, fetchRollCall, fetchSchedule, fetchScheduleTemplate,
+  deleteScheduleDay, fetchAttendancePhoto, fetchRollCall, fetchSchedule, fetchScheduleTemplate,
   saveScheduleTemplate, setScheduleDay,
-  type PlannedShift, type RollCallReport, type RollCallStatus,
+  type PlannedShift, type RollCallReport, type RollCallRow, type RollCallStatus,
 } from '@/lib/queries/schedule'
 import { humanizeError } from '@/lib/errors'
 import type { User } from '@/lib/types'
@@ -321,6 +321,8 @@ function RollCallView({
   report: RollCallReport | null
   loading: boolean
 }) {
+  const [photoFor, setPhotoFor] = useState<RollCallRow | null>(null)
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -356,6 +358,7 @@ function RollCallView({
             <div className="border rounded-xl divide-y">
               {report.rows.map((row) => (
                 <div key={row.userId} className="flex flex-wrap items-center gap-3 px-3 py-2.5">
+                  <SelfieThumb row={row} onOpen={() => setPhotoFor(row)} />
                   <div className="flex-1 min-w-40">
                     <div className="font-medium">{row.userName || '—'}</div>
                     <div className="text-xs text-muted-foreground">
@@ -378,7 +381,91 @@ function RollCallView({
           )}
         </>
       )}
+
+      {photoFor && <SelfieDialog row={photoFor} onClose={() => setPhotoFor(null)} />}
     </div>
+  )
+}
+
+/**
+ * Миниатюра селфи прихода. Превью приходит вместе с перекличкой (~8 КБ), а
+ * оригинал тянется только по клику — иначе список на 20 человек весил бы под
+ * мегабайт ради картинок, на которые чаще всего не смотрят.
+ */
+function SelfieThumb({ row, onOpen }: { row: RollCallRow; onOpen: () => void }) {
+  if (!row.photoThumb) {
+    return (
+      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center shrink-0" title="Без снимка">
+        <Camera className="w-4 h-4 text-muted-foreground/60" />
+      </div>
+    )
+  }
+  return (
+    <button
+      onClick={onOpen}
+      className="w-10 h-10 rounded-full overflow-hidden shrink-0 ring-1 ring-border hover:ring-primary transition"
+      title="Показать снимок"
+    >
+      <img
+        src={`data:image/jpeg;base64,${row.photoThumb}`}
+        alt={`Отметка: ${row.userName}`}
+        className="w-full h-full object-cover"
+      />
+    </button>
+  )
+}
+
+/** Оригинал снимка. Живёт на кассе филиала — если она выключена, останется превью. */
+function SelfieDialog({ row, onClose }: { row: RollCallRow; onClose: () => void }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!row.entryId) return
+    let objectUrl: string | null = null
+    let alive = true
+    void (async () => {
+      try {
+        const u = await fetchAttendancePhoto(row.entryId!, 'in')
+        objectUrl = u
+        if (alive) setUrl(u)
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : 'Снимок недоступен')
+      }
+    })()
+    // Отзываем object URL: без этого каждый просмотр оставлял бы блоб
+    // висеть в памяти вкладки до перезагрузки.
+    return () => { alive = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
+  }, [row.entryId])
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {row.userName} · {row.clockIn ? timeOf(row.clockIn) : '—'}
+          </DialogTitle>
+        </DialogHeader>
+        {error ? (
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground">{error}</p>
+            {row.photoThumb && (
+              <img
+                src={`data:image/jpeg;base64,${row.photoThumb}`}
+                alt=""
+                className="rounded-lg w-full max-w-[240px] mx-auto"
+              />
+            )}
+          </div>
+        ) : url ? (
+          <img src={url} alt={`Отметка: ${row.userName}`} className="rounded-lg w-full" />
+        ) : (
+          <div className="flex justify-center py-10">
+            <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }
 

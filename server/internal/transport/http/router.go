@@ -42,6 +42,9 @@ type Deps struct {
 	// WaiterAPKPath — путь к загруженному APK официанта (раздаётся по QR/LAN).
 	// Пусто → раздача/загрузка APK недоступна (dev/тест без DataDir).
 	WaiterAPKPath string
+	// AttendancePhotosDir — каталог селфи отметок (103). Пусто → фото
+	// отключены: отметки продолжают работать, просто без снимков.
+	AttendancePhotosDir string
 	// SyncToken — общий секрет сети для межузлового auth /sync/* (Фаза 3).
 	// Пусто → /sync/* закрыт (узел не участвует в multi-branch sync).
 	SyncToken string
@@ -138,8 +141,9 @@ func NewRouter(deps Deps) http.Handler {
 	equitySvc := service.NewEquityService(rep)
 	budgetSvc := service.NewBudgetService(rep)
 	timeEntriesSvc := service.NewTimeEntriesService(rep)
-	attendanceSvc := service.NewAttendanceService(rep, timeEntriesSvc)
-	scheduleSvc := service.NewScheduleService(rep)
+	attendancePhotos := service.NewAttendancePhotoStore(rep, deps.AttendancePhotosDir)
+	attendanceSvc := service.NewAttendanceService(rep, timeEntriesSvc, attendancePhotos)
+	scheduleSvc := service.NewScheduleService(rep, attendancePhotos)
 	modGroupsSvc := service.NewModifierGroupsService(rep)
 	modsSvc := service.NewModifiersService(rep)
 	bundleSlotsSvc := service.NewBundleSlotsService(rep)
@@ -205,7 +209,7 @@ func NewRouter(deps Deps) http.Handler {
 	equityH := handlers.NewEquity(equitySvc)
 	budgetH := handlers.NewBudget(budgetSvc)
 	timeEntriesH := handlers.NewTimeEntries(timeEntriesSvc)
-	attendanceH := handlers.NewAttendance(attendanceSvc)
+	attendanceH := handlers.NewAttendance(attendanceSvc, attendancePhotos)
 	scheduleH := handlers.NewSchedule(scheduleSvc)
 	modGroupsH := handlers.NewModifierGroups(modGroupsSvc)
 	modsH := handlers.NewModifiers(modsSvc)
@@ -463,6 +467,9 @@ func NewRouter(deps Deps) http.Handler {
 			g.Get("/time-entries/active", timeEntriesH.Active)
 			// Терминал учёта времени (:checkin) — кто сейчас на смене.
 			g.Get("/attendance/on-shift", attendanceH.OnShift)
+			// Оригинал селфи отметки (103) — только со своего узла: на центре
+			// файла нет, там показывается превью из реплики.
+			g.Get("/attendance/photo/{entry_id}", attendanceH.Photo)
 
 			// Плановый график смен (102) + перекличка «план против факта».
 			g.Get("/schedule", scheduleH.Plan)

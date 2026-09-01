@@ -142,6 +142,29 @@ func recordScheduleDayDeleteSync(tx *gorm.DB, id, restaurantID string) error {
 	})
 }
 
+// ─── attendance_photos (103) ───────────────────────────────────────────────
+// В центр уезжает СТРОКА целиком, включая thumb (~8 КБ) — по нему владелец
+// сети видит, кто отметился, не поднимая касс филиалов. Оригинал (path) в
+// реплике будет указывать на файл, которого на центре нет; это ожидаемо —
+// отдача оригинала работает только на своём узле (см. Original).
+//
+// Снимок пишется один раз и не правится; delete-хук не нужен даже под
+// ретенцию — Purge обнуляет только path и не удаляет строку.
+
+func recordAttendancePhotoSync(tx *gorm.DB, id string) error {
+	var row models.AttendancePhoto
+	if err := tx.Where("id = ?", id).First(&row).Error; err != nil {
+		return err
+	}
+	return synclog.Record(tx, synclog.Entry{
+		Entity:       "attendance_photos",
+		RowID:        row.ID,
+		Op:           "update",
+		RestaurantID: row.RestaurantID,
+		Payload:      row,
+	})
+}
+
 // ─── salary_deductions / salary_advances ────────────────────────────────
 // Обе — create + soft-cancel (cancelled_at/by), НИКОГДА hard delete — сам
 // апдейт (отмена) синкается тем же upsert-вызовом с уже отменённым снапшотом.

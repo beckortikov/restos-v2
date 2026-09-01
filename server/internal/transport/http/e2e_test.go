@@ -107,6 +107,9 @@ func setupE2E(t *testing.T) *e2eFixture {
 		Build:         httpx.BuildInfo{Version: "test"},
 		WaiterAPKPath: filepath.Join(t.TempDir(), "waiter-app.apk"),
 		ZakupAPKPath:  filepath.Join(t.TempDir(), "zakup-app.apk"),
+		// Селфи отметок (103) — во временный каталог теста: без него хранилище
+		// выключается, и проверять было бы нечего.
+		AttendancePhotosDir: filepath.Join(t.TempDir(), "attendance"),
 	})
 	srv := httptest.NewServer(router)
 

@@ -11,6 +11,7 @@ package service
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
@@ -42,9 +44,14 @@ const (
 	dateLayout = "2006-01-02"
 )
 
-type ScheduleService struct{ r *repo.Repo }
+type ScheduleService struct {
+	r      *repo.Repo
+	photos *AttendancePhotoStore
+}
 
-func NewScheduleService(r *repo.Repo) *ScheduleService { return &ScheduleService{r: r} }
+func NewScheduleService(r *repo.Repo, photos *AttendancePhotoStore) *ScheduleService {
+	return &ScheduleService{r: r, photos: photos}
+}
 
 // ─── Входные структуры ─────────────────────────────────────────────────────
 
@@ -103,6 +110,12 @@ type RollCallRow struct {
 	ClockOut     *time.Time `json:"clock_out,omitempty"`
 	LateMinutes  int        `json:"late_minutes,omitempty"`
 	Source       string     `json:"source,omitempty"` // источник плана
+	// EntryID — отметка табеля, к которой относится строка. По нему UI тянет
+	// оригинал снимка (превью приходит здесь же).
+	EntryID string `json:"entry_id,omitempty"`
+	// PhotoThumb — превью селфи прихода в base64 (103). Именно превью, а не
+	// оригинал: перекличка на 20 человек иначе весила бы под мегабайт.
+	PhotoThumb string `json:"photo_thumb,omitempty"`
 }
 
 // RollCallReport — перекличка за дату.
@@ -532,6 +545,7 @@ func (s *ScheduleService) RollCall(ctx context.Context, date string) (*RollCallR
 			if came {
 				row.Status = "unplanned"
 				row.ClockIn, row.ClockOut = entry.ClockIn, entry.ClockOut
+				row.EntryID = entry.ID
 				report.Unplanned++
 			}
 			report.Rows = append(report.Rows, row)
@@ -545,6 +559,7 @@ func (s *ScheduleService) RollCall(ctx context.Context, date string) (*RollCallR
 			continue
 		}
 		row.ClockIn, row.ClockOut = entry.ClockIn, entry.ClockOut
+		row.EntryID = entry.ID
 		report.Present++
 		late := lateMinutes(*entry.ClockIn, d, p.StartsAt, loc)
 		if late > lateGraceMinutes {
@@ -567,14 +582,45 @@ func (s *ScheduleService) RollCall(ctx context.Context, date string) (*RollCallR
 		report.Unplanned++
 		report.Rows = append(report.Rows, RollCallRow{
 			UserID: uid, UserName: names[uid], Status: "unplanned",
-			ClockIn: e.ClockIn, ClockOut: e.ClockOut,
+			ClockIn: e.ClockIn, ClockOut: e.ClockOut, EntryID: e.ID,
 		})
 	}
 
+	if err := s.attachPhotos(ctx, report); err != nil {
+		return nil, err
+	}
 	sort.Slice(report.Rows, func(i, j int) bool {
 		return report.Rows[i].UserName < report.Rows[j].UserName
 	})
 	return report, nil
+}
+
+// attachPhotos — превью селфи прихода к строкам переклички. Ошибка хранилища
+// не роняет отчёт: перекличка полезна и без картинок.
+func (s *ScheduleService) attachPhotos(ctx context.Context, report *RollCallReport) error {
+	if s.photos == nil {
+		return nil
+	}
+	ids := make([]string, 0, len(report.Rows))
+	for _, row := range report.Rows {
+		if row.EntryID != "" {
+			ids = append(ids, row.EntryID)
+		}
+	}
+	photos, err := s.photos.ForEntries(ctx, ids)
+	if err != nil {
+		log.Warn().Err(err).Msg("roll-call: превью снимков не подгрузились")
+		return nil
+	}
+	for i := range report.Rows {
+		if report.Rows[i].EntryID == "" {
+			continue
+		}
+		if p, ok := photos[report.Rows[i].EntryID+"|in"]; ok && len(p.Thumb) > 0 {
+			report.Rows[i].PhotoThumb = base64.StdEncoding.EncodeToString(p.Thumb)
+		}
+	}
+	return nil
 }
 
 // restaurantLocation — часовой пояс ресторана, fallback Asia/Dushanbe (тот же

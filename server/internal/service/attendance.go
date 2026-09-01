@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"gorm.io/gorm"
 
 	"github.com/restos/restos-v4/server/internal/audit"
@@ -50,11 +51,12 @@ var attendanceRoles = map[string]bool{"checkin": true, "manager": true, "owner":
 type AttendanceService struct {
 	r       *repo.Repo
 	entries *TimeEntriesService
+	photos  *AttendancePhotoStore
 	guess   *pinGuessThrottle
 }
 
-func NewAttendanceService(r *repo.Repo, entries *TimeEntriesService) *AttendanceService {
-	return &AttendanceService{r: r, entries: entries, guess: newPinGuessThrottle()}
+func NewAttendanceService(r *repo.Repo, entries *TimeEntriesService, photos *AttendancePhotoStore) *AttendanceService {
+	return &AttendanceService{r: r, entries: entries, photos: photos, guess: newPinGuessThrottle()}
 }
 
 // ─── Результаты ────────────────────────────────────────────────────────────
@@ -82,6 +84,10 @@ type AttendancePunchResult struct {
 	UserName      string    `json:"user_name"`
 	At            time.Time `json:"at"`
 	WorkedMinutes int       `json:"worked_minutes,omitempty"` // только для "out"
+	// PhotoSaved — прикрепился ли снимок. Отметка засчитывается и без него
+	// (нет камеры, нет разрешения, диск не пишется) — не пускать человека на
+	// смену из-за фото было бы хуже, чем принять отметку без доказательства.
+	PhotoSaved bool `json:"photo_saved"`
 	// ClosedStaleEntryID — id брошенной вчерашней смены, которую пришлось
 	// закрыть, чтобы открыть сегодняшнюю. Терминал показывает по нему
 	// предупреждение, иначе сотрудник не узнает, что его вчерашний уход
@@ -144,7 +150,7 @@ func (s *AttendanceService) Lookup(ctx context.Context, pin string) (*Attendance
 // action приходит от клиента и сверяется с фактическим состоянием: между
 // Lookup и подтверждением сотрудник мог отметиться на другом терминале, а
 // двойной тап по кнопке не должен открывать вторую смену.
-func (s *AttendanceService) Punch(ctx context.Context, pin, action string) (*AttendancePunchResult, error) {
+func (s *AttendanceService) Punch(ctx context.Context, pin, action, photoB64 string) (*AttendancePunchResult, error) {
 	if err := s.requireTerminal(ctx); err != nil {
 		return nil, err
 	}
@@ -187,10 +193,12 @@ func (s *AttendanceService) Punch(ctx context.Context, pin, action string) (*Att
 		if closed.ClockOut != nil {
 			at = *closed.ClockOut
 		}
-		return &AttendancePunchResult{
+		res := &AttendancePunchResult{
 			Action: "out", EntryID: closed.ID, UserID: user.ID, UserName: name,
 			At: at, WorkedMinutes: worked,
-		}, nil
+		}
+		res.PhotoSaved = s.savePhoto(actorCtx, closed.ID, user.ID, "out", photoB64)
+		return res, nil
 	}
 
 	// action == "in"
@@ -218,10 +226,12 @@ func (s *AttendanceService) Punch(ctx context.Context, pin, action string) (*Att
 	if created.ClockIn != nil {
 		at = *created.ClockIn
 	}
-	return &AttendancePunchResult{
+	res := &AttendancePunchResult{
 		Action: "in", EntryID: created.ID, UserID: user.ID, UserName: name,
 		At: at, ClosedStaleEntryID: staleID,
-	}, nil
+	}
+	res.PhotoSaved = s.savePhoto(actorCtx, created.ID, user.ID, "in", photoB64)
+	return res, nil
 }
 
 // OnShift — GET /api/v1/attendance/on-shift: кто сейчас на смене.
@@ -382,6 +392,21 @@ func userDisplayName(u *models.User) string {
 		return *u.Username
 	}
 	return "Сотрудник"
+}
+
+// savePhoto — прикрепить селфи к отметке. Ошибка НЕ роняет отметку: она уже в
+// табеле, и терять рабочий день из-за проблем со снимком нельзя. Возвращаем
+// факт сохранения, чтобы терминал мог честно сказать «фото не сохранилось».
+func (s *AttendanceService) savePhoto(ctx context.Context, entryID, userID, kind, photoB64 string) bool {
+	if s.photos == nil || !s.photos.Enabled() || strings.TrimSpace(photoB64) == "" {
+		return false
+	}
+	if err := s.photos.Save(ctx, entryID, userID, kind, photoB64); err != nil {
+		log.Warn().Err(err).Str("entry_id", entryID).Str("kind", kind).
+			Msg("attendance: снимок не сохранён, отметка засчитана")
+		return false
+	}
+	return true
 }
 
 // ─── Торможение перебора PIN ───────────────────────────────────────────────

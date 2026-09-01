@@ -95,6 +95,26 @@ type ShiftScheduleDay struct {
 
 func (ShiftScheduleDay) TableName() string { return "shift_schedule_days" }
 
+// AttendancePhoto — селфи при отметке (103). Оригинал лежит файлом на диске
+// филиала (Path), в БД только превью (Thumb) — оно уезжает в центр синком, а
+// оригинал остаётся на филиале: см. комментарий миграции.
+type AttendancePhoto struct {
+	ID           string    `gorm:"primaryKey;type:uuid;default:gen_random_uuid()" json:"id"`
+	RestaurantID *string   `gorm:"column:restaurant_id;index" json:"restaurant_id"`
+	EntryID      string    `gorm:"column:entry_id;type:uuid" json:"entry_id"`
+	UserID       *string   `gorm:"column:user_id;type:uuid" json:"user_id"`
+	Kind         string    `gorm:"column:kind" json:"kind"` // in | out
+	TakenAt      time.Time `gorm:"column:taken_at" json:"taken_at"`
+	// Path — путь ОТНОСИТЕЛЬНО каталога фото ('2026-09/<id>.jpg'), не
+	// абсолютный: data-dir у кассы и у центра разные, а абсолютный путь с
+	// чужой машины в реплике был бы мусором.
+	Path      *string   `gorm:"column:path" json:"path,omitempty"`
+	Thumb     []byte    `gorm:"column:thumb" json:"thumb,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (AttendancePhoto) TableName() string { return "attendance_photos" }
+
 // SalaryDayMultiplier — множитель дневной оплаты за конкретный день (066):
 // «две смены в один день» — строка существует, только когда множитель != 1
 // (по умолчанию день = ×1, строки нет — как и SalaryWorkedDay, чистый override).

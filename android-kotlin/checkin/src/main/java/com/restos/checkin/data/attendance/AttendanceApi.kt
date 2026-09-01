@@ -30,7 +30,12 @@ interface AttendanceApi {
 data class PinBody(val pin: String)
 
 @Serializable
-data class PunchBody(val pin: String, val action: String)
+data class PunchBody(
+    val pin: String,
+    val action: String,
+    /** Селфи в base64 (JPEG ~640px). null — камеры нет или кадр не получился. */
+    val photo: String? = null,
+)
 
 @Serializable
 data class AttendanceLookupDto(
@@ -52,6 +57,8 @@ data class AttendancePunchDto(
     @SerialName("user_name") val userName: String,
     val at: String,
     @SerialName("worked_minutes") val workedMinutes: Int = 0,
+    /** Прикрепился ли снимок; отметка засчитывается и без него. */
+    @SerialName("photo_saved") val photoSaved: Boolean = false,
     /** Непустой — значит вчерашняя смена была закрыта автоматически. */
     @SerialName("closed_stale_entry_id") val closedStaleEntryId: String = "",
 )

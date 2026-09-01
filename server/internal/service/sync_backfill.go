@@ -394,6 +394,17 @@ var backfillRegistry = []backfillEntity{
 			return nil
 		})
 	}},
+	// Селфи отметок (103) — превью для сетевой ленты.
+	{name: "attendance_photos", run: func(tx *gorm.DB, rid string) (int64, error) {
+		return backfillLoop(tx, "attendance_photos", "restaurant_id = ?", []any{rid}, func(ids []string) error {
+			for _, id := range ids {
+				if err := recordAttendancePhotoSync(tx, id); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}},
 	// График смен (102) — план, без которого сетевая перекличка знала бы
 	// только факт.
 	{name: "shift_schedule_templates", run: func(tx *gorm.DB, rid string) (int64, error) {
