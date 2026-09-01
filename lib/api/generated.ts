@@ -11255,7 +11255,15 @@ export interface paths {
                 };
                 401: components["responses"]["Error"];
                 403: components["responses"]["Error"];
-                409: components["responses"]["Error"];
+                /** @description Повторная отметка (дребезг: тот же PIN раньше 90 с после предыдущей), превышен дневной предел отметок, либо действие разошлось с состоянием смены. */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
             };
         };
         delete?: never;

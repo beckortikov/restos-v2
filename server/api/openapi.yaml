@@ -3900,7 +3900,12 @@ paths:
         "200": { description: OK, content: { application/json: { schema: { $ref: "#/components/schemas/AttendancePunch" } } } }
         "401": { $ref: "#/components/responses/Error" }
         "403": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
+        "409":
+          description: >-
+            Повторная отметка (дребезг: тот же PIN раньше 90 с после
+            предыдущей), превышен дневной предел отметок, либо действие
+            разошлось с состоянием смены.
+          content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } }
   /api/v1/attendance/undo:
     post:
       tags: [payroll]

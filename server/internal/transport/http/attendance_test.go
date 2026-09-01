@@ -38,6 +38,20 @@ func loginAsPIN(t *testing.T, f *e2eFixture, pin string) string {
 	return out.Token
 }
 
+// backdateEntry — отодвинуть приход назад во времени.
+//
+// Терминал не принимает вторую отметку сразу за первой (дребезг), поэтому
+// сценарий «пришёл и ушёл» в тесте обязан выглядеть как настоящая смена, а не
+// как два запроса подряд. Двигаем время в БД, а не спим в тесте.
+func backdateEntry(t *testing.T, gdb *gorm.DB, entryID string, back time.Duration) {
+	t.Helper()
+	at := time.Now().UTC().Add(-back)
+	if err := gdb.Model(&models.TimeEntry{}).Where("id = ?", entryID).
+		Update("clock_in", at).Error; err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+}
+
 // seedTerminal — служебная учётка терминала + её токен.
 func seedTerminal(t *testing.T, f *e2eFixture, gdb *gorm.DB, pin string) string {
 	t.Helper()
@@ -112,6 +126,10 @@ func TestAttendance_PunchCycle(t *testing.T) {
 	if r.StatusCode != http.StatusConflict {
 		t.Fatalf("повторный приход: ожидали 409, получили %d %v", r.StatusCode, out)
 	}
+
+	// Дальше человек отрабатывает смену — иначе уход упрётся в защиту от
+	// дребезга, и это правильно.
+	backdateEntry(t, gdb, entryID, 4*time.Hour)
 
 	// 4. Теперь терминал предлагает уход.
 	if _, out = lookup(pin); out["next_action"] != "out" {
@@ -276,6 +294,7 @@ func TestAttendance_AutoActionAndUndo(t *testing.T) {
 		t.Fatalf("первая отметка должна быть приходом: %v", first)
 	}
 	entryID, _ := first["entry_id"].(string)
+	backdateEntry(t, gdb, entryID, 3*time.Hour)
 
 	// Второй PIN без action → уход той же смены.
 	second := punch()
@@ -295,6 +314,9 @@ func TestAttendance_AutoActionAndUndo(t *testing.T) {
 	}
 
 	// Отмена прихода удаляет запись целиком — её не должно было быть.
+	// Приход должен быть свежим: трёхчасовой давности отменять уже нельзя, и
+	// это правильно — иначе отмена стала бы правкой табеля задним числом.
+	backdateEntry(t, gdb, entryID, 30*time.Second)
 	r, b = f.post(t, "/api/v1/attendance/undo", tok, uuid.NewString(), map[string]any{"entry_id": entryID})
 	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("undo прихода: %d %s", r.StatusCode, b)
@@ -322,5 +344,56 @@ func TestAttendance_AutoActionAndUndo(t *testing.T) {
 	r, _ = f.post(t, "/api/v1/attendance/undo", tok, uuid.NewString(), map[string]any{"entry_id": oldID})
 	if r.StatusCode != http.StatusConflict {
 		t.Fatalf("отмена старой отметки: ожидали 409, получили %d", r.StatusCode)
+	}
+}
+
+// Защита от повторных отметок: дребезг («нажал дважды») не должен закрывать
+// смену, а бесконечные отметки — засорять табель.
+func TestAttendance_RepeatGuard(t *testing.T) {
+	f := setupE2E(t)
+	gdb := openTestDB(t)
+	tok := seedTerminal(t, f, gdb, "1111")
+
+	waiter, name, pin := "waiter", "Нетерпеливый", "9911"
+	userID := uuid.NewString()
+	gdb.Create(&models.User{ID: userID, Name: &name, Role: &waiter, PIN: &pin, RestaurantID: &f.rid})
+
+	punch := func() (*http.Response, map[string]any) {
+		r, b := f.post(t, "/api/v1/attendance/punch", tok, uuid.NewString(), map[string]any{"pin": pin})
+		var out map[string]any
+		_ = json.Unmarshal(b, &out)
+		return r, out
+	}
+
+	r, out := punch()
+	if r.StatusCode != http.StatusOK || out["action"] != "in" {
+		t.Fatalf("первая отметка: %d %v", r.StatusCode, out)
+	}
+
+	// Второе прикладывание сразу за первым — это дребезг, а не уход. Без
+	// защиты сервер закрыл бы смену нулевой длительности.
+	r, out = punch()
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("повтор сразу: ожидали 409, получили %d %v", r.StatusCode, out)
+	}
+	var entry models.TimeEntry
+	gdb.Where("user_id = ?", userID).First(&entry)
+	if entry.ClockOut != nil {
+		t.Fatalf("дребезг закрыл смену: %+v", entry)
+	}
+
+	// Предел отметок за сутки: дальше разбирается управляющий.
+	active := "active"
+	for i := 0; i < 4; i++ {
+		at := time.Now().UTC().Add(-time.Duration(i+2) * time.Hour)
+		out := at.Add(30 * time.Minute)
+		gdb.Create(&models.TimeEntry{
+			ID: uuid.NewString(), UserID: &userID, ClockIn: &at, ClockOut: &out,
+			Status: &active, RestaurantID: &f.rid,
+		})
+	}
+	r, out = punch()
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("предел отметок за день: ожидали 409, получили %d %v", r.StatusCode, out)
 	}
 }

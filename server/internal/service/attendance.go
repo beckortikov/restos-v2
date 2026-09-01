@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -35,6 +36,24 @@ import (
 const (
 	// attendanceSource — значение time_entries.source для отметок с терминала.
 	attendanceSource = "app"
+
+	// punchCooldown — сколько после отметки терминал не принимает тот же PIN.
+	//
+	// Без этого второе прикладывание сразу за первым закрывало бы смену: сервер
+	// сам определяет действие по состоянию, и «приход + уход» за две секунды
+	// выглядит для него законной парой. На деле это дребезг — человек нажал
+	// дважды, приложил PIN «на всякий случай» или очередь толкнула планшет.
+	// Минута с небольшим покрывает такие случаи и не мешает реальному уходу:
+	// смену короче полутора минут в жизни не отрабатывают.
+	punchCooldown = 90 * time.Second
+
+	// maxPunchesPerDay — предел отметок одного сотрудника за локальные сутки.
+	//
+	// Норма — две (пришёл-ушёл), с обедом — четыре. Восемь это уже игра с
+	// терминалом, и дальше пусть разбирается управляющий: молча пускать
+	// бесконечные отметки значит получить табель, по которому нельзя считать
+	// зарплату.
+	maxPunchesPerDay = 8
 
 	// staleShiftAfter — после скольких часов открытая смена считается брошенной
 	// (сотрудник ушёл, не отметившись). Порог заведомо больше самой длинной
@@ -177,6 +196,10 @@ func (s *AttendanceService) Punch(ctx context.Context, pin, action, photoB64 str
 	}
 	actorCtx := audit.WithActor(ctx, audit.Actor{UserID: user.ID, UserName: name, Role: role})
 
+	if err := s.guardRepeat(ctx, user.ID, name); err != nil {
+		return nil, err
+	}
+
 	open, err := s.openEntry(ctx, user.ID)
 	if err != nil {
 		return nil, err
@@ -248,6 +271,77 @@ func (s *AttendanceService) Punch(ctx context.Context, pin, action, photoB64 str
 	}
 	res.PhotoSaved = s.savePhoto(actorCtx, created.ID, user.ID, "in", photoB64)
 	return res, nil
+}
+
+// guardRepeat — защита от повторных отметок: дребезг и «накрутка».
+//
+// Проверяем ДО того, как решать приход это или уход: иначе второе
+// прикладывание успело бы закрыть смену, и отменять пришлось бы уже
+// свершившийся факт.
+func (s *AttendanceService) guardRepeat(ctx context.Context, userID, name string) error {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
+	scoped, err := s.r.ForTenant(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Последнее событие сотрудника — это либо приход (clock_in), либо уход
+	// (clock_out) той же записи, поэтому берём максимум из двух.
+	var last struct {
+		At *time.Time `gorm:"column:at"`
+	}
+	if err := scoped.Model(&models.TimeEntry{}).
+		Select("MAX(GREATEST(clock_in, COALESCE(clock_out, clock_in))) AS at").
+		Where("user_id = ?", userID).
+		Scan(&last).Error; err != nil {
+		return err
+	}
+	if last.At != nil {
+		if since := time.Since(*last.At); since < punchCooldown {
+			return apperrors.Wrap("CONFLICT", fmt.Sprintf(
+				"%s: отметка уже принята в %s. Повторить можно через %d с",
+				name, last.At.Local().Format("15:04"), int((punchCooldown-since).Seconds())+1), nil)
+		}
+	}
+
+	// Счёт за ЛОКАЛЬНЫЕ сутки ресторана: по UTC ночная смена делилась бы
+	// пополам и лимит срабатывал бы не в тот день.
+	loc := s.restaurantLocation(ctx, rid)
+	dayStart := time.Now().In(loc)
+	dayStart = time.Date(dayStart.Year(), dayStart.Month(), dayStart.Day(), 0, 0, 0, 0, loc)
+	var todays int64
+	if err := scoped.Model(&models.TimeEntry{}).
+		Where("user_id = ? AND clock_in >= ?", userID, dayStart.UTC()).
+		Count(&todays).Error; err != nil {
+		return err
+	}
+	// Одна запись — это два события (приход и уход), поэтому делим предел.
+	if todays >= int64(maxPunchesPerDay/2) {
+		return apperrors.Wrap("CONFLICT",
+			name+": слишком много отметок за сегодня — обратитесь к управляющему", nil)
+	}
+	return nil
+}
+
+// restaurantLocation — часовой пояс ресторана (fallback Asia/Dushanbe). Тот же
+// приём, что в перекличке и нумерации заказов.
+func (s *AttendanceService) restaurantLocation(ctx context.Context, rid string) *time.Location {
+	var tz string
+	if err := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
+		Select("COALESCE(timezone, 'Asia/Dushanbe')").
+		Where("id = ?", rid).Scan(&tz).Error; err != nil || tz == "" {
+		tz = "Asia/Dushanbe"
+	}
+	if loc, err := time.LoadLocation(tz); err == nil {
+		return loc
+	}
+	if fallback, err := time.LoadLocation("Asia/Dushanbe"); err == nil {
+		return fallback
+	}
+	return time.Local
 }
 
 // undoWindow — сколько времени даётся на отмену только что сделанной отметки.
