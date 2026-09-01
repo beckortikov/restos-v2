@@ -102,6 +102,7 @@ const Payments = () => L(() => import('@/app/(app)/finance/payments/page'))
 const NetworkTransfers = () => L(() => import('@/app/(app)/finance/network-transfers/page'))
 const Payroll = () => L(() => import('@/app/(app)/finance/payroll/page'))
 const PayrollEmployee = () => L(() => import('@/app/(app)/finance/payroll/[id]/page'))
+const Schedule = () => L(() => import('@/app/(app)/finance/schedule/page'))
 const ServiceReport = () => L(() => import('@/app/(app)/finance/service-report/page'))
 
 // Analytics
@@ -219,6 +220,7 @@ export function AppRouter() {
         <Route path="/finance/network-transfers" element={<NetworkTransfers />} />
         <Route path="/finance/payroll" element={<Payroll />} />
         <Route path="/finance/payroll/:id" element={<PayrollEmployee />} />
+        <Route path="/finance/schedule" element={<Schedule />} />
         <Route path="/finance/service-report" element={<ServiceReport />} />
 
         {/* Analytics */}

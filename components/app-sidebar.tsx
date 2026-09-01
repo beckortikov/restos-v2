@@ -294,7 +294,7 @@ const NAV: NavItem[] = [
       },
       {
         label: 'Персонал', href: '/finance/payroll', icon: Users,
-        group: ['/finance/payroll', '/finance/service-report'],
+        group: ['/finance/payroll', '/finance/schedule', '/finance/service-report'],
       },
       { label: 'Сводка по сети', href: '/network/summary', icon: Network },
       { label: 'Расходы за филиалы', href: '/network/expenses', icon: Wallet },

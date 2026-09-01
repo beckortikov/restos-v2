@@ -54,6 +54,7 @@ export const FINANCE_GROUPS: FinanceGroup[] = [
     label: 'Персонал',
     tabs: [
       { label: 'Зарплата', href: '/finance/payroll' },
+      { label: 'График смен', href: '/finance/schedule' },
       { label: 'Обслуживание', href: '/finance/service-report' },
     ],
   },
