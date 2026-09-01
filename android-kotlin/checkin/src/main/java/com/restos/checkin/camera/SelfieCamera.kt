@@ -9,24 +9,39 @@ import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.face.FaceDetection
+import com.google.mlkit.vision.face.FaceDetectorOptions
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 
+/** Результат съёмки: снимок и то, нашлось ли на нём лицо. */
+data class SelfieShot(
+    /** JPEG в base64 (~640px). null — кадр не получился. */
+    val photoBase64: String?,
+    /** true — в кадре есть лицо достаточного размера. */
+    val faceFound: Boolean,
+)
+
 /**
- * Фронтальная камера терминала: один кадр в момент подтверждения отметки.
+ * Фронтальная камера терминала: кадр в момент отметки + проверка, что в нём
+ * есть человек.
  *
- * Превью на экран НЕ выводим сознательно. Терминал висит у входа, сотрудник
- * подтверждает своё имя и уходит — окно с собственным лицом только замедляло
- * бы очередь и провоцировало позировать. Снимок — доказательство постфактум,
- * а не селфи-режим.
+ * Детекция лица, НЕ распознавание личности. Мы не отвечаем на вопрос «кто
+ * это» — только «в кадре кто-то есть». Этого достаточно, чтобы снимок работал
+ * доказательством: закрыть камеру пальцем и отметить за товарища больше не
+ * получится, а кто на снимке — видно человеку в перекличке.
  *
- * Камера привязывается к жизненному циклу экрана и держится открытой, пока
- * экран жив: биндить провайдер на каждую отметку значило бы ждать 1–2 секунды
- * инициализации ровно в тот момент, когда человек уже нажал кнопку.
+ * Камера привязана к жизненному циклу экрана и держится открытой, пока экран
+ * жив: биндить провайдер на каждую отметку значило бы ждать 1–2 секунды
+ * инициализации ровно в тот момент, когда человек уже ввёл PIN.
  */
 class SelfieCamera(
     private val context: Context,
@@ -35,6 +50,27 @@ class SelfieCamera(
     private val executor = Executors.newSingleThreadExecutor()
     private var capture: ImageCapture? = null
     private var bound = false
+
+    /** PreviewView для экрана — человек должен видеть, попал ли он в кадр. */
+    val previewView: PreviewView by lazy {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+        }
+    }
+
+    // Детектор в режиме FAST: нам нужен факт присутствия лица, а не контуры и
+    // мимика — точная модель тратила бы сотни миллисекунд на каждую отметку.
+    private val detector by lazy {
+        FaceDetection.getClient(
+            FaceDetectorOptions.Builder()
+                .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
+                // Лицо должно занимать хотя бы 15% кадра: так отсекается
+                // человек, случайно попавший в кадр в глубине коридора, —
+                // отмечается тот, кто стоит у планшета.
+                .setMinFaceSize(0.15f)
+                .build(),
+        )
+    }
 
     /** true — камера готова снимать. */
     val isReady: Boolean get() = capture != null
@@ -51,11 +87,15 @@ class SelfieCamera(
                     // 640px, а человек не должен ждать у планшета.
                     .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                     .build()
+                val preview = Preview.Builder().build().also {
+                    it.surfaceProvider = previewView.surfaceProvider
+                }
                 provider.unbindAll()
                 provider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.DEFAULT_FRONT_CAMERA,
                     imageCapture,
+                    preview,
                 )
                 capture = imageCapture
                 true
@@ -66,7 +106,7 @@ class SelfieCamera(
                 false
             }
             onReady(ok)
-        }, androidx.core.content.ContextCompat.getMainExecutor(context))
+        }, ContextCompat.getMainExecutor(context))
     }
 
     fun stop() {
@@ -76,19 +116,21 @@ class SelfieCamera(
     }
 
     /**
-     * Снимок в base64 JPEG (~640px). null, если камера недоступна или кадр не
-     * получился: отметку это не отменяет.
+     * Снимок с проверкой лица. Возвращает null, если камера недоступна: это не
+     * отменяет отметку — сломанная камера не повод не пустить человека на смену.
      */
-    suspend fun capture(): String? {
+    suspend fun capture(): SelfieShot? {
         val imageCapture = capture ?: return null
-        return suspendCoroutine { cont ->
+        // Явный тип: без него компилятор выводит Nothing? по первому
+        // resume(null) в onError и ломается на resume(bitmap).
+        val bitmap = suspendCoroutine<Bitmap?> { cont ->
             imageCapture.takePicture(
                 executor,
                 object : ImageCapture.OnImageCapturedCallback() {
                     override fun onCaptureSuccess(image: ImageProxy) {
-                        val encoded = runCatching { image.toCompressedBase64() }.getOrNull()
+                        val bmp = runCatching { image.toUprightBitmap() }.getOrNull()
                         image.close()
-                        cont.resume(encoded)
+                        cont.resume(bmp)
                     }
 
                     override fun onError(exception: ImageCaptureException) {
@@ -96,16 +138,33 @@ class SelfieCamera(
                     }
                 },
             )
-        }
+        } ?: return null
+
+        val faceFound = detectFace(bitmap)
+        return SelfieShot(photoBase64 = bitmap.toJpegBase64(), faceFound = faceFound)
+    }
+
+    /** Есть ли в кадре лицо. Ошибка детектора трактуется как «есть»: своя
+     *  поломка не должна мешать человеку отметиться. */
+    private suspend fun detectFace(bitmap: Bitmap): Boolean = suspendCoroutine { cont ->
+        runCatching {
+            detector.process(InputImage.fromBitmap(bitmap, 0))
+                .addOnSuccessListener { faces -> cont.resume(faces.isNotEmpty()) }
+                .addOnFailureListener { cont.resume(true) }
+        }.onFailure { cont.resume(true) }
     }
 }
 
 /**
- * ImageProxy → JPEG base64, сторона не больше [MAX_SIDE], качество
- * [JPEG_QUALITY]. Сжимаем на устройстве, а не на сервере: по LAN и так летит
- * base64 (+33% к размеру), и слать полный кадр камеры было бы расточительно.
+ * ImageProxy → Bitmap нужного размера и ориентации.
+ *
+ * Сжимаем на устройстве, а не на сервере: по LAN и так летит base64 (+33% к
+ * размеру), слать полный кадр камеры было бы расточительно. Доворот
+ * обязателен — фронтальная камера отдаёт кадр повёрнутым по ориентации
+ * устройства, и без него лица в ленте лежали бы на боку (а детектор их не
+ * находил бы вовсе).
  */
-private fun ImageProxy.toCompressedBase64(): String? {
+private fun ImageProxy.toUprightBitmap(): Bitmap? {
     val buffer = planes[0].buffer
     val bytes = ByteArray(buffer.remaining()).also { buffer.get(it) }
     val raw = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
@@ -118,17 +177,17 @@ private fun ImageProxy.toCompressedBase64(): String? {
         true,
     )
 
-    // Фронтальная камера отдаёт кадр повёрнутым по ориентации устройства —
-    // без доворота лица в ленте лежали бы на боку.
     val rotation = imageInfo.rotationDegrees
-    val upright = if (rotation == 0) scaled else Bitmap.createBitmap(
+    return if (rotation == 0) scaled else Bitmap.createBitmap(
         scaled, 0, 0, scaled.width, scaled.height,
         Matrix().apply { postRotate(rotation.toFloat()) },
         true,
     )
+}
 
+private fun Bitmap.toJpegBase64(): String {
     val out = ByteArrayOutputStream()
-    upright.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
+    compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, out)
     return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
 }
 

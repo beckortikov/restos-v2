@@ -120,6 +120,9 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.mlkit.barcode.scanning)
+    // Детекция лица при отметке: снимок без человека в кадре бессмыслен как
+    // доказательство — им можно «отметить» кого угодно, закрыв камеру.
+    implementation(libs.mlkit.face.detection)
     implementation(libs.accompanist.permissions)
 
     testImplementation(libs.junit)

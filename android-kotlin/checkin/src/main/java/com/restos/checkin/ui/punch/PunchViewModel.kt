@@ -2,6 +2,7 @@ package com.restos.checkin.ui.punch
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.restos.checkin.camera.SelfieShot
 import com.restos.checkin.data.attendance.AttendanceApi
 import com.restos.checkin.data.attendance.AttendancePunchDto
 import com.restos.checkin.data.attendance.OnShiftRowDto
@@ -39,6 +40,14 @@ sealed interface PunchStep {
     /** PIN принят: делаем снимок и отправляем отметку. */
     data object Working : PunchStep
 
+    /**
+     * Кадр сделан, но лица в нём нет. Снимок без человека не доказывает
+     * ничего — им можно «отметить» кого угодно, просто закрыв камеру, — но и
+     * держать смену заложником камеры нельзя: свет у входа бывает плохой.
+     * Поэтому отдаём решение человеку: встать в кадр или отметиться без фото.
+     */
+    data class NoFace(val pin: String) : PunchStep
+
     /** Крупный итог отметки, гаснет сам. */
     data class Done(val result: AttendancePunchDto) : PunchStep
 }
@@ -71,9 +80,9 @@ class PunchViewModel @Inject constructor(
      * поэтому это лямбда, а не зависимость Hilt: ViewModel переживает поворот
      * и не должна держать привязанную к экрану камеру.
      */
-    private var photoProvider: (suspend () -> String?)? = null
+    private var photoProvider: (suspend () -> SelfieShot?)? = null
 
-    fun bindCamera(provider: suspend () -> String?) {
+    fun bindCamera(provider: suspend () -> SelfieShot?) {
         photoProvider = provider
     }
 
@@ -115,12 +124,20 @@ class PunchViewModel @Inject constructor(
      * уход, решает сервер — терминалу знать неоткуда, а спрашивать человека
      * значит возвращать тот самый лишний тап.
      */
-    private fun punch(pin: String) {
+    private fun punch(pin: String, requirePhoto: Boolean = true) {
         _state.update { it.copy(loading = true, error = null, step = PunchStep.Working) }
         viewModelScope.launch {
             // Снимок делаем ДО отметки, но его отсутствие её не отменяет:
             // сломанная камера не повод не пустить человека на смену.
-            val photo = runCatching { photoProvider?.invoke() }.getOrNull()
+            val shot = runCatching { photoProvider?.invoke() }.getOrNull()
+            if (requirePhoto && shot != null && !shot.faceFound) {
+                // Камера работает, а лица нет — почти всегда человек стоит
+                // боком или слишком далеко. Просим встать в кадр, а не
+                // отмечаем молча негодным снимком.
+                _state.update { it.copy(loading = false, step = PunchStep.NoFace(pin)) }
+                return@launch
+            }
+            val photo = shot?.photoBase64
             runCatching { api.punch(PunchBody(pin = pin, photo = photo)) }
                 .recoverCatching { e ->
                     // Касса старее приложения. APK ставят вручную, а бэк
@@ -145,6 +162,18 @@ class PunchViewModel @Inject constructor(
                 }
                 .onFailure { e -> failWithPinReset(e) }
         }
+    }
+
+    /** Ещё раз: человек встал в кадр и просит переснять. */
+    fun retryWithPhoto() {
+        val step = _state.value.step
+        if (step is PunchStep.NoFace) punch(step.pin)
+    }
+
+    /** Отметиться без снимка — осознанный выбор, когда камера не видит лица. */
+    fun punchWithoutPhoto() {
+        val step = _state.value.step
+        if (step is PunchStep.NoFace) punch(step.pin, requirePhoto = false)
     }
 
     /** Вернуться к вводу PIN. */

@@ -19,10 +19,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Login
 import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Undo
 import androidx.compose.material.icons.outlined.MoreHoriz
@@ -53,6 +55,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -160,6 +163,12 @@ fun PunchScreen(
                 dateLabel = formatToday(now),
                 restaurantName = restaurantName,
                 cameraReady = cameraReady,
+                cameraPreview = { modifier ->
+                    // Живое превью нужно ровно потому, что снимок теперь
+                    // обязан содержать лицо: без него человек не знает, попал
+                    // ли он в кадр, и упирается в «встаньте в кадр» вслепую.
+                    AndroidView(factory = { camera.previewView }, modifier = modifier)
+                },
                 onDigit = viewModel::appendDigit,
                 onClear = viewModel::clear,
                 onBackspace = viewModel::backspace,
@@ -175,6 +184,19 @@ fun PunchScreen(
                 exit = fadeOut(),
             ) {
                 WorkingOverlay()
+            }
+            AnimatedVisibility(
+                visible = state.step is PunchStep.NoFace,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                NoFaceOverlay(
+                    busy = state.loading,
+                    preview = { modifier -> AndroidView(factory = { camera.previewView }, modifier = modifier) },
+                    onRetry = viewModel::retryWithPhoto,
+                    onSkip = viewModel::punchWithoutPhoto,
+                    onCancel = viewModel::cancel,
+                )
             }
             AnimatedVisibility(
                 visible = state.step is PunchStep.Done,
@@ -203,6 +225,7 @@ private fun PinPad(
     dateLabel: String,
     restaurantName: String?,
     cameraReady: Boolean,
+    cameraPreview: @Composable (Modifier) -> Unit,
     onDigit: (Char) -> Unit,
     onClear: () -> Unit,
     onBackspace: () -> Unit,
@@ -251,7 +274,19 @@ private fun PinPad(
             color = CheckinColors.TextSecondary,
         )
 
-        Spacer(Modifier.height(18.dp))
+        Spacer(Modifier.height(14.dp))
+
+        if (cameraReady) {
+            Surface(
+                modifier = Modifier.size(104.dp),
+                shape = CircleShape,
+                color = CheckinColors.SurfaceMuted,
+                border = BorderStroke(2.dp, CheckinColors.Primary.copy(alpha = 0.35f)),
+            ) {
+                cameraPreview(Modifier.fillMaxSize())
+            }
+            Spacer(Modifier.height(8.dp))
+        }
 
         Surface(
             modifier = Modifier
@@ -368,6 +403,103 @@ private fun WorkingOverlay() {
             CircularProgressIndicator(color = CheckinColors.Primary, strokeWidth = 3.dp)
             Spacer(Modifier.height(18.dp))
             Text("Отмечаем…", style = MaterialTheme.typography.titleMedium, color = CheckinColors.TextSecondary)
+        }
+    }
+}
+
+/**
+ * Кадр без лица. Не отмечаем молча негодным снимком, но и не запираем смену:
+ * у входа бывает темно, а камера — дешёвая. Человек либо встаёт в кадр, либо
+ * осознанно отмечается без фото, и это видно в перекличке как «Без снимка».
+ */
+@Composable
+private fun NoFaceOverlay(
+    busy: Boolean,
+    preview: @Composable (Modifier) -> Unit,
+    onRetry: () -> Unit,
+    onSkip: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    Surface(modifier = Modifier.fillMaxSize(), color = CheckinColors.Bg) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .systemBarsPadding()
+                .padding(horizontal = 28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            // Превью крупнее, чем на клавиатуре: человек должен увидеть, что
+            // именно не так — стоит боком, слишком далеко или темно.
+            Surface(
+                modifier = Modifier.size(180.dp),
+                shape = CircleShape,
+                color = CheckinColors.SurfaceMuted,
+                border = BorderStroke(3.dp, CheckinColors.ClockOut.copy(alpha = 0.6f)),
+            ) {
+                preview(Modifier.fillMaxSize())
+            }
+
+            Spacer(Modifier.height(22.dp))
+            Text(
+                "Не видно лица",
+                fontSize = 26.sp,
+                fontWeight = FontWeight.Bold,
+                color = CheckinColors.TextPrimary,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Встаньте напротив планшета, чтобы лицо попало в круг.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = CheckinColors.TextSecondary,
+                textAlign = TextAlign.Center,
+            )
+
+            Spacer(Modifier.height(28.dp))
+
+            Button(
+                onClick = onRetry,
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp)
+                    .height(72.dp),
+                shape = RoundedCornerShape(CheckinRadius.button),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = CheckinColors.Primary,
+                    contentColor = Color.White,
+                    disabledContainerColor = CheckinColors.Primary.copy(alpha = 0.5f),
+                    disabledContentColor = Color.White,
+                ),
+            ) {
+                if (busy) {
+                    CircularProgressIndicator(modifier = Modifier.size(22.dp), color = Color.White, strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.CameraAlt, contentDescription = null, modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.size(10.dp))
+                    Text("Снять ещё раз", fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            OutlinedButton(
+                onClick = onSkip,
+                enabled = !busy,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .widthIn(max = 420.dp)
+                    .height(52.dp),
+                shape = RoundedCornerShape(CheckinRadius.button),
+                border = BorderStroke(1.dp, CheckinColors.Border),
+            ) {
+                Text("Отметиться без фото", color = CheckinColors.TextSecondary, fontSize = 16.sp)
+            }
+
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = onCancel, enabled = !busy) {
+                Text("Отмена", color = CheckinColors.TextTertiary)
+            }
         }
     }
 }
