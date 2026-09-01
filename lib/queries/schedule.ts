@@ -42,6 +42,10 @@ export interface RollCallRow {
   clockOut?: string
   lateMinutes: number
   source?: 'template' | 'override'
+  /** Сколько система предлагает удержать за это опоздание (105). */
+  suggestedFine?: string
+  /** За этот день штраф уже выставлен. */
+  fined: boolean
   /** Отметка табеля — по ней тянется оригинал снимка. */
   entryId?: string
   /** Превью селфи прихода, base64 JPEG (103). Оригинал — fetchAttendancePhoto. */
@@ -51,6 +55,10 @@ export interface RollCallRow {
 export interface RollCallReport {
   date: string
   timezone: string
+  /** Сколько минут опоздания не считаются опозданием (105). */
+  graceMinutes: number
+  /** Заданы ли правила штрафов; если нет — суммы не предлагаются. */
+  finesConfigured: boolean
   planned: number
   present: number
   late: number
@@ -148,6 +156,8 @@ export async function fetchRollCall(date: string): Promise<RollCallReport> {
   return {
     date: String(res?.date ?? date).slice(0, 10),
     timezone: String(res?.timezone ?? ''),
+    graceMinutes: Number(res?.grace_minutes ?? 0),
+    finesConfigured: res?.fines_configured === true,
     planned: Number(res?.planned ?? 0),
     present: Number(res?.present ?? 0),
     late: Number(res?.late ?? 0),
@@ -165,6 +175,8 @@ export async function fetchRollCall(date: string): Promise<RollCallReport> {
       source: r?.source || undefined,
       entryId: r?.entry_id || undefined,
       photoThumb: r?.photo_thumb || undefined,
+      suggestedFine: r?.suggested_fine || undefined,
+      fined: r?.fined === true,
     })),
   }
 }
@@ -187,4 +199,16 @@ export async function fetchAttendancePhoto(entryId: string, kind: 'in' | 'out' =
   )
   if (!res.ok) throw new Error(res.status === 404 ? 'Снимок не сохранён или уже удалён' : `HTTP ${res.status}`)
   return URL.createObjectURL(await res.blob())
+}
+
+/**
+ * Удержать штраф за опоздание. Сумму считает сервер по политике ресторана —
+ * клиент передаёт только «кого» и «за какой день», иначе в удержание можно
+ * было бы отправить любое число мимо правил.
+ */
+export async function fineLate(userId: string, date: string): Promise<void> {
+  await unwrap(api.POST('/api/v1/schedule/roll-call/fine', {
+    body: { user_id: userId, date } as any,
+  }))
+  logAction('schedule.late_fine', 'user', userId, `Штраф за опоздание ${date}`)
 }

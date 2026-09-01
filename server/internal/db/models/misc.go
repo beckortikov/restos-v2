@@ -146,7 +146,11 @@ type SalaryDeduction struct {
 	Reason       string          `json:"reason"`
 	// Period — YYYY-MM, к какому месяцу относится удержание. Пусто у записей
 	// до 070 (миграция не бэкфиллит — они и раньше не были period-aware).
-	Period      *string    `json:"period"`
+	Period *string `json:"period"`
+	// SourceRef — откуда взялось удержание (105). Для штрафа за опоздание
+	// это 'late:<user_id>:<дата>'; уникальный индекс по нему не даёт
+	// оштрафовать дважды за один день. NULL у ручных удержаний.
+	SourceRef   *string    `gorm:"column:source_ref" json:"source_ref,omitempty"`
 	CreatedBy   *string    `gorm:"column:created_by" json:"created_by"`
 	CreatedAt   time.Time  `json:"created_at"`
 	CancelledAt *time.Time `gorm:"column:cancelled_at" json:"cancelled_at"`

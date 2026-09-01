@@ -10,10 +10,13 @@ import (
 
 // ─── Schedule — плановый график смен (102) ─────────────────────────────────
 
-type ScheduleHandler struct{ svc *service.ScheduleService }
+type ScheduleHandler struct {
+	svc    *service.ScheduleService
+	salary *service.SalaryService
+}
 
-func NewSchedule(svc *service.ScheduleService) *ScheduleHandler {
-	return &ScheduleHandler{svc: svc}
+func NewSchedule(svc *service.ScheduleService, salary *service.SalaryService) *ScheduleHandler {
+	return &ScheduleHandler{svc: svc, salary: salary}
 }
 
 // Plan — GET /api/v1/schedule?from&to&user_id.
@@ -83,4 +86,24 @@ func (h *ScheduleHandler) RollCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond.JSON(w, http.StatusOK, report)
+}
+
+// FineLate — POST /api/v1/schedule/roll-call/fine {user_id, date} (105).
+// Сумма считается на сервере по политике ресторана; из тела берутся только
+// «кого» и «за какой день».
+func (h *ScheduleHandler) FineLate(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		UserID string `json:"user_id"`
+		Date   string `json:"date"`
+	}
+	if !decodeBody(r, &in) {
+		respond.BadRequest(w, "invalid JSON body")
+		return
+	}
+	row, err := h.svc.FineLate(r.Context(), h.salary, in.UserID, in.Date)
+	if err != nil {
+		respond.Error(w, err)
+		return
+	}
+	respond.JSON(w, http.StatusCreated, row)
 }

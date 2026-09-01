@@ -210,7 +210,7 @@ func NewRouter(deps Deps) http.Handler {
 	budgetH := handlers.NewBudget(budgetSvc)
 	timeEntriesH := handlers.NewTimeEntries(timeEntriesSvc)
 	attendanceH := handlers.NewAttendance(attendanceSvc, attendancePhotos)
-	scheduleH := handlers.NewSchedule(scheduleSvc)
+	scheduleH := handlers.NewSchedule(scheduleSvc, salarySvc)
 	modGroupsH := handlers.NewModifierGroups(modGroupsSvc)
 	modsH := handlers.NewModifiers(modsSvc)
 	bundleSlotsH := handlers.NewBundleSlots(bundleSlotsSvc)
@@ -754,6 +754,9 @@ func NewRouter(deps Deps) http.Handler {
 			g.Put("/schedule/template", scheduleH.SetTemplate)
 			g.Put("/schedule/day", scheduleH.SetDay)
 			g.Delete("/schedule/day", scheduleH.DeleteDay)
+			// Штраф за опоздание (105): сумму считает сервер по политике
+			// ресторана, человек только подтверждает.
+			g.Post("/schedule/roll-call/fine", scheduleH.FineLate)
 
 			// Payroll: ClockIn/ClockOut/Delete.
 			g.Post("/time-entries", timeEntriesH.ClockIn)

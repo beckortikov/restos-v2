@@ -1411,6 +1411,11 @@ type RestaurantInput struct {
 	PinLockEnabled     *bool   `json:"pin_lock_enabled,omitempty"`
 	PinLockTimeoutMin  *int    `json:"pin_lock_timeout_min,omitempty"`
 	SupplyAllowNeg     *bool   `json:"supply_allow_negative,omitempty"`
+	// Политика опозданий (105) — см. models.Restaurant.
+	LateGraceMinutes  *int    `json:"late_grace_minutes,omitempty"`
+	LateFineFixed     *string `json:"late_fine_fixed,omitempty"`
+	LateFinePerMinute *string `json:"late_fine_per_minute,omitempty"`
+	LateFineMax       *string `json:"late_fine_max,omitempty"`
 }
 
 // Get — текущий ресторан (из tenant).
@@ -1456,6 +1461,28 @@ func (s *RestaurantService) Patch(ctx context.Context, in RestaurantInput) (*mod
 	}
 	if in.Timezone != nil {
 		updates["timezone"] = *in.Timezone
+	}
+	if in.LateGraceMinutes != nil {
+		if *in.LateGraceMinutes < 0 || *in.LateGraceMinutes > 120 {
+			return nil, apperrors.Wrap("VALIDATION", "грейс опоздания — от 0 до 120 минут", nil)
+		}
+		updates["late_grace_minutes"] = *in.LateGraceMinutes
+	}
+	// Три денежных поля политики — одинаково: пустая строка не трогает
+	// значение, отрицательное отклоняем (штраф-возврат бессмыслен).
+	for col, raw := range map[string]*string{
+		"late_fine_fixed":      in.LateFineFixed,
+		"late_fine_per_minute": in.LateFinePerMinute,
+		"late_fine_max":        in.LateFineMax,
+	} {
+		if raw == nil || strings.TrimSpace(*raw) == "" {
+			continue
+		}
+		v, err := decimal.FromString(*raw)
+		if err != nil || decimal.IsNegative(v) {
+			return nil, apperrors.Wrap("VALIDATION", "суммы штрафа не могут быть отрицательными", err)
+		}
+		updates[col] = v
 	}
 	if in.ServicePercent != nil {
 		d, err := decimal.FromString(*in.ServicePercent)

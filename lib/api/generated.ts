@@ -11524,6 +11524,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/schedule/roll-call/fine": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Удержать штраф за опоздание
+         * @description Сумма считается на сервере по политике ресторана (105) — из тела берутся только «кого» и «за какой день». Штраф не списывается автоматически: удерживаемая сумма это деньги человека, а данные под ней бывают неточными (сбитое время планшета, забытый уход).
+         */
+        post: {
+            parameters: {
+                query?: never;
+                header?: {
+                    /** @description UUID, обязателен для всех write-операций (auto-added by client middleware) */
+                    "Idempotency-Key"?: components["parameters"]["IdempotencyKey"];
+                };
+                path?: never;
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": {
+                        /** Format: uuid */
+                        user_id: string;
+                        /** Format: date */
+                        date: string;
+                    };
+                };
+            };
+            responses: {
+                /** @description Created — строка salary_deductions */
+                201: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                400: components["responses"]["Error"];
+                /** @description Штраф за этот день уже выставлен */
+                409: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["ErrorEnvelope"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/schedule/roll-call": {
         parameters: {
             query?: never;
@@ -17664,6 +17725,14 @@ export interface components {
             board_stations?: string;
             /** @description ТВ-табло /board: яркость логотипа-фона за «Готово», проценты 0–100 (пусто = 13) */
             board_logo_opacity?: number;
+            /** @description Политика опозданий (105): сколько минут не считаются опозданием */
+            late_grace_minutes?: number;
+            /** @description Фиксированная часть штрафа за опоздание */
+            late_fine_fixed?: components["schemas"]["Decimal"];
+            /** @description Штраф за каждую минуту сверх грейса */
+            late_fine_per_minute?: components["schemas"]["Decimal"];
+            /** @description Потолок штрафа; 0 = без потолка */
+            late_fine_max?: components["schemas"]["Decimal"];
         };
         RestaurantInput: {
             name?: string;
@@ -17686,6 +17755,14 @@ export interface components {
             tables_enabled?: boolean;
             kitchen_on_pay?: boolean;
             pos_v2_default?: boolean;
+            /** @description Политика опозданий (105): сколько минут не считаются опозданием */
+            late_grace_minutes?: number;
+            /** @description Фиксированная часть штрафа за опоздание */
+            late_fine_fixed?: components["schemas"]["Decimal"];
+            /** @description Штраф за каждую минуту сверх грейса */
+            late_fine_per_minute?: components["schemas"]["Decimal"];
+            /** @description Потолок штрафа; 0 = без потолка */
+            late_fine_max?: components["schemas"]["Decimal"];
             menu_sort_by_sales?: boolean;
             delivery_enabled?: boolean;
             delivery_contacts_required?: boolean;
@@ -17931,6 +18008,10 @@ export interface components {
              * @description Отметка табеля — по ней тянется оригинал снимка
              */
             entry_id?: string;
+            /** @description Сколько система ПРЕДЛАГАЕТ удержать за опоздание (105); подтверждает человек */
+            suggested_fine?: string;
+            /** @description За этот день уже есть непогашенный штраф */
+            fined?: boolean;
             /** @description Превью селфи прихода в base64 (103); оригинал — GET /attendance/photo/{entry_id} */
             photo_thumb?: string;
         };
@@ -17938,6 +18019,10 @@ export interface components {
             /** Format: date */
             date?: string;
             timezone?: string;
+            /** @description Сколько минут опоздания не считаются опозданием (105) */
+            grace_minutes?: number;
+            /** @description Заданы ли правила штрафов; если нет — суммы не предлагаются */
+            fines_configured?: boolean;
             planned?: number;
             present?: number;
             late?: number;

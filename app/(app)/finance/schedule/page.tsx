@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CalendarDays, Camera, ClipboardCheck, Clock, Loader2, RotateCcw, Users } from 'lucide-react'
+import { CalendarDays, Camera, ClipboardCheck, Clock, Coins, Loader2, RotateCcw, Users } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { FinanceTabs } from '@/components/finance/finance-tabs'
@@ -9,13 +9,16 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { fetchUsers } from '@/lib/queries'
+import { useAuth } from '@/lib/auth-store'
 import { requestSetScheduleDayRelay, requestSetScheduleRelay } from '@/lib/queries/employee-relay'
 import { useBranchView } from '@/hooks/use-branch-view'
 import {
   deleteScheduleDay, fetchAttendancePhoto, fetchRollCall, fetchSchedule, fetchScheduleTemplate,
-  saveScheduleTemplate, setScheduleDay,
+  fineLate, saveScheduleTemplate, setScheduleDay,
   type PlannedShift, type RollCallReport, type RollCallRow, type RollCallStatus,
 } from '@/lib/queries/schedule'
+import { fetchRestaurantById, updateRestaurant } from '@/lib/queries'
+import { formatCurrency } from '@/lib/helpers'
 import { humanizeError } from '@/lib/errors'
 import type { User } from '@/lib/types'
 
@@ -178,6 +181,8 @@ export default function SchedulePage() {
           onDate={setRollCallDate}
           report={rollCall}
           loading={rollCallLoading}
+          canFine={!isBranchView}
+          onReload={() => void loadRollCall(rollCallDate)}
         />
       )}
 
@@ -326,14 +331,33 @@ const STATUS_TONE: Record<RollCallStatus, string> = {
 }
 
 function RollCallView({
-  date, onDate, report, loading,
+  date, onDate, report, loading, canFine, onReload,
 }: {
   date: string
   onDate: (d: string) => void
   report: RollCallReport | null
   loading: boolean
+  /** В режиме просмотра филиала штраф не выставляем: удержание пишется в
+   *  свою БД, а не в филиальскую — оно ушло бы не тому. */
+  canFine: boolean
+  onReload: () => void
 }) {
   const [photoFor, setPhotoFor] = useState<RollCallRow | null>(null)
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const [finingId, setFiningId] = useState<string | null>(null)
+
+  const applyFine = async (row: RollCallRow) => {
+    setFiningId(row.userId)
+    try {
+      await fineLate(row.userId, date)
+      toast.success(`Удержано ${row.suggestedFine} · ${row.userName}`)
+      onReload()
+    } catch (e) {
+      toast.error(humanizeError(e))
+    } finally {
+      setFiningId(null)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -345,8 +369,14 @@ function RollCallView({
           className="w-44"
         />
         <Button variant="outline" size="sm" onClick={() => onDate(ymd(new Date()))}>Сегодня</Button>
-        {report?.timezone && (
-          <span className="text-xs text-muted-foreground">Часовой пояс: {report.timezone}</span>
+        <Button variant="outline" size="sm" onClick={() => setRulesOpen(true)}>
+          <Coins className="w-4 h-4 mr-1.5" /> Правила опозданий
+        </Button>
+        {report && (
+          <span className="text-xs text-muted-foreground">
+            Допуск {report.graceMinutes} мин
+            {report.finesConfigured ? '' : ' · штрафы не настроены'}
+          </span>
         )}
       </div>
 
@@ -387,6 +417,23 @@ function RollCallView({
                     {STATUS_LABEL[row.status]}
                     {row.status === 'late' && row.lateMinutes > 0 ? ` · ${row.lateMinutes} мин` : ''}
                   </span>
+                  {row.status === 'late' && (
+                    row.fined ? (
+                      <span className="text-xs text-muted-foreground w-28 text-right">Штраф удержан</span>
+                    ) : row.suggestedFine && canFine ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={finingId === row.userId}
+                        onClick={() => void applyFine(row)}
+                        className="w-28"
+                      >
+                        {finingId === row.userId
+                          ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                          : <>Удержать {formatCurrency(Number(row.suggestedFine))}</>}
+                      </Button>
+                    ) : <span className="w-28" />
+                  )}
                 </div>
               ))}
             </div>
@@ -395,6 +442,110 @@ function RollCallView({
       )}
 
       {photoFor && <SelfieDialog row={photoFor} onClose={() => setPhotoFor(null)} />}
+      {rulesOpen && <LateRulesDialog onClose={() => setRulesOpen(false)} onSaved={() => { setRulesOpen(false); onReload() }} />}
+    </div>
+  )
+}
+
+/**
+ * Правила опозданий (105): штраф = фикс + за минуту × (минуты сверх допуска),
+ * не больше потолка. Обе части, а не одна: где-то принято «100 за опоздание»,
+ * где-то «по 2 за минуту».
+ */
+function LateRulesDialog({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const { restaurantId } = useAuth()
+  const [grace, setGrace] = useState('5')
+  const [fixed, setFixed] = useState('0')
+  const [perMinute, setPerMinute] = useState('0')
+  const [max, setMax] = useState('0')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    void (async () => {
+      try {
+        const r = restaurantId ? await fetchRestaurantById(restaurantId) : null
+        if (!alive || !r) return
+        setGrace(String(r.lateGraceMinutes ?? 5))
+        setFixed(String(r.lateFineFixed ?? 0))
+        setPerMinute(String(r.lateFinePerMinute ?? 0))
+        setMax(String(r.lateFineMax ?? 0))
+      } catch (e) {
+        toast.error(humanizeError(e))
+      } finally {
+        if (alive) setLoading(false)
+      }
+    })()
+    return () => { alive = false }
+  }, [restaurantId])
+
+  const save = async () => {
+    if (!restaurantId) return
+    setSaving(true)
+    try {
+      await updateRestaurant(restaurantId, {
+        lateGraceMinutes: Number(grace) || 0,
+        lateFineFixed: fixed,
+        lateFinePerMinute: perMinute,
+        lateFineMax: max,
+      })
+      toast.success('Правила сохранены')
+      onSaved()
+    } catch (e) {
+      toast.error(humanizeError(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Правила опозданий</DialogTitle>
+        </DialogHeader>
+        {loading ? (
+          <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-muted-foreground" /></div>
+        ) : (
+          <div className="space-y-3">
+            <Field label="Допуск, минут" hint="Опоздание в пределах допуска не считается опозданием">
+              <Input value={grace} onChange={(e) => setGrace(e.target.value)} className="w-28" inputMode="numeric" />
+            </Field>
+            <Field label="Фиксированно за опоздание">
+              <Input value={fixed} onChange={(e) => setFixed(e.target.value)} className="w-28" inputMode="decimal" />
+            </Field>
+            <Field label="За каждую минуту сверх допуска">
+              <Input value={perMinute} onChange={(e) => setPerMinute(e.target.value)} className="w-28" inputMode="decimal" />
+            </Field>
+            <Field label="Потолок штрафа" hint="0 — без потолка">
+              <Input value={max} onChange={(e) => setMax(e.target.value)} className="w-28" inputMode="decimal" />
+            </Field>
+            <p className="text-xs text-muted-foreground pt-1">
+              Штраф не списывается сам: система считает сумму, а удерживает её кнопкой человек — время на планшете
+              может сбиться, а уход накануне остаться неотмеченным.
+            </p>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={saving}>Отмена</Button>
+          <Button onClick={save} disabled={saving || loading}>
+            {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Сохранить'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <div className="text-sm">{label}</div>
+        {hint && <div className="text-xs text-muted-foreground">{hint}</div>}
+      </div>
+      {children}
     </div>
   )
 }

@@ -50,6 +50,12 @@ export interface Restaurant {
   autoReadyBufferMin?: number
   pinLockEnabled?: boolean
   pinLockTimeoutMin?: number
+  // Политика опозданий (105): допуск в минутах и штраф = fixed + perMinute ×
+  // (минуты сверх допуска), не больше max (0 = без потолка).
+  lateGraceMinutes?: number
+  lateFineFixed?: string
+  lateFinePerMinute?: string
+  lateFineMax?: string
   // Экранная клавиатура (iiko-style) на POS/смене/зале. Default false —
   // включается в настройках владельца для тач-терминалов без физ. клавиатуры.
   onScreenKeyboardEnabled?: boolean

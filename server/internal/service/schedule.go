@@ -25,16 +25,18 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/restos/restos-v4/server/internal/db/models"
+	"github.com/restos/restos-v4/server/internal/pkg/decimal"
 	apperrors "github.com/restos/restos-v4/server/internal/pkg/errors"
 	"github.com/restos/restos-v4/server/internal/pkg/tenant"
 	"github.com/restos/restos-v4/server/internal/repo"
 )
 
 const (
-	// lateGraceMinutes — сколько минут опоздания не считается опозданием.
-	// Ноль был бы бессмысленно строгим: сотрудник, отметившийся в 09:00:40 при
-	// плане на 09:00, опоздавшим не является ни для кого, кроме формулы.
-	lateGraceMinutes = 5
+	// defaultLateGraceMinutes — грейс, если ресторан ещё не настраивал политику
+	// опозданий (105). Ноль был бы бессмысленно строгим: отметившийся в
+	// 09:00:40 при плане на 09:00 опоздавшим не является ни для кого, кроме
+	// формулы.
+	defaultLateGraceMinutes = 5
 
 	// scheduleMaxRangeDays — предохранитель на диапазон плана. План
 	// разворачивается в память по дням × сотрудников; год на 40 человек — это
@@ -47,6 +49,32 @@ const (
 type ScheduleService struct {
 	r      *repo.Repo
 	photos *AttendancePhotoStore
+}
+
+// latePolicy — правила опозданий ресторана (105).
+type latePolicy struct {
+	graceMinutes int
+	fixed        decimal.Decimal
+	perMinute    decimal.Decimal
+	max          decimal.Decimal
+	loc          *time.Location
+}
+
+// fineFor — сколько предложить удержать за опоздание на late минут. Ноль,
+// если правила не заданы (по умолчанию так и есть) — тогда перекличка просто
+// показывает опоздание, ничего не предлагая.
+func (p latePolicy) fineFor(late int) decimal.Decimal {
+	over := late - p.graceMinutes
+	if over <= 0 {
+		return decimal.FromInt(0)
+	}
+	fine := decimal.Add(p.fixed, decimal.Mul(p.perMinute, decimal.FromInt(int64(over))))
+	if decimal.IsPositive(p.max) && decimal.IsPositive(decimal.Sub(fine, p.max)) {
+		// Потолок нужен именно из-за поминутной части: «опоздал на 4 часа»
+		// иначе съедает дневной заработок целиком.
+		return p.max
+	}
+	return decimal.Normalize(fine)
 }
 
 func NewScheduleService(r *repo.Repo, photos *AttendancePhotoStore) *ScheduleService {
@@ -116,18 +144,28 @@ type RollCallRow struct {
 	// PhotoThumb — превью селфи прихода в base64 (103). Именно превью, а не
 	// оригинал: перекличка на 20 человек иначе весила бы под мегабайт.
 	PhotoThumb string `json:"photo_thumb,omitempty"`
+	// SuggestedFine — сколько система ПРЕДЛАГАЕТ удержать за это опоздание
+	// (105). Не удерживает: подтверждает человек, потому что данные бывают
+	// неточными (сбитое время планшета, забытый уход), а деньги чужие.
+	SuggestedFine string `json:"suggested_fine,omitempty"`
+	// Fined — за этот день уже есть непогашенный штраф.
+	Fined bool `json:"fined,omitempty"`
 }
 
 // RollCallReport — перекличка за дату.
 type RollCallReport struct {
-	Date      string        `json:"date"`
-	Timezone  string        `json:"timezone"`
-	Planned   int           `json:"planned"`
-	Present   int           `json:"present"`
-	Late      int           `json:"late"`
-	Absent    int           `json:"absent"`
-	Unplanned int           `json:"unplanned"`
-	Rows      []RollCallRow `json:"rows"`
+	Date     string `json:"date"`
+	Timezone string `json:"timezone"`
+	// GraceMinutes / FinesConfigured — чтобы экран объяснял, откуда берутся
+	// суммы, и не предлагал штрафовать там, где правила не заданы.
+	GraceMinutes    int           `json:"grace_minutes"`
+	FinesConfigured bool          `json:"fines_configured"`
+	Planned         int           `json:"planned"`
+	Present         int           `json:"present"`
+	Late            int           `json:"late"`
+	Absent          int           `json:"absent"`
+	Unplanned       int           `json:"unplanned"`
+	Rows            []RollCallRow `json:"rows"`
 }
 
 // ─── Шаблон недели ─────────────────────────────────────────────────────────
@@ -497,7 +535,8 @@ func (s *ScheduleService) RollCall(ctx context.Context, date string) (*RollCallR
 	if err != nil {
 		return nil, err
 	}
-	loc := s.restaurantLocation(ctx, rid)
+	policy := s.loadLatePolicy(ctx, rid)
+	loc := policy.loc
 
 	plan, names, err := s.planFor(ctx, []string{d}, "")
 	if err != nil {
@@ -529,7 +568,10 @@ func (s *ScheduleService) RollCall(ctx context.Context, date string) (*RollCallR
 		}
 	}
 
-	report := &RollCallReport{Date: d, Timezone: loc.String()}
+	report := &RollCallReport{
+		Date: d, Timezone: loc.String(),
+		GraceMinutes: policy.graceMinutes, FinesConfigured: policy.finesConfigured(),
+	}
 	plannedUsers := map[string]bool{}
 
 	for _, p := range plan {
@@ -562,10 +604,13 @@ func (s *ScheduleService) RollCall(ctx context.Context, date string) (*RollCallR
 		row.EntryID = entry.ID
 		report.Present++
 		late := lateMinutes(*entry.ClockIn, d, p.StartsAt, loc)
-		if late > lateGraceMinutes {
+		if late > policy.graceMinutes {
 			row.Status = "late"
 			row.LateMinutes = late
 			report.Late++
+			if fine := policy.fineFor(late); decimal.IsPositive(fine) {
+				row.SuggestedFine = fine.String()
+			}
 		} else {
 			row.Status = "on_time"
 		}
@@ -589,11 +634,58 @@ func (s *ScheduleService) RollCall(ctx context.Context, date string) (*RollCallR
 	if err := s.attachPhotos(ctx, report); err != nil {
 		return nil, err
 	}
+	if err := s.attachFineState(ctx, report); err != nil {
+		return nil, err
+	}
 	sort.Slice(report.Rows, func(i, j int) bool {
 		return report.Rows[i].UserName < report.Rows[j].UserName
 	})
 	return report, nil
 }
+
+// attachFineState — помечает строки, за которые штраф уже выставлен. Без
+// этого кнопка «оштрафовать» выглядела бы доступной и на втором открытии
+// экрана, а уникальный индекс возвращал бы ошибку вместо внятного состояния.
+func (s *ScheduleService) attachFineState(ctx context.Context, report *RollCallReport) error {
+	rid, err := tenant.MustRestaurantID(ctx)
+	if err != nil {
+		return err
+	}
+	refs := make([]string, 0, len(report.Rows))
+	for _, row := range report.Rows {
+		if row.Status == "late" {
+			refs = append(refs, lateFineRef(row.UserID, report.Date))
+		}
+	}
+	if len(refs) == 0 {
+		return nil
+	}
+	var existing []models.SalaryDeduction
+	if err := s.r.Raw().WithContext(ctx).
+		Where("restaurant_id = ? AND source_ref IN ? AND cancelled_at IS NULL", rid, refs).
+		Find(&existing).Error; err != nil {
+		return err
+	}
+	fined := map[string]bool{}
+	for _, d := range existing {
+		if d.SourceRef != nil {
+			fined[*d.SourceRef] = true
+		}
+	}
+	for i := range report.Rows {
+		if report.Rows[i].Status != "late" {
+			continue
+		}
+		if fined[lateFineRef(report.Rows[i].UserID, report.Date)] {
+			report.Rows[i].Fined = true
+		}
+	}
+	return nil
+}
+
+// lateFineRef — ключ идемпотентности штрафа: один сотрудник, один день, один
+// штраф. По нему же стоит уникальный индекс (105).
+func lateFineRef(userID, date string) string { return "late:" + userID + ":" + date }
 
 // attachPhotos — превью селфи прихода к строкам переклички. Ошибка хранилища
 // не роняет отчёт: перекличка полезна и без картинок.
@@ -623,23 +715,99 @@ func (s *ScheduleService) attachPhotos(ctx context.Context, report *RollCallRepo
 	return nil
 }
 
-// restaurantLocation — часовой пояс ресторана, fallback Asia/Dushanbe (тот же
-// приём, что в нумерации заказов: см. orders_write.go).
-func (s *ScheduleService) restaurantLocation(ctx context.Context, rid string) *time.Location {
-	var tz string
-	if err := s.r.Raw().WithContext(ctx).Model(&models.Restaurant{}).
-		Select("COALESCE(timezone, 'Asia/Dushanbe')").
-		Where("id = ?", rid).Scan(&tz).Error; err != nil || tz == "" {
-		tz = "Asia/Dushanbe"
+// FineLate — удержать штраф за опоздание конкретного сотрудника в конкретный
+// день (105).
+//
+// Отдельное явное действие, а не автоматика внутри переклички: удерживаемая
+// сумма — деньги человека, а данные под ней бывают неточными (сбитое время
+// планшета, забытый вчера уход, подмена без записи в графике). Молча снятый
+// штраф превращается в спор задним числом, который нечем закрыть.
+//
+// Сумму берём СВОЮ, пересчитанную здесь же, а не присланную клиентом: иначе
+// в удержание можно было бы отправить любое число мимо политики.
+func (s *ScheduleService) FineLate(ctx context.Context, salary *SalaryService, userID, date string) (*models.SalaryDeduction, error) {
+	if err := requirePermFor(ctx, s.r, "payroll.manage"); err != nil {
+		return nil, err
 	}
-	loc, err := time.LoadLocation(tz)
+	d, err := normalizeDate(date)
 	if err != nil {
-		if fallback, err2 := time.LoadLocation("Asia/Dushanbe"); err2 == nil {
-			return fallback
-		}
-		return time.Local
+		return nil, err
 	}
-	return loc
+	report, err := s.RollCall(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	var target *RollCallRow
+	for i := range report.Rows {
+		if report.Rows[i].UserID == userID {
+			target = &report.Rows[i]
+			break
+		}
+	}
+	if target == nil || target.Status != "late" {
+		return nil, apperrors.Wrap("VALIDATION", "в этот день опоздания не зафиксировано", nil)
+	}
+	if target.Fined {
+		return nil, apperrors.Wrap("CONFLICT", "штраф за этот день уже выставлен", nil)
+	}
+	if target.SuggestedFine == "" {
+		return nil, apperrors.Wrap("VALIDATION",
+			"правила штрафов не заданы — задайте их в настройках опозданий", nil)
+	}
+
+	ref := lateFineRef(userID, d)
+	period := d[:7]
+	reason := fmt.Sprintf("Опоздание %d мин (%s), смена с %s", target.LateMinutes, d, target.PlannedStart)
+	row, err := salary.AddDeduction(ctx, DeductionInput{
+		UserID: &userID, Amount: &target.SuggestedFine, Reason: &reason,
+		Period: &period, SourceRef: &ref,
+	})
+	if err != nil {
+		// Уникальный индекс по source_ref (105) — второй менеджер, открывший
+		// перекличку одновременно, получает внятный отказ, а не 500.
+		if strings.Contains(err.Error(), "uq_salary_deductions_source_ref") {
+			return nil, apperrors.Wrap("CONFLICT", "штраф за этот день уже выставлен", nil)
+		}
+		return nil, err
+	}
+	return row, nil
+}
+
+// loadLatePolicy — часовой пояс и правила опозданий ресторана одним запросом.
+// Часовой пояс с fallback Asia/Dushanbe — тот же приём, что в нумерации
+// заказов (orders_write.go).
+func (s *ScheduleService) loadLatePolicy(ctx context.Context, rid string) latePolicy {
+	p := latePolicy{
+		graceMinutes: defaultLateGraceMinutes,
+		fixed:        decimal.FromInt(0),
+		perMinute:    decimal.FromInt(0),
+		max:          decimal.FromInt(0),
+		loc:          time.Local,
+	}
+	var row models.Restaurant
+	if err := s.r.Raw().WithContext(ctx).Where("id = ?", rid).First(&row).Error; err == nil {
+		if row.LateGraceMinutes >= 0 {
+			p.graceMinutes = row.LateGraceMinutes
+		}
+		p.fixed, p.perMinute, p.max = row.LateFineFixed, row.LateFinePerMinute, row.LateFineMax
+	}
+	tz := "Asia/Dushanbe"
+	if row.Timezone != nil && *row.Timezone != "" {
+		tz = *row.Timezone
+	}
+	if loc, err := time.LoadLocation(tz); err == nil {
+		p.loc = loc
+	} else if fallback, err2 := time.LoadLocation("Asia/Dushanbe"); err2 == nil {
+		p.loc = fallback
+	}
+	return p
+}
+
+// finesConfigured — заданы ли правила. Если нет, перекличка показывает
+// опоздания, но ничего не предлагает удерживать: сумма «0 сомони» на экране
+// выглядела бы как настроенный нулевой штраф.
+func (p latePolicy) finesConfigured() bool {
+	return decimal.IsPositive(p.fixed) || decimal.IsPositive(p.perMinute)
 }
 
 // lateMinutes — на сколько минут приход позже планового начала. Отрицательное

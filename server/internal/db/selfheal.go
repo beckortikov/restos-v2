@@ -107,6 +107,15 @@ var schemaSelfHealStmts = []string{
 	// 101: источник отметки табеля. Терминал :checkin пишет source на КАЖДОЙ
 	// отметке — без колонки приход сотрудника падает с ошибкой БД.
 	`ALTER TABLE time_entries ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'`,
+
+	// 105: политика опозданий и маркер источника удержания. Перекличка читает
+	// политику на каждый запрос, штраф пишет source_ref — без колонок падает
+	// и то, и другое.
+	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS late_grace_minutes   INTEGER       NOT NULL DEFAULT 5`,
+	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS late_fine_fixed      NUMERIC(14,4) NOT NULL DEFAULT 0`,
+	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS late_fine_per_minute NUMERIC(14,4) NOT NULL DEFAULT 0`,
+	`ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS late_fine_max        NUMERIC(14,4) NOT NULL DEFAULT 0`,
+	`ALTER TABLE salary_deductions ADD COLUMN IF NOT EXISTS source_ref TEXT`,
 	`CREATE INDEX IF NOT EXISTS idx_order_items_bundle_group ON order_items (bundle_group_id)`,
 	`CREATE TABLE IF NOT EXISTS salary_deductions (
 		id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),

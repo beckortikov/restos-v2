@@ -3972,6 +3972,30 @@ paths:
       responses:
         "204": { description: No Content }
         "404": { $ref: "#/components/responses/Error" }
+  /api/v1/schedule/roll-call/fine:
+    post:
+      tags: [payroll]
+      summary: Удержать штраф за опоздание
+      description: >-
+        Сумма считается на сервере по политике ресторана (105) — из тела берутся
+        только «кого» и «за какой день». Штраф не списывается автоматически:
+        удерживаемая сумма это деньги человека, а данные под ней бывают
+        неточными (сбитое время планшета, забытый уход).
+      parameters: [ { $ref: "#/components/parameters/IdempotencyKey" } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, date]
+              properties:
+                user_id: { type: string, format: uuid }
+                date: { type: string, format: date }
+      responses:
+        "201": { description: Created — строка salary_deductions, content: { application/json: { schema: { type: object } } } }
+        "400": { $ref: "#/components/responses/Error" }
+        "409": { description: "Штраф за этот день уже выставлен", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorEnvelope" } } } }
   /api/v1/schedule/roll-call:
     get:
       tags: [payroll]
@@ -6527,6 +6551,10 @@ components:
         is_blocked: { type: boolean }
         board_stations: { type: string, description: "ТВ-табло /board: CSV станций для показа (как у кухонного планшета); пусто = все" }
         board_logo_opacity: { type: integer, description: "ТВ-табло /board: яркость логотипа-фона за «Готово», проценты 0–100 (пусто = 13)" }
+        late_grace_minutes: { type: integer, description: "Политика опозданий (105): сколько минут не считаются опозданием" }
+        late_fine_fixed: { $ref: "#/components/schemas/Decimal", description: "Фиксированная часть штрафа за опоздание" }
+        late_fine_per_minute: { $ref: "#/components/schemas/Decimal", description: "Штраф за каждую минуту сверх грейса" }
+        late_fine_max: { $ref: "#/components/schemas/Decimal", description: "Потолок штрафа; 0 = без потолка" }
     RestaurantInput:
       type: object
       properties:
@@ -6549,6 +6577,10 @@ components:
         tables_enabled: { type: boolean }
         kitchen_on_pay: { type: boolean }
         pos_v2_default: { type: boolean }
+        late_grace_minutes: { type: integer, description: "Политика опозданий (105): сколько минут не считаются опозданием" }
+        late_fine_fixed: { $ref: "#/components/schemas/Decimal", description: "Фиксированная часть штрафа за опоздание" }
+        late_fine_per_minute: { $ref: "#/components/schemas/Decimal", description: "Штраф за каждую минуту сверх грейса" }
+        late_fine_max: { $ref: "#/components/schemas/Decimal", description: "Потолок штрафа; 0 = без потолка" }
         menu_sort_by_sales: { type: boolean }
         delivery_enabled: { type: boolean }
         delivery_contacts_required: { type: boolean }
@@ -6765,12 +6797,16 @@ components:
         late_minutes: { type: integer }
         source: { type: string, enum: [template, override] }
         entry_id: { type: string, format: uuid, description: "Отметка табеля — по ней тянется оригинал снимка" }
+        suggested_fine: { type: string, description: "Сколько система ПРЕДЛАГАЕТ удержать за опоздание (105); подтверждает человек" }
+        fined: { type: boolean, description: "За этот день уже есть непогашенный штраф" }
         photo_thumb: { type: string, description: "Превью селфи прихода в base64 (103); оригинал — GET /attendance/photo/{entry_id}" }
     RollCallReport:
       type: object
       properties:
         date: { type: string, format: date }
         timezone: { type: string }
+        grace_minutes: { type: integer, description: "Сколько минут опоздания не считаются опозданием (105)" }
+        fines_configured: { type: boolean, description: "Заданы ли правила штрафов; если нет — суммы не предлагаются" }
         planned: { type: integer }
         present: { type: integer }
         late: { type: integer }

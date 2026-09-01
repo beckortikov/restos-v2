@@ -31,6 +31,10 @@ type DeductionInput struct {
 	// Period — YYYY-MM, к какому месяцу относится удержание (070). Опционально
 	// для обратной совместимости со старыми клиентами.
 	Period *string `json:"period,omitempty"`
+	// SourceRef — маркер происхождения (105). Ставит только сервер (штраф за
+	// опоздание), из тела запроса не принимается: иначе клиент мог бы занять
+	// чужой ключ и заблокировать штраф.
+	SourceRef *string `json:"-"`
 }
 
 // AddDeduction — создаёт запись удержания и увеличивает users.deductions
@@ -71,6 +75,7 @@ func (s *SalaryService) AddDeduction(ctx context.Context, in DeductionInput) (*m
 		Amount:       amount,
 		Reason:       reason,
 		Period:       in.Period,
+		SourceRef:    in.SourceRef,
 		CreatedBy:    &createdBy,
 		CreatedAt:    now,
 	}

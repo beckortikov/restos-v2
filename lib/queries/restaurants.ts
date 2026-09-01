@@ -52,6 +52,13 @@ export async function updateRestaurant(id: string, data: Partial<{
   autoReadyBufferMin: number
   pinLockEnabled: boolean
   pinLockTimeoutMin: number
+  // Политика опозданий (105): штраф = fixed + perMinute × (минуты сверх
+  // допуска), не больше max. Суммы строками — как и остальные деньги, чтобы
+  // не терять копейки на float.
+  lateGraceMinutes: number
+  lateFineFixed: string
+  lateFinePerMinute: string
+  lateFineMax: string
   supplyAllowNegative: boolean
   onScreenKeyboardEnabled: boolean
   tablesEnabled: boolean
@@ -80,6 +87,10 @@ export async function updateRestaurant(id: string, data: Partial<{
   if (data.autoReadyBufferMin !== undefined) updates.auto_ready_buffer_min = data.autoReadyBufferMin
   if (data.pinLockEnabled !== undefined) updates.pin_lock_enabled = data.pinLockEnabled
   if (data.pinLockTimeoutMin !== undefined) updates.pin_lock_timeout_min = data.pinLockTimeoutMin
+  if (data.lateGraceMinutes !== undefined) updates.late_grace_minutes = data.lateGraceMinutes
+  if (data.lateFineFixed !== undefined) updates.late_fine_fixed = data.lateFineFixed
+  if (data.lateFinePerMinute !== undefined) updates.late_fine_per_minute = data.lateFinePerMinute
+  if (data.lateFineMax !== undefined) updates.late_fine_max = data.lateFineMax
   if (data.supplyAllowNegative !== undefined) updates.supply_allow_negative = data.supplyAllowNegative
   if (data.onScreenKeyboardEnabled !== undefined) updates.on_screen_keyboard_enabled = data.onScreenKeyboardEnabled
   if (data.tablesEnabled !== undefined) updates.tables_enabled = data.tablesEnabled

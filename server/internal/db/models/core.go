@@ -23,8 +23,15 @@ type Restaurant struct {
 	// настраивает в настройках. DEFAULT 10 — прежнее захардкоженное поведение.
 	DiscountApprovalThreshold decimal.Decimal `gorm:"column:discount_approval_threshold;type:numeric(14,4);default:10" json:"discount_approval_threshold"`
 	Timezone                  *string         `gorm:"default:'Asia/Dushanbe'" json:"timezone"`
-	EnforceStockCheck         *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
-	TechCardsEnabled          *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
+	// Политика опозданий (105). Штраф = fixed + per_minute × (минуты сверх
+	// грейса), не больше max (0 = без потолка). Считается, но НЕ списывается
+	// автоматически — предлагается человеку в перекличке.
+	LateGraceMinutes  int             `gorm:"column:late_grace_minutes;not null;default:5" json:"late_grace_minutes"`
+	LateFineFixed     decimal.Decimal `gorm:"column:late_fine_fixed;type:numeric(14,4);not null;default:0" json:"late_fine_fixed"`
+	LateFinePerMinute decimal.Decimal `gorm:"column:late_fine_per_minute;type:numeric(14,4);not null;default:0" json:"late_fine_per_minute"`
+	LateFineMax       decimal.Decimal `gorm:"column:late_fine_max;type:numeric(14,4);not null;default:0" json:"late_fine_max"`
+	EnforceStockCheck *bool           `gorm:"column:enforce_stock_check;default:false" json:"enforce_stock_check"`
+	TechCardsEnabled  *bool           `gorm:"column:tech_cards_enabled;default:true" json:"tech_cards_enabled"`
 	// ShiftBalanceCorrectedAt — маркер разовой коррекции балансов под фикс Н13
 	// (v3.16.94+). NULL = не выполнялась; заполнен = повтор запрещён.
 	ShiftBalanceCorrectedAt *time.Time `gorm:"column:shift_balance_corrected_at" json:"shift_balance_corrected_at,omitempty"`
